@@ -1,3 +1,10 @@
 [submodule "3rdpty/sources/IonCachyEngine"]
 	path = 3rdpty/sources/IonCachyEngine
 	url = https://github.com/xiangCaO233/IonCachyEngine.git
+[submodule "3rdpty/sources/imgui"]
+	path = 3rdpty/sources/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking
+[submodule "3rdpty/sources/glfw"]
+	path = 3rdpty/sources/glfw
+	url = https://github.com/glfw/glfw.git
