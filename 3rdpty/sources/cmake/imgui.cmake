@@ -1,7 +1,7 @@
 # 3rdpty/sources/cmake/Buildimgui.cmake
 
 # 定义源码路径
-set(IMGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../sources/imgui")
+set(IMGUI_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
 message(STATUS "Configuring ImGui from: ${IMGUI_SOURCE_DIR}")
 
 # 收集源码文件

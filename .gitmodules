@@ -1,6 +1,7 @@
 [submodule "3rdpty/sources/IonCachyEngine"]
 	path = 3rdpty/sources/IonCachyEngine
 	url = https://github.com/xiangCaO233/IonCachyEngine.git
+	branch = main
 [submodule "3rdpty/sources/imgui"]
 	path = 3rdpty/sources/imgui
 	url = https://github.com/ocornut/imgui.git
@@ -8,3 +9,12 @@
 [submodule "3rdpty/sources/glfw"]
 	path = 3rdpty/sources/glfw
 	url = https://github.com/glfw/glfw.git
+	branch = master
+[submodule "3rdpty/sources/sol2"]
+	path = 3rdpty/sources/sol2
+	url = https://github.com/ThePhD/sol2.git
+	branch = develop
+[submodule "3rdpty/sources/luajit"]
+	path = 3rdpty/sources/luajit
+	url = https://github.com/LuaJIT/LuaJIT.git
+	branch = v2.1
