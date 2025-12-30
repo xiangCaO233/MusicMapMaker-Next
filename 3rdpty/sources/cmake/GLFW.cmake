@@ -1,7 +1,7 @@
 # 3rdpty/sources/cmake/BuildGLFW.cmake
 
 # 定义源码路径
-set(GLFW_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../sources/glfw")
+set(GLFW_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/glfw")
 
 # 覆盖 GLFW 的内部选项
 set(GLFW_BUILD_DOCS
