@@ -2,4 +2,4 @@
 
 add_executable(MusicMapMaker-Next src/main.cpp)
 
-target_link_libraries(MusicMapMaker-Next PRIVATE Log Audio Game)
+target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game)

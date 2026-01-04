@@ -14,12 +14,12 @@
 #include <spdlog/spdlog.h>
 #include <string_view>
 
-#define XTRACE(msg) SPDLOG_TRACE(msg)
-#define XDEBUG(msg) SPDLOG_DEBUG(msg)
-#define XINFO(msg) SPDLOG_INFO(msg);
-#define XWARN(msg) SPDLOG_WARN(msg);
-#define XERROR(msg) SPDLOG_ERROR(msg);
-#define XCRITICAL(msg) SPDLOG_CRITICAL(msg)
+#define XTRACE(...) SPDLOG_TRACE(__VA_ARGS__)
+#define XDEBUG(...) SPDLOG_DEBUG(__VA_ARGS__)
+#define XINFO(...) SPDLOG_INFO(__VA_ARGS__)
+#define XWARN(...) SPDLOG_WARN(__VA_ARGS__)
+#define XERROR(...) SPDLOG_ERROR(__VA_ARGS__)
+#define XCRITICAL(...) SPDLOG_CRITICAL(__VA_ARGS__)
 
 class ColorfulFormatter : public spdlog::formatter
 {
