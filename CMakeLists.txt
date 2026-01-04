@@ -12,9 +12,6 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
 
 include("project-configure")
 
-# 找到系统中的 Vulkan 包
-find_package(Vulkan REQUIRED)
-
 option(SOURCES_BUILD "Build Deps from sources." ON)
 
 add_subdirectory("3rdpty")

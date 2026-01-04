@@ -1,5 +1,4 @@
-#ifndef XIANG_COLORFULLOG_H
-#define XIANG_COLORFULLOG_H
+#pragma once
 
 #include <spdlog/common.h>
 #ifdef _WIN32
@@ -47,4 +46,3 @@ public:
     static void     disable();
     static void     setlevel(spdlog::level::level_enum level);
 };
-#endif  // XIANG_COLORFULLOG_H

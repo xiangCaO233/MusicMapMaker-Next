@@ -1,4 +1,5 @@
 #pragma once
+
 #include <string>
 #include <unordered_map>
 
@@ -15,7 +16,10 @@ struct Color
 // 皮肤数据持有者
 struct SkinData
 {
+    // 皮肤名称
     std::string themeName;
+    std::string themeAuthor;
+    std::string themeVersion;
 
     // 颜色表
     std::unordered_map<std::string, Color> colors;
@@ -23,7 +27,8 @@ struct SkinData
     // 资产路径表 (Key: 资产ID, Value: 文件路径)
     std::unordered_map<std::string, std::string> assetPaths;
 
-    float windowPadding;
+    // 布局配置表 (Key: 布局配置ID, Value: 值)
+    std::unordered_map<std::string, std::string> layoutConfigs;
 };
 
 class SkinManager

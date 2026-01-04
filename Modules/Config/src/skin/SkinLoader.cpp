@@ -1,5 +1,5 @@
-#include "SkinConfig.h"
 #include "colorful-log.h"
+#include "skin/SkinConfig.h"
 #include <filesystem>
 #include <sol/sol.hpp>
 
@@ -43,7 +43,12 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     sol::table skinTable = result;
 
     // 解析 Meta
-    m_data.themeName = skinTable["meta"]["name"].get_or<std::string>("Unknown");
+    m_data.themeName =
+        skinTable["meta"]["name"].get_or<std::string>("Custom Skin");
+    m_data.themeAuthor =
+        skinTable["meta"]["author"].get_or<std::string>("Various Artists");
+    m_data.themeVersion =
+        skinTable["meta"]["version"].get_or<std::string>("1.0");
 
     // 解析 Colors
     sol::table colorsTable = skinTable["colors"];
@@ -67,6 +72,15 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         std::string key        = kv.first.as<std::string>();
         std::string path       = kv.second.as<std::string>();
         m_data.assetPaths[key] = path;
+    }
+
+    // 解析 layout
+    sol::table layoutTable = skinTable["layout"];
+    for (const auto& kv : layoutTable)
+    {
+        std::string key           = kv.first.as<std::string>();
+        std::string value         = std::to_string(kv.second.as<int>());
+        m_data.layoutConfigs[key] = value;
     }
 
     XINFO("Skin loaded: " + m_data.themeName);
