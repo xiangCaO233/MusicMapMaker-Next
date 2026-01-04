@@ -18,3 +18,7 @@
 	path = 3rdpty/sources/luajit
 	url = https://github.com/LuaJIT/LuaJIT.git
 	branch = v2.1
+[submodule "3rdpty/sources/freetype"]
+	path = 3rdpty/sources/freetype
+	url = https://github.com/freetype/freetype.git
+	branch = master
