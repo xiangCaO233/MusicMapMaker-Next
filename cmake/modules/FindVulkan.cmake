@@ -6,9 +6,9 @@ if(WIN32)
     set(VULKAN_VENDORED_DIR "${CMAKE_SOURCE_DIR}/3rdpty/prebuilts/windows/vulkan")
 
     message(
-    STATUS
-      "FindVulkan Wrapper: Checking for vendored Vulkan in ${VULKAN_VENDORED_DIR}..."
-  )
+        STATUS
+        "FindVulkan Wrapper: Checking for vendored Vulkan in ${VULKAN_VENDORED_DIR}..."
+    )
 
     if(EXISTS "${VULKAN_VENDORED_DIR}")
         # 设置头文件搜索路径提示
@@ -16,6 +16,7 @@ if(WIN32)
 
         # 根据编译器确定库文件子目录
         set(_VULKAN_LIB_SUBDIR "")
+
         if(MSVC)
             set(_VULKAN_LIB_SUBDIR "msvc")
         elseif(MINGW)
@@ -31,25 +32,25 @@ if(WIN32)
             # 将路径加入到 CMAKE_LIBRARY_PATH 中，这样标准 find_library 就能找到它
             list(APPEND CMAKE_LIBRARY_PATH "${_VULKAN_LIB_PATH}")
             message(
-        STATUS
-          "FindVulkan Wrapper: Added hint for ${_VULKAN_LIB_SUBDIR} libraries.")
+                STATUS
+                "FindVulkan Wrapper: Added hint for ${_VULKAN_LIB_SUBDIR} libraries.")
 
-            # 也可以直接设置环境变量 VULKAN_SDK 指向我们的 vendored 目录 这样标准模块会误以为这就是安装的 SDK
-            # set(ENV{VULKAN_SDK} "${VULKAN_VENDORED_DIR}")
+        # 也可以直接设置环境变量 VULKAN_SDK 指向我们的 vendored 目录 这样标准模块会误以为这就是安装的 SDK
+        # set(ENV{VULKAN_SDK} "${VULKAN_VENDORED_DIR}")
         else()
             message(
-        WARNING
-          "FindVulkan Wrapper: Vendored lib directory not found: ${_VULKAN_LIB_PATH}"
-      )
+                WARNING
+                "FindVulkan Wrapper: Vendored lib directory not found: ${_VULKAN_LIB_PATH}"
+            )
         endif()
     endif()
+else()
+    # =============================================================================
+    # 调用系统内置的标准 FindVulkan
+    # =============================================================================
+    # CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
+    include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
 endif()
-
-# =============================================================================
-# 调用系统内置的标准 FindVulkan
-# =============================================================================
-# CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
-include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
 
 # =============================================================================
 # 修正与后处理
