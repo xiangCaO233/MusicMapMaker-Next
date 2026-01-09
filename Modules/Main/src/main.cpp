@@ -15,13 +15,11 @@ int main(int argc, char* argv[])
     auto rootDir = std::filesystem::current_path();
     // 向上查找直到找到 assets 文件夹
     while ( !std::filesystem::exists(rootDir / "assets") &&
-            rootDir.has_parent_path() )
-    {
+            rootDir.has_parent_path() ) {
         rootDir = rootDir.parent_path();
     }
 
-    if ( !std::filesystem::exists(rootDir / "assets") )
-    {
+    if ( !std::filesystem::exists(rootDir / "assets") ) {
         XERROR("Fatal: Could not find assets directory!");
         return -1;
     }
@@ -30,15 +28,17 @@ int main(int argc, char* argv[])
     auto assetPath = rootDir / "assets";
 
     using namespace Translation;
-    Translator::instance().loadLanguage((assetPath / "lang" / "en_us.lua").generic_string());
-    Translator::instance().loadLanguage((assetPath / "lang" / "zh_cn.lua").generic_string());
+    Translator::instance().loadLanguage(
+        (assetPath / "lang" / "en_us.lua").generic_string());
+    Translator::instance().loadLanguage(
+        (assetPath / "lang" / "zh_cn.lua").generic_string());
     Translator::instance().switchLang("zh_cn");
     XINFO(TR("tips.welcom"));
 
     using namespace Config;
     // 载入皮肤配置
-    SkinManager::instance().loadSkin((assetPath / "skins" / "mmm-nightly" /
-                                     "skin.lua").generic_string());
+    SkinManager::instance().loadSkin(
+        (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
     auto backgroundColor = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]",
           backgroundColor.r,
