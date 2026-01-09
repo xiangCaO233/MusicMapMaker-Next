@@ -30,15 +30,15 @@ int main(int argc, char* argv[])
     auto assetPath = rootDir / "assets";
 
     using namespace Translation;
-    Translator::instance().loadLanguage(assetPath / "lang" / "en_us.lua");
-    Translator::instance().loadLanguage(assetPath / "lang" / "zh_cn.lua");
+    Translator::instance().loadLanguage((assetPath / "lang" / "en_us.lua").generic_string());
+    Translator::instance().loadLanguage((assetPath / "lang" / "zh_cn.lua").generic_string());
     Translator::instance().switchLang("zh_cn");
     XINFO(TR("tips.welcom"));
 
     using namespace Config;
     // 载入皮肤配置
-    SkinManager::instance().loadSkin(assetPath / "skins" / "mmm-nightly" /
-                                     "skin.lua");
+    SkinManager::instance().loadSkin((assetPath / "skins" / "mmm-nightly" /
+                                     "skin.lua").generic_string());
     auto backgroundColor = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]",
           backgroundColor.r,
