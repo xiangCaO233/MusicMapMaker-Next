@@ -1,6 +1,6 @@
 # Modules/Config/CMakeLists.txt
 
-add_library(Config SHARED src/skin/SkinLoader.cpp
+add_library(Config STATIC src/skin/SkinLoader.cpp
                           src/translation/Translation.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
