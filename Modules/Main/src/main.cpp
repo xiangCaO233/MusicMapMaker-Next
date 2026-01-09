@@ -14,12 +14,14 @@ int main(int argc, char* argv[])
     // 而 build 目录通常在 root/build/Modules/Main/ 下 (深度为 3 或 4)
     auto rootDir = std::filesystem::current_path();
     // 向上查找直到找到 assets 文件夹
-    while ( !std::filesystem::exists(rootDir / "assets") &&
-            rootDir.has_parent_path() ) {
+    while (!std::filesystem::exists(rootDir / "assets") &&
+           rootDir.has_parent_path())
+    {
         rootDir = rootDir.parent_path();
     }
 
-    if ( !std::filesystem::exists(rootDir / "assets") ) {
+    if (!std::filesystem::exists(rootDir / "assets"))
+    {
         XERROR("Fatal: Could not find assets directory!");
         return -1;
     }
