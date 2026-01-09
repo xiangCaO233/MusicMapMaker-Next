@@ -51,13 +51,16 @@ if(MSVC)
 elseif(MINGW)
     # --- Windows MinGW ---
     find_program(MAKE_EXE NAMES mingw32-make make)
-    set(LJ_LIB_NAME "libluajit.a")
+
+    set(LJ_LIB_NAME "libluajit-5.1.dll.a")  # 这是链接时用的导入库
+    set(LJ_DLL_NAME "lua51.dll")            # 这是运行时用的动态库
+    
     set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+    set(LJ_OUTPUT_DLL "${LJ_BUILD_SRC}/${LJ_DLL_NAME}")
 
     add_custom_command(
-        OUTPUT "${LJ_OUTPUT_LIB}"
+        OUTPUT "${LJ_OUTPUT_LIB}" "${LJ_OUTPUT_DLL}"
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${LJ_ORIGINAL_DIR}" "${LJ_BUILD_ROOT}"
-        # 加上 -j 多线程编译
         COMMAND ${MAKE_EXE} -j${HOST_CORES}
         WORKING_DIRECTORY "${LJ_BUILD_SRC}"
         COMMENT "Building LuaJIT (MinGW)..."

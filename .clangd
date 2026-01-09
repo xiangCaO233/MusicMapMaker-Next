@@ -1,0 +1,9 @@
+CompileFlags:
+    Add:
+        - -Wno-unknown-warning-option
+        - -Wno-unused-command-line-argument
+    Remove:
+        - -mno-direct-extern-access
+        - -fdeps-format=p1689r5 # 移除 GCC 特有的依赖跟踪选项
+        - -fmodule-mapper=* # 移除模块映射选项（通配符匹配）
+        - -fmodules-ts # 移除 C++ Modules TS 选项
