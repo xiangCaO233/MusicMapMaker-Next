@@ -7,6 +7,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 
+# 是否为Debug模式的宏
+add_definitions(-DBUILD_TYPE_DEBUG=$<CONFIG:Debug>)
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
@@ -14,6 +17,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
 include("project-configure")
 
 option(SOURCES_BUILD "Build Deps from sources." ON)
+
+find_package(Vulkan REQUIRED)
 
 add_subdirectory("3rdpty")
 add_subdirectory("Modules")
