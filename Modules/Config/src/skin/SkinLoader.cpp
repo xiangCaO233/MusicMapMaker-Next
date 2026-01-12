@@ -23,7 +23,9 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     // --- 路径注入 ---
     fs::path    path(luaFilePath);
     fs::path    absPath = fs::absolute(path);
-    std::string skinDir = absPath.parent_path().string();
+    m_data.skinPath = absPath.parent_path();
+    std::string skinDir = m_data.skinPath.generic_string();
+    // 规范路径字符串
     std::replace(skinDir.begin(), skinDir.end(), '\\', '/');
     if (!skinDir.empty() && skinDir.back() != '/') skinDir += '/';
     // 注入 __SKINLUA_DIR__
@@ -65,13 +67,22 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         }
     }
 
+    // 解析 Fonts
+    sol::table fontsTable = skinTable["fonts"];
+    for (const auto& kv : fontsTable)
+    {
+        std::string key        = kv.first.as<std::string>();
+        std::string rpath       = kv.second.as<std::string>();
+        m_data.fontPaths[key] = m_data.skinPath / "resources" / rpath;
+    }
+
     // 解析 Assets
     sol::table assetsTable = skinTable["assets"];
     for (const auto& kv : assetsTable)
     {
         std::string key        = kv.first.as<std::string>();
-        std::string path       = kv.second.as<std::string>();
-        m_data.assetPaths[key] = path;
+        std::string rpath       = kv.second.as<std::string>();
+        m_data.assetPaths[key] = m_data.skinPath / "resources" / rpath;
     }
 
     // 解析 layout
@@ -87,11 +98,24 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     return true;
 }
 
-std::string SkinManager::getAssetPath(const std::string& key)
+std::filesystem::path SkinManager::getFontPath(const std::string& key)
 {
-    if (m_data.assetPaths.find(key) != m_data.assetPaths.end())
+    if (auto fontPathit = m_data.fontPaths.find(key); 
+        fontPathit != m_data.fontPaths.end())
     {
-        return m_data.assetPaths[key];
+        return fontPathit->second;
+    }
+    XERROR("Asset key not found: " + key);
+    return "";
+
+}
+
+std::filesystem::path SkinManager::getAssetPath(const std::string& key)
+{
+    if (auto assetPathit = m_data.assetPaths.find(key);
+        assetPathit != m_data.assetPaths.end())
+    {
+        return assetPathit->second;
     }
     XERROR("Asset key not found: " + key);
     return "";

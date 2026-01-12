@@ -1,6 +1,9 @@
 #pragma once
 
-#include <memory>
+#include "vk/VKContext.h"
+#include <string_view>
+
+struct GLFWwindow;
 
 namespace MMM
 {
@@ -9,19 +12,20 @@ namespace Canvas
 class TestCanvas
 {
 public:
-    TestCanvas(int w, int h);
+    TestCanvas(int w, int h, std::string_view windwo_title);
     ~TestCanvas();
 
     // 窗口是否点击了关闭
     bool shouldClose();
 
     // 更新并交换缓冲区
-    void update();
+    void update(Graphic::VKContext& vkContext);
+
+    // 获取窗口句柄
+    GLFWwindow* getWindowHandle();
 
 private:
-    // GLFW上下文实现指针
-    struct GLFWContextImpl;
-    std::unique_ptr<GLFWContextImpl> m_glfwImplPtr;
+    GLFWwindow* m_windowHandle{ nullptr };
 };
 }  // namespace Canvas
 }  // namespace MMM
