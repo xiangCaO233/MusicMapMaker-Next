@@ -43,6 +43,12 @@ if(WIN32)
                 "FindVulkan Wrapper: Vendored lib directory not found: ${_VULKAN_LIB_PATH}"
             )
         endif()
+    else()
+        # =============================================================================
+        # 调用系统内置的标准 FindVulkan
+        # =============================================================================
+        # CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
+        include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
     endif()
 else()
     # =============================================================================
