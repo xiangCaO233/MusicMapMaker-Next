@@ -20,8 +20,8 @@ public:
 
 private:
     // GLFW上下文实现指针
-    struct GLFWContextImpl;
-    std::unique_ptr<GLFWContextImpl> m_glfwImplPtr;
+    struct ContextImpl;
+    std::unique_ptr<ContextImpl> m_CtxImplPtr;
 };
 }  // namespace Canvas
 }  // namespace MMM
