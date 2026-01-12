@@ -10,4 +10,4 @@ else()
     add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
 
-target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game)
+target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game 3rd_glfw)
