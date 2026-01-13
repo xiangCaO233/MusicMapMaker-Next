@@ -5,7 +5,22 @@ find_package(Vulkan REQUIRED)
 
 add_subdirectory("Font")
 
-add_library(Graphic SHARED src/Renderer.cpp)
+add_library(
+    Graphic
+    STATIC
+    src/vk/Instance.cpp
+    src/Renderer.cpp
+)
 
-target_include_directories(Graphic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(Graphic PUBLIC Log Vulkan::Vulkan)
+target_include_directories(
+    Graphic
+    PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_link_libraries(Graphic PUBLIC
+    Log
+    Font
+    3rd_glfw
+    Vulkan::Vulkan
+)
