@@ -8,7 +8,8 @@ add_subdirectory("Font")
 add_library(
     Graphic
     STATIC
-    src/vk/Instance.cpp
+    src/vk/VKContextGLFW.cpp
+    src/vk/VKContext.cpp
     src/Renderer.cpp
 )
 
