@@ -34,7 +34,7 @@ target_compile_features(imgui-static PRIVATE cxx_std_11)
 # Link the necessary dependencies. We link against `3rd_glfw`, which is our
 # interface library for GLFW + Vulkan. This will transitively link glfw and
 # Vulkan::Vulkan.
-target_link_libraries(imgui-static PUBLIC 3rd_glfw)
+target_link_libraries(imgui-static PUBLIC 3rd_glfw Vulkan::Vulkan)
 
 # --- 5. 创建统一的接口库 `3rd_imgui` ---
 # This is the final target that the main application (`MusicMapMaker-Next`)
