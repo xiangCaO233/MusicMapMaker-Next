@@ -28,12 +28,18 @@ bool TestCanvas::shouldClose()
     return m_windowHandle && glfwWindowShouldClose(m_windowHandle);
 }
 
+// 获取窗口句柄
+GLFWwindow* TestCanvas::getWindowHandle()
+{
+    return m_windowHandle;
+}
+
 // 具体的 GLFW 操作封装在这
 void TestCanvas::update()
 {
+    glfwPollEvents();
     if ( m_windowHandle ) {
-        glfwPollEvents();
-        glfwSwapBuffers(m_windowHandle);
+        // 更新窗口
     }
 }
 }  // namespace Canvas

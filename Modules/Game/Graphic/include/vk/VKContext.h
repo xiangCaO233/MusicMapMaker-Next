@@ -6,6 +6,8 @@
 #include <vulkan/vulkan_handles.hpp>
 #include <vulkan/vulkan_structs.hpp>
 
+struct GLFWwindow;
+
 namespace MMM
 {
 namespace Graphic
@@ -34,6 +36,11 @@ public:
     VKContext& operator=(VKContext&&)      = delete;
     VKContext& operator=(const VKContext&) = delete;
 
+    /*
+     * 初始化VK窗体相关资源
+     * */
+    void initVKWindowRess(GLFWwindow* window_ctx);
+
 private:
     VKContext();
     ~VKContext();
@@ -41,7 +48,7 @@ private:
     // GLFW相关
 private:
     /*
-     * 初始化GLFW窗口上下文
+     * 初始化GLFW上下文
      * */
     void initGLFW();
 
@@ -128,6 +135,16 @@ private:
     void enableVKValidateLayer();
 
     /*
+     * vk表面句柄
+     * */
+    vk::SurfaceKHR m_vkSurface{};
+
+    /*
+     * 初始化vk表面句柄
+     * */
+    void initSurface(GLFWwindow* window_handle);
+
+    /*
      * vk物理设备
      * */
     vk::PhysicalDevice m_vkPhysicalDevice{};
@@ -138,20 +155,11 @@ private:
     void pickPhysicalDevice();
 
     /*
-     * vk逻辑设备队列创建信息
-     * */
-    vk::DeviceQueueCreateInfo m_vkDeviceQueueCreateInfo{};
-
-    /*
-     * vk逻辑设备队列优先级表
-     * */
-    std::array<float, 1> m_vkDeviceQueuePriorities{ 1.f };
-
-    /*
      * vk逻辑设备图形队列族索引
      * */
     struct QueueFamilyIndices final {
-        std::optional<uint32_t> graphicsQueue;
+        std::optional<uint32_t> graphicsQueueIndex;
+        std::optional<uint32_t> presentQueueIndex;
     };
     QueueFamilyIndices m_queueFamilyIndices{};
 
@@ -166,11 +174,6 @@ private:
     vk::Device m_vkLogicalDevice{};
 
     /*
-     * vk逻辑设备创建信息
-     * */
-    vk::DeviceCreateInfo m_vkDeviceCreateInfo{};
-
-    /*
      * 初始化vk逻辑设备
      * */
     void initLogicDevice();
@@ -179,6 +182,11 @@ private:
      * 逻辑设备图形队列
      * */
     vk::Queue m_LogicDeviceGraphicsQueue;
+
+    /*
+     * 逻辑设备呈现队列
+     * */
+    vk::Queue m_LogicDevicePresentQueue;
 };
 
 

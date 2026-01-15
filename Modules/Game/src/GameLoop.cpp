@@ -29,6 +29,11 @@ int GameLoop::start(std::string_view window_title)
     // 初始化窗口
     Canvas::TestCanvas canvas(800, 600, window_title);
 
+    // VKContext 表面资源后续初始化
+    if ( vkContext ) {
+        vkContext->get().initVKWindowRess(canvas.getWindowHandle());
+    }
+
     while ( !canvas.shouldClose() ) {
         canvas.update();
     }

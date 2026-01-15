@@ -1,7 +1,9 @@
 #include "vk/VKContext.h"
 #include "colorful-log.h"
 
+#include "glfw/GLFWHeader.h"
 #include <expected>
+#include <set>
 #include <stdexcept>
 
 namespace MMM
@@ -56,17 +58,12 @@ VKContext::VKContext()
         // 这里必须传入 dldy 否则会链接报错
         m_vkDebugMessenger = m_vkInstance.createDebugUtilsMessengerEXT(
             m_vkDebugUtilCreateInfo, nullptr, m_vkDldy);
-        XINFO("Vulkan Debug Messenger 开启成功");
+        XINFO("Vulkan Debug Messenger Initialize Successed");
     }
 
-    // 挑选物理显卡
-    pickPhysicalDevice();
-
-    // 查询图形队列族索引
-    queryQueueFamilyIndices();
-
-    // 初始化逻辑设备
-    initLogicDevice();
+    // 初始化窗口表面和
+    // 后续显卡设备初始化
+    // 放在窗口相关资源初始化函数中
 }
 
 VKContext::~VKContext()
@@ -76,6 +73,10 @@ VKContext::~VKContext()
         m_vkLogicalDevice.destroy();
         XINFO("VK Logical Device destroyed.");
     }
+
+    // 销毁vk表面
+    if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
+    XINFO("VK Surface destroyed.");
 
     // 销毁可能的vk调试信息工具实例
     if ( is_debug() && m_vkDebugMessenger ) {
@@ -234,6 +235,41 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
 }
 
 /*
+ * 初始化VK窗体相关资源
+ * */
+void VKContext::initVKWindowRess(GLFWwindow* window_ctx)
+{
+    // 初始化vk表面句柄
+    initSurface(window_ctx);
+
+    // 挑选物理显卡
+    pickPhysicalDevice();
+
+    // 查询图形队列族索引
+    queryQueueFamilyIndices();
+
+    // 初始化逻辑设备
+    initLogicDevice();
+}
+
+/*
+ * 初始化vk表面句柄
+ * */
+void VKContext::initSurface(GLFWwindow* window_handle)
+{
+    // C 风格的 Surface 创建（GLFW 提供的快捷函数）
+    VkSurfaceKHR surface;
+    if ( glfwCreateWindowSurface(
+             m_vkInstance, window_handle, nullptr, &surface) != VK_SUCCESS ) {
+        throw std::runtime_error("Failed to create window surface!");
+    }
+
+    // 转换为 vk::SurfaceKHR
+    m_vkSurface = surface;
+    XINFO("Vulkan Surface created.");
+}
+
+/*
  * 挑选vk物理设备
  * */
 void VKContext::pickPhysicalDevice()
@@ -288,21 +324,31 @@ void VKContext::queryQueueFamilyIndices()
     auto phyDeviceQueueFamilyProperties =
         m_vkPhysicalDevice.getQueueFamilyProperties();
 
-    // 2.查询到支持图形的显卡队列族索引并保存
+    // 2.查询到支持的显卡队列族索引并保存
     for ( size_t i{ 0 }; i < phyDeviceQueueFamilyProperties.size(); ++i ) {
         const auto& phyDeviceQueueFamilyProperty =
             phyDeviceQueueFamilyProperties[i];
         const auto& queueFlags = phyDeviceQueueFamilyProperty.queueFlags;
 
+        // 检查是否支持图形功能
         if ( queueFlags & vk::QueueFlagBits::eGraphics ) {
-            // 使用图形功能
-            m_queueFamilyIndices.graphicsQueue = i;
+            m_queueFamilyIndices.graphicsQueueIndex = i;
+        }
+
+        // 检查是否支持在该 Surface 上显示
+        if ( m_vkPhysicalDevice.getSurfaceSupportKHR(i, m_vkSurface) ) {
+            m_queueFamilyIndices.presentQueueIndex = i;
+        }
+
+        if ( m_queueFamilyIndices.graphicsQueueIndex &&
+             m_queueFamilyIndices.presentQueueIndex ) {
+            // 找到了同时支持两者的（或者分别找到了）
             break;
         }
     }
 
     // 3.没查到的话及时销毁已创建的资源并抛出异常
-    if ( !m_queueFamilyIndices.graphicsQueue.has_value() ) {
+    if ( !m_queueFamilyIndices.graphicsQueueIndex.has_value() ) {
         // 销毁调试消息器 (在 Instance 销毁之前)
         // 需要传入之前初始化的 dldy
         if ( is_debug() && m_vkDebugMessenger ) {
@@ -310,6 +356,10 @@ void VKContext::queryQueueFamilyIndices()
                 m_vkDebugMessenger, nullptr, m_vkDldy);
             XINFO("VK Debug Messenger destroyed.");
         }
+
+        // 销毁vk表面
+        if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
+        XINFO("VK Surface destroyed.");
 
         // 销毁vk实例
         m_vkInstance.destroy();
@@ -328,30 +378,57 @@ void VKContext::queryQueueFamilyIndices()
  * */
 void VKContext::initLogicDevice()
 {
-    // 1.初始化队列创建信息
-    m_vkDeviceQueueCreateInfo
-        // 优先级表
-        .setQueuePriorities(m_vkDeviceQueuePriorities)
-        // 图形队列族索引
-        .setQueueFamilyIndex(m_queueFamilyIndices.graphicsQueue.value());
+    // vk逻辑设备队列优先级表
+    std::array<float, 1> vkDeviceQueuePriorities{ 1.f };
 
-    // 2.初始化逻辑设备创建信息
-    m_vkDeviceCreateInfo
+    // 唯一队列族集合(set自动去重)
+    std::set<uint32_t> uniqueQueueFamilies = {
+        m_queueFamilyIndices.graphicsQueueIndex.value(),
+        m_queueFamilyIndices.presentQueueIndex.value()
+    };
+
+    // 1.为每个队列族索引创建对应的队列创建信息
+    std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos;
+
+    for ( const uint32_t& queueFamily : uniqueQueueFamilies ) {
+        vk::DeviceQueueCreateInfo queueInfo{};
+        queueInfo.setQueueFamilyIndex(queueFamily)
+            .setQueueCount(1)
+            .setQueuePriorities(vkDeviceQueuePriorities);
+        queueCreateInfos.push_back(queueInfo);
+    }
+
+    // 2.准备逻辑设备需要启用的扩展
+    // const std::array<const char*, 1> deviceExtensions = {
+    //     // 交换链扩展
+    //     VK_KHR_SWAPCHAIN_EXTENSION_NAME
+    // };
+
+    // 3.初始化队列创建信息
+    vk::DeviceCreateInfo vkDeviceCreateInfo;
+
+    // 4.初始化逻辑设备创建信息
+    vkDeviceCreateInfo
         // 将队列创建信息设置到逻辑设备创建信息中
-        .setQueueCreateInfos(m_vkDeviceQueueCreateInfo)
+        .setQueueCreateInfos(queueCreateInfos)
         // 启用逻辑设备功能
-        .setPEnabledFeatures({})
-        // 启用逻辑设备扩展
-        .setPEnabledExtensionNames({});
+        .setPEnabledFeatures({});
+    // 启用逻辑设备扩展
+    // .setPEnabledExtensionNames(deviceExtensions);
 
-    // 3.创建vk逻辑设备 (通过物理设备)
-    m_vkLogicalDevice = m_vkPhysicalDevice.createDevice(m_vkDeviceCreateInfo);
+    // 5.创建vk逻辑设备 (通过物理设备)
+    m_vkLogicalDevice = m_vkPhysicalDevice.createDevice(vkDeviceCreateInfo);
     XINFO("VK Logic Device Initialized.");
 
-    // 4.获取队列句柄
+    // 6.获取图形队列族句柄
     m_LogicDeviceGraphicsQueue = m_vkLogicalDevice.getQueue(
-        m_queueFamilyIndices.graphicsQueue.value(), 0);
+        m_queueFamilyIndices.graphicsQueueIndex.value(), 0);
     XINFO("Graphics Queue handle retrieved.");
+
+    // 7.获取呈现队列族句柄
+    m_LogicDevicePresentQueue = m_vkLogicalDevice.getQueue(
+        m_queueFamilyIndices.presentQueueIndex.value(), 0);
+    XINFO("Present Queue handle retrieved.");
 }
 
 }  // namespace Graphic

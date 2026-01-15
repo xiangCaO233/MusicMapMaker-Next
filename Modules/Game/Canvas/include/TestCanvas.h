@@ -20,6 +20,9 @@ public:
     // 更新并交换缓冲区
     void update();
 
+    // 获取窗口句柄
+    GLFWwindow* getWindowHandle();
+
 private:
     GLFWwindow* m_windowHandle{ nullptr };
 };
