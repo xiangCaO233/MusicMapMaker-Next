@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <expected>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_handles.hpp>
@@ -59,27 +60,22 @@ private:
     /*
      * vk应用程序信息
      * */
-    vk::ApplicationInfo m_vkAppInfo;
+    vk::ApplicationInfo m_vkAppInfo{};
 
     /*
      * vk实例创建信息
      * */
-    vk::InstanceCreateInfo m_vkInstanceCreateInfo;
+    vk::InstanceCreateInfo m_vkInstanceCreateInfo{};
 
     /*
      * vk动态加载器
      * */
-    vk::detail::DispatchLoaderDynamic m_vkDldy;
+    vk::detail::DispatchLoaderDynamic m_vkDldy{};
 
     /*
      * vk实例
      * */
-    vk::Instance m_vkInstance;
-
-    /*
-     * vk设备
-     * */
-    vk::PhysicalDevice m_vkPhysicalDevice;
+    vk::Instance m_vkInstance{};
 
     /*
      * 初始化vk应用程序信息
@@ -95,7 +91,7 @@ private:
      * vk扩展列表
      * */
     using VKExtensions = std::vector<const char*>;
-    VKExtensions m_vkExtensions;
+    VKExtensions m_vkExtensions{};
 
     // vk debug回调
     static VKAPI_ATTR VkBool32 VKAPI_PTR
@@ -112,12 +108,12 @@ private:
     /*
      * vk调试创建信息
      * */
-    vk::DebugUtilsMessengerCreateInfoEXT m_vkDebugUtilCreateInfo;
+    vk::DebugUtilsMessengerCreateInfoEXT m_vkDebugUtilCreateInfo{};
 
     /*
      * vkdebug调试信息工具
      * */
-    vk::DebugUtilsMessengerEXT m_vkDebugMessenger;
+    vk::DebugUtilsMessengerEXT m_vkDebugMessenger{};
 
     /*
      * vk验证层列表
@@ -130,6 +126,59 @@ private:
      * 启用vk验证层
      * */
     void enableVKValidateLayer();
+
+    /*
+     * vk物理设备
+     * */
+    vk::PhysicalDevice m_vkPhysicalDevice{};
+
+    /*
+     * 挑选vk物理设备
+     * */
+    void pickPhysicalDevice();
+
+    /*
+     * vk逻辑设备队列创建信息
+     * */
+    vk::DeviceQueueCreateInfo m_vkDeviceQueueCreateInfo{};
+
+    /*
+     * vk逻辑设备队列优先级表
+     * */
+    std::array<float, 1> m_vkDeviceQueuePriorities{ 1.f };
+
+    /*
+     * vk逻辑设备图形队列族索引
+     * */
+    struct QueueFamilyIndices final {
+        std::optional<uint32_t> graphicsQueue;
+    };
+    QueueFamilyIndices m_queueFamilyIndices{};
+
+    /*
+     * 查询图形队列族索引
+     * */
+    void queryQueueFamilyIndices();
+
+    /*
+     * vk逻辑设备
+     * */
+    vk::Device m_vkLogicalDevice{};
+
+    /*
+     * vk逻辑设备创建信息
+     * */
+    vk::DeviceCreateInfo m_vkDeviceCreateInfo{};
+
+    /*
+     * 初始化vk逻辑设备
+     * */
+    void initLogicDevice();
+
+    /*
+     * 逻辑设备图形队列
+     * */
+    vk::Queue m_LogicDeviceGraphicsQueue;
 };
 
 

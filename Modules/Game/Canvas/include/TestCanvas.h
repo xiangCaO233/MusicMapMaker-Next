@@ -1,6 +1,8 @@
 #pragma once
 
-#include <memory>
+#include <string_view>
+
+struct GLFWwindow;
 
 namespace MMM
 {
@@ -9,7 +11,7 @@ namespace Canvas
 class TestCanvas
 {
 public:
-    TestCanvas(int w, int h);
+    TestCanvas(int w, int h, std::string_view windwo_title);
     ~TestCanvas();
 
     // 窗口是否点击了关闭
@@ -19,9 +21,7 @@ public:
     void update();
 
 private:
-    // GLFW上下文实现指针
-    struct ContextImpl;
-    std::unique_ptr<ContextImpl> m_CtxImplPtr;
+    GLFWwindow* m_windowHandle{ nullptr };
 };
 }  // namespace Canvas
 }  // namespace MMM

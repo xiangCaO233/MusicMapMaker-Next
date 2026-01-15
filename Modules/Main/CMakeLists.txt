@@ -6,8 +6,12 @@ if(WIN32)
     else()
         add_executable(MusicMapMaker-Next WIN32 src/main.cpp)
     endif()
-else() 
+else()
     add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
 
-target_link_libraries(MusicMapMaker-Next PRIVATE Log Config Audio Game 3rd_glfw)
+target_link_libraries(
+    MusicMapMaker-Next
+    PRIVATE
+    Log Config Audio Game
+)
