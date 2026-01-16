@@ -18,5 +18,7 @@ include("project-configure")
 
 option(SOURCES_BUILD "Build Deps from sources." ON)
 
+find_package(Vulkan REQUIRED)
+
 add_subdirectory("3rdpty")
 add_subdirectory("Modules")

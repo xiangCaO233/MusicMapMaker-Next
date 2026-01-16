@@ -8,6 +8,8 @@ if(WIN32)
     endif()
 else()
     add_executable(MusicMapMaker-Next src/main.cpp)
+    add_executable(imgui-demo src/imgui_main_demo.cpp)
+    target_link_libraries(imgui-demo PUBLIC Vulkan::Vulkan 3rd_glfw 3rd_imgui Log Config Audio Game)
 endif()
 
 target_link_libraries(
