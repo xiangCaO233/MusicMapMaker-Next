@@ -1,6 +1,6 @@
-#include "vk/VKRenderPass.h"
-#include "colorful-log.h"
-#include "vk/VKSwapchain.h"
+#include "graphic/vk/VKRenderPass.h"
+#include "log/colorful-log.h"
+#include "graphic/vk/VKSwapchain.h"
 
 namespace MMM
 {

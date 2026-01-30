@@ -1,8 +1,8 @@
-#include "GameLoop.h"
-#include "GlobDefs.h"
-#include "TestCanvas.h"
-#include "colorful-log.h"
-#include "vk/VKContext.h"
+#include "game/GameLoop.h"
+#include "game/GlobDefs.h"
+#include "canvas/TestCanvas.h"
+#include "log/colorful-log.h"
+#include "graphic/vk/VKContext.h"
 
 namespace MMM
 {

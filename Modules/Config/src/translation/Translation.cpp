@@ -1,5 +1,5 @@
-#include "translation/Translation.h"
-#include "colorful-log.h"
+#include "config/translation/Translation.h"
+#include "log/colorful-log.h"
 #include <filesystem>
 #include <sol/sol.hpp>
 

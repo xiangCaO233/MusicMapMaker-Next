@@ -1,5 +1,5 @@
-#include "vk/VKContext.h"
-#include "colorful-log.h"
+#include "graphic/vk/VKContext.h"
+#include "log/colorful-log.h"
 
 #include <GLFW/glfw3.h>
 #include <filesystem>

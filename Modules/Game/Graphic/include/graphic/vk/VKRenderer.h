@@ -1,7 +1,7 @@
 #pragma once
 
-#include "vk/VKRenderPipeline.h"
-#include "vk/VKSwapchain.h"
+#include "graphic/vk/VKRenderPipeline.h"
+#include "graphic/vk/VKSwapchain.h"
 #include "vulkan/vulkan.hpp"
 
 namespace MMM

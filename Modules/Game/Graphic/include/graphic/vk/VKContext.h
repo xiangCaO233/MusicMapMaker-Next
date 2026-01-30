@@ -1,11 +1,11 @@
 #pragma once
 
 #include "VKShader.h"
-#include "vk/VKQueueFamilyDef.h"
-#include "vk/VKRenderPass.h"
-#include "vk/VKRenderPipeline.h"
-#include "vk/VKRenderer.h"
-#include "vk/VKSwapchain.h"
+#include "graphic/vk/VKQueueFamilyDef.h"
+#include "graphic/vk/VKRenderPass.h"
+#include "graphic/vk/VKRenderPipeline.h"
+#include "graphic/vk/VKRenderer.h"
+#include "graphic/vk/VKSwapchain.h"
 #include <array>
 #include <expected>
 #include <memory>

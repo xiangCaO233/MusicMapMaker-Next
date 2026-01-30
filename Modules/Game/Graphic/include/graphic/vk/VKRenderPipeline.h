@@ -1,8 +1,8 @@
 #pragma once
 
-#include "vk/VKRenderPass.h"
-#include "vk/VKShader.h"
-#include "vk/VKSwapchain.h"
+#include "graphic/vk/VKRenderPass.h"
+#include "graphic/vk/VKShader.h"
+#include "graphic/vk/VKSwapchain.h"
 
 namespace MMM
 {
