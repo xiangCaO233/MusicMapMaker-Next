@@ -1,5 +1,6 @@
 #include "graphic/vk/VKRenderPipeline.h"
 #include "log/colorful-log.h"
+#include "vk/mesh/VKVertex.h"
 #include <cassert>
 
 namespace MMM
@@ -7,6 +8,16 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 构造函数，创建图形管线
+ *
+ * @param logicalDevice 逻辑设备引用
+ * @param shader 着色器管理器引用 (提供 Shader Stages)
+ * @param renderPass 渲染流程引用 (提供附件格式兼容性)
+ * @param swapchain 交换链引用
+ * @param w 视口宽度
+ * @param h 视口高度
+ */
 VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                                    VKRenderPass& renderPass,
                                    VKSwapchain& swapchain, int w, int h)
@@ -23,6 +34,10 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 
     // 4.1:顶点输入状态创建信息
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
+    // 设置顶点输入属性描述信息
+    pipelineVertexInputStateCreateInfo
+        .setVertexBindingDescriptions(Graphic::VKVERTEX_BIND_DESC)
+        .setVertexAttributeDescriptions(Graphic::VKVERTEX_ATTR_DESC);
     graphicsPipelineCreateInfo.setPVertexInputState(
         &pipelineVertexInputStateCreateInfo);
 

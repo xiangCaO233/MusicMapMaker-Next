@@ -6,6 +6,13 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 构造函数：基础管线 (Vertex + Fragment)
+ *
+ * @param vkLogicalDevice 逻辑设备引用
+ * @param vertexSource 顶点着色器 SPIR-V 二进制数据
+ * @param fragmentSource 片段着色器 SPIR-V 二进制数据
+ */
 VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
                    std::string_view fragmentSource)
     : m_vkLogicalDevice(vkLogicalDevice)
@@ -47,6 +54,14 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
     m_shaderStageCreateInfos.push_back(pipelineFragmentShaderStageCreateInfo);
 }
 
+/**
+ * @brief 构造函数：含几何着色器 (Vertex + Geometry + Fragment)
+ *
+ * @param vkLogicalDevice 逻辑设备引用
+ * @param vertexSource 顶点着色器 SPIR-V 二进制数据
+ * @param geometrySource 几何着色器 SPIR-V 二进制数据
+ * @param fragmentSource 片段着色器 SPIR-V 二进制数据
+ */
 VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
                    std::string_view geometrySource,
                    std::string_view fragmentSource)
@@ -85,9 +100,11 @@ VKShader::~VKShader()
     }
 }
 
-/*
- * 获取vk渲染管线着色器模块stage创建信息列表
- **/
+/**
+ * @brief 获取渲染管线所需的着色器阶段创建信息列表
+ * @return std::vector<vk::PipelineShaderStageCreateInfo>
+ *         包含所有已加载 Shader 的 Stage 配置信息
+ */
 std::vector<vk::PipelineShaderStageCreateInfo>
 VKShader::getShaderStageCreateInfos()
 {

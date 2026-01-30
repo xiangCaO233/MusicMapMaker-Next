@@ -7,6 +7,11 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 构造函数
+ * @param logicalDevice Vulkan 逻辑设备引用
+ * @param swapchain 交换链引用 (用于获取图像格式)
+ */
 VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain)
     : m_logicalDevice(logicalDevice)
 {

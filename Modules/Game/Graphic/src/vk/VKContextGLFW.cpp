@@ -7,9 +7,9 @@ namespace MMM
 {
 namespace Graphic
 {
-/*
- * 初始化GLFW窗口上下文
- * */
+/**
+ * @brief 初始化 GLFW 上下文
+ */
 void VKContext::initGLFW()
 {
     // 1.初始化GLFW
@@ -33,9 +33,9 @@ void VKContext::initGLFW()
     XINFO("GLFW Vulkan is supported.");
 }
 
-/*
- * 注册GLFW窗口扩展
- * */
+/**
+ * @brief 注册 GLFW 所需的 Vulkan 扩展
+ */
 void VKContext::registerGLFWExtentions()
 {
     // 1.3获取 GLFW 需要的扩展
@@ -61,9 +61,9 @@ void VKContext::registerGLFWExtentions()
     // requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 }
 
-/*
- * 释放GLFW
- * */
+/**
+ * @brief 释放 GLFW 资源
+ */
 void VKContext::releaseGLFW()
 {
     glfwTerminate();

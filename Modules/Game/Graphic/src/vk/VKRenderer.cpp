@@ -6,8 +6,30 @@ namespace MMM
 {
 namespace Graphic
 {
+// 顶点信息
+static std::array<VKVertex, 3> vertices{
+    VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
+              .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
+    VKVertex{ .pos   = { .x = .5f, .y = .5f },
+              .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
+    VKVertex{ .pos   = { .x = -0.5f, .y = 0.5f },
+              .color = { .r = 0.0f, .g = 0.0f, .b = 1.0f, .a = 1.0f } },
 
-VKRenderer::VKRenderer(vk::Device& logicalDevice, VKSwapchain& swapchain,
+};
+
+/**
+ * @brief 构造函数，初始化渲染所需的同步对象和命令资源
+ *
+ * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
+ * @param logicalDevice 逻辑设备引用
+ * @param swapchain 交换链引用
+ * @param pipeline 渲染管线引用
+ * @param renderPass 渲染流程引用
+ * @param logicDeviceGraphicsQueue 图形队列引用
+ * @param logicDevicePresentQueue 呈现队列引用
+ */
+VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
+                       vk::Device& logicalDevice, VKSwapchain& swapchain,
                        VKRenderPipeline& pipeline, VKRenderPass& renderPass,
                        vk::Queue& logicDeviceGraphicsQueue,
                        vk::Queue& logicDevicePresentQueue)
@@ -47,7 +69,7 @@ VKRenderer::VKRenderer(vk::Device& logicalDevice, VKSwapchain& swapchain,
 
     // 创建信号量和同步栅
     m_imageAvailableSems.resize(m_avalableImageBufferCount);
-    m_imageFinishedSems.resize(m_avalableImageBufferCount);
+    m_renderFinishedSems.resize(m_avalableImageBufferCount);
     m_cmdAvailableFences.resize(m_avalableImageBufferCount);
 
     for ( size_t i{ 0 }; i < m_avalableImageBufferCount; ++i ) {
@@ -55,7 +77,7 @@ VKRenderer::VKRenderer(vk::Device& logicalDevice, VKSwapchain& swapchain,
         vk::SemaphoreCreateInfo semaphoreCreateInfo;
         m_imageAvailableSems[i] =
             logicalDevice.createSemaphore(semaphoreCreateInfo);
-        m_imageFinishedSems[i] =
+        m_renderFinishedSems[i] =
             logicalDevice.createSemaphore(semaphoreCreateInfo);
         XINFO("Created image Semaphores For ImageBuffer{}.", i);
 
@@ -66,12 +88,33 @@ VKRenderer::VKRenderer(vk::Device& logicalDevice, VKSwapchain& swapchain,
         m_cmdAvailableFences[i] = logicalDevice.createFence(fenceCreateInfo);
         XINFO("Created cmd Sync Fence For ImageBuffer{}.", i);
     }
+
+    // 创建VK内存缓冲区
+    m_vkMemBuffer = std::make_unique<VKMemBuffer>(
+        vkPhysicalDevice,
+        logicalDevice,
+        sizeof(vertices),
+        vk::BufferUsageFlagBits::eVertexBuffer,
+        // 主机可访问 + 可协同工作
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    // 在这里上传一次数据
+    void* data =
+        logicalDevice.mapMemory(m_vkMemBuffer->m_vkDevMem, 0, sizeof(vertices));
+    memcpy(data, vertices.data(), sizeof(vertices));
+    logicalDevice.unmapMemory(m_vkMemBuffer->m_vkDevMem);
+
+    XINFO("Uploaded vertex data to buffer.");
 }
 
 VKRenderer::~VKRenderer()
 {
     // 等待设备空闲，确保不再使用任何资源
     m_vkLogicalDevice.waitIdle();
+
+    // 释放VK内存缓冲区
+    m_vkMemBuffer.reset();
 
     for ( auto& cmdAvailableFence : m_cmdAvailableFences ) {
         m_vkLogicalDevice.destroyFence(cmdAvailableFence);
@@ -81,8 +124,8 @@ VKRenderer::~VKRenderer()
     for ( auto& imageAvailableSem : m_imageAvailableSems ) {
         m_vkLogicalDevice.destroySemaphore(imageAvailableSem);
     }
-    for ( auto& imageFinishedSem : m_imageFinishedSems ) {
-        m_vkLogicalDevice.destroySemaphore(imageFinishedSem);
+    for ( auto& renderFinishedSem : m_renderFinishedSems ) {
+        m_vkLogicalDevice.destroySemaphore(renderFinishedSem);
     }
     XINFO("Destroyed All image Semaphores.");
 
@@ -96,21 +139,13 @@ VKRenderer::~VKRenderer()
     XINFO("Destroyed VK Command Pool.");
 }
 
-/*
- * 执行渲染
- * */
+/**
+ * @brief 执行单帧渲染
+ *
+ * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
+ */
 void VKRenderer::render()
 {
-    // 顶点信息
-    static std::array<VKVertex, 3> vertices{
-        VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
-                  .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
-        VKVertex{ .pos   = { .x = .5f, .y = .5f },
-                  .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
-        VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
-                  .color = { .r = 0.f, .g = 0.f, .b = 1.f, .a = 1.f } },
-
-    };
     // 等待cmd完成
     auto waitResult = m_vkLogicalDevice.waitForFences(
         m_cmdAvailableFences[m_currentFrameIndex],
@@ -135,7 +170,7 @@ void VKRenderer::render()
     auto imageIndex = imageResult.value;
 
     // 重置命令缓冲
-    auto& currentCmdBuffer = m_vkCommandBuffers[imageIndex];
+    auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
     currentCmdBuffer.reset();
 
     // 准备开始输入命令
@@ -185,6 +220,14 @@ void VKRenderer::render()
         // 真 - 命令录制
         currentCmdBuffer.beginRenderPass(renderPassBeginInfo, {});
         {
+            // 绑定顶点缓冲区
+            currentCmdBuffer.bindVertexBuffers(
+                // 多个buffer时要绑定第几个
+                0,
+                // 可以传入多个buffer
+                m_vkMemBuffer->m_vkBuffer,
+                // 偏移量
+                { 0 });
             currentCmdBuffer.draw(
                 // 绘制几个顶点
                 3
@@ -220,7 +263,7 @@ void VKRenderer::render()
         // 设置等待的阶段掩码
         .setWaitDstStageMask(waitStages)
         // 发出信号量
-        .setSignalSemaphores(m_imageFinishedSems[imageIndex]);
+        .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
     m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
 
@@ -232,7 +275,7 @@ void VKRenderer::render()
         // 设置交换链
         .setSwapchains(m_vkSwapChain.m_swapchain)
         // 等待信号量
-        .setWaitSemaphores(m_imageFinishedSems[imageIndex]);
+        .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
     auto presentResult = m_LogicDevicePresentQueue.presentKHR(presentInfo);
     if ( presentResult != vk::Result::eSuccess ) {
         XWARN("Present failed");

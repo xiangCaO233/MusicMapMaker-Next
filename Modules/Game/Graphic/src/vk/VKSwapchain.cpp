@@ -7,6 +7,16 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 构造函数，创建交换链及其图像资源
+ *
+ * @param vkPhysicalDevice 物理设备引用 (查询表面支持能力)
+ * @param vkLogicalDevice 逻辑设备引用
+ * @param vkSurface 窗口表面句柄
+ * @param queueFamilyIndices 队列族索引信息
+ * @param w 期望的宽度
+ * @param h 期望的高度
+ */
 VKSwapchain::VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
                          vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
                          QueueFamilyIndices& queueFamilyIndices, int w, int h)
@@ -203,17 +213,24 @@ VKSwapchain::~VKSwapchain()
     XINFO("SwapChain destroyed.");
 }
 
-/*
- * 获取vk交换链创建信息
- * */
+/**
+ * @brief 获取交换链创建信息
+ * @return const vk::SwapchainCreateInfoKHR&
+ * 包含图像格式、尺寸、呈现模式等信息
+ */
 const vk::SwapchainCreateInfoKHR& VKSwapchain::info() const
 {
     return m_swapchainCreateInfo;
 }
 
-/*
- * 创建vk帧缓冲 - 时序要求,必须在后面手动调用
- * */
+/**
+ * @brief 创建帧缓冲区 (Framebuffer)
+ *
+ * @note 时序要求：必须在 RenderPass 创建之后手动调用此函数，
+ * 因为 Framebuffer 依赖于 RenderPass 的结构。
+ *
+ * @param renderPass 渲染流程引用
+ */
 void VKSwapchain::createFramebuffers(VKRenderPass& renderPass)
 {
     for ( auto& imageBuffer : m_vkImageBuffers ) {
@@ -235,9 +252,12 @@ void VKSwapchain::createFramebuffers(VKRenderPass& renderPass)
     XINFO("Successfully Created [{}] FrameBuffers", m_vkImageBuffers.size());
 }
 
-/*
- * 销毁vk帧缓冲 - 时序要求,必须在Swapchain释放前手动调用
- * */
+/**
+ * @brief 销毁帧缓冲区
+ *
+ * @note 时序要求：必须在 Swapchain 析构之前手动调用（通常在 Context
+ * 析构中）， 或者在重建 Swapchain 时调用。
+ */
 void VKSwapchain::destroyFramebuffers()
 {
     for ( auto& imageBuffer : m_vkImageBuffers ) {
