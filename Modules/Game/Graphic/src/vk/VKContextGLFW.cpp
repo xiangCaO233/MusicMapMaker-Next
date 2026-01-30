@@ -1,6 +1,6 @@
-#include "colorful-log.h"
-#include "glfw/GLFWHeader.h"
-#include "vk/VKContext.h"
+#include "log/colorful-log.h"
+#include "graphic/glfw/GLFWHeader.h"
+#include "graphic/vk/VKContext.h"
 #include <stdexcept>
 
 namespace MMM

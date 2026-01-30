@@ -1,5 +1,5 @@
-#include "colorful-log.h"
-#include "skin/SkinConfig.h"
+#include "log/colorful-log.h"
+#include "config/skin/SkinConfig.h"
 #include <filesystem>
 #include <sol/sol.hpp>
 

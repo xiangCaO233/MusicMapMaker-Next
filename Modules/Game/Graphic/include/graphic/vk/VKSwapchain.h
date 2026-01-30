@@ -1,7 +1,7 @@
 #pragma once
 
-#include "vk/VKQueueFamilyDef.h"
-#include "vk/VKRenderPass.h"
+#include "graphic/vk/VKQueueFamilyDef.h"
+#include "graphic/vk/VKRenderPass.h"
 #include <vulkan/vulkan.hpp>
 
 namespace MMM

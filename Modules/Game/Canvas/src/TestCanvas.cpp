@@ -1,7 +1,8 @@
-#include "TestCanvas.h"
-#include "CanvasDefs.h"
+#include "canvas/TestCanvas.h"
+#include "canvas/CanvasDefs.h"
 
-#include "glfw/GLFWHeader.h"
+#include "graphic/vk/VKContext.h"
+#include "graphic/glfw/GLFWHeader.h"
 
 namespace MMM
 {

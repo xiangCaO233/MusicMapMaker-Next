@@ -1,5 +1,5 @@
-#include "vk/VKShader.h"
-#include "colorful-log.h"
+#include "graphic/vk/VKShader.h"
+#include "log/colorful-log.h"
 
 namespace MMM
 {

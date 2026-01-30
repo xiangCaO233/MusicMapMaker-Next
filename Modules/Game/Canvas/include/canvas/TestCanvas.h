@@ -1,12 +1,14 @@
 #pragma once
 
-#include "vk/VKContext.h"
 #include <string_view>
 
 struct GLFWwindow;
 
 namespace MMM
 {
+namespace Graphic {
+class VKContext;
+}
 namespace Canvas
 {
 class TestCanvas

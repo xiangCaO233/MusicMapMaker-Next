@@ -1,7 +1,7 @@
-#include "GameLoop.h"
-#include "colorful-log.h"
-#include "skin/SkinConfig.h"
-#include "translation/Translation.h"
+#include "game/GameLoop.h"
+#include "log/colorful-log.h"
+#include "config/skin/SkinConfig.h"
+#include "config/translation/Translation.h"
 #include <filesystem>
 
 int main(int argc, char* argv[])

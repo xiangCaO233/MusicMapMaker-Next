@@ -1,7 +1,7 @@
 #ifndef MMM_GLOBDEFS_H
 #define MMM_GLOBDEFS_H
 
-#include "colorful-log.h"
+#include "log/colorful-log.h"
 
 namespace MMM
 {
