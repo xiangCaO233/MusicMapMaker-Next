@@ -1,6 +1,6 @@
 #include "graphic/vk/VKRenderPipeline.h"
 #include "log/colorful-log.h"
-#include "vk/mesh/VKVertex.h"
+#include "graphic/vk/mesh/VKVertex.h"
 #include <cassert>
 
 namespace MMM

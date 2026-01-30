@@ -1,5 +1,5 @@
-#include "vk/mem/VKMemBuffer.h"
-#include "colorful-log.h"
+#include "graphic/vk/mem/VKMemBuffer.h"
+#include "log/colorful-log.h"
 
 namespace MMM
 {

@@ -2,7 +2,7 @@
 
 #include "graphic/vk/VKRenderPipeline.h"
 #include "graphic/vk/VKSwapchain.h"
-#include "vk/mem/VKMemBuffer.h"
+#include "graphic/vk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
 
