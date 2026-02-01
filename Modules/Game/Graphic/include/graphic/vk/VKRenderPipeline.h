@@ -47,6 +47,9 @@ private:
     /// @brief Vulkan 图形管线句柄
     vk::Pipeline m_graphicsPipeline;
 
+    /// @brief Vulkan Descriptor Sets布局句柄 (描述 Uniform等资源布局)
+    vk::DescriptorSetLayout m_descriptorSetLayout;
+
     /// @brief Vulkan 管线布局句柄 (描述 Push Constants 和 Descriptor Sets)
     vk::PipelineLayout m_graphicsPipelineLayout;
 

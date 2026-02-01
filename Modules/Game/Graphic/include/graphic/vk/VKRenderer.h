@@ -3,8 +3,10 @@
 #include "graphic/vk/VKRenderPipeline.h"
 #include "graphic/vk/VKSwapchain.h"
 #include "graphic/vk/mem/VKMemBuffer.h"
+#include "mem/VKUniforms.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
+#include <vector>
 
 namespace MMM
 {
@@ -72,8 +74,27 @@ private:
     /// @brief 逻辑设备呈现队列引用
     vk::Queue& m_LogicDevicePresentQueue;
 
-    /// @brief 内存缓冲区封装
-    std::unique_ptr<VKMemBuffer> m_vkMemBuffer;
+    // =========================================================================
+    // 内存 - 显存相关资源
+    // =========================================================================
+
+    /// @brief 主机内存缓冲区封装
+    std::unique_ptr<VKMemBuffer> m_vkHostMemBuffer;
+
+    /// @brief GPU内存缓冲区封装
+    std::unique_ptr<VKMemBuffer> m_vkGPUMemBuffer;
+
+    /// @brief 主机Uniform缓冲区封装 - 每帧都需要
+    std::vector<std::unique_ptr<VKMemBuffer>> m_vkHostUniformMemBuffers;
+
+    /// @brief GPUUniform缓冲区封装 - 每帧都需要
+    std::vector<std::unique_ptr<VKMemBuffer>> m_vkGPUUniformMemBuffers;
+
+    /// @brief 描述符池
+    vk::DescriptorPool m_vkDescriptorPool;
+
+    /// @brief 描述符集列表 - 每帧都需要
+    std::vector<vk::DescriptorSet> m_vkDescriptorSets;
 
     // =========================================================================
     // 命令相关资源
@@ -124,6 +145,67 @@ private:
 
     /// @brief 当前并发帧索引 (0 ~ MAX_FRAMES_IN_FLIGHT-1)
     size_t m_currentFrameIndex{ 0 };
+
+    /// @brief 测试用当前时间的uniform变量
+    VKTestTimeUniform m_testCurrentTime{ 0.f };
+
+    /// @brief 用于上传uniform数据的指令缓冲区
+    std::vector<vk::CommandBuffer> m_uniformUploadCmdBuffers;
+
+private:
+    /**
+     * @brief 创建命令池
+     */
+    void createCommandPool();
+
+    /**
+     * @brief 分配命令缓冲区
+     */
+    void allocateCommandBuffers();
+
+    /**
+     * @brief 创建信号量和栅栏
+     */
+    void createSemsWithFences();
+
+    /**
+     * @brief 创建缓冲区
+     *
+     * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
+     */
+    void createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice);
+
+    /**
+     * @brief 传输数据到GPU
+     */
+    void uploadBuffer2GPU(vk::CommandBuffer&            cmdBuffer,
+                          std::unique_ptr<VKMemBuffer>& hostBuffer,
+                          std::unique_ptr<VKMemBuffer>& gpuBuffer);
+
+    /**
+     * @brief 上传顶点缓冲区到GPU
+     */
+    void uploadVertexBuffer2GPU();
+
+    /**
+     * @brief 创建描述符池
+     */
+    void createDescriptPool();
+
+    /**
+     * @brief 创建描述符集列表
+     */
+    void createDescriptSets();
+
+    /**
+     * @brief 映射uniformbuffer到对应描述符集
+     */
+    void mapUniformBuffer2DescriptorSet();
+
+    /**
+     * @brief 上传uniform缓冲区到GPU
+     */
+    void uploadUniformBuffer2GPU(int current_image_index);
 };
 
 }  // namespace Graphic
