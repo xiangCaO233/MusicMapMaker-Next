@@ -5,6 +5,7 @@
 #include "graphic/vk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
+#include <vector>
 
 namespace MMM
 {
@@ -72,8 +73,21 @@ private:
     /// @brief 逻辑设备呈现队列引用
     vk::Queue& m_LogicDevicePresentQueue;
 
-    /// @brief 内存缓冲区封装
-    std::unique_ptr<VKMemBuffer> m_vkMemBuffer;
+    // =========================================================================
+    // 内存 - 显存相关资源
+    // =========================================================================
+
+    /// @brief 主机内存缓冲区封装
+    std::unique_ptr<VKMemBuffer> m_vkHostMemBuffer;
+
+    /// @brief GPU内存缓冲区封装
+    std::unique_ptr<VKMemBuffer> m_vkGPUMemBuffer;
+
+    /// @brief 主机Uniform缓冲区封装 - 每帧都需要
+    std::vector<std::unique_ptr<VKMemBuffer>> m_vkHostUniformMemBuffers;
+
+    /// @brief GPUUniform缓冲区封装 - 每帧都需要
+    std::vector<std::unique_ptr<VKMemBuffer>> m_vkGPUUniformMemBuffers;
 
     // =========================================================================
     // 命令相关资源
@@ -124,6 +138,18 @@ private:
 
     /// @brief 当前并发帧索引 (0 ~ MAX_FRAMES_IN_FLIGHT-1)
     size_t m_currentFrameIndex{ 0 };
+
+private:
+    void createCommandPool();
+    void allocateCommandBuffers();
+
+    void createSemsWithFences();
+
+    void createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice);
+
+    void uploadVertexBuffer2GPU();
+
+    void uploadUniformBuffer2GPU();
 };
 
 }  // namespace Graphic
