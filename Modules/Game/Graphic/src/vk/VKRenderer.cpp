@@ -132,11 +132,15 @@ void VKRenderer::render()
     auto imageIndex = imageResult.value;
 
     // 获取当前时间
-    auto current_time =
+    static auto start_time =
         std::chrono::high_resolution_clock::now().time_since_epoch();
+    auto since_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch() -
+        start_time;
     auto current_time_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(current_time);
+        std::chrono::duration_cast<std::chrono::milliseconds>(since_start);
     m_testCurrentTime.time = float(current_time_ms.count()) / 1000.f;
+    XINFO("current time: {}", m_testCurrentTime.time);
     // 上传uniform数据
     uploadUniformBuffer2GPU(imageIndex);
 
@@ -421,7 +425,7 @@ void VKRenderer::uploadBuffer2GPU(vk::CommandBuffer&            cmdBuffer,
         vk::BufferCopy bufferCopyRegion;
         bufferCopyRegion
             // 如名
-            .setSize(m_vkHostMemBuffer->m_bufSize)
+            .setSize(hostBuffer->m_bufSize)
             .setSrcOffset(0)
             .setDstOffset(0);
         cmdBuffer.copyBuffer(
@@ -601,7 +605,7 @@ void VKRenderer::uploadUniformBuffer2GPU(int current_image_index)
                      current_frame_host_uniform_buffer,
                      current_frame_gpu_uniform_buffer);
 
-    XINFO("Uploaded uniform data to gpu buffer.");
+    // XINFO("Uploaded uniform data to gpu buffer.");
 }
 
 }  // namespace Graphic
