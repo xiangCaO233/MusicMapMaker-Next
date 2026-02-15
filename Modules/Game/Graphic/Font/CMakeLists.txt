@@ -2,7 +2,7 @@
 
 add_library(
     Font
-    SHARED
+    STATIC
     src/FontPool.cpp
 )
 
@@ -11,6 +11,7 @@ target_include_directories(
     PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
 target_link_libraries(
     Font
     PRIVATE
