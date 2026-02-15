@@ -23,7 +23,7 @@ public:
      * @param vertexSource 顶点着色器 SPIR-V 二进制数据
      * @param fragmentSource 片段着色器 SPIR-V 二进制数据
      */
-    VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
+    VKShader(vk::Device&      vkLogicalDevice, std::string_view vertexSource,
              std::string_view fragmentSource);
 
     /**
@@ -34,13 +34,16 @@ public:
      * @param geometrySource 几何着色器 SPIR-V 二进制数据
      * @param fragmentSource 片段着色器 SPIR-V 二进制数据
      */
-    VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
-             std::string_view geometrySource, std::string_view fragmentSource);
+    VKShader(vk::Device&      vkLogicalDevice, std::string_view vertexSource,
+             std::string_view geometrySource, std::string_view  fragmentSource);
 
     // 禁用拷贝和移动
-    VKShader(VKShader&&)                 = delete;
-    VKShader(const VKShader&)            = delete;
-    VKShader& operator=(VKShader&&)      = delete;
+    VKShader(VKShader&&) = delete;
+
+    VKShader(const VKShader&) = delete;
+
+    VKShader& operator=(VKShader&&) = delete;
+
     VKShader& operator=(const VKShader&) = delete;
 
     ~VKShader();

@@ -22,7 +22,8 @@ constexpr int EXIT_WINDOW_EXEPTION = 1;
  *
  * 利用静态对象的生命周期自动初始化和关闭日志系统。
  */
-struct RTTILogger {
+struct RTTILogger
+{
     RTTILogger()
     {
 #ifdef _WIN32
@@ -31,10 +32,11 @@ struct RTTILogger {
         std::setlocale(LC_ALL, ".UTF-8");
         XLogger::init("MMM");
     }
+
     ~RTTILogger() { XLogger::shutdown(); }
 };
 
 /// @brief 全局日志管理器实例 (程序启动时自动初始化)
 inline RTTILogger rttiLogger;
 
-}  // namespace MMM
+} // namespace MMM

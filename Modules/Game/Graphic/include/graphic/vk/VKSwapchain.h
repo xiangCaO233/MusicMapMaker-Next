@@ -28,13 +28,16 @@ public:
      * @param h 期望的高度
      */
     VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
-                vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
-                QueueFamilyIndices& queueFamilyIndices, int w, int h);
+                vk::Device&         vkLogicalDevice, vk::SurfaceKHR& vkSurface,
+                QueueFamilyIndices& queueFamilyIndices, int          w, int h);
 
     // 禁用拷贝和移动
-    VKSwapchain(VKSwapchain&&)                 = delete;
-    VKSwapchain(const VKSwapchain&)            = delete;
-    VKSwapchain& operator=(VKSwapchain&&)      = delete;
+    VKSwapchain(VKSwapchain&&) = delete;
+
+    VKSwapchain(const VKSwapchain&) = delete;
+
+    VKSwapchain& operator=(VKSwapchain&&) = delete;
+
     VKSwapchain& operator=(const VKSwapchain&) = delete;
 
     ~VKSwapchain();
@@ -78,7 +81,8 @@ private:
      * @brief 内部图像缓冲结构体
      * 包含每一帧所需的图像资源
      */
-    struct ImageBuffer {
+    struct ImageBuffer
+    {
         /// @brief Swapchain 原生图像句柄
         vk::Image vk_image;
 

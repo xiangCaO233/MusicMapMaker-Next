@@ -18,25 +18,21 @@ std::string_view ColorfulFormatter::extract_module_name(
 
     // 查找 "Modules" 出现的位置
     size_t pos = path.find(keyword);
-    if ( pos != std::string_view::npos )
-    {
+    if ( pos != std::string_view::npos ) {
         // 移动到 "Modules" 之后
         size_t start = pos + keyword_len;
         // 跳过分隔符 (例如 / 或 \)
-        while ( start < path.length() && is_path_sep(path[start]) )
-        {
+        while ( start < path.length() && is_path_sep(path[start]) ) {
             start++;
         }
 
         // 查找模块名的结束位置 (下一个分隔符)
         size_t end = start;
-        while ( end < path.length() && !is_path_sep(path[end]) )
-        {
+        while ( end < path.length() && !is_path_sep(path[end]) ) {
             end++;
         }
 
-        if ( end > start )
-        {
+        if ( end > start ) {
             return path.substr(start, end - start);
         }
     }
@@ -52,7 +48,7 @@ void ColorfulFormatter::format(const spdlog::details::log_msg& msg,
     // 使用chrono直接格式化时间点
     // 分离时间的秒和毫秒部分
     const auto time_since_epoch = msg.time.time_since_epoch();
-    const auto sec =
+    const auto sec              =
         std::chrono::duration_cast<std::chrono::seconds>(time_since_epoch);
     const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
         time_since_epoch - sec);
@@ -68,7 +64,7 @@ void ColorfulFormatter::format(const spdlog::details::log_msg& msg,
 #endif
     // 信息提取
     std::string_view module_name  = extract_module_name(msg.source.filename);
-    const char*      module_color = "\033[35;1m";  // 洋红色 (用于模块名)
+    const char*      module_color = "\033[35;1m"; // 洋红色 (用于模块名)
 
     // 格式化主要部分
     // 结构修改为: [时间] [级别/模块/函数]
@@ -78,11 +74,15 @@ void ColorfulFormatter::format(const spdlog::details::log_msg& msg,
         "[\033[{};1m{}\033[37;22m/{}{}\033[37;22m/\033[32;1m{}\033[37;22m]",
         tm_buf,
         millis.count(),
-        get_color(msg.level),                                    // 级别颜色
-        spdlog::level::to_string_view(msg.level),                // 级别文本
-        module_color,                                            // 模块颜色
-        module_name,                                             // 模块文本
-        msg.source.funcname ? msg.source.funcname : "unknown");  // 函数文本
+        get_color(msg.level),
+        // 级别颜色
+        spdlog::level::to_string_view(msg.level),
+        // 级别文本
+        module_color,
+        // 模块颜色
+        module_name,
+        // 模块文本
+        msg.source.funcname ? msg.source.funcname : "unknown"); // 函数文本
 
     // 添加日志内容
     spdlog::fmt_lib::format_to(std::back_inserter(dest),
@@ -90,16 +90,14 @@ void ColorfulFormatter::format(const spdlog::details::log_msg& msg,
                                get_color(msg.level),
                                msg.payload);
     // 添加文件信息,仅debug/error及以上
-    if ( msg.level == spdlog::level::debug || msg.level >= spdlog::level::err )
-    {
+    if ( msg.level == spdlog::level::debug || msg.level >=
+         spdlog::level::err ) {
         spdlog::fmt_lib::format_to(
             std::back_inserter(dest),
             " \033[37m(\033[35m{}\033[37m:\033[35m{}\033[37m)\033[0m\n",
             msg.source.filename,
             msg.source.line);
-    }
-    else
-    {
+    } else {
         spdlog::fmt_lib::format_to(std::back_inserter(dest), "\033[0m\n");
     }
 }
@@ -108,16 +106,16 @@ std::unique_ptr<spdlog::formatter> ColorfulFormatter::clone() const
 {
     return std::make_unique<ColorfulFormatter>();
 }
+
 const char* ColorfulFormatter::get_color(spdlog::level::level_enum level) const
 {
-    switch ( level )
-    {
-    case spdlog::level::trace: return "37";       // 白色
-    case spdlog::level::debug: return "36";       // 青色
-    case spdlog::level::info: return "32";        // 绿色
-    case spdlog::level::warn: return "33";        // 黄色
-    case spdlog::level::err: return "31";         // 红色
-    case spdlog::level::critical: return "31;1";  // 亮红色
+    switch ( level ) {
+    case spdlog::level::trace: return "37";      // 白色
+    case spdlog::level::debug: return "36";      // 青色
+    case spdlog::level::info: return "32";       // 绿色
+    case spdlog::level::warn: return "33";       // 黄色
+    case spdlog::level::err: return "31";        // 红色
+    case spdlog::level::critical: return "31;1"; // 亮红色
     default: return "0";
     }
 }
@@ -164,6 +162,7 @@ void XLogger::init(const char* name)
 
     XINFO("日志初始化完成");
 }
+
 void XLogger::shutdown()
 {
     // 销毁 logger
@@ -173,10 +172,12 @@ void XLogger::shutdown()
     // 销毁所有 logger
     spdlog::shutdown();
 }
+
 void XLogger::enable()
 {
     logger->set_level(spdlog::level::trace);
 }
+
 void XLogger::disable()
 {
     logger->set_level(spdlog::level::off);

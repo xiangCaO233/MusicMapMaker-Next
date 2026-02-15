@@ -33,10 +33,10 @@ macro(add_strip_command_for_release TARGET_NAME)
     # CONFIGURATIONS Release: 只在 Release 模式下执行此命令
     # POST_BUILD:             在目标成功构建之后执行
     add_custom_command(TARGET ${TARGET_NAME}
-        POST_BUILD
-        COMMAND ${CMAKE_STRIP} -s "$<TARGET_FILE:${TARGET_NAME}>"
-        CONFIGURATIONS Release
-        COMMENT "Stripping symbols from ${TARGET_NAME} in Release mode"
+            POST_BUILD
+            COMMAND ${CMAKE_STRIP} -s "$<TARGET_FILE:${TARGET_NAME}>"
+            CONFIGURATIONS Release
+            COMMENT "Stripping symbols from ${TARGET_NAME} in Release mode"
     )
     message(STATUS "Added post-build strip command for target '${TARGET_NAME}' in Release mode.")
 endmacro()
