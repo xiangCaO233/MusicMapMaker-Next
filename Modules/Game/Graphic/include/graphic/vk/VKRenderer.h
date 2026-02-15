@@ -1,16 +1,14 @@
 #pragma once
 
-#include "graphic/vk/VKRenderPipeline.h"
-#include "graphic/vk/VKSwapchain.h"
 #include "graphic/vk/mem/VKMemBuffer.h"
+#include "graphic/vk/VKRenderPipeline.h"
 #include "mem/VKUniforms.h"
+#include "mesh/VKVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
 #include <vector>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -56,6 +54,9 @@ public:
     void render();
 
 private:
+    /// @brief 顶点数据
+    static std::array<VKVertex, 3> s_vertices;
+
     /// @brief 逻辑设备引用
     vk::Device& m_vkLogicalDevice;
 
@@ -179,13 +180,13 @@ private:
      * @brief 传输数据到GPU
      */
     void uploadBuffer2GPU(vk::CommandBuffer&            cmdBuffer,
-                          std::unique_ptr<VKMemBuffer>& hostBuffer,
-                          std::unique_ptr<VKMemBuffer>& gpuBuffer);
+                          const std::unique_ptr<VKMemBuffer>& hostBuffer,
+                          const std::unique_ptr<VKMemBuffer>& gpuBuffer) const;
 
     /**
      * @brief 上传顶点缓冲区到GPU
      */
-    void uploadVertexBuffer2GPU();
+    void uploadVertexBuffer2GPU() const;
 
     /**
      * @brief 创建描述符池
@@ -200,14 +201,14 @@ private:
     /**
      * @brief 映射uniformbuffer到对应描述符集
      */
-    void mapUniformBuffer2DescriptorSet();
+    void mapUniformBuffer2DescriptorSet() const;
 
     /**
      * @brief 上传uniform缓冲区到GPU
      */
-    void uploadUniformBuffer2GPU(int current_image_index);
+    void uploadUniformBuffer2GPU(uint32_t current_image_index);
 };
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

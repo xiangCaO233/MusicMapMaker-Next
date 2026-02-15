@@ -5,9 +5,8 @@ if(WIN32)
     # 定义项目内预编译 Vulkan 的位置
     set(VULKAN_VENDORED_DIR "${CMAKE_SOURCE_DIR}/3rdpty/prebuilts/windows/vulkan")
 
-    message(
-        STATUS
-        "FindVulkan Wrapper: Checking for vendored Vulkan in ${VULKAN_VENDORED_DIR}..."
+    message(STATUS
+            "FindVulkan Wrapper: Checking for vendored Vulkan in ${VULKAN_VENDORED_DIR}..."
     )
 
     if(EXISTS "${VULKAN_VENDORED_DIR}")
@@ -31,16 +30,14 @@ if(WIN32)
         if(EXISTS "${_VULKAN_LIB_PATH}")
             # 将路径加入到 CMAKE_LIBRARY_PATH 中，这样标准 find_library 就能找到它
             list(APPEND CMAKE_LIBRARY_PATH "${_VULKAN_LIB_PATH}")
-            message(
-                STATUS
-                "FindVulkan Wrapper: Added hint for ${_VULKAN_LIB_SUBDIR} libraries.")
+            message(STATUS
+                    "FindVulkan Wrapper: Added hint for ${_VULKAN_LIB_SUBDIR} libraries.")
 
-        # 也可以直接设置环境变量 VULKAN_SDK 指向我们的 vendored 目录 这样标准模块会误以为这就是安装的 SDK
-        # set(ENV{VULKAN_SDK} "${VULKAN_VENDORED_DIR}")
+            # 也可以直接设置环境变量 VULKAN_SDK 指向我们的 vendored 目录 这样标准模块会误以为这就是安装的 SDK
+            # set(ENV{VULKAN_SDK} "${VULKAN_VENDORED_DIR}")
         else()
-            message(
-                WARNING
-                "FindVulkan Wrapper: Vendored lib directory not found: ${_VULKAN_LIB_PATH}"
+            message(WARNING
+                    "FindVulkan Wrapper: Vendored lib directory not found: ${_VULKAN_LIB_PATH}"
             )
         endif()
     else()

@@ -4,9 +4,7 @@
 #include "graphic/vk/VKRenderPass.h"
 #include <vulkan/vulkan.hpp>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -30,13 +28,16 @@ public:
      * @param h 期望的高度
      */
     VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
-                vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
-                QueueFamilyIndices& queueFamilyIndices, int w, int h);
+                vk::Device&         vkLogicalDevice, vk::SurfaceKHR& vkSurface,
+                QueueFamilyIndices& queueFamilyIndices, int          w, int h);
 
     // 禁用拷贝和移动
-    VKSwapchain(VKSwapchain&&)                 = delete;
-    VKSwapchain(const VKSwapchain&)            = delete;
-    VKSwapchain& operator=(VKSwapchain&&)      = delete;
+    VKSwapchain(VKSwapchain&&) = delete;
+
+    VKSwapchain(const VKSwapchain&) = delete;
+
+    VKSwapchain& operator=(VKSwapchain&&) = delete;
+
     VKSwapchain& operator=(const VKSwapchain&) = delete;
 
     ~VKSwapchain();
@@ -56,7 +57,7 @@ public:
      *
      * @param renderPass 渲染流程引用
      */
-    void createFramebuffers(VKRenderPass& renderPass);
+    void createFramebuffers(const VKRenderPass& renderPass);
 
     /**
      * @brief 销毁帧缓冲区
@@ -80,7 +81,8 @@ private:
      * @brief 内部图像缓冲结构体
      * 包含每一帧所需的图像资源
      */
-    struct ImageBuffer {
+    struct ImageBuffer
+    {
         /// @brief Swapchain 原生图像句柄
         vk::Image vk_image;
 
@@ -100,6 +102,6 @@ private:
     // 允许 Renderer 直接访问内部的 ImageBuffers
     friend class VKRenderer;
 };
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

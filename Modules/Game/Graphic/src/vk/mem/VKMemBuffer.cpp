@@ -1,22 +1,22 @@
 #include "graphic/vk/mem/VKMemBuffer.h"
 #include "log/colorful-log.h"
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
  * @brief 构造函数，创建VK内存缓冲区
  *
+ * @param vkPhysicalDevice 物理设备引用
  * @param vkLogicalDevice 逻辑设备引用
  * @param bufSize 要创建的缓冲区大小(字节)
  * @param bufUsage 缓冲区用法
+ * @param desireProperty 期望的属性
  */
-VKMemBuffer::VKMemBuffer(vk::PhysicalDevice& vkPhysicalDevice,
-                         vk::Device& vkLogicalDevice, size_t bufSize,
-                         vk::BufferUsageFlags    bufUsage,
-                         vk::MemoryPropertyFlags desireProperty)
+VKMemBuffer::VKMemBuffer(const vk::PhysicalDevice& vkPhysicalDevice,
+                         vk::Device& vkLogicalDevice, const size_t bufSize,
+                         const vk::BufferUsageFlags    bufUsage,
+                         const vk::MemoryPropertyFlags desireProperty)
     : m_vkLogicalDevice(vkLogicalDevice), m_bufSize(bufSize)
 {
     // 1.缓冲区创建信息
@@ -37,12 +37,12 @@ VKMemBuffer::VKMemBuffer(vk::PhysicalDevice& vkPhysicalDevice,
     XINFO("Created VK Memory Buffer.");
 
     // 3.查询内存需求
-    vk::MemoryRequirements bufferMemoryRequirements =
+    const vk::MemoryRequirements bufferMemoryRequirements =
         vkLogicalDevice.getBufferMemoryRequirements(m_vkBuffer);
     // 实际分配的大小 (通常 >= bufSize，因为有对齐要求)
     m_memInfo.size = bufferMemoryRequirements.size;
     // 初始化为无效值
-    m_memInfo.index = uint32_t(~0);
+    m_memInfo.index = static_cast<uint32_t>(~0);
 
     // 3.1.查询物理设备内存属性
     vk::PhysicalDeviceMemoryProperties memoryProperties =
@@ -58,7 +58,7 @@ VKMemBuffer::VKMemBuffer(vk::PhysicalDevice& vkPhysicalDevice,
         }
     }
 
-    if ( m_memInfo.index == uint32_t(~0) ) {
+    if ( m_memInfo.index == static_cast<uint32_t>(~0) ) {
         XCRITICAL("Failed to find suitable memory type!");
     }
 
@@ -90,6 +90,6 @@ VKMemBuffer::~VKMemBuffer()
     XINFO("Destroyd VK Memory Buffer.");
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

@@ -7,9 +7,7 @@
 #include <ios>
 #include <set>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -40,7 +38,7 @@ VKContext::VKContext()
     // 初始化GLFW
     initGLFW();
     // 注册GLFW的VK扩展
-    registerGLFWExtentions();
+    registerGLFWExtensions();
 
     // Debug模式启用VK调试工具
     if ( is_debug() ) {
@@ -376,7 +374,7 @@ void VKContext::pickPhysicalDevice()
     // 2.简单起见先选择第一个GPU设备
     m_vkPhysicalDevice = phyDevices[0];
 
-    XINFO("Selected GPU:\n-- {}",
+    XINFO("Selected GPU: -- {}",
           std::string(m_vkPhysicalDevice.getProperties().deviceName));
 
     /*
@@ -408,7 +406,7 @@ void VKContext::pickPhysicalDevice()
 void VKContext::queryQueueFamilyIndices()
 {
     // 1.获取物理显卡队列族属性
-    auto phyDeviceQueueFamilyProperties =
+    const auto phyDeviceQueueFamilyProperties =
         m_vkPhysicalDevice.getQueueFamilyProperties();
 
     // 2.查询到支持的显卡队列族索引并保存
@@ -465,10 +463,10 @@ void VKContext::queryQueueFamilyIndices()
 void VKContext::initLogicDevice()
 {
     // vk逻辑设备队列优先级表
-    std::array<float, 1> vkDeviceQueuePriorities{ 1.f };
+    std::array vkDeviceQueuePriorities{ 1.f };
 
     // 唯一队列族集合(set自动去重)
-    std::set<uint32_t> uniqueQueueFamilies = {
+    const std::set uniqueQueueFamilies = {
         m_queueFamilyIndices.graphicsQueueIndex.value(),
         m_queueFamilyIndices.presentQueueIndex.value()
     };
@@ -485,7 +483,7 @@ void VKContext::initLogicDevice()
     }
 
     // 2.准备逻辑设备需要启用的扩展
-    const std::array<const char*, 1> deviceExtensions = {
+    constexpr std::array deviceExtensions = {
         // 交换链扩展
         VK_KHR_SWAPCHAIN_EXTENSION_NAME
     };
@@ -574,6 +572,6 @@ void VKContext::createShader()
     m_vkShaders.emplace("testShader", std::move(test_vkShader));
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

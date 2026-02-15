@@ -3,9 +3,7 @@
 #include "graphic/vk/VKContext.h"
 #include <stdexcept>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 /**
  * @brief 初始化 GLFW 上下文
@@ -36,7 +34,7 @@ void VKContext::initGLFW()
 /**
  * @brief 注册 GLFW 所需的 Vulkan 扩展
  */
-void VKContext::registerGLFWExtentions()
+void VKContext::registerGLFWExtensions()
 {
     // 1.3获取 GLFW 需要的扩展
     uint32_t     glfwExtensionCount = 0;
@@ -70,6 +68,6 @@ void VKContext::releaseGLFW()
     XINFO("GLFW Terminated.");
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

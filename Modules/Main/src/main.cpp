@@ -31,8 +31,7 @@ int main(int argc, char* argv[])
     Translator::instance().loadLanguage(
         (assetPath / "lang" / "zh_cn.lua").generic_string());
     Translator::instance().switchLang("zh_cn");
-    XINFO(TR("tips.welcom"));
-
+    XINFO(TR("tips.welcome"));
 
     using namespace Config;
     // 载入皮肤配置

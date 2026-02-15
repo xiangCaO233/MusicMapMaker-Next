@@ -1,9 +1,7 @@
 #include "graphic/vk/VKShader.h"
 #include "log/colorful-log.h"
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -111,6 +109,6 @@ VKShader::getShaderStageCreateInfos()
     return m_shaderStageCreateInfos;
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

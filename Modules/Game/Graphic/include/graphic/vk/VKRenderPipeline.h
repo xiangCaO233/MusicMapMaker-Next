@@ -2,11 +2,8 @@
 
 #include "graphic/vk/VKRenderPass.h"
 #include "graphic/vk/VKShader.h"
-#include "graphic/vk/VKSwapchain.h"
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -28,14 +25,17 @@ public:
      * @param w 视口宽度
      * @param h 视口高度
      */
-    VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
+    VKRenderPipeline(vk::Device&   logicalDevice, VKShader& shader,
                      VKRenderPass& renderPass, VKSwapchain& swapchain, int w,
-                     int h);
+                     int           h);
 
     // 禁用拷贝和移动
-    VKRenderPipeline(VKRenderPipeline&&)                 = delete;
-    VKRenderPipeline(const VKRenderPipeline&)            = delete;
-    VKRenderPipeline& operator=(VKRenderPipeline&&)      = delete;
+    VKRenderPipeline(VKRenderPipeline&&) = delete;
+
+    VKRenderPipeline(const VKRenderPipeline&) = delete;
+
+    VKRenderPipeline& operator=(VKRenderPipeline&&) = delete;
+
     VKRenderPipeline& operator=(const VKRenderPipeline&) = delete;
 
     ~VKRenderPipeline();
@@ -58,5 +58,5 @@ private:
 };
 
 
-}  // namespace Graphic
-}  // namespace MMM
+} // namespace MMM::Graphic
+
