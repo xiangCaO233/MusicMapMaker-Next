@@ -1,13 +1,14 @@
 #include "graphic/vk/VKRenderer.h"
 #include "graphic/vk/mem/VKUniforms.h"
 #include "graphic/vk/mesh/VKVertex.h"
+#include "graphic/vk/VKSwapchain.h"
 #include "log/colorful-log.h"
 #include <chrono>
 
 namespace MMM::Graphic
 {
 // 顶点信息
-static std::array<VKVertex, 3> vertices{
+static std::array vertices{
     VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
               .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
     VKVertex{ .pos   = { .x = .5f, .y = .5f },

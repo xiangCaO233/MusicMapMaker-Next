@@ -1,7 +1,7 @@
 #pragma once
 
-#include "graphic/vk/VKSwapchain.h"
 #include "graphic/vk/mem/VKMemBuffer.h"
+#include "graphic/vk/VKRenderPipeline.h"
 #include "mem/VKUniforms.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
