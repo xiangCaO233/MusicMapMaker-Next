@@ -2,9 +2,7 @@
 #include "log/colorful-log.h"
 #include <set>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -231,7 +229,7 @@ const vk::SwapchainCreateInfoKHR& VKSwapchain::info() const
  *
  * @param renderPass 渲染流程引用
  */
-void VKSwapchain::createFramebuffers(VKRenderPass& renderPass)
+void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
 {
     for ( auto& imageBuffer : m_vkImageBuffers ) {
         // 帧缓冲创建信息
@@ -267,6 +265,6 @@ void VKSwapchain::destroyFramebuffers()
     XINFO("FrameBuffers all destroyed.");
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

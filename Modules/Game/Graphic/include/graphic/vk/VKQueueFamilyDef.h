@@ -3,9 +3,7 @@
 #include <cstdint>
 #include <optional>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -32,6 +30,6 @@ struct QueueFamilyIndices final {
     }
 };
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

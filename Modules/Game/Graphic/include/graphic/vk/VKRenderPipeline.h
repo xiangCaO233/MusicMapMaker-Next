@@ -2,11 +2,8 @@
 
 #include "graphic/vk/VKRenderPass.h"
 #include "graphic/vk/VKShader.h"
-#include "graphic/vk/VKSwapchain.h"
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -58,5 +55,5 @@ private:
 };
 
 
-}  // namespace Graphic
-}  // namespace MMM
+} // namespace MMM::Graphic
+

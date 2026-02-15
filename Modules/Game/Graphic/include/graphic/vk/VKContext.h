@@ -16,9 +16,7 @@
 
 struct GLFWwindow;
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -95,17 +93,17 @@ private:
     /**
      * @brief 初始化 GLFW 上下文
      */
-    void initGLFW();
+    static void initGLFW();
 
     /**
      * @brief 注册 GLFW 所需的 Vulkan 扩展
      */
-    void registerGLFWExtentions();
+    void registerGLFWExtensions();
 
     /**
      * @brief 释放 GLFW 资源
      */
-    void releaseGLFW();
+    static void releaseGLFW();
 
     // =========================================================================
     // Vulkan 核心初始化相关
@@ -245,6 +243,6 @@ private:
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
 };
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

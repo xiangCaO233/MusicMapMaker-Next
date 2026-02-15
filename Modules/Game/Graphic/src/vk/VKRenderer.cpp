@@ -4,9 +4,7 @@
 #include "log/colorful-log.h"
 #include <chrono>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 // 顶点信息
 static std::array<VKVertex, 3> vertices{
@@ -140,7 +138,7 @@ void VKRenderer::render()
     auto current_time_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(since_start);
     m_testCurrentTime.time = float(current_time_ms.count()) / 1000.f;
-    XINFO("current time: {}", m_testCurrentTime.time);
+    // XINFO("current time: {}", m_testCurrentTime.time);
     // 上传uniform数据
     uploadUniformBuffer2GPU(imageIndex);
 
@@ -608,6 +606,6 @@ void VKRenderer::uploadUniformBuffer2GPU(int current_image_index)
     // XINFO("Uploaded uniform data to gpu buffer.");
 }
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

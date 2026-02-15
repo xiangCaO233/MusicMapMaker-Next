@@ -34,7 +34,7 @@ public:
      * @param desireProperty 期望的内存属性
      * (如 HostVisible | HostCoherent 用于 CPU 写入)
      */
-    VKMemBuffer(vk::PhysicalDevice& vkPhysicalDevice,
+    VKMemBuffer(const vk::PhysicalDevice& vkPhysicalDevice,
                 vk::Device& vkLogicalDevice, size_t bufSize,
                 vk::BufferUsageFlags    bufUsage,
                 vk::MemoryPropertyFlags desireProperty);
@@ -55,7 +55,7 @@ private:
     };
 
     /// @brief 内存分配信息
-    MemInfo m_memInfo;
+    MemInfo m_memInfo{};
 
     /// @brief 逻辑设备引用
     vk::Device& m_vkLogicalDevice;

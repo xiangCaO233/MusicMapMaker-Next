@@ -4,9 +4,7 @@
 #include "graphic/vk/VKRenderPass.h"
 #include <vulkan/vulkan.hpp>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -56,7 +54,7 @@ public:
      *
      * @param renderPass 渲染流程引用
      */
-    void createFramebuffers(VKRenderPass& renderPass);
+    void createFramebuffers(const VKRenderPass& renderPass);
 
     /**
      * @brief 销毁帧缓冲区
@@ -100,6 +98,6 @@ private:
     // 允许 Renderer 直接访问内部的 ImageBuffers
     friend class VKRenderer;
 };
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

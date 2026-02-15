@@ -4,9 +4,7 @@
 #include "log/colorful-log.h"
 #include <cassert>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -71,8 +69,8 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     // 4.4.视口配置
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     // 单纯绘制窗口区域 - 无裁切
-    vk::Viewport viewPort{ 0, 0, float(w), float(h), 0, 1 };
-    vk::Rect2D   scissor{ { 0, 0 }, { uint32_t(w), uint32_t(h) } };
+    vk::Viewport viewPort{ 0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1 };
+    vk::Rect2D   scissor{ { 0, 0 }, { static_cast<uint32_t>(w), static_cast<uint32_t>(h) } };
     pipelineViewportStateCreateInfo
         // 设置视口
         .setViewports(viewPort)
@@ -178,5 +176,5 @@ VKRenderPipeline::~VKRenderPipeline()
     XINFO("Destroyed VK Descriptor Set Layout.");
 }
 
-}  // namespace Graphic
-}  // namespace MMM
+} // namespace MMM::Graphic
+

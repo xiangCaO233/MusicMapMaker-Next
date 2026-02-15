@@ -17,5 +17,5 @@ return {
 	-- ["info.position: {}, {}"] = "Position: X={}, Y={}",
 
 	-- tips,长文本
-	["tips.welcom"] = "Welcome to MusicMapMaker!",
+	["tips.welcome"] = "Welcome to MusicMapMaker!",
 }

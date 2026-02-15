@@ -2,9 +2,7 @@
 
 #include <vulkan/vulkan.hpp>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 class VKSwapchain;
 
@@ -46,6 +44,6 @@ private:
 };
 
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

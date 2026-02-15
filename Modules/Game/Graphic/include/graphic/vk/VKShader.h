@@ -4,9 +4,7 @@
 #include <string_view>
 #include <vector>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -71,6 +69,6 @@ private:
     std::vector<vk::PipelineShaderStageCreateInfo> m_shaderStageCreateInfos;
 };
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+

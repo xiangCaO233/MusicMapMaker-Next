@@ -1,6 +1,5 @@
 #pragma once
 
-#include "graphic/vk/VKRenderPipeline.h"
 #include "graphic/vk/VKSwapchain.h"
 #include "graphic/vk/mem/VKMemBuffer.h"
 #include "mem/VKUniforms.h"
@@ -8,9 +7,7 @@
 #include <memory>
 #include <vector>
 
-namespace MMM
-{
-namespace Graphic
+namespace MMM::Graphic
 {
 
 /**
@@ -208,6 +205,6 @@ private:
     void uploadUniformBuffer2GPU(int current_image_index);
 };
 
-}  // namespace Graphic
+} // namespace MMM::Graphic
 
-}  // namespace MMM
+
