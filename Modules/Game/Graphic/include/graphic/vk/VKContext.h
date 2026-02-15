@@ -21,6 +21,11 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 检查当前是否为 Debug 模式
+ * @return true 如果是 Debug 模式
+ * @return false 如果是 Release 模式
+ */
 static constexpr bool is_debug()
 {
 #ifdef BUILD_TYPE_DEBUG
@@ -30,201 +35,213 @@ static constexpr bool is_debug()
 #endif
 }
 
-/*
- * 图形Vulkan上下文
- * */
+/**
+ * @brief Vulkan 图形上下文类
+ *
+ * 负责管理 Vulkan 的实例、设备、表面、交换链等核心资源的生命周期。
+ * 采用单例模式设计。
+ */
 class VKContext final
 {
 public:
-    // 单例&&立即初始化模式
+    /**
+     * @brief 获取 VKContext 单例实例
+     *
+     * 如果实例尚未创建，将尝试进行初始化。
+     *
+     * @return std::expected<std::reference_wrapper<VKContext>, std::string>
+     *         成功返回上下文引用，失败返回错误信息字符串
+     */
     static std::expected<std::reference_wrapper<VKContext>, std::string> get();
 
+    // 禁用拷贝和移动语义
     VKContext(VKContext&&)                 = delete;
     VKContext(const VKContext&)            = delete;
     VKContext& operator=(VKContext&&)      = delete;
     VKContext& operator=(const VKContext&) = delete;
 
-    /*
-     * 初始化VK窗体相关资源
-     * */
+    /**
+     * @brief 初始化 Vulkan 窗体相关资源
+     *
+     * 包括 Surface, Swapchain, RenderPass, Pipeline 等依赖窗口尺寸的资源。
+     *
+     * @param window_ctx GLFW 窗口句柄
+     * @param w 窗口宽度
+     * @param h 窗口高度
+     */
     void initVKWindowRess(GLFWwindow* window_ctx, int w, int h);
 
-    /*
-     * 获取渲染器
-     * */
+    /**
+     * @brief 获取渲染器实例
+     * @return VKRenderer& 渲染器引用
+     */
     inline VKRenderer& getRenderer() { return *m_vkRenderer; }
 
 private:
+    /**
+     * @brief 私有构造函数，执行基础 Vulkan 初始化
+     */
     VKContext();
+
+    /**
+     * @brief 析构函数，负责清理所有 Vulkan 资源
+     */
     ~VKContext();
 
-    // GLFW相关
+    // =========================================================================
+    // GLFW 相关
+    // =========================================================================
 private:
-    /*
-     * 初始化GLFW上下文
-     * */
+    /**
+     * @brief 初始化 GLFW 上下文
+     */
     void initGLFW();
 
-    /*
-     * 注册GLFW窗口扩展
-     * */
+    /**
+     * @brief 注册 GLFW 所需的 Vulkan 扩展
+     */
     void registerGLFWExtentions();
 
-    /*
-     * 释放GLFW
-     * */
+    /**
+     * @brief 释放 GLFW 资源
+     */
     void releaseGLFW();
 
-    // VK相关
+    // =========================================================================
+    // Vulkan 核心初始化相关
+    // =========================================================================
 private:
-    /*
-     * vk应用程序信息
-     * */
+    /// @brief Vulkan 应用程序信息结构体
     vk::ApplicationInfo m_vkAppInfo{};
 
-    /*
-     * vk实例创建信息
-     * */
+    /// @brief Vulkan 实例创建信息结构体
     vk::InstanceCreateInfo m_vkInstanceCreateInfo{};
 
-    /*
-     * vk动态加载器
-     * */
+    /// @brief Vulkan 动态函数加载器 (用于加载扩展函数)
     vk::detail::DispatchLoaderDynamic m_vkDldy{};
 
-    /*
-     * vk实例
-     * */
+    /// @brief Vulkan 实例句柄
     vk::Instance m_vkInstance{};
 
-    /*
-     * 初始化vk应用程序信息
-     * */
+    /**
+     * @brief 初始化 Vulkan 应用程序信息
+     */
     void initVkAppInfo();
 
-    /*
-     * 初始化vk实例创建信息
-     * */
+    /**
+     * @brief 初始化 Vulkan 实例创建信息
+     */
     void initVkInstanceCreateInfo();
 
-    /*
-     * vk扩展列表
-     * */
+    /// @brief 启用的 Vulkan 扩展列表类型定义
     using VKExtensions = std::vector<const char*>;
+
+    /// @brief 当前启用的 Vulkan 扩展列表
     VKExtensions m_vkExtensions{};
 
-    // vk debug回调
+    /**
+     * @brief Vulkan Debug 回调函数
+     *
+     * 用于接收并处理 Validation Layer 发出的调试信息。
+     *
+     * @param messageSeverity 消息严重等级
+     * @param messageTypes 消息类型
+     * @param pCallbackData 回调数据（包含错误信息）
+     * @param pUserData 用户自定义数据指针
+     * @return VKAPI_ATTR VkBool32 是否中断 Vulkan 调用
+     */
     static VKAPI_ATTR VkBool32 VKAPI_PTR
     vkDebug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
                      VkDebugUtilsMessageTypeFlagsEXT        messageTypes,
                      const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
                      void*                                       pUserData);
 
-    /*
-     * 启用vkdebug扩展
-     * */
+    /**
+     * @brief 启用 Vulkan Debug 扩展
+     */
     void enableVKDebugExt();
 
-    /*
-     * vk调试创建信息
-     * */
+    /// @brief Vulkan Debug Utils 创建信息
     vk::DebugUtilsMessengerCreateInfoEXT m_vkDebugUtilCreateInfo{};
 
-    /*
-     * vkdebug调试信息工具
-     * */
+    /// @brief Vulkan Debug Messenger 句柄
     vk::DebugUtilsMessengerEXT m_vkDebugMessenger{};
 
-    /*
-     * vk验证层列表
-     * */
+    /// @brief 请求启用的 Validation Layer 列表
     const std::array<const char*, 1> m_vkValidationLayers{
         "VK_LAYER_KHRONOS_validation",
     };
 
-    /*
-     * 启用vk验证层
-     * */
+    /**
+     * @brief 启用并检查 Validation Layer
+     */
     void enableVKValidateLayer();
 
-    /*
-     * vk表面句柄
-     * */
+    // =========================================================================
+    // 物理设备与逻辑设备相关
+    // =========================================================================
+
+    /// @brief Vulkan 表面句柄 (Window Surface)
     vk::SurfaceKHR m_vkSurface{};
 
-    /*
-     * 初始化vk表面句柄
-     * */
+    /**
+     * @brief 初始化 Vulkan 表面
+     * @param window_handle GLFW 窗口句柄
+     */
     void initSurface(GLFWwindow* window_handle);
 
-    /*
-     * vk物理设备
-     * */
+    /// @brief 选定的 Vulkan 物理设备 (GPU)
     vk::PhysicalDevice m_vkPhysicalDevice{};
 
-    /*
-     * 挑选vk物理设备
-     * */
+    /**
+     * @brief 挑选合适的物理设备
+     */
     void pickPhysicalDevice();
 
-    /*
-     * vk逻辑设备图形队列族索引
-     * */
+    /// @brief 队列族索引结构体
     QueueFamilyIndices m_queueFamilyIndices{};
 
-    /*
-     * 查询图形队列族索引
-     * */
+    /**
+     * @brief 查询物理设备的队列族索引
+     */
     void queryQueueFamilyIndices();
 
-    /*
-     * vk逻辑设备
-     * */
+    /// @brief Vulkan 逻辑设备句柄
     vk::Device m_vkLogicalDevice{};
 
-    /*
-     * 初始化vk逻辑设备
-     * */
+    /**
+     * @brief 初始化逻辑设备
+     */
     void initLogicDevice();
 
-    /*
-     * 逻辑设备图形队列
-     * */
+    /// @brief 逻辑设备图形队列句柄
     vk::Queue m_LogicDeviceGraphicsQueue;
 
-    /*
-     * 逻辑设备呈现队列
-     * */
+    /// @brief 逻辑设备呈现队列句柄
     vk::Queue m_LogicDevicePresentQueue;
 
-    /*
-     * vk交换链
-     * */
+    // =========================================================================
+    // 渲染资源相关
+    // =========================================================================
+
+    /// @brief Vulkan 交换链封装对象
     std::unique_ptr<VKSwapchain> m_swapchain{ nullptr };
 
-    /*
-     * vk着色器表
-     * */
+    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
     std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
 
-    /*
-     * 创建vk着色器
-     * */
+    /**
+     * @brief 加载并创建 Shader 模块
+     */
     void createShader();
 
-    /*
-     * vk渲染流程
-     * */
+    /// @brief Vulkan 渲染流程封装对象 (Render Pass)
     std::unique_ptr<VKRenderPass> m_vkRenderPass{ nullptr };
 
-    /*
-     * vk渲染管线
-     * */
+    /// @brief Vulkan 渲染管线封装对象 (Graphics Pipeline)
     std::unique_ptr<VKRenderPipeline> m_vkRenderPipeline{ nullptr };
 
-    /*
-     * vk渲染器
-     * */
+    /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
 };
 

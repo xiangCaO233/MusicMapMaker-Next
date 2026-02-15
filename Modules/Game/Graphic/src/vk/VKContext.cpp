@@ -12,7 +12,14 @@ namespace MMM
 namespace Graphic
 {
 
-// 获取实例
+/**
+ * @brief 获取 VKContext 单例实例
+ *
+ * 如果实例尚未创建，将尝试进行初始化。
+ *
+ * @return std::expected<std::reference_wrapper<VKContext>, std::string>
+ *         成功返回上下文引用，失败返回错误信息字符串
+ */
 std::expected<std::reference_wrapper<VKContext>, std::string> VKContext::get()
 {
     try {
@@ -25,6 +32,9 @@ std::expected<std::reference_wrapper<VKContext>, std::string> VKContext::get()
     }
 }
 
+/**
+ * @brief 私有构造函数，执行基础 Vulkan 初始化
+ */
 VKContext::VKContext()
 {
     // 初始化GLFW
@@ -67,6 +77,9 @@ VKContext::VKContext()
     // 放在窗口相关资源初始化函数中
 }
 
+/**
+ * @brief 析构函数，负责清理所有 Vulkan 资源
+ */
 VKContext::~VKContext()
 {
     // 销毁渲染器
@@ -114,9 +127,9 @@ VKContext::~VKContext()
     releaseGLFW();
 }
 
-/*
- * 初始化vk应用程序信息
- * */
+/**
+ * @brief 初始化 Vulkan 应用程序信息
+ */
 void VKContext::initVkAppInfo()
 {
     m_vkAppInfo.setPApplicationName("MMM")
@@ -126,9 +139,9 @@ void VKContext::initVkAppInfo()
         .setPEngineName("No Engine");
 }
 
-/*
- * 初始化vk实例创建信息
- * */
+/**
+ * @brief 初始化 Vulkan 实例创建信息
+ */
 void VKContext::initVkInstanceCreateInfo()
 {
     m_vkInstanceCreateInfo
@@ -144,9 +157,9 @@ void VKContext::initVkInstanceCreateInfo()
     }
 }
 
-/*
- * 启用vkdebug扩展
- * */
+/**
+ * @brief 启用 Vulkan Debug 扩展
+ */
 void VKContext::enableVKDebugExt()
 {
     // 1.启用vk的debug工具扩展
@@ -177,9 +190,9 @@ void VKContext::enableVKDebugExt()
             &VKContext::vkDebug_callback));
 }
 
-/*
- * 启用vk验证层
- * */
+/**
+ * @brief 启用并检查 Validation Layer
+ */
 void VKContext::enableVKValidateLayer()
 {
     // 1.检查请求的验证层是否可用
@@ -220,7 +233,17 @@ void VKContext::enableVKValidateLayer()
     }
 }
 
-// vk debug回调
+/**
+ * @brief Vulkan Debug 回调函数
+ *
+ * 用于接收并处理 Validation Layer 发出的调试信息。
+ *
+ * @param messageSeverity 消息严重等级
+ * @param messageTypes 消息类型
+ * @param pCallbackData 回调数据（包含错误信息）
+ * @param pUserData 用户自定义数据指针
+ * @return VKAPI_ATTR VkBool32 是否中断 Vulkan 调用
+ */
 VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT             messageTypes,
@@ -256,9 +279,15 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
     return VK_FALSE;
 }
 
-/*
- * 初始化VK窗体相关资源
- * */
+/**
+ * @brief 初始化 Vulkan 窗体相关资源
+ *
+ * 包括 Surface, Swapchain, RenderPass, Pipeline 等依赖窗口尺寸的资源。
+ *
+ * @param window_ctx GLFW 窗口句柄
+ * @param w 窗口宽度
+ * @param h 窗口高度
+ */
 void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
 {
     // 初始化vk表面句柄
@@ -300,7 +329,8 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                            h);
 
     // 创建渲染器
-    m_vkRenderer = std::make_unique<VKRenderer>(m_vkLogicalDevice,
+    m_vkRenderer = std::make_unique<VKRenderer>(m_vkPhysicalDevice,
+                                                m_vkLogicalDevice,
                                                 *m_swapchain,
                                                 *m_vkRenderPipeline,
                                                 *m_vkRenderPass,
@@ -308,9 +338,10 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                                 m_LogicDevicePresentQueue);
 }
 
-/*
- * 初始化vk表面句柄
- * */
+/**
+ * @brief 初始化 Vulkan 表面
+ * @param window_handle GLFW 窗口句柄
+ */
 void VKContext::initSurface(GLFWwindow* window_handle)
 {
     // C 风格的 Surface 创建（GLFW 提供的快捷函数）
@@ -325,9 +356,9 @@ void VKContext::initSurface(GLFWwindow* window_handle)
     XINFO("Vulkan Surface created.");
 }
 
-/*
- * 挑选vk物理设备
- * */
+/**
+ * @brief 挑选合适的物理设备
+ */
 void VKContext::pickPhysicalDevice()
 {
     // 1.列出所有物理GPU设备
@@ -371,9 +402,9 @@ void VKContext::pickPhysicalDevice()
      * */
 }
 
-/*
- * 查询图形队列族索引
- * */
+/**
+ * @brief 查询物理设备的队列族索引
+ */
 void VKContext::queryQueueFamilyIndices()
 {
     // 1.获取物理显卡队列族属性
@@ -428,9 +459,9 @@ void VKContext::queryQueueFamilyIndices()
     }
 }
 
-/*
- * 初始化vk逻辑设备
- * */
+/**
+ * @brief 初始化逻辑设备
+ */
 void VKContext::initLogicDevice()
 {
     // vk逻辑设备队列优先级表
@@ -504,9 +535,9 @@ std::string readFile(std::string path)
     return source;
 }
 
-/*
- * 创建vk着色器
- * */
+/**
+ * @brief 加载并创建 Shader 模块
+ */
 void VKContext::createShader()
 {
     // 读取源码初始化shader

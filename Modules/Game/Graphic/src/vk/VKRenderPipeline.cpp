@@ -1,4 +1,6 @@
 #include "graphic/vk/VKRenderPipeline.h"
+#include "graphic/vk/mem/VKUniforms.h"
+#include "graphic/vk/mesh/VKVertex.h"
 #include "log/colorful-log.h"
 #include <cassert>
 
@@ -7,13 +9,32 @@ namespace MMM
 namespace Graphic
 {
 
+/**
+ * @brief 构造函数，创建图形管线
+ *
+ * @param logicalDevice 逻辑设备引用
+ * @param shader 着色器管理器引用 (提供 Shader Stages)
+ * @param renderPass 渲染流程引用 (提供附件格式兼容性)
+ * @param swapchain 交换链引用
+ * @param w 视口宽度
+ * @param h 视口高度
+ */
 VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                                    VKRenderPass& renderPass,
                                    VKSwapchain& swapchain, int w, int h)
     : m_logicalDevice(logicalDevice)
 {
-    // 3:创建渲染管线布局
+    // 2:创建Descriptor Set布局
+    vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
+    descriptorSetLayoutCreateInfo.setBindings(TEST_TIMEUNIFORM_BIND_DESC);
+    m_descriptorSetLayout =
+        logicalDevice.createDescriptorSetLayout(descriptorSetLayoutCreateInfo);
+    XINFO("Created VK Descriptor Set Layout.");
+
+    // 3:创建渲染管线布局(主要说明整个shader中uniform变量的布局)
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
+    // 设置SetLayout到管线布局配置中
+    pipelineLayoutCreateInfo.setSetLayouts(m_descriptorSetLayout);
     m_graphicsPipelineLayout =
         logicalDevice.createPipelineLayout(pipelineLayoutCreateInfo);
     XINFO("Created VK Graphics RenderPipeline Layout.");
@@ -23,6 +44,10 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 
     // 4.1:顶点输入状态创建信息
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
+    // 设置顶点输入属性描述信息
+    pipelineVertexInputStateCreateInfo
+        .setVertexBindingDescriptions(Graphic::VKVERTEX_BIND_DESC)
+        .setVertexAttributeDescriptions(Graphic::VKVERTEX_ATTR_DESC);
     graphicsPipelineCreateInfo.setPVertexInputState(
         &pipelineVertexInputStateCreateInfo);
 
@@ -147,6 +172,10 @@ VKRenderPipeline::~VKRenderPipeline()
     // 销毁图形渲染管线布局
     m_logicalDevice.destroyPipelineLayout(m_graphicsPipelineLayout);
     XINFO("Destroyed VK Graphics RenderPipeline Layout.");
+
+    // 销毁Descriptor Set布局
+    m_logicalDevice.destroyDescriptorSetLayout(m_descriptorSetLayout);
+    XINFO("Destroyed VK Descriptor Set Layout.");
 }
 
 }  // namespace Graphic

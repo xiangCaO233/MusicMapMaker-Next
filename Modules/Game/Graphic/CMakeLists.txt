@@ -15,6 +15,7 @@ add_library(
     src/vk/VKRenderPass.cpp
     src/vk/VKRenderPipeline.cpp
     src/vk/VKRenderer.cpp
+    src/vk/mem/VKMemBuffer.cpp
 )
 
 target_include_directories(
