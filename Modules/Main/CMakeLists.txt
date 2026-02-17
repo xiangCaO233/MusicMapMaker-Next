@@ -8,13 +8,13 @@ if(WIN32)
     else()
         # Windows 非Debug模式下添加WIN32标识不显示控制台
         add_executable(MusicMapMaker-Next WIN32 src/main.cpp)
-        add_strip_command_for_release(MusicMapMaker-Next)
     endif()
 else()
     # Linux/Macos 可执行文件编译配置
     # 编译MusicMapMaker-Next可执行文件
     add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
+add_strip_command_for_release(MusicMapMaker-Next)
 
 # 编译imgui-demo(.exe)可执行文件
 add_executable(imgui-demo src/imgui_main_demo.cpp)
