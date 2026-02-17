@@ -46,7 +46,7 @@ public:
      * @param window_title 窗口标题
      * @return int 退出代码 (0 表示正常退出)
      */
-    int start(std::string_view window_title);
+    int start(std::string_view window_title) const;
 
 private:
     GameLoop();

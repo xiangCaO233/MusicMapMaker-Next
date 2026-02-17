@@ -9,11 +9,11 @@ namespace MMM
 namespace Canvas
 {
 
-TestCanvas::TestCanvas(int w, int h, std::string_view windwo_title)
+TestCanvas::TestCanvas(const int w, const int h, const std::string_view window_title)
 {
     // 创建窗口
     m_windowHandle =
-        glfwCreateWindow(w, h, windwo_title.data(), nullptr, nullptr);
+        glfwCreateWindow(w, h, window_title.data(), nullptr, nullptr);
 }
 
 TestCanvas::~TestCanvas()
@@ -30,14 +30,12 @@ bool TestCanvas::shouldClose()
 }
 
 // 获取窗口句柄
-GLFWwindow* TestCanvas::getWindowHandle()
-{
+GLFWwindow* TestCanvas::getWindowHandle() const {
     return m_windowHandle;
 }
 
 // 具体的 GLFW 操作封装在这
-void TestCanvas::update(Graphic::VKContext& vkContext)
-{
+void TestCanvas::update(Graphic::VKContext& vkContext) const {
     auto& renderer = vkContext.getRenderer();
     glfwPollEvents();
     if ( m_windowHandle ) {

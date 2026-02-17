@@ -4,26 +4,23 @@ else()
         # windows非msvc直接静态链接标准库之类的
         add_link_options(-static)
     endif()
-    # ==============================================================================
-    #  全局为 Clang + Release 模式开启 ThinLTO
-    # ==============================================================================
 
-    # 检查编译器是否是 Clang
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # ==============================================================================
+        #  全局为 Clang + Release 模式开启 ThinLTO
+        # ==============================================================================
+
+        # 检查编译器是否是 Clang
         message(STATUS "Compiler is Clang. Enabling global ThinLTO for Release builds.")
 
-        # 使用 CMAKE_CXX_FLAGS_RELEASE 变量来全局添加编译选项
-        # "APPEND" 可以在已有 Release 标志的基础上追加
-        string(APPEND CMAKE_CXX_FLAGS_RELEASE " -flto=thin")
-
         # 同时，也为链接器添加 LTO 标志
-        # 注意：对于可执行文件和共享库，链接标志变量不同
-        string(APPEND CMAKE_EXE_LINKER_FLAGS_RELEASE " -flto=thin")
-        string(APPEND CMAKE_SHARED_LINKER_FLAGS_RELEASE " -flto=thin")
-        string(APPEND CMAKE_MODULE_LINKER_FLAGS_RELEASE " -flto=thin")
-
+        # 仅在 Release 或 RelWithDebInfo 模式下添加编译选项
+        add_compile_options("$<$<CONFIG:Release,RelWithDebInfo>:-flto=thin>")
+        
+        # 仅在 Release 或 RelWithDebInfo 模式下添加链接选项
+        add_link_options("$<$<CONFIG:Release,RelWithDebInfo>:-flto=thin>")
     else()
-        message(STATUS "Compiler is not Clang. Global ThinLTO is disabled.")
+        message(STATUS "Compiler is GCC. Disable LTO.")
     endif()
 endif()
 
@@ -40,9 +37,10 @@ macro(add_strip_command_for_release TARGET_NAME)
     # POST_BUILD:             在目标成功构建之后执行
     add_custom_command(TARGET ${TARGET_NAME}
             POST_BUILD
-            COMMAND ${CMAKE_STRIP} -s "$<TARGET_FILE:${TARGET_NAME}>"
-            CONFIGURATIONS Release
+            # 关键：使用生成器表达式。只有在 Release 模式下，命令才会被生成。
+            COMMAND $<$<CONFIG:Release>:${CMAKE_STRIP}> $<$<CONFIG:Release>:-s> $<$<CONFIG:Release>:$<TARGET_FILE:${TARGET_NAME}>>
             COMMENT "Stripping symbols from ${TARGET_NAME} in Release mode"
+            VERBATIM # 建议加上这个，处理路径中的空格更稳健
     )
     message(STATUS "Added post-build strip command for target '${TARGET_NAME}' in Release mode.")
 endmacro()
@@ -57,7 +55,6 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 
 # 是否为Debug模式的宏
 add_definitions(-DBUILD_TYPE_DEBUG=$<CONFIG:Debug>)

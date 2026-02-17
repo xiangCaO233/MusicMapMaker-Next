@@ -32,8 +32,7 @@ GameLoop::~GameLoop() {}
  * @param window_title 窗口标题
  * @return int 退出代码 (0 表示正常退出)
  */
-int GameLoop::start(std::string_view window_title)
-{
+int GameLoop::start(std::string_view window_title) const {
     // 初始化窗口
     Canvas::TestCanvas canvas(800, 600, window_title);
 

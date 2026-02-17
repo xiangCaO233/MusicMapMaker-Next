@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
     }
 
     // 跨平台（自动处理 / 或 \）
-    auto assetPath = rootDir / "assets";
+    const auto assetPath = rootDir / "assets";
 
     using namespace Translation;
     Translator::instance().loadLanguage(
@@ -37,12 +37,12 @@ int main(int argc, char* argv[])
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
         (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
-    auto backgroundColor = SkinManager::instance().getColor("background");
+    auto [r, g, b, a] = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]",
-          backgroundColor.r,
-          backgroundColor.g,
-          backgroundColor.b,
-          backgroundColor.a);
+          r,
+          g,
+          b,
+          a);
 
     // 测试vulkan
     auto& gameLoop = GameLoop::instance();
@@ -58,7 +58,7 @@ int main(int argc, char* argv[])
     // 正常运行
     XINFO("entering gameloop...");
 
-    auto ret = gameLoop.start("Vulkan Test");
+    const auto ret = gameLoop.start("Vulkan Test");
 
     return ret;
 }
