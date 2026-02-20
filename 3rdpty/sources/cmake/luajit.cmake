@@ -78,7 +78,9 @@ else()
 
     set(MAKE_ENV "")
     if(APPLE)
-        set(MAKE_ENV "MACOSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        # 强制写死为 11.0，这是一个安全且广泛兼容的版本
+        set(MAKE_ENV "MACOSX_DEPLOYMENT_TARGET=11.0")
+        message(STATUS "Forcing LuaJIT macOS Target to 11.0")
     endif()
 
     add_custom_command(
