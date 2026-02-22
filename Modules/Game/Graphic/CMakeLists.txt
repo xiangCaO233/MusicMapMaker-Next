@@ -29,5 +29,6 @@ target_link_libraries(Graphic PUBLIC
         Log
         Font
         3rd_glfw
+        3rd_glm
         Vulkan::Vulkan
 )

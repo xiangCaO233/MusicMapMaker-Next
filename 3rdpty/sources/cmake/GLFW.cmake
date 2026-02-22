@@ -19,7 +19,7 @@ set(GLFW_INSTALL
 
 # 将 GLFW 作为子项目包含进来 GLFW 会自动创建一个名为 'glfw' 的 target
 add_subdirectory(${GLFW_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/glfw_build
-                 EXCLUDE_FROM_ALL)
+                 EXCLUDE_FROM_ALL SYSTEM)
 
 # 创建接口库
 add_library(3rd_glfw INTERFACE)

@@ -15,4 +15,4 @@ set(SOL2_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # ==========================================
 # 引入 sol2
 # ==========================================
-add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/sol2")
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/sol2" SYSTEM)
