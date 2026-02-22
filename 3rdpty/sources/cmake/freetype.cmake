@@ -25,7 +25,7 @@ endif()
 # =========================================================================
 # 假设源码在 ../sources/freetype
 add_subdirectory(
-    ${CMAKE_CURRENT_SOURCE_DIR}/freetype)
+    ${CMAKE_CURRENT_SOURCE_DIR}/freetype SYSTEM)
 
 # =========================================================================
 # 别名设置
