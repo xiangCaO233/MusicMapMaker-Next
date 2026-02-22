@@ -22,3 +22,7 @@
 	path = 3rdpty/sources/freetype
 	url = https://github.com/freetype/freetype.git
 	branch = master
+[submodule "3rdpty/sources/glm"]
+	path = 3rdpty/sources/glm
+	url = https://github.com/icaven/glm.git
+	branch = master

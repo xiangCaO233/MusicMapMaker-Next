@@ -1,0 +1,11 @@
+set(GLM_QUIET ON CACHE BOOL "" FORCE)
+set(GLM_BUILD_LIBRARY OFF CACHE BOOL "" FORCE)
+set(GLM_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(GLM_BUILD_INSTALL OFF CACHE BOOL "" FORCE)
+
+set(GLM_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../glm")
+
+add_subdirectory(${GLM_SOURCE_DIR} "${CMAKE_CURRENT_BINARY_DIR}/glm_build" SYSTEM)
+
+add_library(3rd_glm INTERFACE)
+target_link_libraries(3rd_glm INTERFACE glm::glm)
