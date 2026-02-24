@@ -1,6 +1,6 @@
-#include "log/colorful-log.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/vk/VKContext.h"
+#include "log/colorful-log.h"
 #include <stdexcept>
 
 namespace MMM::Graphic
@@ -55,6 +55,14 @@ void VKContext::registerGLFWExtensions()
         XINFO("  - {}", glfwExtension);
     }
 
+#ifdef __APPLE__
+    m_vkExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    XINFO("  - {}", VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+    m_vkExtensions.push_back(
+        VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+    XINFO("  - {}", VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
+#endif  // __APPLE__
+
     // 启用vk的debug工具扩展
     // requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 }
@@ -68,6 +76,4 @@ void VKContext::releaseGLFW()
     XINFO("GLFW Terminated.");
 }
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

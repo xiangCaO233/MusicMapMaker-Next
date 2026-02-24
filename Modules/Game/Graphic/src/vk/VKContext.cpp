@@ -145,7 +145,11 @@ void VKContext::initVkInstanceCreateInfo()
     m_vkInstanceCreateInfo
         .setPApplicationInfo(&m_vkAppInfo)
         // 启用的扩展
-        .setPEnabledExtensionNames(m_vkExtensions);
+        .setPEnabledExtensionNames(m_vkExtensions)
+#ifdef __APPLE__
+        .setFlags(vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR)
+#endif  //__APPLE__
+        ;
 
     if ( is_debug() ) {
         // 启用的Layer
@@ -485,7 +489,7 @@ void VKContext::initLogicDevice()
     // 2.准备逻辑设备需要启用的扩展
     constexpr std::array deviceExtensions = {
         // 交换链扩展
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME,
     };
 
     // 3.初始化队列创建信息
@@ -572,6 +576,4 @@ void VKContext::createShader()
     m_vkShaders.emplace("testShader", std::move(test_vkShader));
 }
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic
