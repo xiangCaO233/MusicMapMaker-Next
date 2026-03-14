@@ -1,6 +1,6 @@
-#include "graphic/vk/VKRenderPass.h"
+#include "graphic/imguivk/VKRenderPass.h"
+#include "graphic/imguivk/VKSwapchain.h"
 #include "log/colorful-log.h"
-#include "graphic/vk/VKSwapchain.h"
 
 namespace MMM::Graphic
 {
@@ -80,6 +80,4 @@ VKRenderPass::~VKRenderPass()
     XINFO("Destroyed VK Graphics RenderPipeline RenderPass.");
 }
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

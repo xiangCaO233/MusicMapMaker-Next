@@ -1,7 +1,7 @@
-#include "game/GameLoop.h"
-#include "log/colorful-log.h"
 #include "config/skin/SkinConfig.h"
 #include "config/translation/Translation.h"
+#include "game/GameLoop.h"
+#include "log/colorful-log.h"
 #include <filesystem>
 
 int main(int argc, char* argv[])
@@ -38,11 +38,7 @@ int main(int argc, char* argv[])
     SkinManager::instance().loadSkin(
         (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
-    XINFO("background color:[{},{},{},{}]",
-          r,
-          g,
-          b,
-          a);
+    XINFO("background color:[{},{},{},{}]", r, g, b, a);
 
     // 测试vulkan
     auto& gameLoop = GameLoop::instance();
@@ -58,7 +54,7 @@ int main(int argc, char* argv[])
     // 正常运行
     XINFO("entering gameloop...");
 
-    const auto ret = gameLoop.start("Vulkan Test");
+    const auto ret = gameLoop.start("MusicMapMaker(Gamma)");
 
     return ret;
 }

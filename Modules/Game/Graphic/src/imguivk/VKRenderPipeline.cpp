@@ -1,6 +1,6 @@
-#include "graphic/vk/VKRenderPipeline.h"
-#include "graphic/vk/mem/VKUniforms.h"
-#include "graphic/vk/mesh/VKVertex.h"
+#include "graphic/imguivk/VKRenderPipeline.h"
+#include "graphic/imguivk/mem/VKUniforms.h"
+#include "graphic/imguivk/mesh/VKVertex.h"
 #include "log/colorful-log.h"
 #include <cassert>
 
@@ -71,9 +71,9 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     // 单纯绘制窗口区域 - 无裁切
     vk::Viewport viewPort{ 0, 0, static_cast<float>(w), static_cast<float>(h),
                            0, 1 };
-    vk::Rect2D scissor{ { 0, 0 },
-                        { static_cast<uint32_t>(w),
-                          static_cast<uint32_t>(h) } };
+    vk::Rect2D   scissor{
+          { 0, 0 }, { static_cast<uint32_t>(w), static_cast<uint32_t>(h) }
+    };
     pipelineViewportStateCreateInfo
         // 设置视口
         .setViewports(viewPort)
@@ -132,7 +132,7 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
         // 也就是：新颜色(Src) * Alpha + 旧颜色(Dst) * (1 - Alpha)
         .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
         .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
-        .setColorBlendOp(vk::BlendOp::eAdd) // 相加
+        .setColorBlendOp(vk::BlendOp::eAdd)  // 相加
         // 设置 Alpha 通道混合因子
         // 通常直接保留新像素的 Alpha，或者两者相加。
         // 下面配置表示：FinalAlpha = (SrcAlpha * 1) + (DstAlpha * 0) =>
@@ -158,8 +158,7 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 
     // 4.10:最终创建管线
     auto pipelineCreateResult = logicalDevice.createGraphicsPipeline(
-        nullptr,
-        graphicsPipelineCreateInfo);
+        nullptr, graphicsPipelineCreateInfo);
     assert(pipelineCreateResult.result == vk::Result::eSuccess);
     m_graphicsPipeline = pipelineCreateResult.value;
     XINFO("Created VK Graphics RenderPipeline.");
@@ -180,5 +179,4 @@ VKRenderPipeline::~VKRenderPipeline()
     XINFO("Destroyed VK Descriptor Set Layout.");
 }
 
-} // namespace MMM::Graphic
-
+}  // namespace MMM::Graphic

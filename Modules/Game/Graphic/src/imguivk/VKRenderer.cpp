@@ -1,7 +1,11 @@
-#include "graphic/vk/VKRenderer.h"
-#include "graphic/vk/mem/VKUniforms.h"
-#include "graphic/vk/mesh/VKVertex.h"
-#include "graphic/vk/VKSwapchain.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/glfw/window/NativeWindow.h"
+#include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKSwapchain.h"
+#include "graphic/imguivk/mem/VKUniforms.h"
+#include "graphic/imguivk/mesh/VKVertex.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 #include <chrono>
 
@@ -104,8 +108,22 @@ VKRenderer::~VKRenderer()
  *
  * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
  */
-void VKRenderer::render()
+void VKRenderer::render(NativeWindow& window)
 {
+    // 1. 主动检查 GLFW 报告的当前尺寸
+    int currentWidth, currentHeight;
+    window.getFramebufferSize(currentWidth, currentHeight);
+
+    // 2. 检查当前交换链的 Extent 是否与窗口一致
+    auto& extent = m_vkSwapChain.info().imageExtent;
+
+    // 如果 flag 被触发，或者尺寸实际对不上，就强制重建
+    if ( window.isFramebufferResized() || currentWidth != extent.width ||
+         currentHeight != extent.height ) {
+        triggerRecreate(window);
+        return;  // 重建后这一帧直接跳过，下一帧再画
+    }
+
     // 等待cmd完成
     auto waitResult = m_vkLogicalDevice.waitForFences(
         m_cmdAvailableFences[m_currentFrameIndex],
@@ -117,12 +135,62 @@ void VKRenderer::render()
 
     // 恢复fence
     m_vkLogicalDevice.resetFences(m_cmdAvailableFences[m_currentFrameIndex]);
+    static std::array clear_color{ .23f, .23f, .23f, 1.f };
+    // --- 1. ImGui 准备新帧 ---
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    // 2. Show a simple window that we create ourselves. We use a Begin/End pair
+    // to create a named window.
+    {
+        ImGuiIO&     io      = ImGui::GetIO();
+        static float f       = 0.0f;
+        static int   counter = 0;
+
+        ImGui::Begin("Hello, world!");  // Create a window called "Hello,
+                                        // world!" and append into it.
+
+        ImGui::Text("This is some useful text.");  // Display some text (you can
+                                                   // use a format strings too)
+
+        ImGui::SliderFloat(
+            "float",
+            &f,
+            0.0f,
+            1.0f);  // Edit 1 float using a slider from 0.0f to 1.0f
+        ImGui::ColorEdit4(
+            "clear color",
+            clear_color.data());  // Edit 4 floats representing a color
+
+        if ( ImGui::Button(
+                 "Button") )  // Buttons return true when clicked (most widgets
+                              // return true when edited/activated)
+            counter++;
+        ImGui::SameLine();
+        ImGui::Text("counter = %d", counter);
+
+        ImGui::Text("Application average %.3f ms/frame (%.1f FPS)",
+                    1000.0f / io.Framerate,
+                    io.Framerate);
+        ImGui::End();
+    }
+
+    ImGui::ShowDemoWindow();  // 测试用，显示ImGui默认演示窗口
+    ImGui::Render();          // 生成绘制数据
 
     // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
     auto imageResult = m_vkLogicalDevice.acquireNextImageKHR(
         m_vkSwapChain.m_swapchain,
         std::numeric_limits<uint64_t>::max(),
         m_imageAvailableSems[m_currentFrameIndex]);
+    if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
+
+        // 标记需要重建
+        triggerRecreate(window);
+
+        return;
+    }
     if ( imageResult.result != vk::Result::eSuccess ) {
         XWARN("acquire ImageKHR failed");
     }
@@ -137,7 +205,8 @@ void VKRenderer::render()
         start_time;
     auto current_time_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(since_start);
-    m_testCurrentTime.time = static_cast<float>(current_time_ms.count()) / 1000.f;
+    m_testCurrentTime.time =
+        static_cast<float>(current_time_ms.count()) / 1000.f;
     // XINFO("current time: {}", m_testCurrentTime.time);
     // 上传uniform数据
     uploadUniformBuffer2GPU(imageIndex);
@@ -158,10 +227,10 @@ void VKRenderer::render()
     // .setFlags(vk::CommandBufferUsageFlagBits::eSimultaneousUse);
 
     // 渲染区域
-    auto       swapchainCreateInfo = m_vkSwapChain.info();
+    auto swapchainCreateInfo = m_vkSwapChain.info();
     // clearmask - 类似opengl的清屏颜色
     vk::ClearValue      clearValue;
-    vk::ClearColorValue clearColorValue(std::array{ .23f, .23f, .23f, 1.f });
+    vk::ClearColorValue clearColorValue(clear_color);
     clearValue.setColor(clearColorValue);
 
     // 命令录制
@@ -222,11 +291,14 @@ void VKRenderer::render()
                 // 从第几个实例开始
                 ,
                 0);
+            // 在此处绘制 ImGui (在 3D 之后画，从而覆盖在上面)
+            ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+                                            currentCmdBuffer);
         }
         // 结束渲染流程
         currentCmdBuffer.endRenderPass();
     }
-    currentCmdBuffer.end(); // 结束命令录制
+    currentCmdBuffer.end();  // 结束命令录制
 
     // 准备等待的阶段掩码
     // 这表示：在流水线的“颜色附件输出”阶段等待信号量
@@ -247,8 +319,7 @@ void VKRenderer::render()
         // 发出信号量
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
     m_LogicDeviceGraphicsQueue.submit(
-        submitInfo,
-        m_cmdAvailableFences[m_currentFrameIndex]);
+        submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
 
     // 呈现
     vk::PresentInfoKHR presentInfo;
@@ -260,21 +331,45 @@ void VKRenderer::render()
         // 等待信号量
         .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
     auto presentResult = m_LogicDevicePresentQueue.presentKHR(presentInfo);
+
     if ( presentResult != vk::Result::eSuccess ) {
-        XWARN("Present failed");
+        if ( presentResult == vk::Result::eSuboptimalKHR ||
+             window.isFramebufferResized() ) {
+            triggerRecreate(window);
+        } else {
+            XWARN("Present failed");
+        }
     }
 
     // 并发帧数步进
     ++m_currentFrameIndex %= MAX_FRAMES_IN_FLIGHT;
+
+    // 更新并渲染所有的多视口 (Viewports)
+    ImGuiIO& io = ImGui::GetIO();
+    if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+    }
 }
 
+void VKRenderer::triggerRecreate(NativeWindow& window)
+{
+    int w, h;
+    window.getFramebufferSize(w, h);
+    // 这里需要调用 context 的 recreateSwapchain
+    // 你可以通过回调或者单例模式来调用
+    MMM::Graphic::VKContext::get().value().get().recreateSwapchain(
+        window.getWindowHandle(), w, h);
+    window.resetFramebufferResized();
+}
 
 /**
  * @brief 传输数据到GPU
  */
-void VKRenderer::uploadBuffer2GPU(vk::CommandBuffer&            cmdBuffer,
-                                  const std::unique_ptr<VKMemBuffer>& hostBuffer,
-                                  const std::unique_ptr<VKMemBuffer>& gpuBuffer) const
+void VKRenderer::uploadBuffer2GPU(
+    vk::CommandBuffer&                  cmdBuffer,
+    const std::unique_ptr<VKMemBuffer>& hostBuffer,
+    const std::unique_ptr<VKMemBuffer>& gpuBuffer) const
 {
     vk::CommandBufferBeginInfo uploadCmdBufBeginInfo;
 
@@ -320,9 +415,7 @@ void VKRenderer::uploadVertexBuffer2GPU() const
 
     // 写入数据到主机内存缓冲区
     void* data = m_vkLogicalDevice.mapMemory(
-        m_vkHostMemBuffer->m_vkDevMem,
-        0,
-        sizeof(s_vertices));
+        m_vkHostMemBuffer->m_vkDevMem, 0, sizeof(s_vertices));
     memcpy(data, s_vertices.data(), sizeof(s_vertices));
     m_vkLogicalDevice.unmapMemory(m_vkHostMemBuffer->m_vkDevMem);
 
@@ -380,6 +473,4 @@ void VKRenderer::uploadUniformBuffer2GPU(const uint32_t current_image_index)
     // XINFO("Uploaded uniform data to gpu buffer.");
 }
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

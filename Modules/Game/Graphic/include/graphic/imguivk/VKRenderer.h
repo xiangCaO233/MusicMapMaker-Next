@@ -1,7 +1,8 @@
 #pragma once
 
-#include "graphic/vk/mem/VKMemBuffer.h"
-#include "graphic/vk/VKRenderPipeline.h"
+#include "graphic/glfw/GLFWHeader.h"
+#include "graphic/imguivk/VKRenderPipeline.h"
+#include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "mem/VKUniforms.h"
 #include "mesh/VKVertex.h"
 #include "vulkan/vulkan.hpp"
@@ -11,6 +12,7 @@
 namespace MMM::Graphic
 {
 
+class NativeWindow;
 /**
  * @brief Vulkan 渲染器类
  *
@@ -51,7 +53,9 @@ public:
      *
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
      */
-    void render();
+    void render(NativeWindow& window);
+
+    void triggerRecreate(NativeWindow& window);
 
 private:
     /// @brief 顶点数据
@@ -179,7 +183,7 @@ private:
     /**
      * @brief 传输数据到GPU
      */
-    void uploadBuffer2GPU(vk::CommandBuffer&            cmdBuffer,
+    void uploadBuffer2GPU(vk::CommandBuffer&                  cmdBuffer,
                           const std::unique_ptr<VKMemBuffer>& hostBuffer,
                           const std::unique_ptr<VKMemBuffer>& gpuBuffer) const;
 
@@ -207,8 +211,8 @@ private:
      * @brief 上传uniform缓冲区到GPU
      */
     void uploadUniformBuffer2GPU(uint32_t current_image_index);
+
+    friend class VKContext;
 };
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

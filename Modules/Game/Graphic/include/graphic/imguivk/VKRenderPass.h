@@ -38,12 +38,11 @@ private:
     vk::RenderPass m_graphicRenderPass;
 
     // 允许 Renderer, Swapchain, Pipeline 访问内部 RenderPass 句柄
+    friend class VKContext;
     friend class VKRenderer;
     friend class VKSwapchain;
     friend class VKRenderPipeline;
 };
 
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

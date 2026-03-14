@@ -1,8 +1,8 @@
 #include "game/GameLoop.h"
 #include "game/GlobDefs.h"
-#include "canvas/TestCanvas.h"
+#include "graphic/glfw/window/NativeWindow.h"
+#include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
-#include "graphic/vk/VKContext.h"
 
 namespace MMM
 {
@@ -21,6 +21,7 @@ GameLoop::GameLoop() : vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
 }
+
 GameLoop::~GameLoop() {}
 
 /**
@@ -32,17 +33,22 @@ GameLoop::~GameLoop() {}
  * @param window_title 窗口标题
  * @return int 退出代码 (0 表示正常退出)
  */
-int GameLoop::start(std::string_view window_title) const {
+int GameLoop::start(std::string_view window_title) const
+{
     // 初始化窗口
-    Canvas::TestCanvas canvas(800, 600, window_title);
-
+    Graphic::NativeWindow window(1280, 720, window_title.data());
     // VKContext 表面资源后续初始化
     if ( vkContext ) {
         auto& context = vkContext->get();
-        context.initVKWindowRess(canvas.getWindowHandle(), 800, 600);
+        int   fbWidth, fbHeight;
+        window.getFramebufferSize(fbWidth, fbHeight);
+        context.initVKWindowRess(window.getWindowHandle(), fbWidth, fbHeight);
         // 进入主循环
-        while ( !canvas.shouldClose() ) {
-            canvas.update(context);
+        while ( !window.shouldClose() ) {
+            // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
+            window.pollEvents();
+            // 3.2 执行渲染
+            context.getRenderer().render(window);
         }
         return EXIT_NORMAL;
     } else {

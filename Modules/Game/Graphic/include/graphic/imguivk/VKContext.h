@@ -1,24 +1,20 @@
 #pragma once
 
-#include "VKShader.h"
-#include "graphic/vk/VKQueueFamilyDef.h"
-#include "graphic/vk/VKRenderPass.h"
-#include "graphic/vk/VKRenderPipeline.h"
-#include "graphic/vk/VKRenderer.h"
-#include "graphic/vk/VKSwapchain.h"
-#include <array>
+#include "graphic/glfw/GLFWHeader.h"
+#include "graphic/imguivk/VKQueueFamilyDef.h"
+#include "graphic/imguivk/VKRenderPass.h"
+#include "graphic/imguivk/VKRenderPipeline.h"
+#include "graphic/imguivk/VKRenderer.h"
+#include "graphic/imguivk/VKShader.h"
+#include "graphic/imguivk/VKSwapchain.h"
+#include "imgui_impl_vulkan.h"
 #include <expected>
 #include <memory>
 #include <unordered_map>
 #include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_handles.hpp>
-#include <vulkan/vulkan_structs.hpp>
-
-struct GLFWwindow;
 
 namespace MMM::Graphic
 {
-
 /**
  * @brief 检查当前是否为 Debug 模式
  * @return true 如果是 Debug 模式
@@ -33,12 +29,6 @@ static constexpr bool is_debug()
 #endif
 }
 
-/**
- * @brief Vulkan 图形上下文类
- *
- * 负责管理 Vulkan 的实例、设备、表面、交换链等核心资源的生命周期。
- * 采用单例模式设计。
- */
 class VKContext final
 {
 public:
@@ -52,11 +42,12 @@ public:
      */
     static std::expected<std::reference_wrapper<VKContext>, std::string> get();
 
-    // 禁用拷贝和移动语义
+    VKContext();
     VKContext(VKContext&&)                 = delete;
     VKContext(const VKContext&)            = delete;
     VKContext& operator=(VKContext&&)      = delete;
     VKContext& operator=(const VKContext&) = delete;
+    ~VKContext();
 
     /**
      * @brief 初始化 Vulkan 窗体相关资源
@@ -67,7 +58,7 @@ public:
      * @param w 窗口宽度
      * @param h 窗口高度
      */
-    void initVKWindowRess(GLFWwindow* window_ctx, int w, int h);
+    void initVKWindowRess(GLFWwindow* window, int width, int height);
 
     /**
      * @brief 获取渲染器实例
@@ -75,20 +66,6 @@ public:
      */
     inline VKRenderer& getRenderer() { return *m_vkRenderer; }
 
-private:
-    /**
-     * @brief 私有构造函数，执行基础 Vulkan 初始化
-     */
-    VKContext();
-
-    /**
-     * @brief 析构函数，负责清理所有 Vulkan 资源
-     */
-    ~VKContext();
-
-    // =========================================================================
-    // GLFW 相关
-    // =========================================================================
 private:
     /**
      * @brief 初始化 GLFW 上下文
@@ -105,10 +82,6 @@ private:
      */
     static void releaseGLFW();
 
-    // =========================================================================
-    // Vulkan 核心初始化相关
-    // =========================================================================
-private:
     /// @brief Vulkan 应用程序信息结构体
     vk::ApplicationInfo m_vkAppInfo{};
 
@@ -179,30 +152,22 @@ private:
     // 物理设备与逻辑设备相关
     // =========================================================================
 
-    /// @brief Vulkan 表面句柄 (Window Surface)
-    vk::SurfaceKHR m_vkSurface{};
-
-    /**
-     * @brief 初始化 Vulkan 表面
-     * @param window_handle GLFW 窗口句柄
-     */
-    void initSurface(GLFWwindow* window_handle);
-
     /// @brief 选定的 Vulkan 物理设备 (GPU)
     vk::PhysicalDevice m_vkPhysicalDevice{};
-
-    /**
-     * @brief 挑选合适的物理设备
-     */
-    void pickPhysicalDevice();
 
     /// @brief 队列族索引结构体
     QueueFamilyIndices m_queueFamilyIndices{};
 
+    /// @brief 逻辑设备图形队列句柄
+    vk::Queue m_LogicDeviceGraphicsQueue;
+
+    /// @brief 逻辑设备呈现队列句柄
+    vk::Queue m_LogicDevicePresentQueue;
+
     /**
-     * @brief 查询物理设备的队列族索引
+     * @brief 使用imgui自动选择物理设备和队列族
      */
-    void queryQueueFamilyIndices();
+    void imguiAutoSelect();
 
     /// @brief Vulkan 逻辑设备句柄
     vk::Device m_vkLogicalDevice{};
@@ -212,11 +177,8 @@ private:
      */
     void initLogicDevice();
 
-    /// @brief 逻辑设备图形队列句柄
-    vk::Queue m_LogicDeviceGraphicsQueue;
-
-    /// @brief 逻辑设备呈现队列句柄
-    vk::Queue m_LogicDevicePresentQueue;
+    /// @brief Vulkan 表面句柄 (Window Surface)
+    vk::SurfaceKHR m_vkSurface{};
 
     // =========================================================================
     // 渲染资源相关
@@ -227,6 +189,11 @@ private:
 
     /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
     std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
+
+    /**
+     * @brief 重建交换链
+     */
+    void recreateSwapchain(GLFWwindow* window_context, int width, int height);
 
     /**
      * @brief 加载并创建 Shader 模块
@@ -241,8 +208,17 @@ private:
 
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
+
+    // =========================================================================
+    // imgui - 实现相关
+    // =========================================================================
+
+    /**
+     * @brief 初始化 imgui Vulkan
+     */
+    void imguiVulkanInit(GLFWwindow* iwindow_handle);
+
+    friend class VKRenderer;
 };
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "graphic/vk/VKQueueFamilyDef.h"
-#include "graphic/vk/VKRenderPass.h"
+#include "graphic/imguivk/VKQueueFamilyDef.h"
+#include "graphic/imguivk/VKRenderPass.h"
 #include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
@@ -28,8 +28,8 @@ public:
      * @param h 期望的高度
      */
     VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
-                vk::Device&         vkLogicalDevice, vk::SurfaceKHR& vkSurface,
-                QueueFamilyIndices& queueFamilyIndices, int          w, int h);
+                vk::Device& vkLogicalDevice, vk::SurfaceKHR& vkSurface,
+                QueueFamilyIndices& queueFamilyIndices, int w, int h);
 
     // 禁用拷贝和移动
     VKSwapchain(VKSwapchain&&) = delete;
@@ -81,8 +81,7 @@ private:
      * @brief 内部图像缓冲结构体
      * 包含每一帧所需的图像资源
      */
-    struct ImageBuffer
-    {
+    struct ImageBuffer {
         /// @brief Swapchain 原生图像句柄
         vk::Image vk_image;
 
@@ -101,7 +100,6 @@ private:
 
     // 允许 Renderer 直接访问内部的 ImageBuffers
     friend class VKRenderer;
+    friend class VKContext;
 };
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

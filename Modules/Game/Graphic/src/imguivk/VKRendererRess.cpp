@@ -1,4 +1,4 @@
-#include "graphic/vk/VKRenderer.h"
+#include "graphic/imguivk/VKRenderer.h"
 #include "log/colorful-log.h"
 
 namespace MMM::Graphic
@@ -6,11 +6,11 @@ namespace MMM::Graphic
 
 // 顶点信息
 std::array<VKVertex, 3> VKRenderer::s_vertices{
-    VKVertex{ .pos = { .x = 0.f, .y = -.5f },
+    VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
               .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
-    VKVertex{ .pos = { .x = .5f, .y = .5f },
+    VKVertex{ .pos   = { .x = .5f, .y = .5f },
               .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
-    VKVertex{ .pos = { .x = -0.5f, .y = 0.5f },
+    VKVertex{ .pos   = { .x = -0.5f, .y = 0.5f },
               .color = { .r = 0.0f, .g = 0.0f, .b = 1.0f, .a = 1.0f } },
 
 };
@@ -51,7 +51,8 @@ void VKRenderer::allocateCommandBuffers()
 
     // 创建上传Uniform数据的命令缓冲区
     // 为每一个图像缓冲分配一个用于上传Uniform数据的命令缓冲区
-    m_uniformUploadCmdBuffers = m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo);
+    m_uniformUploadCmdBuffers =
+        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo);
 
     XINFO("Allocated VK Command Buffers.");
 }
@@ -101,7 +102,7 @@ void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
         vk::BufferUsageFlagBits::eTransferSrc,
         // 主机可访问 + 可协同工作
         vk::MemoryPropertyFlagBits::eHostVisible |
-        vk::MemoryPropertyFlagBits::eHostCoherent);
+            vk::MemoryPropertyFlagBits::eHostCoherent);
 
     // 创建VKGPU内存缓冲区
     m_vkGPUMemBuffer =
@@ -110,7 +111,7 @@ void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
                                       sizeof(s_vertices),
                                       // 顶点缓冲区并设置为传输终点
                                       vk::BufferUsageFlagBits::eVertexBuffer |
-                                      vk::BufferUsageFlagBits::eTransferDst,
+                                          vk::BufferUsageFlagBits::eTransferDst,
                                       // 仅GPU设备本地可见
                                       vk::MemoryPropertyFlagBits::eDeviceLocal);
 
@@ -125,7 +126,7 @@ void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
             vk::BufferUsageFlagBits::eTransferSrc,
             // 主机可访问 + 可协同工作
             vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent);
+                vk::MemoryPropertyFlagBits::eHostCoherent);
     }
 
     // 创建GPUUniform缓冲区
@@ -137,7 +138,7 @@ void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
             sizeof(Graphic::VKTestTimeUniform),
             // Uniform缓冲区并设置为传输终点
             vk::BufferUsageFlagBits::eUniformBuffer |
-            vk::BufferUsageFlagBits::eTransferDst,
+                vk::BufferUsageFlagBits::eTransferDst,
             // 仅GPU设备本地可见
             vk::MemoryPropertyFlagBits::eDeviceLocal);
     }
@@ -147,22 +148,32 @@ void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
  * @brief 创建描述符池
  */
 void VKRenderer::createDescriptPool()
-{
+{  // My Create Descriptor Pool
+
     // 描述符池创建信息
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
+
     // 描述符池大小
-    vk::DescriptorPoolSize descriptorPoolSize;
-    descriptorPoolSize
-        // 描述符类型::Uniform类型 - 之后还有采样器类型等等
+    std::array<vk::DescriptorPoolSize, 2> descriptorPoolSizes;
+    vk::DescriptorPoolSize                descriptorPoolSize;
+    descriptorPoolSizes[0]
+        // 描述符类型::Uniform类型
         .setType(vk::DescriptorType::eUniformBuffer)
         // 总共需要创建多少描述符集 (描述符集数量 * 对应的内容数量
         // (当前uniform就一个))
         .setDescriptorCount(m_avalableImageBufferCount * 1);
+    descriptorPoolSizes[1]
+        // 描述符类型::采样器类型等等
+        .setType(vk::DescriptorType::eCombinedImageSampler)
+        // 总共需要创建多少描述符集 (描述符集数量 * 对应的内容数量 直接给够)
+        .setDescriptorCount(1000);
+
     descriptorPoolCreateInfo
+        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         // 有多少帧就创建多少个描述符集
-        .setMaxSets(m_avalableImageBufferCount)
+        .setMaxSets(m_avalableImageBufferCount + 32)
         // 设置描述符池大小
-        .setPoolSizes(descriptorPoolSize);
+        .setPoolSizes(descriptorPoolSizes);
 
     // 创建描述符池
     m_vkDescriptorPool =
@@ -234,4 +245,4 @@ void VKRenderer::mapUniformBuffer2DescriptorSet() const
     }
 }
 
-}
+}  // namespace MMM::Graphic
