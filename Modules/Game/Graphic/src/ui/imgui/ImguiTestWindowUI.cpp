@@ -45,6 +45,11 @@ void ImguiTestWindowUI::update()
                     1000.0f / io.Framerate,
                     io.Framerate);
         ImGui::End();
+
+        // window2
+        ImGui::Begin("cnm");
+        ImGui::Text("nmsl");
+        ImGui::End();
     }
 
     // ImGui::ShowDemoWindow();  // 测试用，显示ImGui默认演示窗口

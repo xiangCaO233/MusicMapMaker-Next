@@ -1,6 +1,6 @@
 #pragma once
 
-namespace MMM::MMM::Graphic::UI
+namespace MMM::Graphic::UI
 {
 
 class Brush
@@ -15,4 +15,4 @@ public:
 
 private:
 };
-}  // namespace MMM::MMM::Graphic::UI
+}  // namespace MMM::Graphic::UI
