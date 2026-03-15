@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/UIManager.h"
 #include <expected>
 #include <functional>  // reference_wrapper 需要这个头文件
 #include <string>
@@ -46,7 +47,7 @@ public:
      * @param window_title 窗口标题
      * @return int 退出代码 (0 表示正常退出)
      */
-    int start(std::string_view window_title) const;
+    int start(std::string_view window_title);
 
 private:
     GameLoop();
@@ -57,5 +58,8 @@ private:
     GameLoop(const GameLoop&)            = delete;
     GameLoop& operator=(GameLoop&&)      = delete;
     GameLoop& operator=(const GameLoop&) = delete;
+
+    /// @brief ui管理器
+    Graphic::UI::UIManager m_uiManager;
 };
 }  // namespace MMM

@@ -11,7 +11,7 @@ add_library(
 
 target_link_libraries(
     Game
-    PRIVATE
+    PUBLIC
     Log Canvas Graphic
 )
 

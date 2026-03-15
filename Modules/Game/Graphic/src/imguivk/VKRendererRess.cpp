@@ -245,4 +245,114 @@ void VKRenderer::mapUniformBuffer2DescriptorSet() const
     }
 }
 
+/**
+ * @brief 传输数据到GPU
+ */
+void VKRenderer::uploadBuffer2GPU(
+    vk::CommandBuffer&                  cmdBuffer,
+    const std::unique_ptr<VKMemBuffer>& hostBuffer,
+    const std::unique_ptr<VKMemBuffer>& gpuBuffer) const
+{
+    vk::CommandBufferBeginInfo uploadCmdBufBeginInfo;
+
+    // 只用一次
+    uploadCmdBufBeginInfo.setFlags(
+        vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    cmdBuffer.begin(uploadCmdBufBeginInfo);
+    {
+        vk::BufferCopy bufferCopyRegion;
+        bufferCopyRegion
+            // 如名
+            .setSize(hostBuffer->m_bufSize)
+            .setSrcOffset(0)
+            .setDstOffset(0);
+        cmdBuffer.copyBuffer(
+            // 起始缓冲区
+            hostBuffer->m_vkBuffer,
+            // 目标缓冲区
+            gpuBuffer->m_vkBuffer,
+            // 拷贝区域
+            bufferCopyRegion);
+    }
+    cmdBuffer.end();
+
+    // 上传信息 - 无需信号量
+    vk::SubmitInfo submitInfo;
+    submitInfo.setCommandBuffers(cmdBuffer);
+
+    // 上传命令
+    m_LogicDeviceGraphicsQueue.submit(submitInfo);
+
+    // 等待上传完毕
+    m_vkLogicalDevice.waitIdle();
+}
+
+/**
+ * @brief 上传顶点缓冲区到GPU
+ */
+void VKRenderer::uploadVertexBuffer2GPU() const
+{
+    // 为每一个图像缓冲分配一个命令缓冲区
+    vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
+
+    // 写入数据到主机内存缓冲区
+    void* data = m_vkLogicalDevice.mapMemory(
+        m_vkHostMemBuffer->m_vkDevMem, 0, sizeof(s_vertices));
+    memcpy(data, s_vertices.data(), sizeof(s_vertices));
+    m_vkLogicalDevice.unmapMemory(m_vkHostMemBuffer->m_vkDevMem);
+
+    // 传输主机内存缓冲区到GPU内存缓冲区
+    // 需要专门分配一个命令缓冲区用于上传
+    commandBufferAllocateInfo
+        // 要从哪个命令池分配
+        .setCommandPool(m_vkCommandPool)
+        // 分配1个缓冲区
+        .setCommandBufferCount(1)
+        .setLevel(vk::CommandBufferLevel::ePrimary);
+    vk::CommandBuffer uploadMemCmdBuffer =
+        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo)[0];
+
+    // 传输到对应gpu缓冲区
+    uploadBuffer2GPU(uploadMemCmdBuffer, m_vkHostMemBuffer, m_vkGPUMemBuffer);
+
+    // 销毁缓冲区
+    m_vkLogicalDevice.freeCommandBuffers(m_vkCommandPool, uploadMemCmdBuffer);
+
+    XINFO("Uploaded vertex data to gpu buffer.");
+}
+
+/**
+ * @brief 上传uniform缓冲区到GPU
+ */
+void VKRenderer::uploadUniformBuffer2GPU(const uint32_t current_image_index)
+{
+    // 获取当前image对应的缓冲区
+    auto& current_frame_host_uniform_buffer =
+        m_vkHostUniformMemBuffers[current_image_index];
+    auto& current_frame_gpu_uniform_buffer =
+        m_vkGPUUniformMemBuffers[current_image_index];
+    auto& uniformUploadCmdBuffer =
+        m_uniformUploadCmdBuffers[current_image_index];
+
+    // 映射获取主机uniform缓冲区内存地址
+    auto data_ptr = m_vkLogicalDevice.mapMemory(
+        current_frame_host_uniform_buffer->m_vkDevMem,
+        0,
+        current_frame_host_uniform_buffer->m_bufSize);
+
+    // 写入uniform到主机uniform缓冲区
+    memcpy(data_ptr, &m_testCurrentTime, sizeof(m_testCurrentTime));
+
+    // 结束映射
+    m_vkLogicalDevice.unmapMemory(
+        current_frame_host_uniform_buffer->m_vkDevMem);
+
+    // 传输到gpu对应位置
+    uploadBuffer2GPU(uniformUploadCmdBuffer,
+                     current_frame_host_uniform_buffer,
+                     current_frame_gpu_uniform_buffer);
+
+    // XINFO("Uploaded uniform data to gpu buffer.");
+}
+
 }  // namespace MMM::Graphic

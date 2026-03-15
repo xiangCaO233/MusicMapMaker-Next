@@ -35,9 +35,13 @@ add_library(
         src/imguivk/VKRenderPass.cpp
         src/imguivk/VKRenderPipeline.cpp
         src/imguivk/VKRenderer.cpp
+        src/imguivk/VKRendererRender.cpp
         src/imguivk/VKRendererRess.cpp
         src/imguivk/VKShader.cpp
         src/imguivk/VKSwapchain.cpp
+        src/ui/imgui/MainDockSpaceUI.cpp
+        src/ui/imgui/ImguiTestWindowUI.cpp
+        src/ui/UIManager.cpp
 )
 
 target_include_directories(
@@ -49,6 +53,7 @@ target_include_directories(
 target_link_libraries(Graphic PUBLIC
         Log
         Font
+        Event
         Config
         3rd_glfw
         3rd_glm

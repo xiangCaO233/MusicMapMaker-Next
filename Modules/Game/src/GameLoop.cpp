@@ -3,6 +3,9 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/ImguiTestWindowUI.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 
 namespace MMM
 {
@@ -20,6 +23,16 @@ GameLoop& GameLoop::instance()
 GameLoop::GameLoop() : vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
+
+    m_uiManager.registerView("MainDockSpaceUI",
+                             std::make_unique<Graphic::UI::MainDockSpaceUI>());
+
+    m_uiManager.registerView(
+        "ImguiTestWindowUI",
+        std::make_unique<Graphic::UI::ImguiTestWindowUI>());
+
+
+    m_uiManager.printUis();
 }
 
 GameLoop::~GameLoop() {}
@@ -33,7 +46,7 @@ GameLoop::~GameLoop() {}
  * @param window_title 窗口标题
  * @return int 退出代码 (0 表示正常退出)
  */
-int GameLoop::start(std::string_view window_title) const
+int GameLoop::start(std::string_view window_title)
 {
     // 初始化窗口
     Graphic::NativeWindow window(1280, 720, window_title.data());
@@ -48,7 +61,8 @@ int GameLoop::start(std::string_view window_title) const
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
             window.pollEvents();
             // 3.2 执行渲染
-            context.getRenderer().render(window);
+            context.getRenderer().render(
+                window, std::vector<Graphic::UI::UIManager*>{ &m_uiManager });
         }
         return EXIT_NORMAL;
     } else {

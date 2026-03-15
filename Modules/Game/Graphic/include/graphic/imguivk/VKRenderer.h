@@ -11,6 +11,10 @@
 
 namespace MMM::Graphic
 {
+namespace UI
+{
+class UIManager;
+}
 
 class NativeWindow;
 /**
@@ -53,13 +57,14 @@ public:
      *
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
      */
-    void render(NativeWindow& window);
+    void render(NativeWindow& window, std::vector<UI::UIManager*> uiManagers);
 
     void triggerRecreate(NativeWindow& window);
 
 private:
     /// @brief 顶点数据
     static std::array<VKVertex, 3> s_vertices;
+    static std::array<float, 4>    s_clear_color;
 
     /// @brief 逻辑设备引用
     vk::Device& m_vkLogicalDevice;

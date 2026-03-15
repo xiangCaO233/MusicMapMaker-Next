@@ -1,8 +1,8 @@
 # Modules/Game/Canvas/CMakeLists.txt
 
 add_library(Canvas STATIC
-    src/obj.cpp
+    src/TestCanvas.cpp
 )
 
-target_link_libraries(Canvas PUBLIC Log Config)
+target_link_libraries(Canvas PUBLIC Log Config Graphic)
 target_include_directories(Canvas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
