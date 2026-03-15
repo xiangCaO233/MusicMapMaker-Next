@@ -1,10 +1,12 @@
 #pragma once
 
+#include "ui/IRenderableView.h"
 #include "ui/IUIView.h"
 
 namespace MMM::Canvas
 {
-class TestCanvas : public Graphic::UI::IUIView
+class TestCanvas : public Graphic::UI::IUIView,
+                   public Graphic::UI::IRenderableView
 {
 public:
     TestCanvas();
@@ -14,7 +16,10 @@ public:
     TestCanvas& operator=(const TestCanvas&) = default;
     ~TestCanvas();
 
-    void update() override;
+    // 接口实现
+    void                               update() override;
+    MMM::Graphic::VKOffScreenRenderer& getOffscreenRenderer() override;
+    const MMM::Graphic::UI::Brush&     getBrush() const override;
 
 private:
 };
