@@ -1,4 +1,5 @@
 #include "graphic/imguivk/VKOffScreenRenderer.h"
+#include "graphic/imguivk/mem/VKUniforms.h"
 #include "graphic/imguivk/mesh/VKVertex.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
@@ -18,8 +19,8 @@ std::array<VKVertex, 3> g_vertices{
 
 };
 
-
 VKOffScreenRenderer::VKOffScreenRenderer() {}
+
 VKOffScreenRenderer::~VKOffScreenRenderer()
 {
     // 1. 先等待设备空闲，防止正在渲染时销毁
@@ -59,19 +60,6 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     // 创建画笔渲染管线(2DCanvas)
     m_brushRenderPipeline = std::make_unique<VKRenderPipeline>(
         logicalDevice, shader, *m_offScreenRenderPass, swapchain, true);
-
-    // 计算缓冲区大小
-    size_t bufferSize = sizeof(VKVertex) * maxVertexCount;
-    // 创建缓冲区
-    m_vertexBuffer = std::make_unique<VKMemBuffer>(
-        phyDevice,
-        m_device,
-        bufferSize,
-        vk::BufferUsageFlagBits::eVertexBuffer,  // 作为顶点缓冲区
-        vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
-    );
-    XINFO("OffScreen Vertex Buffer Created.");
 
     // 再重建
     // ==========================================
@@ -175,7 +163,38 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     );
 
     // ==========================================
-    // 6. 上传顶点数据到 Buffer (新增)
+    // 6. 创建顶点缓冲区和uniform缓冲区
+    // ==========================================
+    // 计算缓冲区大小
+    size_t bufferSize = sizeof(VKVertex) * maxVertexCount;
+    // 创建缓冲区
+    m_vertexBuffer = std::make_unique<VKMemBuffer>(
+        phyDevice,
+        m_device,
+        bufferSize,
+        vk::BufferUsageFlagBits::eVertexBuffer,  // 作为顶点缓冲区
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
+    );
+    XINFO("OffScreen Vertex Buffer Created.");
+    m_uniformBuffer = std::make_unique<VKMemBuffer>(
+        phyDevice,
+        m_device,
+        sizeof(VKTestTimeUniform),
+        vk::BufferUsageFlagBits::eUniformBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent);
+    // ==========================================
+    // 7. 创建uniform需要的描述符池和描述符集
+    // ==========================================
+    createDescriptPool();
+    createDescriptSets();
+    // ==========================================
+    // 8. 映射uniform内存到描述符集
+    // ==========================================
+    mapUniformBuffer2DescriptorSet();
+    // ==========================================
+    // 9. 上传顶点数据到 顶点缓冲区
     // ==========================================
     {
         // 计算实际数据大小
@@ -206,13 +225,13 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
 
 /// @brief 录制gpu指令
 void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
-                                     UI::IRenderableView* renderable_view,
-                                     vk::DescriptorSet    descriptorSet)
+                                     UI::IRenderableView* renderable_view)
 {
     // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
     vk::ClearValue clearValue;
     clearValue.setColor(
         vk::ClearColorValue(std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f }));
+    uploadUniformBuffer2GPU();
 
     // 2. 开始渲染流程 (针对离屏 Framebuffer)
     vk::RenderPassBeginInfo rpBegin;
@@ -241,7 +260,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
             m_brushRenderPipeline->m_graphicsPipelineLayout,
             0,
             1,
-            &descriptorSet,
+            &m_offScreenDescriptorSet,
             0,
             nullptr);
 
@@ -253,6 +272,75 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
     }
     cmdBuf.endRenderPass();
 }
+/**
+ * @brief 创建描述符池
+ */
+void VKOffScreenRenderer::createDescriptPool()
+{
+    // ==========================================
+    // 7. 创建独立的描述符池 (只分配1个 Set)
+    // ==========================================
+    vk::DescriptorPoolSize poolSize(vk::DescriptorType::eUniformBuffer, 1);
+    vk::DescriptorPoolCreateInfo poolInfo({}, 1, 1, &poolSize);
+    m_descriptorPool = m_device.createDescriptorPool(poolInfo);
+}
+
+/**
+ * @brief 创建描述符集列表
+ */
+void VKOffScreenRenderer::createDescriptSets()
+{
+    // ==========================================
+    // 8. 分配并绑定描述符集
+    // ==========================================
+    // 使用离屏管线创建时自动生成的 Layout
+    // (m_brushRenderPipeline->m_descriptorSetLayout)
+    vk::DescriptorSetAllocateInfo allocInfo(
+        m_descriptorPool, 1, &m_brushRenderPipeline->m_descriptorSetLayout);
+    m_offScreenDescriptorSet = m_device.allocateDescriptorSets(allocInfo)[0];
+}
+
+/**
+ * @brief 映射uniformbuffer到对应描述符集
+ */
+void VKOffScreenRenderer::mapUniformBuffer2DescriptorSet() const
+{
+    // 更新描述符集，指向我们的 m_uniformBuffer
+    vk::DescriptorBufferInfo bufferInfo(
+        m_uniformBuffer->m_vkBuffer, 0, sizeof(VKTestTimeUniform));
+    vk::WriteDescriptorSet write(m_offScreenDescriptorSet,
+                                 0,
+                                 0,
+                                 1,
+                                 vk::DescriptorType::eUniformBuffer,
+                                 nullptr,
+                                 &bufferInfo);
+    m_device.updateDescriptorSets(write, nullptr);
+}
+
+/**
+ * @brief 上传uniform缓冲区到GPU
+ */
+void VKOffScreenRenderer::uploadUniformBuffer2GPU()
+{
+    static float currentTime{ 0.f };
+    // 获取当前时间
+    static auto start_time =
+        std::chrono::high_resolution_clock::now().time_since_epoch();
+    auto since_start =
+        std::chrono::high_resolution_clock::now().time_since_epoch() -
+        start_time;
+    auto current_time_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(since_start);
+    currentTime = static_cast<float>(current_time_ms.count()) / 1000.f;
+    // 1. 更新 Uniform 数据 (时间)
+    VKTestTimeUniform ubo{ currentTime };
+    void*             data =
+        m_device.mapMemory(m_uniformBuffer->m_vkDevMem, 0, sizeof(ubo));
+    memcpy(data, &ubo, sizeof(ubo));
+    m_device.unmapMemory(m_uniformBuffer->m_vkDevMem);
+}
+
 
 /// @brief 释放持有的资源
 void VKOffScreenRenderer::releaseResources()
@@ -266,11 +354,28 @@ void VKOffScreenRenderer::releaseResources()
 
     // 释放 Vulkan 原生资源
     if ( m_device ) {
+        // ★ 必须手动销毁描述符池
+        if ( m_descriptorPool ) {
+            m_device.destroyDescriptorPool(m_descriptorPool);
+            m_descriptorPool = nullptr;
+        }
+
         m_device.destroyFramebuffer(m_framebuffer);
         m_device.destroySampler(m_sampler);
         m_device.destroyImageView(m_imageView);
         m_device.destroyImage(m_image);
         m_device.freeMemory(m_imageMemory);
+
+        // ★ 还要销毁管线和 RenderPass (虽然它们被 unique_ptr 包裹，但 reCreate
+        // 时 reset 也会触发销毁，确保它们也执行了销毁逻辑)
+        m_brushRenderPipeline.reset();
+        m_offScreenRenderPass.reset();
+        m_vertexBuffer.reset();
+        m_uniformBuffer.reset();
+    }
+    if ( m_imguiDescriptor ) {
+        ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_imguiDescriptor);
+        m_imguiDescriptor = nullptr;
     }
 }
 

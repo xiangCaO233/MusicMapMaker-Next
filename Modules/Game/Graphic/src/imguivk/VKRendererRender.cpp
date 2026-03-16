@@ -120,9 +120,7 @@ void VKRenderer::render(NativeWindow&               window,
         // 在 UIManager 获取到所有注册可再渲染View
         for ( auto renderableView : uiManager->getRenderableViews() ) {
             // 录制离屏绘制指令到当前命令缓冲
-            renderableView->recordCmds(currentCmdBuffer,
-                                       renderableView,
-                                       m_vkDescriptorSets[imageIndex]);
+            renderableView->recordCmds(currentCmdBuffer, renderableView);
         }
     }
     {

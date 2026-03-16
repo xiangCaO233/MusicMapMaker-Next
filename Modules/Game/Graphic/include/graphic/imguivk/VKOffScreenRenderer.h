@@ -29,8 +29,7 @@ public:
 
     /// @brief 录制gpu指令
     void recordCmds(vk::CommandBuffer&   cmdBuf,
-                    UI::IRenderableView* renderable_view,
-                    vk::DescriptorSet    descriptorSet);
+                    UI::IRenderableView* renderable_view);
 
     /// @brief 重建帧缓冲
     void reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
@@ -74,6 +73,36 @@ private:
     // --- 2. 几何资源 (独占) ---
     // 存 Brush 的顶点
     std::unique_ptr<VKMemBuffer> m_vertexBuffer;
+
+    // 离屏用的 Uniform Buffer
+    std::unique_ptr<VKMemBuffer> m_uniformBuffer;
+
+    // 离屏用描述符池
+    vk::DescriptorPool m_descriptorPool;
+
+    // 离屏用描述符集
+    vk::DescriptorSet m_offScreenDescriptorSet;
+
+    /**
+     * @brief 创建描述符池
+     */
+    void createDescriptPool();
+
+    /**
+     * @brief 创建描述符集列表
+     */
+    void createDescriptSets();
+
+    /**
+     * @brief 映射uniformbuffer到对应描述符集
+     */
+    void mapUniformBuffer2DescriptorSet() const;
+
+    /**
+     * @brief 上传uniform缓冲区到GPU
+     */
+    void uploadUniformBuffer2GPU();
+
 
     // --- 3. UI 集成句柄 (独占) ---
     vk::DescriptorSet m_imguiDescriptor{ VK_NULL_HANDLE };  // ImGui 用的贴图 ID
