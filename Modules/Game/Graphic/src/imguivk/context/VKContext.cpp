@@ -71,6 +71,10 @@ VKContext::VKContext()
 
 VKContext::~VKContext()
 {
+    if ( m_vkLogicalDevice ) {
+        m_vkLogicalDevice.waitIdle();
+    }
+
     // 1. 必须在销毁 DescriptorPool 和 Device 之前关闭 ImGui！
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
