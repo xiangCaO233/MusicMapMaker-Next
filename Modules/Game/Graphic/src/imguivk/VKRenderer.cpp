@@ -22,14 +22,17 @@ std::array<float, 4> VKRenderer::s_clear_color{ .23f, .23f, .23f, 1.f };
  * @param logicDeviceGraphicsQueue 图形队列引用
  * @param logicDevicePresentQueue 呈现队列引用
  */
-VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
-                       vk::Device& logicalDevice, VKSwapchain& swapchain,
-                       VKRenderPipeline& pipeline, VKRenderPass& renderPass,
-                       vk::Queue& logicDeviceGraphicsQueue,
-                       vk::Queue& logicDevicePresentQueue)
-    : m_vkLogicalDevice(logicalDevice)
+VKRenderer::VKRenderer(
+    vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
+    VKSwapchain&                                                swapchain,
+    std::unordered_map<std::string, std::unique_ptr<VKShader>>& shaders,
+    VKRenderPipeline& pipeline, VKRenderPass& renderPass,
+    vk::Queue& logicDeviceGraphicsQueue, vk::Queue& logicDevicePresentQueue)
+    : m_vkPhysicalDevice(vkPhysicalDevice)
+    , m_vkLogicalDevice(logicalDevice)
     , m_vkRenderPass(renderPass)
     , m_vkSwapChain(swapchain)
+    , m_vkShadersRef(shaders)
     , m_vkRenderPipeline(pipeline)
     , m_LogicDeviceGraphicsQueue(logicDeviceGraphicsQueue)
     , m_LogicDevicePresentQueue(logicDevicePresentQueue)
@@ -118,4 +121,5 @@ void VKRenderer::triggerRecreate(NativeWindow& window)
         window.getWindowHandle(), w, h);
     window.resetFramebufferResized();
 }
+
 }  // namespace MMM::Graphic

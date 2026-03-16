@@ -241,7 +241,7 @@ void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
             .setWidth(m_swapchainCreateInfo.imageExtent.width)
             .setHeight(m_swapchainCreateInfo.imageExtent.height)
             // 这里需要知道renderpass
-            .setRenderPass(renderPass.m_graphicRenderPass)
+            .setRenderPass(renderPass.getRenderPass())
             // 设置layers - 非3d图像绘制只能拿一个
             .setLayers(1);
         imageBuffer.vk_frameBuffer =

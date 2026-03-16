@@ -1,9 +1,277 @@
 #include "graphic/imguivk/VKOffScreenRenderer.h"
+#include "graphic/imguivk/mesh/VKVertex.h"
+#include "imgui_impl_vulkan.h"
+#include "log/colorful-log.h"
+#include "vulkan/vulkan.hpp"
 
 namespace MMM::Graphic
 {
 
+// 顶点信息
+std::array<VKVertex, 3> g_vertices{
+    VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
+              .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
+    VKVertex{ .pos   = { .x = .5f, .y = .5f },
+              .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
+    VKVertex{ .pos   = { .x = -0.5f, .y = 0.5f },
+              .color = { .r = 0.0f, .g = 0.0f, .b = 1.0f, .a = 1.0f } },
+
+};
+
+
 VKOffScreenRenderer::VKOffScreenRenderer() {}
-VKOffScreenRenderer::~VKOffScreenRenderer() {}
+VKOffScreenRenderer::~VKOffScreenRenderer()
+{
+    // 1. 先等待设备空闲，防止正在渲染时销毁
+    if ( m_device ) m_device.waitIdle();
+
+    releaseResources();
+    XINFO("VKOffScreenRenderer destroyed.");
+}
+
+/// @brief 重建帧缓冲
+void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
+                                              vk::Device&         logicalDevice,
+                                              VKSwapchain&        swapchain,
+                                              VKShader&           shader,
+                                              size_t maxVertexCount)
+{
+    // 确保不为 0
+    if ( m_targetWidth == 0 || m_targetHeight == 0 ) return;
+
+    // 1. 先等待设备空闲，防止正在渲染时销毁
+    if ( m_device ) m_device.waitIdle();
+
+    // 先释放
+    releaseResources();
+
+
+    // 赋值引用
+    m_device = logicalDevice;
+
+    // 赋值实际尺寸
+    uint32_t creationW = m_targetWidth;
+    uint32_t creationH = m_targetHeight;
+
+    // 创建离屏渲染流程
+    m_offScreenRenderPass = std::make_unique<VKRenderPass>(
+        logicalDevice, swapchain, vk::ImageLayout::eShaderReadOnlyOptimal);
+    // 创建画笔渲染管线(2DCanvas)
+    m_brushRenderPipeline = std::make_unique<VKRenderPipeline>(
+        logicalDevice, shader, *m_offScreenRenderPass, swapchain, true);
+
+    // 计算缓冲区大小
+    size_t bufferSize = sizeof(VKVertex) * maxVertexCount;
+    // 创建缓冲区
+    m_vertexBuffer = std::make_unique<VKMemBuffer>(
+        phyDevice,
+        m_device,
+        bufferSize,
+        vk::BufferUsageFlagBits::eVertexBuffer,  // 作为顶点缓冲区
+        vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
+    );
+    XINFO("OffScreen Vertex Buffer Created.");
+
+    // 再重建
+    // ==========================================
+    // 1. 创建 vk::Image (离屏画布)
+    // ==========================================
+    vk::ImageCreateInfo imageInfo;
+    imageInfo.setImageType(vk::ImageType::e2D)
+        .setFormat(vk::Format::eR8G8B8A8Srgb)  // 与RenderPass中保持一致
+        .setExtent(vk::Extent3D{ creationW, creationH, 1 })
+        .setMipLevels(1)
+        .setArrayLayers(1)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setTiling(vk::ImageTiling::eOptimal)
+        // 关键：作为颜色附件输出，并且可以被采样器读取
+        .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
+                  vk::ImageUsageFlagBits::eSampled)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setInitialLayout(vk::ImageLayout::eUndefined);
+
+    m_image = m_device.createImage(imageInfo);
+
+    // ==========================================
+    // 2. 为 Image 分配物理显存 (DeviceLocal)
+    // ==========================================
+    vk::MemoryRequirements memRequirements =
+        m_device.getImageMemoryRequirements(m_image);
+
+    // 辅助 Lambda：查找合适的内存类型
+    auto findMemoryType = [&](uint32_t                typeFilter,
+                              vk::MemoryPropertyFlags properties) -> uint32_t {
+        vk::PhysicalDeviceMemoryProperties memProperties =
+            phyDevice.getMemoryProperties();
+        for ( uint32_t i = 0; i < memProperties.memoryTypeCount; i++ ) {
+            if ( (typeFilter & (1 << i)) &&
+                 (memProperties.memoryTypes[i].propertyFlags & properties) ==
+                     properties ) {
+                return i;
+            }
+        }
+        XCRITICAL("Failed to find suitable memory type for OffScreen Image!");
+        return 0;
+    };
+    vk::MemoryAllocateInfo allocInfo;
+    allocInfo.setAllocationSize(memRequirements.size)
+        .setMemoryTypeIndex(
+            findMemoryType(memRequirements.memoryTypeBits,
+                           vk::MemoryPropertyFlagBits::eDeviceLocal));
+
+    m_imageMemory = m_device.allocateMemory(allocInfo);
+    // 绑定显存到 Image
+    m_device.bindImageMemory(m_image, m_imageMemory, 0);
+
+    // ==========================================
+    // 3. 创建 ImageView 和 Sampler
+    // ==========================================
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.setImage(m_image)
+        .setViewType(vk::ImageViewType::e2D)
+        .setFormat(vk::Format::eR8G8B8A8Srgb)  // 与RenderPass中保持一致
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+
+    m_imageView = m_device.createImageView(viewInfo);
+
+    vk::SamplerCreateInfo samplerInfo;
+    samplerInfo.setMagFilter(vk::Filter::eLinear)
+        .setMinFilter(vk::Filter::eLinear)
+        .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+        .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+        .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+        .setAnisotropyEnable(VK_FALSE)
+        .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+        .setUnnormalizedCoordinates(VK_FALSE)
+        .setCompareEnable(VK_FALSE)
+        .setCompareOp(vk::CompareOp::eAlways)
+        .setMipmapMode(vk::SamplerMipmapMode::eLinear);
+
+    m_sampler = m_device.createSampler(samplerInfo);
+
+    // ==========================================
+    // 4. 创建 Framebuffer 供 RenderPass 渲染使用
+    // ==========================================
+    vk::FramebufferCreateInfo framebufferInfo;
+    framebufferInfo.setRenderPass(m_offScreenRenderPass->getRenderPass())
+        .setAttachments(m_imageView)
+        .setWidth(creationW)
+        .setHeight(creationH)
+        .setLayers(1);
+
+    m_framebuffer = m_device.createFramebuffer(framebufferInfo);
+
+    // ==========================================
+    // 5. 注册到 ImGui
+    // ==========================================
+    // ImGui_ImplVulkan_AddTexture 会将 ImageView 和 Sampler 封装到一个
+    // DescriptorSet 中返回
+    m_imguiDescriptor = (vk::DescriptorSet)ImGui_ImplVulkan_AddTexture(
+        (VkSampler)m_sampler,
+        (VkImageView)m_imageView,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL  // ★ImGui读取时，期望它处于的布局状态
+    );
+
+    // ==========================================
+    // 6. 上传顶点数据到 Buffer (新增)
+    // ==========================================
+    {
+        // 计算实际数据大小
+        size_t dataSize = sizeof(VKVertex) * g_vertices.size();
+
+        // 映射内存
+        // 注意：m_vertexBuffer 是 friend 类，所以可以直接访问 m_vkDevMem
+        void* data =
+            m_device.mapMemory(m_vertexBuffer->m_vkDevMem, 0, dataSize);
+
+        // 拷贝数据
+        memcpy(data, g_vertices.data(), dataSize);
+
+        // 解除映射
+        m_device.unmapMemory(m_vertexBuffer->m_vkDevMem);
+
+        XINFO("OffScreen Vertex Data uploaded ({} bytes).", dataSize);
+    }
+
+    m_width  = creationW;
+    m_height = creationH;
+
+    m_need_reCreate.store(false);
+
+    XINFO(
+        "VKOffScreenRenderer recreate successfully[{}x{}]", m_width, m_height);
+}
+
+/// @brief 录制gpu指令
+void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
+                                     UI::IRenderableView* renderable_view,
+                                     vk::DescriptorSet    descriptorSet)
+{
+    // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
+    vk::ClearValue clearValue;
+    clearValue.setColor(
+        vk::ClearColorValue(std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f }));
+
+    // 2. 开始渲染流程 (针对离屏 Framebuffer)
+    vk::RenderPassBeginInfo rpBegin;
+    rpBegin.setRenderPass(m_offScreenRenderPass->getRenderPass())
+        .setFramebuffer(m_framebuffer)
+        .setRenderArea(vk::Rect2D({ 0, 0 }, { m_width, m_height }))
+        .setClearValues(clearValue);
+
+    cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+    {
+        // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
+        vk::Viewport viewport(
+            0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
+        vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
+        cmdBuf.setViewport(0, 1, &viewport);
+        cmdBuf.setScissor(0, 1, &scissor);
+
+        // 4. 绑定离屏专属管线
+        cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                            m_brushRenderPipeline->m_graphicsPipeline);
+
+        // 4. ★ 关键：绑定描述符集（解决报错）
+        // 注意：这里使用的 Layout 必须是创建该 Pipeline 时用的那个 Layout
+        cmdBuf.bindDescriptorSets(
+            vk::PipelineBindPoint::eGraphics,
+            m_brushRenderPipeline->m_graphicsPipelineLayout,
+            0,
+            1,
+            &descriptorSet,
+            0,
+            nullptr);
+
+        // 5. 绑定顶点缓冲区 (你的 VKMemBuffer)
+        cmdBuf.bindVertexBuffers(0, m_vertexBuffer->m_vkBuffer, { 0 });
+
+        // 6. 执行绘制 (根据 Brush 的数据)
+        cmdBuf.draw(3, 1, 0, 0);
+    }
+    cmdBuf.endRenderPass();
+}
+
+/// @brief 释放持有的资源
+void VKOffScreenRenderer::releaseResources()
+{
+    // 如果还没被释放，先从 ImGui 注销 DescriptorSet
+    // 避免 Descriptor Pool 提前释放导致的报错
+    if ( m_imguiDescriptor ) {
+        ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_imguiDescriptor);
+        m_imguiDescriptor = nullptr;
+    }
+
+    // 释放 Vulkan 原生资源
+    if ( m_device ) {
+        m_device.destroyFramebuffer(m_framebuffer);
+        m_device.destroySampler(m_sampler);
+        m_device.destroyImageView(m_imageView);
+        m_device.destroyImage(m_image);
+        m_device.freeMemory(m_imageMemory);
+    }
+}
 
 }  // namespace MMM::Graphic

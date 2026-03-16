@@ -29,6 +29,14 @@ struct Color {
 };
 
 /**
+ * @brief 贴图UV结构体
+ */
+struct TexUV {
+    float u;
+    float v;
+};
+
+/**
  * @brief Vulkan 顶点数据结构体
  *
  * 包含位置和颜色信息，对应 Shader 中的输入属性。

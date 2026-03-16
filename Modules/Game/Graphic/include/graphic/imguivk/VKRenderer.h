@@ -7,6 +7,7 @@
 #include "mesh/VKVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Graphic
@@ -39,10 +40,13 @@ public:
      * @param logicDeviceGraphicsQueue 图形队列引用
      * @param logicDevicePresentQueue 呈现队列引用
      */
-    VKRenderer(vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
-               VKSwapchain& swapchain, VKRenderPipeline& pipeline,
-               VKRenderPass& renderPass, vk::Queue& logicDeviceGraphicsQueue,
-               vk::Queue& logicDevicePresentQueue);
+    VKRenderer(
+        vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
+        VKSwapchain&                                                swapchain,
+        std::unordered_map<std::string, std::unique_ptr<VKShader>>& shaders,
+        VKRenderPipeline& pipeline, VKRenderPass& renderPass,
+        vk::Queue& logicDeviceGraphicsQueue,
+        vk::Queue& logicDevicePresentQueue);
 
     // 禁用拷贝和移动
     VKRenderer(VKRenderer&&)                 = delete;
@@ -65,6 +69,8 @@ private:
     /// @brief 顶点数据
     static std::array<VKVertex, 3> s_vertices;
     static std::array<float, 4>    s_clear_color;
+    /// @brief 物理设备引用
+    vk::PhysicalDevice& m_vkPhysicalDevice;
 
     /// @brief 逻辑设备引用
     vk::Device& m_vkLogicalDevice;
@@ -83,6 +89,9 @@ private:
 
     /// @brief 逻辑设备呈现队列引用
     vk::Queue& m_LogicDevicePresentQueue;
+
+    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
+    std::unordered_map<std::string, std::unique_ptr<VKShader>>& m_vkShadersRef;
 
     // =========================================================================
     // 内存 - 显存相关资源

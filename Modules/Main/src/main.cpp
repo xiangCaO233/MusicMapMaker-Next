@@ -44,10 +44,10 @@ int main(int argc, char* argv[])
     auto& gameLoop = GameLoop::instance();
 
     // 检查 Vulkan 环境
-    if ( !gameLoop.vkContext ) {
+    if ( !gameLoop.g_vkContext ) {
         // 这里会打印 VKContext::get() 的 catch 块里填入的 e.what()
         XERROR("Start Failed, graphic enc initialize failed with:\n {}",
-               gameLoop.vkContext.error());
+               gameLoop.g_vkContext.error());
         return 1;
     }
 

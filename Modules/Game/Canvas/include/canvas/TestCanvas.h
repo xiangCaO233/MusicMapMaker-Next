@@ -1,15 +1,13 @@
 #pragma once
 
 #include "ui/IRenderableView.h"
-#include "ui/IUIView.h"
 
 namespace MMM::Canvas
 {
-class TestCanvas : public Graphic::UI::IUIView,
-                   public Graphic::UI::IRenderableView
+class TestCanvas : public Graphic::UI::IRenderableView
 {
 public:
-    TestCanvas();
+    TestCanvas(uint32_t w, uint32_t h);
     TestCanvas(TestCanvas&&)                 = delete;
     TestCanvas(const TestCanvas&)            = delete;
     TestCanvas& operator=(TestCanvas&&)      = delete;

@@ -10,7 +10,8 @@ namespace MMM::Graphic
  * @param logicalDevice Vulkan 逻辑设备引用
  * @param swapchain 交换链引用 (用于获取图像格式)
  */
-VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain)
+VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
+                           vk::ImageLayout finalLayout)
     : m_logicalDevice(logicalDevice)
 {
     // 1:创建渲染流程
@@ -23,7 +24,7 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain)
         // 附件进入时的布局 - 暂不关心
         .setInitialLayout(vk::ImageLayout::eUndefined)
         // 附件输出时的布局 - 呈现附件
-        .setFinalLayout(vk::ImageLayout::ePresentSrcKHR)
+        .setFinalLayout(finalLayout)
         // 附件加载时需要的操作 - 加载时清空
         .setLoadOp(vk::AttachmentLoadOp::eClear)
         // 附件保存时需要的操作 - 正常存储

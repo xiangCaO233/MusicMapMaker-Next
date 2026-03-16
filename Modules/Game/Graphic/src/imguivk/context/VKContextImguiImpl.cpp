@@ -80,8 +80,8 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     init_info.DescriptorPool = m_vkRenderer->m_vkDescriptorPool;
     init_info.MinImageCount  = 2;  // 根据你的 swapchain 设置
     init_info.ImageCount     = m_swapchain->m_vkImageBuffers.size();
-    init_info.PipelineInfoMain.RenderPass = m_vkRenderPass->m_graphicRenderPass;
-    init_info.PipelineInfoMain.Subpass    = 0;
+    init_info.PipelineInfoMain.RenderPass  = m_vkRenderPass->getRenderPass();
+    init_info.PipelineInfoMain.Subpass     = 0;
     init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     init_info.Allocator                    = nullptr;
     init_info.CheckVkResultFn              = check_vk_result;

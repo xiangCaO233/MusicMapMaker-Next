@@ -30,7 +30,7 @@ public:
      * @note 在使用前检查是否包含有效值。
      */
     std::expected<std::reference_wrapper<Graphic::VKContext>, std::string>
-        vkContext;
+        g_vkContext;
 
     /**
      * @brief 获取 GameLoop 单例实例

@@ -20,7 +20,8 @@ public:
      * @param logicalDevice Vulkan 逻辑设备引用
      * @param swapchain 交换链引用 (用于获取图像格式)
      */
-    VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain);
+    VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
+                 vk::ImageLayout finalLayout);
 
     // 禁用拷贝和移动
     VKRenderPass(VKRenderPass&&)                 = delete;
@@ -30,18 +31,18 @@ public:
 
     ~VKRenderPass();
 
+    /// @brief Vulkan 获取内部渲染流程句柄
+    inline const vk::RenderPass& getRenderPass() const
+    {
+        return m_graphicRenderPass;
+    }
+
 private:
     /// @brief 逻辑设备引用，用于销毁资源
     vk::Device& m_logicalDevice;
 
     /// @brief Vulkan 渲染流程句柄
     vk::RenderPass m_graphicRenderPass;
-
-    // 允许 Renderer, Swapchain, Pipeline 访问内部 RenderPass 句柄
-    friend class VKContext;
-    friend class VKRenderer;
-    friend class VKSwapchain;
-    friend class VKRenderPipeline;
 };
 
 

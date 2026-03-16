@@ -1,4 +1,5 @@
 #include "game/GameLoop.h"
+#include "canvas/TestCanvas.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
@@ -20,19 +21,22 @@ GameLoop& GameLoop::instance()
     return loopInstance;
 }
 
-GameLoop::GameLoop() : vkContext(Graphic::VKContext::get())
+GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
 
     m_uiManager.registerView("MainDockSpaceUI",
                              std::make_unique<Graphic::UI::MainDockSpaceUI>());
+    m_uiManager.registerView("TestCanvas",
+                             std::make_unique<Canvas::TestCanvas>(200, 200));
+
+    if ( g_vkContext ) {
+        auto& context = g_vkContext->get();
+    }
 
     m_uiManager.registerView(
         "ImguiTestWindowUI",
         std::make_unique<Graphic::UI::ImguiTestWindowUI>());
-
-
-    m_uiManager.printUis();
 }
 
 GameLoop::~GameLoop() {}
@@ -51,8 +55,8 @@ int GameLoop::start(std::string_view window_title)
     // 初始化窗口
     Graphic::NativeWindow window(1280, 720, window_title.data());
     // VKContext 表面资源后续初始化
-    if ( vkContext ) {
-        auto& context = vkContext->get();
+    if ( g_vkContext ) {
+        auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
         context.initVKWindowRess(window.getWindowHandle(), fbWidth, fbHeight);

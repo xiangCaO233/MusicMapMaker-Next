@@ -71,6 +71,7 @@ private:
 
     // 允许 Renderer 直接访问内部的 Buffer
     friend class VKRenderer;
+    friend class VKOffScreenRenderer;
 };
 
 }  // namespace Graphic

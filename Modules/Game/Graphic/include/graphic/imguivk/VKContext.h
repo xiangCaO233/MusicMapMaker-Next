@@ -187,13 +187,13 @@ private:
     /// @brief Vulkan 交换链封装对象
     std::unique_ptr<VKSwapchain> m_swapchain{ nullptr };
 
-    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
-    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
-
     /**
      * @brief 重建交换链
      */
     void recreateSwapchain(GLFWwindow* window_context, int width, int height);
+
+    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
+    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
 
     /**
      * @brief 加载并创建 Shader 模块

@@ -184,9 +184,9 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
     // 创建着色器程序
     createShader();
 
-    // 创建渲染流程
-    m_vkRenderPass =
-        std::make_unique<VKRenderPass>(m_vkLogicalDevice, *m_swapchain);
+    // 创建最终呈现的渲染流程
+    m_vkRenderPass = std::make_unique<VKRenderPass>(
+        m_vkLogicalDevice, *m_swapchain, vk::ImageLayout::ePresentSrcKHR);
 
     // 创建帧缓冲
     m_swapchain->createFramebuffers(*m_vkRenderPass);
@@ -197,6 +197,7 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                            *m_vkShaders["testShader"],
                                            *m_vkRenderPass,
                                            *m_swapchain,
+                                           false,
                                            w,
                                            h);
 
@@ -204,6 +205,7 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
     m_vkRenderer = std::make_unique<VKRenderer>(m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
                                                 *m_swapchain,
+                                                m_vkShaders,
                                                 *m_vkRenderPipeline,
                                                 *m_vkRenderPass,
                                                 m_LogicDeviceGraphicsQueue,
