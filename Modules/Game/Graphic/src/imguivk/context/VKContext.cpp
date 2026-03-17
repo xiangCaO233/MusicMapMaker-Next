@@ -168,8 +168,6 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
     // 初始化逻辑设备
     initLogicDevice();
 
-    VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eMailbox;
-
     // 创建交换链
     m_swapchain = std::make_unique<VKSwapchain>(m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
@@ -177,6 +175,9 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                                 m_queueFamilyIndices,
                                                 w,
                                                 h);
+    setVSync(true);
+
+
     // 创建最终呈现的渲染流程
     m_vkRenderPass = std::make_unique<VKRenderPass>(
         m_vkLogicalDevice, *m_swapchain, vk::ImageLayout::ePresentSrcKHR);
