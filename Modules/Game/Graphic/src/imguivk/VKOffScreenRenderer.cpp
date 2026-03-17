@@ -13,11 +13,11 @@ namespace MMM::Graphic
 // 顶点信息
 std::array<VKVertex, 3> g_vertices{
     VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
-              .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
+              .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = 1.f } },
     VKVertex{ .pos   = { .x = .5f, .y = .5f },
-              .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
-    VKVertex{ .pos   = { .x = -0.5f, .y = 0.5f },
-              .color = { .r = 0.0f, .g = 0.0f, .b = 1.0f, .a = 1.0f } },
+              .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = 1.f } },
+    VKVertex{ .pos   = { .x = -.5f, .y = .5f },
+              .color = { .r = 0.f, .g = 0.f, .b = 1.f, .a = 1.f } },
 
 };
 
@@ -77,7 +77,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     // ==========================================
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D)
-        .setFormat(vk::Format::eR8G8B8A8Srgb)  // 与RenderPass中保持一致
+        .setFormat(swapchain.info().imageFormat)  // 与SwapChain中保持一致
         .setExtent(vk::Extent3D{ creationW, creationH, 1 })
         .setMipLevels(1)
         .setArrayLayers(1)
@@ -128,7 +128,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     vk::ImageViewCreateInfo viewInfo;
     viewInfo.setImage(m_image)
         .setViewType(vk::ImageViewType::e2D)
-        .setFormat(vk::Format::eR8G8B8A8Srgb)  // 与RenderPass中保持一致
+        .setFormat(swapchain.info().imageFormat)  // 与SwapChain中保持一致
         .setSubresourceRange(vk::ImageSubresourceRange(
             vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 
