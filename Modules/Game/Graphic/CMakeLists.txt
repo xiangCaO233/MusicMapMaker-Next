@@ -59,5 +59,6 @@ target_link_libraries(Graphic PUBLIC
         3rd_glfw
         3rd_glm
         3rd_imgui
+        3rd_clay
         Vulkan::Vulkan
 )
