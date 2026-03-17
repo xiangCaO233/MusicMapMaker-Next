@@ -73,6 +73,8 @@ public:
 
         // 2. 修改交换链配置类里的 PresentMode 偏好
         if ( enabled ) {
+            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
+        } else {
             // fallback 为立即模式
             VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
             // 查询物理设备支持的呈现模式
@@ -87,8 +89,6 @@ public:
                     break;
                 }
             }
-        } else {
-            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
         }
 
         // 3. 标记需要重建
