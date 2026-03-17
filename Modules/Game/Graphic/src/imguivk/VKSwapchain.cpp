@@ -67,8 +67,9 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
     vk::SurfaceFormatKHR chosenFormat = supported_surfaceFormats[0];
     for ( const auto& sf : supported_surfaceFormats ) {
-        if ( sf.format == vk::Format::eR8G8B8A8Srgb &&
-             sf.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear ) {
+        // 将 Srgb 改为 Unorm
+        if ( sf.format == vk::Format::eR8G8B8A8Unorm ||
+             sf.format == vk::Format::eB8G8R8A8Unorm ) {
             chosenFormat = sf;
             break;
         }
