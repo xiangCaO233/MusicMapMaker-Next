@@ -5,6 +5,7 @@
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/CLayoutTestUI.h"
 #include "ui/imgui/ImguiTestWindowUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 
@@ -33,6 +34,8 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     m_uiManager.registerView(
         "ImguiTestWindowUI",
         std::make_unique<Graphic::UI::ImguiTestWindowUI>());
+    m_uiManager.registerView("CLayoutTestUI",
+                             std::make_unique<Graphic::UI::CLayoutTestUI>());
 }
 
 GameLoop::~GameLoop() {}
