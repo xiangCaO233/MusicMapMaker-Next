@@ -195,6 +195,7 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
 
     // 初始化 ImGui
     imguiVulkanInit(window_ctx);
+    setImguiStyle();
 }
 
 /**

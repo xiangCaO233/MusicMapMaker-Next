@@ -236,6 +236,11 @@ private:
      */
     void imguiVulkanInit(GLFWwindow* iwindow_handle);
 
+    /**
+     * @brief 设置imgui样式包
+     */
+    void setImguiStyle();
+
     friend class VKRenderer;
 };
 
