@@ -22,18 +22,15 @@ std::array<float, 4> VKRenderer::s_clear_color{ .23f, .23f, .23f, 1.f };
  * @param logicDeviceGraphicsQueue 图形队列引用
  * @param logicDevicePresentQueue 呈现队列引用
  */
-VKRenderer::VKRenderer(
-    vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
-    VKSwapchain&                                                swapchain,
-    std::unordered_map<std::string, std::unique_ptr<VKShader>>& shaders,
-    VKRenderPipeline& pipeline, VKRenderPass& renderPass,
-    vk::Queue& logicDeviceGraphicsQueue, vk::Queue& logicDevicePresentQueue)
+VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
+                       vk::Device& logicalDevice, VKSwapchain& swapchain,
+                       VKRenderPass& renderPass,
+                       vk::Queue&    logicDeviceGraphicsQueue,
+                       vk::Queue&    logicDevicePresentQueue)
     : m_vkPhysicalDevice(vkPhysicalDevice)
     , m_vkLogicalDevice(logicalDevice)
     , m_vkRenderPass(renderPass)
     , m_vkSwapChain(swapchain)
-    , m_vkShadersRef(shaders)
-    , m_vkRenderPipeline(pipeline)
     , m_LogicDeviceGraphicsQueue(logicDeviceGraphicsQueue)
     , m_LogicDevicePresentQueue(logicDevicePresentQueue)
 {
@@ -51,20 +48,8 @@ VKRenderer::VKRenderer(
     // 创建信号量和栅栏
     createSemsWithFences();
 
-    // 创建内存缓冲区
-    createMemBuffers(vkPhysicalDevice);
-
-    // 上传顶点数据到gpu
-    uploadVertexBuffer2GPU();
-
     // 创建描述符池
     createDescriptPool();
-
-    // 创建描述符集
-    createDescriptSets();
-
-    // 映射uniform描述符集
-    mapUniformBuffer2DescriptorSet();
 
     // 订阅clearcolor更新事件
     Event::EventBus::instance().subscribe<Event::ClearColorUpdateEvent>(
@@ -82,10 +67,6 @@ VKRenderer::~VKRenderer()
     // 描述符集会随描述符池一同销毁，不必再手动销毁
     m_vkLogicalDevice.destroyDescriptorPool(m_vkDescriptorPool);
     XINFO("Destroyed Descriptor Pool.");
-
-    // 释放VK内存缓冲区
-    m_vkHostMemBuffer.reset();
-    m_vkGPUMemBuffer.reset();
 
     for ( auto& cmdAvailableFence : m_cmdAvailableFences ) {
         m_vkLogicalDevice.destroyFence(cmdAvailableFence);
@@ -119,7 +100,6 @@ void VKRenderer::triggerRecreate(NativeWindow& window)
     // 你可以通过回调或者单例模式来调用
     MMM::Graphic::VKContext::get().value().get().recreateSwapchain(
         window.getWindowHandle(), w, h);
-    window.resetFramebufferResized();
 }
 
 }  // namespace MMM::Graphic

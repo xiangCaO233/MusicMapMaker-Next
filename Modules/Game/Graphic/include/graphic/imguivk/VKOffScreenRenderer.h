@@ -5,8 +5,10 @@
 #include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <memory>
+#include <unordered_map>
 
 namespace MMM::Graphic
 {
@@ -25,6 +27,7 @@ public:
     VKOffScreenRenderer& operator=(const VKOffScreenRenderer&) = delete;
     ~VKOffScreenRenderer();
 
+    /// @brief 获取imgui图像描述符集用于贴窗口
     vk::DescriptorSet getDescriptorSet() const { return m_imguiDescriptor; }
 
     /// @brief 录制gpu指令
@@ -34,10 +37,21 @@ public:
     /// @brief 重建帧缓冲
     void reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
                              vk::Device& logicalDevice, VKSwapchain& swapchain,
-                             VKShader& shader, size_t maxVertexCount = 1024);
+                             size_t maxVertexCount = 1024);
 
     /// @brief 外部确认是否需要重建
-    inline bool needReCreateFrameBuffer() { return m_need_reCreate.load(); }
+    inline bool needReCreateFrameBuffer() const
+    {
+        if ( !m_need_reCreate.load() ) return false;
+
+        // 核心消抖判断：当前时间 - 最后请求时间 > 阈值
+        auto now = std::chrono::steady_clock::now();
+        if ( now - m_lastRequestTime > m_debounceThreshold ) {
+            return true;
+        }
+
+        return false;
+    }
 
 protected:
     /// @brief 画布尺寸
@@ -48,12 +62,20 @@ protected:
     uint32_t m_targetWidth{ 0 };
     uint32_t m_targetHeight{ 0 };
 
+    // 时间点记录
+    std::chrono::steady_clock::time_point m_lastRequestTime;
+
+    // 消抖阈值 (150ms 是肉眼感知和性能的平衡点)
+    const std::chrono::milliseconds m_debounceThreshold{ 150 };
+
     // UI 只设置目标，不改实际尺寸
-    void setTargetSize(uint32_t w, uint32_t h)
+    inline void setTargetSize(uint32_t w, uint32_t h)
     {
         if ( w != m_targetWidth || h != m_targetHeight ) {
-            m_targetWidth  = w;
-            m_targetHeight = h;
+            m_targetWidth     = w;
+            m_targetHeight    = h;
+            m_lastRequestTime = std::chrono::steady_clock::now();
+            // 标记为“有变更待处理”
             m_need_reCreate.store(true);
         }
     }
@@ -69,6 +91,14 @@ private:
     vk::ImageView    m_imageView;    // 纹理视图
     vk::Framebuffer  m_framebuffer;  // 绑定到此纹理的帧缓冲
     vk::Sampler      m_sampler;      // 绑定到此纹理的采样器
+
+    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
+    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
+
+    /**
+     * @brief 加载并创建 Shader 模块
+     */
+    void createShader();
 
     // --- 2. 几何资源 (独占) ---
     // 存 Brush 的顶点

@@ -4,6 +4,8 @@
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 #include "vulkan/vulkan.hpp"
+#include <filesystem>
+#include <fstream>
 
 namespace MMM::Graphic
 {
@@ -34,9 +36,11 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
                                               vk::Device&         logicalDevice,
                                               VKSwapchain&        swapchain,
-                                              VKShader&           shader,
                                               size_t maxVertexCount)
 {
+    // 1. 确认是真的需要重建（再次检查消抖，防止并发问题）
+    if ( !needReCreateFrameBuffer() ) return;
+
     // 确保不为 0
     if ( m_targetWidth == 0 || m_targetHeight == 0 ) return;
 
@@ -45,7 +49,6 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
 
     // 先释放
     releaseResources();
-
 
     // 赋值引用
     m_device = logicalDevice;
@@ -57,9 +60,16 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     // 创建离屏渲染流程
     m_offScreenRenderPass = std::make_unique<VKRenderPass>(
         logicalDevice, swapchain, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    createShader();
+
     // 创建画笔渲染管线(2DCanvas)
-    m_brushRenderPipeline = std::make_unique<VKRenderPipeline>(
-        logicalDevice, shader, *m_offScreenRenderPass, swapchain, true);
+    m_brushRenderPipeline =
+        std::make_unique<VKRenderPipeline>(logicalDevice,
+                                           *m_vkShaders["testShader"],
+                                           *m_offScreenRenderPass,
+                                           swapchain,
+                                           true);
 
     // 再重建
     // ==========================================
@@ -159,7 +169,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
     m_imguiDescriptor = (vk::DescriptorSet)ImGui_ImplVulkan_AddTexture(
         (VkSampler)m_sampler,
         (VkImageView)m_imageView,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL  // ★ImGui读取时，期望它处于的布局状态
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL  // ImGui读取时，期望它处于的布局状态
     );
 
     // ==========================================
@@ -176,7 +186,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
         vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
     );
-    XINFO("OffScreen Vertex Buffer Created.");
+
     m_uniformBuffer = std::make_unique<VKMemBuffer>(
         phyDevice,
         m_device,
@@ -184,15 +194,18 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
         vk::BufferUsageFlagBits::eUniformBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent);
+
     // ==========================================
     // 7. 创建uniform需要的描述符池和描述符集
     // ==========================================
     createDescriptPool();
     createDescriptSets();
+
     // ==========================================
     // 8. 映射uniform内存到描述符集
     // ==========================================
     mapUniformBuffer2DescriptorSet();
+
     // ==========================================
     // 9. 上传顶点数据到 顶点缓冲区
     // ==========================================
@@ -210,8 +223,6 @@ void VKOffScreenRenderer::reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
 
         // 解除映射
         m_device.unmapMemory(m_vertexBuffer->m_vkDevMem);
-
-        XINFO("OffScreen Vertex Data uploaded ({} bytes).", dataSize);
     }
 
     m_width  = creationW;
@@ -272,6 +283,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
     }
     cmdBuf.endRenderPass();
 }
+
 /**
  * @brief 创建描述符池
  */
@@ -360,6 +372,10 @@ void VKOffScreenRenderer::releaseResources()
             m_descriptorPool = nullptr;
         }
 
+        // 清理着色器程序
+        m_vkShaders.clear();
+
+
         m_device.destroyFramebuffer(m_framebuffer);
         m_device.destroySampler(m_sampler);
         m_device.destroyImageView(m_imageView);
@@ -377,6 +393,63 @@ void VKOffScreenRenderer::releaseResources()
         ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_imguiDescriptor);
         m_imguiDescriptor = nullptr;
     }
+}
+
+std::string readFile(std::string path)
+{
+    // 读取文件内容
+    std::ifstream fs;
+    fs.open(path, std::ios::binary | std::ios::ate);
+    if ( !fs.is_open() ) {
+        XERROR("Fatal: Could not open File[{}]!", path);
+        return {};
+    }
+    auto        sourceSize = fs.tellg();
+    std::string source;
+    source.resize(sourceSize);
+    fs.seekg(0);
+    fs.read(source.data(), sourceSize);
+    fs.close();
+    return source;
+}
+
+/**
+ * @brief 加载并创建 Shader 模块
+ */
+void VKOffScreenRenderer::createShader()
+{
+    // 读取源码初始化shader
+    // 假设 assets 肯定在运行目录上n级
+    // 而 build 目录通常在 root/build/Modules/Main/ 下 (深度为 3 或 4)
+    auto rootDir = std::filesystem::current_path();
+    // 向上查找直到找到 assets 文件夹
+    while ( !std::filesystem::exists(rootDir / "assets") &&
+            rootDir.has_parent_path() ) {
+        rootDir = rootDir.parent_path();
+    }
+
+    if ( !std::filesystem::exists(rootDir / "assets") ) {
+        XERROR("Fatal: Could not find assets directory!");
+        return;
+    }
+
+    // 跨平台（自动处理 / 或 \）
+    auto assetPath = rootDir / "assets";
+    auto testVertexShaderSourcePath =
+        assetPath / "shaders" / "testVertexShader.spv";
+    auto testFragmentShaderSourcePath =
+        assetPath / "shaders" / "testFragmentShader.spv";
+
+    // 读取文件内容
+    std::string testVertexShaderSource =
+        readFile(testVertexShaderSourcePath.generic_string());
+    std::string testFragmentShaderSource =
+        readFile(testFragmentShaderSourcePath.generic_string());
+
+    // 创建着色器
+    auto test_vkShader = std::make_unique<VKShader>(
+        m_device, testVertexShaderSource, testFragmentShaderSource);
+    m_vkShaders.emplace("testShader", std::move(test_vkShader));
 }
 
 }  // namespace MMM::Graphic

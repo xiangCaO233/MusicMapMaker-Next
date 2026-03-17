@@ -1,13 +1,11 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
-#include "graphic/imguivk/mem/VKUniforms.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 #include "ui/IRenderableView.h"
 #include "ui/UIManager.h"
-#include <chrono>
 
 namespace MMM::Graphic
 {
@@ -19,18 +17,21 @@ namespace MMM::Graphic
 void VKRenderer::render(NativeWindow&               window,
                         std::vector<UI::UIManager*> uiManagers)
 {
-    // 1. 主动检查 GLFW 报告的当前尺寸
-    int currentWidth, currentHeight;
-    window.getFramebufferSize(currentWidth, currentHeight);
+    // 检查窗口是否完成了缩放操作（消抖）
+    if ( window.shouldRecreate() ) {
+        m_vkSwapChain.markDirty();
+    }
 
-    // 2. 检查当前交换链的 Extent 是否与窗口一致
-    auto& extent = m_vkSwapChain.info().imageExtent;
+    // 只判断标志位（极快的布尔值检查）
+    if ( m_vkSwapChain.needsRecreate() ) {
+        // 额外检查：如果是最小化，宽和高为 0，此时不应重建，直接跳过
+        int w, h;
+        window.getFramebufferSize(w, h);
+        if ( w == 0 || h == 0 ) return;
 
-    // 如果 flag 被触发，或者尺寸实际对不上，就强制重建
-    if ( window.isFramebufferResized() || currentWidth != extent.width ||
-         currentHeight != extent.height ) {
-        triggerRecreate(window);
-        return;  // 重建后这一帧直接跳过，下一帧再画
+        triggerRecreate(
+            window);  // 内部重建完后记得调用 m_vkSwapChain.checkAndResetDirty()
+        return;
     }
 
     // 等待cmd完成
@@ -57,11 +58,7 @@ void VKRenderer::render(NativeWindow&               window,
             // 如果离屏渲染器需要重建（初次或改名）
             if ( renderableView->needReCreateFrameBuffer() ) {
                 renderableView->reCreateFrameBuffer(
-                    m_vkPhysicalDevice,
-                    m_vkLogicalDevice,
-                    m_vkSwapChain,
-                    *m_vkShadersRef["testShader"]  // 使用现有的 shader 测试
-                );
+                    m_vkPhysicalDevice, m_vkLogicalDevice, m_vkSwapChain);
             }
         }
     }
@@ -78,13 +75,15 @@ void VKRenderer::render(NativeWindow&               window,
         m_vkSwapChain.m_swapchain,
         std::numeric_limits<uint64_t>::max(),
         m_imageAvailableSems[m_currentFrameIndex]);
-    if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
 
-        // 标记需要重建
-        triggerRecreate(window);
+    // if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
+    //     // 先结束 ImGui 帧
+    //     ImGui::EndFrame();
+    //     // 标记需要重建
+    //     triggerRecreate(window);
+    //     return;
+    // }
 
-        return;
-    }
     if ( imageResult.result != vk::Result::eSuccess ) {
         XWARN("acquire ImageKHR failed");
     }
@@ -109,9 +108,10 @@ void VKRenderer::render(NativeWindow&               window,
     // 渲染区域
     auto swapchainCreateInfo = m_vkSwapChain.info();
     // clearmask - 类似opengl的清屏颜色
-    vk::ClearValue      clearValue;
-    vk::ClearColorValue clearColorValue(s_clear_color);
-    clearValue.setColor(clearColorValue);
+    std::array<vk::ClearValue, 2> clearValues;
+    vk::ClearColorValue           clearColorValue(s_clear_color);
+    clearValues[0].setColor(clearColorValue);
+    clearValues[1].setDepthStencil({ 1.0f, 0 });
 
     // 命令录制
     currentCmdBuffer.begin(commandBufferBeginInfo);
@@ -130,19 +130,7 @@ void VKRenderer::render(NativeWindow&               window,
                          swapchainCreateInfo.imageExtent.width,
                          swapchainCreateInfo.imageExtent.height } };
 
-        // 绑定渲染管线
-        currentCmdBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
-                                      m_vkRenderPipeline.m_graphicsPipeline);
-
-        // 绑定描述符集
-        currentCmdBuffer.bindDescriptorSets(
-            vk::PipelineBindPoint::eGraphics,
-            m_vkRenderPipeline.m_graphicsPipelineLayout,
-            0,
-            m_vkDescriptorSets[imageIndex],
-            {});
-
-        // 开始渲染流程
+        // 开始主屏幕渲染流程
         vk::RenderPassBeginInfo renderPassBeginInfo;
         renderPassBeginInfo
             // 设置渲染流程
@@ -153,7 +141,7 @@ void VKRenderer::render(NativeWindow&               window,
             .setFramebuffer(
                 m_vkSwapChain.m_vkImageBuffers[imageIndex].vk_frameBuffer)
             // clearmask - 类似opengl的清屏颜色
-            .setClearValues(clearValue);
+            .setClearValues(clearValues);
 
         // 真 - 命令录制
         currentCmdBuffer.beginRenderPass(renderPassBeginInfo, {});
@@ -200,9 +188,9 @@ void VKRenderer::render(NativeWindow&               window,
     auto presentResult = m_LogicDevicePresentQueue.presentKHR(presentInfo);
 
     if ( presentResult != vk::Result::eSuccess ) {
-        if ( presentResult == vk::Result::eSuboptimalKHR ||
-             window.isFramebufferResized() ) {
-            triggerRecreate(window);
+        if ( presentResult == vk::Result::eSuboptimalKHR ) {
+            // triggerRecreate(window);
+            XWARN("Size Missed");
         } else {
             XWARN("Present failed");
         }
