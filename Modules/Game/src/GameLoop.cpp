@@ -25,15 +25,11 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 {
     XINFO("GameLoop created");
 
+    // 注册ui视图
     m_uiManager.registerView("MainDockSpaceUI",
                              std::make_unique<Graphic::UI::MainDockSpaceUI>());
     m_uiManager.registerView("TestCanvas",
                              std::make_unique<Canvas::TestCanvas>(200, 200));
-
-    if ( g_vkContext ) {
-        auto& context = g_vkContext->get();
-    }
-
     m_uiManager.registerView(
         "ImguiTestWindowUI",
         std::make_unique<Graphic::UI::ImguiTestWindowUI>());
@@ -60,6 +56,7 @@ int GameLoop::start(std::string_view window_title)
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
         context.initVKWindowRess(window.getWindowHandle(), fbWidth, fbHeight);
+        context.setVSync(false);
         // 进入主循环
         while ( !window.shouldClose() ) {
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
