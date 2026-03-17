@@ -4,17 +4,6 @@
 namespace MMM::Graphic
 {
 
-// 顶点信息
-std::array<VKVertex, 3> VKRenderer::s_vertices{
-    VKVertex{ .pos   = { .x = 0.f, .y = -.5f },
-              .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = .33f } },
-    VKVertex{ .pos   = { .x = .5f, .y = .5f },
-              .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = .66f } },
-    VKVertex{ .pos   = { .x = -0.5f, .y = 0.5f },
-              .color = { .r = 0.0f, .g = 0.0f, .b = 1.0f, .a = 1.0f } },
-
-};
-
 /**
  * @brief 创建命令池
  */
@@ -47,11 +36,6 @@ void VKRenderer::allocateCommandBuffers()
         // 这里分配主要的
         .setLevel(vk::CommandBufferLevel::ePrimary);
     m_vkCommandBuffers =
-        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo);
-
-    // 创建上传Uniform数据的命令缓冲区
-    // 为每一个图像缓冲分配一个用于上传Uniform数据的命令缓冲区
-    m_uniformUploadCmdBuffers =
         m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo);
 
     XINFO("Allocated VK Command Buffers.");
@@ -87,272 +71,36 @@ void VKRenderer::createSemsWithFences()
 }
 
 /**
- * @brief 创建缓冲区
- *
- * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
- */
-void VKRenderer::createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice)
-{
-    // 创建VK主机内存缓冲区
-    m_vkHostMemBuffer = std::make_unique<VKMemBuffer>(
-        vkPhysicalDevice,
-        m_vkLogicalDevice,
-        sizeof(s_vertices),
-        // 设置为传输起点
-        vk::BufferUsageFlagBits::eTransferSrc,
-        // 主机可访问 + 可协同工作
-        vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent);
-
-    // 创建VKGPU内存缓冲区
-    m_vkGPUMemBuffer =
-        std::make_unique<VKMemBuffer>(vkPhysicalDevice,
-                                      m_vkLogicalDevice,
-                                      sizeof(s_vertices),
-                                      // 顶点缓冲区并设置为传输终点
-                                      vk::BufferUsageFlagBits::eVertexBuffer |
-                                          vk::BufferUsageFlagBits::eTransferDst,
-                                      // 仅GPU设备本地可见
-                                      vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-    // 创建主机Uniform缓冲区
-    m_vkHostUniformMemBuffers.resize(m_avalableImageBufferCount);
-    for ( auto& vkHostUniformMemBuffer : m_vkHostUniformMemBuffers ) {
-        vkHostUniformMemBuffer = std::make_unique<VKMemBuffer>(
-            vkPhysicalDevice,
-            m_vkLogicalDevice,
-            sizeof(Graphic::VKTestTimeUniform),
-            // 设置为传输起点
-            vk::BufferUsageFlagBits::eTransferSrc,
-            // 主机可访问 + 可协同工作
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent);
-    }
-
-    // 创建GPUUniform缓冲区
-    m_vkGPUUniformMemBuffers.resize(m_avalableImageBufferCount);
-    for ( auto& vkGPUUniformMemBuffer : m_vkGPUUniformMemBuffers ) {
-        vkGPUUniformMemBuffer = std::make_unique<VKMemBuffer>(
-            vkPhysicalDevice,
-            m_vkLogicalDevice,
-            sizeof(Graphic::VKTestTimeUniform),
-            // Uniform缓冲区并设置为传输终点
-            vk::BufferUsageFlagBits::eUniformBuffer |
-                vk::BufferUsageFlagBits::eTransferDst,
-            // 仅GPU设备本地可见
-            vk::MemoryPropertyFlagBits::eDeviceLocal);
-    }
-}
-
-/**
  * @brief 创建描述符池
  */
 void VKRenderer::createDescriptPool()
-{  // My Create Descriptor Pool
-
-    // 描述符池创建信息
-    vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
-
-    // 描述符池大小
-    std::array<vk::DescriptorPoolSize, 2> descriptorPoolSizes;
-    vk::DescriptorPoolSize                descriptorPoolSize;
-    descriptorPoolSizes[0]
-        // 描述符类型::Uniform类型
-        .setType(vk::DescriptorType::eUniformBuffer)
-        // 总共需要创建多少描述符集 (描述符集数量 * 对应的内容数量
-        // (当前uniform就一个))
-        .setDescriptorCount(m_avalableImageBufferCount * 1);
-    descriptorPoolSizes[1]
-        // 描述符类型::采样器类型等等
-        .setType(vk::DescriptorType::eCombinedImageSampler)
-        // 总共需要创建多少描述符集 (描述符集数量 * 对应的内容数量 直接给够)
-        .setDescriptorCount(1000);
-
-    descriptorPoolCreateInfo
-        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
-        // 有多少帧就创建多少个描述符集
-        .setMaxSets(m_avalableImageBufferCount + 32)
-        // 设置描述符池大小
-        .setPoolSizes(descriptorPoolSizes);
-
-    // 创建描述符池
-    m_vkDescriptorPool =
-        m_vkLogicalDevice.createDescriptorPool(descriptorPoolCreateInfo);
-
-    XINFO("Created Descriptor Pool.");
-}
-
-/**
- * @brief 创建描述符集列表
- */
-void VKRenderer::createDescriptSets()
 {
-    // 描述符集分配信息
-    vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
-    // 复制多份setlayout用于一一对应描述符集
-    std::vector<vk::DescriptorSetLayout> descriptorSetLayouts(
-        m_avalableImageBufferCount, m_vkRenderPipeline.m_descriptorSetLayout);
-    descriptorSetAllocateInfo
-        // 从哪个描述符池创建
-        .setDescriptorPool(m_vkDescriptorPool)
-        // 创建多少个描述符集
-        .setDescriptorSetCount(m_avalableImageBufferCount)
-        // 设置描述符集布局 - 需要一一对应
-        .setSetLayouts(descriptorSetLayouts);
+    // 定义 ImGui 需要的各种描述符类型的大小
+    // 这些数量通常给得比较从容，以防 ImGui 插件或大量贴图使用
+    std::array<vk::DescriptorPoolSize, 11> poolSizes = {
+        { { vk::DescriptorType::eSampler, 1000 },
+          { vk::DescriptorType::eCombinedImageSampler, 1000 },
+          { vk::DescriptorType::eSampledImage, 1000 },
+          { vk::DescriptorType::eStorageImage, 1000 },
+          { vk::DescriptorType::eUniformTexelBuffer, 1000 },
+          { vk::DescriptorType::eStorageTexelBuffer, 1000 },
+          { vk::DescriptorType::eUniformBuffer, 1000 },
+          { vk::DescriptorType::eStorageBuffer, 1000 },
+          { vk::DescriptorType::eUniformBufferDynamic, 1000 },
+          { vk::DescriptorType::eStorageBufferDynamic, 1000 },
+          { vk::DescriptorType::eInputAttachment, 1000 } }
+    };
 
-    // 分配描述符集
-    m_vkDescriptorSets =
-        m_vkLogicalDevice.allocateDescriptorSets(descriptorSetAllocateInfo);
-    XINFO("Descriptor Sets Allocated.");
-}
+    vk::DescriptorPoolCreateInfo poolInfo;
+    poolInfo
+        .setFlags(vk::DescriptorPoolCreateFlagBits::
+                      eFreeDescriptorSet)  // 允许 ImGui 动态增删贴图
+        .setMaxSets(1000 * poolSizes.size())
+        .setPoolSizes(poolSizes);
 
-/**
- * @brief 映射uniformbuffer到对应描述符集
- */
-void VKRenderer::mapUniformBuffer2DescriptorSet() const
-{
-    for ( size_t i{ 0 }; i < m_vkDescriptorSets.size(); ++i ) {
-        auto& descriptorSet           = m_vkDescriptorSets[i];
-        auto& descriptorUniformBuffer = m_vkGPUUniformMemBuffers[i];
+    m_vkDescriptorPool = m_vkLogicalDevice.createDescriptorPool(poolInfo);
 
-        // 描述符集写入信息
-        vk::WriteDescriptorSet writeDescriptorSet;
-
-        // 描述符缓冲区信息
-        vk::DescriptorBufferInfo descriptorBufferInfo;
-        descriptorBufferInfo
-            .setBuffer(descriptorUniformBuffer->m_vkBuffer)
-            // 无偏移量
-            .setOffset(0)
-            // 缓冲区范围 - 大小
-            .setRange(descriptorUniformBuffer->m_bufSize);
-        writeDescriptorSet
-            // 描述符类型
-            .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-            // 描述的buffer
-            .setBufferInfo(descriptorBufferInfo)
-            // 设置绑定号0
-            .setDstBinding(0)
-            // 设置关联的set
-            .setDstSet(descriptorSet)
-            // 如果是数组，设置为对应数组的实际对象的下标
-            .setDstArrayElement(0)
-            // 数组里的元素总数
-            .setDescriptorCount(1);
-
-        // 映射uniform缓冲区到描述符集
-        m_vkLogicalDevice.updateDescriptorSets(writeDescriptorSet, {});
-    }
-}
-
-/**
- * @brief 传输数据到GPU
- */
-void VKRenderer::uploadBuffer2GPU(
-    vk::CommandBuffer&                  cmdBuffer,
-    const std::unique_ptr<VKMemBuffer>& hostBuffer,
-    const std::unique_ptr<VKMemBuffer>& gpuBuffer) const
-{
-    vk::CommandBufferBeginInfo uploadCmdBufBeginInfo;
-
-    // 只用一次
-    uploadCmdBufBeginInfo.setFlags(
-        vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    cmdBuffer.begin(uploadCmdBufBeginInfo);
-    {
-        vk::BufferCopy bufferCopyRegion;
-        bufferCopyRegion
-            // 如名
-            .setSize(hostBuffer->m_bufSize)
-            .setSrcOffset(0)
-            .setDstOffset(0);
-        cmdBuffer.copyBuffer(
-            // 起始缓冲区
-            hostBuffer->m_vkBuffer,
-            // 目标缓冲区
-            gpuBuffer->m_vkBuffer,
-            // 拷贝区域
-            bufferCopyRegion);
-    }
-    cmdBuffer.end();
-
-    // 上传信息 - 无需信号量
-    vk::SubmitInfo submitInfo;
-    submitInfo.setCommandBuffers(cmdBuffer);
-
-    // 上传命令
-    m_LogicDeviceGraphicsQueue.submit(submitInfo);
-
-    // 等待上传完毕
-    m_vkLogicalDevice.waitIdle();
-}
-
-/**
- * @brief 上传顶点缓冲区到GPU
- */
-void VKRenderer::uploadVertexBuffer2GPU() const
-{
-    // 为每一个图像缓冲分配一个命令缓冲区
-    vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
-
-    // 写入数据到主机内存缓冲区
-    void* data = m_vkLogicalDevice.mapMemory(
-        m_vkHostMemBuffer->m_vkDevMem, 0, sizeof(s_vertices));
-    memcpy(data, s_vertices.data(), sizeof(s_vertices));
-    m_vkLogicalDevice.unmapMemory(m_vkHostMemBuffer->m_vkDevMem);
-
-    // 传输主机内存缓冲区到GPU内存缓冲区
-    // 需要专门分配一个命令缓冲区用于上传
-    commandBufferAllocateInfo
-        // 要从哪个命令池分配
-        .setCommandPool(m_vkCommandPool)
-        // 分配1个缓冲区
-        .setCommandBufferCount(1)
-        .setLevel(vk::CommandBufferLevel::ePrimary);
-    vk::CommandBuffer uploadMemCmdBuffer =
-        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo)[0];
-
-    // 传输到对应gpu缓冲区
-    uploadBuffer2GPU(uploadMemCmdBuffer, m_vkHostMemBuffer, m_vkGPUMemBuffer);
-
-    // 销毁缓冲区
-    m_vkLogicalDevice.freeCommandBuffers(m_vkCommandPool, uploadMemCmdBuffer);
-
-    XINFO("Uploaded vertex data to gpu buffer.");
-}
-
-/**
- * @brief 上传uniform缓冲区到GPU
- */
-void VKRenderer::uploadUniformBuffer2GPU(const uint32_t current_image_index)
-{
-    // 获取当前image对应的缓冲区
-    auto& current_frame_host_uniform_buffer =
-        m_vkHostUniformMemBuffers[current_image_index];
-    auto& current_frame_gpu_uniform_buffer =
-        m_vkGPUUniformMemBuffers[current_image_index];
-    auto& uniformUploadCmdBuffer =
-        m_uniformUploadCmdBuffers[current_image_index];
-
-    // 映射获取主机uniform缓冲区内存地址
-    auto data_ptr = m_vkLogicalDevice.mapMemory(
-        current_frame_host_uniform_buffer->m_vkDevMem,
-        0,
-        current_frame_host_uniform_buffer->m_bufSize);
-
-    // 写入uniform到主机uniform缓冲区
-    memcpy(data_ptr, &m_testCurrentTime, sizeof(m_testCurrentTime));
-
-    // 结束映射
-    m_vkLogicalDevice.unmapMemory(
-        current_frame_host_uniform_buffer->m_vkDevMem);
-
-    // 传输到gpu对应位置
-    uploadBuffer2GPU(uniformUploadCmdBuffer,
-                     current_frame_host_uniform_buffer,
-                     current_frame_gpu_uniform_buffer);
-
-    // XINFO("Uploaded uniform data to gpu buffer.");
+    XINFO("Created Global Descriptor Pool for ImGui.");
 }
 
 }  // namespace MMM::Graphic

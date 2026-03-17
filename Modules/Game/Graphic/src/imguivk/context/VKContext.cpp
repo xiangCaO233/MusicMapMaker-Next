@@ -71,6 +71,10 @@ VKContext::VKContext()
 
 VKContext::~VKContext()
 {
+    if ( m_vkLogicalDevice ) {
+        m_vkLogicalDevice.waitIdle();
+    }
+
     // 1. 必须在销毁 DescriptorPool 和 Device 之前关闭 ImGui！
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -79,12 +83,6 @@ VKContext::~VKContext()
 
     // 销毁渲染器
     m_vkRenderer.reset();
-
-    // 清理渲染管线
-    m_vkRenderPipeline.reset();
-
-    // 清理着色器程序
-    m_vkShaders.clear();
 
     if ( m_swapchain ) {
         // 手动销毁交换链中的帧缓冲
@@ -170,6 +168,8 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
     // 初始化逻辑设备
     initLogicDevice();
 
+    VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eMailbox;
+
     // 创建交换链
     m_swapchain = std::make_unique<VKSwapchain>(m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
@@ -177,30 +177,17 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                                 m_queueFamilyIndices,
                                                 w,
                                                 h);
-    // 创建着色器程序
-    createShader();
-
-    // 创建渲染流程
-    m_vkRenderPass =
-        std::make_unique<VKRenderPass>(m_vkLogicalDevice, *m_swapchain);
+    // 创建最终呈现的渲染流程
+    m_vkRenderPass = std::make_unique<VKRenderPass>(
+        m_vkLogicalDevice, *m_swapchain, vk::ImageLayout::ePresentSrcKHR);
 
     // 创建帧缓冲
     m_swapchain->createFramebuffers(*m_vkRenderPass);
-
-    // 创建图形渲染管线
-    m_vkRenderPipeline =
-        std::make_unique<VKRenderPipeline>(m_vkLogicalDevice,
-                                           *m_vkShaders["testShader"],
-                                           *m_vkRenderPass,
-                                           *m_swapchain,
-                                           w,
-                                           h);
 
     // 创建渲染器
     m_vkRenderer = std::make_unique<VKRenderer>(m_vkPhysicalDevice,
                                                 m_vkLogicalDevice,
                                                 *m_swapchain,
-                                                *m_vkRenderPipeline,
                                                 *m_vkRenderPass,
                                                 m_LogicDeviceGraphicsQueue,
                                                 m_LogicDevicePresentQueue);
@@ -215,109 +202,35 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
 void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
                                   int height)
 {
-    // 1. 如果窗口最小化了（宽高为0），就阻塞等待，直到窗口恢复
+    // 1. 最小化处理
     while ( width == 0 || height == 0 ) {
         glfwGetFramebufferSize(window_context, &width, &height);
         glfwWaitEvents();
     }
 
-    // 2. 等待 GPU 完成所有当前任务
+    // 2. 等待设备空闲
     m_vkLogicalDevice.waitIdle();
 
-    // 1. 必须在销毁 DescriptorPool 和 Device 之前关闭 ImGui！
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-    XINFO("ImGui Destroyed.");
+    // 3. 【只清理尺寸相关的资源】
+    // 不需要销毁 Device! 不需要销毁 Renderer!
 
-    // 销毁渲染器
-    m_vkRenderer.reset();
+    // 清理旧的 Framebuffers (可以在 swapchain 类内部实现)
+    m_swapchain->destroyFramebuffers();
 
-    // 清理渲染管线
-    m_vkRenderPipeline.reset();
+    // 4. 【重建交换链】
+    // 传入旧的 swapchain 句柄可以加速创建 (oldSwapchain)
+    m_swapchain->recreate(
+        m_vkPhysicalDevice, m_vkSurface, m_queueFamilyIndices, width, height);
 
-    // 清理着色器程序
-    m_vkShaders.clear();
+    // 5. 【重建帧缓冲】
+    // 既然 RenderPass 没变，直接用原来的 RenderPass 重新绑定到新的 Swapchain
+    // 图像上
+    m_swapchain->createFramebuffers(*m_vkRenderPass);
 
-    if ( m_swapchain ) {
-        // 手动销毁交换链中的帧缓冲
-        m_swapchain->destroyFramebuffers();
-    }
+    // 6. 【通知渲染器更新】
+    // 后续如果渲染器内部存了 imageCount 之类的缓存，更新它
+    // m_vkRenderer->onSwapchainChanged();
 
-    // RenderPass 是通过 Device 创建和销毁的
-    // 在销毁 Device 前销毁 RenderPass
-    m_vkRenderPass.reset();
-
-    // 销毁交换链
-    m_swapchain.reset();
-
-    // 销毁逻辑设备
-    if ( m_vkLogicalDevice ) {
-        m_vkLogicalDevice.destroy();
-        XINFO("VK Logical Device destroyed.");
-    }
-
-    // 销毁vk表面
-    if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
-    XINFO("VK Surface destroyed.");
-
-    initVKWindowRess(window_context, width, height);
-}
-
-std::string readFile(std::string path)
-{
-    // 读取文件内容
-    std::ifstream fs;
-    fs.open(path, std::ios::binary | std::ios::ate);
-    if ( !fs.is_open() ) {
-        XERROR("Fatal: Could not open File[{}]!", path);
-        return {};
-    }
-    auto        sourceSize = fs.tellg();
-    std::string source;
-    source.resize(sourceSize);
-    fs.seekg(0);
-    fs.read(source.data(), sourceSize);
-    fs.close();
-    return source;
-}
-
-/**
- * @brief 加载并创建 Shader 模块
- */
-void VKContext::createShader()
-{
-    // 读取源码初始化shader
-    // 假设 assets 肯定在运行目录上n级
-    // 而 build 目录通常在 root/build/Modules/Main/ 下 (深度为 3 或 4)
-    auto rootDir = std::filesystem::current_path();
-    // 向上查找直到找到 assets 文件夹
-    while ( !std::filesystem::exists(rootDir / "assets") &&
-            rootDir.has_parent_path() ) {
-        rootDir = rootDir.parent_path();
-    }
-
-    if ( !std::filesystem::exists(rootDir / "assets") ) {
-        XERROR("Fatal: Could not find assets directory!");
-        return;
-    }
-
-    // 跨平台（自动处理 / 或 \）
-    auto assetPath = rootDir / "assets";
-    auto testVertexShaderSourcePath =
-        assetPath / "shaders" / "testVertexShader.spv";
-    auto testFragmentShaderSourcePath =
-        assetPath / "shaders" / "testFragmentShader.spv";
-
-    // 读取文件内容
-    std::string testVertexShaderSource =
-        readFile(testVertexShaderSourcePath.generic_string());
-    std::string testFragmentShaderSource =
-        readFile(testFragmentShaderSourcePath.generic_string());
-
-    // 创建着色器
-    auto test_vkShader = std::make_unique<VKShader>(
-        m_vkLogicalDevice, testVertexShaderSource, testFragmentShaderSource);
-    m_vkShaders.emplace("testShader", std::move(test_vkShader));
+    XINFO("Swapchain recreation finished.");
 }
 }  // namespace MMM::Graphic

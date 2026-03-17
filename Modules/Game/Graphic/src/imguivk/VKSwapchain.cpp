@@ -5,6 +5,17 @@
 namespace MMM::Graphic
 {
 
+// 默认用fifo(必定支持-等于垂直同步)
+// 下面这两个几乎必然造成撕裂
+// 松弛fifo模式
+// swapchainInfo.presentMode = vk::PresentModeKHR::eFifoRelaxed;
+// 立即模式 -无限制 (撕裂高手l)
+// swapchainInfo.presentMode = vk::PresentModeKHR::eImmediate;
+/// @brief 主窗口呈现模式默认垂直同步 - 更改后需重建交换链
+vk::PresentModeKHR VKSwapchain::s_globalPresentMode{
+    vk::PresentModeKHR::eFifo
+};
+
 /**
  * @brief 构造函数，创建交换链及其图像资源
  *
@@ -20,195 +31,148 @@ VKSwapchain::VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
                          QueueFamilyIndices& queueFamilyIndices, int w, int h)
     : m_vkLogicalDevice(vkLogicalDevice)
 {
-    // 无需查询的配置
-    m_swapchainCreateInfo
-        // 裁切
-        .setClipped(true)
-        // 图像数组层数 - 3d图像可能需要多层
-        .setImageArrayLayers(1)
-        // 图像使用方法: 一般颜色附件
-        // 允许gpu往上绘制像素
-        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
-        // 设置窗口表面
-        .setSurface(vkSurface)
-        // 与窗口表面融混策略
-        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque);
-    ;
-
-    // 需要查询的配置
-    struct SwapChainInfo {
-        // 图像尺寸
-        vk::Extent2D imageExtent{};
-        // 图像数量
-        uint32_t imageCount{};
-        // 表面格式
-        vk::SurfaceFormatKHR surfaceFormat{};
-        // 贴上图像前的可选变换
-        vk::SurfaceTransformFlagBitsKHR surfaceTransformFlags;
-        // 呈现模式
-        vk::PresentModeKHR presentMode;
-    };
-
-    SwapChainInfo swapchainInfo;
-
-    // 查询物理设备支持的表面格式
-    std::vector<vk::SurfaceFormatKHR> supported_surfaceFormats =
-        vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
-    // 默认选第一个
-    swapchainInfo.surfaceFormat = supported_surfaceFormats[0];
-    for ( const auto& surfaceFormat : supported_surfaceFormats ) {
-        // 选个通用srgb色彩空间的格式
-        if ( surfaceFormat.format == vk::Format::eR8G8B8A8Srgb &&
-             surfaceFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear ) {
-            swapchainInfo.surfaceFormat = surfaceFormat;
-        }
-    }
-    // 查询物理设备表面支持
-    vk::SurfaceCapabilitiesKHR surfaceSupportedCapabilities =
-        vkPhysicalDevice.getSurfaceCapabilitiesKHR(vkSurface);
-
-    // 图像数量期望为2个形成双缓冲绘制
-    swapchainInfo.imageCount =
-        // 限制在物理设置支持的数量上下限之间
-        std::clamp<uint32_t>(
-            2,
-            surfaceSupportedCapabilities.minImageCount,
-            (surfaceSupportedCapabilities.maxImageCount > 0
-                 ? surfaceSupportedCapabilities.maxImageCount
-                 : (2 > surfaceSupportedCapabilities.minImageCount
-                        ? 2
-                        : surfaceSupportedCapabilities.minImageCount)));
-
-    // 图像尺寸期望为创建的窗口尺寸
-    swapchainInfo.imageExtent.width =
-        // 限制在物理设置支持的分辨率上下限之间
-        std::clamp<uint32_t>(w,
-                             surfaceSupportedCapabilities.minImageExtent.width,
-                             surfaceSupportedCapabilities.maxImageExtent.width);
-    swapchainInfo.imageExtent.height = std::clamp<uint32_t>(
-        h,
-        surfaceSupportedCapabilities.minImageExtent.height,
-        surfaceSupportedCapabilities.maxImageExtent.height);
-
-    // 图像变换期望为物理设备默认的
-    swapchainInfo.surfaceTransformFlags =
-        surfaceSupportedCapabilities.currentTransform;
-
-    // 查询物理设备支持的呈现模式
-    std::vector<vk::PresentModeKHR> supported_presentModes =
-        vkPhysicalDevice.getSurfacePresentModesKHR(vkSurface);
-    // 默认用fifo(必定支持-基本等于垂直同步?)
-    swapchainInfo.presentMode = vk::PresentModeKHR::eFifo;
-    // 下面这两个几乎必然造成撕裂
-    // 松弛fifo模式
-    // swapchainInfo.presentMode = vk::PresentModeKHR::eFifoRelaxed;
-    // 立即模式
-    // swapchainInfo.presentMode = vk::PresentModeKHR::eImmediate;
-    for ( const auto& presentMode : supported_presentModes ) {
-        // 最优选mailbox模式
-        // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
-        if ( presentMode == vk::PresentModeKHR::eMailbox ) {
-            swapchainInfo.presentMode = vk::PresentModeKHR::eMailbox;
-            break;
-        }
-    }
-
-    // 命令队列索引去重
-    std::set<uint32_t> queueFamilyIndexSet{
-        queueFamilyIndices.graphicsQueueIndex.value(),
-        queueFamilyIndices.presentQueueIndex.value()
-    };
-    std::vector<uint32_t> resQueueFamilyIndices;
-    for ( uint32_t queueFamilyIndex : queueFamilyIndexSet ) {
-        resQueueFamilyIndices.push_back(queueFamilyIndex);
-    }
-
-    // 继续填充查询到的交换链创建信息
-    m_swapchainCreateInfo
-        // 刚查到的支持的色彩空间
-        .setImageColorSpace(swapchainInfo.surfaceFormat.colorSpace)
-        // 刚查到的支持的表面格式中的图像格式
-        .setImageFormat(swapchainInfo.surfaceFormat.format)
-        // 刚查到的图像尺寸(或者说分辨率?)
-        .setImageExtent(swapchainInfo.imageExtent)
-        // 刚查到的图像缓冲数量
-        .setMinImageCount(swapchainInfo.imageCount)
-        // 刚查到的呈现模式
-        .setPresentMode(swapchainInfo.presentMode)
-        // 刚查到的变换模式
-        .setPreTransform(swapchainInfo.surfaceTransformFlags)
-        // 命令队列索引集合
-        .setQueueFamilyIndices(resQueueFamilyIndices)
-        // 若队列不是同一个，则需要sharing,否则独占
-        .setImageSharingMode(resQueueFamilyIndices.size() == 1
-                                 ? vk::SharingMode::eExclusive
-                                 : vk::SharingMode::eConcurrent);
-
-    // 用逻辑设备创建交换链
-    m_swapchain = vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo);
-    XINFO("SwapChain Created");
-
-    // 创建vk的图像缓冲
-    // 获取到交换链中的图像
-    std::vector<vk::Image> swapchain_images =
-        vkLogicalDevice.getSwapchainImagesKHR(m_swapchain);
-    m_vkImageBuffers.reserve(swapchain_images.size());
-    for ( const auto& swapchain_image : swapchain_images ) {
-        // 色彩组件映射
-        vk::ComponentMapping imageComponentMapping{};
-        // 如交换R颜色组件和A颜色组件
-        // imageComponentMapping.setR(vk::ComponentSwizzle::eA);
-
-        // 纹理资源范围
-        vk::ImageSubresourceRange imageSubresourceRange;
-        imageSubresourceRange
-            // 不使用mipmap
-            .setBaseMipLevel(0)
-            // 需要的mipmap等级数量(不使用的话就是一个)
-            .setLevelCount(1)
-            // 3d图像可能会使用到这个
-            .setBaseArrayLayer(0)
-            // 3d图像的话设置层数,2d的话就一层
-            .setLayerCount(1)
-            // 作为色彩资源
-            .setAspectMask(vk::ImageAspectFlagBits::eColor);
-
-        // 图像视图创建信息
-        vk::ImageViewCreateInfo imageViewCreateInfo;
-        imageViewCreateInfo
-            // 毫无疑问设置的图像
-            .setImage(swapchain_image)
-            // 观察方式(二维)
-            .setViewType(vk::ImageViewType::e2D)
-            // 色彩组件映射
-            .setComponents(imageComponentMapping)
-            // 图像格式
-            .setFormat(swapchainInfo.surfaceFormat.format)
-            // 纹理资源范围
-            .setSubresourceRange(imageSubresourceRange);
-
-
-        // 创建图像缓冲
-        m_vkImageBuffers.push_back(
-            { .vk_image = swapchain_image,
-              .vk_imageView =
-                  vkLogicalDevice.createImageView(imageViewCreateInfo),
-              .vk_frameBuffer = {} });
-    }
-    XINFO("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
+    // 初始创建，oldSwapchain 为空
+    createInternal(
+        vkPhysicalDevice, vkSurface, queueFamilyIndices, w, h, nullptr);
 }
 
 VKSwapchain::~VKSwapchain()
 {
-    // 用逻辑设备销毁创建的图像缓冲中的图像视图
-    for ( const auto& imageBuffer : m_vkImageBuffers ) {
-        m_vkLogicalDevice.destroyImageView(imageBuffer.vk_imageView);
+    destroyFramebuffers();
+    cleanupImageViews();
+    if ( m_swapchain ) {
+        m_vkLogicalDevice.destroySwapchainKHR(m_swapchain);
     }
-    XINFO("ImageView all destroyed.");
 
-    // 用逻辑设备销毁交换链
-    m_vkLogicalDevice.destroySwapchainKHR(m_swapchain);
     XINFO("SwapChain destroyed.");
+}
+
+// 提取出的公共初始化逻辑
+void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
+                                 vk::SurfaceKHR&     vkSurface,
+                                 QueueFamilyIndices& queueFamilyIndices, int w,
+                                 int h, vk::SwapchainKHR oldSwapchain)
+{
+    // 1. 基础配置 (不随窗口变化的)
+    m_swapchainCreateInfo.setClipped(true)
+        .setImageArrayLayers(1)
+        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+        .setSurface(vkSurface)
+        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+        .setOldSwapchain(oldSwapchain);  // 【关键】设置旧交换链以优化重建
+
+    // 2. 查询物理设备支持情况
+    // 查询格式
+    std::vector<vk::SurfaceFormatKHR> supported_surfaceFormats =
+        vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
+    vk::SurfaceFormatKHR chosenFormat = supported_surfaceFormats[0];
+    for ( const auto& sf : supported_surfaceFormats ) {
+        if ( sf.format == vk::Format::eR8G8B8A8Srgb &&
+             sf.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear ) {
+            chosenFormat = sf;
+            break;
+        }
+    }
+
+    // 查询能力 (Extent, Count)
+    vk::SurfaceCapabilitiesKHR caps =
+        vkPhysicalDevice.getSurfaceCapabilitiesKHR(vkSurface);
+
+    // 确定图像数量 (期望2个)
+    uint32_t imageCount =
+        std::clamp<uint32_t>(2,
+                             caps.minImageCount,
+                             (caps.maxImageCount > 0 ? caps.maxImageCount : 2));
+
+    // 确定尺寸
+    vk::Extent2D extent;
+    extent.width = std::clamp<uint32_t>(
+        w, caps.minImageExtent.width, caps.maxImageExtent.width);
+    extent.height = std::clamp<uint32_t>(
+        h, caps.minImageExtent.height, caps.maxImageExtent.height);
+
+    // 3. 队列族处理
+    std::set<uint32_t> queueIndices = {
+        queueFamilyIndices.graphicsQueueIndex.value(),
+        queueFamilyIndices.presentQueueIndex.value()
+    };
+    std::vector<uint32_t> queueIndicesVec(queueIndices.begin(),
+                                          queueIndices.end());
+
+    // 4. 填充并创建交换链
+    m_swapchainCreateInfo.setImageColorSpace(chosenFormat.colorSpace)
+        .setImageFormat(chosenFormat.format)
+        .setImageExtent(extent)
+        .setMinImageCount(imageCount)
+        .setPresentMode(s_globalPresentMode)
+        .setPreTransform(caps.currentTransform)
+        .setQueueFamilyIndices(queueIndicesVec)
+        .setImageSharingMode(queueIndicesVec.size() > 1
+                                 ? vk::SharingMode::eConcurrent
+                                 : vk::SharingMode::eExclusive);
+
+    m_swapchain = m_vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo);
+    XINFO("SwapChain Created (Extent: {}x{})", extent.width, extent.height);
+
+    // 5. 获取图像并创建 ImageView
+    std::vector<vk::Image> swapchain_images =
+        m_vkLogicalDevice.getSwapchainImagesKHR(m_swapchain);
+    m_vkImageBuffers.reserve(swapchain_images.size());
+
+    for ( const auto& img : swapchain_images ) {
+        vk::ImageViewCreateInfo viewInfo;
+        viewInfo.setImage(img)
+            .setViewType(vk::ImageViewType::e2D)
+            .setFormat(chosenFormat.format)
+            .setSubresourceRange(
+                { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+
+        m_vkImageBuffers.push_back(
+            { .vk_image       = img,
+              .vk_imageView   = m_vkLogicalDevice.createImageView(viewInfo),
+              .vk_frameBuffer = nullptr });
+    }
+    XINFO("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
+}
+
+// 清理 ImageView 的逻辑（不销毁 Swapchain 句柄，用于 recreate 过程中间）
+void VKSwapchain::cleanupImageViews()
+{
+    for ( const auto& imageBuffer : m_vkImageBuffers ) {
+        if ( imageBuffer.vk_imageView ) {
+            m_vkLogicalDevice.destroyImageView(imageBuffer.vk_imageView);
+        }
+    }
+    m_vkImageBuffers.clear();
+    XINFO("ImageView all destroyed.");
+}
+
+
+/**
+ * @brief 高效重建交换链
+ */
+void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
+                           vk::SurfaceKHR&     vkSurface,
+                           QueueFamilyIndices& queueFamilyIndices, int w, int h)
+{
+    // 1. 备份旧句柄
+    vk::SwapchainKHR oldSwapchain = m_swapchain;
+
+    // 2. 销毁依赖旧交换链的资源（注意：不能先销毁 oldSwapchain 句柄）
+    destroyFramebuffers();
+    cleanupImageViews();
+
+    // 3. 重新创建内部资源
+    createInternal(
+        vkPhysicalDevice, vkSurface, queueFamilyIndices, w, h, oldSwapchain);
+
+    // 4. 此时可以安全销毁旧句柄了
+    if ( oldSwapchain ) {
+        m_vkLogicalDevice.destroySwapchainKHR(oldSwapchain);
+    }
+
+    m_needsRecreate = false;
+    XINFO("Swapchain creation completed.");
 }
 
 /**
@@ -241,7 +205,7 @@ void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
             .setWidth(m_swapchainCreateInfo.imageExtent.width)
             .setHeight(m_swapchainCreateInfo.imageExtent.height)
             // 这里需要知道renderpass
-            .setRenderPass(renderPass.m_graphicRenderPass)
+            .setRenderPass(renderPass.getRenderPass())
             // 设置layers - 非3d图像绘制只能拿一个
             .setLayers(1);
         imageBuffer.vk_frameBuffer =

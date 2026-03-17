@@ -32,6 +32,7 @@ add_library(
         src/imguivk/context/VKContextInfos.cpp
         src/imguivk/context/VKContextImguiImpl.cpp
         src/imguivk/mem/VKMemBuffer.cpp
+        src/imguivk/VKOffScreenRenderer.cpp
         src/imguivk/VKRenderPass.cpp
         src/imguivk/VKRenderPipeline.cpp
         src/imguivk/VKRenderer.cpp

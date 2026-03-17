@@ -26,8 +26,8 @@ public:
      * @param h 视口高度
      */
     VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
-                     VKRenderPass& renderPass, VKSwapchain& swapchain, int w,
-                     int h);
+                     VKRenderPass& renderPass, VKSwapchain& swapchain,
+                     bool is2DCanvas, int w = 0, int h = 0);
 
     // 禁用拷贝和移动
     VKRenderPipeline(VKRenderPipeline&&) = delete;
@@ -55,6 +55,7 @@ private:
 
     // 允许 Renderer 访问内部 Pipeline 句柄进行绑定
     friend class VKRenderer;
+    friend class VKOffScreenRenderer;
 };
 
 

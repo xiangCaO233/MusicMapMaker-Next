@@ -7,6 +7,7 @@
 #include "mesh/VKVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Graphic
@@ -34,14 +35,13 @@ public:
      * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
      * @param logicalDevice 逻辑设备引用
      * @param swapchain 交换链引用
-     * @param pipeline 渲染管线引用
      * @param renderPass 渲染流程引用
      * @param logicDeviceGraphicsQueue 图形队列引用
      * @param logicDevicePresentQueue 呈现队列引用
      */
     VKRenderer(vk::PhysicalDevice& vkPhysicalDevice, vk::Device& logicalDevice,
-               VKSwapchain& swapchain, VKRenderPipeline& pipeline,
-               VKRenderPass& renderPass, vk::Queue& logicDeviceGraphicsQueue,
+               VKSwapchain& swapchain, VKRenderPass& renderPass,
+               vk::Queue& logicDeviceGraphicsQueue,
                vk::Queue& logicDevicePresentQueue);
 
     // 禁用拷贝和移动
@@ -54,17 +54,25 @@ public:
 
     /**
      * @brief 执行单帧渲染
-     *
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
+     *
+     * @param window 原生窗口
+     * @param uiManagers ui管理器
      */
     void render(NativeWindow& window, std::vector<UI::UIManager*> uiManagers);
 
+    /**
+     * @brief 触发重建交换链
+     *
+     * @param window 原生窗口
+     */
     void triggerRecreate(NativeWindow& window);
 
 private:
-    /// @brief 顶点数据
-    static std::array<VKVertex, 3> s_vertices;
-    static std::array<float, 4>    s_clear_color;
+    /// @brief 清屏颜色
+    static std::array<float, 4> s_clear_color;
+    /// @brief 物理设备引用
+    vk::PhysicalDevice& m_vkPhysicalDevice;
 
     /// @brief 逻辑设备引用
     vk::Device& m_vkLogicalDevice;
@@ -75,9 +83,6 @@ private:
     /// @brief 交换链引用
     VKSwapchain& m_vkSwapChain;
 
-    /// @brief 渲染管线引用
-    VKRenderPipeline& m_vkRenderPipeline;
-
     /// @brief 逻辑设备图形队列引用
     vk::Queue& m_LogicDeviceGraphicsQueue;
 
@@ -87,12 +92,6 @@ private:
     // =========================================================================
     // 内存 - 显存相关资源
     // =========================================================================
-
-    /// @brief 主机内存缓冲区封装
-    std::unique_ptr<VKMemBuffer> m_vkHostMemBuffer;
-
-    /// @brief GPU内存缓冲区封装
-    std::unique_ptr<VKMemBuffer> m_vkGPUMemBuffer;
 
     /// @brief 主机Uniform缓冲区封装 - 每帧都需要
     std::vector<std::unique_ptr<VKMemBuffer>> m_vkHostUniformMemBuffers;
@@ -156,12 +155,6 @@ private:
     /// @brief 当前并发帧索引 (0 ~ MAX_FRAMES_IN_FLIGHT-1)
     size_t m_currentFrameIndex{ 0 };
 
-    /// @brief 测试用当前时间的uniform变量
-    VKTestTimeUniform m_testCurrentTime{ 0.f };
-
-    /// @brief 用于上传uniform数据的指令缓冲区
-    std::vector<vk::CommandBuffer> m_uniformUploadCmdBuffers;
-
 private:
     /**
      * @brief 创建命令池
@@ -179,43 +172,9 @@ private:
     void createSemsWithFences();
 
     /**
-     * @brief 创建缓冲区
-     *
-     * @param vkPhysicalDevice 物理设备引用 (用于创建内存缓冲区)
-     */
-    void createMemBuffers(vk::PhysicalDevice& vkPhysicalDevice);
-
-    /**
-     * @brief 传输数据到GPU
-     */
-    void uploadBuffer2GPU(vk::CommandBuffer&                  cmdBuffer,
-                          const std::unique_ptr<VKMemBuffer>& hostBuffer,
-                          const std::unique_ptr<VKMemBuffer>& gpuBuffer) const;
-
-    /**
-     * @brief 上传顶点缓冲区到GPU
-     */
-    void uploadVertexBuffer2GPU() const;
-
-    /**
      * @brief 创建描述符池
      */
     void createDescriptPool();
-
-    /**
-     * @brief 创建描述符集列表
-     */
-    void createDescriptSets();
-
-    /**
-     * @brief 映射uniformbuffer到对应描述符集
-     */
-    void mapUniformBuffer2DescriptorSet() const;
-
-    /**
-     * @brief 上传uniform缓冲区到GPU
-     */
-    void uploadUniformBuffer2GPU(uint32_t current_image_index);
 
     friend class VKContext;
 };

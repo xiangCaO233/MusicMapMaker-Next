@@ -2,6 +2,7 @@
 
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/imguivk/VKRenderPass.h"
+#include <atomic>
 #include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
@@ -42,6 +43,9 @@ public:
 
     ~VKSwapchain();
 
+    /// @brief 主窗口呈现模式 - 更改后需重建交换链
+    static vk::PresentModeKHR s_globalPresentMode;
+
     /**
      * @brief 获取交换链创建信息
      * @return const vk::SwapchainCreateInfoKHR&
@@ -66,6 +70,29 @@ public:
      * 析构中）， 或者在重建 Swapchain 时调用。
      */
     void destroyFramebuffers();
+
+    /// @brief 设置重建标志
+    void markDirty() { m_needsRecreate = true; }
+
+    /// @brief 获取并重置标志（通常在重建完成后调用）
+    bool checkAndResetDirty()
+    {
+        if ( m_needsRecreate ) {
+            m_needsRecreate = false;
+            return true;
+        }
+        return false;
+    }
+
+    /// @brief 直接提供判断
+    inline bool needsRecreate() const { return m_needsRecreate.load(); }
+
+    /**
+     * @brief 高效重建交换链
+     */
+    void recreate(vk::PhysicalDevice& vkPhysicalDevice,
+                  vk::SurfaceKHR&     vkSurface,
+                  QueueFamilyIndices& queueFamilyIndices, int w, int h);
 
 private:
     /// @brief 逻辑设备引用
@@ -97,6 +124,18 @@ private:
      * 数量通常为 2 (双重缓冲) 或 3 (三重缓冲)，取决于 Swapchain 创建时的配置。
      */
     std::vector<ImageBuffer> m_vkImageBuffers;
+
+    /// @brief 是否需要重建
+    std::atomic<bool> m_needsRecreate{ false };
+
+    // 提取出的公共初始化逻辑
+    void createInternal(vk::PhysicalDevice& vkPhysicalDevice,
+                        vk::SurfaceKHR&     vkSurface,
+                        QueueFamilyIndices& queueFamilyIndices, int w, int h,
+                        vk::SwapchainKHR oldSwapchain = nullptr);
+
+    // 清理 ImageView 的逻辑（不销毁 Swapchain 句柄，用于 recreate 过程中间）
+    void cleanupImageViews();
 
     // 允许 Renderer 直接访问内部的 ImageBuffers
     friend class VKRenderer;

@@ -7,6 +7,7 @@
 
 namespace MMM::Graphic::UI
 {
+class IRenderableView;
 class UIManager
 {
 public:
@@ -20,6 +21,9 @@ public:
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
 
+    /// @brief 获取可再渲染视图
+    std::vector<IRenderableView*> getRenderableViews();
+
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
     {
@@ -30,8 +34,6 @@ public:
         return nullptr;
     }
 
-    void printUis();
-
     /// @brief 更新所有ui视图
     void updateAllUIs();
 
@@ -41,5 +43,8 @@ private:
 
     /// @brief ui接口注册顺序
     std::vector<std::string> m_uiSequence;
+
+    /// @brief 可再渲染ui接口注册顺序
+    std::vector<std::string> m_renderableUiSequence;
 };
 }  // namespace MMM::Graphic::UI

@@ -19,7 +19,8 @@ namespace MMM::Graphic
  */
 VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                                    VKRenderPass& renderPass,
-                                   VKSwapchain& swapchain, int w, int h)
+                                   VKSwapchain& swapchain, bool is2DCanvas,
+                                   int w, int h)
     : m_logicalDevice(logicalDevice)
 {
     // 2:创建Descriptor Set布局
@@ -68,28 +69,58 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 
     // 4.4.视口配置
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
-    // 单纯绘制窗口区域 - 无裁切
-    vk::Viewport viewPort{ 0, 0, static_cast<float>(w), static_cast<float>(h),
-                           0, 1 };
-    vk::Rect2D   scissor{
-          { 0, 0 }, { static_cast<uint32_t>(w), static_cast<uint32_t>(h) }
-    };
-    pipelineViewportStateCreateInfo
-        // 设置视口
-        .setViewports(viewPort)
-        // 设置裁切区域
-        .setScissors(scissor);
+    if ( is2DCanvas ) {
+        // 2d窗口 - 不固定视口大小
+        pipelineViewportStateCreateInfo
+            // 设置视口数量 1 在命令录制时传入具体的视口
+            .setViewportCount(1)
+            // 设置裁切区域数量 1 在命令录制时传入具体的裁切区域
+            .setScissorCount(1);
+    } else {
+        // 非2d窗口 - 按传入的视口大小固定
+        // 单纯绘制窗口区域 - 无裁切
+        vk::Viewport viewPort{
+            0, 0, static_cast<float>(w), static_cast<float>(h), 0, 1
+        };
+        vk::Rect2D scissor{
+            { 0, 0 }, { static_cast<uint32_t>(w), static_cast<uint32_t>(h) }
+        };
+        pipelineViewportStateCreateInfo
+            // 设置视口
+            .setViewports(viewPort)
+            // 设置裁切区域
+            .setScissors(scissor);
+    }
     graphicsPipelineCreateInfo.setPViewportState(
         &pipelineViewportStateCreateInfo);
 
-    // 4.5:光栅化配置
+    // 4.5 配置动态状态
+    std::vector<vk::DynamicState> dynamicStates;
+    if ( is2DCanvas ) {
+        dynamicStates.push_back(vk::DynamicState::eViewport);
+        dynamicStates.push_back(vk::DynamicState::eScissor);
+    }
+
+    vk::PipelineDynamicStateCreateInfo dynamicStateCreateInfo;
+    dynamicStateCreateInfo.setDynamicStates(dynamicStates);
+
+    // 将动态状态关联到管线
+    if ( !dynamicStates.empty() ) {
+        graphicsPipelineCreateInfo.setPDynamicState(&dynamicStateCreateInfo);
+    }
+
+    // 4.6:光栅化配置
     vk::PipelineRasterizationStateCreateInfo
         pipelineRasterizationStateCreateInfo;
     pipelineRasterizationStateCreateInfo
         // 设置是否抛弃光栅化结果 - 否
         .setRasterizerDiscardEnable(false)
         // 设置面剔除 - 剔除背面
-        .setCullMode(vk::CullModeFlagBits::eBack)
+        .setCullMode(is2DCanvas ?
+                                // 画布模式不设置面剔除
+                         vk::CullModeFlagBits::eNone
+                                // 非画布模式不设置剔除背面
+                                : vk::CullModeFlagBits::eBack)
         // 设置如何代表正面 - 逆时针方向代表正面
         .setFrontFace(vk::FrontFace::eClockwise)
         // 设置多边形绘制模式 - 填充
@@ -108,7 +139,7 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     graphicsPipelineCreateInfo.setPRasterizationState(
         &pipelineRasterizationStateCreateInfo);
 
-    // 4.6:多重采样配置
+    // 4.7:多重采样配置
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo
         // 暂时不启用超采样
@@ -118,12 +149,12 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     graphicsPipelineCreateInfo.setPMultisampleState(
         &pipelineMultisampleStateCreateInfo);
 
-    // 4.7:深度测试和模板测试
+    // 4.8:深度测试和模板测试
     // 3d绘制需要，暂时跳过
 
-    // 4.8:色彩融混
+    // 4.9:色彩融混
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
-    // 4.8.1:颜色附件配置
+    // 4.9.1:颜色附件配置
     vk::PipelineColorBlendAttachmentState pipelineColorBlendAttachmentState;
     pipelineColorBlendAttachmentState
         // 开启混合
@@ -152,11 +183,11 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     graphicsPipelineCreateInfo.setPColorBlendState(
         &pipelineColorBlendStateCreateInfo);
 
-    // 4.9:设置renderpass和layout
+    // 4.10:设置renderpass和layout
     graphicsPipelineCreateInfo.setLayout(m_graphicsPipelineLayout);
-    graphicsPipelineCreateInfo.setRenderPass(renderPass.m_graphicRenderPass);
+    graphicsPipelineCreateInfo.setRenderPass(renderPass.getRenderPass());
 
-    // 4.10:最终创建管线
+    // 4.11:最终创建管线
     auto pipelineCreateResult = logicalDevice.createGraphicsPipeline(
         nullptr, graphicsPipelineCreateInfo);
     assert(pipelineCreateResult.result == vk::Result::eSuccess);

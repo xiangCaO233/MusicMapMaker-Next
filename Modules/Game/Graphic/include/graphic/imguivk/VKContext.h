@@ -66,6 +66,35 @@ public:
      */
     inline VKRenderer& getRenderer() { return *m_vkRenderer; }
 
+    inline void setVSync(bool enabled)
+    {
+        // 1. 等待设备空闲，因为要修改交换链
+        m_vkLogicalDevice.waitIdle();
+
+        // 2. 修改交换链配置类里的 PresentMode 偏好
+        if ( enabled ) {
+            // fallback 为立即模式
+            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
+            // 查询物理设备支持的呈现模式
+            std::vector<vk::PresentModeKHR> supported_presentModes =
+                m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface);
+            for ( const auto& presentMode : supported_presentModes ) {
+                // 无限帧数优选mailbox模式
+                // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
+                if ( presentMode == vk::PresentModeKHR::eMailbox ) {
+                    VKSwapchain::s_globalPresentMode =
+                        vk::PresentModeKHR::eMailbox;
+                    break;
+                }
+            }
+        } else {
+            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
+        }
+
+        // 3. 标记需要重建
+        m_swapchain->markDirty();
+    }
+
 private:
     /**
      * @brief 初始化 GLFW 上下文
@@ -187,24 +216,13 @@ private:
     /// @brief Vulkan 交换链封装对象
     std::unique_ptr<VKSwapchain> m_swapchain{ nullptr };
 
-    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
-    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
-
     /**
      * @brief 重建交换链
      */
     void recreateSwapchain(GLFWwindow* window_context, int width, int height);
 
-    /**
-     * @brief 加载并创建 Shader 模块
-     */
-    void createShader();
-
     /// @brief Vulkan 渲染流程封装对象 (Render Pass)
     std::unique_ptr<VKRenderPass> m_vkRenderPass{ nullptr };
-
-    /// @brief Vulkan 渲染管线封装对象 (Graphics Pipeline)
-    std::unique_ptr<VKRenderPipeline> m_vkRenderPipeline{ nullptr };
 
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
