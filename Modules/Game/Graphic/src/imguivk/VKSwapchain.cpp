@@ -78,11 +78,18 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
     vk::SurfaceCapabilitiesKHR caps =
         vkPhysicalDevice.getSurfaceCapabilitiesKHR(vkSurface);
 
-    // 确定图像数量 (期望2个)
-    uint32_t imageCount =
-        std::clamp<uint32_t>(2,
-                             caps.minImageCount,
-                             (caps.maxImageCount > 0 ? caps.maxImageCount : 2));
+    // 确定图像数量
+    // 推荐做法：min + 1。如果没有上限限制，就用这个值。
+    // 如果有上限限制，取 (min+1) 和 max 之间的较小值。
+    uint32_t imageCount = caps.minImageCount + 1;
+    if ( caps.maxImageCount > 0 && imageCount > caps.maxImageCount ) {
+        imageCount = caps.maxImageCount;
+    }
+
+    XINFO("Swapchain image count: requested {}, min {}, max {}",
+          imageCount,
+          caps.minImageCount,
+          caps.maxImageCount);
 
     // 确定尺寸
     vk::Extent2D extent;
