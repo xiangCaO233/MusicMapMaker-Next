@@ -8,12 +8,12 @@ namespace MMM::Graphic::UI
 class CLayoutTestUI : public IUIView
 {
 public:
-    CLayoutTestUI();
-    CLayoutTestUI(CLayoutTestUI&&)                 = default;
-    CLayoutTestUI(const CLayoutTestUI&)            = default;
-    CLayoutTestUI& operator=(CLayoutTestUI&&)      = default;
-    CLayoutTestUI& operator=(const CLayoutTestUI&) = default;
-    ~CLayoutTestUI();
+    CLayoutTestUI(const std::string& name) : IUIView(name) {}
+    CLayoutTestUI(CLayoutTestUI&&)                 = delete;
+    CLayoutTestUI(const CLayoutTestUI&)            = delete;
+    CLayoutTestUI& operator=(CLayoutTestUI&&)      = delete;
+    CLayoutTestUI& operator=(const CLayoutTestUI&) = delete;
+    ~CLayoutTestUI() override                      = default;
 
     void update() override;
 

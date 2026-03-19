@@ -6,11 +6,6 @@
 namespace MMM::Graphic::UI
 {
 
-
-CLayoutTestUI::CLayoutTestUI() {}
-
-CLayoutTestUI::~CLayoutTestUI() {}
-
 void CLayoutTestUI::update()
 {
     // 在 Begin 之前，推入样式变量，将窗口内边距设为 0

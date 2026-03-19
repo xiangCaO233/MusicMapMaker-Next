@@ -5,9 +5,6 @@
 
 namespace MMM::Graphic::UI
 {
-ImguiTestWindowUI::ImguiTestWindowUI() {}
-
-ImguiTestWindowUI::~ImguiTestWindowUI() {}
 
 void ImguiTestWindowUI::update()
 {
@@ -31,7 +28,7 @@ void ImguiTestWindowUI::update()
         if ( ImGui::ColorEdit4("clear color", m_clear_color.data()) ) {
             // 发布ClearColorUpdate事件
             Event::EventBus::instance().publish<Event::ClearColorUpdateEvent>(
-                { m_clear_color });
+                { .clear_color_value = m_clear_color });
         }
 
         if ( ImGui::Button(

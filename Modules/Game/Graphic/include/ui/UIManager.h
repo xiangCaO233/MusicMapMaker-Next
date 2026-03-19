@@ -42,6 +42,9 @@ public:
     /// @brief 更新所有ui视图
     void updateAllUIs();
 
+    /// @brief 分派所有imgui事件
+    void DispatchGlobalUIEvents();
+
 private:
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;

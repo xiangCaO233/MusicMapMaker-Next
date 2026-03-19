@@ -7,12 +7,12 @@ namespace MMM::Canvas
 class TestCanvas : public Graphic::UI::IRenderableView
 {
 public:
-    TestCanvas(uint32_t w, uint32_t h);
+    TestCanvas(const std::string& name, uint32_t w, uint32_t h);
     TestCanvas(TestCanvas&&)                 = delete;
     TestCanvas(const TestCanvas&)            = delete;
     TestCanvas& operator=(TestCanvas&&)      = delete;
     TestCanvas& operator=(const TestCanvas&) = delete;
-    ~TestCanvas();
+    ~TestCanvas()                            = default;
 
     // 接口实现
     void update() override;

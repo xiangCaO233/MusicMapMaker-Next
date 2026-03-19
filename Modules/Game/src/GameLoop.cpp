@@ -27,15 +27,18 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     XINFO("GameLoop created");
 
     // 注册ui视图
-    m_uiManager.registerView("MainDockSpaceUI",
-                             std::make_unique<Graphic::UI::MainDockSpaceUI>());
-    m_uiManager.registerView("TestCanvas",
-                             std::make_unique<Canvas::TestCanvas>(200, 200));
+    m_uiManager.registerView(
+        "MainDockSpaceUI",
+        std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
+    m_uiManager.registerView(
+        "TestCanvas",
+        std::make_unique<Canvas::TestCanvas>("TestCanvas", 200, 200));
     m_uiManager.registerView(
         "ImguiTestWindowUI",
-        std::make_unique<Graphic::UI::ImguiTestWindowUI>());
-    m_uiManager.registerView("CLayoutTestUI",
-                             std::make_unique<Graphic::UI::CLayoutTestUI>());
+        std::make_unique<Graphic::UI::ImguiTestWindowUI>("ImguiTestWindowUI"));
+    m_uiManager.registerView(
+        "CLayoutTestUI",
+        std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
 }
 
 GameLoop::~GameLoop() {}

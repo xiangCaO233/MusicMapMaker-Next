@@ -8,7 +8,9 @@ namespace MMM::Event
 {
 
 struct CanvasResizeEvent : public CanvasInteractiveEvent {
+    ///@brief resize前尺寸
     glm::vec2 lastSize;
+    ///@brief resize后尺寸
     glm::vec2 newSize;
 };
 

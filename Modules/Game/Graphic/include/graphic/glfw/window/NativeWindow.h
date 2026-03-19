@@ -49,12 +49,18 @@ public:
         return false;
     }
 
+    static void GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,
+                                 int action, int mods);
+
     static void framebufferResizeCallback(GLFWwindow* window, int w, int h);
 
 private:
     GLFWwindow*                           m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
     mutable std::atomic<bool>             m_resizePending{ false };
+    static double                         s_lastMouseX;
+    static double                         s_lastMouseY;
+    static bool                           s_firstMouse;
     int m_backupPos[2]  = { 100, 100 };   // 默认备份位置
     int m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
 };
