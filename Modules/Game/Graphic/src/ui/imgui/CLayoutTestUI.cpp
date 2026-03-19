@@ -69,12 +69,16 @@ void CLayoutTestUI::update()
         Sizing::Fixed(btnSize.x),
         Sizing::Fixed(btnSize.y),
         [](auto r, bool h) { ImGui::Button("Stop", { r.width, r.height }); });
-    toolbar.addElement(
-        "Slider", Sizing::Grow(), Sizing::Fixed(30), [](auto r, bool h) {
-            ImGui::SetNextItemWidth(r.width);
-            static float val = 0;
-            ImGui::SliderFloat("##p", &val, 0, 100);
-        });
+
+    auto sliderSize = WidgetSizeHelper::Calculate(ImGuiWidget::Slider, "");
+    toolbar.addElement("Slider",
+                       Sizing::Grow(),
+                       Sizing::Fixed(sliderSize.y),
+                       [](auto r, bool h) {
+                           ImGui::SetNextItemWidth(r.width);
+                           static float val = 0;
+                           ImGui::SliderFloat("##p", &val, 0, 100);
+                       });
 
     // 1. 先加工具栏 (高度设为 Fit，它会靠在最顶端)
     clayVBox.addLayout(
