@@ -1,10 +1,11 @@
 #include "graphic/imguivk/VKContext.h"
 #include "config/skin/SkinConfig.h"
+#include "event/core/EventBus.h"
+#include "event/input/MMMInput.h"
+#include "event/input/glfw/GLFWKeyEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
-#include <filesystem>
-#include <fstream>
 
 namespace MMM::Graphic
 {
@@ -68,6 +69,25 @@ VKContext::VKContext()
     // 初始化窗口表面和
     // 后续显卡设备初始化
     // 放在窗口相关资源初始化函数中
+
+    Event::EventBus::instance().subscribe<Event::GLFWKeyEvent>(
+        [&](Event::GLFWKeyEvent e) {
+            if ( e.key == Event::Input::Key::F7 &&
+                 e.action == Event::Input::Action::Press ) {
+                /// @brief f7 开启垂直同步
+                setVSync(true);
+            }
+            if ( e.key == Event::Input::Key::F8 &&
+                 e.action == Event::Input::Action::Press ) {
+                /// @brief f8 关闭垂直同步
+                setVSync(false);
+            }
+            if ( e.key == Event::Input::Key::F11 &&
+                 e.action == Event::Input::Action::Press ) {
+                /// @brief f8 切换全屏
+                ToggleFullscreen();
+            }
+        });
 }
 
 VKContext::~VKContext()
