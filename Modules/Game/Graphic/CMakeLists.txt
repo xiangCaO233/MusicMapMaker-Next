@@ -43,6 +43,8 @@ add_library(
         src/ui/imgui/MainDockSpaceUI.cpp
         src/ui/imgui/ImguiTestWindowUI.cpp
         src/ui/imgui/CLayoutTestUI.cpp
+        src/ui/layout/CLayWrapperCore.cpp
+        src/ui/layout/box/CLayBox.cpp
         src/ui/UIManager.cpp
 )
 

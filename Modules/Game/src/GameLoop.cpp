@@ -58,8 +58,9 @@ int GameLoop::start(std::string_view window_title)
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
-        context.initVKWindowRess(window.getWindowHandle(), fbWidth, fbHeight);
+        context.initVKWindowRess(&window, fbWidth, fbHeight);
         context.setVSync(false);
+        // context.ToggleFullscreen();
         // 进入主循环
         while ( !window.shouldClose() ) {
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)

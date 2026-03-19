@@ -51,4 +51,43 @@ void NativeWindow::getFramebufferSize(int& width, int& height) const
 {
     glfwGetFramebufferSize(m_windowHandle, &width, &height);
 }
+
+/**
+ * @brief 全屏
+ */
+void NativeWindow::ToggleFullscreen()
+{
+    if ( glfwGetWindowMonitor(m_windowHandle) ) {
+        // --- 退出全屏，恢复窗口模式 ---
+        glfwSetWindowMonitor(m_windowHandle,
+                             nullptr,
+                             m_backupPos[0],
+                             m_backupPos[1],
+                             m_backupSize[0],
+                             m_backupSize[1],
+                             0);
+        XINFO("Restored window to {}x{} at ({},{})",
+              m_backupSize[0],
+              m_backupSize[1],
+              m_backupPos[0],
+              m_backupPos[1]);
+    } else {
+        // --- 进入全屏前，备份当前窗口状态 ---
+        glfwGetWindowPos(m_windowHandle, &m_backupPos[0], &m_backupPos[1]);
+        glfwGetWindowSize(m_windowHandle, &m_backupSize[0], &m_backupSize[1]);
+
+        // 执行全屏切换
+        GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
+        glfwSetWindowMonitor(m_windowHandle,
+                             monitor,
+                             0,
+                             0,
+                             mode->width,
+                             mode->height,
+                             mode->refreshRate);
+        XINFO("Entered fullscreen mode.");
+    }
+}
+
 }  // namespace MMM::Graphic

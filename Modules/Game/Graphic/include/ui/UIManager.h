@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IUIView.h"
+#include "ui/layout/CLayWrapperCore.h"
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -11,7 +12,11 @@ class IRenderableView;
 class UIManager
 {
 public:
-    UIManager()                            = default;
+    UIManager()
+    {
+        // 初始化CLay
+        CLayWrapperCore::instance().setupClayTextMeasurement();
+    }
     UIManager(UIManager&&)                 = delete;
     UIManager(const UIManager&)            = delete;
     UIManager& operator=(UIManager&&)      = delete;

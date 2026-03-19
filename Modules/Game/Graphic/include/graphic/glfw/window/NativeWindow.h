@@ -27,6 +27,11 @@ public:
     // 获取窗口宽高，用于 Swapchain 重建
     void getFramebufferSize(int& width, int& height) const;
 
+    /**
+     * @brief 全屏
+     */
+    void ToggleFullscreen();
+
     inline bool shouldRecreate() const
     {
         if ( !m_resizePending ) return false;
@@ -50,6 +55,8 @@ private:
     GLFWwindow*                           m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
     mutable std::atomic<bool>             m_resizePending{ false };
+    int m_backupPos[2]  = { 100, 100 };   // 默认备份位置
+    int m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
 };
 
 }  // namespace MMM::Graphic

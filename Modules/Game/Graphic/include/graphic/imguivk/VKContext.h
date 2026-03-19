@@ -58,7 +58,8 @@ public:
      * @param w 窗口宽度
      * @param h 窗口高度
      */
-    void initVKWindowRess(GLFWwindow* window, int width, int height);
+    void initVKWindowRess(NativeWindow* native_window_ptr, int width,
+                          int height);
 
     /**
      * @brief 获取渲染器实例
@@ -66,34 +67,15 @@ public:
      */
     inline VKRenderer& getRenderer() { return *m_vkRenderer; }
 
-    inline void setVSync(bool enabled)
-    {
-        // 1. 等待设备空闲，因为要修改交换链
-        m_vkLogicalDevice.waitIdle();
+    /**
+     * @brief 切换垂直同步
+     */
+    void setVSync(bool enabled);
 
-        // 2. 修改交换链配置类里的 PresentMode 偏好
-        if ( enabled ) {
-            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
-        } else {
-            // fallback 为立即模式
-            VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
-            // 查询物理设备支持的呈现模式
-            std::vector<vk::PresentModeKHR> supported_presentModes =
-                m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface);
-            for ( const auto& presentMode : supported_presentModes ) {
-                // 无限帧数优选mailbox模式
-                // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
-                if ( presentMode == vk::PresentModeKHR::eMailbox ) {
-                    VKSwapchain::s_globalPresentMode =
-                        vk::PresentModeKHR::eMailbox;
-                    break;
-                }
-            }
-        }
-
-        // 3. 标记需要重建
-        m_swapchain->markDirty();
-    }
+    /**
+     * @brief 全屏
+     */
+    void ToggleFullscreen();
 
 private:
     /**
@@ -102,14 +84,17 @@ private:
     static void initGLFW();
 
     /**
-     * @brief 注册 GLFW 所需的 Vulkan 扩展
-     */
-    void registerGLFWExtensions();
-
-    /**
      * @brief 释放 GLFW 资源
      */
     static void releaseGLFW();
+
+    /// @brief 原生窗口指针
+    NativeWindow* m_nativeWindow_ptr{ nullptr };
+
+    /**
+     * @brief 注册 GLFW 所需的 Vulkan 扩展
+     */
+    void registerGLFWExtensions();
 
     /// @brief Vulkan 应用程序信息结构体
     vk::ApplicationInfo m_vkAppInfo{};

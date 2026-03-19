@@ -1,5 +1,6 @@
 #include "graphic/imguivk/VKContext.h"
 #include "config/skin/SkinConfig.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
 #include <filesystem>
@@ -147,13 +148,17 @@ void VKContext::imguiAutoSelect()
  * @param w 窗口宽度
  * @param h 窗口高度
  */
-void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
+void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 {
+    m_nativeWindow_ptr = native_window_ptr;
+
     // 初始化vk表面句柄
     // C 风格的 Surface 创建（GLFW 提供的快捷函数）
     VkSurfaceKHR surface;
-    if ( glfwCreateWindowSurface(m_vkInstance, window_ctx, nullptr, &surface) !=
-         VK_SUCCESS ) {
+    if ( glfwCreateWindowSurface(m_vkInstance,
+                                 native_window_ptr->getWindowHandle(),
+                                 nullptr,
+                                 &surface) != VK_SUCCESS ) {
         throw std::runtime_error("Failed to create window surface!");
     }
 
@@ -194,7 +199,7 @@ void VKContext::initVKWindowRess(GLFWwindow* window_ctx, int w, int h)
                                                 m_LogicDevicePresentQueue);
 
     // 初始化 ImGui
-    imguiVulkanInit(window_ctx);
+    imguiVulkanInit(native_window_ptr->getWindowHandle());
     setImguiStyle();
 }
 
@@ -235,4 +240,46 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
 
     XINFO("Swapchain recreation finished.");
 }
+
+/**
+ * @brief 切换垂直同步
+ */
+void VKContext::setVSync(bool enabled)
+{
+    // 1. 等待设备空闲，因为要修改交换链
+    m_vkLogicalDevice.waitIdle();
+
+    // 2. 修改交换链配置类里的 PresentMode 偏好
+    if ( enabled ) {
+        VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
+    } else {
+        // fallback 为立即模式
+        VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
+        // 查询物理设备支持的呈现模式
+        std::vector<vk::PresentModeKHR> supported_presentModes =
+            m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface);
+        for ( const auto& presentMode : supported_presentModes ) {
+            // 无限帧数优选mailbox模式
+            // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
+            if ( presentMode == vk::PresentModeKHR::eMailbox ) {
+                VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eMailbox;
+                break;
+            }
+        }
+    }
+
+    // 3. 标记需要重建
+    m_swapchain->markDirty();
+}
+
+/**
+ * @brief 全屏
+ */
+void VKContext::ToggleFullscreen()
+{
+    m_nativeWindow_ptr->ToggleFullscreen();
+    // 因为全屏会导致窗口尺寸剧变，必须标记交换链需要重建
+    m_swapchain->markDirty();
+}
+
 }  // namespace MMM::Graphic

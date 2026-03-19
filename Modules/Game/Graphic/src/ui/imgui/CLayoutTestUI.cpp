@@ -1,116 +1,183 @@
 #include "ui/imgui/CLayoutTestUI.h"
 #include "imgui.h"
-
-// 必须在其中一个源文件中定义实现
-#define CLAY_IMPLEMENTATION
-#include <clay.h>
+#include "ui/imgui/ImguiTools.h"
+#include "ui/layout/box/CLayBox.h"
 
 namespace MMM::Graphic::UI
 {
 
 
-// 准备 Clay 所需的内存竞技场 (Arena)
-static uint64_t   clayMemorySize = Clay_MinMemorySize();
-static Clay_Arena clayArena;
-static bool       clayInitialized = false;
-
-// 将变量转换为 Clay_String 的辅助函数
-inline Clay_String ToClayString(const char* str)
-{
-    return Clay_String{ .isStaticallyAllocated = false,
-                        .length                = (int32_t)strlen(str),
-                        .chars                 = str };
-}
-
-CLayoutTestUI::CLayoutTestUI()
-{
-    if ( !clayInitialized ) {
-        clayArena = Clay_CreateArenaWithCapacityAndMemory(
-            clayMemorySize, malloc(clayMemorySize));
-        Clay_Initialize(clayArena, { 800, 600 }, { [](Clay_ErrorData error) {
-                            // 简单的错误回调
-                        } });
-        clayInitialized = true;
-    }
-}
+CLayoutTestUI::CLayoutTestUI() {}
 
 CLayoutTestUI::~CLayoutTestUI() {}
 
 void CLayoutTestUI::update()
 {
+    // 在 Begin 之前，推入样式变量，将窗口内边距设为 0
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
     ImGui::Begin("Clay Powered HBox");
+    // 1. 获取 ImGui 的绘图起始点（绝对坐标）
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 avail    = ImGui::GetContentRegionAvail();
+    // 1. 获取鼠标状态并传给 Clay
+    ImVec2 mousePos    = ImGui::GetMousePos();
+    bool   isMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
 
-    // --- 1. 准备阶段 ---
-    ImVec2 windowContentStart =
-        ImGui::GetCursorScreenPos();  // 记录 ImGui 当前内容的起始绝对坐标
-    ImVec2 availableSize = ImGui::GetContentRegionAvail();  // 获取可用空间
+    // Clay 需要知道相对于布局起点的坐标
+    Clay_SetPointerState({ mousePos.x - startPos.x, mousePos.y - startPos.y },
+                         isMouseDown);
+    // --- 水平布局 ---
+    CLayHBox rootHBox;
+    rootHBox.setPadding(10, 10, 10, 10).setSpacing(10);
+    rootHBox.addElement(
+        "FullButton", Sizing::Grow(), Sizing::Grow(), [](auto r, bool h) {
+            ImGui::Button("FullButton", { r.width, r.height });
+        });
 
-    // 告诉 Clay 现在的画布有多大
-    Clay_SetLayoutDimensions({ availableSize.x, availableSize.y });
-    Clay_BeginLayout();
+    // --- 垂直布局 ---
+    CLayVBox clayVBox;
+    clayVBox.setPadding(10, 10, 10, 10).setSpacing(10);
 
-    // --- 2. 定义布局 (HBox) ---
-    // 在 v0.14 中，CLAY 宏第一个参数是 ID，后面直接跟初始化列表
-    CLAY(CLAY_ID("MainHBox"), { 
-    .layout = { 
-        .sizing = { 
-            .width = CLAY_SIZING_GROW(), 
-            .height = CLAY_SIZING_GROW() // 修复点：高度也设为 GROW，填满窗口
-        }, 
-        .layoutDirection = CLAY_LEFT_TO_RIGHT, 
-        .padding = { 10, 10, 10, 10 }, 
-        .childGap = 15,
-        .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } // 此时垂直居中才会生效
-    }
-})
-    {
-        CLAY(CLAY_ID("Btn1Slot"),
-             { .layout = { .sizing = { .width  = CLAY_SIZING_GROW(),
-                                       .height = CLAY_SIZING_GROW() } } })
-        {
-        }
+    // 2. 后加填充区 (高度设为 Grow，它会占据剩下的所有空间)
+    clayVBox.addElement(
+        "HoverArea",
+        Sizing::Grow(),
+        Sizing::Grow(),
+        [startPos](auto r, bool isHovered) {
+            ImDrawList* dl    = ImGui::GetWindowDrawList();
+            ImVec2      p_min = { startPos.x + r.x, startPos.y + r.y };
+            ImVec2      p_max = { p_min.x + r.width, p_min.y + r.height };
 
-        CLAY(CLAY_ID("Btn2Slot"),
-             { .layout = { .sizing = { .width  = CLAY_SIZING_GROW(),
-                                       .height = CLAY_SIZING_GROW() } } })
-        {
-        }
-    }
+            dl->AddRectFilled(p_min, p_max, IM_COL32(33, 233, 233, 255), 4.0f);
+            if ( isHovered ) {
+                dl->AddRect(
+                    p_min, p_max, IM_COL32(255, 255, 0, 255), 4.0f, 0, 2.0f);
+                ImGui::SetCursorScreenPos({ p_min.x + 10, p_min.y + 10 });
+                ImGui::TextColored({ 1, 1, 0, 1 }, "Hovering Content Area");
+            }
+        });
 
-    Clay_EndLayout();
 
-    // 映射函数
-    auto drawSlot = [&](const char* idStr, const char* label) {
-        // 使用手动构造的 Clay_String 替代宏
-        Clay_String clayIdStr = { .isStaticallyAllocated = false,
-                                  .length = (int32_t)strlen(idStr),
-                                  .chars  = idStr };
+    // --- 子布局：水平工具栏 (高度设为 Fit) ---
+    CLayHBox toolbar;
+    toolbar.setSpacing(5).setAlignment(Alignment::Center());
 
-        // 获取 ID 数据
-        Clay_ElementData data =
-            Clay_GetElementData(Clay_GetElementId(clayIdStr));
+    auto btnSize = WidgetSizeHelper::Calculate(ImGuiWidget::Button, "Play");
+    toolbar.addElement(
+        "PlayBtn",
+        Sizing::Fixed(btnSize.x),
+        Sizing::Fixed(btnSize.y),
+        [](auto r, bool h) { ImGui::Button("Play", { r.width, r.height }); });
+    toolbar.addElement(
+        "StopBtn",
+        Sizing::Fixed(btnSize.x),
+        Sizing::Fixed(btnSize.y),
+        [](auto r, bool h) { ImGui::Button("Stop", { r.width, r.height }); });
+    toolbar.addElement(
+        "Slider", Sizing::Grow(), Sizing::Fixed(30), [](auto r, bool h) {
+            ImGui::SetNextItemWidth(r.width);
+            static float val = 0;
+            ImGui::SliderFloat("##p", &val, 0, 100);
+        });
 
-        if ( data.found ) {
-            ImGui::SetCursorScreenPos(
-                ImVec2(windowContentStart.x + data.boundingBox.x,
-                       windowContentStart.y + data.boundingBox.y));
-            ImGui::Button(
-                label, ImVec2(data.boundingBox.width, data.boundingBox.height));
-        } else {
-            ImGui::SetCursorScreenPos(windowContentStart);
-            ImGui::Text("Error: ID %s not found!", idStr);
-        }
-    };
+    // 1. 先加工具栏 (高度设为 Fit，它会靠在最顶端)
+    clayVBox.addLayout(
+        "Toolbar_Container", toolbar, Sizing::Grow(), Sizing::Fit());
 
-    drawSlot("Btn1Slot", "Button 1");
-    drawSlot("Btn2Slot", "Button 2");
+    rootHBox.addLayout("Contents", clayVBox);
 
-    // --- 4. 收尾阶段 ---
-    // 为了不让 ImGui 接下来的控件乱套，需要把光标放回到布局结束后的位置
-    // 或者简单地占个位
-    ImGui::SetCursorScreenPos(windowContentStart);
-    ImGui::Dummy(availableSize);
+    // 一键渲染：根布局尺寸必须固定为 avail
+    rootHBox.render(avail.x, avail.y, startPos);
+
+    // CLayVBox rootVBox;
+    // rootVBox.addElement(
+    //     "HoverArea",
+    //     Sizing::Grow(),
+    //     Sizing::Grow(),
+    //     [=](auto r, bool isHovered) {
+    //         ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    //         // 1. 计算该区域在屏幕上的绝对坐标
+    //         ImVec2 p_min = ImVec2(startPos.x + r.x, startPos.y + r.y);
+    //         ImVec2 p_max = ImVec2(p_min.x + r.width, p_min.y + r.height);
+
+    //         // 2. 先画一个底色（否则你看不到这个区域到底占了多大）
+    //         dl->AddRectFilled(p_min, p_max, IM_COL32(35, 35, 35, 255));
+
+    //         // 3. 如果 Hover 了，画黄色高亮边框
+    //         if ( isHovered ) {
+    //             dl->AddRect(
+    //                 p_min, p_max, IM_COL32(255, 255, 0, 255), 0.0f, 0, 2.0f);
+
+    //             // 在该区域内写点字测试
+    //             ImGui::SetCursorScreenPos({ p_min.x + 10, p_min.y + 10 });
+    //             ImGui::TextColored({ 1, 1, 0, 1 }, "Clay Hover Active!");
+    //         }
+    //     });
+
+    // CLayHBox layout;
+    // layout.setSpacing(5)
+    //     .setPadding(5, 5, 2, 2)
+    //     .setAlignment(Alignment::Center());
+
+    // // 添加元素的同时绑定绘制逻辑
+    // auto btn_text_size =
+    //     WidgetSizeHelper::Calculate(ImGuiWidget::Button, "Play");
+    // layout.addElement(
+    //     "Btn_Play",
+    //     Sizing::Fixed(btn_text_size.x),
+    //     Sizing::Fixed(btn_text_size.y),
+    //     [](auto r, bool isHovered) {
+    //         if ( ImGui::Button("Play", { r.width, r.height }) ) { /* 开始播放
+    //         */
+    //         }
+    //     });
+
+    // auto btn_text_size2 =
+    //     WidgetSizeHelper::Calculate(ImGuiWidget::Button, "Stop");
+    // layout.addElement(
+    //     "Btn_Stop",
+    //     Sizing::Fixed(btn_text_size2.x),
+    //     Sizing::Fixed(btn_text_size2.y),
+    //     [](auto r, bool isHovered) {
+    //         if ( ImGui::Button("Stop", { r.width, r.height }) ) { /* 停止播放
+    //         */
+    //         }
+    //     });
+
+
+    // auto progress_size = WidgetSizeHelper::Calculate(ImGuiWidget::Slider,
+    // ""); layout.addElement(
+    //     "Slider",
+    //     Sizing::Grow(),
+    //     Sizing::Fixed(progress_size.y),
+    //     [](auto r, bool isHovered) {
+    //         // 1. 获取当前 ImGui 的行高
+    //         float imguiHeight = ImGui::GetFrameHeight();
+    //         // 2. 计算垂直偏移量，让 Slider 在 Clay 的 40px 高度内居中
+    //         float offsetY = (r.height - imguiHeight) * 0.5f;
+
+    //         // 3. 内部偏移游标
+    //         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offsetY);
+
+    //         ImGui::SetNextItemWidth(r.width);
+    //         static float val = 0;
+    //         ImGui::SliderFloat("##progress", &val, 0, 100);
+    //     });
+
+    // rootVBox.addLayout("Content", layout);
+
+    // // 一键执行：自动计算、自动设游标、自动调绘制逻辑
+    // rootVBox.render(avail.x, avail.y, startPos);
+
+    // 4. 重置 ImGui 游标，防止 Dummy 影响后续内容
+    ImGui::SetCursorScreenPos(startPos);
+    ImGui::Dummy(avail);  // 占位，确保滚动条正确
+
     ImGui::End();
+    // 恢复样式，否则会影响到后面其他的窗口
+    ImGui::PopStyleVar();
 }
 
 }  // namespace MMM::Graphic::UI
