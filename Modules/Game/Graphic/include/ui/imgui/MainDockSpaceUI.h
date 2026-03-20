@@ -7,12 +7,12 @@ namespace MMM::Graphic::UI
 class MainDockSpaceUI : public IUIView
 {
 public:
-    MainDockSpaceUI();
-    MainDockSpaceUI(MainDockSpaceUI&&)                 = default;
-    MainDockSpaceUI(const MainDockSpaceUI&)            = default;
-    MainDockSpaceUI& operator=(MainDockSpaceUI&&)      = default;
-    MainDockSpaceUI& operator=(const MainDockSpaceUI&) = default;
-    ~MainDockSpaceUI();
+    MainDockSpaceUI(const std::string& name) : IUIView(name) {}
+    MainDockSpaceUI(MainDockSpaceUI&&)                 = delete;
+    MainDockSpaceUI(const MainDockSpaceUI&)            = delete;
+    MainDockSpaceUI& operator=(MainDockSpaceUI&&)      = delete;
+    MainDockSpaceUI& operator=(const MainDockSpaceUI&) = delete;
+    ~MainDockSpaceUI() override                        = default;
 
     void update() override;
 

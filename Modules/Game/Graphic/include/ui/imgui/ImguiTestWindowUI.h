@@ -8,12 +8,12 @@ namespace MMM::Graphic::UI
 class ImguiTestWindowUI : public IUIView
 {
 public:
-    ImguiTestWindowUI();
-    ImguiTestWindowUI(ImguiTestWindowUI&&)                 = default;
-    ImguiTestWindowUI(const ImguiTestWindowUI&)            = default;
-    ImguiTestWindowUI& operator=(ImguiTestWindowUI&&)      = default;
-    ImguiTestWindowUI& operator=(const ImguiTestWindowUI&) = default;
-    ~ImguiTestWindowUI();
+    ImguiTestWindowUI(const std::string& name) : IUIView(name) {}
+    ImguiTestWindowUI(ImguiTestWindowUI&&)                 = delete;
+    ImguiTestWindowUI(const ImguiTestWindowUI&)            = delete;
+    ImguiTestWindowUI& operator=(ImguiTestWindowUI&&)      = delete;
+    ImguiTestWindowUI& operator=(const ImguiTestWindowUI&) = delete;
+    ~ImguiTestWindowUI() override                          = default;
 
     void update() override;
 

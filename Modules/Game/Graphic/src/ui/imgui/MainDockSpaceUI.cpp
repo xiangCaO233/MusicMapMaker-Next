@@ -5,9 +5,6 @@
 namespace MMM::Graphic::UI
 {
 
-MainDockSpaceUI::MainDockSpaceUI() {}
-MainDockSpaceUI::~MainDockSpaceUI() {}
-
 void MainDockSpaceUI::update()
 {
     // ================== 新增：全窗口透明 DockSpace ==================

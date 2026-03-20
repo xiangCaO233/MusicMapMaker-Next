@@ -1,5 +1,7 @@
 # Modules/Event/CMakeLists.txt
 
-add_library(Event INTERFACE)
+add_library(Event src/core/EventBus.cpp)
 
-target_include_directories(Event INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(Event PUBLIC Graphic)
+
+target_include_directories(Event PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")

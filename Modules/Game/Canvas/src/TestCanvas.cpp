@@ -5,12 +5,12 @@
 
 namespace MMM::Canvas
 {
-TestCanvas::TestCanvas(uint32_t w, uint32_t h) : Graphic::UI::IRenderableView()
+TestCanvas::TestCanvas(const std::string& name, uint32_t w, uint32_t h)
+    : IRenderableView(name)
 {
     m_targetWidth  = w;
     m_targetHeight = h;
 }
-TestCanvas::~TestCanvas() {}
 
 // 接口实现
 void TestCanvas::update()

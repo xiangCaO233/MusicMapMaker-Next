@@ -1,17 +1,11 @@
 #pragma once
 
+#include "event/ui/UIEvent.h"
 #include <cstdint>
 #include <memory>
-#include <string>
 
 namespace MMM
 {
-
-namespace Graphic::UI
-{
-class UIManager;
-class IUIView;
-}  // namespace Graphic::UI
 
 namespace Event
 {
@@ -22,13 +16,7 @@ enum Operate : uint32_t {
     UPDATE = 3,
 };
 
-struct UIManagerModifyEvent {
-    ///@brief 需要发生变更的ui管理器常指针
-    const Graphic::UI::UIManager* uiManager;
-
-    ///@brief 需要变更的ui名
-    const std::string uiName;
-
+struct UIManagerModifyEvent : public UIEvent {
     ///@brief 变更行为
     const Operate operate;
 
@@ -39,3 +27,6 @@ struct UIManagerModifyEvent {
 }  // namespace Event
 
 }  // namespace MMM
+
+// 注册parent关系
+EVENT_REGISTER_PARENTS(UIManagerModifyEvent, UIEvent);

@@ -12,12 +12,12 @@ class Brush;
 class IRenderableView : public IUIView, public VKOffScreenRenderer
 {
 public:
-    IRenderableView()                                  = default;
+    IRenderableView(const std::string& name) : IUIView(name) {}
     IRenderableView(IRenderableView&&)                 = delete;
     IRenderableView(const IRenderableView&)            = delete;
     IRenderableView& operator=(IRenderableView&&)      = delete;
     IRenderableView& operator=(const IRenderableView&) = delete;
-    ~IRenderableView()                                 = default;
+    ~IRenderableView() override                        = default;
 
     ///@brief 获取笔刷
     const Brush& getBrush() const { return m_brush; }
