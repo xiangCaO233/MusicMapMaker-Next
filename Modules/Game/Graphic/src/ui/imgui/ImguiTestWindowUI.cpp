@@ -44,7 +44,7 @@ void ImguiTestWindowUI::update()
         ImGui::End();
     }
 
-    // ImGui::ShowDemoWindow();  // 测试用，显示ImGui默认演示窗口
+    ImGui::ShowDemoWindow();  // 测试用，显示ImGui默认演示窗口
 }
 
 }  // namespace MMM::Graphic::UI

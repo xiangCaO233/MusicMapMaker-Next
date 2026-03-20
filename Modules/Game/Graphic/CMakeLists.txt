@@ -40,11 +40,14 @@ add_library(
         src/imguivk/VKRendererRess.cpp
         src/imguivk/VKShader.cpp
         src/imguivk/VKSwapchain.cpp
+        src/imguivk/VKTexture.cpp
         src/ui/imgui/MainDockSpaceUI.cpp
         src/ui/imgui/ImguiTestWindowUI.cpp
         src/ui/imgui/CLayoutTestUI.cpp
+        src/ui/imgui/DebugWindowUI.cpp
         src/ui/layout/CLayWrapperCore.cpp
         src/ui/layout/box/CLayBox.cpp
+        src/ui/CursorManager.cpp
         src/ui/UIManager.cpp
 )
 
@@ -63,5 +66,6 @@ target_link_libraries(Graphic PUBLIC
         3rd_glm
         3rd_imgui
         3rd_clay
+        3rd_stb
         Vulkan::Vulkan
 )
