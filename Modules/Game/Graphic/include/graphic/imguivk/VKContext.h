@@ -209,6 +209,11 @@ private:
     /// @brief Vulkan 渲染流程封装对象 (Render Pass)
     std::unique_ptr<VKRenderPass> m_vkRenderPass{ nullptr };
 
+    // =========================================================================
+    // 光标管理
+    // =========================================================================
+    std::unique_ptr<UI::CursorManager> m_cursorManager{ nullptr };
+
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };
 

@@ -30,6 +30,8 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     // Enable Docking
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // No Auto Change Cursor
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
 
     // Enable Multi-Viewport / Platform
     // Windows
@@ -38,7 +40,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // io.ConfigViewportsNoTaskBarIcon = true;
 
     // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
+    // ImGui::StyleColorsDark();
     // ImGui::StyleColorsLight();
 
     // Setup scaling

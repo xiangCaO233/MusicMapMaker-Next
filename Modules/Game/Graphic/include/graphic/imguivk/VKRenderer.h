@@ -5,6 +5,7 @@
 #include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "mem/VKUniforms.h"
 #include "mesh/VKVertex.h"
+#include "ui/CursorManager.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
 #include <unordered_map>
@@ -154,6 +155,16 @@ private:
 
     /// @brief 当前并发帧索引 (0 ~ MAX_FRAMES_IN_FLIGHT-1)
     size_t m_currentFrameIndex{ 0 };
+
+    // =========================================================================
+    // 光标管理
+    // =========================================================================
+    std::unique_ptr<UI::CursorManager> m_cursorManager{ nullptr };
+
+    void initCursorManager(vk::PhysicalDevice& vkPhysicalDevice,
+                           vk::Device&         logicalDevice);
+
+    void releaseCursorManager();
 
 private:
     /**

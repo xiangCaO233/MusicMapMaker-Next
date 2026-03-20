@@ -68,6 +68,10 @@ void VKRenderer::render(NativeWindow&               window,
         uiManager->updateAllUIs();
     }
 
+    if ( m_cursorManager ) {
+        m_cursorManager->UpdateAndDraw();
+    }
+
     ImGui::Render();  // 生成imgui绘制顶点数据
 
     // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量

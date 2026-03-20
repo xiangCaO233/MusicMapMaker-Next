@@ -20,6 +20,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     // 不再需要初始化 ImGui 的辅助窗口
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
 
+    // 隐藏系统原生光标
+    glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+
     // 设置用户指针，方便回调函数访问类成员
     glfwSetWindowUserPointer(m_windowHandle, this);
     glfwSetFramebufferSizeCallback(m_windowHandle,

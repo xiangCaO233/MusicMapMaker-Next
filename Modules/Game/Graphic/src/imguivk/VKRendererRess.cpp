@@ -4,6 +4,23 @@
 namespace MMM::Graphic
 {
 
+void VKRenderer::initCursorManager(vk::PhysicalDevice& vkPhysicalDevice,
+                                   vk::Device&         logicalDevice)
+{
+    // 创建光标管理器
+    m_cursorManager =
+        std::make_unique<UI::CursorManager>(vkPhysicalDevice,
+                                            logicalDevice,
+                                            m_vkCommandPool,
+                                            m_LogicDeviceGraphicsQueue);
+}
+
+void VKRenderer::releaseCursorManager()
+{
+    // 释放光标管理器
+    m_cursorManager.reset();
+}
+
 /**
  * @brief 创建命令池
  */

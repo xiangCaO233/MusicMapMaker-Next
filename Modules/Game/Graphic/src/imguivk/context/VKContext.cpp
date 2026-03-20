@@ -96,7 +96,10 @@ VKContext::~VKContext()
         m_vkLogicalDevice.waitIdle();
     }
 
-    // 1. 必须在销毁 DescriptorPool 和 Device 之前关闭 ImGui！
+    // 在关闭 ImGui之前必须先释放渲染器中imgui对纹理的引用！
+    m_vkRenderer->releaseCursorManager();
+
+    // 在销毁 DescriptorPool 和 Device 之前必须先关闭 ImGui！
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -217,6 +220,9 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
                                                 *m_vkRenderPass,
                                                 m_LogicDeviceGraphicsQueue,
                                                 m_LogicDevicePresentQueue);
+
+    // 初始化渲染器中的光标管理器
+    m_vkRenderer->initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
 
     // 初始化 ImGui
     imguiVulkanInit(native_window_ptr->getWindowHandle());
