@@ -35,6 +35,18 @@ public:
     CLayWrapperCore& operator=(const CLayWrapperCore&) = delete;
     ~CLayWrapperCore();
 
+    // 为每个窗口创建一个独立的上下文
+    struct WindowContext {
+        Clay_Context* context;
+        Clay_Arena    arena;
+    };
+
+    WindowContext createWindowContext();
+    void          destroyWindowContext(WindowContext& ctx);
+
+    // 切换当前活跃的上下文
+    void makeCurrent(Clay_Context* ctx) { Clay_SetCurrentContext(ctx); }
+
     void setupClayTextMeasurement();
 
 private:

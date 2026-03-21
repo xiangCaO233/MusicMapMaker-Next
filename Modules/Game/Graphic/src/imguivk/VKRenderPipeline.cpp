@@ -1,8 +1,9 @@
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/mem/VKUniforms.h"
-#include "graphic/imguivk/mesh/VKVertex.h"
+#include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "log/colorful-log.h"
 #include <cassert>
+#include <glm/glm.hpp>
 
 namespace MMM::Graphic
 {
@@ -25,15 +26,28 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 {
     // 2:创建Descriptor Set布局
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
-    descriptorSetLayoutCreateInfo.setBindings(TEST_TIMEUNIFORM_BIND_DESC);
+    // 包括uniform在内的所有描述符绑定配置
+    descriptorSetLayoutCreateInfo.setBindings(
+        { Graphic::BRUSH_TEXTURE_BIND_DESC });
     m_descriptorSetLayout =
         logicalDevice.createDescriptorSetLayout(descriptorSetLayoutCreateInfo);
     XINFO("Created VK Descriptor Set Layout.");
 
+    // --- 定义 Push Constant 范围 ---
+    vk::PushConstantRange pushConstantRange;
+    pushConstantRange
+        .setStageFlags(vk::ShaderStageFlagBits::eVertex)  // 在顶点着色器使用
+        .setOffset(0)
+        .setSize(sizeof(glm::mat4));  // 大小为一个 4x4 矩阵 (64 bytes)
+
     // 3:创建渲染管线布局(主要说明整个shader中uniform变量的布局)
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     // 设置SetLayout到管线布局配置中
-    pipelineLayoutCreateInfo.setSetLayouts(m_descriptorSetLayout);
+    pipelineLayoutCreateInfo
+        // 描述符布局配置
+        .setSetLayouts(m_descriptorSetLayout)
+        // pushConstant范围配置
+        .setPushConstantRanges(pushConstantRange);
     m_graphicsPipelineLayout =
         logicalDevice.createPipelineLayout(pipelineLayoutCreateInfo);
     XINFO("Created VK Graphics RenderPipeline Layout.");
@@ -45,8 +59,8 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
     // 设置顶点输入属性描述信息
     pipelineVertexInputStateCreateInfo
-        .setVertexBindingDescriptions(Graphic::VKVERTEX_BIND_DESC)
-        .setVertexAttributeDescriptions(Graphic::VKVERTEX_ATTR_DESC);
+        .setVertexBindingDescriptions(Graphic::Vertex::VKVERTEX_BIND_DESC)
+        .setVertexAttributeDescriptions(Graphic::Vertex::VKVERTEX_ATTR_DESC);
     graphicsPipelineCreateInfo.setPVertexInputState(
         &pipelineVertexInputStateCreateInfo);
 

@@ -33,6 +33,7 @@ add_library(
         src/imguivk/context/VKContextImguiImpl.cpp
         src/imguivk/mem/VKMemBuffer.cpp
         src/imguivk/VKOffScreenRenderer.cpp
+        src/imguivk/VKOffScreenRendererRess.cpp
         src/imguivk/VKRenderPass.cpp
         src/imguivk/VKRenderPipeline.cpp
         src/imguivk/VKRenderer.cpp
@@ -49,6 +50,7 @@ add_library(
         src/ui/layout/box/CLayBox.cpp
         src/ui/CursorManager.cpp
         src/ui/UIManager.cpp
+        src/ui/brush/Brush.cpp
 )
 
 target_include_directories(

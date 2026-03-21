@@ -8,27 +8,25 @@
 namespace MMM::Graphic
 {
 
-/**
- * @brief Vulkan 纹理封装类
- *
- * 负责从文件加载图片、创建 Vulkan Image 资源、上传数据，
- * 并将其注册到 ImGui 的描述符池中。
- */
 class VKTexture
 {
 public:
+    // 构造方式 A：从文件加载
     VKTexture(const std::string& filePath, vk::PhysicalDevice& physicalDevice,
               vk::Device& device, vk::CommandPool commandPool, vk::Queue queue);
-    // 允许移动
+
+    // 构造方式 B：直接从内存像素加载 (用于纯色或动态生成纹理)
+    VKTexture(const unsigned char* pixels, uint32_t width, uint32_t height,
+              vk::PhysicalDevice& physicalDevice, vk::Device& device,
+              vk::CommandPool commandPool, vk::Queue queue);
+
     VKTexture(VKTexture&& other) noexcept;
     VKTexture& operator=(VKTexture&& other) noexcept;
-    // 禁用拷贝
     VKTexture(const VKTexture&)            = delete;
     VKTexture& operator=(const VKTexture&) = delete;
     ~VKTexture();
 
-    /// @brief 获取 ImGui 可用的纹理 ID
-    ImTextureID getImTextureID()
+    inline ImTextureID getImTextureID()
     {
         if ( !m_descriptorSet ) {
             // 4. 注册到 ImGui
@@ -43,38 +41,40 @@ public:
             static_cast<VkDescriptorSet>(m_descriptorSet));
     }
 
+
+    // 暴露句柄供 DescriptorSet 更新使用
+    vk::ImageView getImageView() const { return m_imageView; }
+    vk::Sampler   getSampler() const { return m_sampler; }
+
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
 
 private:
-    void createTextureImage(const std::string&  filePath,
-                            vk::PhysicalDevice& physDevice,
-                            vk::CommandPool pool, vk::Queue queue);
-    void createTextureImageView();
-    void createTextureSampler();
+    // 【共通核心逻辑】
+    void initFromPixels(const unsigned char* pixels, uint32_t width,
+                        uint32_t height, vk::PhysicalDevice& physDevice,
+                        vk::CommandPool pool, vk::Queue queue);
 
-    // 辅助工具：寻找内存类型
     uint32_t findMemoryType(vk::PhysicalDevice& physDevice, uint32_t typeFilter,
                             vk::MemoryPropertyFlags properties);
 
-    // 辅助工具：执行单次命令
     void transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
                                vk::ImageLayout oldLayout,
                                vk::ImageLayout newLayout);
+
     void copyBufferToImage(vk::CommandPool pool, vk::Queue queue,
                            vk::Buffer buffer, uint32_t width, uint32_t height);
 
 private:
-    vk::Device       m_device{ nullptr };
-    vk::Image        m_image{ nullptr };
-    vk::DeviceMemory m_memory{ nullptr };
-    vk::ImageView    m_imageView{ nullptr };
-    vk::Sampler      m_sampler{ nullptr };
-
-    // ImGui 相关的描述符集句柄
+    vk::Device        m_device{ nullptr };
+    vk::Image         m_image{ nullptr };
+    vk::DeviceMemory  m_memory{ nullptr };
+    vk::ImageView     m_imageView{ nullptr };
+    vk::Sampler       m_sampler{ nullptr };
     vk::DescriptorSet m_descriptorSet{ nullptr };
 
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };
 };
+
 }  // namespace MMM::Graphic

@@ -7,21 +7,43 @@
 namespace MMM::Graphic
 {
 
+// 构造函数 A：从文件
 VKTexture::VKTexture(const std::string&  filePath,
                      vk::PhysicalDevice& physicalDevice, vk::Device& device,
                      vk::CommandPool commandPool, vk::Queue queue)
     : m_device(device)
 {
-    // 1. 创建 Image 并上传数据
-    createTextureImage(filePath, physicalDevice, commandPool, queue);
+    int      texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(
+        filePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 
-    // 2. 创建访问 Image 的视图
-    createTextureImageView();
+    if ( !pixels ) {
+        XCRITICAL("Failed to load texture file: {}", filePath);
+        throw std::runtime_error("failed to load texture image!");
+    }
 
-    // 3. 创建采样器
-    createTextureSampler();
+    // 调用共通逻辑
+    initFromPixels(pixels,
+                   static_cast<uint32_t>(texWidth),
+                   static_cast<uint32_t>(texHeight),
+                   physicalDevice,
+                   commandPool,
+                   queue);
 
-    XINFO("Texture loaded and registered to ImGui: {}", filePath);
+    stbi_image_free(pixels);
+    XINFO("Texture loaded from file: {}", filePath);
+}
+
+// 构造函数 B：从内存数据
+VKTexture::VKTexture(const unsigned char* pixels, uint32_t width,
+                     uint32_t height, vk::PhysicalDevice& physicalDevice,
+                     vk::Device& device, vk::CommandPool commandPool,
+                     vk::Queue queue)
+    : m_device(device)
+{
+    // 直接调用共通逻辑
+    initFromPixels(pixels, width, height, physicalDevice, commandPool, queue);
+    XINFO("Texture created from memory buffer [{}x{}]", width, height);
 }
 
 VKTexture::~VKTexture()
@@ -39,25 +61,16 @@ VKTexture::~VKTexture()
     m_device.freeMemory(m_memory);
 }
 
-void VKTexture::createTextureImage(const std::string&  filePath,
-                                   vk::PhysicalDevice& physDevice,
-                                   vk::CommandPool pool, vk::Queue queue)
+// 【共通核心逻辑实现】
+void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
+                               uint32_t height, vk::PhysicalDevice& physDevice,
+                               vk::CommandPool pool, vk::Queue queue)
 {
-    int texWidth, texHeight, texChannels;
-    // 强制加载为 RGBA 格式
-    stbi_uc* pixels = stbi_load(
-        filePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-    vk::DeviceSize imageSize = texWidth * texHeight * 4;
+    m_width                  = width;
+    m_height                 = height;
+    vk::DeviceSize imageSize = width * height * 4;
 
-    if ( !pixels ) {
-        XCRITICAL("Failed to load texture image: {}", filePath);
-        throw std::runtime_error("failed to load texture image!");
-    }
-
-    m_width  = static_cast<uint32_t>(texWidth);
-    m_height = static_cast<uint32_t>(texHeight);
-
-    // --- 创建 Staging Buffer ---
+    // 1. 创建 Staging Buffer 并上传
     vk::BufferCreateInfo stagingBufferInfo(
         {}, imageSize, vk::BufferUsageFlagBits::eTransferSrc);
     vk::Buffer stagingBuffer = m_device.createBuffer(stagingBufferInfo);
@@ -70,15 +83,15 @@ void VKTexture::createTextureImage(const std::string&  filePath,
                        memReqs.memoryTypeBits,
                        vk::MemoryPropertyFlagBits::eHostVisible |
                            vk::MemoryPropertyFlagBits::eHostCoherent));
+
     vk::DeviceMemory stagingMemory = m_device.allocateMemory(allocInfo);
     m_device.bindBufferMemory(stagingBuffer, stagingMemory, 0);
 
     void* data = m_device.mapMemory(stagingMemory, 0, imageSize);
     memcpy(data, pixels, static_cast<size_t>(imageSize));
     m_device.unmapMemory(stagingMemory);
-    stbi_image_free(pixels);
 
-    // --- 创建目的 Image ---
+    // 2. 创建真正的 Image (Device Local)
     vk::ImageCreateInfo imageInfo(
         {},
         vk::ImageType::e2D,
@@ -92,37 +105,32 @@ void VKTexture::createTextureImage(const std::string&  filePath,
         vk::SharingMode::eExclusive);
 
     m_image = m_device.createImage(imageInfo);
+    memReqs = m_device.getImageMemoryRequirements(m_image);
 
-    memReqs   = m_device.getImageMemoryRequirements(m_image);
-    allocInfo = vk::MemoryAllocateInfo(
+    vk::MemoryAllocateInfo imgAllocInfo(
         memReqs.size,
         findMemoryType(physDevice,
                        memReqs.memoryTypeBits,
                        vk::MemoryPropertyFlagBits::eDeviceLocal));
-    m_memory = m_device.allocateMemory(allocInfo);
+    m_memory = m_device.allocateMemory(imgAllocInfo);
     m_device.bindImageMemory(m_image, m_memory, 0);
 
-    // --- 数据传输过程 ---
-    // 1. 转为传输接收布局
+    // 3. 数据拷贝 (Undefined -> Dst -> ShaderRead)
     transitionImageLayout(pool,
                           queue,
                           vk::ImageLayout::eUndefined,
                           vk::ImageLayout::eTransferDstOptimal);
-    // 2. 拷贝
     copyBufferToImage(pool, queue, stagingBuffer, m_width, m_height);
-    // 3. 转为 Shader 只读布局 (ImGui需要)
     transitionImageLayout(pool,
                           queue,
                           vk::ImageLayout::eTransferDstOptimal,
                           vk::ImageLayout::eShaderReadOnlyOptimal);
 
-    // 清理临时 Buffer
+    // 清理临时资源
     m_device.destroyBuffer(stagingBuffer);
     m_device.freeMemory(stagingMemory);
-}
 
-void VKTexture::createTextureImageView()
-{
+    // 4. 创建 ImageView
     vk::ImageViewCreateInfo viewInfo(
         {},
         m_image,
@@ -131,10 +139,8 @@ void VKTexture::createTextureImageView()
         {},
         { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     m_imageView = m_device.createImageView(viewInfo);
-}
 
-void VKTexture::createTextureSampler()
-{
+    // 5. 创建 Sampler
     vk::SamplerCreateInfo samplerInfo({},
                                       vk::Filter::eLinear,
                                       vk::Filter::eLinear,

@@ -32,6 +32,17 @@ local Skin = {
 		bg_main = "images/backgrounds/main_menu.jpg",
 	},
 
+	-- 2d绘制画布配置
+	canvases_2d = {
+		basic_2d_canvas = {
+			name = "Basic2DCanvas",
+			shader_modules = {
+				main = "shaders/canvas/Basic2DCanvas/main",
+				effect = "shaders/canvas/Basic2DCanvas/effect",
+			},
+		},
+	},
+
 	-- 布局参数
 	layout = {
 		windowPadding = 20,

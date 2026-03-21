@@ -39,6 +39,38 @@ CLayWrapperCore::~CLayWrapperCore()
     }
 }
 
+CLayWrapperCore::WindowContext CLayWrapperCore::createWindowContext()
+{
+    uint32_t   memSize = Clay_MinMemorySize();
+    void*      memory  = std::malloc(memSize);
+    Clay_Arena arena   = Clay_CreateArenaWithCapacityAndMemory(memSize, memory);
+
+    // 初始化并返回。注意：Clay_Initialize 会自动将其设为 Current
+    Clay_Context* ctx = Clay_Initialize(arena, { 0, 0 }, { HandleClayError });
+    setupClayTextMeasurement();  // 每个上下文都需要设置一次
+
+    return { ctx, arena };
+}
+
+void CLayWrapperCore::destroyWindowContext(WindowContext& ctx)
+{
+    // 1. 安全检查：如果销毁的是当前正在使用的上下文，先切回 nullptr
+    if ( ctx.context == Clay_GetCurrentContext() ) {
+        Clay_SetCurrentContext(nullptr);
+    }
+
+    // 2. 释放 Arena 内存
+    if ( ctx.arena.memory ) {
+        // 因为 Clay_Context 指针就指向这块内存的开头，
+        // 所以释放 memory 就会同时销毁 context 数据
+        std::free(ctx.arena.memory);
+
+        // 3. 句柄置空，防止野指针
+        ctx.arena.memory = nullptr;
+        ctx.context      = nullptr;
+    }
+}
+
 // 告诉 Clay 怎么算 ImGui 里的文字宽度
 static Clay_Dimensions MeasureTextForImGui(Clay_StringSlice        text,
                                            Clay_TextElementConfig* config,

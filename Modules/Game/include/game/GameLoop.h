@@ -12,7 +12,8 @@ namespace MMM
 namespace Graphic
 {
 class VKContext;
-}
+class NativeWindow;
+}  // namespace Graphic
 
 /**
  * @brief 游戏主循环类 (单例)
@@ -44,10 +45,10 @@ public:
      * 初始化窗口、图形上下文，并进入主消息/渲染循环。
      * 该函数会阻塞直到窗口关闭。
      *
-     * @param window_title 窗口标题
+     * @param window 窗口上下文
      * @return int 退出代码 (0 表示正常退出)
      */
-    int start(std::string_view window_title);
+    int start(Graphic::NativeWindow& window);
 
 private:
     GameLoop();

@@ -57,8 +57,11 @@ void VKRenderer::render(NativeWindow&               window,
         for ( auto renderableView : uiManager->getRenderableViews() ) {
             // 如果离屏渲染器需要重建（初次或改名）
             if ( renderableView->needReCreateFrameBuffer() ) {
-                renderableView->reCreateFrameBuffer(
-                    m_vkPhysicalDevice, m_vkLogicalDevice, m_vkSwapChain);
+                renderableView->reCreateFrameBuffer(m_vkPhysicalDevice,
+                                                    m_vkLogicalDevice,
+                                                    m_vkSwapChain,
+                                                    m_vkCommandPool,
+                                                    m_LogicDeviceGraphicsQueue);
             }
         }
     }

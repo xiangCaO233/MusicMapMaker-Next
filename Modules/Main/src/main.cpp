@@ -1,6 +1,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/translation/Translation.h"
 #include "game/GameLoop.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
 #include <filesystem>
 
@@ -54,7 +55,9 @@ int main(int argc, char* argv[])
     // 正常运行
     XINFO("entering gameloop...");
 
-    const auto ret = gameLoop.start("MusicMapMaker(Gamma)");
+    Graphic::NativeWindow nativeWindow(1280, 720, "MusicMapMaker(Gamma)");
+
+    const auto ret = gameLoop.start(nativeWindow);
 
     return ret;
 }

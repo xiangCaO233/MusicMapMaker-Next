@@ -112,6 +112,7 @@ protected:
     // 内部递归函数
     void internalGenerate(const char* currentId, Clay_SizingAxis w,
                           Clay_SizingAxis h);
+    // 内部绘制执行函数
     void internalExecute(ImVec2 origin);
 
     Clay_LayoutDirection m_dir;

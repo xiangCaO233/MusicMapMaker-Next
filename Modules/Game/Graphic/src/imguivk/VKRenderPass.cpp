@@ -52,22 +52,48 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
         .setColorAttachments(attachmentReference);
     renderPassCreateInfo.setSubpasses(subpassDescription);
 
+    // 判断当前 RenderPass 的用途
+    bool isOffScreen = (finalLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
+
     // 1.3:流程依赖
+    std::array<vk::SubpassDependency, 2> dependencies;
+
+    // 依赖 1: 外部读取结束 -> 开始离屏写入 (Undefined/ReadOnly ->
+    // AttachmentOptimal)
+    dependencies[0]
+        .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+        .setDstSubpass(0)
+        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        .setSrcAccessMask(vk::AccessFlagBits::eNone)
+        .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
+
+    // 依赖 2: 离屏写入结束 -> 外部读取开始 (AttachmentOptimal -> ReadOnly)
+    dependencies[1]
+        .setSrcSubpass(0)
+        .setDstSubpass(VK_SUBPASS_EXTERNAL)
+        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        .setDstStageMask(vk::PipelineStageFlagBits::eFragmentShader)
+        .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+
+    renderPassCreateInfo.setDependencies(dependencies);
+
     // vulkan 存在一个隐含的 initsubpass,
     // 还是需要手动指定这个initsubpass和创建的subpass的依赖关系
-    vk::SubpassDependency subpassDependency;
-    subpassDependency
-        // 先执行 VK_SUBPASS_EXTERNAL subpass
-        .setSrcSubpass(VK_SUBPASS_EXTERNAL)
-        // 后执行 指定上面设置的setSubpasses 的[索引]
-        .setDstSubpass(0)
-        // 对subpass的访问权限设置 - 给setDstSubpass的subpass写权限
-        .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-        // 设置指定subpass执行完后的使用场景 - 输出颜色附件
-        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-        .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    // vk::SubpassDependency subpassDependency;
+    // subpassDependency
+    //     // 先执行 VK_SUBPASS_EXTERNAL subpass
+    //     .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+    //     // 后执行 指定上面设置的setSubpasses 的[索引]
+    //     .setDstSubpass(0)
+    //     // 对subpass的访问权限设置 - 给setDstSubpass的subpass写权限
+    //     .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+    //     // 设置指定subpass执行完后的使用场景 - 输出颜色附件
+    //     .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+    //     .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 
-    renderPassCreateInfo.setDependencies(subpassDependency);
+    // renderPassCreateInfo.setDependencies(subpassDependency);
 
     // 2:创建renderpass
     m_graphicRenderPass = logicalDevice.createRenderPass(renderPassCreateInfo);

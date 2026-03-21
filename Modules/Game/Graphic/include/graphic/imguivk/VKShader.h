@@ -1,7 +1,9 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include <memory>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Graphic
@@ -23,7 +25,7 @@ public:
      * @param vertexSource 顶点着色器 SPIR-V 二进制数据
      * @param fragmentSource 片段着色器 SPIR-V 二进制数据
      */
-    VKShader(vk::Device&      vkLogicalDevice, std::string_view vertexSource,
+    VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
              std::string_view fragmentSource);
 
     /**
@@ -34,8 +36,8 @@ public:
      * @param geometrySource 几何着色器 SPIR-V 二进制数据
      * @param fragmentSource 片段着色器 SPIR-V 二进制数据
      */
-    VKShader(vk::Device&      vkLogicalDevice, std::string_view vertexSource,
-             std::string_view geometrySource, std::string_view  fragmentSource);
+    VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
+             std::string_view geometrySource, std::string_view fragmentSource);
 
     // 禁用拷贝和移动
     VKShader(VKShader&&) = delete;
@@ -47,6 +49,9 @@ public:
     VKShader& operator=(const VKShader&) = delete;
 
     ~VKShader();
+
+    ///@brief 读取文件文本内容工具
+    static std::string readFile(std::string path);
 
     /**
      * @brief 获取渲染管线所需的着色器阶段创建信息列表
@@ -72,6 +77,4 @@ private:
     std::vector<vk::PipelineShaderStageCreateInfo> m_shaderStageCreateInfos;
 };
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

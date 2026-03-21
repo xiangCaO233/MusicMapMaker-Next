@@ -3,12 +3,9 @@
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"
-#include "mem/VKUniforms.h"
-#include "mesh/VKVertex.h"
 #include "ui/CursorManager.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace MMM::Graphic
@@ -72,6 +69,7 @@ public:
 private:
     /// @brief 清屏颜色
     static std::array<float, 4> s_clear_color;
+
     /// @brief 物理设备引用
     vk::PhysicalDevice& m_vkPhysicalDevice;
 

@@ -26,6 +26,9 @@ public:
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
 
+    /// @brief 清理所有ui
+    void clearAllViews();
+
     /// @brief 获取可再渲染视图
     std::vector<IRenderableView*> getRenderableViews();
 
@@ -44,6 +47,7 @@ public:
 
     /// @brief 分派所有imgui事件
     void DispatchGlobalUIEvents();
+
 
 private:
     /// @brief 所有ui接口

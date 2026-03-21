@@ -9,6 +9,8 @@ namespace MMM
 namespace Graphic
 {
 
+namespace Vertex
+{
 /**
  * @brief 3D 空间坐标结构体
  */
@@ -22,18 +24,18 @@ struct Position {
  * @brief RGBA 颜色结构体
  */
 struct Color {
-    float r;
-    float g;
-    float b;
-    float a;
+    float r{ 1.f };
+    float g{ 1.f };
+    float b{ 1.f };
+    float a{ 1.f };
 };
 
 /**
  * @brief 贴图UV结构体
  */
 struct TexUV {
-    float u;
-    float v;
+    float u{ 0.f };
+    float v{ 0.f };
 };
 
 /**
@@ -41,11 +43,11 @@ struct TexUV {
  *
  * 包含位置和颜色信息，对应 Shader 中的输入属性。
  */
-struct VKVertex final {
-    Position pos;
-    Color    color;
+struct VKBasicVertex {
+    Position pos{};
+    Color    color{};
+    TexUV    uv{};
 };
-
 
 /**
  * @brief 顶点输入绑定描述 (Vertex Binding Description)
@@ -57,7 +59,7 @@ inline constexpr vk::VertexInputBindingDescription VKVERTEX_BIND_DESC =
         // 对应的Shader 中的绑定点 bind = 0(默认)
         .setBinding(0)
         // 每个顶点的步长（字节数）
-        .setStride(sizeof(VKVertex))
+        .setStride(sizeof(VKBasicVertex))
         // 按顶点步进
         .setInputRate(vk::VertexInputRate::eVertex);
 
@@ -67,7 +69,7 @@ inline constexpr vk::VertexInputBindingDescription VKVERTEX_BIND_DESC =
  * 定义了 Shader 中每个 location 对应的数据格式和偏移量。
  * 包含 Position (loc=0) 和 Color (loc=1)。
  */
-inline constexpr std::array<vk::VertexInputAttributeDescription, 2>
+inline constexpr std::array<vk::VertexInputAttributeDescription, 3>
     VKVERTEX_ATTR_DESC = {
         // 属性 0: Position (location = 0)
         vk::VertexInputAttributeDescription()
@@ -78,7 +80,7 @@ inline constexpr std::array<vk::VertexInputAttributeDescription, 2>
             // 3个 float
             .setFormat(vk::Format::eR32G32B32Sfloat)
             // 偏移量
-            .setOffset(offsetof(VKVertex, pos)),
+            .setOffset(offsetof(VKBasicVertex, pos)),
 
         // 属性 1: Color (location = 1)
         vk::VertexInputAttributeDescription()
@@ -88,8 +90,22 @@ inline constexpr std::array<vk::VertexInputAttributeDescription, 2>
             // 4个 float
             .setFormat(vk::Format::eR32G32B32A32Sfloat)
             // 偏移量
-            .setOffset(offsetof(VKVertex, color)),
-    };  // namespace Graphic
+            .setOffset(offsetof(VKBasicVertex, color)),
+
+        // 属性 2: TexUV(location = 2)
+        vk::VertexInputAttributeDescription()
+            .setBinding(0)
+            // Shader 中的 layout(location = 2)
+            .setLocation(2)
+            // 2个 float
+            .setFormat(vk::Format::eR32G32Sfloat)
+            // 偏移量
+            .setOffset(offsetof(VKBasicVertex, uv)),
+    };
+
+}  // namespace Vertex
+
+
 
 }  // namespace Graphic
 

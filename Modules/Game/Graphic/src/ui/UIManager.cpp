@@ -1,5 +1,10 @@
 #include "ui/UIManager.h"
 // 需要引入 internal 获取当前 Focus/Hover 的窗口
+#include "event/core/EventBus.h"
+#include "event/input/translators/ImGuiTranslator.h"
+#include "event/input/translators/UniversalCodepoint.h"
+#include "event/ui/iwindow/UIWindowKeyEvent.h"
+#include "event/ui/iwindow/UIWindowMouseEvent.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "ui/IRenderableView.h"
@@ -20,6 +25,12 @@ void UIManager::registerView(const std::string&       name,
         XINFO("Registered General [{}] UIView", name);
     }
     m_uiviews[name] = std::move(view);
+}
+
+/// @brief 清理所有ui
+void UIManager::clearAllViews()
+{
+    m_uiviews.clear();
 }
 
 /// @brief 获取可再渲染视图
