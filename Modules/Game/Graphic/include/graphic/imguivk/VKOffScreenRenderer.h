@@ -41,7 +41,7 @@ public:
                              vk::Device& logicalDevice, VKSwapchain& swapchain,
                              vk::CommandPool commandPool, vk::Queue queue,
                              const std::filesystem::path& shaderModulePath = {},
-                             size_t maxVertexCount = 1024);
+                             size_t maxVertexCount = 81920);
 
     /// @brief 外部确认是否需要重建
     inline bool needReCreateFrameBuffer() const

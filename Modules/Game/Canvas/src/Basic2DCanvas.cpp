@@ -6,6 +6,7 @@
 #include "log/colorful-log.h"
 #include <filesystem>
 #include <glm/glm.hpp>
+#include <random>
 
 namespace MMM::Canvas
 {
@@ -27,12 +28,7 @@ void Basic2DCanvas::update()
                              ImGuiCond_FirstUseEver);
 
     ImGui::Begin("Music Score");
-    // 每一帧都要从 0 开始重新构建顶点
-    m_brush.clear();
-    // 处理逻辑... 填充 m_brush
-    m_brush.drawRect(glm::vec2{ 20.f, 20.f },
-                     glm::vec2{ 100, 100 },
-                     glm::vec4{ 0, 1, 1, 1 });
+
 
     // 1. 获取 ImGui 窗口分配给内容的实际大小
     ImVec2 size = ImGui::GetContentRegionAvail();
@@ -40,6 +36,33 @@ void Basic2DCanvas::update()
         // 仅仅是发送请求，不会立刻改变渲染状态
         setTargetSize(static_cast<uint32_t>(size.x),
                       static_cast<uint32_t>(size.y));
+    }
+
+    // 1. 必须清空上一帧的顶点
+    m_brush.clear();
+
+    // 2. 准备随机数引擎
+    // 注意：如果想让位置固定，把 engine 和 dist 设为 static
+    std::random_device rd;
+    std::mt19937       gen(rd());
+
+    // 坐标范围：从 0 到画布宽高
+    std::uniform_real_distribution<float> distX(0.0f, (float)m_targetWidth);
+    std::uniform_real_distribution<float> distY(0.0f, (float)m_targetHeight);
+    // 尺寸范围：10 到 50 像素
+    std::uniform_real_distribution<float> distSize(10.0f, 50.0f);
+    // 颜色范围：0.0 到 1.0
+    std::uniform_real_distribution<float> distCol(0.0f, 1.0f);
+
+    // 3. 循环绘制 100 个
+    for ( int i = 0; i < 100; ++i ) {
+        glm::vec2 randomPos   = { distX(gen), distY(gen) };
+        glm::vec2 randomSize  = { distSize(gen), distSize(gen) };
+        glm::vec4 randomColor = {
+            distCol(gen), distCol(gen), distCol(gen), 1.0f
+        };
+
+        m_brush.drawRect(randomPos, randomSize, randomColor);
     }
 
     vk::DescriptorSet texID = getDescriptorSet();

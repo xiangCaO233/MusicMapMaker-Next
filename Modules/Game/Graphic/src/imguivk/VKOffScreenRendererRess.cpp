@@ -1,6 +1,5 @@
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
-#include "graphic/imguivk/mem/VKUniforms.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
@@ -9,20 +8,6 @@
 
 namespace MMM::Graphic
 {
-
-// 顶点信息
-std::array<Vertex::VKBasicVertex, 3> g_vertices{
-    Vertex::VKBasicVertex{
-        .pos   = { .x = 0.f, .y = -.5f },
-        .color = { .r = 1.f, .g = 0.f, .b = 0.f, .a = 1.f } },
-    Vertex::VKBasicVertex{
-        .pos   = { .x = .5f, .y = .5f },
-        .color = { .r = 0.f, .g = 1.f, .b = 0.f, .a = 1.f } },
-    Vertex::VKBasicVertex{
-        .pos   = { .x = -.5f, .y = .5f },
-        .color = { .r = 0.f, .g = 0.f, .b = 1.f, .a = 1.f } },
-
-};
 
 void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool pool,
                                                   vk::Queue       queue,
@@ -251,17 +236,6 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     // ==========================================
     createDescriptPool();
     createDescriptSets();
-
-    // ==========================================
-    // 8. 上传顶点数据到 顶点缓冲区
-    // ==========================================
-    {
-        size_t dataSize = sizeof(Vertex::VKBasicVertex) * g_vertices.size();
-
-        // 直接调用封装好的 uploadData 方法！
-        // 内部已经处理好了 memcpy 和 flush（如果需要的话）。
-        m_vertexBuffer->uploadData(g_vertices.data(), dataSize);
-    }
 
     m_width  = creationW;
     m_height = creationH;
