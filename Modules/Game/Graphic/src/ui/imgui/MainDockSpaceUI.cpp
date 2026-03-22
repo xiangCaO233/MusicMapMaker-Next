@@ -1,5 +1,8 @@
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "log/colorful-log.h"
 
 namespace MMM::Graphic::UI
@@ -7,62 +10,81 @@ namespace MMM::Graphic::UI
 
 void MainDockSpaceUI::update()
 {
-    // ================== 新增：全窗口透明 DockSpace ==================
+    const ImGuiViewport* viewport     = ImGui::GetMainViewport();
+    float                sidebarWidth = 48.0f;
+
+    // 1. 获取菜单栏标准高度
+    float menuBarHeight = ImGui::GetFrameHeight();
+
+    // ================== A. 顶部菜单栏窗口 ==================
     {
-        static bool               opt_fullscreen  = true;
-        static ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
+        ImGui::SetNextWindowPos(viewport->WorkPos);
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, menuBarHeight));
+        ImGui::SetNextWindowViewport(viewport->ID);
 
-        // 1. 设置 DockSpace 为透明并允许背景点击穿透
-        // ImGuiDockNodeFlags_PassthruCentralNode 会让中心节点不绘制背景
-        dockspace_flags |= ImGuiDockNodeFlags_PassthruCentralNode;
+        ImGuiWindowFlags menu_flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground;
 
-        // 2. 配置全屏窗口参数
-        ImGuiWindowFlags window_flags =
-            ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-        if ( opt_fullscreen ) {
-            const ImGuiViewport* viewport = ImGui::GetMainViewport();
-            ImGui::SetNextWindowPos(viewport->WorkPos);
-            ImGui::SetNextWindowSize(viewport->WorkSize);
-            ImGui::SetNextWindowViewport(viewport->ID);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            window_flags |= ImGuiWindowFlags_NoTitleBar |
-                            ImGuiWindowFlags_NoCollapse |
-                            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-            window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus |
-                            ImGuiWindowFlags_NoNavFocus;
-        }
-
-        // 3. 关键：将背景设为透明
-        window_flags |= ImGuiWindowFlags_NoBackground;
-
-        // 4. 开始窗口
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::Begin("MyMainDockSpaceWindow", nullptr, window_flags);
-        ImGui::PopStyleVar();
-
-        if ( opt_fullscreen ) ImGui::PopStyleVar(2);
-
-        // 5. 提交 DockSpace
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.ConfigFlags & ImGuiConfigFlags_DockingEnable ) {
-            ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
-            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
-        }
-
-        // 这里可以添加常驻的菜单栏（如果需要）
+        ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
         if ( ImGui::BeginMenuBar() ) {
-            if ( ImGui::BeginMenu("File") ) {
-                if ( ImGui::MenuItem("Exit") ) { /* 退出逻辑 */
-                }
+            if ( ImGui::BeginMenu(TR("ui.file")) ) {
+                ImGui::EndMenu();
+            }
+            if ( ImGui::BeginMenu(TR("ui.edit")) ) {
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
         }
-
         ImGui::End();
     }
-    // =============================================================
+
+    // ================== B. 右侧停靠空间窗口 ==================
+    {
+        // 位置偏移：X + 48, Y + 菜单高度
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + sidebarWidth,
+                                       viewport->WorkPos.y + menuBarHeight));
+        // 尺寸：宽 - 48, 高 - 菜单高度
+        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - sidebarWidth,
+                                        viewport->WorkSize.y - menuBarHeight));
+        ImGui::SetNextWindowViewport(viewport->ID);
+
+        ImGuiWindowFlags dock_flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_NoBackground;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+
+        ImGui::Begin("RightDockHost", nullptr, dock_flags);
+
+        ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
+        // 这里 Size 传 (0,0) 表示占满 RightDockHost 窗口
+        ImGui::DockSpace(
+            dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+
+        static bool is_first_time = true;
+        if ( is_first_time ) {
+            is_first_time = false;
+            ImGui::DockBuilderRemoveNode(dockspace_id);
+            ImGui::DockBuilderAddNode(dockspace_id,
+                                      ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(
+                dockspace_id,
+                ImVec2(viewport->WorkSize.x - sidebarWidth,
+                       viewport->WorkSize.y - menuBarHeight));
+            ImGui::DockBuilderDockWindow("Basic2DCanvas", dockspace_id);
+            ImGui::DockBuilderFinish(dockspace_id);
+        }
+
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+    }
 }
 
 };  // namespace MMM::Graphic::UI

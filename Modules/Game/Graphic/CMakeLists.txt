@@ -46,6 +46,7 @@ add_library(
         src/ui/imgui/ImguiTestWindowUI.cpp
         src/ui/imgui/CLayoutTestUI.cpp
         src/ui/imgui/DebugWindowUI.cpp
+        src/ui/imgui/SideBarUI.cpp
         src/ui/layout/CLayWrapperCore.cpp
         src/ui/layout/box/CLayBox.cpp
         src/ui/CursorManager.cpp

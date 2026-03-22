@@ -16,3 +16,7 @@ set(SOL2_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 # 引入 sol2
 # ==========================================
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/sol2" SYSTEM)
+
+# 创建接口库
+add_library(3rd_sol2 INTERFACE)
+target_link_libraries(3rd_sol2 INTERFACE sol2::sol2)

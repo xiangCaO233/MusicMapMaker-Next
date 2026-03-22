@@ -4,6 +4,7 @@
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "ui/IUIView.h"
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <random>
@@ -20,26 +21,11 @@ Basic2DCanvas::Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h)
 // 接口实现
 void Basic2DCanvas::update()
 {
-    // 1. 在 Begin 之前设置窗口大小
-    // ImGuiCond_FirstUseEver: 只在第一次运行且没有 .ini 配置文件记录时生效
-    // ImGuiCond_Always: 强制每一帧都固定这个大小（用户无法拖拽改变大小）
-    // ImGuiCond_Once: 每轮启动只设置一次
-    ImGui::SetNextWindowSize(ImVec2((float)m_width, (float)m_height),
-                             ImGuiCond_FirstUseEver);
+    Graphic::UI::LayoutContext lctx(m_layoutCtx, m_canvasName.c_str());
+    RenderContext              rctx(
+        this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
 
-    ImGui::Begin("Music Score");
-
-
-    // 1. 获取 ImGui 窗口分配给内容的实际大小
-    ImVec2 size = ImGui::GetContentRegionAvail();
-    if ( size.x > 0 && size.y > 0 ) {
-        // 仅仅是发送请求，不会立刻改变渲染状态
-        setTargetSize(static_cast<uint32_t>(size.x),
-                      static_cast<uint32_t>(size.y));
-    }
-
-    // 1. 必须清空上一帧的顶点
-    m_brush.clear();
+    // m_brush.drawRect({ 40, 40 }, { 70, 100 }, { 0, 1, 1, 1 });
 
     // 2. 准备随机数引擎
     // 注意：如果想让位置固定，把 engine 和 dist 设为 static
@@ -55,7 +41,7 @@ void Basic2DCanvas::update()
     std::uniform_real_distribution<float> distCol(0.0f, 1.0f);
 
     // 3. 循环绘制 100 个
-    for ( int i = 0; i < 100; ++i ) {
+    for ( int i = 0; i < 200; ++i ) {
         glm::vec2 randomPos   = { distX(gen), distY(gen) };
         glm::vec2 randomSize  = { distSize(gen), distSize(gen) };
         glm::vec4 randomColor = {
@@ -64,15 +50,6 @@ void Basic2DCanvas::update()
 
         m_brush.drawRect(randomPos, randomSize, randomColor);
     }
-
-    vk::DescriptorSet texID = getDescriptorSet();
-    // 增加判空，防止在重构瞬间崩溃
-    if ( texID != VK_NULL_HANDLE ) {
-        ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
-    } else {
-        ImGui::Text("Loading Surface...");
-    }
-    ImGui::End();
 }
 
 ///@brief 是否需要重新记录命令 (比如数据变了)

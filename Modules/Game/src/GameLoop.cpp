@@ -9,6 +9,7 @@
 #include "ui/imgui/DebugWindowUI.h"
 #include "ui/imgui/ImguiTestWindowUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/SideBarUI.h"
 
 namespace MMM
 {
@@ -32,17 +33,19 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         "MainDockSpaceUI",
         std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
     m_uiManager.registerView(
+        "SideBarUI", std::make_unique<Graphic::UI::SideBarUI>("SideBarUI"));
+    m_uiManager.registerView(
         "Basic2DCanvas",
         std::make_unique<Canvas::Basic2DCanvas>("Basic2DCanvas", 200, 200));
-    m_uiManager.registerView(
-        "ImguiTestWindowUI",
-        std::make_unique<Graphic::UI::ImguiTestWindowUI>("ImguiTestWindowUI"));
-    m_uiManager.registerView(
-        "CLayoutTestUI",
-        std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
-    m_uiManager.registerView(
-        "DebugWindowUI",
-        std::make_unique<Graphic::UI::DebugWindowUI>("DebugWindowUI"));
+    // m_uiManager.registerView(
+    //     "ImguiTestWindowUI",
+    //     std::make_unique<Graphic::UI::ImguiTestWindowUI>("ImguiTestWindowUI"));
+    // m_uiManager.registerView(
+    //     "CLayoutTestUI",
+    //     std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
+    // m_uiManager.registerView(
+    //     "DebugWindowUI",
+    //     std::make_unique<Graphic::UI::DebugWindowUI>("DebugWindowUI"));
 }
 
 GameLoop::~GameLoop() {}

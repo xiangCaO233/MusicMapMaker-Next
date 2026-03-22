@@ -2,8 +2,12 @@ return {
 	-- [ Translation Key ] = "翻译后的目标文本"
 
 	-- 普通文本
-	-- ["ui.file"] = "文件",
-	-- ["ui.edit"] = "编辑",
+	["ui.file"] = "文件",
+	["ui.file.open"] = "打开",
+	["ui.file.exit"] = "退出",
+	["ui.edit"] = "编辑",
+	["ui.edit.copy"] = "复制",
+	["ui.edit.paste"] = "粘贴",
 	-- ["ui.view"] = "视图",
 	-- ["ui.settings"] = "设置",
 	-- ["ui.exit"] = "退出",

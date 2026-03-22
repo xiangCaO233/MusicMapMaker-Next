@@ -40,13 +40,18 @@ class LayoutContext final
 
 public:
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
-                  const char*                     iwindow_name)
+                  const char* iwindow_name, bool custom_window_flags = false,
+                  ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
-        ImGui::Begin(iwindow_name);
+        if ( custom_window_flags ) {
+            ImGui::Begin(iwindow_name, nullptr, windowFlags);
+        } else {
+            ImGui::Begin(iwindow_name);
+        }
         // 1. 获取 ImGui 的绘图起始点（绝对坐标）
         m_startPos = ImGui::GetCursorScreenPos();
         m_avail    = ImGui::GetContentRegionAvail();

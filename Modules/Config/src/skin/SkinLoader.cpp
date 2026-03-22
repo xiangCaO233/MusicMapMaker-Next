@@ -1,7 +1,6 @@
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include <filesystem>
-#include <sol/sol.hpp>
 
 namespace MMM
 {
@@ -64,6 +63,21 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         }
     }
 
+    // 解析 langs
+    sol::table langsTable = skinTable["langs"];
+    for ( const auto& kv : langsTable ) {
+        std::string key          = kv.first.as<std::string>();
+        std::string rpath        = kv.second.as<std::string>();
+        m_data.langLuaPaths[key] = m_data.skinPath / "resources" / rpath;
+    }
+
+    // 载入所有语言
+    for ( auto& [langName, langLuaPath] : m_data.langLuaPaths ) {
+        m_translator.loadLanguage(langLuaPath.generic_string());
+    }
+    // 选择回退语言
+    m_translator.switchLang(m_data.fallBackLang);
+
     // 解析 Fonts
     sol::table fontsTable = skinTable["fonts"];
     for ( const auto& kv : fontsTable ) {
@@ -72,12 +86,11 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         m_data.fontPaths[key] = m_data.skinPath / "resources" / rpath;
     }
 
-    // 解析 Assets
+    // 在你的解析代码中
     sol::table assetsTable = skinTable["assets"];
-    for ( const auto& kv : assetsTable ) {
-        std::string key        = kv.first.as<std::string>();
-        std::string rpath      = kv.second.as<std::string>();
-        m_data.assetPaths[key] = m_data.skinPath / "resources" / rpath;
+    if ( assetsTable.valid() ) {
+        // 初始前缀为空，开始递归
+        parseAssetsRecursive(assetsTable, "");
     }
 
     // 解析 canvases_2d
@@ -124,6 +137,36 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
 
     XINFO("Skin loaded: " + m_data.themeName);
     return true;
+}
+
+/**
+ * @brief 递归解析 Lua 资产表
+ * @param currentTable 当前正在处理的 Lua 表
+ * @param prefix 当前键的前缀（用于处理嵌套，如 "side_bar"）
+ */
+void SkinManager::parseAssetsRecursive(const sol::table&  currentTable,
+                                       const std::string& prefix)
+{
+    for ( const auto& kv : currentTable ) {
+        // 获取键名
+        std::string key   = kv.first.as<std::string>();
+        sol::object value = kv.second;
+
+        // 构建完整的键名（如 "side_bar.file_explorer_icon"）
+        std::string fullKey = prefix.empty() ? key : prefix + "." + key;
+
+        if ( value.is<std::string>() ) {
+            // 如果是字符串，说明到了叶子节点，保存路径
+            std::string rpath          = value.as<std::string>();
+            m_data.assetPaths[fullKey] = m_data.skinPath / "resources" / rpath;
+
+            // 打印日志方便调试
+            // XINFO("Loaded Asset: {} -> {}", fullKey, rpath);
+        } else if ( value.is<sol::table>() ) {
+            // 如果是表，则递归进入下一层
+            parseAssetsRecursive(value.as<sol::table>(), fullKey);
+        }
+    }
 }
 
 std::filesystem::path SkinManager::getFontPath(const std::string& key)

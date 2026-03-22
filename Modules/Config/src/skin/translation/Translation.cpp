@@ -1,4 +1,4 @@
-#include "config/translation/Translation.h"
+#include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include <filesystem>
 #include <sol/sol.hpp>
@@ -7,12 +7,6 @@ namespace MMM
 {
 namespace Translation
 {
-Translator& Translator::instance()
-{
-    static Translator translator;
-    return translator;
-}
-
 Translator::Translator()
 {
     XINFO("Initializing translations");
@@ -26,8 +20,7 @@ void Translator::loadLanguage(const std::string& langLuaFile)
 
     XINFO("Loading language: {}", langID);
 
-    try
-    {
+    try {
         sol::state lua;
         lua.open_libraries(sol::lib::base, sol::lib::table);
         auto result = lua.script_file(langLuaFile);
@@ -38,8 +31,7 @@ void Translator::loadLanguage(const std::string& langLuaFile)
         Dictionary newDict;
 
         // 遍历 Lua 表，将 String Key 转换为 uint32 Hash 存入 Map
-        for ( const auto& kv : langTable )
-        {
+        for ( const auto& kv : langTable ) {
             std::string keyStr = kv.first.as<std::string>();
             std::string valStr = kv.second.as<std::string>();
 
@@ -51,13 +43,10 @@ void Translator::loadLanguage(const std::string& langLuaFile)
 
         m_Dictionarys[langID] = std::move(newDict);
 
-        if ( m_currentDictionary == nullptr )
-        {
+        if ( m_currentDictionary == nullptr ) {
             switchLang(langID);
         }
-    }
-    catch ( const std::exception& e )
-    {
+    } catch ( const std::exception& e ) {
         XERROR("Error loading lang: {}", e.what());
     }
 }
@@ -66,8 +55,7 @@ void Translator::loadLanguage(const std::string& langLuaFile)
 bool Translator::switchLang(const std::string& langID)
 {
     auto it = m_Dictionarys.find(langID);
-    if ( it != m_Dictionarys.end() )
-    {
+    if ( it != m_Dictionarys.end() ) {
         m_currentDictionary = &(it->second);
         m_version++;  // 版本号 +1，通知所有宏更新缓存
         return true;
@@ -89,12 +77,10 @@ const std::string& Translator::translate(uint32_t    keyHash,
     // 需要一个静态 string 来存储 fallback，以返回引用
     static std::string fallback;
 
-    if ( m_currentDictionary )
-    {
+    if ( m_currentDictionary ) {
         // 整数查找，非常快
         auto it = m_currentDictionary->find(keyHash);
-        if ( it != m_currentDictionary->end() )
-        {
+        if ( it != m_currentDictionary->end() ) {
             return it->second;
         }
     }

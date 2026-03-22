@@ -1,6 +1,8 @@
 #pragma once
 
+#include "translation/Translation.h"
 #include <filesystem>
+#include <sol/sol.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -26,6 +28,10 @@ struct SkinData {
 
     // 颜色表
     std::unordered_map<std::string, Color> colors;
+
+    // 语言表
+    std::unordered_map<std::string, std::filesystem::path> langLuaPaths;
+    std::string fallBackLang{ "en_us" };
 
     // 字体表
     std::unordered_map<std::string, std::filesystem::path> fontPaths;
@@ -55,6 +61,9 @@ class SkinManager
 public:
     static SkinManager& instance();
 
+    ///@brief 获取翻译器
+    inline Translation::Translator& getTranslator() { return m_translator; }
+
     ///@brief 载入皮肤
     bool loadSkin(const std::string& luaFilePath);
 
@@ -77,6 +86,13 @@ public:
 private:
     ///@brief 皮肤数据
     SkinData m_data;
+
+    ///@brief 翻译器
+    Translation::Translator m_translator;
+
+    void parseAssetsRecursive(const sol::table&  currentTable,
+                              const std::string& prefix);
+
 
     SkinManager() = default;
 };

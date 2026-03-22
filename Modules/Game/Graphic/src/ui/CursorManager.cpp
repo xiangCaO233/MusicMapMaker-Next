@@ -13,7 +13,7 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                              vk::Device&         logicalDevice,
                              vk::CommandPool commandPool, vk::Queue queue)
 {
-    auto skin = Config::SkinManager::instance();
+    auto& skin = Config::SkinManager::instance();
 
     // RAII 自动加载、注册 ImGui 描述符、并在析构时自动销毁
     m_texCursor =
@@ -24,6 +24,13 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                                     queue);
     m_texTrail =
         std::make_unique<VKTexture>(skin.getAssetPath("cursortrail").string(),
+                                    phyDevice,
+                                    logicalDevice,
+                                    commandPool,
+                                    queue);
+
+    m_texSmoke =
+        std::make_unique<VKTexture>(skin.getAssetPath("cursor_smoke").string(),
                                     phyDevice,
                                     logicalDevice,
                                     commandPool,
@@ -61,63 +68,80 @@ void CursorManager::UpdateAndDraw()
     ImVec2   mousePos  = io.MousePos;
     float    deltaTime = io.DeltaTime;
 
-    // 1. 生成新的拖尾点
-    // 只有当鼠标移动超过一定距离时，才添加新的点，这样拖尾更平滑
-    if ( m_trailPoints.empty() ||
-         ImLengthSqr(ImVec2(mousePos.x - m_trailPoints.front().pos.x,
-                            mousePos.y - m_trailPoints.front().pos.y)) >
-             (m_emitDistance * m_emitDistance) ) {
+    // 1. 生成新的点
+    bool isMoving =
+        m_trailPoints.empty() ||
+        ImLengthSqr(ImVec2(mousePos.x - m_trailPoints.front().pos.x,
+                           mousePos.y - m_trailPoints.front().pos.y)) >
+            (m_emitDistance * m_emitDistance);
+
+    if ( isMoving ) {
         m_trailPoints.push_front({ mousePos, 1.0f });
+        m_smokePoints.push_front({ mousePos, 1.0f });  // 同时生成烟雾
     }
 
-    // 2. 获取前景绘制列表（确保光标在所有 UI 之上）
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
 
-    // 3. 更新并绘制拖尾
-    // 从后往前遍历，以便安全地删除死亡的粒子
+    while ( m_smokePoints.size() > 256 ) m_smokePoints.pop_back();
+
+    // 2. 绘制烟雾 (最底层)
+    for ( int i = (int)m_smokePoints.size() - 1; i >= 0; --i ) {
+        TrailPoint& p = m_smokePoints[i];
+        p.life -= deltaTime / m_smokeLifeTime;
+        if ( p.life <= 0.0f ) {
+            m_smokePoints.pop_back();
+            continue;
+        }
+
+        // 烟雾逻辑：随时间变淡，且缓慢变大
+        int   alpha = (int)(p.life * 255.0f * m_smokeOpacity);
+        ImU32 color = IM_COL32(255, 255, 255, alpha);
+
+        // 扩张公式：初始大小 * (1.0 + (1.0 - 剩余寿命) * 扩张系数)
+        float currentSize =
+            m_smokeSize * (1.0f + (1.0f - p.life) * m_smokeExpansion);
+        float hs = currentSize * 0.5f;
+
+        if ( m_texSmoke ) {
+            drawList->AddImage(m_texSmoke->getImTextureID(),
+                               ImVec2(p.pos.x - hs, p.pos.y - hs),
+                               ImVec2(p.pos.x + hs, p.pos.y + hs),
+                               ImVec2(0, 0),
+                               ImVec2(1, 1),
+                               color);
+        }
+    }
+
+    // 3. 绘制拖尾 (中间层)
     for ( int i = (int)m_trailPoints.size() - 1; i >= 0; --i ) {
         TrailPoint& p = m_trailPoints[i];
-
-        // 随时间减少生命值
         p.life -= deltaTime / m_trailLifeTime;
-
         if ( p.life <= 0.0f ) {
-            // 如果生命周期结束，从队列末尾移除
             m_trailPoints.pop_back();
             continue;
         }
 
-        // 计算当前点的透明度 (0~255)
-        // 可以使用 ease-out 函数让淡出更自然，这里直接用线性 p.life
-        int   alpha     = (int)(p.life * 255.0f);
-        ImU32 tintColor = IM_COL32(255, 255, 255, alpha);
+        int   alpha       = (int)(p.life * 255.0f);
+        ImU32 color       = IM_COL32(255, 255, 255, alpha);
+        float currentSize = m_trailSize * (0.3f + 0.7f * p.life);  // 拖尾会收缩
+        float hs          = currentSize * 0.5f;
 
-        // 计算当前点的大小（随着生命周期减小而缩小）
-        // 例如：刚生成时是 100% 大小，快消失时是 30% 大小
-        float currentSize = m_trailSize * (0.3f + 0.7f * p.life);
-        float halfSize    = currentSize * 0.5f;
-
-        // 绘制拖尾纹理 (使用 cursortrail.png)
         if ( m_texTrail ) {
-            drawList->AddImage(
-                m_texTrail->getImTextureID(),
-                ImVec2(p.pos.x - halfSize, p.pos.y - halfSize),  // 左上角
-                ImVec2(p.pos.x + halfSize, p.pos.y + halfSize),  // 右下角
-                ImVec2(0, 0),
-                ImVec2(1, 1),  // UV
-                tintColor      // 带透明度的颜色
-            );
+            drawList->AddImage(m_texTrail->getImTextureID(),
+                               ImVec2(p.pos.x - hs, p.pos.y - hs),
+                               ImVec2(p.pos.x + hs, p.pos.y + hs),
+                               ImVec2(0, 0),
+                               ImVec2(1, 1),
+                               color);
         }
     }
 
-    // 4. 绘制主光标头 (使用 cursor.png)
-    // 主光标永远在最后绘制（最上层），永远是 100% 不透明
+    // 4. 绘制主光标头 (最顶层)
     if ( m_texCursor ) {
-        float halfCursorSize = m_cursorSize * 0.5f;
-        drawList->AddImage(
-            m_texCursor->getImTextureID(),
-            ImVec2(mousePos.x - halfCursorSize, mousePos.y - halfCursorSize),
-            ImVec2(mousePos.x + halfCursorSize, mousePos.y + halfCursorSize));
+        float hs = m_cursorSize * 0.5f;
+        drawList->AddImage(m_texCursor->getImTextureID(),
+                           ImVec2(mousePos.x - hs, mousePos.y - hs),
+                           ImVec2(mousePos.x + hs, mousePos.y + hs));
     }
 }
 

@@ -17,19 +17,30 @@ local Skin = {
 		alert = { 1.0, 0.2, 0.2, 1.0 },
 	},
 
+	-- 翻译配置
+	langs = {
+		en_us = "lang/en_us.lua",
+		zh_cn = "lang/zh_cn.lua",
+	},
+
+	-- 字体配置
 	fonts = {
-		ascii = "fonts/ComicShannsMonoNerdFontPropo-Regular.otf",
-		cjk = "fonts/NotoSansMonoCJKsc-Regular.otf",
+		ascii = "font/ComicShannsMonoNerdFontPropo-Regular.otf",
+		cjk = "font/NotoSansMonoCJKsc-Regular.otf",
 	},
 
 	-- 资产文件映射
 	assets = {
-		cursor = "images/cursor/cursor.png",
-		cursortrail = "images/cursor/cursortrail.png",
-		cursor_smoke = "images/cursor/cursor-smoke.png",
-		btn_play = "images/buttons/play.png",
-		btn_pause = "images/buttons/pause.png",
-		bg_main = "images/backgrounds/main_menu.jpg",
+		cursor = "image/cursor/cursor.png",
+		cursortrail = "image/cursor/cursortrail.png",
+		cursor_smoke = "image/cursor/cursor_smoke.png",
+		btn_play = "image/buttons/play.png",
+		btn_pause = "image/buttons/pause.png",
+		bg_main = "image/backgrounds/main_menu.jpg",
+		side_bar = {
+			file_explorer_icon = "image/sidebar/folder.svg",
+			audio_explorer_icon = "image/sidebar/music.svg",
+		},
 	},
 
 	-- 2d绘制画布配置
@@ -37,8 +48,8 @@ local Skin = {
 		basic_2d_canvas = {
 			name = "Basic2DCanvas",
 			shader_modules = {
-				main = "shaders/canvas/Basic2DCanvas/main",
-				effect = "shaders/canvas/Basic2DCanvas/effect",
+				main = "shader/canvas/Basic2DCanvas/main",
+				effect = "shader/canvas/Basic2DCanvas/effect",
 			},
 		},
 	},
@@ -50,11 +61,19 @@ local Skin = {
 	},
 }
 
--- 自动拼接路径 (在Lua层处理逻辑，减轻C++负担)
-function Skin:resolve_paths()
-	for k, v in pairs(self.assets) do
-		-- 最终: .../mmm-nightly/resources/images/buttons/play.png
-		self.assets[k] = self.basePath .. v
+-- 自动拼接路径 (支持无限嵌套)
+function Skin:resolve_paths(current_assets)
+	-- 如果没传参数，默认处理 self.assets
+	local assets_to_process = current_assets or self.assets
+
+	for k, v in pairs(assets_to_process) do
+		if type(v) == "table" then
+			-- 如果是表，递归处理子表
+			self:resolve_paths(v)
+		elseif type(v) == "string" then
+			-- 如果是字符串，执行拼接
+			assets_to_process[k] = self.basePath .. v
+		end
 	end
 end
 

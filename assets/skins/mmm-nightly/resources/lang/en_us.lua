@@ -2,11 +2,12 @@ return {
 	-- [ Translation Key ] = "翻译后的目标文本"
 
 	-- 普通文本
-	-- ["ui.file"] = "File",
-	-- ["ui.edit"] = "Edit",
-	-- ["ui.view"] = "View",
-	-- ["ui.settings"] = "Settings",
-	-- ["ui.exit"] = "Exit",
+	["ui.file"] = "File",
+	["ui.file.open"] = "Open",
+	["ui.file.exit"] = "Exit",
+	["ui.edit"] = "Edit",
+	["ui.edit.copy"] = "Copy",
+	["ui.edit.paste"] = "Paste",
 
 	-- 带格式化参数的文本 (TR_FMT)
 	-- 大括号 {} 的位置和数量须和代码里的逻辑一致

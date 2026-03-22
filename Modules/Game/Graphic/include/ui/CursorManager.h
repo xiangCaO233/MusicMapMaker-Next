@@ -13,36 +13,35 @@ namespace Graphic::UI
 class CursorManager
 {
 private:
-    // 定义拖尾点的数据结构
     struct TrailPoint {
-        ImVec2 pos;   // 位置
-        float  life;  // 生命周期 (1.0f 降到 0.0f)
+        ImVec2 pos;
+        float  life;
     };
 
+    // 分开存储拖尾和烟雾，因为它们的生命周期和行为不同
     std::deque<TrailPoint> m_trailPoints;
+    std::deque<TrailPoint> m_smokePoints;
 
-    // --- 可调节的参数 ---
+    // --- 拖尾参数 ---
+    float m_trailLifeTime = 0.4f;
+    float m_trailSize     = 48.0f;
+    float m_cursorSize    = 72.0f;
+    float m_emitDistance  = 1.5f;
 
-    /// @brief 拖尾存活时间(秒)
-    float m_trailLifeTime = 0.3f;
-    /// @brief 拖尾纹理的基础大小
-    float m_trailSize = 32.0f;
-    /// @bried 光标头纹理的大小
-    float m_cursorSize = 48.0f;
-    /// @brief 鼠标移动多远才生成一个新的拖尾点(防止密集堆叠)
-    float m_emitDistance = 2.0f;
+    // --- 烟雾参数 ---
+    float m_smokeLifeTime  = 0.8f;   // 烟雾存活久一点
+    float m_smokeSize      = 32.0f;  // 烟雾初始大小
+    float m_smokeExpansion = 1.5f;   // 烟雾随时间扩张的倍率
+    float m_smokeOpacity   = 0.25f;  // 烟雾的基础不透明度（烟雾通常很淡）
 
-    /// @brief 光标主体纹理
     std::unique_ptr<VKTexture> m_texCursor;
-
-    /// @brief 光标拖尾纹理
     std::unique_ptr<VKTexture> m_texTrail;
+    std::unique_ptr<VKTexture> m_texSmoke;  // 新增烟雾纹理
 
 public:
     CursorManager(vk::PhysicalDevice& phyDevice, vk::Device& logicalDevice,
                   vk::CommandPool commandPool, vk::Queue queue);
     ~CursorManager();
-    // 渲染更新函数，每帧调用一次
     void UpdateAndDraw();
 };
 
