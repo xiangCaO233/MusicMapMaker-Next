@@ -42,3 +42,7 @@
 	path = 3rdpty/sources/implot
 	url = https://github.com/epezent/implot.git
 	branch = master
+[submodule "3rdpty/sources/lunasvg"]
+	path = 3rdpty/sources/lunasvg
+	url = https://github.com/sammycage/lunasvg.git
+	branch = master

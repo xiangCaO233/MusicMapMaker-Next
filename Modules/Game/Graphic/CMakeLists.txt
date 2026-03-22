@@ -70,5 +70,6 @@ target_link_libraries(Graphic PUBLIC
         3rd_imgui
         3rd_clay
         3rd_stb
+        3rd_lunasvg
         Vulkan::Vulkan
 )

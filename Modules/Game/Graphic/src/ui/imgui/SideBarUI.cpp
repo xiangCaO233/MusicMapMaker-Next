@@ -1,20 +1,42 @@
 #include "ui/imgui/SideBarUI.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
+#include "log/colorful-log.h"
 #include "ui/layout/box/CLayBox.h"
+#include <lunasvg.h>
 
 namespace MMM::Graphic::UI
 {
 
 SideBarUI::SideBarUI(const std::string& name) : IUIView(name)
 {
+    auto loadSvg = [&](SideBarTab tab, const std::string& assetKey) {
+        auto path = Config::SkinManager::instance().getAssetPath(assetKey);
+
+        // 1. 使用 lunasvg 加载并渲染
+        auto doc = lunasvg::Document::loadFromFile(path.string());
+        if ( !doc ) {
+            XWARN("Failed to load SVG: {}", path.string());
+            return;
+        }
+
+        // 侧边栏按钮通常是 48px，我们栅格化为 48x48 (或者 96x96
+        // 以获得更好的清晰度)
+        uint32_t size   = 48;
+        auto     bitmap = doc->renderToBitmap(size, size);
+        bitmap.convertToRGBA();
+
+        // 2. 调用你的 VKTexture 内存构造函数
+        // 这里会把像素上传到显存，但还不会注册给 ImGui
+        m_tabIcons[tab] = std::make_unique<VKTexture>(
+            bitmap.data(), size, size, phys, device, pool, queue);
+    };
+
     // 读取图标路径
-    m_tabIconMap[SideBarTab::FileExplorer] =
-        Config::SkinManager::instance().getAssetPath(
-            "side_bar.file_explorer_icon");
-    m_tabIconMap[SideBarTab::AudioExplorer] =
-        Config::SkinManager::instance().getAssetPath(
-            "side_bar.audio_explorer_icon");
+    auto file_icon = Config::SkinManager::instance().getAssetPath(
+        "side_bar.file_explorer_icon");
+    auto audio_icon = Config::SkinManager::instance().getAssetPath(
+        "side_bar.audio_explorer_icon");
 }
 
 void SideBarUI::update()

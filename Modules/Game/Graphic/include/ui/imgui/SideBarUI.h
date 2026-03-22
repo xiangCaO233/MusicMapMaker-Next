@@ -1,7 +1,8 @@
 #pragma once
 
+#include "graphic/imguivk/VKTexture.h"
 #include "ui/IUIView.h"
-#include <filesystem>
+#include <memory>
 #include <unordered_map>
 
 namespace MMM::Graphic::UI
@@ -29,8 +30,8 @@ private:
     ///@brief 激活的tab,默认选中第一个
     SideBarTab m_activeTab = SideBarTab::FileExplorer;
 
-    ///@brief tab图标映射表
-    std::unordered_map<SideBarTab, std::filesystem::path> m_tabIconMap;
+    ///@brief 存储图标纹理对象
+    std::unordered_map<SideBarTab, std::unique_ptr<VKTexture>> m_tabIcons;
 };
 
 }  // namespace MMM::Graphic::UI
