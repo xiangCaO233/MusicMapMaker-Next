@@ -10,8 +10,10 @@ namespace MMM::Graphic::UI
 
 void MainDockSpaceUI::update()
 {
-    const ImGuiViewport* viewport     = ImGui::GetMainViewport();
-    float                sidebarWidth = 32.0f;
+    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    static float         sidebarWidth =
+        std::stof(skinCfg.getLayoutConfig("side_bar.width"));
 
     // 1. 获取菜单栏标准高度
     float menuBarHeight = ImGui::GetFrameHeight();
@@ -72,6 +74,8 @@ void MainDockSpaceUI::update()
         static bool is_first_time = true;
         if ( is_first_time ) {
             is_first_time = false;
+            auto& skinCfg = Config::SkinManager::instance();
+
             // --- 第一步：彻底清空这个 ID 下的所有节点 ---
             ImGui::DockBuilderRemoveNode(dockspace_id);
 
@@ -86,10 +90,23 @@ void MainDockSpaceUI::update()
             // --- 第三步：拆分空间 ---
             ImGuiID dock_id_left;
             ImGuiID dock_id_right;
+            float   sidebarRatio = std::stof(skinCfg.getLayoutConfig(
+                "floating_windows.window1.initial_ratio"));
+            auto    dir          = skinCfg.getLayoutConfig(
+                "floating_windows.window1.initial_side");
+            ImGuiDir sidebarDir;
+            if ( dir == "left" ) {
+                sidebarDir = ImGuiDir_Left;
+            } else if ( dir == "right" ) {
+                sidebarDir = ImGuiDir_Right;
+            }
             // 从总空间 (dockspace_id) 中拆出 35% 给左边，剩下的 65%
             // 会被分给右边 (dock_id_right)
-            dock_id_left = ImGui::DockBuilderSplitNode(
-                dockspace_id, ImGuiDir_Left, 0.35f, nullptr, &dock_id_right);
+            dock_id_left = ImGui::DockBuilderSplitNode(dockspace_id,
+                                                       sidebarDir,
+                                                       sidebarRatio,
+                                                       nullptr,
+                                                       &dock_id_right);
 
             // --- 第四步：把窗口填进拆好的坑位里 ---
 

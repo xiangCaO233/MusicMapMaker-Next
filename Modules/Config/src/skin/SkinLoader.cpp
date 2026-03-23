@@ -129,10 +129,9 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
 
     // 解析 layout
     sol::table layoutTable = skinTable["layout"];
-    for ( const auto& kv : layoutTable ) {
-        std::string key           = kv.first.as<std::string>();
-        std::string value         = std::to_string(kv.second.as<int>());
-        m_data.layoutConfigs[key] = value;
+    if ( layoutTable.valid() ) {
+        // 启动递归解析，初始前缀为空
+        parseLayoutRecursive(layoutTable, "");
     }
 
     XINFO("Skin loaded: " + m_data.themeName);
@@ -169,6 +168,47 @@ void SkinManager::parseAssetsRecursive(const sol::table&  currentTable,
     }
 }
 
+/**
+ * @brief 递归解析布局配置表
+ * @param currentTable 当前处理的 Lua 表
+ * @param prefix 键前缀（用于处理嵌套，如 "side_bar"）
+ */
+void SkinManager::parseLayoutRecursive(const sol::table&  currentTable,
+                                       const std::string& prefix)
+{
+    for ( const auto& kv : currentTable ) {
+        // 获取键名
+        std::string key   = kv.first.as<std::string>();
+        sol::object value = kv.second;
+
+        // 构建完整路径键名，如 "layout.side_bar.width"
+        std::string fullKey = prefix.empty() ? key : prefix + "." + key;
+
+        if ( value.is<sol::table>() ) {
+            // 如果是子表，递归进入
+            parseLayoutRecursive(value.as<sol::table>(), fullKey);
+        } else {
+            // 处理基本类型并转换为 string 存储
+            if ( value.is<std::string>() ) {
+                m_data.layoutConfigs[fullKey] = value.as<std::string>();
+            } else if ( value.is<double>() ) {
+                double val = value.as<double>();
+                // 如果是整数，去掉小数点（例如把 32.0 变成 "32"）
+                if ( val == static_cast<long long>(val) ) {
+                    m_data.layoutConfigs[fullKey] =
+                        std::to_string(static_cast<long long>(val));
+                } else {
+                    // 如果是浮点数（如 0.275），保留原样
+                    m_data.layoutConfigs[fullKey] = std::to_string(val);
+                }
+            } else if ( value.is<bool>() ) {
+                m_data.layoutConfigs[fullKey] =
+                    value.as<bool>() ? "true" : "false";
+            }
+        }
+    }
+}
+
 std::filesystem::path SkinManager::getFontPath(const std::string& key)
 {
     if ( auto fontPathit = m_data.fontPaths.find(key);
@@ -199,6 +239,16 @@ const SkinData::CanvasConfig& SkinManager::getCanvasConfig(
     }
     XERROR("CanvasConfig key not found: " + canvasName);
     return m_data.null_canvas_config;
+}
+
+///@brief 获取布局配置
+std::string SkinManager::getLayoutConfig(const std::string& key)
+{
+    if ( auto layout_config_it = m_data.layoutConfigs.find(key);
+         layout_config_it != m_data.layoutConfigs.end() ) {
+        return layout_config_it->second;
+    }
+    return {};
 }
 
 Color SkinManager::getColor(const std::string& key)

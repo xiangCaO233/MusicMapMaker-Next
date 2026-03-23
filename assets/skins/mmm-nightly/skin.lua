@@ -56,8 +56,19 @@ local Skin = {
 
 	-- 布局参数
 	layout = {
-		windowPadding = 20,
-		buttonHeight = 40,
+		-- 侧边栏配置
+		side_bar = {
+			width = 32,
+			icon_size = 20,
+		},
+		-- 悬浮窗初始配置
+		floating_windows = {
+			window1 = {
+				initial_title = "title.FileManager",
+				initial_side = "left",
+				initial_ratio = 0.275,
+			},
+		},
 	},
 }
 

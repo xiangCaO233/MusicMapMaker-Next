@@ -6,15 +6,18 @@
 namespace MMM::Graphic::UI
 {
 
-class FileManagerUI : public ITextureLoader
+class FlotingManagerUI : public ITextureLoader
 {
 public:
-    FileManagerUI(const std::string& name);
-    FileManagerUI(FileManagerUI&&)                 = default;
-    FileManagerUI(const FileManagerUI&)            = default;
-    FileManagerUI& operator=(FileManagerUI&&)      = delete;
-    FileManagerUI& operator=(const FileManagerUI&) = delete;
-    ~FileManagerUI() override;
+    FlotingManagerUI(const std::string& name);
+    FlotingManagerUI(FlotingManagerUI&&)                 = default;
+    FlotingManagerUI(const FlotingManagerUI&)            = default;
+    FlotingManagerUI& operator=(FlotingManagerUI&&)      = delete;
+    FlotingManagerUI& operator=(const FlotingManagerUI&) = delete;
+    ~FlotingManagerUI() override;
+
+    /// @brief 设置窗口标题
+    void set_window_title(const std::string& name);
 
     void update() override;
 

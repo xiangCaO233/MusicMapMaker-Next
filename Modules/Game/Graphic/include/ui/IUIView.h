@@ -11,7 +11,7 @@ class IUIView
 {
 public:
     /// @brief ui名称
-    const std::string m_name;
+    std::string m_name;
 
     IUIView(const std::string& name) : m_name(name)
     {

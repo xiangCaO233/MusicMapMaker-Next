@@ -18,8 +18,12 @@ SideBarUI::~SideBarUI()
 
 void SideBarUI::update()
 {
+    Config::SkinManager& skinCfg = Config::SkinManager::instance();
+    static float         sidebarWidth =
+        std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    static float sidebarIconSize =
+        std::stof(skinCfg.getLayoutConfig("side_bar.icon_size"));
     const ImGuiViewport* viewport      = ImGui::GetMainViewport();
-    float                sidebarWidth  = 32.0f;
     float                menuBarHeight = ImGui::GetFrameHeight();
 
     // ================== C. 左侧侧边栏窗口 ==================
@@ -87,9 +91,10 @@ void SideBarUI::update()
                 ImTextureID imTexId = (ImTextureID)tex->getImTextureID();
 
                 // 2. 计算居中位置
-                float  iconSize = 20.0f;  // 图标在 32px 按钮里的实际显示大小
-                ImVec2 p_min    = ImGui::GetItemRectMin();
-                ImVec2 p_max    = ImGui::GetItemRectMax();
+                float iconSize =
+                    sidebarIconSize;  // 图标在 32px 按钮里的实际显示大小
+                ImVec2 p_min = ImGui::GetItemRectMin();
+                ImVec2 p_max = ImGui::GetItemRectMax();
 
                 float offsetX = (rect.width - iconSize) * 0.5f;
                 float offsetY = (rect.height - iconSize) * 0.5f;
@@ -124,15 +129,15 @@ void SideBarUI::update()
     vbox.setPadding(0, 0, 0, 0)
         .setSpacing(0)
         .addElement("FileExplorerButton",
-                    Sizing::Fixed(32),
-                    Sizing::Fixed(32),
+                    Sizing::Fixed(sidebarWidth),
+                    Sizing::Fixed(sidebarWidth),
                     [=](Clay_BoundingBox rect, bool isHovered) {
                         DrawSidebarButton(
                             "File", SideBarTab::FileExplorer, rect);
                     })
         .addElement("AudioExplorerButton",
-                    Sizing::Fixed(32),
-                    Sizing::Fixed(32),
+                    Sizing::Fixed(sidebarWidth),
+                    Sizing::Fixed(sidebarWidth),
                     [=](Clay_BoundingBox rect, bool isHovered) {
                         DrawSidebarButton(
                             "Audio", SideBarTab::AudioExplorer, rect);

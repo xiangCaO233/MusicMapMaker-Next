@@ -93,11 +93,11 @@ inline std::string_view format_as(const TRResult& tr)
 // 基础宏 (支持自动转换为 const char*)
 // =========================================================
 #define TR(key_str)                                                             \
-    ([]() -> MMM::Translation::TRResult {                                       \
+    ([&]() -> MMM::Translation::TRResult {                                      \
         static std::string_view cachedResult;                                   \
         static uint32_t         cachedVer = 0;                                  \
                                                                                 \
-        constexpr uint32_t keyHash = MMM::Hash::hash_str(key_str);              \
+        uint32_t keyHash = MMM::Hash::hash_str(key_str);                        \
                                                                                 \
         auto&    trans  = MMM::Config::SkinManager::instance().getTranslator(); \
         uint32_t curVer = trans.getVersion();                                   \
