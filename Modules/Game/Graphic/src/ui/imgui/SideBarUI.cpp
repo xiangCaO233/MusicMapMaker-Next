@@ -2,47 +2,24 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "ui/ITextureLoader.h"
 #include "ui/layout/box/CLayBox.h"
 #include <lunasvg.h>
 
 namespace MMM::Graphic::UI
 {
 
-SideBarUI::SideBarUI(const std::string& name) : IUIView(name)
+SideBarUI::SideBarUI(const std::string& name) : ITextureLoader(name) {}
+
+SideBarUI::~SideBarUI()
 {
-    auto loadSvg = [&](SideBarTab tab, const std::string& assetKey) {
-        auto path = Config::SkinManager::instance().getAssetPath(assetKey);
-
-        // 1. 使用 lunasvg 加载并渲染
-        auto doc = lunasvg::Document::loadFromFile(path.string());
-        if ( !doc ) {
-            XWARN("Failed to load SVG: {}", path.string());
-            return;
-        }
-
-        // 侧边栏按钮通常是 48px，我们栅格化为 48x48 (或者 96x96
-        // 以获得更好的清晰度)
-        uint32_t size   = 48;
-        auto     bitmap = doc->renderToBitmap(size, size);
-        bitmap.convertToRGBA();
-
-        // 2. 调用你的 VKTexture 内存构造函数
-        // 这里会把像素上传到显存，但还不会注册给 ImGui
-        m_tabIcons[tab] = std::make_unique<VKTexture>(
-            bitmap.data(), size, size, phys, device, pool, queue);
-    };
-
-    // 读取图标路径
-    auto file_icon = Config::SkinManager::instance().getAssetPath(
-        "side_bar.file_explorer_icon");
-    auto audio_icon = Config::SkinManager::instance().getAssetPath(
-        "side_bar.audio_explorer_icon");
+    m_tabIcons.clear();
 }
 
 void SideBarUI::update()
 {
     const ImGuiViewport* viewport      = ImGui::GetMainViewport();
-    float                sidebarWidth  = 48.0f;
+    float                sidebarWidth  = 32.0f;
     float                menuBarHeight = ImGui::GetFrameHeight();
 
     // ================== C. 左侧侧边栏窗口 ==================
@@ -76,6 +53,9 @@ void SideBarUI::update()
     auto DrawSidebarButton =
         [&](const char* label, SideBarTab tab, Clay_BoundingBox rect) {
             bool isActive = (m_activeTab == tab);
+            // 获取纹理
+            VKTexture* tex = nullptr;
+            if ( m_tabIcons.count(tab) ) tex = m_tabIcons[tab].get();
 
             // --- 样式处理 ---
             if ( isActive ) {
@@ -95,16 +75,37 @@ void SideBarUI::update()
                                       ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
             }
 
-            // --- 核心交互逻辑 ---
-            if ( ImGui::Button(label, { rect.width, rect.height }) ) {
-                if ( m_activeTab == tab ) {
-                    // 如果点的是已经选中的按钮 -> 取消选中
-                    m_activeTab = SideBarTab::None;
-                } else {
-                    // 如果点的是未选中的按钮 -> 切换到该按钮
-                    m_activeTab = tab;
-                }
+            // 绘制透明按钮捕捉点击
+            std::string btnId = "##tab_" + std::to_string((int)tab);
+            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
+                m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
             }
+
+            // --- 核心：绘制图标 ---
+            if ( tex ) {
+                // 1. 触发自动注册并获取 ID
+                ImTextureID imTexId = (ImTextureID)tex->getImTextureID();
+
+                // 2. 计算居中位置
+                float  iconSize = 20.0f;  // 图标在 32px 按钮里的实际显示大小
+                ImVec2 p_min    = ImGui::GetItemRectMin();
+                ImVec2 p_max    = ImGui::GetItemRectMax();
+
+                float offsetX = (rect.width - iconSize) * 0.5f;
+                float offsetY = (rect.height - iconSize) * 0.5f;
+
+                ImVec2 img_p1 = { p_min.x + offsetX, p_min.y + offsetY };
+                ImVec2 img_p2 = { img_p1.x + iconSize, img_p1.y + iconSize };
+
+                // 3. 绘制图标
+                // 使用不同的着色（未激活时稍显灰色）
+                ImU32 tint =
+                    isActive ? IM_COL32_WHITE : IM_COL32(200, 200, 200, 255);
+
+                ImGui::GetWindowDrawList()->AddImage(
+                    imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
+            }
+
             // 如果是激活状态，在左侧画一个蓝色的指示条（可选，VS Code 风格）
             if ( isActive ) {
                 ImVec2 p_min = ImGui::GetItemRectMin();
@@ -123,15 +124,15 @@ void SideBarUI::update()
     vbox.setPadding(0, 0, 0, 0)
         .setSpacing(0)
         .addElement("FileExplorerButton",
-                    Sizing::Fixed(48),
-                    Sizing::Fixed(48),
+                    Sizing::Fixed(32),
+                    Sizing::Fixed(32),
                     [=](Clay_BoundingBox rect, bool isHovered) {
                         DrawSidebarButton(
                             "File", SideBarTab::FileExplorer, rect);
                     })
         .addElement("AudioExplorerButton",
-                    Sizing::Fixed(48),
-                    Sizing::Fixed(48),
+                    Sizing::Fixed(32),
+                    Sizing::Fixed(32),
                     [=](Clay_BoundingBox rect, bool isHovered) {
                         DrawSidebarButton(
                             "Audio", SideBarTab::AudioExplorer, rect);
@@ -141,6 +142,49 @@ void SideBarUI::update()
 
     // --- 弹出样式变量 ---
     ImGui::PopStyleVar(6);
+}
+
+/// @brief 是否需要重载
+bool SideBarUI::needReload()
+{
+    return std::exchange(m_needReload, false);
+}
+
+/// @brief 重载纹理
+void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device&         logicalDevice,
+                               vk::CommandPool& cmdPool, vk::Queue& queue)
+{
+    auto loadSvg = [&](SideBarTab tab, const std::string& assetKey) {
+        auto path = Config::SkinManager::instance().getAssetPath(assetKey);
+
+        // 1. 使用 lunasvg 加载并渲染
+        auto doc = lunasvg::Document::loadFromFile(path.string());
+        if ( !doc ) {
+            XWARN("Failed to load SVG: {}", path.string());
+            return;
+        }
+
+        // 侧边栏按钮通常是 48px，我们栅格化为 48x48 (或者 96x96
+        // 以获得更好的清晰度)
+        uint32_t size   = 32;
+        auto     bitmap = doc->renderToBitmap(size, size);
+        bitmap.convertToRGBA();
+
+        // 2. 调用 VKTexture 内存构造函数
+        // 这里会把像素上传到显存，但还不会注册给 ImGui
+        m_tabIcons[tab] = std::make_unique<VKTexture>(bitmap.data(),
+                                                      size,
+                                                      size,
+                                                      physicalDevice,
+                                                      logicalDevice,
+                                                      cmdPool,
+                                                      queue);
+    };
+
+    // 载入图标路径
+    loadSvg(SideBarTab::FileExplorer, "side_bar.file_explorer_icon");
+    loadSvg(SideBarTab::AudioExplorer, "side_bar.audio_explorer_icon");
 }
 
 }  // namespace MMM::Graphic::UI

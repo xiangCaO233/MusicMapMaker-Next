@@ -9,6 +9,7 @@
 namespace MMM::Graphic::UI
 {
 class IRenderableView;
+class ITextureLoader;
 class UIManager
 {
 public:
@@ -32,6 +33,9 @@ public:
     /// @brief 获取可再渲染视图
     std::vector<IRenderableView*> getRenderableViews();
 
+    /// @brief 获取纹理加载器
+    std::vector<ITextureLoader*> getTextureLoaders();
+
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
     {
@@ -48,7 +52,6 @@ public:
     /// @brief 分派所有imgui事件
     void DispatchGlobalUIEvents();
 
-
 private:
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
@@ -58,5 +61,8 @@ private:
 
     /// @brief 可再渲染ui接口注册顺序
     std::vector<std::string> m_renderableUiSequence;
+
+    /// @brief 纹理加载器接口注册顺序
+    std::vector<std::string> m_textureLoaderSequence;
 };
 }  // namespace MMM::Graphic::UI

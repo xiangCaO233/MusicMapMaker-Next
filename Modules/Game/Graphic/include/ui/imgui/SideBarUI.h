@@ -1,7 +1,7 @@
 #pragma once
 
 #include "graphic/imguivk/VKTexture.h"
-#include "ui/IUIView.h"
+#include "ui/ITextureLoader.h"
 #include <memory>
 #include <unordered_map>
 
@@ -14,7 +14,7 @@ enum class SideBarTab {
     AudioExplorer  // 选中音频浏览器
 };
 
-class SideBarUI : public IUIView
+class SideBarUI : public ITextureLoader
 {
 public:
     SideBarUI(const std::string& name);
@@ -22,11 +22,23 @@ public:
     SideBarUI(const SideBarUI&)            = delete;
     SideBarUI& operator=(SideBarUI&&)      = delete;
     SideBarUI& operator=(const SideBarUI&) = delete;
-    ~SideBarUI() override                  = default;
+
+    ~SideBarUI() override;
 
     void update() override;
 
+    /// @brief 是否需要重载
+    bool needReload() override;
+
+    /// @brief 重载纹理
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
+
 private:
+    ///@brief 是否需要重载
+    bool m_needReload{ true };
+
     ///@brief 激活的tab,默认选中第一个
     SideBarTab m_activeTab = SideBarTab::FileExplorer;
 

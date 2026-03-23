@@ -31,7 +31,7 @@ struct SkinData {
 
     // 语言表
     std::unordered_map<std::string, std::filesystem::path> langLuaPaths;
-    std::string fallBackLang{ "en_us" };
+    std::string fallBackLang{ "zh_cn" };
 
     // 字体表
     std::unordered_map<std::string, std::filesystem::path> fontPaths;

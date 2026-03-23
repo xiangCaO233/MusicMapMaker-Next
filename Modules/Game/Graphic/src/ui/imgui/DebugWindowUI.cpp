@@ -15,8 +15,6 @@ float DebugWindowUI::slideValue4{ 2.f };
 
 DebugWindowUI::DebugWindowUI(const std::string& name) : IUIView(name) {}
 
-DebugWindowUI::~DebugWindowUI() {}
-
 void DebugWindowUI::update()
 {
     LayoutContext ctx(m_layoutCtx, "DebugWindow");

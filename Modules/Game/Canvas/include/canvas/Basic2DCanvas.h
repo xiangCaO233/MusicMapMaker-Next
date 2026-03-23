@@ -12,7 +12,8 @@ public:
     Basic2DCanvas(const Basic2DCanvas&)            = delete;
     Basic2DCanvas& operator=(Basic2DCanvas&&)      = delete;
     Basic2DCanvas& operator=(const Basic2DCanvas&) = delete;
-    ~Basic2DCanvas()                               = default;
+
+    ~Basic2DCanvas() override = default;
 
     // 接口实现
     void update() override;
@@ -31,6 +32,14 @@ public:
      */
     std::string getShaderName(const std::string& shader_module_name) override;
 
+    /// @brief 是否需要重载
+    bool needReload() override;
+
+    /// @brief 重载纹理
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
+
 private:
     /// @brief 画布名称
     std::string m_canvasName;
@@ -38,6 +47,9 @@ private:
     /// @brief 缓存spv源码，避免重复读盘
     std::unordered_map<std::string, std::vector<std::string>>
         m_shaderSourceCache;
+
+    ///@brief 是否需要重载
+    bool m_needReload{ true };
 };
 
 }  // namespace MMM::Canvas

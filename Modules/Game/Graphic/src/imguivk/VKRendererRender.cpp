@@ -66,6 +66,19 @@ void VKRenderer::render(NativeWindow&               window,
         }
     }
 
+    // 检查需不需要重载纹理
+    for ( auto* uiManager : uiManagers ) {
+        for ( auto textureLoader : uiManager->getTextureLoaders() ) {
+            // 给标记了需要重载纹理的ui重载
+            if ( textureLoader->needReload() ) {
+                textureLoader->reloadTextures(m_vkPhysicalDevice,
+                                              m_vkLogicalDevice,
+                                              m_vkCommandPool,
+                                              m_LogicDeviceGraphicsQueue);
+            }
+        }
+    }
+
     // 录制所有Imgui的ui布局
     for ( UI::UIManager* uiManager : uiManagers ) {
         uiManager->updateAllUIs();

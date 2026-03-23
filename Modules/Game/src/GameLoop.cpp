@@ -1,5 +1,6 @@
 #include "game/GameLoop.h"
 #include "canvas/Basic2DCanvas.h"
+#include "config/skin/translation/Translation.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
@@ -7,6 +8,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/CLayoutTestUI.h"
 #include "ui/imgui/DebugWindowUI.h"
+#include "ui/imgui/FileManagerUI.h"
 #include "ui/imgui/ImguiTestWindowUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
@@ -34,6 +36,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
     m_uiManager.registerView(
         "SideBarUI", std::make_unique<Graphic::UI::SideBarUI>("SideBarUI"));
+    m_uiManager.registerView(
+        TR("title.FileManager"),
+        std::make_unique<Graphic::UI::FileManagerUI>(TR("title.FileManager")));
     m_uiManager.registerView(
         "Basic2DCanvas",
         std::make_unique<Canvas::Basic2DCanvas>("Basic2DCanvas", 200, 200));

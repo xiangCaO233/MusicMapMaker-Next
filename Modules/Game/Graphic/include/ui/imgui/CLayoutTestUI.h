@@ -13,7 +13,8 @@ public:
     CLayoutTestUI(const CLayoutTestUI&)            = delete;
     CLayoutTestUI& operator=(CLayoutTestUI&&)      = delete;
     CLayoutTestUI& operator=(const CLayoutTestUI&) = delete;
-    ~CLayoutTestUI() override                      = default;
+
+    ~CLayoutTestUI() override = default;
 
     void update() override;
 

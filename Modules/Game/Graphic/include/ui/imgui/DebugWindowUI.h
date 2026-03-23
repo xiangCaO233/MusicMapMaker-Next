@@ -13,7 +13,7 @@ public:
     DebugWindowUI(const DebugWindowUI&)            = default;
     DebugWindowUI& operator=(DebugWindowUI&&)      = delete;
     DebugWindowUI& operator=(const DebugWindowUI&) = delete;
-    ~DebugWindowUI();
+    ~DebugWindowUI() override                      = default;
 
     void update() override;
 

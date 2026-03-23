@@ -3,7 +3,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
-#include "ui/IUIView.h"
+#include "ui/ITextureLoader.h"
 #include "ui/brush/Brush.h"
 
 namespace MMM::Graphic
@@ -11,15 +11,15 @@ namespace MMM::Graphic
 namespace UI
 {
 class Brush;
-class IRenderableView : public IUIView, public VKOffScreenRenderer
+class IRenderableView : public ITextureLoader, public VKOffScreenRenderer
 {
 public:
-    IRenderableView(const std::string& name) : IUIView(name) {}
+    IRenderableView(const std::string& name) : ITextureLoader(name) {}
     IRenderableView(IRenderableView&&)                 = delete;
     IRenderableView(const IRenderableView&)            = delete;
     IRenderableView& operator=(IRenderableView&&)      = delete;
     IRenderableView& operator=(const IRenderableView&) = delete;
-    ~IRenderableView() override                        = default;
+    virtual ~IRenderableView() override                = default;
 
     ///@brief 获取笔刷
     const Brush& getBrush() const { return m_brush; }

@@ -11,7 +11,7 @@ namespace MMM::Graphic::UI
 void MainDockSpaceUI::update()
 {
     const ImGuiViewport* viewport     = ImGui::GetMainViewport();
-    float                sidebarWidth = 48.0f;
+    float                sidebarWidth = 32.0f;
 
     // 1. 获取菜单栏标准高度
     float menuBarHeight = ImGui::GetFrameHeight();
@@ -63,22 +63,44 @@ void MainDockSpaceUI::update()
 
         ImGui::Begin("RightDockHost", nullptr, dock_flags);
 
+        // 1. 声明并建立 DockSpace (必须在 Builder 逻辑之前或同一层级)
         ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
-        // 这里 Size 传 (0,0) 表示占满 RightDockHost 窗口
+        // 注意：这个 DockSpace 必须每帧都调用
         ImGui::DockSpace(
             dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
 
         static bool is_first_time = true;
         if ( is_first_time ) {
             is_first_time = false;
+            // --- 第一步：彻底清空这个 ID 下的所有节点 ---
             ImGui::DockBuilderRemoveNode(dockspace_id);
+
+            // --- 第二步：添加一个新的根节点，并设置总大小 ---
             ImGui::DockBuilderAddNode(dockspace_id,
                                       ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(
                 dockspace_id,
                 ImVec2(viewport->WorkSize.x - sidebarWidth,
                        viewport->WorkSize.y - menuBarHeight));
-            ImGui::DockBuilderDockWindow("Basic2DCanvas", dockspace_id);
+
+            // --- 第三步：拆分空间 ---
+            ImGuiID dock_id_left;
+            ImGuiID dock_id_right;
+            // 从总空间 (dockspace_id) 中拆出 35% 给左边，剩下的 65%
+            // 会被分给右边 (dock_id_right)
+            dock_id_left = ImGui::DockBuilderSplitNode(
+                dockspace_id, ImGuiDir_Left, 0.35f, nullptr, &dock_id_right);
+
+            // --- 第四步：把窗口填进拆好的坑位里 ---
+
+            // 文件管理器 -> 停靠在左侧坑位
+            ImGui::DockBuilderDockWindow(TR("title.FileManager"), dock_id_left);
+
+            // 画布 -> 停靠在剩余的右侧（中心）坑位
+            // 【关键】不要停靠到 dockspace_id，要停靠到 split 出来的右侧 ID
+            ImGui::DockBuilderDockWindow("Basic2DCanvas", dock_id_right);
+
+            // --- 第五步：完成构建 ---
             ImGui::DockBuilderFinish(dockspace_id);
         }
 

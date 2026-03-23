@@ -8,6 +8,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "ui/IRenderableView.h"
+#include "ui/ITextureLoader.h"
 #include <vector>
 
 namespace MMM::Graphic::UI
@@ -18,12 +19,19 @@ void UIManager::registerView(const std::string&       name,
                              std::unique_ptr<IUIView> view)
 {
     m_uiSequence.push_back(name);
+
     if ( view->renderable() ) {
         m_renderableUiSequence.push_back(name);
         XINFO("Registered Renderable [{}] UIView", name);
     } else {
         XINFO("Registered General [{}] UIView", name);
     }
+
+    auto textureLoader = dynamic_cast<ITextureLoader*>(view.get());
+    if ( textureLoader ) {
+        m_textureLoaderSequence.push_back(name);
+    }
+
     m_uiviews[name] = std::move(view);
 }
 
@@ -42,6 +50,17 @@ std::vector<IRenderableView*> UIManager::getRenderableViews()
             static_cast<IRenderableView*>(m_uiviews[name].get()));
     }
     return renderableViews;
+}
+
+/// @brief 获取纹理加载器
+std::vector<ITextureLoader*> UIManager::getTextureLoaders()
+{
+    std::vector<ITextureLoader*> textureLoaders;
+    for ( const auto& name : m_textureLoaderSequence ) {
+        textureLoaders.push_back(
+            static_cast<ITextureLoader*>(m_uiviews[name].get()));
+    }
+    return textureLoaders;
 }
 
 /// @brief 更新所有ui视图

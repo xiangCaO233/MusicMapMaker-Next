@@ -4,10 +4,13 @@
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
+#include "ui/UIManager.h"
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <random>
+#include <utility>
 
 namespace MMM::Canvas
 {
@@ -122,6 +125,19 @@ std::vector<std::string> Basic2DCanvas::getShaderSources(
 std::string Basic2DCanvas::getShaderName(const std::string& shader_module_name)
 {
     return m_canvasName + ":" + shader_module_name;
+}
+
+/// @brief 是否需要重载
+bool Basic2DCanvas::needReload()
+{
+    return std::exchange(m_needReload, false);
+}
+
+/// @brief 重载纹理
+void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                   vk::Device&         logicalDevice,
+                                   vk::CommandPool& cmdPool, vk::Queue& queue)
+{
 }
 
 }  // namespace MMM::Canvas

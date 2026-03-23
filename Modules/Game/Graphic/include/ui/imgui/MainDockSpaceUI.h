@@ -12,7 +12,8 @@ public:
     MainDockSpaceUI(const MainDockSpaceUI&)            = delete;
     MainDockSpaceUI& operator=(MainDockSpaceUI&&)      = delete;
     MainDockSpaceUI& operator=(const MainDockSpaceUI&) = delete;
-    ~MainDockSpaceUI() override                        = default;
+
+    ~MainDockSpaceUI() override = default;
 
     void update() override;
 

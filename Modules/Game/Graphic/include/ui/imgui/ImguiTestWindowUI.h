@@ -13,7 +13,8 @@ public:
     ImguiTestWindowUI(const ImguiTestWindowUI&)            = delete;
     ImguiTestWindowUI& operator=(ImguiTestWindowUI&&)      = delete;
     ImguiTestWindowUI& operator=(const ImguiTestWindowUI&) = delete;
-    ~ImguiTestWindowUI() override                          = default;
+
+    ~ImguiTestWindowUI() override = default;
 
     void update() override;
 
