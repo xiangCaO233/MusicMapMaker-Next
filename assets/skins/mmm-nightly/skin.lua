@@ -31,6 +31,7 @@ local Skin = {
 
 	-- 资产文件映射
 	assets = {
+		logo = "image/logo.png",
 		cursor = "image/cursor/cursor.png",
 		cursortrail = "image/cursor/cursortrail.png",
 		cursor_smoke = "image/cursor/cursor_smoke.png",

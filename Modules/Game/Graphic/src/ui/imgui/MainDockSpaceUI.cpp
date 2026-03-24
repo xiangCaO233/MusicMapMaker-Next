@@ -31,12 +31,53 @@ void MainDockSpaceUI::update()
 
         ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
         if ( ImGui::BeginMenuBar() ) {
+            // --- 1. 前置图标 (例如 Logo) ---
+            // 如果你有纹理 ID，用 ImGui::Image；如果没有，先用文本代替
+            ImGui::TextDisabled(" (M) ");  // 这里放置你的图标
+            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);  // 垂直分割线
+
             if ( ImGui::BeginMenu(TR("ui.file")) ) {
                 ImGui::EndMenu();
             }
             if ( ImGui::BeginMenu(TR("ui.edit")) ) {
                 ImGui::EndMenu();
             }
+            // --- 3. 计算并跳转到右侧 ---
+            // 假设每个按钮宽度等于菜单栏高度
+            float buttonSize      = ImGui::GetFrameHeight();
+            float numberOfButtons = 3;
+            // 设置光标位置：总宽度 - 按钮占用的总宽度
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() -
+                                 (buttonSize * numberOfButtons));
+
+            // 样式微调：移除按钮背景边框，让它看起来像原生标题栏按钮
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
+
+            // 最小化
+            if ( ImGui::Button("_", ImVec2(buttonSize, buttonSize)) ) {
+                // 这里调用 GLFW 最小化
+                // glfwIconifyWindow(window);
+            }
+
+            // 最大化 / 还原
+            ImGui::SameLine();
+            if ( ImGui::Button("[]", ImVec2(buttonSize, buttonSize)) ) {
+                // 这里切换最大化状态
+            }
+
+            // 关闭 (通常悬停时显示红色)
+            ImGui::SameLine();
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.9f, 0.1f, 0.1f, 1.0f));
+            if ( ImGui::Button("X", ImVec2(buttonSize, buttonSize)) ) {
+                // glfwSetWindowShouldClose(window, GLFW_TRUE);
+            }
+            ImGui::PopStyleColor();  // 弹出 Close 按钮的 Hover 颜色
+            ImGui::PopStyleVar(2);
+            ImGui::PopStyleColor(1);  // 弹出按钮背景颜色
+
             ImGui::EndMenuBar();
         }
         ImGui::End();
