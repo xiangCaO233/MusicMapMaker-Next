@@ -1,9 +1,12 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/ui/GLFWNativeEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include <utility>
 
 namespace MMM::Graphic::UI
 {
@@ -30,10 +33,48 @@ void MainDockSpaceUI::update()
             ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground;
 
         ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
+        float buttonSize = ImGui::GetFrameHeight();
         if ( ImGui::BeginMenuBar() ) {
+            // 定义 Lambda (内部 Pop 2个 Color，不改变外部计数)
+            auto DrawIconButton = [&](const char*                 str_id,
+                                      std::unique_ptr<VKTexture>& tex,
+                                      float                       btnSize,
+                                      ImVec4 hoverColor) -> bool {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+
+                bool clicked = ImGui::Button(str_id, ImVec2(btnSize, btnSize));
+
+                if ( tex ) {
+                    ImTextureID imTexId  = (ImTextureID)tex->getImTextureID();
+                    float       iconSize = btnSize * 0.65f;
+                    ImVec2      p_min    = ImGui::GetItemRectMin();
+                    float       offsetX  = (btnSize - iconSize) * 0.5f;
+                    float       offsetY  = (btnSize - iconSize) * 0.5f;
+                    ImVec2 img_p1 = { p_min.x + offsetX, p_min.y + offsetY };
+                    ImVec2 img_p2 = { img_p1.x + iconSize,
+                                      img_p1.y + iconSize };
+                    ImU32  tint   = ImGui::IsItemActive()
+                                        ? IM_COL32(180, 180, 180, 255)
+                                        : IM_COL32_WHITE;
+                    ImGui::GetWindowDrawList()->AddImage(
+                        imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
+                }
+
+                ImGui::PopStyleColor(2);  // 弹出 Lambda 内部的
+                return clicked;
+            };
+            // 【修正点 1】统一在此处 Push 样式，计数：Color 1个, Var 2个
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
             // --- 1. 前置图标 (例如 Logo) ---
-            // 如果你有纹理 ID，用 ImGui::Image；如果没有，先用文本代替
-            ImGui::TextDisabled(" (M) ");  // 这里放置你的图标
+            DrawIconButton(
+                "##logo", m_logo_texture, buttonSize, ImVec4(1, 1, 1, 0.1f));
+            // 按照 Push 的数量精确 Pop
+            ImGui::PopStyleVar(2);    // 弹出 Rounding 和 Spacing
+            ImGui::PopStyleColor(1);  // 弹出外部的 Button Color
+
             ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);  // 垂直分割线
 
             if ( ImGui::BeginMenu(TR("ui.file")) ) {
@@ -43,40 +84,48 @@ void MainDockSpaceUI::update()
                 ImGui::EndMenu();
             }
             // --- 3. 计算并跳转到右侧 ---
-            // 假设每个按钮宽度等于菜单栏高度
-            float buttonSize      = ImGui::GetFrameHeight();
             float numberOfButtons = 3;
-            // 设置光标位置：总宽度 - 按钮占用的总宽度
             ImGui::SetCursorPosX(ImGui::GetWindowWidth() -
                                  (buttonSize * numberOfButtons));
 
-            // 样式微调：移除按钮背景边框，让它看起来像原生标题栏按钮
+            // 【修正点 1】统一在此处 Push 样式，计数：Color 1个, Var 2个
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
-            // 最小化
-            if ( ImGui::Button("_", ImVec2(buttonSize, buttonSize)) ) {
-                // 这里调用 GLFW 最小化
-                // glfwIconifyWindow(window);
+
+            // A. 最小化按钮
+            if ( DrawIconButton("##Minimize",
+                                m_minimize_texture,
+                                buttonSize,
+                                ImVec4(1, 1, 1, 0.1f)) ) {
+                Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+                    .type = NativeEventType::GLFW_ICONFY_WINDOW });
             }
 
-            // 最大化 / 还原
+            // B. 最大化 / 还原按钮
             ImGui::SameLine();
-            if ( ImGui::Button("[]", ImVec2(buttonSize, buttonSize)) ) {
-                // 这里切换最大化状态
+            if ( DrawIconButton("##Maximize",
+                                m_maxmize_texture,
+                                buttonSize,
+                                ImVec4(1, 1, 1, 0.1f)) ) {
+                Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+                    .type = NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
             }
 
-            // 关闭 (通常悬停时显示红色)
+            // C. 关闭按钮
             ImGui::SameLine();
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.9f, 0.1f, 0.1f, 1.0f));
-            if ( ImGui::Button("X", ImVec2(buttonSize, buttonSize)) ) {
-                // glfwSetWindowShouldClose(window, GLFW_TRUE);
+            if ( DrawIconButton("##Close",
+                                m_close_texture,
+                                buttonSize,
+                                ImVec4(0.9f, 0.1f, 0.1f, 1.0f)) ) {
+                Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+                    .type = NativeEventType::GLFW_CLOSE_WINDOW });
             }
-            ImGui::PopStyleColor();  // 弹出 Close 按钮的 Hover 颜色
-            ImGui::PopStyleVar(2);
-            ImGui::PopStyleColor(1);  // 弹出按钮背景颜色
+
+            // 按照 Push 的数量精确 Pop
+            ImGui::PopStyleVar(2);    // 弹出 Rounding 和 Spacing
+            ImGui::PopStyleColor(1);  // 弹出外部的 Button Color
 
             ImGui::EndMenuBar();
         }
@@ -152,7 +201,8 @@ void MainDockSpaceUI::update()
             // --- 第四步：把窗口填进拆好的坑位里 ---
 
             // 文件管理器 -> 停靠在左侧坑位
-            ImGui::DockBuilderDockWindow(TR("title.FileManager"), dock_id_left);
+            ImGui::DockBuilderDockWindow(TR("title.file_manager"),
+                                         dock_id_left);
 
             // 画布 -> 停靠在剩余的右侧（中心）坑位
             // 【关键】不要停靠到 dockspace_id，要停靠到 split 出来的右侧 ID
@@ -165,6 +215,56 @@ void MainDockSpaceUI::update()
         ImGui::End();
         ImGui::PopStyleVar(3);
     }
+}
+/// @brief 是否需要重载
+bool MainDockSpaceUI::needReload()
+{
+    return std::exchange(m_needReload, false);
+}
+
+/// @brief 重载纹理
+void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                     vk::Device&         logicalDevice,
+                                     vk::CommandPool& cmdPool, vk::Queue& queue)
+{
+    ///@brief 图标纹理
+    m_logo_texture = loadTextureResource(
+        Config::SkinManager::instance().getAssetPath("logo"),
+        24,
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    ;
+
+    ///@brief 最小化图标纹理
+    m_minimize_texture = loadTextureResource(
+        Config::SkinManager::instance().getAssetPath("menubar.minimize"),
+        24,
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+
+    ///@brief 最大化图标纹理
+    m_maxmize_texture = loadTextureResource(
+        Config::SkinManager::instance().getAssetPath("menubar.maximize"),
+        24,
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    ;
+
+    ///@brief 关闭图标纹理
+    m_close_texture = loadTextureResource(
+        Config::SkinManager::instance().getAssetPath("menubar.close"),
+        24,
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    ;
 }
 
 };  // namespace MMM::Graphic::UI

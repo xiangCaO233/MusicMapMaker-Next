@@ -77,7 +77,7 @@ void CLayoutTestUI::update()
     rootHBox.addLayout("Contents", clayVBox);
 
     // 一键渲染：根布局尺寸必须固定为 avail
-    rootHBox.render(ctx.m_avail.x, ctx.m_avail.y, ctx.m_startPos);
+    rootHBox.render(ctx);
 }
 
 }  // namespace MMM::Graphic::UI

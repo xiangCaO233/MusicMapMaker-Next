@@ -2,6 +2,7 @@
 
 #include "graphic/imguivk/VKTexture.h"
 #include "ui/ITextureLoader.h"
+#include <filesystem>
 #include <memory>
 #include <unordered_map>
 

@@ -12,7 +12,9 @@ return {
 	-- ["ui.settings"] = "设置",
 	-- ["ui.exit"] = "退出",
 
-	["title.FileManager"] = "资源管理器",
+	["title.file_manager"] = "资源管理器",
+	["ui.file_manager.initial_hint"] = "暂未打开项目",
+	["ui.file_manager.open_directory"] = "打开文件夹",
 
 	-- 带格式化参数的文本 (TR_FMT)
 	-- 大括号 {} 的位置和数量须和代码里的逻辑一致

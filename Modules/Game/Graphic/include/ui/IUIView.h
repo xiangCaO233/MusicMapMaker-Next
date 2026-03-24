@@ -1,5 +1,6 @@
 #pragma once
 
+#include "log/colorful-log.h"
 #include "ui/layout/CLayDefs.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include <imgui.h>
@@ -40,7 +41,8 @@ class LayoutContext final
 
 public:
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
-                  const char* iwindow_name, bool custom_window_flags = false,
+                  const std::string&              iwindow_name,
+                  bool                            custom_window_flags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
@@ -48,9 +50,9 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if ( custom_window_flags ) {
-            ImGui::Begin(iwindow_name, nullptr, windowFlags);
+            ImGui::Begin(iwindow_name.c_str(), nullptr, windowFlags);
         } else {
-            ImGui::Begin(iwindow_name);
+            ImGui::Begin(iwindow_name.c_str());
         }
         // 1. 获取 ImGui 的绘图起始点（绝对坐标）
         m_startPos = ImGui::GetCursorScreenPos();

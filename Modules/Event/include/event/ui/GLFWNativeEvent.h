@@ -6,6 +6,7 @@
 enum class NativeEventType {
     GLFW_CLOSE_WINDOW,
     GLFW_ICONFY_WINDOW,
+    GLFW_TOGGLE_WINDOW_MAXIMIZE,
 };
 
 namespace MMM::Event

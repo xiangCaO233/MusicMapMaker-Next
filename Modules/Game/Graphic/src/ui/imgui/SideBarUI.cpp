@@ -143,7 +143,7 @@ void SideBarUI::update()
                             "Audio", SideBarTab::AudioExplorer, rect);
                     })
         .addSpring();
-    vbox.render(ctx.m_avail.x, ctx.m_avail.y, ctx.m_startPos);
+    vbox.render(ctx);
 
     // --- 弹出样式变量 ---
     ImGui::PopStyleVar(6);
@@ -160,36 +160,27 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                vk::Device&         logicalDevice,
                                vk::CommandPool& cmdPool, vk::Queue& queue)
 {
-    auto loadSvg = [&](SideBarTab tab, const std::string& assetKey) {
-        auto path = Config::SkinManager::instance().getAssetPath(assetKey);
+    auto&          skin     = Config::SkinManager::instance();
+    const uint32_t iconSize = 32;
 
-        // 1. 使用 lunasvg 加载并渲染
-        auto doc = lunasvg::Document::loadFromFile(path.string());
-        if ( !doc ) {
-            XWARN("Failed to load SVG: {}", path.string());
-            return;
-        }
+    // 直接调用基类生产接口，只需要给路径
+    m_tabIcons[SideBarTab::FileExplorer] =
+        loadTextureResource(skin.getAssetPath("side_bar.file_explorer_icon"),
+                            iconSize,
+                            physicalDevice,
+                            logicalDevice,
+                            cmdPool,
+                            queue);
 
-        // 侧边栏按钮通常是 48px，我们栅格化为 48x48 (或者 96x96
-        // 以获得更好的清晰度)
-        uint32_t size   = 32;
-        auto     bitmap = doc->renderToBitmap(size, size);
-        bitmap.convertToRGBA();
+    m_tabIcons[SideBarTab::AudioExplorer] =
+        loadTextureResource(skin.getAssetPath("side_bar.audio_explorer_icon"),
+                            iconSize,
+                            physicalDevice,
+                            logicalDevice,
+                            cmdPool,
+                            queue);
 
-        // 2. 调用 VKTexture 内存构造函数
-        // 这里会把像素上传到显存，但还不会注册给 ImGui
-        m_tabIcons[tab] = std::make_unique<VKTexture>(bitmap.data(),
-                                                      size,
-                                                      size,
-                                                      physicalDevice,
-                                                      logicalDevice,
-                                                      cmdPool,
-                                                      queue);
-    };
-
-    // 载入图标路径
-    loadSvg(SideBarTab::FileExplorer, "side_bar.file_explorer_icon");
-    loadSvg(SideBarTab::AudioExplorer, "side_bar.audio_explorer_icon");
+    XINFO("SideBar textures reloaded.");
 }
 
 }  // namespace MMM::Graphic::UI

@@ -36,9 +36,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
     m_uiManager.registerView(
         "SideBarUI", std::make_unique<Graphic::UI::SideBarUI>("SideBarUI"));
-    m_uiManager.registerView(TR("title.FileManager"),
+    m_uiManager.registerView(TR("title.file_manager"),
                              std::make_unique<Graphic::UI::FlotingManagerUI>(
-                                 TR("title.FileManager")));
+                                 TR("title.file_manager")));
     m_uiManager.registerView(
         "Basic2DCanvas",
         std::make_unique<Canvas::Basic2DCanvas>("Basic2DCanvas", 200, 200));

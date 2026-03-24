@@ -38,6 +38,11 @@ local Skin = {
 		btn_play = "image/buttons/play.png",
 		btn_pause = "image/buttons/pause.png",
 		bg_main = "image/backgrounds/main_menu.jpg",
+		menubar = {
+			minimize = "image/menubar/window-minimize.svg",
+			maximize = "image/menubar/window-maximize.svg",
+			close = "image/menubar/window-close.svg",
+		},
 		side_bar = {
 			file_explorer_icon = "image/sidebar/folder.svg",
 			audio_explorer_icon = "image/sidebar/music.svg",

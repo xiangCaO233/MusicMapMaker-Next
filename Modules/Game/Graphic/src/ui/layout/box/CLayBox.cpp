@@ -4,18 +4,18 @@
 namespace MMM::Graphic::UI
 {
 
-void CLayBox::render(float containerW, float containerH, ImVec2 windowOrigin)
+void CLayBox::render(LayoutContext& lctx)
 {
-    Clay_SetLayoutDimensions({ containerW, containerH });
+    Clay_SetLayoutDimensions({ lctx.m_avail.x, lctx.m_avail.y });
     Clay_BeginLayout();
 
     // 1. 根节点直接传入外部给定的固定尺寸
     this->internalGenerate("CLAY_ROOT_CONTAINER",
-                           Sizing::Fixed(containerW).axis,
-                           Sizing::Fixed(containerH).axis);
+                           Sizing::Fixed(lctx.m_avail.x).axis,
+                           Sizing::Fixed(lctx.m_avail.y).axis);
 
     Clay_EndLayout();
-    this->internalExecute(windowOrigin);
+    this->internalExecute(lctx.m_startPos);
 }
 
 void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,

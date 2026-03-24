@@ -4,7 +4,9 @@
 #include "event/input/glfw/GLFWMouseEvent.h"
 #include "event/input/translators/GLFWTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
+#include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
+#include <GLFW/glfw3.h>
 
 #ifdef WIN32
 #    define GLFW_EXPOSE_NATIVE_WIN32
@@ -139,6 +141,35 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
 
             MMM::Event::EventBus::instance().publish(e);
+        });
+
+    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
+        [&](Event::GLFWNativeEvent e) {
+            switch ( e.type ) {
+            case NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
+                // 获取当前最大化状态
+                int maximized =
+                    glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
+                if ( maximized ) {
+                    glfwRestoreWindow(m_windowHandle);
+                    XINFO("Window restored.");
+                } else {
+                    glfwMaximizeWindow(m_windowHandle);
+                    XINFO("Window maximized.");
+                }
+                break;
+            }
+            case NativeEventType::GLFW_ICONFY_WINDOW: {
+                // 最小化窗口
+                glfwIconifyWindow(m_windowHandle);
+                XINFO("Window iconified.");
+                break;
+            }
+            case NativeEventType::GLFW_CLOSE_WINDOW: {
+                glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
+                break;
+            }
+            }
         });
 }
 

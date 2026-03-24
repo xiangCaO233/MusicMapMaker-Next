@@ -31,6 +31,7 @@ public:
                                 vk::Queue&          queue) override;
 
 private:
+    ///@brief 是否需要重载
     bool m_needReload{ true };
 };
 

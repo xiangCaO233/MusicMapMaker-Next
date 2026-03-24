@@ -83,7 +83,7 @@ void DebugWindowUI::update()
             }
         });
     clayVBox.addSpring();
-    clayVBox.render(ctx.m_avail.x, ctx.m_avail.y, ctx.m_startPos);
+    clayVBox.render(ctx);
 }
 
 }  // namespace MMM::Graphic::UI

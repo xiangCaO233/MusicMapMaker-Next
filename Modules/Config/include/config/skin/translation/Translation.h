@@ -94,8 +94,8 @@ inline std::string_view format_as(const TRResult& tr)
 // =========================================================
 #define TR(key_str)                                                             \
     ([&]() -> MMM::Translation::TRResult {                                      \
-        static std::string_view cachedResult;                                   \
-        static uint32_t         cachedVer = 0;                                  \
+        static std::string cachedResult;                                        \
+        static uint32_t    cachedVer = 0;                                       \
                                                                                 \
         uint32_t keyHash = MMM::Hash::hash_str(key_str);                        \
                                                                                 \

@@ -2,6 +2,7 @@
 
 #include "../CLayDefs.h"
 #include "imgui.h"
+#include "ui/IUIView.h"
 #include <cstdint>
 #include <functional>
 #include <vector>
@@ -93,7 +94,7 @@ public:
     }
 
     // --- 执行布局与映射 ---
-    void render(float containerW, float containerH, ImVec2 windowOrigin);
+    void render(LayoutContext& lctx);
 
 protected:
     CLayBox(Clay_LayoutDirection dir) : m_dir(dir) {}
