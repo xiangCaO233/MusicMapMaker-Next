@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.31)
 
 project(MusicMapMaker-Next)
 
+if(MSVC)
+	# 设置msvc需要的 VCPKG_ROOT
+	set(VCPKG_ROOT "D:/vcpkg")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
