@@ -6,6 +6,42 @@
 #include "event/input/translators/UniversalCodepoint.h"
 #include "log/colorful-log.h"
 
+#ifdef WIN32
+#    define GLFW_EXPOSE_NATIVE_WIN32
+#    include <GLFW/glfw3native.h>
+#    include <dwmapi.h>
+// 窗口过程拦截器
+LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+                            UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    if ( uMsg == WM_NCHITTEST ) {
+        POINT pt = { LOWORD(lParam), HIWORD(lParam) };
+        ScreenToClient(hWnd, &pt);
+        RECT rect;
+        GetClientRect(hWnd, &rect);
+
+        int  border = 8;  // 响应缩放的边缘宽度
+        bool left   = pt.x < border;
+        bool right  = pt.x > rect.right - border;
+        bool top    = pt.y < border;
+        bool bottom = pt.y > rect.bottom - border;
+
+        if ( top && left ) return HTTOPLEFT;
+        if ( top && right ) return HTTOPRIGHT;
+        if ( bottom && left ) return HTBOTTOMLEFT;
+        if ( bottom && right ) return HTBOTTOMRIGHT;
+        if ( left ) return HTLEFT;
+        if ( right ) return HTRIGHT;
+        if ( top ) return HTTOP;
+        if ( bottom ) return HTBOTTOM;
+
+        // 如果你需要像原标题栏一样拖动窗口，可以自定义一块区域返回 HTCAPTION
+        // if (pt.y < 30) return HTCAPTION;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+#endif
+
 namespace MMM::Graphic
 {
 double NativeWindow::s_lastMouseX{ 0. };
@@ -19,10 +55,26 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     }
     // 隐藏系统标题栏
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-    // glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
 
     // 不再需要初始化 ImGui 的辅助窗口
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
+
+    // 在 glfwCreateWindow 之后调用
+#ifdef WIN32
+    HWND hwnd = glfwGetWin32Window(m_windowHandle);
+
+    SetWindowSubclass(hwnd, WindowProc, 0, 0);
+
+    // 方案 1：强制开启阴影（即使是无边框）
+    const MARGINS shadow_margin = { 3, 3, 3, 3 };
+    DwmExtendFrameIntoClientArea(hwnd, &shadow_margin);
+
+    // 方案 2：如果是 Windows 11，甚至可以设置圆角
+    DWORD count = DWMWCP_ROUND;
+    DwmSetWindowAttribute(
+        hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &count, sizeof(count));
+#endif
 
     // 隐藏系统原生光标
     glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);

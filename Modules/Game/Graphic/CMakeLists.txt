@@ -20,57 +20,58 @@ add_subdirectory("Font")
 #         src/vk/VKRendererRess.cpp
 # )
 
-add_library(
-        Graphic
-        STATIC
-        src/glfw/GLFWCallback.cpp
-        src/glfw/NativeWindow.cpp
-        src/imguivk/context/VKContext.cpp
-        src/imguivk/context/VKContextGLFW.cpp
-        src/imguivk/context/VKContextDevice.cpp
-        src/imguivk/context/VKContextDebugFeats.cpp
-        src/imguivk/context/VKContextInfos.cpp
-        src/imguivk/context/VKContextImguiImpl.cpp
-        src/imguivk/mem/VKMemBuffer.cpp
-        src/imguivk/VKOffScreenRenderer.cpp
-        src/imguivk/VKOffScreenRendererRess.cpp
-        src/imguivk/VKRenderPass.cpp
-        src/imguivk/VKRenderPipeline.cpp
-        src/imguivk/VKRenderer.cpp
-        src/imguivk/VKRendererRender.cpp
-        src/imguivk/VKRendererRess.cpp
-        src/imguivk/VKShader.cpp
-        src/imguivk/VKSwapchain.cpp
-        src/imguivk/VKTexture.cpp
-        src/ui/imgui/MainDockSpaceUI.cpp
-        src/ui/imgui/ImguiTestWindowUI.cpp
-        src/ui/imgui/CLayoutTestUI.cpp
-        src/ui/imgui/DebugWindowUI.cpp
-        src/ui/imgui/FloatingManagerUI.cpp
-        src/ui/imgui/SideBarUI.cpp
-        src/ui/layout/CLayWrapperCore.cpp
-        src/ui/layout/box/CLayBox.cpp
-        src/ui/CursorManager.cpp
-        src/ui/UIManager.cpp
-        src/ui/brush/Brush.cpp
+add_library(Graphic STATIC
+	src/glfw/GLFWCallback.cpp
+	src/glfw/NativeWindow.cpp
+	src/imguivk/context/VKContext.cpp
+	src/imguivk/context/VKContextGLFW.cpp
+	src/imguivk/context/VKContextDevice.cpp
+	src/imguivk/context/VKContextDebugFeats.cpp
+	src/imguivk/context/VKContextInfos.cpp
+	src/imguivk/context/VKContextImguiImpl.cpp
+	src/imguivk/mem/VKMemBuffer.cpp
+	src/imguivk/VKOffScreenRenderer.cpp
+	src/imguivk/VKOffScreenRendererRess.cpp
+	src/imguivk/VKRenderPass.cpp
+	src/imguivk/VKRenderPipeline.cpp
+	src/imguivk/VKRenderer.cpp
+	src/imguivk/VKRendererRender.cpp
+	src/imguivk/VKRendererRess.cpp
+	src/imguivk/VKShader.cpp
+	src/imguivk/VKSwapchain.cpp
+	src/imguivk/VKTexture.cpp
+	src/ui/imgui/MainDockSpaceUI.cpp
+	src/ui/imgui/ImguiTestWindowUI.cpp
+	src/ui/imgui/CLayoutTestUI.cpp
+	src/ui/imgui/DebugWindowUI.cpp
+	src/ui/imgui/FloatingManagerUI.cpp
+	src/ui/imgui/SideBarUI.cpp
+	src/ui/layout/CLayWrapperCore.cpp
+	src/ui/layout/box/CLayBox.cpp
+	src/ui/CursorManager.cpp
+	src/ui/UIManager.cpp
+	src/ui/brush/Brush.cpp
 )
 
-target_include_directories(
-        Graphic
-        PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+target_include_directories(Graphic
+	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_link_libraries(Graphic PUBLIC
-        Log
-        Font
-        Event
-        Config
-        3rd_glfw
-        3rd_glm
-        3rd_imgui
-        3rd_clay
-        3rd_stb
-        3rd_lunasvg
-        Vulkan::Vulkan
+target_link_libraries(Graphic
+	PUBLIC
+		Log
+		Font
+		Event
+		Config
+		3rd_glfw
+		3rd_glm
+		3rd_imgui
+		3rd_clay
+		3rd_stb
+		3rd_lunasvg
+		Vulkan::Vulkan
 )
+
+if(WIN32)
+	target_link_libraries(Graphic PRIVATE dwmapi comctl32)
+endif()
