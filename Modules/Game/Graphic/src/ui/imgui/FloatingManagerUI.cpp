@@ -1,89 +1,80 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
-#include "imgui.h"
-#include "imgui_internal.h"
+#include "event/ui/UISubViewToggleEvent.h"
 #include "log/colorful-log.h"
-#include "ui/layout/box/CLayBox.h"
+#include "ui/ISubView.h"
 #include <utility>
 
 namespace MMM::Graphic::UI
 {
 
-FlotingManagerUI::FlotingManagerUI(const std::string& name)
+FloatingManagerUI::FloatingManagerUI(const std::string& name)
     : ITextureLoader(name)
 {
+    // 订阅切换事件
+    m_subId = MMM::Event::EventBus::instance()
+                  .subscribe<MMM::Event::UISubViewToggleEvent>(
+                      [this](const MMM::Event::UISubViewToggleEvent& e) {
+                          XINFO(
+                              "FloatingManagerUI get event, targetName:{}, "
+                              "targetSubViewId:{}",
+                              e.targetFloatManagerName,
+                              e.subViewId);
+                          // 核心逻辑：只处理发给“我”的指令
+                          if ( e.targetFloatManagerName == this->m_name ) {
+                              this->toggleSubView(e.subViewId);
+                          }
+                      });
 }
 
-FlotingManagerUI::~FlotingManagerUI() {}
-
-/// @brief 设置窗口标题
-void FlotingManagerUI::set_window_title(const std::string& name)
+FloatingManagerUI::~FloatingManagerUI()
 {
-    m_name = name;
+    MMM::Event::EventBus::instance()
+        .unsubscribe<MMM::Event::UISubViewToggleEvent>(m_subId);
 }
 
-void FlotingManagerUI::update()
+///@brief 注册子视图到这个管理器
+void FloatingManagerUI::registerSubView(const std::string&        subViewId,
+                                        std::unique_ptr<ISubView> subView)
 {
-    LayoutContext lctx{ m_layoutCtx, TR(m_name.c_str()) };
-    CLayVBox      rootVBox;
+    m_subViews[subViewId] = std::move(subView);
+    toggleSubView(subViewId);
+}
 
-    CLayHBox labelHBox;
-    auto     fh = ImGui::GetFrameHeight();
-    // 获取翻译文本
-    auto hintText = TR("ui.file_manager.initial_hint");
-    labelHBox.addSpring()
-        .addElement(hintText,
-                    Sizing::Grow(),
-                    Sizing::Fixed(fh),
-                    [=](Clay_BoundingBox r, bool isHovered) {
-                        // 文本在 30px 高度的坑位里垂直居中
-                        float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
-                        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offY);
+///@brief 核心切换逻辑
+void FloatingManagerUI::toggleSubView(const std::string& subViewId)
+{
+    if ( m_currentSubViewId == subViewId && m_isVisible ) {
+        m_isVisible = false;  // 已激活再点击 -> 隐藏
+    } else {
+        m_currentSubViewId = subViewId;
+        m_isVisible        = true;  // 切换或显示
+    }
+}
 
-                        // 【技巧】为了真正居中，可以用 ImGui 的居中文字函数
-                        // 或者计算偏移：(r.width - CalcTextSize.x) * 0.5f
-                        ImVec2 textSize = ImGui::CalcTextSize(hintText);
-                        // 移动游标实现垂直居中
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                             (r.width - textSize.x) * 0.5f);
+void FloatingManagerUI::update()
+{
+    if ( !m_isVisible ) return;
 
-                        ImGui::TextEx(hintText);
-                    })
-        .addSpring();
-    CLayHBox buttonHBox;
-    buttonHBox.addSpring()
-        .addElement(TR("ui.file_manager.open_directory"),
-                    Sizing::Grow(),
-                    Sizing::Fixed(fh),
-                    [=](Clay_BoundingBox r, bool isHovered) {
-                        if ( ImGui::Button(TR("ui.file_manager.open_directory"),
-                                           { r.width, r.height }) ) {
-                            XINFO("打开文件夹");
-                        }
-                    })
-        .addSpring();
-
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(12)
-        .addLayout("labelHBox", labelHBox, Sizing::Grow(), Sizing::Fixed(40))
-        .addLayout("buttonHBox", buttonHBox, Sizing::Grow(), Sizing::Fixed(40))
-        .addSpring();
-    rootVBox.render(lctx);
+    LayoutContext lctx{ m_layoutCtx, m_currentSubViewId };
+    if ( m_subViews.contains(m_currentSubViewId) ) {
+        m_subViews[m_currentSubViewId]->onUpdate(lctx);
+    }
 }
 
 /// @brief 是否需要重载
-bool FlotingManagerUI::needReload()
+bool FloatingManagerUI::needReload()
 {
     // 仅加载一次
     return std::exchange(m_needReload, false);
 }
 
 /// @brief 重载纹理
-void FlotingManagerUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
-                                      vk::Device&         logicalDevice,
-                                      vk::CommandPool&    cmdPool,
-                                      vk::Queue&          queue)
+void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
+                                       vk::Device&         logicalDevice,
+                                       vk::CommandPool&    cmdPool,
+                                       vk::Queue&          queue)
 {
 }
 

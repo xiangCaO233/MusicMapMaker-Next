@@ -135,7 +135,7 @@ void MainDockSpaceUI::update()
 
             ImGui::PopStyleVar(1);  // 弹出 ItemSpacing
 
-            // --- 【关键清理】弹出最开始推入的 FrameRounding 和 FrameBorderSize ---
+            // 弹出最开始推入的 FrameRounding 和 FrameBorderSize ---
             ImGui::PopStyleVar(2);
 
             ImGui::EndMenuBar();
@@ -219,7 +219,7 @@ void MainDockSpaceUI::update()
                                          dock_id_left);
 
             // 画布 -> 停靠在剩余的右侧（中心）坑位
-            // 【关键】不要停靠到 dockspace_id，要停靠到 split 出来的右侧 ID
+            // 不要停靠到 dockspace_id，要停靠到 split 出来的右侧 ID
             ImGui::DockBuilderDockWindow("Basic2DCanvas", dock_id_right);
 
             // --- 第五步：完成构建 ---

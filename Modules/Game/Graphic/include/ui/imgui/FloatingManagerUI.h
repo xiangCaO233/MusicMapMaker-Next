@@ -1,23 +1,31 @@
 #pragma once
 
+#include "event/core/EventBus.h"
+#include "ui/ISubView.h"
 #include "ui/ITextureLoader.h"
 #include <string>
 
 namespace MMM::Graphic::UI
 {
+class ISubView;
 
-class FlotingManagerUI : public ITextureLoader
+class FloatingManagerUI : public ITextureLoader
 {
 public:
-    FlotingManagerUI(const std::string& name);
-    FlotingManagerUI(FlotingManagerUI&&)                 = default;
-    FlotingManagerUI(const FlotingManagerUI&)            = default;
-    FlotingManagerUI& operator=(FlotingManagerUI&&)      = delete;
-    FlotingManagerUI& operator=(const FlotingManagerUI&) = delete;
-    ~FlotingManagerUI() override;
+    ///@brief 初始化时显示的的窗口id
+    FloatingManagerUI(const std::string& name);
+    FloatingManagerUI(FloatingManagerUI&&)                 = default;
+    FloatingManagerUI(const FloatingManagerUI&)            = default;
+    FloatingManagerUI& operator=(FloatingManagerUI&&)      = delete;
+    FloatingManagerUI& operator=(const FloatingManagerUI&) = delete;
+    ~FloatingManagerUI() override;
 
-    /// @brief 设置窗口标题
-    void set_window_title(const std::string& name);
+    ///@brief 注册子视图到这个管理器
+    void registerSubView(const std::string&        subViewId,
+                         std::unique_ptr<ISubView> subView);
+
+    ///@brief 核心切换逻辑
+    void toggleSubView(const std::string& subViewId);
 
     void update() override;
 
@@ -33,6 +41,18 @@ public:
 private:
     ///@brief 是否需要重载
     bool m_needReload{ true };
+
+    ///@brief 是否显示此浮窗
+    bool m_isVisible = false;
+
+    ///@brief 当前子视图id
+    std::string m_currentSubViewId;
+
+    ///@brief 子视图表
+    std::unordered_map<std::string, std::unique_ptr<ISubView>> m_subViews;
+
+    ///@brief 订阅事件id
+    MMM::Event::SubscriptionID m_subId;
 };
 
 }  // namespace MMM::Graphic::UI

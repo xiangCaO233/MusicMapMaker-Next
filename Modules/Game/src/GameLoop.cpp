@@ -6,12 +6,10 @@
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/CLayoutTestUI.h"
-#include "ui/imgui/DebugWindowUI.h"
 #include "ui/imgui/FloatingManagerUI.h"
-#include "ui/imgui/ImguiTestWindowUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/manager/FileManagerView.h"
 
 namespace MMM
 {
@@ -36,9 +34,16 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
     m_uiManager.registerView(
         "SideBarUI", std::make_unique<Graphic::UI::SideBarUI>("SideBarUI"));
-    m_uiManager.registerView(TR("title.file_manager"),
-                             std::make_unique<Graphic::UI::FlotingManagerUI>(
-                                 TR("title.file_manager")));
+    m_uiManager.registerView(
+        "SideBarManager",
+        std::make_unique<Graphic::UI::FloatingManagerUI>("SideBarManager"));
+    auto sidebar_manager =
+        m_uiManager.getView<Graphic::UI::FloatingManagerUI>("SideBarManager");
+    sidebar_manager->registerSubView(
+        TR("title.file_manager"),
+        std::make_unique<Graphic::UI::FileManagerView>(
+            TR("title.file_manager")));
+
     m_uiManager.registerView(
         "Basic2DCanvas",
         std::make_unique<Canvas::Basic2DCanvas>("Basic2DCanvas", 200, 200));

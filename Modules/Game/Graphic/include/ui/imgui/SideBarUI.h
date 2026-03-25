@@ -1,8 +1,8 @@
 #pragma once
 
+#include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "ui/ITextureLoader.h"
-#include <filesystem>
 #include <memory>
 #include <unordered_map>
 
@@ -14,6 +14,16 @@ enum class SideBarTab {
     FileExplorer,  // 选中文件浏览器
     AudioExplorer  // 选中音频浏览器
 };
+
+// 在 SideBarUI 内部或匿名命名空间中
+static std::string TabToSubViewId(SideBarTab tab)
+{
+    switch ( tab ) {
+    case SideBarTab::FileExplorer: return TR("title.file_manager");
+    case SideBarTab::AudioExplorer: return TR("title.audio_manager");
+    default: return "";
+    }
+}
 
 class SideBarUI : public ITextureLoader
 {

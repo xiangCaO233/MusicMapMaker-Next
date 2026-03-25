@@ -1,5 +1,7 @@
 #include "ui/imgui/SideBarUI.h"
 #include "config/skin/SkinConfig.h"
+#include "event/core/EventBus.h"
+#include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "ui/ITextureLoader.h"
@@ -83,6 +85,25 @@ void SideBarUI::update()
             std::string btnId = "##tab_" + std::to_string((int)tab);
             if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
                 m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
+                // 2. 发布事件通知 FloatingManagerUI
+                using namespace MMM::Event;
+
+                UISubViewToggleEvent evt;
+                // 填充基类 UIEvent 信息
+                evt.sourceUiName = m_name;
+                evt.uiManager =
+                    nullptr;  // 如果你有 UIManager 指针可以传入，否则填 nullptr
+
+                // 填充切换信息
+                // 与注册 FloatingManagerUI
+                // 时使用的名字一致
+                evt.targetFloatManagerName = "SideBarManager";
+                evt.subViewId              = TabToSubViewId(tab);
+
+                // 核心：发布到总线
+                EventBus::instance().publish(evt);
+
+                XINFO("SideBarUI: Published ToggleEvent for {}", evt.subViewId);
             }
 
             // --- 核心：绘制图标 ---

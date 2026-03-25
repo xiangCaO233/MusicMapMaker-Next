@@ -9,6 +9,8 @@
 #include "log/colorful-log.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/FloatingManagerUI.h"
+#include "ui/imgui/SideBarUI.h"
 #include <vector>
 
 namespace MMM::Graphic::UI
