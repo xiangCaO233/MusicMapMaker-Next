@@ -125,7 +125,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
 
     ImFont* font = io.Fonts->AddFontFromFileTTF(
-        asciiFontPath.generic_string().c_str(), 16.f);
+        asciiFontPath.generic_string().c_str(), 20.f);
 
     // 2. 配置合并参数
     ImFontConfig config;
@@ -140,7 +140,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // 4. 加载中文字体并合并到上一个字体中
     auto chineseFontPath = Config::SkinManager::instance().getFontPath("cjk");
     io.Fonts->AddFontFromFileTTF(chineseFontPath.generic_string().c_str(),
-                                 16.f,     // 保持跟基础字体大小一致
+                                 20.f,     // 保持跟基础字体大小一致
                                  &config,  // 传入合并配置
                                  ranges    // 传入要支持的字符范围
     );

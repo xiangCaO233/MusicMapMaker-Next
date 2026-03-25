@@ -20,7 +20,6 @@ void MainDockSpaceUI::update()
 
     // 1. 获取菜单栏标准高度
     float menuBarHeight = ImGui::GetFrameHeight();
-
     // ================== A. 顶部菜单栏窗口 ==================
     {
         ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -32,14 +31,31 @@ void MainDockSpaceUI::update()
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground;
 
+        // --- [1] 窗口级样式（Push 2 次） ---
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+
         ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
+
         float buttonSize = ImGui::GetFrameHeight();
+
         if ( ImGui::BeginMenuBar() ) {
-            // 定义 Lambda (内部 Pop 2个 Color，不改变外部计数)
+            float  buttonSize          = ImGui::GetFrameHeight();
+            ImVec2 defaultFramePadding = ImGui::GetStyle().FramePadding;
+
+            // --- 【核心修复：统一推入扁平化变量】 ---
+            // 这两个变量必须在整个 MenuBar 生命周期内生效
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
+                                0.0f);  // 强制无圆角
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
+                                0.0f);  // 强制无边框
+
+            // --- 定义图标绘制 Lambda ---
             auto DrawIconButton = [&](const char*                 str_id,
                                       std::unique_ptr<VKTexture>& tex,
                                       float                       btnSize,
                                       ImVec4 hoverColor) -> bool {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
@@ -49,33 +65,32 @@ void MainDockSpaceUI::update()
                     ImTextureID imTexId  = (ImTextureID)tex->getImTextureID();
                     float       iconSize = btnSize * 0.65f;
                     ImVec2      p_min    = ImGui::GetItemRectMin();
-                    float       offsetX  = (btnSize - iconSize) * 0.5f;
-                    float       offsetY  = (btnSize - iconSize) * 0.5f;
-                    ImVec2 img_p1 = { p_min.x + offsetX, p_min.y + offsetY };
-                    ImVec2 img_p2 = { img_p1.x + iconSize,
-                                      img_p1.y + iconSize };
-                    ImU32  tint   = ImGui::IsItemActive()
-                                        ? IM_COL32(180, 180, 180, 255)
-                                        : IM_COL32_WHITE;
+                    float  offsetX = std::floor((btnSize - iconSize) * 0.5f);
+                    float  offsetY = std::floor((btnSize - iconSize) * 0.5f);
+                    ImVec2 img_p1  = { p_min.x + offsetX, p_min.y + offsetY };
+                    ImVec2 img_p2  = { img_p1.x + iconSize,
+                                       img_p1.y + iconSize };
+                    ImU32  tint    = ImGui::IsItemActive()
+                                         ? IM_COL32(180, 180, 180, 255)
+                                         : IM_COL32_WHITE;
                     ImGui::GetWindowDrawList()->AddImage(
                         imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
                 }
-
-                ImGui::PopStyleColor(2);  // 弹出 Lambda 内部的
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar(1);
                 return clicked;
             };
-            // 【修正点 1】统一在此处 Push 样式，计数：Color 1个, Var 2个
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-            // --- 1. 前置图标 (例如 Logo) ---
+
+            // ================== 1. Logo 区域 ==================
+            ImGui::SetCursorPosX(0.0f);
             DrawIconButton(
                 "##logo", m_logo_texture, buttonSize, ImVec4(1, 1, 1, 0.1f));
-            // 按照 Push 的数量精确 Pop
-            ImGui::PopStyleVar(2);    // 弹出 Rounding 和 Spacing
-            ImGui::PopStyleColor(1);  // 弹出外部的 Button Color
 
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);  // 垂直分割线
+            // ================== 2. 标准菜单区域 ==================
+            // 菜单项需要正常的 Padding，所以局部推入
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(10.0f, defaultFramePadding.y));
+            ImGui::SetCursorPosX(buttonSize + 4.0f);
 
             if ( ImGui::BeginMenu(TR("ui.file")) ) {
                 ImGui::EndMenu();
@@ -83,18 +98,17 @@ void MainDockSpaceUI::update()
             if ( ImGui::BeginMenu(TR("ui.edit")) ) {
                 ImGui::EndMenu();
             }
-            // --- 3. 计算并跳转到右侧 ---
+
+            ImGui::PopStyleVar(1);  // 弹出菜单专用 Padding
+
+            // ================== 3. 右侧按钮组区域 ==================
             float numberOfButtons = 3;
             ImGui::SetCursorPosX(ImGui::GetWindowWidth() -
                                  (buttonSize * numberOfButtons));
 
-            // 【修正点 1】统一在此处 Push 样式，计数：Color 1个, Var 2个
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+            // 按钮组之间不留缝隙
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
 
-
-            // A. 最小化按钮
             if ( DrawIconButton("##Minimize",
                                 m_minimize_texture,
                                 buttonSize,
@@ -102,8 +116,6 @@ void MainDockSpaceUI::update()
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                     .type = NativeEventType::GLFW_ICONFY_WINDOW });
             }
-
-            // B. 最大化 / 还原按钮
             ImGui::SameLine();
             if ( DrawIconButton("##Maximize",
                                 m_maxmize_texture,
@@ -112,8 +124,6 @@ void MainDockSpaceUI::update()
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                     .type = NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
             }
-
-            // C. 关闭按钮
             ImGui::SameLine();
             if ( DrawIconButton("##Close",
                                 m_close_texture,
@@ -123,13 +133,17 @@ void MainDockSpaceUI::update()
                     .type = NativeEventType::GLFW_CLOSE_WINDOW });
             }
 
-            // 按照 Push 的数量精确 Pop
-            ImGui::PopStyleVar(2);    // 弹出 Rounding 和 Spacing
-            ImGui::PopStyleColor(1);  // 弹出外部的 Button Color
+            ImGui::PopStyleVar(1);  // 弹出 ItemSpacing
+
+            // --- 【关键清理】弹出最开始推入的 FrameRounding 和 FrameBorderSize ---
+            ImGui::PopStyleVar(2);
 
             ImGui::EndMenuBar();
         }
         ImGui::End();
+
+        // --- [4] 弹出窗口级样式（Pop 2 次） ---
+        ImGui::PopStyleVar(2);
     }
 
     // ================== B. 右侧停靠空间窗口 ==================
@@ -234,8 +248,9 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
         physicalDevice,
         logicalDevice,
         cmdPool,
-        queue);
-    ;
+        queue,
+        { { .83f, .83f, .83f, .83f } });
+
 
     ///@brief 最小化图标纹理
     m_minimize_texture = loadTextureResource(
@@ -244,7 +259,8 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
         physicalDevice,
         logicalDevice,
         cmdPool,
-        queue);
+        queue,
+        { { .83f, .83f, .83f, .83f } });
 
     ///@brief 最大化图标纹理
     m_maxmize_texture = loadTextureResource(
@@ -253,8 +269,9 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
         physicalDevice,
         logicalDevice,
         cmdPool,
-        queue);
-    ;
+        queue,
+        { { .83f, .83f, .83f, .83f } });
+
 
     ///@brief 关闭图标纹理
     m_close_texture = loadTextureResource(
@@ -263,8 +280,8 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
         physicalDevice,
         logicalDevice,
         cmdPool,
-        queue);
-    ;
+        queue,
+        { { .83f, .83f, .83f, .83f } });
 }
 
 };  // namespace MMM::Graphic::UI

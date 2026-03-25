@@ -170,7 +170,8 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
                             physicalDevice,
                             logicalDevice,
                             cmdPool,
-                            queue);
+                            queue,
+                            { { .83f, .83f, .83f, .83f } });
 
     m_tabIcons[SideBarTab::AudioExplorer] =
         loadTextureResource(skin.getAssetPath("side_bar.audio_explorer_icon"),
@@ -178,7 +179,8 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
                             physicalDevice,
                             logicalDevice,
                             cmdPool,
-                            queue);
+                            queue,
+                            { { .83f, .83f, .83f, .83f } });
 
     XINFO("SideBar textures reloaded.");
 }
