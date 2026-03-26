@@ -22,7 +22,7 @@ Basic2DCanvas::Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h)
 }
 
 // 接口实现
-void Basic2DCanvas::update()
+void Basic2DCanvas::update(Graphic::UI::UIManager* sourceManager)
 {
     Graphic::UI::LayoutContext lctx(m_layoutCtx, m_canvasName.c_str());
     RenderContext              rctx(

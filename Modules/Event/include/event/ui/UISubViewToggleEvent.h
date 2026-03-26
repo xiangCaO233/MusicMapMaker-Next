@@ -11,6 +11,9 @@ struct UISubViewToggleEvent : public UIEvent {
 
     /// @brief 要切换到的子视图 ID (例如 "FileManager", "AudioManager")
     std::string subViewId;
+
+    /// @brief 是否要显示子视图
+    bool showSubView{ false };
 };
 
 }  // namespace MMM::Event

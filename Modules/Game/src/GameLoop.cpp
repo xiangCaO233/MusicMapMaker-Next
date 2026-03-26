@@ -9,6 +9,7 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
 
 namespace MMM
@@ -43,6 +44,10 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         TR("title.file_manager"),
         std::make_unique<Graphic::UI::FileManagerView>(
             TR("title.file_manager")));
+    sidebar_manager->registerSubView(
+        TR("title.audio_manager"),
+        std::make_unique<Graphic::UI::AudioManagerView>(
+            TR("title.audio_manager")));
 
     m_uiManager.registerView(
         "Basic2DCanvas",
@@ -86,7 +91,8 @@ int GameLoop::start(Graphic::NativeWindow& window)
             window.pollEvents();
             // 3.2 执行渲染
             context.getRenderer().render(
-                window, std::vector<Graphic::UI::UIManager*>{ &m_uiManager });
+                window,
+                std::vector<Graphic::IGraphicUserHook*>{ &m_uiManager });
         }
         // 2. 主动清理 UI 管理器里存的所有视图
         // 这样 VKOffScreenRenderer 的析构就会在这里发生，

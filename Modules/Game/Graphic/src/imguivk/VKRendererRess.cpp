@@ -9,10 +9,10 @@ void VKRenderer::initCursorManager(vk::PhysicalDevice& vkPhysicalDevice,
 {
     // 创建光标管理器
     m_cursorManager =
-        std::make_unique<UI::CursorManager>(vkPhysicalDevice,
-                                            logicalDevice,
-                                            m_vkCommandPool,
-                                            m_LogicDeviceGraphicsQueue);
+        std::make_unique<CursorManager>(vkPhysicalDevice,
+                                        logicalDevice,
+                                        m_vkCommandPool,
+                                        m_LogicDeviceGraphicsQueue);
 }
 
 void VKRenderer::releaseCursorManager()

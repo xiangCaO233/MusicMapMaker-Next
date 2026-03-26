@@ -1,6 +1,7 @@
 # Modules/Game/CMakeLists.txt
 
 add_subdirectory("Graphic")
+add_subdirectory("UI")
 add_subdirectory("Canvas")
 
 add_library(

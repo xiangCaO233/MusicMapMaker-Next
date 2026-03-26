@@ -3,6 +3,7 @@
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"
+#include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <atomic>
 #include <chrono>
@@ -99,6 +100,11 @@ protected:
      */
     virtual std::string getShaderName(
         const std::string& shader_module_name) = 0;
+
+    // --- 获取数据供 Vulkan 使用 ---
+    virtual const std::vector<Vertex::VKBasicVertex>& getVertices() const = 0;
+
+    virtual const std::vector<uint32_t>& getIndices() const = 0;
 
 private:
     // --- 1. 物理资源 (独占) ---

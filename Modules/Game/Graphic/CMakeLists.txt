@@ -25,19 +25,7 @@ add_library(Graphic STATIC
  src/imguivk/VKShader.cpp
  src/imguivk/VKSwapchain.cpp
  src/imguivk/VKTexture.cpp
- src/ui/imgui/MainDockSpaceUI.cpp
- src/ui/imgui/ImguiTestWindowUI.cpp
- src/ui/imgui/CLayoutTestUI.cpp
- src/ui/imgui/DebugWindowUI.cpp
- src/ui/imgui/FloatingManagerUI.cpp
- src/ui/imgui/SideBarUI.cpp
- src/ui/imgui/manager/FileManagerView.cpp
- src/ui/imgui/manager/AudioManagerView.cpp
- src/ui/layout/CLayWrapperCore.cpp
- src/ui/layout/box/CLayBox.cpp
- src/ui/CursorManager.cpp
- src/ui/UIManager.cpp
- src/ui/brush/Brush.cpp
+ src/CursorManager.cpp
 )
 
 target_include_directories(Graphic

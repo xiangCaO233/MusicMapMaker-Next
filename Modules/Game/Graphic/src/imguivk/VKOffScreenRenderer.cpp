@@ -1,7 +1,6 @@
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
-#include "ui/IRenderableView.h"
 #include "vulkan/vulkan.hpp"
 #include <glm/ext.hpp>
 
@@ -30,10 +29,9 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
         vk::ClearColorValue(std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f }));
 
     // 获取渲染数据
-    const auto& brush    = renderable_view->getBrush();
-    const auto& vertices = brush.getVertices();
-    const auto& indices  = brush.getIndices();
-    const auto& drawCmds = brush.getCmds();
+    const auto& vertices = getVertices();
+    const auto& indices  = getIndices();
+    // const auto& drawCmds = brush.getCmds();
 
     if ( vertices.empty() || indices.empty() ) return;
 

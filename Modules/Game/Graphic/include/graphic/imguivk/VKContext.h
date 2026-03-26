@@ -212,7 +212,7 @@ private:
     // =========================================================================
     // 光标管理
     // =========================================================================
-    std::unique_ptr<UI::CursorManager> m_cursorManager{ nullptr };
+    std::unique_ptr<CursorManager> m_cursorManager{ nullptr };
 
     /// @brief Vulkan 渲染器封装对象 (负责 Command Buffer 和 Draw Call)
     std::unique_ptr<VKRenderer> m_vkRenderer{ nullptr };

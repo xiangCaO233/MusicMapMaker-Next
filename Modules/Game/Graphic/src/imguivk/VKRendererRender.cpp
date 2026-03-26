@@ -1,11 +1,10 @@
 #include "graphic/glfw/window/NativeWindow.h"
+#include "graphic/imguivk/IGraphicUserHook.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
-#include "ui/IRenderableView.h"
-#include "ui/UIManager.h"
 
 namespace MMM::Graphic
 {
@@ -14,8 +13,8 @@ namespace MMM::Graphic
  *
  * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
  */
-void VKRenderer::render(NativeWindow&               window,
-                        std::vector<UI::UIManager*> uiManagers)
+void VKRenderer::render(NativeWindow&                  window,
+                        std::vector<IGraphicUserHook*> graphicUserHooks)
 {
     // 检查窗口是否完成了缩放操作（消抖）
     if ( window.shouldRecreate() ) {
@@ -51,39 +50,22 @@ void VKRenderer::render(NativeWindow&               window,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // 在录制Imgui的UI前先检查需不需要重建帧缓冲 ★★★
-    for ( auto* uiManager : uiManagers ) {
-        // 在 UIManager 获取到所有注册可再渲染View
-        for ( auto renderableView : uiManager->getRenderableViews() ) {
-            // 如果离屏渲染器需要重建（初次或改名）
-            if ( renderableView->needReCreateFrameBuffer() ) {
-                renderableView->reCreateFrameBuffer(m_vkPhysicalDevice,
-                                                    m_vkLogicalDevice,
-                                                    m_vkSwapChain,
-                                                    m_vkCommandPool,
-                                                    m_LogicDeviceGraphicsQueue);
-            }
-        }
+    // 准备所有资源
+    for ( auto& graphicUserHook : graphicUserHooks ) {
+        graphicUserHook->onPrepareResources(m_vkPhysicalDevice,
+                                            m_vkLogicalDevice,
+                                            m_vkSwapChain,
+                                            m_vkCommandPool,
+                                            m_LogicDeviceGraphicsQueue);
     }
 
-    // 检查需不需要重载纹理
-    for ( auto* uiManager : uiManagers ) {
-        for ( auto textureLoader : uiManager->getTextureLoaders() ) {
-            // 给标记了需要重载纹理的ui重载
-            if ( textureLoader->needReload() ) {
-                textureLoader->reloadTextures(m_vkPhysicalDevice,
-                                              m_vkLogicalDevice,
-                                              m_vkCommandPool,
-                                              m_LogicDeviceGraphicsQueue);
-            }
-        }
+
+    // 录制所有ui
+    for ( auto& graphicUserHook : graphicUserHooks ) {
+        graphicUserHook->onUpdateUI();
     }
 
-    // 录制所有Imgui的ui布局
-    for ( UI::UIManager* uiManager : uiManagers ) {
-        uiManager->updateAllUIs();
-    }
-
+    // 更新光标管理器
     if ( m_cursorManager ) {
         m_cursorManager->UpdateAndDraw();
     }
@@ -135,14 +117,12 @@ void VKRenderer::render(NativeWindow&               window,
 
     // 命令录制
     currentCmdBuffer.begin(commandBufferBeginInfo);
-    // 在主 RenderPass 开始前，执行离屏渲染录制
-    for ( auto* uiManager : uiManagers ) {
-        // 在 UIManager 获取到所有注册可再渲染View
-        for ( auto renderableView : uiManager->getRenderableViews() ) {
-            // 录制离屏绘制指令到当前命令缓冲
-            renderableView->recordCmds(currentCmdBuffer, renderableView);
-        }
+
+    // 录制所有离屏渲染命令
+    for ( auto& graphicUserHook : graphicUserHooks ) {
+        graphicUserHook->onRecordOffscreen(currentCmdBuffer);
     }
+
     {
         vk::Rect2D renderArea;
         renderArea = { { 0,
