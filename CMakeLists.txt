@@ -4,7 +4,7 @@ project(MusicMapMaker-Next)
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
-	set(VCPKG_ROOT "D:/vcpkg")
+	set(VCPKG_ROOT "C:/msys64/home/xiang/projects/vcpkg")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
