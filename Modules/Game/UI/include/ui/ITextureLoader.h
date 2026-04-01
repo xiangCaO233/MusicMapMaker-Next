@@ -6,10 +6,10 @@
 #include <filesystem>
 #include <lunasvg.h>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
-class ITextureLoader : public IUIView
+class ITextureLoader : virtual public IUIView
 {
 public:
     ITextureLoader(const std::string& name) : IUIView(name) {};
@@ -36,7 +36,7 @@ protected:
      * @param overrideColor 可选：如果提供，SVG
      * 的所有非透明像素将被替换为此颜色 (RGB 范围 0.0~1.0)
      */
-    std::unique_ptr<VKTexture> loadTextureResource(
+    std::unique_ptr<Graphic::VKTexture> loadTextureResource(
         const std::filesystem::path& path, uint32_t targetSize,
         vk::PhysicalDevice& pd, vk::Device& ld, vk::CommandPool& cp,
         vk::Queue&                          q,
@@ -85,16 +85,17 @@ protected:
                 }
             }
 
-            return std::make_unique<VKTexture>(
+            return std::make_unique<Graphic::VKTexture>(
                 bitmap.data(), targetSize, targetSize, pd, ld, cp, q);
         }
 
         // 2. 处理常规位图
-        return std::make_unique<VKTexture>(path.string(), pd, ld, cp, q);
+        return std::make_unique<Graphic::VKTexture>(
+            path.string(), pd, ld, cp, q);
     }
 
 
 private:
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

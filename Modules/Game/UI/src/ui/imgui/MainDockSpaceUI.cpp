@@ -9,7 +9,7 @@
 #include "log/colorful-log.h"
 #include <utility>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 void MainDockSpaceUI::update(UIManager* sourceManager)
@@ -52,9 +52,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                 0.0f);  // 强制无边框
 
             // --- 定义图标绘制 Lambda ---
-            auto DrawIconButton = [&](const char*                 str_id,
-                                      std::unique_ptr<VKTexture>& tex,
-                                      float                       btnSize,
+            auto DrawIconButton = [&](const char* str_id,
+                                      std::unique_ptr<Graphic::VKTexture>& tex,
+                                      float  btnSize,
                                       ImVec4 hoverColor) -> bool {
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -309,4 +309,4 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
         { { .83f, .83f, .83f, .83f } });
 }
 
-};  // namespace MMM::Graphic::UI
+};  // namespace MMM::UI

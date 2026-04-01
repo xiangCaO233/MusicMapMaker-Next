@@ -3,7 +3,7 @@
 #include "imgui.h"
 #include <string>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 enum class ImGuiWidget { Button, Slider, InputText, Checkbox, TextOnly };
@@ -60,4 +60,4 @@ struct WidgetSizeHelper {
     }
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

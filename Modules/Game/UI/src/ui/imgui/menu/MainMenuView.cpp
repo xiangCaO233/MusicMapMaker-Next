@@ -2,7 +2,7 @@
 #include "config/skin/SkinConfig.h"
 #include <imgui.h>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 MainMenuView::MainMenuView() {}
@@ -31,4 +31,4 @@ void MainMenuView::update()
 }
 
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

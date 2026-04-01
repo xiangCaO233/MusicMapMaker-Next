@@ -5,11 +5,11 @@
 #include "ui/ITextureLoader.h"
 #include <string>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 class ISubView;
 
-class FloatingManagerUI : public ITextureLoader
+class FloatingManagerUI : public ITextureLoader, virtual public IUIView
 {
 public:
     ///@brief 初始化时显示的的窗口id
@@ -55,4 +55,4 @@ private:
     MMM::Event::SubscriptionID m_subId;
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

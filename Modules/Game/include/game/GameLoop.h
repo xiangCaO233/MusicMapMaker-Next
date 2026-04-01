@@ -61,6 +61,6 @@ private:
     GameLoop& operator=(const GameLoop&) = delete;
 
     /// @brief ui管理器
-    Graphic::UI::UIManager m_uiManager;
+    UI::UIManager m_uiManager;
 };
 }  // namespace MMM

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 class MainMenuView
@@ -18,4 +18,4 @@ public:
 private:
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

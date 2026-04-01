@@ -3,7 +3,7 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 // 错误处理回调
 static void HandleClayError(Clay_ErrorData errorData)
@@ -88,4 +88,4 @@ void CLayWrapperCore::setupClayTextMeasurement()
     Clay_SetMeasureTextFunction(MeasureTextForImGui, nullptr);
 }
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

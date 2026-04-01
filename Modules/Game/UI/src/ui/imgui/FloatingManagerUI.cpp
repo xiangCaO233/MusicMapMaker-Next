@@ -6,11 +6,11 @@
 #include "ui/ISubView.h"
 #include <utility>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 FloatingManagerUI::FloatingManagerUI(const std::string& name)
-    : ITextureLoader(name)
+    : IUIView(name), ITextureLoader(name)
 {
     // 订阅切换事件
     m_subId = MMM::Event::EventBus::instance()
@@ -81,4 +81,4 @@ void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
 {
 }
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

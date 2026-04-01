@@ -1,7 +1,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "log/colorful-log.h"
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 void CLayBox::render(LayoutContext& lctx)
@@ -78,4 +78,4 @@ void CLayBox::internalExecute(ImVec2 origin)
         }
     }
 }
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

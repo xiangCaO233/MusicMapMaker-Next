@@ -4,7 +4,7 @@
 
 namespace MMM::Canvas
 {
-class Basic2DCanvas : public Graphic::UI::IRenderableView
+class Basic2DCanvas : public UI::IRenderableView
 {
 public:
     Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h);
@@ -16,7 +16,7 @@ public:
     ~Basic2DCanvas() override = default;
 
     // 接口实现
-    void update(Graphic::UI::UIManager* sourceManager) override;
+    void update(UI::UIManager* sourceManager) override;
 
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;

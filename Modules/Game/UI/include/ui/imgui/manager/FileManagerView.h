@@ -2,7 +2,7 @@
 
 #include "ui/ISubView.h"
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 class FileManagerView : public ISubView
@@ -22,4 +22,4 @@ public:
 private:
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

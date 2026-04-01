@@ -7,7 +7,7 @@
 #include <functional>
 #include <vector>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 class CLayBox
@@ -134,4 +134,4 @@ public:
     CLayVBox() : CLayBox(CLAY_TOP_TO_BOTTOM) {}
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

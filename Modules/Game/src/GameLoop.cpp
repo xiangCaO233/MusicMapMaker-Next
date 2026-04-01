@@ -32,22 +32,20 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // 注册ui视图
     m_uiManager.registerView(
         "MainDockSpaceUI",
-        std::make_unique<Graphic::UI::MainDockSpaceUI>("MainDockSpaceUI"));
-    m_uiManager.registerView(
-        "SideBarUI", std::make_unique<Graphic::UI::SideBarUI>("SideBarUI"));
+        std::make_unique<UI::MainDockSpaceUI>("MainDockSpaceUI"));
+    m_uiManager.registerView("SideBarUI",
+                             std::make_unique<UI::SideBarUI>("SideBarUI"));
     m_uiManager.registerView(
         "SideBarManager",
-        std::make_unique<Graphic::UI::FloatingManagerUI>("SideBarManager"));
+        std::make_unique<UI::FloatingManagerUI>("SideBarManager"));
     auto sidebar_manager =
-        m_uiManager.getView<Graphic::UI::FloatingManagerUI>("SideBarManager");
+        m_uiManager.getView<UI::FloatingManagerUI>("SideBarManager");
     sidebar_manager->registerSubView(
         TR("title.file_manager"),
-        std::make_unique<Graphic::UI::FileManagerView>(
-            TR("title.file_manager")));
+        std::make_unique<UI::FileManagerView>(TR("title.file_manager")));
     sidebar_manager->registerSubView(
         TR("title.audio_manager"),
-        std::make_unique<Graphic::UI::AudioManagerView>(
-            TR("title.audio_manager")));
+        std::make_unique<UI::AudioManagerView>(TR("title.audio_manager")));
 
     // 初始化时默认激活第一个 Tab（文件管理器）
     sidebar_manager->toggleSubView(TR("title.file_manager"));

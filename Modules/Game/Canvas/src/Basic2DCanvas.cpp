@@ -15,25 +15,26 @@
 namespace MMM::Canvas
 {
 Basic2DCanvas::Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h)
-    : IRenderableView(name), m_canvasName(name)
+    : IUIView(name), IRenderableView(name), m_canvasName(name)
 {
     m_targetWidth  = w;
     m_targetHeight = h;
 }
 
 // 接口实现
-void Basic2DCanvas::update(Graphic::UI::UIManager* sourceManager)
+void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
-    Graphic::UI::LayoutContext lctx(m_layoutCtx, m_canvasName.c_str());
-    RenderContext              rctx(
+    UI::LayoutContext lctx(m_layoutCtx, m_canvasName.c_str());
+    RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
 
-    // m_brush.drawRect({ 40, 40 }, { 70, 100 }, { 0, 1, 1, 1 });
+    // 1. 绘制背景网格或固定图形测试状态机
+    m_brush.setColor(0.1f, 0.1f, 0.1f, 1.0f);
+    m_brush.drawRect(0, 0, m_targetWidth, m_targetHeight);
 
-    // 2. 准备随机数引擎
-    // 注意：如果想让位置固定，把 engine 和 dist 设为 static
-    std::random_device rd;
-    std::mt19937       gen(rd());
+    // 2. 准备随机数引擎 (改为 static 让图形位置固定，方便观察测试)
+    static std::random_device rd;
+    static std::mt19937       gen(rd());
 
     // 坐标范围：从 0 到画布宽高
     std::uniform_real_distribution<float> distX(0.0f, (float)m_targetWidth);
@@ -43,15 +44,16 @@ void Basic2DCanvas::update(Graphic::UI::UIManager* sourceManager)
     // 颜色范围：0.0 到 1.0
     std::uniform_real_distribution<float> distCol(0.0f, 1.0f);
 
-    // 3. 循环绘制 100 个
-    for ( int i = 0; i < 200; ++i ) {
-        glm::vec2 randomPos   = { distX(gen), distY(gen) };
-        glm::vec2 randomSize  = { distSize(gen), distSize(gen) };
-        glm::vec4 randomColor = {
-            distCol(gen), distCol(gen), distCol(gen), 1.0f
-        };
+    // 3. 循环绘制矩形 (利用新状态机 API)
+    for ( int i = 0; i < 50; ++i ) {
+        m_brush.setColor(distCol(gen), distCol(gen), distCol(gen), 0.8f);
+        m_brush.drawRect(distX(gen), distY(gen), distSize(gen), distSize(gen));
+    }
 
-        m_brush.drawRect(randomPos, randomSize, randomColor);
+    // 4. 测试绘制圆形
+    for ( int i = 0; i < 20; ++i ) {
+        m_brush.setColor(distCol(gen), distCol(gen), distCol(gen), 0.9f);
+        m_brush.drawCircle(distX(gen), distY(gen), distSize(gen) * 0.8f, 32);
     }
 }
 

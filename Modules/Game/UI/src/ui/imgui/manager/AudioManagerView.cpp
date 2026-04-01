@@ -4,7 +4,7 @@
 #include "imgui_internal.h"
 #include "ui/layout/box/CLayBox.h"
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 // 内部绘制逻辑 (Clay/ImGui)
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,
@@ -43,4 +43,4 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     rootVBox.render(layoutContext);
 }
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <string>
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 class UIManager;
 class LayoutContext;
@@ -24,4 +24,4 @@ protected:
     /// @brief 子视图名称
     const std::string& m_subViewName;
 };
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

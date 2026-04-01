@@ -4,17 +4,21 @@
 #include "config/skin/translation/Translation.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "ui/ITextureLoader.h"
+#include "ui/IUIView.h"
 #include "ui/brush/Brush.h"
 
-namespace MMM::Graphic
-{
-namespace UI
+namespace MMM::UI
 {
 class Brush;
-class IRenderableView : public ITextureLoader, public VKOffScreenRenderer
+class IRenderableView : public ITextureLoader,
+                        public Graphic::VKOffScreenRenderer
 {
 public:
-    IRenderableView(const std::string& name) : ITextureLoader(name) {}
+    IRenderableView(const std::string& name)
+        : IUIView(name), ITextureLoader(name)
+    {
+    }
+
     IRenderableView(IRenderableView&&)                 = delete;
     IRenderableView(const IRenderableView&)            = delete;
     IRenderableView& operator=(IRenderableView&&)      = delete;
@@ -85,7 +89,8 @@ protected:
     Brush m_brush;
 
     // --- 获取数据供 Vulkan 使用 ---
-    const std::vector<Vertex::VKBasicVertex>& getVertices() const override
+    const std::vector<Graphic::Vertex::VKBasicVertex>&
+    getVertices() const override
     {
         return m_brush.getVertices();
     }
@@ -94,6 +99,35 @@ protected:
     {
         return m_brush.getIndices();
     };
+
+    /**
+     * @brief 录制具体的绘制指令 (由 UI 层实现)
+     */
+    void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
+                          vk::PipelineLayout pipelineLayout,
+                          vk::DescriptorSet  defaultDescriptor) override
+    {
+        for ( const auto& cmd : m_brush.getCmds() ) {
+            if ( cmd.texture != VK_NULL_HANDLE ) {
+                cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                          pipelineLayout,
+                                          0,
+                                          1,
+                                          &cmd.texture,
+                                          0,
+                                          nullptr);
+            } else {
+                cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                          pipelineLayout,
+                                          0,
+                                          1,
+                                          &defaultDescriptor,
+                                          0,
+                                          nullptr);
+            }
+            cmdBuf.drawIndexed(
+                cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
+        }
+    }
 };
-}  // namespace UI
-}  // namespace MMM::Graphic
+}  // namespace MMM::UI

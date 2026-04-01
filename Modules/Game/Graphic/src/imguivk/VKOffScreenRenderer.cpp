@@ -20,8 +20,7 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 
 
 /// @brief 录制gpu指令
-void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
-                                     UI::IRenderableView* renderable_view)
+void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 {
     // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
     vk::ClearValue clearValue;
@@ -31,7 +30,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
     // 获取渲染数据
     const auto& vertices = getVertices();
     const auto& indices  = getIndices();
-    // const auto& drawCmds = brush.getCmds();
 
     if ( vertices.empty() || indices.empty() ) return;
 
@@ -93,16 +91,13 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer&   cmdBuf,
 
         // 5. 绑定顶点缓冲区
         cmdBuf.bindVertexBuffers(0, m_vertexBuffer->m_vkBuffer, { 0 });
+        cmdBuf.bindIndexBuffer(
+            m_indexBuffer->m_vkBuffer, 0, vk::IndexType::eUint32);
 
-        // 修改最后的绘制命令：
-        if ( !indices.empty() ) {
-            cmdBuf.bindIndexBuffer(
-                m_indexBuffer->m_vkBuffer, 0, vk::IndexType::eUint32);
-            cmdBuf.drawIndexed(
-                static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
-        } else {
-            cmdBuf.draw(static_cast<uint32_t>(vertices.size()), 1, 0, 0);
-        }
+        // 6. 解析 DrawCmds 进行批次渲染 (回调到 UI 实现层)
+        onRecordDrawCmds(cmdBuf,
+                         m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                         m_offScreenDescriptorSet);
     }
     cmdBuf.endRenderPass();
 }

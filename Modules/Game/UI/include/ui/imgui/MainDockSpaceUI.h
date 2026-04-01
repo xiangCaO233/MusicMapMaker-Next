@@ -4,12 +4,15 @@
 #include "ui/imgui/menu/MainMenuView.h"
 #include <memory>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
-class MainDockSpaceUI : public ITextureLoader
+class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
 public:
-    MainDockSpaceUI(const std::string& name) : ITextureLoader(name) {}
+    MainDockSpaceUI(const std::string& name)
+        : IUIView(name), ITextureLoader(name)
+    {
+    }
     MainDockSpaceUI(MainDockSpaceUI&&)                 = delete;
     MainDockSpaceUI(const MainDockSpaceUI&)            = delete;
     MainDockSpaceUI& operator=(MainDockSpaceUI&&)      = delete;
@@ -35,16 +38,16 @@ private:
     MainMenuView m_mainMenuview;
 
     ///@brief 图标纹理
-    std::unique_ptr<VKTexture> m_logo_texture;
+    std::unique_ptr<Graphic::VKTexture> m_logo_texture;
 
     ///@brief 最小化图标纹理
-    std::unique_ptr<VKTexture> m_minimize_texture;
+    std::unique_ptr<Graphic::VKTexture> m_minimize_texture;
 
     ///@brief 最大化图标纹理
-    std::unique_ptr<VKTexture> m_maxmize_texture;
+    std::unique_ptr<Graphic::VKTexture> m_maxmize_texture;
 
     ///@brief 关闭图标纹理
-    std::unique_ptr<VKTexture> m_close_texture;
+    std::unique_ptr<Graphic::VKTexture> m_close_texture;
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

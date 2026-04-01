@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 class IRenderableView;
 class ITextureLoader;
@@ -46,10 +46,11 @@ public:
     void DispatchGlobalUIEvents();
 
     /// @brief 准备资源
-    void onPrepareResources(vk::PhysicalDevice& physicalDevice,
-                            vk::Device& logicalDevice, VKSwapchain& swapchain,
-                            vk::CommandPool& cmdPool,
-                            vk::Queue&       queue) override;
+    void onPrepareResources(vk::PhysicalDevice&   physicalDevice,
+                            vk::Device&           logicalDevice,
+                            Graphic::VKSwapchain& swapchain,
+                            vk::CommandPool&      cmdPool,
+                            vk::Queue&            queue) override;
 
     /// @brief 更新ui
     void onUpdateUI() override;
@@ -70,4 +71,4 @@ private:
     /// @brief 纹理加载器接口注册顺序
     std::vector<std::string> m_textureLoaderSequence;
 };
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

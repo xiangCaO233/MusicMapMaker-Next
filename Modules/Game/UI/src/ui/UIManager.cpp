@@ -10,7 +10,7 @@
 #include "ui/ITextureLoader.h"
 #include <vector>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 /// @brief 注册视图，转交所有权
@@ -41,16 +41,16 @@ void UIManager::clearAllViews()
 }
 
 /// @brief 准备资源
-void UIManager::onPrepareResources(vk::PhysicalDevice& physicalDevice,
-                                   vk::Device&         logicalDevice,
-                                   VKSwapchain&        swapchain,
+void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
+                                   vk::Device&           logicalDevice,
+                                   Graphic::VKSwapchain& swapchain,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
     // 检查并重建所有离屏帧缓冲
     for ( const auto& name : m_renderableUiSequence ) {
         auto renderableView =
-            static_cast<IRenderableView*>(m_uiviews[name].get());
-        if ( renderableView->needReCreateFrameBuffer() ) {
+            dynamic_cast<IRenderableView*>(m_uiviews[name].get());
+        if ( renderableView && renderableView->needReCreateFrameBuffer() ) {
             renderableView->reCreateFrameBuffer(
                 physicalDevice, logicalDevice, swapchain, cmdPool, queue);
         }
@@ -59,8 +59,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice& physicalDevice,
     // 检查并重载所有纹理
     for ( const auto& name : m_textureLoaderSequence ) {
         auto textureLoader =
-            static_cast<ITextureLoader*>(m_uiviews[name].get());
-        if ( textureLoader->needReload() ) {
+            dynamic_cast<ITextureLoader*>(m_uiviews[name].get());
+        if ( textureLoader && textureLoader->needReload() ) {
             textureLoader->reloadTextures(
                 physicalDevice, logicalDevice, cmdPool, queue);
         }
@@ -84,8 +84,10 @@ void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd)
 {
     for ( const auto& name : m_renderableUiSequence ) {
         auto renderableView =
-            static_cast<IRenderableView*>(m_uiviews[name].get());
-        renderableView->recordCmds(cmd, renderableView);
+            dynamic_cast<IRenderableView*>(m_uiviews[name].get());
+        if ( renderableView ) {
+            renderableView->recordCmds(cmd);
+        }
     }
 }
 
@@ -186,4 +188,4 @@ void UIManager::DispatchGlobalUIEvents()
     }
 }
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

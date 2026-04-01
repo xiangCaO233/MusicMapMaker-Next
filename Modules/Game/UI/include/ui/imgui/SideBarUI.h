@@ -6,7 +6,7 @@
 #include <memory>
 #include <unordered_map>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 enum class SideBarTab {
@@ -25,7 +25,7 @@ static std::string TabToSubViewId(SideBarTab tab)
     }
 }
 
-class SideBarUI : public ITextureLoader
+class SideBarUI : public ITextureLoader, virtual public IUIView
 {
 public:
     SideBarUI(const std::string& name);
@@ -54,7 +54,8 @@ private:
     SideBarTab m_activeTab = SideBarTab::FileExplorer;
 
     ///@brief 存储图标纹理对象
-    std::unordered_map<SideBarTab, std::unique_ptr<VKTexture>> m_tabIcons;
+    std::unordered_map<SideBarTab, std::unique_ptr<Graphic::VKTexture>>
+        m_tabIcons;
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

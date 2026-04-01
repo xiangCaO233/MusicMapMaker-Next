@@ -6,7 +6,7 @@
 #include <imgui.h>
 #include <string>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 class UIManager;
 class IUIView
@@ -18,11 +18,13 @@ public:
     IUIView(const std::string& name) : m_name(name)
     {
         // 创建独立的布局上下文
-        m_layoutCtx = CLayWrapperCore::instance().createWindowContext();
+        m_layoutCtx =
+            CLayWrapperCore::instance().createWindowContext();
     }
     virtual ~IUIView()
     {
-        CLayWrapperCore::instance().destroyWindowContext(m_layoutCtx);
+        CLayWrapperCore::instance().destroyWindowContext(
+            m_layoutCtx);
     }
 
     /// @brief 更新ui
@@ -42,11 +44,12 @@ class LayoutContext final
 
 public:
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
-                  const std::string&              iwindow_name,
-                  bool                            custom_window_flags = false,
+                  const std::string&                           iwindow_name,
+                  bool             custom_window_flags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar)
     {
-        CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
+        CLayWrapperCore::instance().makeCurrent(
+            clayout_ctx.context);
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
@@ -84,4 +87,4 @@ public:
     bool   m_isMouseDown;
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

@@ -5,7 +5,7 @@ extern "C" {
 #include <string.h>
 #include <string>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 // 增加对 char* 的重载，确保指针直接透传，不产生临时变量
@@ -65,4 +65,4 @@ struct Sizing {
     }
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

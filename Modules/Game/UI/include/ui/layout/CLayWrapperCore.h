@@ -5,7 +5,7 @@ extern "C" {
 }
 #include <string>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
 // 将 std::string 转为 Clay_String
@@ -56,4 +56,4 @@ private:
     Clay_Arena clayArena;
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

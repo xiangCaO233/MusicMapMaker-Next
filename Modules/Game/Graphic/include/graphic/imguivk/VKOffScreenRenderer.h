@@ -7,17 +7,12 @@
 #include "vulkan/vulkan.hpp"
 #include <atomic>
 #include <chrono>
-#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
 
 namespace MMM::Graphic
 {
-namespace UI
-{
-class IRenderableView;
-}
 class VKTexture;
 
 class VKOffScreenRenderer
@@ -28,14 +23,13 @@ public:
     VKOffScreenRenderer(const VKOffScreenRenderer&)            = delete;
     VKOffScreenRenderer& operator=(VKOffScreenRenderer&&)      = delete;
     VKOffScreenRenderer& operator=(const VKOffScreenRenderer&) = delete;
-    ~VKOffScreenRenderer();
+    virtual ~VKOffScreenRenderer();
 
     /// @brief 获取imgui图像描述符集用于贴窗口
     vk::DescriptorSet getDescriptorSet() const { return m_imguiDescriptor; }
 
     /// @brief 录制gpu指令
-    void recordCmds(vk::CommandBuffer&   cmdBuf,
-                    UI::IRenderableView* renderable_view);
+    void recordCmds(vk::CommandBuffer& cmdBuf);
 
     /// @brief 重建帧缓冲
     void reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
@@ -105,6 +99,13 @@ protected:
     virtual const std::vector<Vertex::VKBasicVertex>& getVertices() const = 0;
 
     virtual const std::vector<uint32_t>& getIndices() const = 0;
+
+    /**
+     * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)
+     */
+    virtual void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
+                                  vk::PipelineLayout pipelineLayout,
+                                  vk::DescriptorSet  defaultDescriptor) = 0;
 
 private:
     // --- 1. 物理资源 (独占) ---

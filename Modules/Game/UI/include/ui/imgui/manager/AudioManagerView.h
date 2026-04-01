@@ -2,7 +2,7 @@
 
 #include "ui/ISubView.h"
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 class AudioManagerView : public ISubView
 {
@@ -21,4 +21,4 @@ public:
 private:
 };
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI

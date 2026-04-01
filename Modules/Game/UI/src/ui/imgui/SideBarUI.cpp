@@ -8,10 +8,13 @@
 #include "ui/layout/box/CLayBox.h"
 #include <lunasvg.h>
 
-namespace MMM::Graphic::UI
+namespace MMM::UI
 {
 
-SideBarUI::SideBarUI(const std::string& name) : ITextureLoader(name) {}
+SideBarUI::SideBarUI(const std::string& name)
+    : IUIView(name), ITextureLoader(name)
+{
+}
 
 SideBarUI::~SideBarUI()
 {
@@ -60,7 +63,7 @@ void SideBarUI::update(UIManager* sourceManager)
         [&](const char* label, SideBarTab tab, Clay_BoundingBox rect) {
             bool isActive = (m_activeTab == tab);
             // 获取纹理
-            VKTexture* tex = nullptr;
+            Graphic::VKTexture* tex = nullptr;
             if ( m_tabIcons.count(tab) ) tex = m_tabIcons[tab].get();
 
             // --- 样式处理 ---
@@ -209,4 +212,4 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
     XINFO("SideBar textures reloaded.");
 }
 
-}  // namespace MMM::Graphic::UI
+}  // namespace MMM::UI
