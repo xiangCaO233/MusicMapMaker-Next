@@ -1,23 +1,18 @@
 #pragma once
 
+#include "graphic/CursorManager.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"
-#include "mem/VKUniforms.h"
-#include "mesh/VKVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace MMM::Graphic
 {
-namespace UI
-{
-class UIManager;
-}
 
 class NativeWindow;
+class IGraphicUserHook;
 /**
  * @brief Vulkan 渲染器类
  *
@@ -57,9 +52,10 @@ public:
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
      *
      * @param window 原生窗口
-     * @param uiManagers ui管理器
+     * @param 图形用户接口钩子列表
      */
-    void render(NativeWindow& window, std::vector<UI::UIManager*> uiManagers);
+    void render(NativeWindow&                  window,
+                std::vector<IGraphicUserHook*> uiManagers);
 
     /**
      * @brief 触发重建交换链
@@ -71,6 +67,7 @@ public:
 private:
     /// @brief 清屏颜色
     static std::array<float, 4> s_clear_color;
+
     /// @brief 物理设备引用
     vk::PhysicalDevice& m_vkPhysicalDevice;
 
@@ -154,6 +151,16 @@ private:
 
     /// @brief 当前并发帧索引 (0 ~ MAX_FRAMES_IN_FLIGHT-1)
     size_t m_currentFrameIndex{ 0 };
+
+    // =========================================================================
+    // 光标管理
+    // =========================================================================
+    std::unique_ptr<CursorManager> m_cursorManager{ nullptr };
+
+    void initCursorManager(vk::PhysicalDevice& vkPhysicalDevice,
+                           vk::Device&         logicalDevice);
+
+    void releaseCursorManager();
 
 private:
     /**

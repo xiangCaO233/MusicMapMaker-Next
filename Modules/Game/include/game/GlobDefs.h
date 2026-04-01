@@ -37,7 +37,7 @@ struct RTTILogger {
 #ifdef _WIN32
             wchar_t buffer[MAX_PATH];
             GetModuleFileNameW(NULL, buffer, MAX_PATH);
-            exePath = fs::path(buffer);
+            exePath = std::filesystem::path(buffer);
 #else
             char    buffer[PATH_MAX];
             ssize_t count = readlink("/proc/self/exe", buffer, PATH_MAX);

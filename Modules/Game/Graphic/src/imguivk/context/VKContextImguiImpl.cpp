@@ -30,6 +30,10 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     // Enable Docking
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // No Auto Change Cursor
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+    // 禁用保存
+    // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 
     // Enable Multi-Viewport / Platform
     // Windows
@@ -38,7 +42,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // io.ConfigViewportsNoTaskBarIcon = true;
 
     // Setup Dear ImGui style
-    ImGui::StyleColorsDark();
+    // ImGui::StyleColorsDark();
     // ImGui::StyleColorsLight();
 
     // Setup scaling
@@ -119,8 +123,29 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     auto asciiFontPath = Config::SkinManager::instance().getFontPath("ascii");
     XINFO("asciiFontPath: {}", asciiFontPath.generic_string());
 
-    ImFont* font =
-        io.Fonts->AddFontFromFileTTF(asciiFontPath.generic_string().c_str());
+
+    ImFont* font = io.Fonts->AddFontFromFileTTF(
+        asciiFontPath.generic_string().c_str(), 20.f);
+
+    // 2. 配置合并参数
+    ImFontConfig config;
+    config.MergeMode  = true;  // 关键：开启合并模式
+    config.PixelSnapH = true;  // 字符对齐，让字体更清晰
+
+    // 3. 获取中文范围 (ImGui 内置了常用中文字符范围)
+    // 注意：这个指针必须在整个程序运行期间有效，GetGlyphRangesChineseFull
+    // 是静态的，所以没问题
+    const ImWchar* ranges = io.Fonts->GetGlyphRangesChineseFull();
+
+    // 4. 加载中文字体并合并到上一个字体中
+    auto chineseFontPath = Config::SkinManager::instance().getFontPath("cjk");
+    io.Fonts->AddFontFromFileTTF(chineseFontPath.generic_string().c_str(),
+                                 20.f,     // 保持跟基础字体大小一致
+                                 &config,  // 传入合并配置
+                                 ranges    // 传入要支持的字符范围
+    );
+
+
     XINFO("ImGui Vulkan backend initialized.");
 }
 

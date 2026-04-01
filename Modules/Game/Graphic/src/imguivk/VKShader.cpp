@@ -1,8 +1,28 @@
 #include "graphic/imguivk/VKShader.h"
 #include "log/colorful-log.h"
+#include <fstream>
 
 namespace MMM::Graphic
 {
+
+///@brief 读取文件文本内容工具
+std::string VKShader::readFile(std::string path)
+{
+    // 读取文件内容
+    std::ifstream fs;
+    fs.open(path, std::ios::binary | std::ios::ate);
+    if ( !fs.is_open() ) {
+        XERROR("Fatal: Could not open File[{}]!", path);
+        return {};
+    }
+    auto        sourceSize = fs.tellg();
+    std::string source;
+    source.resize(sourceSize);
+    fs.seekg(0);
+    fs.read(source.data(), sourceSize);
+    fs.close();
+    return source;
+}
 
 /**
  * @brief 构造函数：基础管线 (Vertex + Fragment)

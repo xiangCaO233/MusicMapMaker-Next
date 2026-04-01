@@ -1,6 +1,7 @@
 #include "config/skin/SkinConfig.h"
-#include "config/translation/Translation.h"
+#include "config/skin/translation/Translation.h"
 #include "game/GameLoop.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
 #include <filesystem>
 
@@ -25,20 +26,14 @@ int main(int argc, char* argv[])
     // 跨平台（自动处理 / 或 \）
     const auto assetPath = rootDir / "assets";
 
-    using namespace Translation;
-    Translator::instance().loadLanguage(
-        (assetPath / "lang" / "en_us.lua").generic_string());
-    Translator::instance().loadLanguage(
-        (assetPath / "lang" / "zh_cn.lua").generic_string());
-    Translator::instance().switchLang("zh_cn");
-    XINFO(TR("tips.welcome"));
-
     using namespace Config;
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
         (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]", r, g, b, a);
+
+    XINFO(TR("tips.welcome"));
 
     // 测试vulkan
     auto& gameLoop = GameLoop::instance();
@@ -54,7 +49,9 @@ int main(int argc, char* argv[])
     // 正常运行
     XINFO("entering gameloop...");
 
-    const auto ret = gameLoop.start("MusicMapMaker(Gamma)");
+    Graphic::NativeWindow nativeWindow(1280, 720, "MusicMapMaker(Gamma)");
+
+    const auto ret = gameLoop.start(nativeWindow);
 
     return ret;
 }

@@ -4,7 +4,13 @@
 #include "event/input/glfw/GLFWMouseEvent.h"
 #include "event/input/translators/GLFWTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
+#include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
+#include <GLFW/glfw3.h>
+
+#ifdef _WIN32
+#    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
+#endif
 
 namespace MMM::Graphic
 {
@@ -17,8 +23,21 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     if ( !glfwVulkanSupported() ) {
         XERROR("GLFW: Vulkan Not Supported");
     }
+    // 隐藏系统标题栏
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+
     // 不再需要初始化 ImGui 的辅助窗口
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
+
+    // 在 glfwCreateWindow 之后调用
+#ifdef _WIN32
+    m_win32Adapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
+#endif
+
+    // 隐藏系统原生光标
+    glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+
 
     // 设置用户指针，方便回调函数访问类成员
     glfwSetWindowUserPointer(m_windowHandle, this);
@@ -79,6 +98,35 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
 
             MMM::Event::EventBus::instance().publish(e);
+        });
+
+    Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
+        [&](Event::GLFWNativeEvent e) {
+            switch ( e.type ) {
+            case NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
+                // 获取当前最大化状态
+                int maximized =
+                    glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
+                if ( maximized ) {
+                    glfwRestoreWindow(m_windowHandle);
+                    XINFO("Window restored.");
+                } else {
+                    glfwMaximizeWindow(m_windowHandle);
+                    XINFO("Window maximized.");
+                }
+                break;
+            }
+            case NativeEventType::GLFW_ICONFY_WINDOW: {
+                // 最小化窗口
+                glfwIconifyWindow(m_windowHandle);
+                XINFO("Window iconified.");
+                break;
+            }
+            case NativeEventType::GLFW_CLOSE_WINDOW: {
+                glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
+                break;
+            }
+            }
         });
 }
 

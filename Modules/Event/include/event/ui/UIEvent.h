@@ -7,16 +7,16 @@
 
 namespace MMM
 {
-namespace Graphic::UI
+namespace UI
 {
 class UIManager;
 class IUIView;
-}  // namespace Graphic::UI
+}  // namespace UI
 namespace Event
 {
 struct UIEvent : public BaseEvent {
     ///@brief 需要发生变更的ui管理器常指针
-    const Graphic::UI::UIManager* uiManager;
+    const UI::UIManager* uiManager;
 
     ///@brief 需要变更的ui名
     std::string sourceUiName;

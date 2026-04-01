@@ -3,19 +3,17 @@
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"
+#include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "vulkan/vulkan.hpp"
 #include <atomic>
 #include <chrono>
-#include <cstddef>
+#include <filesystem>
 #include <memory>
 #include <unordered_map>
 
 namespace MMM::Graphic
 {
-namespace UI
-{
-class IRenderableView;
-}
+class VKTexture;
 
 class VKOffScreenRenderer
 {
@@ -25,19 +23,20 @@ public:
     VKOffScreenRenderer(const VKOffScreenRenderer&)            = delete;
     VKOffScreenRenderer& operator=(VKOffScreenRenderer&&)      = delete;
     VKOffScreenRenderer& operator=(const VKOffScreenRenderer&) = delete;
-    ~VKOffScreenRenderer();
+    virtual ~VKOffScreenRenderer();
 
     /// @brief 获取imgui图像描述符集用于贴窗口
     vk::DescriptorSet getDescriptorSet() const { return m_imguiDescriptor; }
 
     /// @brief 录制gpu指令
-    void recordCmds(vk::CommandBuffer&   cmdBuf,
-                    UI::IRenderableView* renderable_view);
+    void recordCmds(vk::CommandBuffer& cmdBuf);
 
     /// @brief 重建帧缓冲
     void reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
                              vk::Device& logicalDevice, VKSwapchain& swapchain,
-                             size_t maxVertexCount = 1024);
+                             vk::CommandPool commandPool, vk::Queue queue,
+                             const std::filesystem::path& shaderModulePath = {},
+                             size_t maxVertexCount = 81920);
 
     /// @brief 外部确认是否需要重建
     inline bool needReCreateFrameBuffer() const
@@ -84,6 +83,30 @@ protected:
     /// @brief 是否需要重建
     std::atomic<bool> m_need_reCreate{ true };
 
+    /**
+     * @brief 获取 Shader 源码接口 (在固定时刻需要创建)
+     */
+    virtual std::vector<std::string> getShaderSources(
+        const std::string& shader_module_name) = 0;
+
+    /**
+     * @brief 获取 Shader 名称(需要按唯一名称名称储存和销毁)
+     */
+    virtual std::string getShaderName(
+        const std::string& shader_module_name) = 0;
+
+    // --- 获取数据供 Vulkan 使用 ---
+    virtual const std::vector<Vertex::VKBasicVertex>& getVertices() const = 0;
+
+    virtual const std::vector<uint32_t>& getIndices() const = 0;
+
+    /**
+     * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)
+     */
+    virtual void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
+                                  vk::PipelineLayout pipelineLayout,
+                                  vk::DescriptorSet  defaultDescriptor) = 0;
+
 private:
     // --- 1. 物理资源 (独占) ---
     vk::Image        m_image;        // 画布纹理
@@ -92,17 +115,12 @@ private:
     vk::Framebuffer  m_framebuffer;  // 绑定到此纹理的帧缓冲
     vk::Sampler      m_sampler;      // 绑定到此纹理的采样器
 
-    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
-    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
-
-    /**
-     * @brief 加载并创建 Shader 模块
-     */
-    void createShader();
-
     // --- 2. 几何资源 (独占) ---
     // 存 Brush 的顶点
     std::unique_ptr<VKMemBuffer> m_vertexBuffer;
+
+    // 存 Brush 的索引
+    std::unique_ptr<VKMemBuffer> m_indexBuffer;
 
     // 离屏用的 Uniform Buffer
     std::unique_ptr<VKMemBuffer> m_uniformBuffer;
@@ -112,6 +130,12 @@ private:
 
     // 离屏用描述符集
     vk::DescriptorSet m_offScreenDescriptorSet;
+
+    // 离屏用白色纹理
+    std::unique_ptr<VKTexture> m_whiteTexture;
+
+    /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
+    std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
 
     /**
      * @brief 创建描述符池
@@ -124,14 +148,26 @@ private:
     void createDescriptSets();
 
     /**
-     * @brief 映射uniformbuffer到对应描述符集
+     * @brief 更新描述符集
      */
-    void mapUniformBuffer2DescriptorSet() const;
+    void updateDescriptorSets();
 
     /**
      * @brief 上传uniform缓冲区到GPU
      */
     void uploadUniformBuffer2GPU();
+
+    /**
+     * @brief 创建所有着色器
+     */
+    void createShaderModules();
+
+    /**
+     * @brief 瞬发布局转换
+     */
+    void transitionImageInternal(vk::CommandPool pool, vk::Queue queue,
+                                 vk::ImageLayout oldLayout,
+                                 vk::ImageLayout newLayout);
 
 
     // --- 3. UI 集成句柄 (独占) ---
@@ -145,7 +181,7 @@ private:
     std::unique_ptr<VKRenderPass> m_offScreenRenderPass{ nullptr };
 
     // 画笔管线
-    std::unique_ptr<VKRenderPipeline> m_brushRenderPipeline{ nullptr };
+    std::unique_ptr<VKRenderPipeline> m_mainBrushRenderPipeline{ nullptr };
 
     /// @brief 释放持有的资源
     void releaseResources();

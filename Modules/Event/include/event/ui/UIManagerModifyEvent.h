@@ -21,7 +21,7 @@ struct UIManagerModifyEvent : public UIEvent {
     const Operate operate;
 
     ///@brief 更新或插入的资源
-    std::unique_ptr<Graphic::UI::IUIView> ui_resource{ nullptr };
+    std::unique_ptr<UI::IUIView> ui_resource{ nullptr };
 };
 
 }  // namespace Event
