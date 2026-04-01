@@ -3,6 +3,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "event/ui/UpdateDragAreaEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
@@ -96,10 +97,40 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
             ImGui::PopStyleVar(1);  // 弹出菜单专用 Padding
 
+            // --- 记录拖拽区域起点 ---
+            float dragStartX = ImGui::GetCursorPosX();
+
             // ================== 3. 右侧按钮组区域 ==================
             float numberOfButtons = 3;
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() -
-                                 (buttonSize * numberOfButtons));
+            float dragEndX =
+                ImGui::GetWindowWidth() - (buttonSize * numberOfButtons);
+            ImGui::SetCursorPosX(dragEndX);
+
+            // --- 动态上报拖拽区域 ---
+            static float lastDragStartX = -1.0f;
+            static float lastDragEndX   = -1.0f;
+            if ( dragStartX != lastDragStartX || dragEndX != lastDragEndX ) {
+                lastDragStartX = dragStartX;
+                lastDragEndX   = dragEndX;
+
+                Event::UpdateDragAreaEvent e;
+                e.uiManager    = sourceManager;
+                e.sourceUiName = "TopMenuBarHost";
+                e.areas.push_back(
+                    { dragStartX, 0.0f, dragEndX - dragStartX, menuBarHeight });
+                Event::EventBus::instance().publish(e);
+            }
+
+            // --- 跨平台双击最大化支持 ---
+            ImGui::SetCursorPosX(dragStartX);
+            ImGui::InvisibleButton(
+                "DragArea", ImVec2(dragEndX - dragStartX, menuBarHeight));
+            if ( ImGui::IsItemHovered() &&
+                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+                Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+                    .type = NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+            }
+            ImGui::SetCursorPosX(dragEndX);
 
             // 按钮组之间不留缝隙
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));

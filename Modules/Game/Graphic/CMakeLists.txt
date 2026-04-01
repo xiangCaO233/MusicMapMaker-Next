@@ -8,6 +8,7 @@ add_subdirectory("Font")
 add_library(Graphic STATIC
  src/glfw/GLFWCallback.cpp
  src/glfw/NativeWindow.cpp
+ src/glfw/adapters/Win32WindowAdapter.cpp
  src/imguivk/context/VKContext.cpp
  src/imguivk/context/VKContextGLFW.cpp
  src/imguivk/context/VKContextDevice.cpp

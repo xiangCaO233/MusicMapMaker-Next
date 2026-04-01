@@ -3,9 +3,12 @@
 #include "graphic/glfw/GLFWHeader.h"
 #include <atomic>
 #include <chrono>
+#include <memory>
 
 namespace MMM::Graphic
 {
+class Win32WindowAdapter;
+
 class NativeWindow
 {
 
@@ -63,6 +66,11 @@ private:
     static bool                           s_firstMouse;
     int m_backupPos[2]  = { 100, 100 };   // 默认备份位置
     int m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
+
+#ifdef _WIN32
+    std::unique_ptr<Win32WindowAdapter>
+        m_win32Adapter;  ///< Win32 窗口事件适配器
+#endif
 };
 
 }  // namespace MMM::Graphic
