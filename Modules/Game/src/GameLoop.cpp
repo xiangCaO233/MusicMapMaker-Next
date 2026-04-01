@@ -49,6 +49,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<Graphic::UI::AudioManagerView>(
             TR("title.audio_manager")));
 
+    // 初始化时默认激活第一个 Tab（文件管理器）
+    sidebar_manager->toggleSubView(TR("title.file_manager"));
+
     m_uiManager.registerView(
         "Basic2DCanvas",
         std::make_unique<Canvas::Basic2DCanvas>("Basic2DCanvas", 200, 200));

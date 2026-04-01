@@ -40,6 +40,12 @@ void VKContext::registerGLFWExtensions()
     const char** glfwExtensions{ nullptr };
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if ( glfwExtensions == nullptr ) {
+        const char* description;
+        int         code = glfwGetError(&description);
+        if ( description ) {
+            // 打印出具体的错误原因
+            XCRITICAL("GLFW Error {} : {}", code, description);
+        }
         releaseGLFW();
         // !此处可能退出
         throw std::runtime_error(

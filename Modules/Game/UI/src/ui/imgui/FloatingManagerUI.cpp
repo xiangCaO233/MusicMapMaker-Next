@@ -39,7 +39,7 @@ void FloatingManagerUI::registerSubView(const std::string&        subViewId,
                                         std::unique_ptr<ISubView> subView)
 {
     m_subViews[subViewId] = std::move(subView);
-    toggleSubView(subViewId);
+    // 不在此处自动 toggle，避免初始化时状态错乱
 }
 
 ///@brief 核心切换逻辑
@@ -57,7 +57,10 @@ void FloatingManagerUI::update(UIManager* sourceManager)
 {
     if ( !m_isVisible ) return;
 
-    LayoutContext lctx{ m_layoutCtx, m_currentSubViewId };
+    // 使用 ### 后缀强制固定 ImGui 内部窗口
+    // ID，即使显示的标题变化也不会丢失停靠状态
+    std::string   windowName = m_currentSubViewId + "###" + m_name;
+    LayoutContext lctx{ m_layoutCtx, windowName };
     if ( m_subViews.contains(m_currentSubViewId) ) {
         m_subViews[m_currentSubViewId]->onUpdate(lctx, sourceManager);
     }

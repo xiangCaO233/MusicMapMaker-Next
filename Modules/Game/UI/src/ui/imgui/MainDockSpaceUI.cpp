@@ -241,8 +241,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // --- 第四步：把窗口填进拆好的坑位里 ---
 
             // 文件管理器 -> 停靠在左侧坑位
-            ImGui::DockBuilderDockWindow(TR("title.file_manager"),
-                                         dock_id_left);
+            ImGui::DockBuilderDockWindow("SideBarManager", dock_id_left);
 
             // 画布 -> 停靠在剩余的右侧（中心）坑位
             // 不要停靠到 dockspace_id，要停靠到 split 出来的右侧 ID
