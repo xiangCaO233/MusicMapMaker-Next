@@ -50,3 +50,7 @@
 	path = 3rdpty/sources/entt
 	url = https://github.com/skypjack/entt.git
 	branch = main
+[submodule "3rdpty/sources/concurrentqueue"]
+	path = 3rdpty/sources/concurrentqueue
+	url = https://github.com/cameron314/concurrentqueue.git
+	branch = master
