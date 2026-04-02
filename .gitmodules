@@ -46,3 +46,7 @@
 	path = 3rdpty/sources/lunasvg
 	url = https://github.com/sammycage/lunasvg.git
 	branch = master
+[submodule "3rdpty/sources/entt"]
+	path = 3rdpty/sources/entt
+	url = https://github.com/skypjack/entt.git
+	branch = main
