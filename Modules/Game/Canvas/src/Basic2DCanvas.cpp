@@ -1,15 +1,19 @@
 #include "canvas/Basic2DCanvas.h"
 #include "config/skin/SkinConfig.h"
+#include "event/canvas/interactive/ResizeEvent.h"
+#include "event/core/EventBus.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorEngine.h"
+#include "logic/LogicCommands.h"
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
 #include <filesystem>
 #include <glm/glm.hpp>
-#include <random>
 #include <utility>
 
 namespace MMM::Canvas
@@ -24,43 +28,117 @@ Basic2DCanvas::Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h)
 // 接口实现
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
-    UI::LayoutContext lctx(m_layoutCtx, m_canvasName.c_str());
+    std::string windowName =
+        TR("canvas.editor") + std::string("###") + m_canvasName;
+    UI::LayoutContext lctx(m_layoutCtx, windowName);
     RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
 
-    // 1. 绘制背景网格或固定图形测试状态机
-    m_brush.setColor(0.1f, 0.1f, 0.1f, 1.0f);
-    m_brush.drawRect(0, 0, m_targetWidth, m_targetHeight);
-
-    // 2. 准备随机数引擎 (改为 static 让图形位置固定，方便观察测试)
-    static std::random_device rd;
-    static std::mt19937       gen(rd());
-
-    // 坐标范围：从 0 到画布宽高
-    std::uniform_real_distribution<float> distX(0.0f, (float)m_targetWidth);
-    std::uniform_real_distribution<float> distY(0.0f, (float)m_targetHeight);
-    // 尺寸范围：10 到 50 像素
-    std::uniform_real_distribution<float> distSize(10.0f, 50.0f);
-    // 颜色范围：0.0 到 1.0
-    std::uniform_real_distribution<float> distCol(0.0f, 1.0f);
-
-    // 3. 循环绘制矩形 (利用新状态机 API)
-    for ( int i = 0; i < 50; ++i ) {
-        m_brush.setColor(distCol(gen), distCol(gen), distCol(gen), 0.8f);
-        m_brush.drawRect(distX(gen), distY(gen), distSize(gen), distSize(gen));
+    // 尝试拉取最新的逻辑线程渲染快照 (专属摄像机缓冲)
+    auto syncBuffer =
+        Logic::EditorEngine::instance().getSyncBuffer(m_canvasName);
+    if ( syncBuffer ) {
+        m_currentSnapshot = syncBuffer->pullLatestSnapshot();
     }
 
-    // 4. 测试绘制圆形
-    for ( int i = 0; i < 20; ++i ) {
-        m_brush.setColor(distCol(gen), distCol(gen), distCol(gen), 0.9f);
-        m_brush.drawCircle(distX(gen), distY(gen), distSize(gen) * 0.8f, 32);
+    // --- MVP 交互实现：拾取测试 ---
+    if ( m_currentSnapshot ) {
+        // 获取鼠标在 ImGui 窗口中的相对位置
+        ImVec2 mousePos = ImGui::GetMousePos();
+
+        // 由于 Basic2DCanvas 是绘制在全屏 Dock 窗口中的 Image，
+        // 我们需要计算相对于窗口内容的本地坐标。
+        ImVec2 windowPos     = ImGui::GetWindowPos();
+        ImVec2 localMousePos = { mousePos.x - windowPos.x,
+                                 mousePos.y - windowPos.y };
+
+        entt::entity hoveredEntity = entt::null;
+
+        // 倒序遍历 Hitbox (最上层的优先)
+        for ( auto it = m_currentSnapshot->hitboxes.rbegin();
+              it != m_currentSnapshot->hitboxes.rend();
+              ++it ) {
+            if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
+                 localMousePos.y >= it->y &&
+                 localMousePos.y <= it->y + it->h ) {
+                hoveredEntity = it->entity;
+                break;
+            }
+        }
+
+        // 推送悬停指令到逻辑线程
+        Logic::EditorEngine::instance().pushCommand(
+            Logic::CmdSetHoveredEntity{ hoveredEntity });
+    }
+}
+
+// --- 改变尺寸后的回调 ---
+void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
+                               uint32_t h) const
+{
+    Event::CanvasResizeEvent e;
+    e.canvasName = m_canvasName;
+    e.lastSize   = { oldW, oldH };
+    e.newSize    = { w, h };
+    Event::EventBus::instance().publish(e);
+}
+
+const std::vector<Graphic::Vertex::VKBasicVertex>&
+Basic2DCanvas::getVertices() const
+{
+    if ( m_currentSnapshot ) {
+        return m_currentSnapshot->vertices;
+    }
+    static std::vector<Graphic::Vertex::VKBasicVertex> empty;
+    return empty;
+}
+
+const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
+{
+    if ( m_currentSnapshot ) {
+        return m_currentSnapshot->indices;
+    }
+    static std::vector<uint32_t> empty;
+    return empty;
+}
+
+void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
+                                     vk::PipelineLayout pipelineLayout,
+                                     vk::DescriptorSet  defaultDescriptor)
+{
+    if ( !m_currentSnapshot ) return;
+
+    for ( const auto& cmd : m_currentSnapshot->cmds ) {
+        if ( cmd.texture != VK_NULL_HANDLE ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &cmd.texture,
+                                      0,
+                                      nullptr);
+        } else {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &defaultDescriptor,
+                                      0,
+                                      nullptr);
+        }
+        cmdBuf.drawIndexed(
+            cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
 }
 
 ///@brief 是否需要重新记录命令 (比如数据变了)
 bool Basic2DCanvas::isDirty() const
 {
-    return false;
+    // 如果想要动态更新，每帧都需要记录。
+    // 我们暂时返回 false，让 Renderer 自己决定，
+    // 但实际使用中由于数据总是变，可能需要让这里返回 true 或者
+    // 依赖 VKOffScreenRenderer 默认每帧刷新的逻辑（当前似乎也是如此）。
+    return true;
 }
 
 /**
