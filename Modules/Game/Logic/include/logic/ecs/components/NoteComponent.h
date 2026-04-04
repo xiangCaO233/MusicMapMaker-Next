@@ -25,6 +25,9 @@ struct NoteComponent {
     /// @brief 滑动轨道偏移 (如果是 Flick 类型)
     int m_dtrack{ 0 };
 
+    /// @brief 是否为折线内部子物件（如果是，则在标准渲染流程中跳过）
+    bool m_isSubNote{ false };
+
     /// @brief 折线子物件定义 (如果是 Polyline 类型)
     struct SubNote {
         ::MMM::NoteType type;

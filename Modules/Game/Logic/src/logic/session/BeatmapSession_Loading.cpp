@@ -39,9 +39,13 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
             timing.m_timingEffectParameter);
     }
 
+    // 用于追踪子物件，防止在折线之外重复绘制
+    std::unordered_map<const ::MMM::Note*, entt::entity> noteToEntity;
+
     // 2. 加载普通音符 (Notes)
     for ( const auto& note : beatmap->m_noteData.notes ) {
-        auto entity = m_noteRegistry.create();
+        auto entity         = m_noteRegistry.create();
+        noteToEntity[&note] = entity;
 
         int track = static_cast<int>(note.m_track);
 
@@ -60,7 +64,8 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
 
     // 3. 加载长键 (Holds)
     for ( const auto& hold : beatmap->m_noteData.holds ) {
-        auto entity = m_noteRegistry.create();
+        auto entity         = m_noteRegistry.create();
+        noteToEntity[&hold] = entity;
 
         int track = static_cast<int>(hold.m_track);
 
@@ -79,7 +84,8 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
 
     // 4. 加载滑键 (Flicks)
     for ( const auto& flick : beatmap->m_noteData.flicks ) {
-        auto entity = m_noteRegistry.create();
+        auto entity          = m_noteRegistry.create();
+        noteToEntity[&flick] = entity;
 
         int track = static_cast<int>(flick.m_track);
 
@@ -105,9 +111,17 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
         auto& comp = m_noteRegistry.emplace<NoteComponent>(
             entity, polyline.m_type, polyline.m_timestamp / 1000.0, 0.0, track);
 
-        // 填充子物件
+        // 填充子物件并标记它们为 SubNote
         for ( const auto& subNoteRef : polyline.m_subNotes ) {
-            const auto&            subNote = subNoteRef.get();
+            const auto& subNote = subNoteRef.get();
+
+            // 标记原始实体为 SubNote，防止独立绘制
+            if ( auto it = noteToEntity.find(&subNote);
+                 it != noteToEntity.end() ) {
+                m_noteRegistry.get<NoteComponent>(it->second).m_isSubNote =
+                    true;
+            }
+
             NoteComponent::SubNote sn;
             sn.type       = subNote.m_type;
             sn.timestamp  = subNote.m_timestamp / 1000.0;
