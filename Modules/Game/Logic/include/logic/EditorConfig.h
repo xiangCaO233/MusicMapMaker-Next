@@ -9,7 +9,7 @@ struct TrackLayout {
     /// @brief 顶部分隔比例位置
     float top{ .05f };
     /// @brief 右侧分隔比例位置
-    float right{ .85f };
+    float right{ .8f };
     /// @brief 底部分隔比例位置
     float bottom{ .95f };
 };
