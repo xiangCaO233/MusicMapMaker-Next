@@ -1,5 +1,6 @@
 #pragma once
 
+#include "logic/EditorConfig.h"
 #include <entt/entt.hpp>
 #include <memory>
 #include <string>
@@ -13,6 +14,13 @@ class BeatMap;
 
 namespace MMM::Logic
 {
+
+/**
+ * @brief 更新编辑器配置指令
+ */
+struct CmdUpdateEditorConfig {
+    EditorConfig config;
+};
 
 /**
  * @brief 更新视口尺寸指令
@@ -77,11 +85,18 @@ struct CmdEndDrag {
 };
 
 /**
+ * @brief 更新轨道数量指令
+ */
+struct CmdUpdateTrackCount {
+    int32_t trackCount;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
 using LogicCommand =
-    std::variant<CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
-                 CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
-                 CmdUpdateDrag, CmdEndDrag>;
+    std::variant<CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState,
+                 CmdLoadBeatmap, CmdSetHoveredEntity, CmdSelectEntity,
+                 CmdStartDrag, CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount>;
 
 }  // namespace MMM::Logic

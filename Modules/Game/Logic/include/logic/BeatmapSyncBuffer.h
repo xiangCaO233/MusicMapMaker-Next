@@ -4,6 +4,8 @@
 #include "ui/brush/BrushDrawCmd.h"
 #include <atomic>
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Logic
@@ -41,6 +43,9 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               cmds;
     std::vector<Hitbox>                         hitboxes;
 
+    // 纹理 UV 映射表 (TextureID -> u,v,w,h)
+    std::unordered_map<uint32_t, glm::vec4> uvMap;
+
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
     {
@@ -48,6 +53,7 @@ struct RenderSnapshot {
         indices.clear();
         cmds.clear();
         hitboxes.clear();
+        uvMap.clear();
     }
 };
 

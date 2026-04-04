@@ -85,7 +85,7 @@ void EditorEngine::loop()
         lastTime                         = currentTime;
 
         if ( m_activeSession ) {
-            m_activeSession->update(dt.count());
+            m_activeSession->update(dt.count(), m_editorConfig);
         } else {
             // 如果没有活动的 Session，稍微让出一下 CPU 避免空转占用过高
             std::this_thread::sleep_for(std::chrono::milliseconds(1));

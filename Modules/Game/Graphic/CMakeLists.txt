@@ -26,6 +26,7 @@ add_library(Graphic STATIC
  src/imguivk/VKShader.cpp
  src/imguivk/VKSwapchain.cpp
  src/imguivk/VKTexture.cpp
+ src/imguivk/VKTextureAtlas.cpp
  src/CursorManager.cpp
 )
 

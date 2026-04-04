@@ -1,7 +1,10 @@
 #pragma once
 
+#include "graphic/imguivk/VKTextureAtlas.h"
 #include "ui/IRenderableView.h"
+#include <glm/glm.hpp>
 #include <memory>
+#include <unordered_map>
 
 namespace MMM::Logic
 {
@@ -54,9 +57,9 @@ protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;
     const std::vector<uint32_t>& getIndices() const override;
-    void                         onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                                                  vk::PipelineLayout pipelineLayout,
-                                                  vk::DescriptorSet  defaultDescriptor) override;
+    void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
+                          vk::PipelineLayout pipelineLayout,
+                          vk::DescriptorSet  defaultDescriptor) override;
 
 private:
     /// @brief 画布名称
@@ -72,26 +75,11 @@ private:
     ///@brief 是否需要重载
     bool m_needReload{ true };
 
-    ///@brief Note的纹理
-    std::unique_ptr<Graphic::VKTexture> m_noteTexture{ nullptr };
+    ///@brief 全局图集
+    std::unique_ptr<Graphic::VKTextureAtlas> m_textureAtlas{ nullptr };
 
-    ///@brief Hold或Flick的头的纹理
-    std::unique_ptr<Graphic::VKTexture> m_holdOrFlickHeadTexture{ nullptr };
-
-    ///@brief Hold尾部纹理
-    std::unique_ptr<Graphic::VKTexture> m_holdEndTexture{ nullptr };
-
-    ///@brief HoldBody(垂直方向)的纹理(连接Hold头和Hold尾的纹理)
-    std::unique_ptr<Graphic::VKTexture> m_holdBodyVerticalTexture{ nullptr };
-
-    ///@brief FlickArrowleft(箭头朝左方向)的纹理(Flick尾部的箭头)
-    std::unique_ptr<Graphic::VKTexture> m_flickArrowLeftTexture{ nullptr };
-
-    ///@brief FlickArrowright(箭头朝右方向)的纹理(Flick尾部的箭头)
-    std::unique_ptr<Graphic::VKTexture> m_flickArrowRightTexture{ nullptr };
-
-    ///@brief HoldBody(水平方向)的纹理(连接Flick头和Flick尾的纹理)
-    std::unique_ptr<Graphic::VKTexture> m_holdBodyHorizontalTexture{ nullptr };
+    ///@brief 图集 UV 缓存，用于同步给逻辑线程
+    std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
 };
 
 }  // namespace MMM::Canvas

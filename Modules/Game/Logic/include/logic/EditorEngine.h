@@ -2,6 +2,7 @@
 
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorConfig.h"
 #include "logic/LogicCommands.h"
 #include <atomic>
 #include <memory>
@@ -53,6 +54,24 @@ public:
     std::shared_ptr<BeatmapSyncBuffer> getSyncBuffer(
         const std::string& cameraId);
 
+    /**
+     * @brief 设置全局图集 UV 映射 (由 UI 线程在构建图集后调用)
+     */
+    void setAtlasUVMap(const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+    {
+        std::lock_guard<std::mutex> lock(m_atlasMutex);
+        m_atlasUVMap = uvMap;
+    }
+
+    /**
+     * @brief 获取当前全局图集 UV 映射
+     */
+    std::unordered_map<uint32_t, glm::vec4> getAtlasUVMap()
+    {
+        std::lock_guard<std::mutex> lock(m_atlasMutex);
+        return m_atlasUVMap;
+    }
+
 private:
     /**
      * @brief 逻辑线程的主循环
@@ -74,6 +93,13 @@ private:
 
     /// @brief 保护缓冲区的锁
     std::mutex m_bufferMutex;
+
+    /// @brief 编辑器配置
+    EditorConfig m_editorConfig;
+
+    /// @brief 图集 UV 映射表
+    std::unordered_map<uint32_t, glm::vec4> m_atlasUVMap;
+    std::mutex                              m_atlasMutex;
 };
 
 }  // namespace MMM::Logic

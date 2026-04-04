@@ -75,6 +75,11 @@
 XERROR("Failed to load skin lua: {}", err.what());
 ```
 
+### Git 提交规范
+- **格式**: `type(scope): 中文描述`
+- **要求**: 冒号 (`:`) 之前的部分必须使用英文（如 `feat`, `fix`, `refactor`, `docs` 等），冒号之后的部分必须使用中文描述。
+- **示例**: `feat(render): 重构渲染管线`
+
     ##智能体最佳实践
 
     1. *
@@ -106,6 +111,10 @@ XERROR("Failed to load skin lua: {}", err.what());
         -
         **音符渲染优化** : 实现了
                            Polyline（折线）的连续几何生成，支持斜向连接段和纹理批处理。
+        -
+        **判定线实现** : 在 `NoteRenderSystem` 中引入了判定线绘制逻辑，支持通过 `EditorConfig` 动态配置位置和线宽。
+        -
+        **核心模块重构** : 完成了 `BeatmapSession` 和 `NoteRenderSystem` 的职责拆分与解耦。建立了 `session/` 和 `render/` 子目录，并将内部批处理器提取为独立的 `Batcher.h`，提升了代码的可维护性和整洁度。
 
                            ## #2. 待办事项(Next Steps) -
         **脚本集成** : 将 `Brush` API 与 ECS 交互事件暴露给 Lua 环境。 -

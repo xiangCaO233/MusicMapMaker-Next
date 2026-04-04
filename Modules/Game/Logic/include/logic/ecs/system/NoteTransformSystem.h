@@ -1,5 +1,6 @@
 #pragma once
 
+#include "logic/EditorConfig.h"
 #include <entt/entt.hpp>
 
 namespace MMM::Logic::System
@@ -19,11 +20,11 @@ public:
      * @param registry 音符注册表
      * @param timelineRegistry 时间线注册表 (用于获取 ScrollCache)
      * @param currentTime 当前播放时间
-     * @param judgmentLineY 判定线在视口中的基准位置 (弃用，由渲染层处理偏移)
+     * @param config 编辑器配置
      */
     static void update(entt::registry& registry,
                        entt::registry& timelineRegistry, double currentTime,
-                       float judgmentLineY);
+                       const EditorConfig& config);
 };
 
 }  // namespace MMM::Logic::System

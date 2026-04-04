@@ -43,8 +43,9 @@ public:
 
 
     // 暴露句柄供 DescriptorSet 更新使用
-    vk::ImageView getImageView() const { return m_imageView; }
-    vk::Sampler   getSampler() const { return m_sampler; }
+    vk::ImageView     getImageView() const { return m_imageView; }
+    vk::Sampler       getSampler() const { return m_sampler; }
+    vk::DescriptorSet getDescriptorSet() const { return m_descriptorSet; }
 
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }

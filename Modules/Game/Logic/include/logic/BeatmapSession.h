@@ -1,8 +1,10 @@
 #pragma once
 
+#include "logic/EditorConfig.h"
 #include "logic/LogicCommands.h"
 #include <concurrentqueue.h>
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -21,11 +23,6 @@ struct CameraInfo {
     float       viewportWidth{ 800.0f };
     float       viewportHeight{ 600.0f };
 };
-class BeatMap;
-}  // namespace MMM::Logic
-
-namespace MMM::Logic
-{
 
 /**
  * @brief 谱面逻辑会话核心
@@ -53,8 +50,9 @@ public:
     /**
      * @brief 每帧更新（由 Logic 线程调用）
      * @param dt 距离上一帧的时间间隔（秒）
+     * @param config 当前编辑器配置
      */
-    void update(double dt);
+    void update(double dt, const EditorConfig& config);
 
 private:
     /**
@@ -69,8 +67,9 @@ private:
 
     /**
      * @brief 执行逻辑计算和生成渲染快照
+     * @param config 当前编辑器配置
      */
-    void updateECSAndRender();
+    void updateECSAndRender(const EditorConfig& config);
 
     /// @brief ECS 注册表：音符
     entt::registry m_noteRegistry;
@@ -87,6 +86,15 @@ private:
     /// @brief 谱面是否正在播放
     bool m_isPlaying{ false };
 
+    /// @brief 当前轨道数
+    int32_t m_trackCount{ 12 };
+
+    /// @brief 当前加载的谱面
+    std::shared_ptr<MMM::BeatMap> m_currentBeatmap;
+
+    /// @brief 当前编辑器配置缓存
+    EditorConfig m_lastConfig;
+
     /// @brief 所有注册的摄像机(视口)信息
     std::unordered_map<std::string, CameraInfo> m_cameras;
 
@@ -94,6 +102,9 @@ private:
     entt::entity m_draggedEntity{ entt::null };
     /// @brief 拖拽发起时的摄像机 ID
     std::string m_dragCameraId;
+
+    /// @brief 图集 UV 映射表
+    std::unordered_map<uint32_t, glm::vec4> m_atlasUVMap;
 };
 
 }  // namespace MMM::Logic

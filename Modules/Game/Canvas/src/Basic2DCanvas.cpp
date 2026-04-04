@@ -136,57 +136,29 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
 {
     if ( !m_currentSnapshot ) return;
 
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        // 核心修复：强制通过 getImTextureID 确保描述符集已在 ImGui 中注册
+        atlasDescriptor = (vk::DescriptorSet)(VkDescriptorSet)
+                              m_textureAtlas->getImTextureID();
+    }
+
+    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
+
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet actualTexture = cmd.texture;
 
-        if ( cmd.customTextureId != 0 ) {
-            auto textureId = static_cast<Logic::TextureID>(cmd.customTextureId);
-            switch ( textureId ) {
-            case Logic::TextureID::Note:
-                if ( m_noteTexture )
-                    actualTexture = (VkDescriptorSet)(uint64_t)
-                                        m_noteTexture->getImTextureID();
-                break;
-            case Logic::TextureID::HoldHead:
-                if ( m_holdOrFlickHeadTexture )
-                    actualTexture =
-                        (VkDescriptorSet)(uint64_t)
-                            m_holdOrFlickHeadTexture->getImTextureID();
-                break;
-            case Logic::TextureID::HoldEnd:
-                if ( m_holdEndTexture )
-                    actualTexture = (VkDescriptorSet)(uint64_t)
-                                        m_holdEndTexture->getImTextureID();
-                break;
-            case Logic::TextureID::HoldBodyVertical:
-                if ( m_holdBodyVerticalTexture )
-                    actualTexture =
-                        (VkDescriptorSet)(uint64_t)
-                            m_holdBodyVerticalTexture->getImTextureID();
-                break;
-            case Logic::TextureID::HoldBodyHorizontal:
-                if ( m_holdBodyHorizontalTexture )
-                    actualTexture =
-                        (VkDescriptorSet)(uint64_t)
-                            m_holdBodyHorizontalTexture->getImTextureID();
-                break;
-            case Logic::TextureID::FlickArrowLeft:
-                if ( m_flickArrowLeftTexture )
-                    actualTexture =
-                        (VkDescriptorSet)(uint64_t)
-                            m_flickArrowLeftTexture->getImTextureID();
-                break;
-            case Logic::TextureID::FlickArrowRight:
-                if ( m_flickArrowRightTexture )
-                    actualTexture =
-                        (VkDescriptorSet)(uint64_t)
-                            m_flickArrowRightTexture->getImTextureID();
-                break;
-            default: break;
-            }
+        // 核心修复：只要该 ID 在图集 UV 映射表中（包含 ID 0），就使用图集
+        if ( m_atlasUVs.count(cmd.customTextureId) ) {
+            actualTexture = atlasDescriptor;
         }
 
-        if ( actualTexture != VK_NULL_HANDLE ) {
+        if ( actualTexture == VK_NULL_HANDLE ) {
+            actualTexture = defaultDescriptor;
+        }
+
+        // 避免冗余绑定
+        if ( actualTexture != lastBoundTexture ) {
             cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                       pipelineLayout,
                                       0,
@@ -194,15 +166,9 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
                                       &actualTexture,
                                       0,
                                       nullptr);
-        } else {
-            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
-                                      pipelineLayout,
-                                      0,
-                                      1,
-                                      &defaultDescriptor,
-                                      0,
-                                      nullptr);
+            lastBoundTexture = actualTexture;
         }
+
         cmdBuf.drawIndexed(
             cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
@@ -293,49 +259,51 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
 {
     auto& skin = Config::SkinManager::instance();
 
-    // 载入Note纹理
-    m_noteTexture =
-        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.note"),
-                                             physicalDevice,
-                                             logicalDevice,
-                                             cmdPool,
-                                             queue);
-    m_holdOrFlickHeadTexture =
-        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.head"),
-                                             physicalDevice,
-                                             logicalDevice,
-                                             cmdPool,
-                                             queue);
-    m_holdEndTexture =
-        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.holdend"),
-                                             physicalDevice,
-                                             logicalDevice,
-                                             cmdPool,
-                                             queue);
-    m_holdBodyVerticalTexture = std::make_unique<Graphic::VKTexture>(
-        skin.getAssetPath("note.holdbodyvertical"),
-        physicalDevice,
-        logicalDevice,
-        cmdPool,
-        queue);
-    m_holdBodyHorizontalTexture = std::make_unique<Graphic::VKTexture>(
-        skin.getAssetPath("note.holdbodyhorizontal"),
-        physicalDevice,
-        logicalDevice,
-        cmdPool,
-        queue);
-    m_flickArrowLeftTexture = std::make_unique<Graphic::VKTexture>(
-        skin.getAssetPath("note.arrowleft"),
-        physicalDevice,
-        logicalDevice,
-        cmdPool,
-        queue);
-    m_flickArrowRightTexture = std::make_unique<Graphic::VKTexture>(
-        skin.getAssetPath("note.arrowright"),
-        physicalDevice,
-        logicalDevice,
-        cmdPool,
-        queue);
+    m_textureAtlas = std::make_unique<Graphic::VKTextureAtlas>(
+        physicalDevice, logicalDevice, cmdPool, queue);
+
+    // 注册所有纹理到图集
+    // 1. 注册 1x1 纯白纹理作为 None (用于绘制纯色几何体而不切换 DrawCall)
+    unsigned char white[] = { 255, 255, 255, 255 };
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::None), white, 1, 1);
+
+
+
+    // 2. 注册资源纹理
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Note),
+                               skin.getAssetPath("note.note"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::HoldHead),
+        skin.getAssetPath("note.head"));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::HoldEnd),
+                               skin.getAssetPath("note.holdend"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::HoldBodyVertical),
+        skin.getAssetPath("note.holdbodyvertical"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::HoldBodyHorizontal),
+        skin.getAssetPath("note.holdbodyhorizontal"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::FlickArrowLeft),
+        skin.getAssetPath("note.arrowleft"));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::FlickArrowRight),
+        skin.getAssetPath("note.arrowright"));
+
+    // 构建图集
+    m_textureAtlas->build(2048);
+
+    // 更新 UV 映射缓存并同步给逻辑线程
+    m_atlasUVs.clear();
+    for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
+          i <= static_cast<uint32_t>(Logic::TextureID::FlickArrowRight);
+          ++i ) {
+        m_atlasUVs[i] = m_textureAtlas->getUV(i);
+    }
+
+    Logic::EditorEngine::instance().setAtlasUVMap(m_atlasUVs);
+    XINFO("Basic2DCanvas textures reloaded into atlas.");
 }
 
 }  // namespace MMM::Canvas
