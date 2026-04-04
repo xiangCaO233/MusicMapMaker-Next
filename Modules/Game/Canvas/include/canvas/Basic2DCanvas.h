@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/IRenderableView.h"
+#include <memory>
 
 namespace MMM::Logic
 {
@@ -70,6 +71,27 @@ private:
 
     ///@brief 是否需要重载
     bool m_needReload{ true };
+
+    ///@brief Note的纹理
+    std::unique_ptr<Graphic::VKTexture> m_noteTexture{ nullptr };
+
+    ///@brief Hold或Flick的头的纹理
+    std::unique_ptr<Graphic::VKTexture> m_holdOrFlickHeadTexture{ nullptr };
+
+    ///@brief Hold尾部纹理
+    std::unique_ptr<Graphic::VKTexture> m_holdEndTexture{ nullptr };
+
+    ///@brief HoldBody(垂直方向)的纹理(连接Hold头和Hold尾的纹理)
+    std::unique_ptr<Graphic::VKTexture> m_holdBodyVerticalTexture{ nullptr };
+
+    ///@brief FlickArrowleft(箭头朝左方向)的纹理(Flick尾部的箭头)
+    std::unique_ptr<Graphic::VKTexture> m_flickArrowLeftTexture{ nullptr };
+
+    ///@brief FlickArrowright(箭头朝右方向)的纹理(Flick尾部的箭头)
+    std::unique_ptr<Graphic::VKTexture> m_flickArrowRightTexture{ nullptr };
+
+    ///@brief HoldBody(水平方向)的纹理(连接Flick头和Flick尾的纹理)
+    std::unique_ptr<Graphic::VKTexture> m_holdBodyHorizontalTexture{ nullptr };
 };
 
 }  // namespace MMM::Canvas

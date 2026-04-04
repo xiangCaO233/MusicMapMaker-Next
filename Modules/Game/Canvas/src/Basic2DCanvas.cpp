@@ -109,12 +109,43 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
     if ( !m_currentSnapshot ) return;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
-        if ( cmd.texture != VK_NULL_HANDLE ) {
+        vk::DescriptorSet actualTexture = cmd.texture;
+        
+        if (cmd.customTextureId != 0) {
+            auto textureId = static_cast<Logic::TextureID>(cmd.customTextureId);
+            switch (textureId) {
+                case Logic::TextureID::Note:
+                    if (m_noteTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_noteTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::HoldHead:
+                    if (m_holdOrFlickHeadTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdOrFlickHeadTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::HoldEnd:
+                    if (m_holdEndTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdEndTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::HoldBodyVertical:
+                    if (m_holdBodyVerticalTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdBodyVerticalTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::HoldBodyHorizontal:
+                    if (m_holdBodyHorizontalTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdBodyHorizontalTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::FlickArrowLeft:
+                    if (m_flickArrowLeftTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_flickArrowLeftTexture->getImTextureID();
+                    break;
+                case Logic::TextureID::FlickArrowRight:
+                    if (m_flickArrowRightTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_flickArrowRightTexture->getImTextureID();
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        if ( actualTexture != VK_NULL_HANDLE ) {
             cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                       pipelineLayout,
                                       0,
                                       1,
-                                      &cmd.texture,
+                                      &actualTexture,
                                       0,
                                       nullptr);
         } else {
@@ -134,10 +165,6 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
 ///@brief 是否需要重新记录命令 (比如数据变了)
 bool Basic2DCanvas::isDirty() const
 {
-    // 如果想要动态更新，每帧都需要记录。
-    // 我们暂时返回 false，让 Renderer 自己决定，
-    // 但实际使用中由于数据总是变，可能需要让这里返回 true 或者
-    // 依赖 VKOffScreenRenderer 默认每帧刷新的逻辑（当前似乎也是如此）。
     return true;
 }
 
@@ -218,6 +245,51 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                    vk::Device&         logicalDevice,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
+    auto& skin = Config::SkinManager::instance();
+
+    // 载入Note纹理
+    m_noteTexture =
+        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.note"),
+                                             physicalDevice,
+                                             logicalDevice,
+                                             cmdPool,
+                                             queue);
+    m_holdOrFlickHeadTexture =
+        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.head"),
+                                             physicalDevice,
+                                             logicalDevice,
+                                             cmdPool,
+                                             queue);
+    m_holdEndTexture =
+        std::make_unique<Graphic::VKTexture>(skin.getAssetPath("note.holdend"),
+                                             physicalDevice,
+                                             logicalDevice,
+                                             cmdPool,
+                                             queue);
+    m_holdBodyVerticalTexture = std::make_unique<Graphic::VKTexture>(
+        skin.getAssetPath("note.holdbodyvertical"),
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    m_holdBodyHorizontalTexture = std::make_unique<Graphic::VKTexture>(
+        skin.getAssetPath("note.holdbodyhorizontal"),
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    m_flickArrowLeftTexture = std::make_unique<Graphic::VKTexture>(
+        skin.getAssetPath("note.arrowleft"),
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
+    m_flickArrowRightTexture = std::make_unique<Graphic::VKTexture>(
+        skin.getAssetPath("note.arrowright"),
+        physicalDevice,
+        logicalDevice,
+        cmdPool,
+        queue);
 }
 
 }  // namespace MMM::Canvas

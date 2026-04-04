@@ -95,31 +95,19 @@ int GameLoop::start(Graphic::NativeWindow& window)
 
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)
-        auto dummyBeatmap = std::make_shared<MMM::BeatMap>();
-
-        // 伪造时间线数据
-        Timing t1;
-        t1.m_timestamp             = 0.0;
-        t1.m_timingEffect          = TimingEffect::SCROLL;
-        t1.m_timingEffectParameter = 500.0;
-        Timing t2;
-        t2.m_timestamp             = 5.0;
-        t2.m_timingEffect          = TimingEffect::SCROLL;
-        t2.m_timingEffectParameter = 800.0;
-        dummyBeatmap->m_timings.push_back(t1);
-        dummyBeatmap->m_timings.push_back(t2);
-
-        // 伪造音符数据
-        for ( int i = 0; i < 100; ++i ) {
-            Note n;
-            n.m_timestamp = i * 0.2;
-            n.m_type      = NoteType::NOTE;
-            dummyBeatmap->m_notes.push_back(n);
-        }
+        // 测试载入谱面
+        auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
+            "/home/xiang/Documents/MusicMapRepo/rm/Corruption/"
+            "Corruption_4k_ez.imd"));
+        // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
+        //     "/home/xiang/Documents/MusicMapRepo/osu/493316 Camellia - I Can "
+        //     "Fly In "
+        //     "The Universe/Camellia - I Can Fly In The Universe (Evening) "
+        //     "[Schizophrenia].osu"));
 
         // 发送给逻辑引擎
         Logic::EditorEngine::instance().pushCommand(
-            Logic::CmdLoadBeatmap{ dummyBeatmap });
+            Logic::CmdLoadBeatmap{ map });
 
         // 进入主循环
         while ( !window.shouldClose() ) {
