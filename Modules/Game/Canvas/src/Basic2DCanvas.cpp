@@ -29,7 +29,7 @@ Basic2DCanvas::Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h)
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     std::string windowName =
-        TR("canvas.editor") + std::string("###") + m_canvasName;
+        fmt::format("{}###{}", TR("canvas.editor"), m_canvasName);
     UI::LayoutContext lctx(m_layoutCtx, windowName);
     RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
@@ -69,6 +69,34 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 推送悬停指令到逻辑线程
         Logic::EditorEngine::instance().pushCommand(
             Logic::CmdSetHoveredEntity{ hoveredEntity });
+
+        // --- 交互：点击选择与拖拽 ---
+        if ( ImGui::IsMouseClicked(0) ) {
+            if ( hoveredEntity != entt::null ) {
+                // 点击了实体，发送选择指令
+                Logic::EditorEngine::instance().pushCommand(
+                    Logic::CmdSelectEntity{ hoveredEntity,
+                                            !ImGui::GetIO().KeyCtrl });
+
+                // 如果没在拖拽，则尝试开始拖拽
+                Logic::EditorEngine::instance().pushCommand(
+                    Logic::CmdStartDrag{ hoveredEntity, m_canvasName });
+            } else {
+                // 点击空白处，取消所有选择
+                Logic::EditorEngine::instance().pushCommand(
+                    Logic::CmdSelectEntity{ entt::null, true });
+            }
+        }
+
+        if ( ImGui::IsMouseDragging(0) ) {
+            Logic::EditorEngine::instance().pushCommand(Logic::CmdUpdateDrag{
+                m_canvasName, localMousePos.x, localMousePos.y });
+        }
+
+        if ( ImGui::IsMouseReleased(0) ) {
+            Logic::EditorEngine::instance().pushCommand(
+                Logic::CmdEndDrag{ m_canvasName });
+        }
     }
 }
 
@@ -110,33 +138,51 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
         vk::DescriptorSet actualTexture = cmd.texture;
-        
-        if (cmd.customTextureId != 0) {
+
+        if ( cmd.customTextureId != 0 ) {
             auto textureId = static_cast<Logic::TextureID>(cmd.customTextureId);
-            switch (textureId) {
-                case Logic::TextureID::Note:
-                    if (m_noteTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_noteTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::HoldHead:
-                    if (m_holdOrFlickHeadTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdOrFlickHeadTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::HoldEnd:
-                    if (m_holdEndTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdEndTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::HoldBodyVertical:
-                    if (m_holdBodyVerticalTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdBodyVerticalTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::HoldBodyHorizontal:
-                    if (m_holdBodyHorizontalTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_holdBodyHorizontalTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::FlickArrowLeft:
-                    if (m_flickArrowLeftTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_flickArrowLeftTexture->getImTextureID();
-                    break;
-                case Logic::TextureID::FlickArrowRight:
-                    if (m_flickArrowRightTexture) actualTexture = (VkDescriptorSet)(uint64_t)m_flickArrowRightTexture->getImTextureID();
-                    break;
-                default:
-                    break;
+            switch ( textureId ) {
+            case Logic::TextureID::Note:
+                if ( m_noteTexture )
+                    actualTexture = (VkDescriptorSet)(uint64_t)
+                                        m_noteTexture->getImTextureID();
+                break;
+            case Logic::TextureID::HoldHead:
+                if ( m_holdOrFlickHeadTexture )
+                    actualTexture =
+                        (VkDescriptorSet)(uint64_t)
+                            m_holdOrFlickHeadTexture->getImTextureID();
+                break;
+            case Logic::TextureID::HoldEnd:
+                if ( m_holdEndTexture )
+                    actualTexture = (VkDescriptorSet)(uint64_t)
+                                        m_holdEndTexture->getImTextureID();
+                break;
+            case Logic::TextureID::HoldBodyVertical:
+                if ( m_holdBodyVerticalTexture )
+                    actualTexture =
+                        (VkDescriptorSet)(uint64_t)
+                            m_holdBodyVerticalTexture->getImTextureID();
+                break;
+            case Logic::TextureID::HoldBodyHorizontal:
+                if ( m_holdBodyHorizontalTexture )
+                    actualTexture =
+                        (VkDescriptorSet)(uint64_t)
+                            m_holdBodyHorizontalTexture->getImTextureID();
+                break;
+            case Logic::TextureID::FlickArrowLeft:
+                if ( m_flickArrowLeftTexture )
+                    actualTexture =
+                        (VkDescriptorSet)(uint64_t)
+                            m_flickArrowLeftTexture->getImTextureID();
+                break;
+            case Logic::TextureID::FlickArrowRight:
+                if ( m_flickArrowRightTexture )
+                    actualTexture =
+                        (VkDescriptorSet)(uint64_t)
+                            m_flickArrowRightTexture->getImTextureID();
+                break;
+            default: break;
             }
         }
 

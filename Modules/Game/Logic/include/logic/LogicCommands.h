@@ -45,9 +45,43 @@ struct CmdSetHoveredEntity {
 };
 
 /**
+ * @brief 选择实体指令
+ */
+struct CmdSelectEntity {
+    entt::entity entity;
+    bool         clearOthers;
+};
+
+/**
+ * @brief 开始拖拽指令
+ */
+struct CmdStartDrag {
+    entt::entity entity;
+    std::string  cameraId;
+};
+
+/**
+ * @brief 更新拖拽位置指令
+ */
+struct CmdUpdateDrag {
+    std::string cameraId;
+    float       mouseX;
+    float       mouseY;
+};
+
+/**
+ * @brief 结束拖拽指令
+ */
+struct CmdEndDrag {
+    std::string cameraId;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
-using LogicCommand = std::variant<CmdUpdateViewport, CmdSetPlayState,
-                                  CmdLoadBeatmap, CmdSetHoveredEntity>;
+using LogicCommand =
+    std::variant<CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
+                 CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
+                 CmdUpdateDrag, CmdEndDrag>;
 
 }  // namespace MMM::Logic

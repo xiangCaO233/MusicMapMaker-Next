@@ -79,4 +79,24 @@ double ScrollCache::getAbsY(double t) const
     return it->absY + (t - it->time) * it->speed;
 }
 
+double ScrollCache::getTime(double absY) const
+{
+    if ( m_segments.empty() ) return absY / 500.0;
+
+    auto it = std::upper_bound(
+        m_segments.begin(),
+        m_segments.end(),
+        absY,
+        [](double val, const ScrollSegment& seg) { return val < seg.absY; });
+
+    if ( it == m_segments.begin() ) {
+        if ( std::abs(m_segments[0].speed) < 1e-6 ) return m_segments[0].time;
+        return m_segments[0].time +
+               (absY - m_segments[0].absY) / m_segments[0].speed;
+    }
+    --it;
+    if ( std::abs(it->speed) < 1e-6 ) return it->time;
+    return it->time + (absY - it->absY) / it->speed;
+}
+
 }  // namespace MMM::Logic::System

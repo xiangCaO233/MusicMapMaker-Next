@@ -6,7 +6,9 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
-#include "logic/ecs/system/NoteSystem.h"
+#include "logic/ecs/system/NoteRenderSystem.h"
+#include "logic/ecs/system/NoteTransformSystem.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <glm/glm.hpp>
 
@@ -229,6 +231,95 @@ void BeatmapSession::processCommands()
                         m_noteRegistry.get<InteractionComponent>(arg.entity)
                             .isHovered = true;
                     }
+                } else if constexpr ( std::is_same_v<T, CmdSelectEntity> ) {
+                    if ( arg.clearOthers ) {
+                        auto view = m_noteRegistry.view<InteractionComponent>();
+                        for ( auto entity : view ) {
+                            m_noteRegistry.get<InteractionComponent>(entity)
+                                .isSelected = false;
+                        }
+                    }
+
+                    if ( arg.entity != entt::null ) {
+                        if ( !m_noteRegistry.all_of<InteractionComponent>(
+                                 arg.entity) ) {
+                            m_noteRegistry.emplace<InteractionComponent>(
+                                arg.entity);
+                        }
+                        auto& ic = m_noteRegistry.get<InteractionComponent>(
+                            arg.entity);
+                        ic.isSelected = !ic.isSelected;
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdStartDrag> ) {
+                    if ( arg.entity != entt::null &&
+                         m_noteRegistry.valid(arg.entity) ) {
+                        m_draggedEntity = arg.entity;
+                        m_dragCameraId  = arg.cameraId;
+                        if ( !m_noteRegistry.all_of<InteractionComponent>(
+                                 arg.entity) ) {
+                            m_noteRegistry.emplace<InteractionComponent>(
+                                arg.entity);
+                        }
+                        m_noteRegistry.get<InteractionComponent>(arg.entity)
+                            .isDragging = true;
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdUpdateDrag> ) {
+                    if ( m_draggedEntity != entt::null &&
+                         m_noteRegistry.valid(m_draggedEntity) ) {
+                        auto it = m_cameras.find(arg.cameraId);
+                        if ( it != m_cameras.end() ) {
+                            // 1. 获取判定线位置
+                            float judgmentLineY =
+                                it->second.viewportHeight - 100.0f;
+
+                            // 2. 将屏幕 Y 映射回逻辑绝对 Y
+                            // noteAbsY = currentAbsY + judgmentLineY - screenY
+                            auto* cache = m_timelineRegistry.ctx()
+                                              .find<System::ScrollCache>();
+                            if ( cache ) {
+                                double currentAbsY =
+                                    cache->getAbsY(m_currentTime);
+                                double targetAbsY =
+                                    currentAbsY + (judgmentLineY - arg.mouseY);
+
+                                // 3. 反查时间戳
+                                double targetTime = cache->getTime(targetAbsY);
+
+                                // 4. 更新 NoteComponent
+                                if ( auto* note =
+                                         m_noteRegistry.try_get<NoteComponent>(
+                                             m_draggedEntity) ) {
+                                    note->m_timestamp = targetTime;
+
+                                    // 更新轨道 (假设轨道宽度 60, 起始偏移 20)
+                                    int track = static_cast<int>(std::round(
+                                        (arg.mouseX - 20.0f) / 60.0f));
+                                    track     = std::clamp(
+                                        track, 0, 11);  // 假设 12 轨道
+                                    note->m_trackIndex = track;
+
+                                    // 同步更新 TransformComponent (X 坐标)
+                                    if ( auto* trans =
+                                             m_noteRegistry
+                                                 .try_get<TransformComponent>(
+                                                     m_draggedEntity) ) {
+                                        trans->m_pos.x = track * 60.0f + 20.0f;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdEndDrag> ) {
+                    if ( m_draggedEntity != entt::null &&
+                         m_noteRegistry.valid(m_draggedEntity) ) {
+                        if ( m_noteRegistry.all_of<InteractionComponent>(
+                                 m_draggedEntity) ) {
+                            m_noteRegistry
+                                .get<InteractionComponent>(m_draggedEntity)
+                                .isDragging = false;
+                        }
+                    }
+                    m_draggedEntity = entt::null;
                 }
             },
             cmd);

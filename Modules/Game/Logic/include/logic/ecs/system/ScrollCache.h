@@ -32,6 +32,9 @@ public:
     /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
     double getAbsY(double t) const;
 
+    /// @brief 获取给定绝对 Y 坐标对应的时间戳 (反向映射)
+    double getTime(double absY) const;
+
     /// @brief 脏标记，用于触发延迟重建
     bool isDirty{ true };
 

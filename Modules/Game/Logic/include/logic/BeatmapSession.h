@@ -89,6 +89,11 @@ private:
 
     /// @brief 所有注册的摄像机(视口)信息
     std::unordered_map<std::string, CameraInfo> m_cameras;
+
+    /// @brief 当前正在拖拽的实体
+    entt::entity m_draggedEntity{ entt::null };
+    /// @brief 拖拽发起时的摄像机 ID
+    std::string m_dragCameraId;
 };
 
 }  // namespace MMM::Logic
