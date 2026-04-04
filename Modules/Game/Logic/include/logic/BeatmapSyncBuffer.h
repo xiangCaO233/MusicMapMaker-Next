@@ -16,7 +16,6 @@ enum class TextureID : uint32_t {
     None = 0,
     Note,
     Node,
-    HoldHead,
     HoldBodyVertical,
     HoldBodyHorizontal,
     HoldEnd,
