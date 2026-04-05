@@ -1,5 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "Batcher.h"
+#include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 
 namespace MMM::Logic::System
@@ -21,7 +22,9 @@ void NoteRenderSystem::generateSnapshot(entt::registry&       registry,
 
     Batcher batcher(snapshot);
 
-
+    // 绘制背景
+    BackgroundRenderSystem::render(
+        batcher, viewportWidth, viewportHeight, config, snapshot);
 
     float leftX, rightX, topY, bottomY, trackAreaW, singleTrackW;
     renderTrackLayout(batcher,

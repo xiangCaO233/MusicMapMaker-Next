@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mmm/note/Note.h"
+#include <entt/entity/entity.hpp>
 #include <vector>
 
 namespace MMM::Logic
@@ -27,6 +28,9 @@ struct NoteComponent {
 
     /// @brief 是否为折线内部子物件（如果是，则在标准渲染流程中跳过）
     bool m_isSubNote{ false };
+
+    /// @brief 如果是子物件，指向所属的 Polyline 父实体
+    entt::entity m_parentPolyline{ entt::null };
 
     /// @brief 折线子物件定义 (如果是 Polyline 类型)
     struct SubNote {

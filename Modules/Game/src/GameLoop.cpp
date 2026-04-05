@@ -96,9 +96,9 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)
         // 测试载入谱面
-        auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
-            "/home/xiang/Documents/MusicMapRepo/rm/Corruption/"
-            "Corruption_4k_ez.imd"));
+        auto map = std::make_shared<BeatMap>(
+            BeatMap::loadFromFile("/home/xiang/Documents/MusicMapRepo/rm/"
+                                  "xiuluo/Redemptione/Redemptione_4k_hd.imd"));
         // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
         //     "/home/xiang/Documents/MusicMapRepo/osu/493316 Camellia - I Can "
         //     "Fly In "

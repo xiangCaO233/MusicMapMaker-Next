@@ -5,6 +5,7 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include <unordered_set>
 
 namespace MMM::Logic::System
 {
@@ -45,6 +46,12 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
         return { drawW, drawH };
     };
 
+    auto getTexAspect = [&](TextureID id) -> float {
+        auto it = snapshot->uvMap.find(static_cast<uint32_t>(id));
+        if ( it == snapshot->uvMap.end() ) return 1.0f;
+        return it->second.z / it->second.w;
+    };
+
     // 4. 获取皮肤配色方案
     auto& skin   = Config::SkinManager::instance();
     auto  toVec4 = [](const Config::Color& c) {
@@ -56,25 +63,20 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
     glm::vec4 colorNode  = toVec4(skin.getColor("note_node"));
     glm::vec4 colorArrow = toVec4(skin.getColor("note_flick_arrow"));
 
+    // 5. 搜集所有可见物件（包括子物件溯源父物件）
+    std::unordered_set<entt::entity> visibleEntities;
     for ( auto entity : noteView ) {
         const auto& transform = noteView.get<const TransformComponent>(entity);
         const auto& note      = noteView.get<const NoteComponent>(entity);
 
-        const InteractionComponent* interaction =
-            registry.try_get<InteractionComponent>(entity);
-        bool isHovered = interaction ? interaction->isHovered : false;
-
         float minY    = transform.m_pos.y;
         float visualH = transform.m_size.y;
-
-        // 计算判定线上的屏幕 Y (主音符中心线或基准位置)
         float screenY = judgmentLineY - minY;
 
-        // 简易视口剔除 (Y 轴剔除)
-        if ( screenY - visualH > bottomY ) continue;
-        if ( screenY < topY ) continue;
+        // 视口剔除 (Y 轴剔除)
+        if ( screenY - visualH > bottomY || screenY < topY ) continue;
 
-        // 同步拾取包围盒 (使用 Note 基准宽度和实际视觉高度)
+        // 同步拾取包围盒
         snapshot->hitboxes.push_back({ entity,
                                        leftX +
                                            note.m_trackIndex * singleTrackW +
@@ -83,8 +85,30 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
                                        noteW,
                                        visualH });
 
-        // 如果是子物件，则在此处跳过后续绘制逻辑（但保留上面的 Hitbox 提交）
-        if ( note.m_isSubNote ) continue;
+        // 如果是子物件，溯源父物件；否则作为独立物件渲染
+        if ( note.m_isSubNote ) {
+            if ( note.m_parentPolyline != entt::null ) {
+                visibleEntities.insert(note.m_parentPolyline);
+            }
+        } else {
+            visibleEntities.insert(entity);
+        }
+    }
+
+    // 6. 统一渲染去重后的物件列表
+    for ( auto entity : visibleEntities ) {
+        if ( !registry.all_of<TransformComponent, NoteComponent>(entity) )
+            continue;
+        const auto& transform = registry.get<TransformComponent>(entity);
+        const auto& note      = registry.get<NoteComponent>(entity);
+
+        const InteractionComponent* interaction =
+            registry.try_get<InteractionComponent>(entity);
+        bool isHovered = interaction ? interaction->isHovered : false;
+
+        float minY    = transform.m_pos.y;
+        float visualH = transform.m_size.y;
+        float screenY = judgmentLineY - minY;
 
         // 设置颜色高亮叠加
         glm::vec4 hoverTint = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -92,12 +116,14 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
 
         if ( note.m_type == ::MMM::NoteType::NOTE ) {
             batcher.setTexture(TextureID::Note);
-            batcher.pushQuad(leftX + note.m_trackIndex * singleTrackW +
-                                 (singleTrackW - noteW) * 0.5f,
-                             screenY + noteH * 0.5f,
-                             noteW,
-                             noteH,
-                             colorTap * hoverTint);
+            batcher.pushFilledQuad(leftX + note.m_trackIndex * singleTrackW +
+                                       (singleTrackW - noteW) * 0.5f,
+                                   screenY + noteH * 0.5f,
+                                   noteW,
+                                   noteH,
+                                   { getTexAspect(TextureID::Note), 1.0f },
+                                   config.noteFillMode,
+                                   colorTap * hoverTint);
         } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
             // 图层顺序: Body (最下) -> Head -> End (最上)
             glm::vec2 headSize = getDrawSize(TextureID::Note);
@@ -118,19 +144,23 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
 
             // 2. Head (复用 Note 纹理)
             batcher.setTexture(TextureID::Note);
-            batcher.pushQuad(headX,
-                             screenY + headSize.y * 0.5f,
-                             headSize.x,
-                             headSize.y,
-                             colorHold * hoverTint);
+            batcher.pushFilledQuad(headX,
+                                   screenY + headSize.y * 0.5f,
+                                   headSize.x,
+                                   headSize.y,
+                                   { getTexAspect(TextureID::Note), 1.0f },
+                                   config.noteFillMode,
+                                   colorHold * hoverTint);
 
             // 3. End
             batcher.setTexture(TextureID::HoldEnd);
-            batcher.pushQuad(endX,
-                             screenY - visualH + endSize.y * 0.5f,
-                             endSize.x,
-                             endSize.y,
-                             colorHold * hoverTint);
+            batcher.pushFilledQuad(endX,
+                                   screenY - visualH + endSize.y * 0.5f,
+                                   endSize.x,
+                                   endSize.y,
+                                   { getTexAspect(TextureID::HoldEnd), 1.0f },
+                                   config.noteFillMode,
+                                   colorHold * hoverTint);
 
         } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
             // 图层顺序: BodyH (最下) -> Head -> Arrow (最上)
@@ -178,11 +208,13 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
                     leftX + (note.m_trackIndex + note.m_dtrack) * singleTrackW +
                     (singleTrackW - arrowSize.x) * 0.5f;
                 batcher.setTexture(arrowId);
-                batcher.pushQuad(arrowX,
-                                 screenY + arrowSize.y * 0.5f,
-                                 arrowSize.x,
-                                 arrowSize.y,
-                                 colorArrow * hoverTint);
+                batcher.pushFilledQuad(arrowX,
+                                       screenY + arrowSize.y * 0.5f,
+                                       arrowSize.x,
+                                       arrowSize.y,
+                                       { getTexAspect(arrowId), 1.0f },
+                                       config.noteFillMode,
+                                       colorArrow * hoverTint);
             }
         } else if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
             // Polyline 图层排序逻辑 (分轮绘制)
@@ -268,11 +300,13 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
                 glm::vec2 nodeSize = getDrawSize(TextureID::Node);
                 float     nodeX    = leftX + sub.trackIndex * singleTrackW +
                                      (singleTrackW - nodeSize.x) * 0.5f;
-                batcher.pushQuad(nodeX,
-                                 subStartY + nodeSize.y * 0.5f,
-                                 nodeSize.x,
-                                 nodeSize.y,
-                                 colorNode * hoverTint);
+                batcher.pushFilledQuad(nodeX,
+                                       subStartY + nodeSize.y * 0.5f,
+                                       nodeSize.x,
+                                       nodeSize.y,
+                                       { getTexAspect(TextureID::Node), 1.0f },
+                                       config.noteFillMode,
+                                       colorNode * hoverTint);
             }
 
             // 第三轮: 绘制起始 HoldHead (复用 Note 纹理)
@@ -284,11 +318,13 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
             float     headX    = leftX + first.trackIndex * singleTrackW +
                                  (singleTrackW - headSize.x) * 0.5f;
             batcher.setTexture(TextureID::Note);
-            batcher.pushQuad(headX,
-                             fStartY + headSize.y * 0.5f,
-                             headSize.x,
-                             headSize.y,
-                             colorHold * hoverTint);
+            batcher.pushFilledQuad(headX,
+                                   fStartY + headSize.y * 0.5f,
+                                   headSize.x,
+                                   headSize.y,
+                                   { getTexAspect(TextureID::Note), 1.0f },
+                                   config.noteFillMode,
+                                   colorHold * hoverTint);
 
             // 第四轮: 绘制结尾特殊样式 (End 或 Arrow)
             const auto& last       = note.m_subNotes.back();
@@ -314,21 +350,26 @@ void NoteRenderSystem::renderNotes(entt::registry& registry,
                 float     arrowX    = leftX + lEndTrack * singleTrackW +
                                       (singleTrackW - arrowSize.x) * 0.5f;
                 batcher.setTexture(arrowId);
-                batcher.pushQuad(arrowX,
-                                 lStartY + arrowSize.y * 0.5f,
-                                 arrowSize.x,
-                                 arrowSize.y,
-                                 colorArrow * hoverTint);
+                batcher.pushFilledQuad(arrowX,
+                                       lStartY + arrowSize.y * 0.5f,
+                                       arrowSize.x,
+                                       arrowSize.y,
+                                       { getTexAspect(arrowId), 1.0f },
+                                       config.noteFillMode,
+                                       colorArrow * hoverTint);
             } else if ( last.type == ::MMM::NoteType::HOLD ) {
                 glm::vec2 endSize = getDrawSize(TextureID::HoldEnd);
                 float     endX    = leftX + last.trackIndex * singleTrackW +
                                     (singleTrackW - endSize.x) * 0.5f;
                 batcher.setTexture(TextureID::HoldEnd);
-                batcher.pushQuad(endX,
-                                 lEndY + endSize.y * 0.5f,
-                                 endSize.x,
-                                 endSize.y,
-                                 colorHold * hoverTint);
+                batcher.pushFilledQuad(
+                    endX,
+                    lEndY + endSize.y * 0.5f,
+                    endSize.x,
+                    endSize.y,
+                    { getTexAspect(TextureID::HoldEnd), 1.0f },
+                    config.noteFillMode,
+                    colorHold * hoverTint);
             }
         }
     }

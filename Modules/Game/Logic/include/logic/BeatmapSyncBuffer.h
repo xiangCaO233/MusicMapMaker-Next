@@ -13,9 +13,10 @@ namespace MMM::Logic
 
 // 预定义纹理ID，用于跨线程纹理映射
 enum class TextureID : uint32_t {
-    None = 0,
-    Note,
-    Node,
+    None       = 0,
+    Background = 1,
+    Note       = 2,
+    Node       = 3,
     HoldBodyVertical,
     HoldBodyHorizontal,
     HoldEnd,
@@ -48,6 +49,12 @@ struct RenderSnapshot {
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
+    // 背景纹理绝对路径
+    std::string backgroundPath;
+
+    // 背景原始尺寸
+    glm::vec2 bgSize{ 0.0f, 0.0f };
+
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
     {
@@ -56,6 +63,8 @@ struct RenderSnapshot {
         cmds.clear();
         hitboxes.clear();
         uvMap.clear();
+        backgroundPath.clear();
+        bgSize = glm::vec2(0.0f);
     }
 };
 

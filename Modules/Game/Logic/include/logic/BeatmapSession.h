@@ -105,6 +105,9 @@ private:
 
     /// @brief 图集 UV 映射表
     std::unordered_map<uint32_t, glm::vec4> m_atlasUVMap;
+
+    /// @brief 背景图片的尺寸缓存
+    glm::vec2 m_bgSize{ 0.0f, 0.0f };
 };
 
 }  // namespace MMM::Logic

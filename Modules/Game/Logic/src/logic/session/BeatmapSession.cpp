@@ -6,6 +6,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "mmm/beatmap/BeatMap.h"
 
 // 独立函数，用于 entt 信号回调，标记 ScrollCache 为脏状态
 static void markScrollCacheDirty(entt::registry& reg, entt::entity)
@@ -73,6 +74,13 @@ void BeatmapSession::updateECSAndRender(const EditorConfig& config)
 
         // 注入当前 UV 映射到快照，供 Batcher 使用
         snapshot->uvMap = m_atlasUVMap;
+        if ( m_currentBeatmap ) {
+            auto bgPath =
+                m_currentBeatmap->m_baseMapMetadata.map_path.parent_path() /
+                m_currentBeatmap->m_baseMapMetadata.main_cover_path;
+            snapshot->backgroundPath = bgPath.string();
+            snapshot->bgSize         = m_bgSize;
+        }
 
         // 判定线高度比例计算
         float judgmentLineY = camera.viewportHeight * config.judgeline_pos;

@@ -41,6 +41,29 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         m_currentSnapshot = syncBuffer->pullLatestSnapshot();
     }
 
+    if ( m_currentSnapshot &&
+         m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
+        m_loadedBgPath = m_currentSnapshot->backgroundPath;
+        if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue &&
+             !m_loadedBgPath.empty() &&
+             std::filesystem::exists(m_loadedBgPath) ) {
+            try {
+                m_bgTexture =
+                    std::make_unique<Graphic::VKTexture>(m_loadedBgPath,
+                                                         m_physicalDevice,
+                                                         m_logicalDevice,
+                                                         m_cmdPool,
+                                                         m_queue);
+                XINFO("Loaded background texture: {}", m_loadedBgPath);
+            } catch ( const std::exception& e ) {
+                XERROR("Failed to load background texture: {}", e.what());
+                m_bgTexture.reset();
+            }
+        } else {
+            m_bgTexture.reset();
+        }
+    }
+
     // --- MVP 交互实现：拾取测试 ---
     if ( m_currentSnapshot ) {
         // 获取鼠标在 ImGui 窗口中的相对位置
@@ -151,6 +174,12 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
         // 核心修复：只要该 ID 在图集 UV 映射表中（包含 ID 0），就使用图集
         if ( m_atlasUVs.count(cmd.customTextureId) ) {
             actualTexture = atlasDescriptor;
+        } else if ( cmd.customTextureId ==
+                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+            if ( m_bgTexture ) {
+                actualTexture = (vk::DescriptorSet)(VkDescriptorSet)
+                                    m_bgTexture->getImTextureID();
+            }
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
@@ -257,6 +286,11 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                    vk::Device&         logicalDevice,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
+    m_physicalDevice = physicalDevice;
+    m_logicalDevice  = logicalDevice;
+    m_cmdPool        = cmdPool;
+    m_queue          = queue;
+
     auto& skin = Config::SkinManager::instance();
 
     m_textureAtlas = std::make_unique<Graphic::VKTextureAtlas>(
@@ -305,6 +339,10 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
           i <= static_cast<uint32_t>(Logic::TextureID::FlickArrowRight);
           ++i ) {
+        // 背景不进入合图，跳过其 UV 记录，防止逻辑层错误识别
+        if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )
+            continue;
+
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
 

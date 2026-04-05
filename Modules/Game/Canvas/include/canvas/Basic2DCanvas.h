@@ -80,6 +80,15 @@ private:
 
     ///@brief 图集 UV 缓存，用于同步给逻辑线程
     std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
+
+    // --- Vulkan devices for dynamic loading ---
+    vk::PhysicalDevice m_physicalDevice{ nullptr };
+    vk::Device         m_logicalDevice{ nullptr };
+    vk::CommandPool    m_cmdPool{ nullptr };
+    vk::Queue          m_queue{ nullptr };
+
+    std::unique_ptr<Graphic::VKTexture> m_bgTexture{ nullptr };
+    std::string                         m_loadedBgPath{ "" };
 };
 
 }  // namespace MMM::Canvas

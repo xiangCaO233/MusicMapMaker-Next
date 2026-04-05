@@ -9,6 +9,7 @@ add_library(Logic STATIC
 	src/logic/ecs/system/render/NoteRenderSystem.cpp
 	src/logic/ecs/system/render/NoteRenderSystem_Layout.cpp
 	src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp
+	src/logic/ecs/system/render/BackgroundRenderSystem.cpp
 	src/logic/ecs/system/NoteTransformSystem.cpp
 	src/logic/ecs/system/ScrollCache.cpp
 )

@@ -70,12 +70,15 @@ void VKTextureAtlas::build(uint32_t atlasSize)
         return;
     }
 
-    // 1. 准备矩形打包数据
+    // 1. 准备矩形打包数据 (添加间距避免采样溢出)
+    const int               padding = 2;
     std::vector<stbrp_rect> rects(m_pendingTextures.size());
     for ( size_t i = 0; i < m_pendingTextures.size(); ++i ) {
         rects[i].id = static_cast<int>(i);
-        rects[i].w  = static_cast<stbrp_coord>(m_pendingTextures[i].w);
-        rects[i].h  = static_cast<stbrp_coord>(m_pendingTextures[i].h);
+        rects[i].w =
+            static_cast<stbrp_coord>(m_pendingTextures[i].w + padding * 2);
+        rects[i].h =
+            static_cast<stbrp_coord>(m_pendingTextures[i].h + padding * 2);
     }
 
     // 2. 打包矩形
@@ -94,21 +97,24 @@ void VKTextureAtlas::build(uint32_t atlasSize)
     for ( size_t i = 0; i < rects.size(); ++i ) {
         if ( rects[i].was_packed ) {
             const auto& src = m_pendingTextures[rects[i].id];
+            // 考虑间距后的实际放置位置
+            int startX = rects[i].x + padding;
+            int startY = rects[i].y + padding;
+
             // 将小纹理像素拷贝到大图对应位置
             for ( uint32_t row = 0; row < src.h; ++row ) {
                 size_t srcOffset = row * src.w * 4;
-                size_t dstOffset =
-                    ((rects[i].y + row) * atlasSize + rects[i].x) * 4;
+                size_t dstOffset = ((startY + row) * atlasSize + startX) * 4;
                 std::copy(src.pixels.begin() + srcOffset,
                           src.pixels.begin() + srcOffset + (src.w * 4),
                           atlasPixels.begin() + dstOffset);
             }
 
-            // 记录 UV 坐标 (u, v, width_ratio, height_ratio)
+            // 记录 UV 坐标 (指向原始像素范围，不包含 padding)
             float u =
-                static_cast<float>(rects[i].x) / static_cast<float>(atlasSize);
+                static_cast<float>(startX) / static_cast<float>(atlasSize);
             float v =
-                static_cast<float>(rects[i].y) / static_cast<float>(atlasSize);
+                static_cast<float>(startY) / static_cast<float>(atlasSize);
             float rw =
                 static_cast<float>(src.w) / static_cast<float>(atlasSize);
             float rh =

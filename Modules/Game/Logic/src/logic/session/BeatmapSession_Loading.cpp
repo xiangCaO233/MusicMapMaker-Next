@@ -5,6 +5,7 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <stb_image.h>
 
 namespace MMM::Logic
 {
@@ -19,6 +20,19 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
     m_currentBeatmap = beatmap;
 
     if ( !beatmap ) return;
+
+    // 计算背景图片的绝对路径并获取尺寸
+    m_bgSize    = glm::vec2(0.0f);
+    auto bgPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
+                  beatmap->m_baseMapMetadata.main_cover_path;
+
+    if ( !beatmap->m_baseMapMetadata.main_cover_path.empty() &&
+         std::filesystem::exists(bgPath) ) {
+        int w = 0, h = 0, comp = 0;
+        if ( stbi_info(bgPath.string().c_str(), &w, &h, &comp) ) {
+            m_bgSize = glm::vec2(static_cast<float>(w), static_cast<float>(h));
+        }
+    }
 
     m_trackCount = beatmap->m_baseMapMetadata.track_count;
     if ( m_trackCount <= 0 ) m_trackCount = 12;  // 默认值
@@ -118,8 +132,9 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
             // 标记原始实体为 SubNote，防止独立绘制
             if ( auto it = noteToEntity.find(&subNote);
                  it != noteToEntity.end() ) {
-                m_noteRegistry.get<NoteComponent>(it->second).m_isSubNote =
-                    true;
+                auto& subComp = m_noteRegistry.get<NoteComponent>(it->second);
+                subComp.m_isSubNote      = true;
+                subComp.m_parentPolyline = entity;
             }
 
             NoteComponent::SubNote sn;
