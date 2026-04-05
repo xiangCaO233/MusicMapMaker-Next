@@ -57,19 +57,29 @@ public:
     /**
      * @brief 设置全局图集 UV 映射 (由 UI 线程在构建图集后调用)
      */
-    void setAtlasUVMap(const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+    void setAtlasUVMap(const std::string&                             cameraId,
+                       const std::unordered_map<uint32_t, glm::vec4>& uvMap)
     {
         std::lock_guard<std::mutex> lock(m_atlasMutex);
-        m_atlasUVMap = uvMap;
+        m_cameraUVMaps[cameraId] = uvMap;
     }
 
     /**
      * @brief 获取当前全局图集 UV 映射
      */
-    std::unordered_map<uint32_t, glm::vec4> getAtlasUVMap()
+    std::unordered_map<uint32_t, glm::vec4> getAtlasUVMap(
+        const std::string& cameraId)
     {
         std::lock_guard<std::mutex> lock(m_atlasMutex);
-        return m_atlasUVMap;
+        if ( m_cameraUVMaps.find(cameraId) != m_cameraUVMaps.end() ) {
+            return m_cameraUVMaps[cameraId];
+        }
+        // 回退到默认图集 (Main)
+        if ( cameraId != "Main" ) {
+            auto it = m_cameraUVMaps.find("Main");
+            if ( it != m_cameraUVMaps.end() ) return it->second;
+        }
+        return {};
     }
 
     /**
@@ -114,9 +124,10 @@ private:
     /// @brief 编辑器配置
     Common::EditorConfig m_editorConfig;
 
-    /// @brief 图集 UV 映射表
-    std::unordered_map<uint32_t, glm::vec4> m_atlasUVMap;
-    std::mutex                              m_atlasMutex;
+    /// @brief 各摄像机独立的图集 UV 映射表
+    std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
+               m_cameraUVMaps;
+    std::mutex m_atlasMutex;
 };
 
 }  // namespace MMM::Logic

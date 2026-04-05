@@ -1,6 +1,9 @@
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
+#include <algorithm>
 #include <filesystem>
+#include <regex>
+#include <vector>
 
 namespace MMM
 {
@@ -49,6 +52,7 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         skinTable["meta"]["author"].get_or<std::string>("Various Artists");
     m_data.themeVersion =
         skinTable["meta"]["version"].get_or<std::string>("1.0");
+    m_data.effectBaseFps = skinTable["meta"]["effectbasefps"].get_or(60.0f);
 
     // 解析 Colors
     sol::optional<sol::table> colorsTableOpt = skinTable["colors"];
@@ -84,6 +88,32 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     if ( assetsTable.valid() ) {
         // 初始前缀为空，开始递归
         parseAssetsRecursive(assetsTable, "");
+
+        // 统一分配序列帧的起始 ID (避免在渲染层硬编码偏移)
+        // 从 1000 (TextureID::EffectStart) 开始分配
+        uint32_t                 currentId = 1000;
+        std::vector<std::string> seqKeys;
+        for ( const auto& [key, seq] : m_data.effectSequences ) {
+            seqKeys.push_back(key);
+        }
+        // 排序以保证多平台/多次运行时的 ID 分配确定性
+        std::sort(seqKeys.begin(), seqKeys.end());
+
+        for ( const auto& key : seqKeys ) {
+            m_data.effectSequences[key].startId = currentId;
+            uint32_t frameCount                 = static_cast<uint32_t>(
+                m_data.effectSequences[key].frames.size());
+            XINFO("Assigning sequence {} start ID: {}, frames: {}",
+                  key,
+                  currentId,
+                  frameCount);
+            currentId += frameCount;
+        }
+    }
+
+    sol::table audiosTable = skinTable["audios"];
+    if ( audiosTable.valid() ) {
+        parseAudiosRecursive(audiosTable, "");
     }
 
     // 解析 canvases_2d
@@ -131,6 +161,24 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     return true;
 }
 
+void SkinManager::parseAudiosRecursive(const sol::table&  currentTable,
+                                       const std::string& prefix)
+{
+    for ( const auto& kv : currentTable ) {
+        std::string key   = kv.first.as<std::string>();
+        sol::object value = kv.second;
+
+        std::string fullKey = prefix.empty() ? key : prefix + "." + key;
+
+        if ( value.is<std::string>() ) {
+            std::string rpath          = value.as<std::string>();
+            m_data.audioPaths[fullKey] = m_data.skinPath / "resources" / rpath;
+        } else if ( value.is<sol::table>() ) {
+            parseAudiosRecursive(value.as<sol::table>(), fullKey);
+        }
+    }
+}
+
 /**
  * @brief 递归解析 Lua 资产表
  * @param currentTable 当前正在处理的 Lua 表
@@ -149,11 +197,34 @@ void SkinManager::parseAssetsRecursive(const sol::table&  currentTable,
 
         if ( value.is<std::string>() ) {
             // 如果是字符串，说明到了叶子节点，保存路径
-            std::string rpath          = value.as<std::string>();
-            m_data.assetPaths[fullKey] = m_data.skinPath / "resources" / rpath;
+            std::string rpath = value.as<std::string>();
 
-            // 打印日志方便调试
-            // XINFO("Loaded Asset: {} -> {}", fullKey, rpath);
+            // 检查是否是序列帧格式，例如 "image/note/effect/flick/[1 ..
+            // 16].png"
+            std::regex  seqRegex(R"(^(.*)\[(\d+)\s*\.\.\s*(\d+)\](.*)$)");
+            std::smatch match;
+            if ( std::regex_match(rpath, match, seqRegex) ) {
+                std::string prefix = match[1].str();
+                int         start  = std::stoi(match[2].str());
+                int         end    = std::stoi(match[3].str());
+                std::string suffix = match[4].str();
+
+                SkinData::EffectSequence seq;
+                int                      step    = (start <= end) ? 1 : -1;
+                int                      current = start;
+                while ( true ) {
+                    std::string framePath =
+                        prefix + std::to_string(current) + suffix;
+                    seq.frames.push_back(m_data.skinPath / "resources" /
+                                         framePath);
+                    if ( current == end ) break;
+                    current += step;
+                }
+                m_data.effectSequences[fullKey] = seq;
+            } else {
+                m_data.assetPaths[fullKey] =
+                    m_data.skinPath / "resources" / rpath;
+            }
         } else if ( value.is<sol::table>() ) {
             // 如果是表，则递归进入下一层
             parseAssetsRecursive(value.as<sol::table>(), fullKey);
@@ -249,6 +320,16 @@ std::filesystem::path SkinManager::getFontPath(const std::string& key)
     return "";
 }
 
+std::filesystem::path SkinManager::getAudioPath(const std::string& key)
+{
+    if ( auto audioPathit = m_data.audioPaths.find(key);
+         audioPathit != m_data.audioPaths.end() ) {
+        return audioPathit->second;
+    }
+    XERROR("Audio key not found: " + key);
+    return "";
+}
+
 std::filesystem::path SkinManager::getAssetPath(const std::string& key)
 {
     if ( auto assetPathit = m_data.assetPaths.find(key);
@@ -257,6 +338,16 @@ std::filesystem::path SkinManager::getAssetPath(const std::string& key)
     }
     XERROR("Asset key not found: " + key);
     return "";
+}
+
+const SkinData::EffectSequence* SkinManager::getEffectSequence(
+    const std::string& key) const
+{
+    if ( auto it = m_data.effectSequences.find(key);
+         it != m_data.effectSequences.end() ) {
+        return &it->second;
+    }
+    return nullptr;
 }
 
 ///@brief 获取画布配置

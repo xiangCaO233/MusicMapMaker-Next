@@ -3,6 +3,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/PreviewCanvas.h"
 #include "common/LogicCommands.h"
+#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
@@ -97,11 +98,18 @@ int GameLoop::start(Graphic::NativeWindow& window)
         context.setVSync(false);
         // context.ToggleFullscreen();
 
-        // 启动独立逻辑线程
-        Logic::EditorEngine::instance().start();
-
         // 初始化音频引擎
         Audio::AudioManager::instance().init();
+
+        // 预加载音效文件
+        auto& skinData = Config::SkinManager::instance().getData();
+        for ( const auto& [key, path] : skinData.audioPaths ) {
+            Audio::AudioManager::instance().preloadSoundEffect(key,
+                                                               path.string());
+        }
+
+        // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
+        Logic::EditorEngine::instance().start();
 
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)

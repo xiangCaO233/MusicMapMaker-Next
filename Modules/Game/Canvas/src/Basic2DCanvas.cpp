@@ -349,8 +349,16 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         static_cast<uint32_t>(Logic::TextureID::JudgeArea),
         skin.getAssetPath("panel.track.judgearea"));
 
+    // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
+    for ( const auto& [key, seq] : skin.getData().effectSequences ) {
+        uint32_t currentId = seq.startId;
+        for ( const auto& frame : seq.frames ) {
+            m_textureAtlas->addTexture(currentId++, frame);
+        }
+    }
+
     // 构建图集
-    m_textureAtlas->build(2048);
+    m_textureAtlas->build(4096);
 
     // 更新 UV 映射缓存并同步给逻辑线程
     m_atlasUVs.clear();
@@ -364,8 +372,17 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
 
-    Logic::EditorEngine::instance().setAtlasUVMap(m_atlasUVs);
-    XINFO("Basic2DCanvas textures reloaded into atlas.");
+    // 更新特序列帧 UV
+    for ( const auto& [key, seq] : skin.getData().effectSequences ) {
+        for ( uint32_t i = 0; i < seq.frames.size(); ++i ) {
+            uint32_t id    = seq.startId + i;
+            m_atlasUVs[id] = m_textureAtlas->getUV(id);
+        }
+    }
+
+    Logic::EditorEngine::instance().setAtlasUVMap(m_cameraId, m_atlasUVs);
+    XINFO("Basic2DCanvas textures reloaded into atlas for camera: " +
+          m_cameraId);
 }
 
 }  // namespace MMM::Canvas

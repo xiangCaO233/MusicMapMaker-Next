@@ -163,7 +163,15 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     addTex(Logic::TextureID::Track, "panel.track.background");
     addTex(Logic::TextureID::JudgeArea, "panel.track.judgearea");
 
-    m_textureAtlas->build(2048);
+    // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
+    for ( const auto& [key, seq] : skin.getData().effectSequences ) {
+        uint32_t currentId = seq.startId;
+        for ( const auto& frame : seq.frames ) {
+            m_textureAtlas->addTexture(currentId++, frame);
+        }
+    }
+
+    m_textureAtlas->build(4096);
 
     m_atlasUVs.clear();
     for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
@@ -173,6 +181,16 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
             continue;
         m_atlasUVs[i] = m_textureAtlas->getUV(i);
     }
+
+    // 更新特序列帧 UV
+    for ( const auto& [key, seq] : skin.getData().effectSequences ) {
+        for ( uint32_t i = 0; i < seq.frames.size(); ++i ) {
+            uint32_t id    = seq.startId + i;
+            m_atlasUVs[id] = m_textureAtlas->getUV(id);
+        }
+    }
+
+    Logic::EditorEngine::instance().setAtlasUVMap(m_cameraId, m_atlasUVs);
 
     m_needReload = false;
 }

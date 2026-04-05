@@ -25,7 +25,9 @@ enum class TextureID : uint32_t {
     Track,
     JudgeArea,
 
-    NoteSelectionBorder = 100
+    NoteSelectionBorder = 100,
+
+    EffectStart = 1000
 };
 
 /**

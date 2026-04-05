@@ -169,6 +169,90 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
             glm::vec2(50.0f, 20.0f));
     }
 
+    // 构建音效触发事件队列并排序
+    m_hitEvents.clear();
+    m_nextHitIndex = 0;
+
+    // 收集所有的 subNote 引用，避免它们被重复加入普通音符的播放队列
+    std::unordered_set<const ::MMM::Note*> subNotesSet;
+    for ( const auto& polyline : beatmap->m_noteData.polylines ) {
+        for ( const auto& subNoteRef : polyline.m_subNotes ) {
+            subNotesSet.insert(&subNoteRef.get());
+        }
+    }
+
+    using HitRole = System::HitFXSystem::HitEvent::Role;
+
+    for ( const auto& note : beatmap->m_noteData.notes ) {
+        if ( subNotesSet.find(&note) != subNotesSet.end() ) continue;
+        m_hitEvents.push_back({ note.m_timestamp / 1000.0,
+                                note.m_type,
+                                HitRole::None,
+                                1,
+                                static_cast<int>(note.m_track),
+                                0,
+                                0.0,
+                                false });
+    }
+    for ( const auto& hold : beatmap->m_noteData.holds ) {
+        if ( subNotesSet.find(&hold) != subNotesSet.end() ) continue;
+        m_hitEvents.push_back({ hold.m_timestamp / 1000.0,
+                                hold.m_type,
+                                HitRole::None,
+                                1,
+                                static_cast<int>(hold.m_track),
+                                0,
+                                hold.m_duration / 1000.0,
+                                false });
+    }
+    for ( const auto& flick : beatmap->m_noteData.flicks ) {
+        if ( subNotesSet.find(&flick) != subNotesSet.end() ) continue;
+        int span = std::abs(flick.m_dtrack) + 1;
+        m_hitEvents.push_back({ flick.m_timestamp / 1000.0,
+                                flick.m_type,
+                                HitRole::None,
+                                span,
+                                static_cast<int>(flick.m_track),
+                                flick.m_dtrack,
+                                0.0,
+                                false });
+    }
+    for ( const auto& polyline : beatmap->m_noteData.polylines ) {
+        // 对于 Polyline 本身不发声，由子物件发声
+        size_t subNoteCount = polyline.m_subNotes.size();
+        for ( size_t i = 0; i < subNoteCount; ++i ) {
+            const auto& subNote = polyline.m_subNotes[i].get();
+
+            HitRole role = HitRole::Internal;
+            if ( i == 0 )
+                role = HitRole::Head;
+            else if ( i == subNoteCount - 1 )
+                role = HitRole::Tail;
+
+            int    span        = 1;
+            int    trackOffset = 0;
+            double duration    = 0.0;
+            if ( subNote.m_type == ::MMM::NoteType::FLICK ) {
+                const auto& f = static_cast<const ::MMM::Flick&>(subNote);
+                span          = std::abs(f.m_dtrack) + 1;
+                trackOffset   = f.m_dtrack;
+            } else if ( subNote.m_type == ::MMM::NoteType::HOLD ) {
+                const auto& h = static_cast<const ::MMM::Hold&>(subNote);
+                duration      = h.m_duration / 1000.0;
+            }
+
+            m_hitEvents.push_back({ subNote.m_timestamp / 1000.0,
+                                    subNote.m_type,
+                                    role,
+                                    span,
+                                    static_cast<int>(subNote.m_track),
+                                    trackOffset,
+                                    duration,
+                                    true });
+        }
+    }
+    std::sort(m_hitEvents.begin(), m_hitEvents.end());
+
     XINFO(
         "Loaded new BeatMap with {} notes, {} holds, {} flicks, {} polylines "
         "and {} timings.",

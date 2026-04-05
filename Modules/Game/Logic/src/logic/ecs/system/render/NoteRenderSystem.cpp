@@ -1,8 +1,8 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
-#include "Batcher.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
 
 namespace MMM::Logic::System
 {
@@ -11,13 +11,15 @@ void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Common::EditorConfig& config)
+    int32_t trackCount, const Common::EditorConfig& config,
+    float mainViewportHeight)
 {
     const auto* cache = timelineRegistry.ctx().find<ScrollCache>();
     if ( !cache ) return;
 
-    // 将 ScrollCache 临时注入 noteRegistry 以便在 renderNotes 中使用
-    registry.ctx().insert_or_assign(cache);
+    // 将 ScrollCache 指针存入 context
+    registry.ctx().erase<const ScrollCache*>();
+    registry.ctx().emplace<const ScrollCache*>(cache);
 
     Batcher batcher(snapshot);
     float   leftX, rightX, topY, bottomY, trackAreaW, singleTrackW;
@@ -31,7 +33,17 @@ void NoteRenderSystem::generateSnapshot(
         bottomY      = viewportHeight - config.previewConfig.margin.bottom;
         trackAreaW   = rightX - leftX;
         singleTrackW = trackAreaW / static_cast<float>(trackCount);
-        renderScaleY = 1.0f / config.previewConfig.areaRatio;
+
+        // --- 修正预览区缩放比例 (renderScaleY) ---
+        // 1. 计算主画布可见的逻辑像素高度 (effective scroll height)
+        float mainEffectiveH =
+            (config.trackLayout.bottom - config.trackLayout.top) *
+            mainViewportHeight;
+        // 2. 计算预览区可用的绘图区高度
+        float previewDrawH = bottomY - topY;
+        // 3. 计算 renderScaleY 使其满足 areaRatio 的定义 (显示 5 倍范围)
+        renderScaleY =
+            previewDrawH / (mainEffectiveH * config.previewConfig.areaRatio);
 
         // 预览区通常不绘制背景图 (保持透明或由 UI 层处理)
         // 绘制主画布范围包围框和判定线
@@ -39,31 +51,28 @@ void NoteRenderSystem::generateSnapshot(
         auto  boxCol  = skin.getColor("preview.boundingbox");
         auto  lineCol = skin.getColor("preview.judgeline");
 
-        // 计算主画布在预览区中的可视范围
-        // 我们假设主画布的高度与预览视口高度一致（作为参考基准）
-        float mainVisibleH =
-            (config.trackLayout.bottom - config.trackLayout.top) *
-            viewportHeight * renderScaleY;
-        // 主画布判定线在预览区中的位置（预览区 judgmentLineY 对应 currentTime）
+        // 计算主画布判定线在预览区中的高度位置
         float mainJudgelineInPreviewY = judgmentLineY;
 
+        // 包围框的高度在预览区中的显示大小
+        float boxDrawH = mainEffectiveH * renderScaleY;
         // 包围框相对于判定线的位置
         float boxTop = mainJudgelineInPreviewY -
                        (config.judgeline_pos - config.trackLayout.top) *
-                           viewportHeight * renderScaleY;
+                           mainViewportHeight * renderScaleY;
 
         batcher.setTexture(TextureID::None);
         // 绘制半透明背景包围框
         batcher.pushQuad(leftX,
-                         boxTop + mainVisibleH,
+                         boxTop + boxDrawH,
                          trackAreaW,
-                         mainVisibleH,
+                         boxDrawH,
                          { boxCol.r, boxCol.g, boxCol.b, boxCol.a });
         // 绘制包围框轮廓 (不透明)
         batcher.pushStrokeRect(leftX,
                                boxTop,
                                rightX,
-                               boxTop + mainVisibleH,
+                               boxTop + boxDrawH,
                                2.0f,
                                { boxCol.r, boxCol.g, boxCol.b, 1.0f });
         // 绘制判定线

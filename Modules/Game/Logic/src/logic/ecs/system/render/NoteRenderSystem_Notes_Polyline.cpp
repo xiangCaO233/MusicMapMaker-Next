@@ -1,7 +1,7 @@
-#include "Batcher.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
 
 namespace MMM::Logic::System
 {
@@ -91,9 +91,12 @@ void NoteRenderSystem::renderPolyline(
                              bodySize.x,
                              subStartY - subEndY,
                              colorHold * hoverTint);
+        } else {
+            // 如果是 NOTE 类型，也要确保 subEndY 正确 (虽然不画 body)
+            subEndY = subStartY;
         }
 
-        // 过渡 Body
+        // 过渡 Body (连接当前子物件末尾到下一个子物件开头)
         if ( i + 1 < note.m_subNotes.size() ) {
             const auto& next          = note.m_subNotes[i + 1];
             double      nextStartAbsY = cache->getAbsY(next.timestamp);
@@ -106,6 +109,8 @@ void NoteRenderSystem::renderPolyline(
                               (singleTrackW - bodySize.x) * 0.5f;
             float nextBodyX = leftX + next.trackIndex * singleTrackW +
                               (singleTrackW - bodySize.x) * 0.5f;
+
+            // 核心修复：强制设置为 HoldBodyVertical 纹理，防止泄露
             batcher.setTexture(TextureID::HoldBodyVertical);
             batcher.pushFreeQuad({ curBodyX, subEndY },
                                  { curBodyX + bodySize.x, subEndY },

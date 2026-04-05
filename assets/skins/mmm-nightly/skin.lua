@@ -5,6 +5,7 @@ local Skin = {
 		name = "MMM Nightly",
 		author = "xiang",
 		version = "1.0",
+		effectbasefps = 60,
 	},
 
 	basePath = ressPath .. "resources/",
@@ -29,6 +30,13 @@ local Skin = {
 		note_hold = { 0.7333, 0.7608, 0.6000, 1.0 },
 		note_node = { 0.9843, 0.8667, 0.8118, 1.0 },
 		note_flick_arrow = { 0.9922, 0.9255, 0.5608, 1.0 },
+	},
+
+	audios = {
+		hiteffect = {
+			note = "audio/note.wav",
+			flick = "audio/flick.wav",
+		},
 	},
 
 	-- 翻译配置
@@ -76,8 +84,8 @@ local Skin = {
 			arrowleft = "image/note/arrowleft.png",
 			arrowright = "image/note/arrowright.png",
 			effect = {
-				note = "image/note/note/[1 .. 1].png",
-				flick = "image/note/flick/[1 .. 16].png",
+				note = "image/note/effect/note/[1 .. 6].png",
+				flick = "image/note/effect/flick/[1 .. 16].png",
 			},
 		},
 	},

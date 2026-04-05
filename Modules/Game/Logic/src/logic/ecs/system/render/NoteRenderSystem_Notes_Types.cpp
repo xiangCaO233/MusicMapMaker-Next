@@ -1,6 +1,6 @@
-#include "Batcher.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
+#include "logic/ecs/system/render/Batcher.h"
 
 namespace MMM::Logic::System
 {
@@ -112,11 +112,13 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
 
     // 2. Head
     batcher.setTexture(TextureID::Note);
-    batcher.pushQuad(headX,
-                     y + headSize.y * 0.5f,
-                     headSize.x,
-                     headSize.y,
-                     color * hoverTint);
+    batcher.pushFilledQuad(headX,
+                           y + headSize.y * 0.5f,
+                           headSize.x,
+                           headSize.y,
+                           { getTexAspect(snapshot, TextureID::Note), 1.0f },
+                           config.noteFillMode,
+                           color * hoverTint);
 
     // 3. Arrow
     if ( note.m_dtrack != 0 ) {

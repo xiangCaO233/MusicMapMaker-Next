@@ -14,18 +14,19 @@ add_library(Logic STATIC
 	src/logic/ecs/system/render/BackgroundRenderSystem.cpp
 	src/logic/ecs/system/NoteTransformSystem.cpp
 	src/logic/ecs/system/ScrollCache.cpp
+	src/logic/ecs/system/HitFXSystem.cpp
 )
 
 target_link_libraries(Logic
 	PUBLIC
 		Log
+		MMM
 		Common
 		UI
 		Graphic
 		3rd_concurrentqueue
 		3rd_entt
 		3rd_glm
-		MMM
 		Audio
 )
 target_include_directories(Logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

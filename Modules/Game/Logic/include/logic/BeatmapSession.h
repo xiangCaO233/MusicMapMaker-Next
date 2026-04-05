@@ -3,12 +3,16 @@
 #include "common/EditorConfig.h"
 #include "common/LogicCommands.h"
 #include "logic/SyncClock.h"
+#include "logic/ecs/system/HitFXSystem.h"
+#include "mmm/note/Note.h"
+#include "mmm/timing/Timing.h"
 #include <concurrentqueue.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // 前置声明
 namespace MMM
@@ -113,11 +117,17 @@ private:
     /// @brief 拖拽发起时的摄像机 ID
     std::string m_dragCameraId;
 
-    /// @brief 图集 UV 映射表
-    std::unordered_map<uint32_t, glm::vec4> m_atlasUVMap;
-
     /// @brief 背景图片的尺寸缓存
     glm::vec2 m_bgSize{ 0.0f, 0.0f };
+
+    /// @brief 预排序的所有音符时间事件
+    std::vector<System::HitFXSystem::HitEvent> m_hitEvents;
+
+    /// @brief 下一个等待触发的音频事件索引
+    size_t m_nextHitIndex{ 0 };
+
+    /// @brief 打击音效与视觉特效系统
+    System::HitFXSystem m_hitFXSystem;
 };
 
 }  // namespace MMM::Logic

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace ice
 {
@@ -74,9 +75,23 @@ public:
     /// @brief 获取当前播放倍率
     double getPlaybackSpeed() const;
 
+    /// @brief 预加载音效文件
+    /// @param key 标识符（如 "hiteffect.note"）
+    /// @param filePath 音效文件绝对路径
+    /// @return 是否加载成功
+    bool preloadSoundEffect(const std::string& key,
+                            const std::string& filePath);
+
+    /// @brief 播放指定 key 的音效
+    /// @param key 标识符
+    /// @param volumeFactor 额外音量倍率 (默认 1.0)
+    void playSoundEffect(const std::string& key, float volumeFactor = 1.0f);
+
 private:
-    AudioManager()  = default;
-    ~AudioManager() = default;
+    AudioManager() = default;
+    ~AudioManager();
+
+    struct SoundEffectPool;
 
     std::unique_ptr<ice::ThreadPool> m_threadPool;
     std::unique_ptr<ice::AudioPool>  m_audioPool;
@@ -85,6 +100,9 @@ private:
     std::shared_ptr<ice::SourceNode>    m_bgmSource;
     std::shared_ptr<ice::TimeStretcher> m_stretcher;
     std::shared_ptr<ice::MixBus>        m_mixer;
+
+    std::unordered_map<std::string, std::unique_ptr<SoundEffectPool>>
+        m_sfxPools;
 
     PlaybackStatus m_status{ PlaybackStatus::Stopped };
     float          m_volume{ 0.5f };

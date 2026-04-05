@@ -31,15 +31,14 @@ public:
      * @param judgmentLineY 判定线位置 (视口空间)
      * @param trackCount 轨道数量
      * @param config 编辑器配置
+     * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      */
-    static void generateSnapshot(entt::registry&       registry,
-                                 const entt::registry& timelineRegistry,
-                                 RenderSnapshot*       snapshot,
-                                 const std::string&    cameraId,
-                                 double currentTime, float viewportWidth,
-                                 float viewportHeight, float judgmentLineY,
-                                 int32_t                     trackCount,
-                                 const Common::EditorConfig& config);
+    static void generateSnapshot(
+        entt::registry& registry, const entt::registry& timelineRegistry,
+        RenderSnapshot* snapshot, const std::string& cameraId,
+        double currentTime, float viewportWidth, float viewportHeight,
+        float judgmentLineY, int32_t trackCount,
+        const Common::EditorConfig& config, float mainViewportHeight = 1000.0f);
 
 private:
     static void renderTrackLayout(Batcher& batcher, float viewportWidth,

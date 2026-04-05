@@ -18,7 +18,7 @@ struct Batcher {
 
     Batcher(RenderSnapshot* s) : snapshot(s)
     {
-        currentCmd.indexOffset     = 0;
+        currentCmd.indexOffset     = static_cast<uint32_t>(s->indices.size());
         currentCmd.vertexOffset    = 0;
         currentCmd.indexCount      = 0;
         currentCmd.texture         = VK_NULL_HANDLE;
@@ -56,8 +56,13 @@ struct Batcher {
     /// @brief 推送一个矩形 (y 为底边坐标，向上绘制)
     void pushQuad(float x, float y, float w, float h, glm::vec4 color)
     {
-        pushFreeQuad(
-            { x, y }, { x + w, y }, { x + w, y - h }, { x, y - h }, color);
+        float minH    = 1.5f;
+        float actualH = std::max(h, minH);
+        pushFreeQuad({ x, y },
+                     { x + w, y },
+                     { x + w, y - actualH },
+                     { x, y - actualH },
+                     color);
     }
 
     /// @brief 推送一个空心边框
@@ -114,16 +119,20 @@ struct Batcher {
     void pushFilledQuad(float x, float y, float w, float h, glm::vec2 texSize,
                         BackgroundFillMode fillMode, glm::vec4 color)
     {
+        float minH    = 1.5f;
+        float actualH = std::max(h, minH);
+        float actualW = std::max(w, 1.0f);
+
         if ( texSize.x <= 0 || texSize.y <= 0 ) {
-            pushQuad(x, y, w, h, color);
+            pushQuad(x, y, actualW, actualH, color);
             return;
         }
 
-        float     viewAspect = w / h;
+        float     viewAspect = actualW / actualH;
         float     texAspect  = texSize.x / texSize.y;
         glm::vec2 uvMin(0.0f, 0.0f);
         glm::vec2 uvMax(1.0f, 1.0f);
-        float     drawX = x, drawY = y, drawW = w, drawH = h;
+        float     drawX = x, drawY = y, drawW = actualW, drawH = actualH;
 
         switch ( fillMode ) {
         case BackgroundFillMode::Stretch: break;

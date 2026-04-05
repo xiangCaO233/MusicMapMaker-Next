@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/NoteTransformSystem.h"
@@ -44,6 +45,9 @@ void BeatmapSession::update(double dt, const Common::EditorConfig& config)
     // 处理来自 UI 的指令
     processCommands();
 
+    double prevTime       = m_currentTime;
+    double prevVisualTime = m_visualTime;
+
     // 更新播放时间
     if ( m_isPlaying ) {
         float speed = Audio::AudioManager::instance().getPlaybackSpeed();
@@ -64,13 +68,36 @@ void BeatmapSession::update(double dt, const Common::EditorConfig& config)
         }
 
         m_visualTime = m_syncClock.getVisualTime() + config.visualOffset;
+
+        // --- 打击音效与特效触发逻辑 ---
+        std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
+
+        // 检测时间跳跃（无论是往前跳还是往回跳）
+        if ( std::abs(m_visualTime - prevVisualTime) > 0.2 ) {
+            // 发生了时间跳转（比如用户拖拽进度条或点击跳转），不发出这一大段的音效
+            auto it =
+                std::lower_bound(m_hitEvents.begin(),
+                                 m_hitEvents.end(),
+                                 System::HitFXSystem::HitEvent{
+                                     m_visualTime, ::MMM::NoteType::NOTE });
+            m_nextHitIndex = std::distance(m_hitEvents.begin(), it);
+        } else {
+            // 正常的帧推进
+            while ( m_nextHitIndex < m_hitEvents.size() &&
+                    m_hitEvents[m_nextHitIndex].timestamp <= m_visualTime ) {
+                const auto& ev = m_hitEvents[m_nextHitIndex];
+                // 确保只有在 prevVisualTime 之后触发的才发声
+                if ( ev.timestamp > prevVisualTime ) {
+                    triggeredEvents.push_back(ev);
+                }
+                m_nextHitIndex++;
+            }
+        }
+        m_hitFXSystem.update(m_visualTime, triggeredEvents, config);
     } else {
         m_visualTime = m_currentTime + config.visualOffset;
         m_syncTimer  = 0.0;
     }
-
-    // 同步最新的图集 UV 映射
-    m_atlasUVMap = EditorEngine::instance().getAtlasUVMap();
 
     // 执行逻辑计算和生成渲染快照
     updateECSAndRender(config);
@@ -94,9 +121,9 @@ void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
 
         snapshot->clear();
 
-        // 注入当前 UV 映射到快照，供 Batcher 使用
-        snapshot->uvMap       = m_atlasUVMap;
-        snapshot->isPlaying   = m_isPlaying;
+        // 注入该 Camera 特有的 UV 映射到快照
+        snapshot->uvMap     = EditorEngine::instance().getAtlasUVMap(cameraId);
+        snapshot->isPlaying = m_isPlaying;
         snapshot->currentTime = m_visualTime;  // 快照使用视觉平滑时间
 
         if ( m_currentBeatmap ) {
@@ -110,6 +137,13 @@ void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
         // 判定线高度比例计算
         float judgmentLineY = camera.viewportHeight * config.judgeline_pos;
 
+        // 获取主视口高度用于预览区比例对齐
+        float mainHeight = 1000.0f;
+        auto  itMain     = m_cameras.find("Main");
+        if ( itMain != m_cameras.end() ) {
+            mainHeight = itMain->second.viewportHeight;
+        }
+
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
         // 使用视觉时间 m_visualTime 进行剔除和位置映射
         System::NoteRenderSystem::generateSnapshot(m_noteRegistry,
@@ -121,9 +155,32 @@ void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
                                                    camera.viewportHeight,
                                                    judgmentLineY,
                                                    m_trackCount,
-                                                   config);
+                                                   config,
+                                                   mainHeight);
 
-        // 4. 提交专属快照
+        // 4. 生成打击特效
+        float leftX        = camera.viewportWidth * config.trackLayout.left;
+        float rightX       = camera.viewportWidth * config.trackLayout.right;
+        float trackAreaW   = rightX - leftX;
+        float singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
+
+        // 针对预览区，布局参数略有不同
+        if ( cameraId == "Preview" ) {
+            leftX  = config.previewConfig.margin.left;
+            rightX = camera.viewportWidth - config.previewConfig.margin.right;
+            trackAreaW   = rightX - leftX;
+            singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
+        }
+
+        m_hitFXSystem.generateSnapshot(snapshot,
+                                       m_visualTime,
+                                       config,
+                                       m_trackCount,
+                                       judgmentLineY,
+                                       leftX,
+                                       singleTrackW);
+
+        // 5. 提交专属快照
         syncBuffer->pushWorkingSnapshot();
     }
 }

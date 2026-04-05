@@ -1,10 +1,10 @@
-#include "Batcher.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
 #include <unordered_set>
 
 namespace MMM::Logic::System

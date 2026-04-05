@@ -1,5 +1,5 @@
-#include "Batcher.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
+#include "logic/ecs/system/render/Batcher.h"
 
 namespace MMM::Logic::System
 {

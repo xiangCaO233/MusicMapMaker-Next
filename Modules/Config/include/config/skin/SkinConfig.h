@@ -39,6 +39,20 @@ struct SkinData {
     // 资产路径表 (Key: 资产ID, Value: 文件路径)
     std::unordered_map<std::string, std::filesystem::path> assetPaths;
 
+    // 音频路径表 (Key: 音频ID, Value: 文件路径)
+    std::unordered_map<std::string, std::filesystem::path> audioPaths;
+
+    // 特效序列帧表
+    struct EffectSequence {
+        std::vector<std::filesystem::path> frames;
+        uint32_t startId{ 0 };  // 对应的起始 TextureID
+    };
+    std::unordered_map<std::string, EffectSequence> effectSequences;
+
+    // 特效基础帧率
+    float effectBaseFps{ 60.0f };
+
+
     // 画布配置结构
     struct CanvasConfig {
         // 画布名称
@@ -73,8 +87,18 @@ public:
     ///@brief 获取字体路径
     std::filesystem::path getFontPath(const std::string& key);
 
+    ///@brief 获取音频路径
+    std::filesystem::path getAudioPath(const std::string& key);
+
     ///@brief 获取资产路径
     std::filesystem::path getAssetPath(const std::string& key);
+
+    ///@brief 获取特效序列帧
+    const SkinData::EffectSequence* getEffectSequence(
+        const std::string& key) const;
+
+    ///@brief 获取特效基础帧率
+    float getEffectBaseFps() const { return m_data.effectBaseFps; }
 
     ///@brief 获取画布配置
     const SkinData::CanvasConfig& getCanvasConfig(
@@ -94,6 +118,9 @@ private:
     Translation::Translator m_translator;
 
     void parseAssetsRecursive(const sol::table&  currentTable,
+                              const std::string& prefix);
+
+    void parseAudiosRecursive(const sol::table&  currentTable,
                               const std::string& prefix);
 
     /**

@@ -77,6 +77,29 @@ struct EditorConfig {
     /// @brief 同步配置
     SyncConfig syncConfig;
 
+    enum class PolylineSfxStrategy {
+        Exact,             ///< 策略一: 所有子物件精确按照他们的类型播放对应音效
+        InternalAsNormal,  ///< 策略二:
+                           ///< 仅"内部"子物件播放普通Note音效(开头和结尾按类型)
+        OnlyTailExact,     ///< 策略三:
+                           ///< 仅尾部子物件按类型播放，其他播放普通Note音效
+        AllAsNormal        ///< 策略四: 全部子物件均播放普通Note音效
+    };
+
+    struct SfxConfig {
+        /// @brief 折线内部子物件音效播放策略
+        PolylineSfxStrategy polylineStrategy{ PolylineSfxStrategy::Exact };
+
+        /// @brief Flick类型音效的播放是否跟随滑动轨道数量进行增益
+        bool enableFlickWidthVolumeScaling{ false };
+
+        /// @brief 每增加一个轨道的增益倍率
+        float flickWidthVolumeMultiplier{ 0.1f };
+    };
+
+    /// @brief 音效配置
+    SfxConfig sfxConfig;
+
     /// @brief 轨道布局包围框线宽(px)
     float trackBoxLineWidth{ 2 };
 
