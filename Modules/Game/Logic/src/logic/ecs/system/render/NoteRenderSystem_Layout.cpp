@@ -83,7 +83,7 @@ void NoteRenderSystem::renderTrackLayout(
                            config.trackBoxLineWidth,
                            { 0.5f, 0.5f, 0.5f, 1.0f });
 
-    // 绘制判定区域 (横向贯穿轨道区域)
+    // 绘制判定区域 (按轨道分别绘制)
     batcher.setTexture(TextureID::JudgeArea);
     auto judgeUvIt = batcher.snapshot->uvMap.find(
         static_cast<uint32_t>(TextureID::JudgeArea));
@@ -92,23 +92,31 @@ void NoteRenderSystem::renderTrackLayout(
         float texH = judgeUvIt->second.w * 2048.0f;
         if ( texW > 0 && texH > 0 ) {
             float aspect = texW / texH;
-            float drawH  = trackAreaW / aspect;  // 根据宽度等比缩放计算高度
+            float drawH =
+                singleTrackW / aspect;  // 根据单轨道宽度等比缩放计算高度
 
             // 为了防止图集边缘线性采样溢出产生黑边
             const float halfPixelU = 0.5f / 2048.0f;
             const float halfPixelV = 0.5f / 2048.0f;
 
-            batcher.pushUVQuad(
-                leftX,
-                judgmentLineY + drawH * 0.5f,
-                trackAreaW,
-                drawH,
-                glm::vec2(judgeUvIt->second.x + halfPixelU,
-                          judgeUvIt->second.y + halfPixelV),
-                glm::vec2(
-                    judgeUvIt->second.x + judgeUvIt->second.z - halfPixelU,
-                    judgeUvIt->second.y + judgeUvIt->second.w - halfPixelV),
-                { 1.0f, 1.0f, 1.0f, 1.0f });
+            for ( int i = 0; i < trackCount; ++i ) {
+                float trackX = leftX + i * singleTrackW;
+
+                // 稍微扩展一点宽度，防止浮点数精度导致的轨道间隙
+                float drawW = singleTrackW + 0.5f;
+
+                batcher.pushUVQuad(
+                    trackX,
+                    judgmentLineY + drawH * 0.5f,
+                    drawW,
+                    drawH,
+                    glm::vec2(judgeUvIt->second.x + halfPixelU,
+                              judgeUvIt->second.y + halfPixelV),
+                    glm::vec2(
+                        judgeUvIt->second.x + judgeUvIt->second.z - halfPixelU,
+                        judgeUvIt->second.y + judgeUvIt->second.w - halfPixelV),
+                    { 1.0f, 1.0f, 1.0f, 1.0f });
+            }
         }
     } else {
         // Fallback: 绘制原有的纯色判定线

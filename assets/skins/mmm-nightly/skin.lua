@@ -62,8 +62,10 @@ local Skin = {
 			audio_explorer_icon = "image/sidebar/music.svg",
 		},
 		panel = {
-			judgearea = "image/panel/judgearea.png",
-			track = "image/panel/track.png",
+			track = {
+				background = "image/panel/track.png",
+				judgearea = "image/panel/judgearea.png",
+			},
 		},
 		note = {
 			note = "image/note/note.png",
