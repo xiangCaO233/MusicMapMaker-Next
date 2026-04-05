@@ -22,6 +22,7 @@ enum class TextureID : uint32_t {
     HoldEnd,
     FlickArrowLeft,
     FlickArrowRight,
+    Track,
 
     NoteSelectionBorder = 100
 };

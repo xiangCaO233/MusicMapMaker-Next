@@ -343,13 +343,16 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         static_cast<uint32_t>(Logic::TextureID::FlickArrowRight),
         skin.getAssetPath("note.arrowright"));
 
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Track),
+                               skin.getAssetPath("panel.track"));
+
     // 构建图集
     m_textureAtlas->build(2048);
 
     // 更新 UV 映射缓存并同步给逻辑线程
     m_atlasUVs.clear();
     for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
-          i <= static_cast<uint32_t>(Logic::TextureID::FlickArrowRight);
+          i <= static_cast<uint32_t>(Logic::TextureID::Track);
           ++i ) {
         // 背景不进入合图，跳过其 UV 记录，防止逻辑层错误识别
         if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )

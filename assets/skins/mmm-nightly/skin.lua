@@ -61,6 +61,10 @@ local Skin = {
 			file_explorer_icon = "image/sidebar/folder.svg",
 			audio_explorer_icon = "image/sidebar/music.svg",
 		},
+		panel = {
+			judgearea = "image/panel/judgearea.png",
+			track = "image/panel/track.png",
+		},
 		note = {
 			note = "image/note/note.png",
 			node = "image/note/node.png",
@@ -69,6 +73,10 @@ local Skin = {
 			holdbodyhorizontal = "image/note/holdbodyhorizontal.png",
 			arrowleft = "image/note/arrowleft.png",
 			arrowright = "image/note/arrowright.png",
+			effect = {
+				note = "image/note/note/[1 .. 1].png",
+				flick = "image/note/flick/[1 .. 16].png",
+			},
 		},
 	},
 
