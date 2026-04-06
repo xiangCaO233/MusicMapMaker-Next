@@ -135,9 +135,12 @@ void NoteRenderSystem::generateSnapshot(
             float logoSize = std::min(viewportWidth, viewportHeight) * 0.4f;
             float cx       = viewportWidth * 0.5f;
             float cy       = viewportHeight * 0.5f;
+
             // 绘制半透明居中 Logo
+            // 注意 Batcher.pushQuad 是从 y 向上绘制 h (底部往上)，所以传入的 y
+            // 应该是底部坐标
             batcher.pushQuad(cx - logoSize * 0.5f,
-                             cy - logoSize * 0.5f,
+                             cy + logoSize * 0.5f,
                              logoSize,
                              logoSize,
                              { 1.0f, 1.0f, 1.0f, 0.15f });
