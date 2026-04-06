@@ -60,6 +60,10 @@ private:
     // 当前字典
     Dictionary* m_currentDictionary{ nullptr };
 
+    // 翻译指针缓存：[keyHash:stablePtr]
+    // 当语言切换或字典更新时必须清空，用于加速 translate 函数
+    std::unordered_map<uint32_t, const char*> m_pointerCache;
+
     // 字符串池：确保所有返回给 UI 的指针在整个程序运行期间都是稳定的
     // unordered_set 中的元素地址在插入新元素时不会改变
     std::unordered_set<std::string> m_stringPool;
@@ -104,6 +108,23 @@ inline std::string_view format_as(const TRResult& tr)
     MMM::Translation::TRResult(                                         \
         MMM::Config::SkinManager::instance().getTranslator().translate( \
             MMM::Hash::hash_str(key_str), key_str))
+
+// =========================================================
+// 缓存宏 (性能最高，适用于 ImGui 每帧调用的场景)
+// =========================================================
+#define TR_CACHE(key_str)                                                        \
+    ([]() -> MMM::Translation::TRResult {                                        \
+        static const char*        cached_ptr     = nullptr;                      \
+        static uint32_t           cached_version = 0xFFFFFFFF;                   \
+        static constexpr uint32_t key_hash       = MMM::Hash::hash_str(key_str); \
+        auto&                     translator =                                   \
+            MMM::Config::SkinManager::instance().getTranslator();                \
+        if ( cached_version != translator.getVersion() ) {                       \
+            cached_ptr     = translator.translate(key_hash, key_str);            \
+            cached_version = translator.getVersion();                            \
+        }                                                                        \
+        return MMM::Translation::TRResult(cached_ptr);                           \
+    }())
 
 // TR_FMT 保持不变，fmt 会自动识别 TRResult 的转换或其内部的 string_view
 #define TR_FMT(key, ...) fmt::format(fmt::runtime(TR(key).view), __VA_ARGS__)

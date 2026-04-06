@@ -57,7 +57,8 @@ bool Translator::switchLang(const std::string& langID)
     auto it = m_Dictionarys.find(langID);
     if ( it != m_Dictionarys.end() ) {
         m_currentDictionary = &(it->second);
-        m_version++;  // 版本号 +1，通知所有宏更新缓存
+        m_version++;             // 版本号 +1，通知所有宏更新缓存
+        m_pointerCache.clear();  // 重要：字典切换，旧的指针缓存必须清空
         return true;
     }
     return false;
@@ -72,28 +73,30 @@ uint32_t Translator::getVersion() const
 // 翻译
 const char* Translator::translate(uint32_t keyHash, const char* fallbackStr)
 {
-    const char* resultStr = fallbackStr;
+    // --- 极速路径：指针缓存 (uint32_t 查找) ---
+    auto it_ptr = m_pointerCache.find(keyHash);
+    if ( it_ptr != m_pointerCache.end() ) {
+        return it_ptr->second;
+    }
 
+    // --- 正常路径：字典查找 ---
+    const char* resultStr = fallbackStr;
     if ( m_currentDictionary ) {
-        // 整数查找，非常快
         auto it = m_currentDictionary->find(keyHash);
         if ( it != m_currentDictionary->end() ) {
             resultStr = it->second.c_str();
         }
     }
 
-    // --- 核心修复：池化 ---
-    // 为了防止字典切换或皮肤重载导致 c_str() 指针失效，
-    // 我们将所有被 UI 访问过的字符串放入一个稳定的池中。
+    // --- 稳定化处理：池化 ---
     // 只要是在池里的字符串，其地址在程序运行期间就是绝对稳定的。
-    auto poolIt = m_stringPool.find(resultStr);
-    if ( poolIt == m_stringPool.end() ) {
-        // 插入池并获取稳定地址
-        auto [insertedIt, success] = m_stringPool.insert(resultStr);
-        return insertedIt->c_str();
-    }
+    auto [poolIt, success] = m_stringPool.insert(resultStr);
+    const char* stablePtr  = poolIt->c_str();
 
-    return poolIt->c_str();
+    // 存入加速缓存
+    m_pointerCache[keyHash] = stablePtr;
+
+    return stablePtr;
 }
 
 }  // namespace Translation
