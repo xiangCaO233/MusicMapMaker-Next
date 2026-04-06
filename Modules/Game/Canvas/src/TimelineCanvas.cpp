@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include <filesystem>
 
 namespace MMM::Canvas
@@ -63,6 +64,78 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             vk::DescriptorSet texID = getDescriptorSet();
             if ( texID != VK_NULL_HANDLE ) {
                 ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
+
+                // 在 ImGui Image 之上绘制交互层
+                ImVec2 canvasPos = ImGui::GetItemRectMin();
+                ImVec2 mousePos  = ImGui::GetMousePos();
+                auto*  drawList  = ImGui::GetWindowDrawList();
+                float  iconSize  = 20.0f;
+                float  padding   = 5.0f;
+                float  proximity = 5.0f;  // 5像素检测范围
+
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                      ImVec4(0, 0, 0, 0));
+
+                for ( const auto& el : m_currentSnapshot->timelineElements ) {
+                    float localMouseY = mousePos.y - canvasPos.y;
+                    bool  isNear = std::abs(localMouseY - el.y) < proximity;
+
+                    if ( isNear ) {
+                        // BPM 齿轮 (左侧)
+                        if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+                            ImVec2 pos(canvasPos.x + padding,
+                                       canvasPos.y + el.y - iconSize * 0.5f);
+                            ImGui::SetCursorScreenPos(pos);
+
+                            ImGui::PushStyleColor(
+                                ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+                            std::string id = fmt::format("BPM_{}", el.time);
+                            if ( ImGui::Button(
+                                     (std::string("\xef\x80\x93##") + id)
+                                         .c_str(),
+                                     ImVec2(iconSize, iconSize)) ) {
+                                XINFO("BPM gear clicked at time: {}", el.time);
+                                // TODO: 发送事件或打开编辑弹窗
+                            }
+                            ImGui::PopStyleColor();
+
+                            if ( ImGui::IsItemHovered() ) {
+                                ImGui::SetTooltip("BPM Event: %.3f s", el.time);
+                            }
+                        }
+
+                        // Scroll 齿轮 (右侧)
+                        if ( el.effects &
+                             Logic::System::SCROLL_EFFECT_SCROLL ) {
+                            ImVec2 pos(
+                                canvasPos.x + size.x - iconSize - padding,
+                                canvasPos.y + el.y - iconSize * 0.5f);
+                            ImGui::SetCursorScreenPos(pos);
+
+                            ImGui::PushStyleColor(
+                                ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.2f, 1.0f));
+                            std::string id = fmt::format("SCROLL_{}", el.time);
+                            if ( ImGui::Button(
+                                     (std::string("\xef\x80\x93##") + id)
+                                         .c_str(),
+                                     ImVec2(iconSize, iconSize)) ) {
+                                XINFO("Scroll gear clicked at time: {}",
+                                      el.time);
+                                // TODO: 发送事件或打开编辑弹窗
+                            }
+                            ImGui::PopStyleColor();
+
+                            if ( ImGui::IsItemHovered() ) {
+                                ImGui::SetTooltip("Scroll Event: %.3f s",
+                                                  el.time);
+                            }
+                        }
+                    }
+                }
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar();
             }
         }
     }

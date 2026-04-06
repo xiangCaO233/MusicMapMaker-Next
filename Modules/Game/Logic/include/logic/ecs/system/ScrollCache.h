@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <vector>
 
@@ -10,10 +11,14 @@ namespace MMM::Logic::System
  * @brief 预计算的积分段，用于通过二分查找实现 O(log T) 的极速时间坐标映射
  */
 struct ScrollSegment {
-    double time;
-    double absY;
-    double speed;
+    double   time;
+    double   absY;
+    double   speed;
+    uint32_t effects{ 0 };  /// @brief 该时间戳上包含的效果类型 (位掩码)
 };
+
+constexpr uint32_t SCROLL_EFFECT_BPM    = 1 << 0;
+constexpr uint32_t SCROLL_EFFECT_SCROLL = 1 << 1;
 
 /**
  * @brief 全局流速映射缓存类

@@ -68,7 +68,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     };
 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
-    m_segments.push_back({ lastTime, 0.0, currentSpeed });
+    m_segments.push_back({ lastTime, 0.0, currentSpeed, 0 });
 
     for ( const auto* tl : timings ) {
         // 如果时间戳推进了，则结算上一段的积分
@@ -76,13 +76,15 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             double dt = tl->m_timestamp - lastTime;
             currentAbsY += dt * currentSpeed;
             lastTime = tl->m_timestamp;
-            m_segments.push_back({ lastTime, currentAbsY, currentSpeed });
+            m_segments.push_back({ lastTime, currentAbsY, currentSpeed, 0 });
         }
 
-        // 更新当前参数
+        // 累计当前时间戳的效果类型
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
+            m_segments.back().effects |= SCROLL_EFFECT_BPM;
             currentBPM = tl->m_value;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
+            m_segments.back().effects |= SCROLL_EFFECT_SCROLL;
             if ( tl->m_value < 0 ) {
                 currentScrollMult = -100.0 / tl->m_value;
             } else {

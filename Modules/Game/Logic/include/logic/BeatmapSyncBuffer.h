@@ -3,6 +3,7 @@
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <atomic>
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <unordered_map>
@@ -43,6 +44,15 @@ struct Hitbox {
 };
 
 /**
+ * @brief 时间线上的交互元素 (BPM/Scroll 调整点)
+ */
+struct TimelineInteractiveElement {
+    double   time;
+    float    y;
+    uint32_t effects;
+};
+
+/**
  * @brief 渲染快照数据，包含 UI 画布所需的所有几何与指令信息
  */
 struct RenderSnapshot {
@@ -50,6 +60,7 @@ struct RenderSnapshot {
     std::vector<uint32_t>                       indices;
     std::vector<UI::BrushDrawCmd>               cmds;
     std::vector<Hitbox>                         hitboxes;
+    std::vector<TimelineInteractiveElement>     timelineElements;
 
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
@@ -75,6 +86,7 @@ struct RenderSnapshot {
         indices.clear();
         cmds.clear();
         hitboxes.clear();
+        timelineElements.clear();
         uvMap.clear();
         backgroundPath.clear();
         bgSize      = glm::vec2(0.0f);

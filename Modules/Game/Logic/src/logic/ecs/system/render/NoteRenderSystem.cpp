@@ -1,5 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/skin/SkinConfig.h"
+#include "imgui.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
@@ -60,11 +61,24 @@ void NoteRenderSystem::generateSnapshot(
                 judgmentLineY - static_cast<float>(seg.absY - currentAbsY);
 
             // 绘制横向刻度线 (BPM/Scroll 变化点)
-            batcher.pushQuad(0,
-                             y + 1.0f,
-                             viewportWidth,
-                             2.0f,
-                             { tickCol.r, tickCol.g, tickCol.b, 0.8f });
+            // 左右各留出 30px 的空间用于绘制图标
+            float paddingX = 30.0f;
+            float lineW    = viewportWidth - paddingX * 2.0f;
+
+            glm::vec4 color = { tickCol.r, tickCol.g, tickCol.b, 0.8f };
+            if ( (seg.effects & SCROLL_EFFECT_BPM) &&
+                 (seg.effects & SCROLL_EFFECT_SCROLL) ) {
+                color = { 1.0f, 0.5f, 0.0f, 0.8f };  // 橙色 (BPM + Scroll)
+            } else if ( seg.effects & SCROLL_EFFECT_BPM ) {
+                color = { 1.0f, 0.2f, 0.2f, 0.8f };  // 红色 (BPM)
+            } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
+                color = { 0.2f, 1.0f, 0.2f, 0.8f };  // 绿色 (Scroll)
+            }
+
+            batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
+
+            // 记录交互元素信息，供 UI 线程绘制 ImGui 按钮
+            snapshot->timelineElements.push_back({ seg.time, y, seg.effects });
         }
 
         // 绘制当前时间指示线 (亮红)
