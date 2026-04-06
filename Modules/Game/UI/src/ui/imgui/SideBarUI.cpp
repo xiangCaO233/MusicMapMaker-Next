@@ -176,7 +176,14 @@ void SideBarUI::update(UIManager* sourceManager)
                         DrawSidebarButton(
                             "BeatMap", SideBarTab::BeatMapExplorer, rect);
                     })
-        .addSpring();
+        .addSpring()
+        .addElement("SettingsButton",
+                    Sizing::Fixed(sidebarWidth),
+                    Sizing::Fixed(sidebarWidth),
+                    [=](Clay_BoundingBox rect, bool isHovered) {
+                        DrawSidebarButton(
+                            "Settings", SideBarTab::Settings, rect);
+                    });
     vbox.render(ctx);
 
     // --- 弹出样式变量 ---
@@ -218,6 +225,15 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
     m_tabIcons[SideBarTab::BeatMapExplorer] =
         loadTextureResource(skin.getAssetPath("side_bar.beatmap_explorer_icon"),
+                            iconSize,
+                            physicalDevice,
+                            logicalDevice,
+                            cmdPool,
+                            queue,
+                            { { .83f, .83f, .83f, .83f } });
+
+    m_tabIcons[SideBarTab::Settings] =
+        loadTextureResource(skin.getAssetPath("side_bar.setting_icon"),
                             iconSize,
                             physicalDevice,
                             logicalDevice,

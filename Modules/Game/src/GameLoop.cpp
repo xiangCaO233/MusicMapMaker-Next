@@ -19,6 +19,7 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
+#include "ui/imgui/manager/SettingsView.h"
 #include <nfd.h>
 
 namespace MMM
@@ -58,6 +59,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     sidebar_manager->registerSubView(
         TR("title.beatmap_manager"),
         std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
+    sidebar_manager->registerSubView(
+        TR("title.settings_manager"),
+        std::make_unique<UI::SettingsView>(TR("title.settings_manager")));
 
     // 初始化时默认激活第一个 Tab（文件管理器）
     sidebar_manager->toggleSubView(TR("title.file_manager"));
