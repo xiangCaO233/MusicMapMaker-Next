@@ -61,14 +61,21 @@ local Skin = {
 		btn_pause = "image/buttons/pause.png",
 		bg_main = "image/backgrounds/main_menu.jpg",
 		menubar = {
-			minimize = "image/menubar/window-minimize.svg",
-			maximize = "image/menubar/window-maximize.svg",
-			close = "image/menubar/window-close.svg",
+			minimize = "image/icon/menubar/window-minimize.svg",
+			maximize = "image/icon/menubar/window-maximize.svg",
+			close = "image/icon/menubar/window-close.svg",
 		},
 		side_bar = {
-			file_explorer_icon = "image/sidebar/folder.svg",
-			audio_explorer_icon = "image/sidebar/music.svg",
-			beatmap_explorer_icon = "image/sidebar/music.svg", -- TODO: use a better icon
+			file_explorer_icon = "image/icon/sidebar/folder.svg",
+			audio_explorer_icon = "image/icon/sidebar/music.svg",
+			beatmap_explorer_icon = "image/icon/sidebar/beatmap.svg",
+			setting_icon = "image/icon/sidebar/setting.svg",
+		},
+		settings = {
+			software = "image/icon/sidebar/setting.svg",
+			visual = "image/icon/setting/visual.svg",
+			project = "image/icon/setting/project.svg",
+			editor = "image/icon/setting/editor.svg",
 		},
 		panel = {
 			track = {
