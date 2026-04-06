@@ -348,6 +348,8 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::JudgeArea),
         skin.getAssetPath("panel.track.judgearea"));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
+                               skin.getAssetPath("logo"));
 
     // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
@@ -363,7 +365,7 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     // 更新 UV 映射缓存并同步给逻辑线程
     m_atlasUVs.clear();
     for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
-          i <= static_cast<uint32_t>(Logic::TextureID::JudgeArea);
+          i <= static_cast<uint32_t>(Logic::TextureID::Logo);
           ++i ) {
         // 背景不进入合图，跳过其 UV 记录，防止逻辑层错误识别
         if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )

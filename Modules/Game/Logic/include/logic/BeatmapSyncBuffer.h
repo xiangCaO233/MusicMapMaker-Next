@@ -24,6 +24,7 @@ enum class TextureID : uint32_t {
     FlickArrowRight,
     Track,
     JudgeArea,
+    Logo,
 
     NoteSelectionBorder = 100,
 
@@ -63,6 +64,9 @@ struct RenderSnapshot {
     bool   isPlaying{ false };
     double currentTime{ 0.0 };
 
+    // 是否已加载谱面
+    bool hasBeatmap{ false };
+
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
     {
@@ -75,6 +79,7 @@ struct RenderSnapshot {
         bgSize      = glm::vec2(0.0f);
         isPlaying   = false;
         currentTime = 0.0;
+        hasBeatmap  = false;
     }
 };
 

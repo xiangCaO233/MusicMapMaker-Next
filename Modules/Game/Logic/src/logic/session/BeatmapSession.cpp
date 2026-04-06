@@ -125,6 +125,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         snapshot->uvMap     = EditorEngine::instance().getAtlasUVMap(cameraId);
         snapshot->isPlaying = m_isPlaying;
         snapshot->currentTime = m_visualTime;  // 快照使用视觉平滑时间
+        snapshot->hasBeatmap  = (m_currentBeatmap != nullptr);
 
         if ( m_currentBeatmap ) {
             auto bgPath =
@@ -135,7 +136,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         }
 
         // 判定线高度比例计算
-        float judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
+        float judgmentLineY =
+            camera.viewportHeight * config.visual.judgeline_pos;
 
         // 获取主视口高度用于预览区比例对齐
         float mainHeight = 1000.0f;
@@ -159,15 +161,16 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                                    mainHeight);
 
         // 4. 生成打击特效
-        float leftX        = camera.viewportWidth * config.visual.trackLayout.left;
-        float rightX       = camera.viewportWidth * config.visual.trackLayout.right;
+        float leftX  = camera.viewportWidth * config.visual.trackLayout.left;
+        float rightX = camera.viewportWidth * config.visual.trackLayout.right;
         float trackAreaW   = rightX - leftX;
         float singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
 
         // 针对预览区，布局参数略有不同
         if ( cameraId == "Preview" ) {
-            leftX  = config.visual.previewConfig.margin.left;
-            rightX = camera.viewportWidth - config.visual.previewConfig.margin.right;
+            leftX = config.visual.previewConfig.margin.left;
+            rightX =
+                camera.viewportWidth - config.visual.previewConfig.margin.right;
             trackAreaW   = rightX - leftX;
             singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
         }

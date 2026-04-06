@@ -27,6 +27,11 @@ void NoteRenderSystem::generateSnapshot(
     float   renderScaleY = 1.0f;
 
     if ( cameraId == "Timeline" ) {
+        if ( !snapshot->hasBeatmap ) {
+            batcher.flush();
+            return;
+        }
+
         // ================== 时间线标尺逻辑 ==================
         leftX        = 0;
         rightX       = viewportWidth;
@@ -70,6 +75,11 @@ void NoteRenderSystem::generateSnapshot(
                          { 1.0f, 0.2f, 0.2f, 1.0f });
 
     } else if ( cameraId == "Preview" ) {
+        if ( !snapshot->hasBeatmap ) {
+            batcher.flush();
+            return;
+        }
+
         // ================== 预览区逻辑 ==================
         leftX      = config.visual.previewConfig.margin.left;
         rightX     = viewportWidth - config.visual.previewConfig.margin.right;
@@ -119,38 +129,54 @@ void NoteRenderSystem::generateSnapshot(
         BackgroundRenderSystem::render(
             batcher, viewportWidth, viewportHeight, config, snapshot);
 
-        renderTrackLayout(batcher,
-                          viewportWidth,
-                          viewportHeight,
-                          judgmentLineY,
-                          trackCount,
-                          config,
-                          timelineRegistry,
-                          currentTime,
-                          cache,
-                          leftX,
-                          rightX,
-                          topY,
-                          bottomY,
-                          trackAreaW,
-                          singleTrackW);
+        if ( !snapshot->hasBeatmap ) {
+            // 未加载谱面时，主画布只绘制 Logo
+            batcher.setTexture(TextureID::Logo);
+            float logoSize = std::min(viewportWidth, viewportHeight) * 0.4f;
+            float cx       = viewportWidth * 0.5f;
+            float cy       = viewportHeight * 0.5f;
+            // 绘制半透明居中 Logo
+            batcher.pushQuad(cx - logoSize * 0.5f,
+                             cy - logoSize * 0.5f,
+                             logoSize,
+                             logoSize,
+                             { 1.0f, 1.0f, 1.0f, 0.15f });
+        } else {
+            renderTrackLayout(batcher,
+                              viewportWidth,
+                              viewportHeight,
+                              judgmentLineY,
+                              trackCount,
+                              config,
+                              timelineRegistry,
+                              currentTime,
+                              cache,
+                              leftX,
+                              rightX,
+                              topY,
+                              bottomY,
+                              trackAreaW,
+                              singleTrackW);
+        }
     }
 
-    // 统一绘制音符
-    renderNotes(registry,
-                snapshot,
-                cameraId,
-                currentTime,
-                judgmentLineY,
-                trackCount,
-                config,
-                batcher,
-                leftX,
-                rightX,
-                topY,
-                bottomY,
-                singleTrackW,
-                renderScaleY);
+    if ( snapshot->hasBeatmap ) {
+        // 统一绘制音符
+        renderNotes(registry,
+                    snapshot,
+                    cameraId,
+                    currentTime,
+                    judgmentLineY,
+                    trackCount,
+                    config,
+                    batcher,
+                    leftX,
+                    rightX,
+                    topY,
+                    bottomY,
+                    singleTrackW,
+                    renderScaleY);
+    }
 
     batcher.flush();
 }

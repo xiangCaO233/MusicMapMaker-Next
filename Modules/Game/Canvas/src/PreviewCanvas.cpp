@@ -162,6 +162,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     addTex(Logic::TextureID::FlickArrowRight, "note.arrowright");
     addTex(Logic::TextureID::Track, "panel.track.background");
     addTex(Logic::TextureID::JudgeArea, "panel.track.judgearea");
+    addTex(Logic::TextureID::Logo, "logo");
 
     // 自动加载所有序列帧资源，并使用 SkinManager 分配好的 ID
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
@@ -175,7 +176,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
     m_atlasUVs.clear();
     for ( uint32_t i = static_cast<uint32_t>(Logic::TextureID::None);
-          i <= static_cast<uint32_t>(Logic::TextureID::JudgeArea);
+          i <= static_cast<uint32_t>(Logic::TextureID::Logo);
           ++i ) {
         if ( i == static_cast<uint32_t>(Logic::TextureID::Background) )
             continue;
