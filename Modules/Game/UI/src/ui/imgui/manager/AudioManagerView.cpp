@@ -95,6 +95,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     config.visual.visualOffset = offsetMs / 1000.0f;
                     changed                    = true;
                 }
+
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip(
                         "%s",

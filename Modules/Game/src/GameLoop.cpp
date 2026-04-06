@@ -131,9 +131,9 @@ int GameLoop::start(Graphic::NativeWindow& window)
         //     BeatMap::loadFromFile("/home/xiang/Documents/MusicMapRepo/rm/"
         //                           "xiuluo/Redemptione/Redemptione_4k_hd.imd"));
 
-        auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
-            "/home/xiang/Documents/MusicMapRepo/osu/Designant - "
-            "Designant/Designant - Designant. (Benson_) [Designant].osu"));
+        // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
+        //     "/home/xiang/Documents/MusicMapRepo/osu/Designant - "
+        //     "Designant/Designant - Designant. (Benson_) [Designant].osu"));
 
         // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
         //     "/home/xiang/Documents/MusicMapRepo/osu/493316 Camellia - I Can "
@@ -142,8 +142,8 @@ int GameLoop::start(Graphic::NativeWindow& window)
         //     "[Schizophrenia].osu"));
 
         // 发送给逻辑引擎
-        Logic::EditorEngine::instance().pushCommand(
-            Logic::CmdLoadBeatmap{ map });
+        // Logic::EditorEngine::instance().pushCommand(
+        //     Logic::CmdLoadBeatmap{ map });
 
         // 进入主循环
         while ( !window.shouldClose() ) {

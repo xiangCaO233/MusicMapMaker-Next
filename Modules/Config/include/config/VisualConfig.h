@@ -93,10 +93,14 @@ struct VisualConfig {
     /// @brief 视觉偏移量 (秒)，用于补偿渲染与音频的延迟
     float visualOffset{ 0.0f };
 
+    /// @brief 时间线缩放倍率 (1.0 代表原始比例)
+    float timelineZoom{ 1.0f };
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(VisualConfig, trackLayout, background,
                                    previewConfig, trackBoxLineWidth,
                                    judgeline_pos, judgelineWidth, noteScaleX,
-                                   noteScaleY, noteFillMode, visualOffset)
+                                   noteScaleY, noteFillMode, visualOffset,
+                                   timelineZoom)
 };
 
 }  // namespace MMM::Config

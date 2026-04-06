@@ -1,69 +1,103 @@
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include <algorithm>
+#include <cmath>
 
 namespace MMM::Logic::System
 {
 
 void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 {
-    // 获取并按时间排序时间线点
+    m_segments.clear();
+    const double BASE_SPEED = 500.0;  // 基准流速
+    const double globalMultiplier =
+        EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+
+    // 获取并排序时间线点
     std::vector<const TimelineComponent*> timings;
     auto tlView = timelineRegistry.view<const TimelineComponent>();
     for ( auto entity : tlView ) {
         timings.push_back(&tlView.get<const TimelineComponent>(entity));
     }
+
+    if ( timings.empty() ) {
+        isDirty = false;
+        return;
+    }
+
+    // 排序逻辑：时间戳升序；时间戳相同时，BPM 类型优先于 SCROLL 类型
     std::stable_sort(
         timings.begin(), timings.end(), [](const auto* a, const auto* b) {
-            return a->m_timestamp < b->m_timestamp;
+            if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-9 ) {
+                return a->m_timestamp < b->m_timestamp;
+            }
+            if ( a->m_effect != b->m_effect ) {
+                return a->m_effect == ::MMM::TimingEffect::BPM;
+            }
+            return false;  // 保持原始顺序
         });
 
-    m_segments.clear();
-
-    if ( !timings.empty() ) {
-        double currentBPM = 120.0;
-        double currentSV  = 1.0;
-        double lastTime   = timings[0]->m_timestamp;
-
-        // 初始参数预扫描
-        for ( const auto* tl : timings ) {
-            if ( tl->m_timestamp > lastTime ) break;
-            if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
-                currentBPM = tl->m_value;
-                currentSV  = 1.0;
-            } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
-                currentSV = tl->m_value < 0 ? -100.0 / tl->m_value : 1.0;
-            }
-        }
-
-        double currentSpeed = currentBPM * 5.0 * currentSV;
-        double currentAbsY  = 0.0;
-        m_segments.push_back({ lastTime, currentAbsY, currentSpeed });
-
-        for ( const auto* tl : timings ) {
-            if ( tl->m_timestamp > lastTime ) {
-                double dt = tl->m_timestamp - lastTime;
-                currentAbsY += dt * currentSpeed;
-                lastTime = tl->m_timestamp;
-                m_segments.push_back({ lastTime, currentAbsY, currentSpeed });
-            }
-
-            if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
-                currentBPM = tl->m_value;
-                currentSV  = 1.0;
-            } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
-                currentSV = tl->m_value < 0 ? -100.0 / tl->m_value : 1.0;
-            }
-            currentSpeed            = currentBPM * 5.0 * currentSV;
-            m_segments.back().speed = currentSpeed;
+    // 1. 查找基准 BPM (第一个出现的 BPM 类型点)
+    double refBPM = 120.0;
+    for ( const auto* tl : timings ) {
+        if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
+            refBPM = tl->m_value;
+            break;
         }
     }
+
+    // 2. 初始参数
+    double currentBPM        = refBPM;
+    double currentScrollMult = 1.0;
+
+    // 如果第一个点在 0ms 之后，我们需要从 0ms 开始的一段默认速度
+    // 如果第一个点就在 0ms
+    // 或更早，这个初始段会在后续循环中被同步时间戳的点修正速度
+    double lastTime    = std::min(0.0, timings[0]->m_timestamp);
+    double currentAbsY = 0.0;
+
+    auto calcSpeed = [&](double bpm, double sm) {
+        if ( std::abs(refBPM) < 1e-6 ) return 0.0;
+        return (bpm / refBPM) * sm * BASE_SPEED * globalMultiplier;
+    };
+
+    double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
+    m_segments.push_back({ lastTime, 0.0, currentSpeed });
+
+    for ( const auto* tl : timings ) {
+        // 如果时间戳推进了，则结算上一段的积分
+        if ( tl->m_timestamp > lastTime ) {
+            double dt = tl->m_timestamp - lastTime;
+            currentAbsY += dt * currentSpeed;
+            lastTime = tl->m_timestamp;
+            m_segments.push_back({ lastTime, currentAbsY, currentSpeed });
+        }
+
+        // 更新当前参数
+        if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
+            currentBPM = tl->m_value;
+        } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
+            if ( tl->m_value < 0 ) {
+                currentScrollMult = -100.0 / tl->m_value;
+            } else {
+                currentScrollMult = tl->m_value;
+            }
+        }
+
+        // 更新当前路段速度
+        currentSpeed            = calcSpeed(currentBPM, currentScrollMult);
+        m_segments.back().speed = currentSpeed;
+    }
+
     isDirty = false;
 }
 
 double ScrollCache::getAbsY(double t) const
 {
-    if ( m_segments.empty() ) return t * 500.0;
+    const double DEFAULT_SPEED =
+        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    if ( m_segments.empty() ) return t * DEFAULT_SPEED;
 
     auto it = std::upper_bound(
         m_segments.begin(),
@@ -72,6 +106,7 @@ double ScrollCache::getAbsY(double t) const
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
     if ( it == m_segments.begin() ) {
+        // 如果 t 比第一个点还早，按第一个点的速度回溯
         return m_segments[0].absY +
                (t - m_segments[0].time) * m_segments[0].speed;
     }
@@ -81,7 +116,9 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getTime(double absY) const
 {
-    if ( m_segments.empty() ) return absY / 500.0;
+    const double DEFAULT_SPEED =
+        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     auto it = std::upper_bound(
         m_segments.begin(),

@@ -146,6 +146,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     XINFO("Project '{}' loaded successfully with {} beatmaps.",
           loadedEv.m_projectTitle,
           loadedEv.m_beatmapCount);
+
+    // 新加载项目时，清空当前 Session 的所有谱面数据
+    pushCommand(CmdLoadBeatmap{ nullptr });
 }
 
 void EditorEngine::start()

@@ -21,6 +21,13 @@ void BeatmapSession::processCommands()
                 using T = std::decay_t<decltype(arg)>;
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ) {
                     m_lastConfig = arg.config;
+                    // 当配置更新时 (例如全局流速倍率修改)，强制标记流速缓存为
+                    // Dirty，以便在下一帧重新计算
+                    auto* cache =
+                        m_timelineRegistry.ctx().find<System::ScrollCache>();
+                    if ( cache ) {
+                        cache->isDirty = true;
+                    }
                 } else if constexpr ( std::is_same_v<T, CmdUpdateViewport> ) {
                     if ( m_cameras.find(arg.cameraId) == m_cameras.end() ) {
                         m_cameras[arg.cameraId] =
@@ -94,8 +101,9 @@ void BeatmapSession::processCommands()
                          m_noteRegistry.valid(m_draggedEntity) ) {
                         auto it = m_cameras.find(arg.cameraId);
                         if ( it != m_cameras.end() ) {
-                            float judgmentLineY = it->second.viewportHeight *
-                                                  m_lastConfig.visual.judgeline_pos;
+                            float judgmentLineY =
+                                it->second.viewportHeight *
+                                m_lastConfig.visual.judgeline_pos;
                             auto* cache = m_timelineRegistry.ctx()
                                               .find<System::ScrollCache>();
                             if ( cache ) {
@@ -109,8 +117,9 @@ void BeatmapSession::processCommands()
                                          m_noteRegistry.try_get<NoteComponent>(
                                              m_draggedEntity) ) {
                                     note->m_timestamp = targetTime;
-                                    float leftX = it->second.viewportWidth *
-                                                  m_lastConfig.visual.trackLayout.left;
+                                    float leftX =
+                                        it->second.viewportWidth *
+                                        m_lastConfig.visual.trackLayout.left;
                                     float rightX =
                                         it->second.viewportWidth *
                                         m_lastConfig.visual.trackLayout.right;

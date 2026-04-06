@@ -23,12 +23,19 @@ return {
 	["ui.audio_manager.visual_offset_tooltip"] = "Adjust overall rendering offset relative to audio (ms)",
 	["ui.audio_manager.audio_tracks"] = "Audio Tracks",
 
-	["title.beatmap_manager"] = "Beatmap Manager",
-	["ui.beatmap_manager.initial_hint"] = "No project, no beatmaps",
-	["ui.beatmap_manager.beatmaps"] = "Beatmaps",
-	-- 原文: "Position: {}, {}"
-	-- ["info.position: {}, {}"] = "Position: X={}, Y={}",
+	["ui.settings.visual"] = "Visual Config",
+	["ui.settings.visual.judgeline"] = "Judge Line",
+	["ui.settings.visual.judgeline_pos"] = "Judge Line Position",
+	["ui.settings.visual.judgeline_width"] = "Judge Line Width",
+	["ui.settings.visual.note"] = "Note Rendering",
+	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",
+	["ui.settings.visual.note_scale_y"] = "Note Vertical Scale",
+	["ui.settings.visual.background"] = "Background & Canvas",
+	["ui.settings.visual.bg_darken"] = "Background Darken Ratio",
+	["ui.settings.visual.timeline_zoom"] = "Timeline Zoom",
+	["ui.settings.visual.offset"] = "Visual Offset",
+	["ui.settings.visual.visual_offset"] = "Global Render Offset (s)",
 
-	-- tips,长文本
+	["ui.settings.project"] = "Project Config",
 	["tips.welcome"] = "Welcome to MusicMapMaker!",
 }

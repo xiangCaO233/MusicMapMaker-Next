@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/layout/box/CLayBox.h"
 
 namespace MMM::UI
@@ -62,10 +63,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             "Beatmap_" + beatmap.m_name,
             Sizing::Grow(),
             Sizing::Fixed(28),
-            [&beatmap](Clay_BoundingBox r, bool isHovered) {
+            [&beatmap, &engine, project](Clay_BoundingBox r, bool isHovered) {
                 if ( ImGui::Selectable(beatmap.m_name.c_str()) ) {
                     XINFO("Request to load beatmap: {}", beatmap.m_name);
-                    // TODO: 发送加载谱面事件
+                    auto fullPath = project->m_projectRoot / beatmap.m_filePath;
+                    auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                        MMM::BeatMap::loadFromFile(fullPath));
+                    engine.pushCommand(Logic::CmdLoadBeatmap{ loadedBeatmap });
                 }
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("File: %s\nTrack: %s",

@@ -43,6 +43,7 @@ return {
 	["ui.settings.visual.note_scale_y"] = "物件纵向缩放",
 	["ui.settings.visual.background"] = "背景与画布",
 	["ui.settings.visual.bg_darken"] = "背景暗化程度",
+	["ui.settings.visual.timeline_zoom"] = "时间线缩放",
 	["ui.settings.visual.offset"] = "视觉偏移",
 	["ui.settings.visual.visual_offset"] = "全局渲染偏移 (秒)",
 

@@ -15,12 +15,17 @@ void BeatmapSession::loadBeatmap(std::shared_ptr<MMM::BeatMap> beatmap)
 {
     m_noteRegistry.clear();
     m_timelineRegistry.clear();
+    Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
     m_currentTime    = 0.0;
     m_currentBeatmap = beatmap;
 
-    if ( !beatmap ) return;
+    if ( !beatmap ) {
+        m_hitEvents.clear();
+        m_nextHitIndex = 0;
+        return;
+    }
 
     // 计算背景图片的绝对路径并获取尺寸
     m_bgSize    = glm::vec2(0.0f);

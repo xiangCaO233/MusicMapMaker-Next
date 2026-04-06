@@ -306,6 +306,13 @@ void SettingsView::drawVisualSettings()
                            0.0f,
                            1.0f);
 
+    changed |=
+        ImGui::SliderFloat(TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+                           &visual.timelineZoom,
+                           0.1f,
+                           5.0f,
+                           "%.2fx");
+
     ImGui::SeparatorText(TR_CACHE("ui.settings.visual.offset").data());
     if ( ImGui::DragFloat(TR_CACHE("ui.settings.visual.visual_offset").data(),
                           &visual.visualOffset,
