@@ -3,6 +3,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/PreviewCanvas.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "game/GlobDefs.h"
@@ -16,7 +17,9 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/AudioManagerView.h"
+#include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
+#include <nfd.h>
 
 namespace MMM
 {
@@ -52,6 +55,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     sidebar_manager->registerSubView(
         TR("title.audio_manager"),
         std::make_unique<UI::AudioManagerView>(TR("title.audio_manager")));
+    sidebar_manager->registerSubView(
+        TR("title.beatmap_manager"),
+        std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
 
     // 初始化时默认激活第一个 Tab（文件管理器）
     sidebar_manager->toggleSubView(TR("title.file_manager"));
@@ -101,6 +107,9 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // 初始化音频引擎
         Audio::AudioManager::instance().init();
 
+        // 初始化原生对话框引擎
+        NFD_Init();
+
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
@@ -114,9 +123,14 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)
         // 测试载入谱面
-        auto map = std::make_shared<BeatMap>(
-            BeatMap::loadFromFile("/home/xiang/Documents/MusicMapRepo/rm/"
-                                  "xiuluo/Redemptione/Redemptione_4k_hd.imd"));
+        // auto map = std::make_shared<BeatMap>(
+        //     BeatMap::loadFromFile("/home/xiang/Documents/MusicMapRepo/rm/"
+        //                           "xiuluo/Redemptione/Redemptione_4k_hd.imd"));
+
+        auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
+            "/home/xiang/Documents/MusicMapRepo/osu/Designant - "
+            "Designant/Designant - Designant. (Benson_) [Designant].osu"));
+
         // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
         //     "/home/xiang/Documents/MusicMapRepo/osu/493316 Camellia - I Can "
         //     "Fly In "
@@ -140,8 +154,14 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // 停止逻辑线程
         Logic::EditorEngine::instance().stop();
 
+        // 保存配置
+        Config::AppConfig::instance().save();
+
         // 关闭音频引擎
         Audio::AudioManager::instance().shutdown();
+
+        // 关闭原生对话框引擎
+        NFD_Quit();
 
         // 2. 主动清理 UI 管理器里存的所有视图
         // 这样 VKOffScreenRenderer 的析构就会在这里发生，

@@ -1,5 +1,5 @@
 #pragma once
-#include "common/EditorConfig.h"
+#include "config/EditorConfig.h"
 #include <cmath>
 
 namespace MMM::Logic
@@ -30,7 +30,7 @@ public:
      * @param audioTime 当前音频硬件播放时间 (秒)
      * @param config 同步配置
      */
-    void sync(double audioTime, const Common::SyncConfig& config)
+    void sync(double audioTime, const Config::SyncConfig& config)
     {
         double error = audioTime - m_visualTime;
 
@@ -41,12 +41,12 @@ public:
         }
 
         switch ( config.mode ) {
-        case Common::SyncMode::None: m_visualTime = audioTime; break;
-        case Common::SyncMode::Integral:
+        case Config::SyncMode::None: m_visualTime = audioTime; break;
+        case Config::SyncMode::Integral:
             // 积分制：误差乘以系数进行微调。系数越小，追赶越平滑，但响应越慢。
             m_visualTime += error * static_cast<double>(config.integralFactor);
             break;
-        case Common::SyncMode::WaterTank:
+        case Config::SyncMode::WaterTank:
             // 水箱制：维持一个固定的延迟缓冲区，牺牲绝对延迟换取极高稳定性。
             m_visualTime =
                 audioTime - static_cast<double>(config.waterTankBuffer);

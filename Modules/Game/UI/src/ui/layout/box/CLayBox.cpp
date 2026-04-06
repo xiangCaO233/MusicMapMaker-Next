@@ -21,6 +21,7 @@ void CLayBox::render(LayoutContext& lctx)
 void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,
                                Clay_SizingAxis h)
 {
+    // 默认使用非静态分配，除非确定是字面量。这里先用 ToCS 确保安全。
     Clay__OpenElementWithId(Clay_GetElementId(ToCS(currentId)));
 
     Clay_ElementDeclaration decl = {};
@@ -33,7 +34,8 @@ void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,
 
     for ( auto& item : m_items ) {
         if ( item.type == ItemType::NestedLayout && item.nestedLayout ) {
-            // 【修复】递归时传入该子布局在 addLayout 时定义的尺寸
+            // 递归子布局。注意：item.id 存储在 std::string 中，其 c_str()
+            // 此时是稳定的。
             item.nestedLayout->internalGenerate(
                 item.id.c_str(), item.w, item.h);
         } else {
@@ -57,7 +59,7 @@ void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,
 void CLayBox::internalExecute(ImVec2 origin)
 {
     for ( auto& item : m_items ) {
-        // 计算当前项的 ID
+        // 计算当前项的 ID。ToCS(std::string) 是安全的。
         Clay_ElementId itemId = Clay_GetElementId(ToCS(item.id));
 
         if ( item.type == ItemType::Element && item.drawCallback ) {

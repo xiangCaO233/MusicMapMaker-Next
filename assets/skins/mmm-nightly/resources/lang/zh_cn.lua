@@ -22,13 +22,20 @@ return {
 	["canvas.editor"] = "编辑器",
 	["canvas.preview"] = "预览",
 
-	["title.file_manager"] = "资源管理器",
+	["title.file_manager"] = "文件浏览",
 	["ui.file_manager.initial_hint"] = "暂未打开项目",
 	["ui.file_manager.open_directory"] = "打开文件夹",
-	["title.audio_manager"] = "音频管理器",
-	["ui.audio_manager.initial_hint"] = "暂未打开项目,无音频",
+	["ui.file_manager.path_hint"] = "#路径提示",
+
+	["title.audio_manager"] = "音频管理",
+	["ui.audio_manager.initial_hint"] = "暂未打开项目, 无音频资源",
 	["ui.audio_manager.visual_offset"] = "渲染视觉偏移",
 	["ui.audio_manager.visual_offset_tooltip"] = "调整整体渲染相对于音频的偏移量(ms)，正值代表物件提前显示",
+	["ui.audio_manager.audio_tracks"] = "音轨列表",
+
+	["title.beatmap_manager"] = "谱面管理",
+	["ui.beatmap_manager.initial_hint"] = "暂未打开项目, 无谱面资源",
+	["ui.beatmap_manager.beatmaps"] = "谱面列表",
 
 	-- 带格式化参数的文本 (TR_FMT)
 	-- 大括号 {} 的位置和数量须和代码里的逻辑一致

@@ -54,3 +54,11 @@
 	path = 3rdpty/sources/concurrentqueue
 	url = https://github.com/cameron314/concurrentqueue.git
 	branch = master
+[submodule "3rdpty/sources/nativefiledialog-extended"]
+	path = 3rdpty/sources/nativefiledialog-extended
+	url = https://github.com/btzy/nativefiledialog-extended.git
+	branch = master
+[submodule "3rdpty/sources/ImGuiFileDialog"]
+	path = 3rdpty/sources/ImGuiFileDialog
+	url = https://github.com/aiekick/ImGuiFileDialog.git
+	branch = master

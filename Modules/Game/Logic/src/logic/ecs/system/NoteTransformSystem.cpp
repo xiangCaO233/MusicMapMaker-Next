@@ -9,7 +9,7 @@ namespace MMM::Logic::System
 void NoteTransformSystem::update(entt::registry& registry,
                                  entt::registry& timelineRegistry,
                                  double          currentTime,
-                                 const Common::EditorConfig& /* config */
+                                 const Config::EditorConfig& /* config */
 )
 {
     auto& cache = timelineRegistry.ctx().get<ScrollCache>();

@@ -31,7 +31,7 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 
 void NoteRenderSystem::renderPolyline(
     entt::registry& registry, Batcher& batcher,
-    const ::MMM::Logic::NoteComponent& note, const Common::EditorConfig& config,
+    const ::MMM::Logic::NoteComponent& note, const Config::EditorConfig& config,
     RenderSnapshot* snapshot, double currentTime, float judgmentLineY,
     float leftX, float rightX, float topY, float bottomY, float singleTrackW,
     float renderScaleY, glm::vec4 colorHold, glm::vec4 colorNode,
@@ -42,7 +42,7 @@ void NoteRenderSystem::renderPolyline(
     const ScrollCache* cache       = *cachePtr;
     double             currentAbsY = cache->getAbsY(currentTime);
 
-    float noteW = singleTrackW * config.noteScaleX;
+    float noteW = singleTrackW * config.visual.noteScaleX;
     float noteH = noteW / getTexAspect(snapshot, TextureID::Note);
 
     // 第一轮: 绘制所有 Body (BodyH, BodyV, Transition)
@@ -138,7 +138,7 @@ void NoteRenderSystem::renderPolyline(
             nodeSize.x,
             nodeSize.y,
             { getTexAspect(snapshot, TextureID::Node), 1.0f },
-            config.noteFillMode,
+            config.visual.noteFillMode,
             colorNode * hoverTint);
     }
 
@@ -156,7 +156,7 @@ void NoteRenderSystem::renderPolyline(
                            headSize.x,
                            headSize.y,
                            { getTexAspect(snapshot, TextureID::Note), 1.0f },
-                           config.noteFillMode,
+                           config.visual.noteFillMode,
                            colorHold * hoverTint);
 
     // 第四轮: 绘制结尾特殊样式
@@ -186,7 +186,7 @@ void NoteRenderSystem::renderPolyline(
                                arrowSize.x,
                                arrowSize.y,
                                { getTexAspect(snapshot, arrowId), 1.0f },
-                               config.noteFillMode,
+                               config.visual.noteFillMode,
                                colorArrow * hoverTint);
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
         glm::vec2 endSize =
@@ -200,7 +200,7 @@ void NoteRenderSystem::renderPolyline(
             endSize.x,
             endSize.y,
             { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
-            config.noteFillMode,
+            config.visual.noteFillMode,
             colorHold * hoverTint);
     }
 }

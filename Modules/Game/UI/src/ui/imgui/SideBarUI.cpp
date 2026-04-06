@@ -169,6 +169,13 @@ void SideBarUI::update(UIManager* sourceManager)
                         DrawSidebarButton(
                             "Audio", SideBarTab::AudioExplorer, rect);
                     })
+        .addElement("BeatMapExplorerButton",
+                    Sizing::Fixed(sidebarWidth),
+                    Sizing::Fixed(sidebarWidth),
+                    [=](Clay_BoundingBox rect, bool isHovered) {
+                        DrawSidebarButton(
+                            "BeatMap", SideBarTab::BeatMapExplorer, rect);
+                    })
         .addSpring();
     vbox.render(ctx);
 
@@ -202,6 +209,15 @@ void SideBarUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
     m_tabIcons[SideBarTab::AudioExplorer] =
         loadTextureResource(skin.getAssetPath("side_bar.audio_explorer_icon"),
+                            iconSize,
+                            physicalDevice,
+                            logicalDevice,
+                            cmdPool,
+                            queue,
+                            { { .83f, .83f, .83f, .83f } });
+
+    m_tabIcons[SideBarTab::BeatMapExplorer] =
+        loadTextureResource(skin.getAssetPath("side_bar.beatmap_explorer_icon"),
                             iconSize,
                             physicalDevice,
                             logicalDevice,

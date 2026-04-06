@@ -261,6 +261,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
         ImGui::End();
         ImGui::PopStyleVar(3);
+
+        ImGui::ShowDemoWindow();
     }
 }
 /// @brief 是否需要重载

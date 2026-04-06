@@ -1,0 +1,58 @@
+#pragma once
+
+#include "EditorConfig.h"
+#include <filesystem>
+#include <mutex>
+
+namespace MMM::Config
+{
+
+/// @brief 全局应用配置管理器
+class AppConfig
+{
+public:
+    static AppConfig& instance();
+
+    /// @brief 获取编辑器配置
+    EditorConfig&       getEditorConfig() { return m_editorConfig; }
+    const EditorConfig& getEditorConfig() const { return m_editorConfig; }
+
+    /// @brief 获取视觉配置
+    VisualConfig&       getVisualConfig() { return m_editorConfig.visual; }
+    const VisualConfig& getVisualConfig() const
+    {
+        return m_editorConfig.visual;
+    }
+
+    /// @brief 获取编辑器设置
+    EditorSettings& getEditorSettings() { return m_editorConfig.settings; }
+    const EditorSettings& getEditorSettings() const
+    {
+        return m_editorConfig.settings;
+    }
+
+    /// @brief 从文件加载配置
+    /// @param path 配置文件路径，若为空则使用默认路径
+    bool load(const std::filesystem::path& path = "");
+
+    /// @brief 保存配置到文件
+    /// @param path 配置文件路径，若为空则使用默认路径
+    bool save(const std::filesystem::path& path = "") const;
+
+    /// @brief 重置为默认配置
+    void reset();
+
+private:
+    AppConfig();
+    ~AppConfig() = default;
+
+    AppConfig(const AppConfig&)            = delete;
+    AppConfig& operator=(const AppConfig&) = delete;
+
+    std::filesystem::path getDefaultConfigPath() const;
+
+    EditorConfig       m_editorConfig;
+    mutable std::mutex m_mutex;
+};
+
+}  // namespace MMM::Config

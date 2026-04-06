@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/EditorConfig.h"
+#include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <entt/entt.hpp>
@@ -38,13 +38,13 @@ public:
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount,
-        const Common::EditorConfig& config, float mainViewportHeight = 1000.0f);
+        const Config::EditorConfig& config, float mainViewportHeight = 1000.0f);
 
 private:
     static void renderTrackLayout(Batcher& batcher, float viewportWidth,
                                   float viewportHeight, float judgmentLineY,
                                   int32_t                     trackCount,
-                                  const Common::EditorConfig& config,
+                                  const Config::EditorConfig& config,
                                   float& leftX, float& rightX, float& topY,
                                   float& bottomY, float& trackAreaW,
                                   float& singleTrackW);
@@ -52,30 +52,30 @@ private:
     static void renderNotes(entt::registry& registry, RenderSnapshot* snapshot,
                             const std::string& cameraId, double currentTime,
                             float judgmentLineY, int32_t trackCount,
-                            const Common::EditorConfig& config,
+                            const Config::EditorConfig& config,
                             Batcher& batcher, float leftX, float rightX,
                             float topY, float bottomY, float singleTrackW,
                             float renderScaleY);
 
     static void renderTap(Batcher& batcher, const NoteComponent& note,
-                          const Common::EditorConfig& config, float x, float y,
+                          const Config::EditorConfig& config, float x, float y,
                           float w, float h, float aspect, glm::vec4 color);
 
     static void renderHold(Batcher& batcher, const NoteComponent& note,
-                           const Common::EditorConfig& config,
+                           const Config::EditorConfig& config,
                            RenderSnapshot* snapshot, float x, float y, float w,
                            float h, float visualH, float singleTrackW,
                            glm::vec4 color, glm::vec4 hoverTint);
 
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
-                            const Common::EditorConfig& config,
+                            const Config::EditorConfig& config,
                             RenderSnapshot* snapshot, float x, float y, float w,
                             float h, float singleTrackW, glm::vec4 color,
                             glm::vec4 arrowColor, glm::vec4 hoverTint);
 
     static void renderPolyline(entt::registry& registry, Batcher& batcher,
                                const NoteComponent&        note,
-                               const Common::EditorConfig& config,
+                               const Config::EditorConfig& config,
                                RenderSnapshot* snapshot, double currentTime,
                                float judgmentLineY, float leftX, float rightX,
                                float topY, float bottomY, float singleTrackW,

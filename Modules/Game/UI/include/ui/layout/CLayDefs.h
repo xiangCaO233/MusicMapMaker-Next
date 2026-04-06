@@ -4,23 +4,23 @@ extern "C" {
 }
 #include <string.h>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
 
-// 增加对 char* 的重载，确保指针直接透传，不产生临时变量
-inline Clay_String ToCS(const char* s)
+// 统一使用 string_view 接口，避免重载歧义
+inline Clay_String ToCS(std::string_view s, bool isStatic = false)
 {
-    return { .isStaticallyAllocated = true,
-             .length                = (int32_t)strlen(s),
-             .chars                 = s };
-}
-// 保留对 string 的支持
-inline Clay_String ToCS(const std::string& s)
-{
-    return { .isStaticallyAllocated = false,
+    return { .isStaticallyAllocated = isStatic,
              .length                = (int32_t)s.length(),
-             .chars                 = s.c_str() };
+             .chars                 = s.data() };
+}
+
+// 专门用于字符串字面量的快捷函数
+inline Clay_String ToStaticCS(std::string_view s)
+{
+    return ToCS(s, true);
 }
 
 // 快速创建对齐配置

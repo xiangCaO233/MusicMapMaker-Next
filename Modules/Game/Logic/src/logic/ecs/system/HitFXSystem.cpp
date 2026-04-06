@@ -19,7 +19,7 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
 }
 
 void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
-                         const Common::EditorConfig& config)
+                         const Config::EditorConfig& config)
 {
     auto& audioManager = Audio::AudioManager::instance();
     auto& skinManager  = Config::SkinManager::instance();
@@ -30,18 +30,18 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
         std::string     effectKey     = "note";
 
         if ( ev.isSubNote ) {
-            const auto& strategy = config.sfxConfig.polylineStrategy;
+            const auto& strategy = config.settings.sfxConfig.polylineStrategy;
             switch ( strategy ) {
-            case Common::EditorConfig::PolylineSfxStrategy::Exact: break;
-            case Common::EditorConfig::PolylineSfxStrategy::InternalAsNormal:
+            case Config::PolylineSfxStrategy::Exact: break;
+            case Config::PolylineSfxStrategy::InternalAsNormal:
                 if ( ev.role == HitEvent::Role::Internal )
                     effectiveType = ::MMM::NoteType::NOTE;
                 break;
-            case Common::EditorConfig::PolylineSfxStrategy::OnlyTailExact:
+            case Config::PolylineSfxStrategy::OnlyTailExact:
                 if ( ev.role != HitEvent::Role::Tail )
                     effectiveType = ::MMM::NoteType::NOTE;
                 break;
-            case Common::EditorConfig::PolylineSfxStrategy::AllAsNormal:
+            case Config::PolylineSfxStrategy::AllAsNormal:
                 effectiveType = ::MMM::NoteType::NOTE;
                 break;
             }
@@ -54,10 +54,10 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
         // 2. 播放音效
         float volumeFactor = 1.0f;
         if ( effectiveType == ::MMM::NoteType::FLICK &&
-             config.sfxConfig.enableFlickWidthVolumeScaling ) {
+             config.settings.sfxConfig.enableFlickWidthVolumeScaling ) {
             volumeFactor =
                 1.0f + (ev.trackSpan - 1) *
-                           config.sfxConfig.flickWidthVolumeMultiplier;
+                           config.settings.sfxConfig.flickWidthVolumeMultiplier;
         }
 
         if ( effectiveType == ::MMM::NoteType::FLICK ) {
@@ -76,10 +76,10 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
         newEffect.isLooping   = (ev.type == ::MMM::NoteType::HOLD);
         newEffect.effectKey   = effectKey;
 
-        XINFO("覆盖轨道{}上的{}特效 (Offset: {})",
-              newEffect.trackIndex,
-              effectKey,
-              newEffect.trackOffset);
+        // XINFO("覆盖轨道{}上的{}特效 (Offset: {})",
+        //       newEffect.trackIndex,
+        //       effectKey,
+        //       newEffect.trackOffset);
 
         // "之前没播放完的动画帧立即清空并立即播放下一个动画序列帧"
         // 针对同一个轨道，直接覆盖即代表清空
@@ -114,7 +114,7 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
 }
 
 void HitFXSystem::generateSnapshot(RenderSnapshot* snapshot, double visualTime,
-                                   const Common::EditorConfig& config,
+                                   const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,
                                    float leftX, float singleTrackW)
 {
@@ -154,7 +154,7 @@ void HitFXSystem::generateSnapshot(RenderSnapshot* snapshot, double visualTime,
         float texAspect = itTex->second.z / itTex->second.w;
 
         // 计算基准尺寸：特效宽度 = 音符宽度 * 2.5 (稍微大一点)
-        float noteW   = singleTrackW * config.noteScaleX;
+        float noteW   = singleTrackW * config.visual.noteScaleX;
         float effectW = noteW;
         float effectH = effectW / texAspect;
 
@@ -176,7 +176,7 @@ void HitFXSystem::generateSnapshot(RenderSnapshot* snapshot, double visualTime,
                                effectW,
                                effectH,
                                { texAspect, 1.0f },
-                               config.noteFillMode,
+                               config.visual.noteFillMode,
                                glm::vec4(1.0f));
     }
 

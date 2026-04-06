@@ -68,6 +68,7 @@ local Skin = {
 		side_bar = {
 			file_explorer_icon = "image/sidebar/folder.svg",
 			audio_explorer_icon = "image/sidebar/music.svg",
+			beatmap_explorer_icon = "image/sidebar/music.svg", -- TODO: use a better icon
 		},
 		panel = {
 			track = {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/ISubView.h"
+#include <filesystem>
 
 namespace MMM::UI
 {
@@ -8,7 +9,7 @@ namespace MMM::UI
 class FileManagerView : public ISubView
 {
 public:
-    FileManagerView(const std::string& subViewName) : ISubView(subViewName) {}
+    FileManagerView(const std::string& subViewName);
     FileManagerView(FileManagerView&&)                 = default;
     FileManagerView(const FileManagerView&)            = default;
     FileManagerView& operator=(FileManagerView&&)      = delete;
@@ -20,6 +21,10 @@ public:
                   UIManager*     sourceManager) override;
 
 private:
+    void drawDirectoryRecursive(const std::filesystem::path& path);
+    void openFolderPicker();
+
+    std::filesystem::path m_currentRoot;
 };
 
 }  // namespace MMM::UI

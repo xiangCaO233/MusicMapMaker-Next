@@ -30,18 +30,18 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 
 void NoteRenderSystem::renderTap(Batcher&                           batcher,
                                  const ::MMM::Logic::NoteComponent& note,
-                                 const Common::EditorConfig& config, float x,
+                                 const Config::EditorConfig& config, float x,
                                  float y, float w, float h, float aspect,
                                  glm::vec4 color)
 {
     batcher.setTexture(TextureID::Note);
     batcher.pushFilledQuad(
-        x, y + h * 0.5f, w, h, { aspect, 1.0f }, config.noteFillMode, color);
+        x, y + h * 0.5f, w, h, { aspect, 1.0f }, config.visual.noteFillMode, color);
 }
 
 void NoteRenderSystem::renderHold(Batcher&                           batcher,
                                   const ::MMM::Logic::NoteComponent& note,
-                                  const Common::EditorConfig&        config,
+                                  const Config::EditorConfig&        config,
                                   RenderSnapshot* snapshot, float x, float y,
                                   float w, float h, float visualH,
                                   float singleTrackW, glm::vec4 color,
@@ -67,7 +67,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                            headSize.x,
                            headSize.y,
                            { getTexAspect(snapshot, TextureID::Note), 1.0f },
-                           config.noteFillMode,
+                           config.visual.noteFillMode,
                            color * hoverTint);
 
     // 3. End
@@ -77,13 +77,13 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                            endSize.x,
                            endSize.y,
                            { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
-                           config.noteFillMode,
+                           config.visual.noteFillMode,
                            color * hoverTint);
 }
 
 void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    const ::MMM::Logic::NoteComponent& note,
-                                   const Common::EditorConfig&        config,
+                                   const Config::EditorConfig&        config,
                                    RenderSnapshot* snapshot, float x, float y,
                                    float w, float h, float singleTrackW,
                                    glm::vec4 color, glm::vec4 arrowColor,
@@ -117,7 +117,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                            headSize.x,
                            headSize.y,
                            { getTexAspect(snapshot, TextureID::Note), 1.0f },
-                           config.noteFillMode,
+                           config.visual.noteFillMode,
                            color * hoverTint);
 
     // 3. Arrow
@@ -134,7 +134,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                arrowSize.x,
                                arrowSize.y,
                                { getTexAspect(snapshot, arrowId), 1.0f },
-                               config.noteFillMode,
+                               config.visual.noteFillMode,
                                arrowColor * hoverTint);
     }
 }

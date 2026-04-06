@@ -1,3 +1,4 @@
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "game/GameLoop.h"
@@ -27,6 +28,9 @@ int main(int argc, char* argv[])
     const auto assetPath = rootDir / "assets";
 
     using namespace Config;
+    // 载入应用全局配置 (序列化/反序列化测试)
+    AppConfig::instance().load();
+
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
         (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());

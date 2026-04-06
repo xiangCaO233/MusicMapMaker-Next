@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/EditorConfig.h"
+#include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <string>
@@ -40,7 +40,7 @@ public:
      * @param config 编辑器配置
      */
     void update(double visualTime, const std::vector<HitEvent>& events,
-                const Common::EditorConfig& config);
+                const Config::EditorConfig& config);
 
     /**
      * @brief 生成打击特效的渲染指令
@@ -53,7 +53,7 @@ public:
      * @param singleTrackW 单个轨道宽度
      */
     void generateSnapshot(RenderSnapshot* snapshot, double visualTime,
-                          const Common::EditorConfig& config,
+                          const Config::EditorConfig& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
                           float singleTrackW);
 

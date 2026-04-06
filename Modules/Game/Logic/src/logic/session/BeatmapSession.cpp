@@ -38,7 +38,7 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
     m_commandQueue.enqueue(std::move(cmd));
 }
 
-void BeatmapSession::update(double dt, const Common::EditorConfig& config)
+void BeatmapSession::update(double dt, const Config::EditorConfig& config)
 {
     m_lastConfig = config;
 
@@ -58,16 +58,16 @@ void BeatmapSession::update(double dt, const Common::EditorConfig& config)
 
         // 2. 周期性：通过同步计时器修正可能的累积偏移
         m_syncTimer += dt;
-        if ( m_syncTimer >= config.syncConfig.syncInterval ) {
+        if ( m_syncTimer >= config.settings.syncConfig.syncInterval ) {
             double audioTime = Audio::AudioManager::instance().getCurrentTime();
             // 修正视觉时间偏移 (根据配置的同步模式: Integral 或 WaterTank)
-            m_syncClock.sync(audioTime, config.syncConfig);
+            m_syncClock.sync(audioTime, config.settings.syncConfig);
             // 将逻辑时间对齐至硬件时间，防止长期累积误差
             m_currentTime = audioTime;
             m_syncTimer   = 0.0;
         }
 
-        m_visualTime = m_syncClock.getVisualTime() + config.visualOffset;
+        m_visualTime = m_syncClock.getVisualTime() + config.visual.visualOffset;
 
         // --- 打击音效与特效触发逻辑 ---
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
@@ -95,7 +95,7 @@ void BeatmapSession::update(double dt, const Common::EditorConfig& config)
         }
         m_hitFXSystem.update(m_visualTime, triggeredEvents, config);
     } else {
-        m_visualTime = m_currentTime + config.visualOffset;
+        m_visualTime = m_currentTime + config.visual.visualOffset;
         m_syncTimer  = 0.0;
     }
 
@@ -103,7 +103,7 @@ void BeatmapSession::update(double dt, const Common::EditorConfig& config)
     updateECSAndRender(config);
 }
 
-void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
+void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 {
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
     // 注意：物理位置更新应基于逻辑时间 m_currentTime
@@ -135,7 +135,7 @@ void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
         }
 
         // 判定线高度比例计算
-        float judgmentLineY = camera.viewportHeight * config.judgeline_pos;
+        float judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
 
         // 获取主视口高度用于预览区比例对齐
         float mainHeight = 1000.0f;
@@ -159,15 +159,15 @@ void BeatmapSession::updateECSAndRender(const Common::EditorConfig& config)
                                                    mainHeight);
 
         // 4. 生成打击特效
-        float leftX        = camera.viewportWidth * config.trackLayout.left;
-        float rightX       = camera.viewportWidth * config.trackLayout.right;
+        float leftX        = camera.viewportWidth * config.visual.trackLayout.left;
+        float rightX       = camera.viewportWidth * config.visual.trackLayout.right;
         float trackAreaW   = rightX - leftX;
         float singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
 
         // 针对预览区，布局参数略有不同
         if ( cameraId == "Preview" ) {
-            leftX  = config.previewConfig.margin.left;
-            rightX = camera.viewportWidth - config.previewConfig.margin.right;
+            leftX  = config.visual.previewConfig.margin.left;
+            rightX = camera.viewportWidth - config.visual.previewConfig.margin.right;
             trackAreaW   = rightX - leftX;
             singleTrackW = trackAreaW / static_cast<float>(m_trackCount);
         }

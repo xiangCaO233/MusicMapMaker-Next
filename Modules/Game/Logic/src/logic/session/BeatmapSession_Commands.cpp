@@ -95,7 +95,7 @@ void BeatmapSession::processCommands()
                         auto it = m_cameras.find(arg.cameraId);
                         if ( it != m_cameras.end() ) {
                             float judgmentLineY = it->second.viewportHeight *
-                                                  m_lastConfig.judgeline_pos;
+                                                  m_lastConfig.visual.judgeline_pos;
                             auto* cache = m_timelineRegistry.ctx()
                                               .find<System::ScrollCache>();
                             if ( cache ) {
@@ -110,10 +110,10 @@ void BeatmapSession::processCommands()
                                              m_draggedEntity) ) {
                                     note->m_timestamp = targetTime;
                                     float leftX = it->second.viewportWidth *
-                                                  m_lastConfig.trackLayout.left;
+                                                  m_lastConfig.visual.trackLayout.left;
                                     float rightX =
                                         it->second.viewportWidth *
-                                        m_lastConfig.trackLayout.right;
+                                        m_lastConfig.visual.trackLayout.right;
                                     float trackAreaW = rightX - leftX;
                                     float noteW = trackAreaW / m_trackCount;
                                     int   track = static_cast<int>(std::round(

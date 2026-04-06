@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MMM
 {
@@ -44,7 +45,7 @@ public:
     uint32_t getVersion() const;
 
     // 翻译
-    const std::string& translate(uint32_t keyHash, const char* fallbackStr);
+    const char* translate(uint32_t keyHash, const char* fallbackStr);
 
 private:
     // 翻译器版本
@@ -58,15 +59,22 @@ private:
 
     // 当前字典
     Dictionary* m_currentDictionary{ nullptr };
+
+    // 字符串池：确保所有返回给 UI 的指针在整个程序运行期间都是稳定的
+    // unordered_set 中的元素地址在插入新元素时不会改变
+    std::unordered_set<std::string> m_stringPool;
 };
 
 struct TRResult {
+    // 原始字符串指针，直接来自字典 Map 或 fallback 字符串字面量
+    const char* pStr;
+    // 兼容 view 访问
     std::string_view view;
 
+    TRResult(const char* s) : pStr(s), view(s ? s : "") {}
+
     // 自动转换为 const char* (ImGui 最需要这个)
-    // 注意：这要求翻译器返回的字符串在内存中是 null-terminated 的
-    // 绝大多数 std::string 或字符串字面量都满足这一点
-    operator const char*() const { return view.data(); }
+    operator const char*() const { return pStr; }
 
     // 自动转换为 std::string_view
     operator std::string_view() const { return view; }
@@ -75,7 +83,7 @@ struct TRResult {
     operator std::string() const { return std::string(view); }
 
     // 提供基础方法
-    const char* data() const { return view.data(); }
+    const char* data() const { return pStr; }
     bool        empty() const { return view.empty(); }
 };
 
@@ -92,23 +100,10 @@ inline std::string_view format_as(const TRResult& tr)
 // =========================================================
 // 基础宏 (支持自动转换为 const char*)
 // =========================================================
-#define TR(key_str)                                                             \
-    ([&]() -> MMM::Translation::TRResult {                                      \
-        static std::string cachedResult;                                        \
-        static uint32_t    cachedVer = 0;                                       \
-                                                                                \
-        uint32_t keyHash = MMM::Hash::hash_str(key_str);                        \
-                                                                                \
-        auto&    trans  = MMM::Config::SkinManager::instance().getTranslator(); \
-        uint32_t curVer = trans.getVersion();                                   \
-                                                                                \
-        if ( cachedVer != curVer || cachedResult.empty() ) {                    \
-            cachedResult = trans.translate(keyHash, key_str);                   \
-            cachedVer    = curVer;                                              \
-        }                                                                       \
-        /* 返回包装后的结果 */                                                  \
-        return { cachedResult };                                                \
-    })()
+#define TR(key_str)                                                     \
+    MMM::Translation::TRResult(                                         \
+        MMM::Config::SkinManager::instance().getTranslator().translate( \
+            MMM::Hash::hash_str(key_str), key_str))
 
 // TR_FMT 保持不变，fmt 会自动识别 TRResult 的转换或其内部的 string_view
 #define TR_FMT(key, ...) fmt::format(fmt::runtime(TR(key).view), __VA_ARGS__)

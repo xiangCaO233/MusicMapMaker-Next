@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/EditorConfig.h"
+#include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 
 namespace MMM::Logic::System
@@ -16,7 +16,7 @@ class BackgroundRenderSystem
 {
 public:
     static void render(Batcher& batcher, float viewportWidth,
-                       float viewportHeight, const Common::EditorConfig& config,
+                       float viewportHeight, const Config::EditorConfig& config,
                        const RenderSnapshot* snapshot);
 };
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common/EditorConfig.h"
 #include "common/LogicCommands.h"
+#include "config/EditorConfig.h"
 #include "logic/SyncClock.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "mmm/note/Note.h"
@@ -57,7 +57,7 @@ public:
      * @param dt 距离上一帧的时间间隔（秒）
      * @param config 当前编辑器配置
      */
-    void update(double dt, const Common::EditorConfig& config);
+    void update(double dt, const Config::EditorConfig& config);
 
 private:
     /**
@@ -74,7 +74,7 @@ private:
      * @brief 执行逻辑计算和生成渲染快照
      * @param config 当前编辑器配置
      */
-    void updateECSAndRender(const Common::EditorConfig& config);
+    void updateECSAndRender(const Config::EditorConfig& config);
 
     /// @brief ECS 注册表：音符
     entt::registry m_noteRegistry;
@@ -107,7 +107,7 @@ private:
     std::shared_ptr<MMM::BeatMap> m_currentBeatmap;
 
     /// @brief 当前编辑器配置缓存
-    Common::EditorConfig m_lastConfig;
+    Config::EditorConfig m_lastConfig;
 
     /// @brief 所有注册的摄像机(视口)信息
     std::unordered_map<std::string, CameraInfo> m_cameras;

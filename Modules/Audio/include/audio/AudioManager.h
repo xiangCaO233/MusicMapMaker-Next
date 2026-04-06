@@ -17,6 +17,8 @@ class TimeStretcher;
 namespace MMM::Audio
 {
 
+class SoundEffectPool;
+
 /**
  * @brief 播放状态
  */
@@ -91,8 +93,6 @@ private:
     AudioManager() = default;
     ~AudioManager();
 
-    struct SoundEffectPool;
-
     std::unique_ptr<ice::ThreadPool> m_threadPool;
     std::unique_ptr<ice::AudioPool>  m_audioPool;
     std::unique_ptr<ice::SDLPlayer>  m_player;
@@ -101,7 +101,7 @@ private:
     std::shared_ptr<ice::TimeStretcher> m_stretcher;
     std::shared_ptr<ice::MixBus>        m_mixer;
 
-    std::unordered_map<std::string, std::unique_ptr<SoundEffectPool>>
+    std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
         m_sfxPools;
 
     PlaybackStatus m_status{ PlaybackStatus::Stopped };

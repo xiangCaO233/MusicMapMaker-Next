@@ -13,7 +13,7 @@ namespace MMM::Logic::System
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
-    int32_t trackCount, const Common::EditorConfig& config, Batcher& batcher,
+    int32_t trackCount, const Config::EditorConfig& config, Batcher& batcher,
     float leftX, float rightX, float topY, float bottomY, float singleTrackW,
     float renderScaleY)
 {
@@ -31,7 +31,7 @@ void NoteRenderSystem::renderNotes(
     float baseAspect = itBase->second.z / itBase->second.w;
 
     // 2. 计算基准尺寸 (画布空间)
-    float noteW = singleTrackW * config.noteScaleX;
+    float noteW = singleTrackW * config.visual.noteScaleX;
     float noteH = noteW / baseAspect;
 
     // 3. 获取皮肤配色方案

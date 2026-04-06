@@ -11,7 +11,7 @@ void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Common::EditorConfig& config,
+    int32_t trackCount, const Config::EditorConfig& config,
     float mainViewportHeight)
 {
     const auto* cache = timelineRegistry.ctx().find<ScrollCache>();
@@ -27,23 +27,23 @@ void NoteRenderSystem::generateSnapshot(
 
     if ( cameraId == "Preview" ) {
         // 预览区逻辑：不使用主画布的轨道配置，使用预览区留白配置
-        leftX        = config.previewConfig.margin.left;
-        rightX       = viewportWidth - config.previewConfig.margin.right;
-        topY         = config.previewConfig.margin.top;
-        bottomY      = viewportHeight - config.previewConfig.margin.bottom;
+        leftX        = config.visual.previewConfig.margin.left;
+        rightX       = viewportWidth - config.visual.previewConfig.margin.right;
+        topY         = config.visual.previewConfig.margin.top;
+        bottomY      = viewportHeight - config.visual.previewConfig.margin.bottom;
         trackAreaW   = rightX - leftX;
         singleTrackW = trackAreaW / static_cast<float>(trackCount);
 
         // --- 修正预览区缩放比例 (renderScaleY) ---
         // 1. 计算主画布可见的逻辑像素高度 (effective scroll height)
         float mainEffectiveH =
-            (config.trackLayout.bottom - config.trackLayout.top) *
+            (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
             mainViewportHeight;
         // 2. 计算预览区可用的绘图区高度
         float previewDrawH = bottomY - topY;
         // 3. 计算 renderScaleY 使其满足 areaRatio 的定义 (显示 5 倍范围)
         renderScaleY =
-            previewDrawH / (mainEffectiveH * config.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * config.visual.previewConfig.areaRatio);
 
         // 预览区通常不绘制背景图 (保持透明或由 UI 层处理)
         // 绘制主画布范围包围框和判定线
@@ -58,7 +58,7 @@ void NoteRenderSystem::generateSnapshot(
         float boxDrawH = mainEffectiveH * renderScaleY;
         // 包围框相对于判定线的位置
         float boxTop = mainJudgelineInPreviewY -
-                       (config.judgeline_pos - config.trackLayout.top) *
+                       (config.visual.judgeline_pos - config.visual.trackLayout.top) *
                            mainViewportHeight * renderScaleY;
 
         batcher.setTexture(TextureID::None);
@@ -77,9 +77,9 @@ void NoteRenderSystem::generateSnapshot(
                                { boxCol.r, boxCol.g, boxCol.b, 1.0f });
         // 绘制判定线
         batcher.pushQuad(leftX,
-                         mainJudgelineInPreviewY + config.judgelineWidth * 0.5f,
+                         mainJudgelineInPreviewY + config.visual.judgelineWidth * 0.5f,
                          trackAreaW,
-                         config.judgelineWidth,
+                         config.visual.judgelineWidth,
                          { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
     } else {
         // 主画布逻辑

@@ -1,10 +1,12 @@
 #pragma once
 
-#include "common/EditorConfig.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "mmm/project/Project.h"
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,11 +29,7 @@ public:
     EditorEngine();
     ~EditorEngine();
 
-    // 禁用拷贝与移动
-    EditorEngine(EditorEngine&&)                 = delete;
-    EditorEngine(const EditorEngine&)            = delete;
-    EditorEngine& operator=(EditorEngine&&)      = delete;
-    EditorEngine& operator=(const EditorEngine&) = delete;
+    // ... (保持禁用拷贝移动部分)
 
     /**
      * @brief 启动逻辑线程
@@ -44,9 +42,21 @@ public:
     void stop();
 
     /**
+     * @brief 打开项目目录并加载其中的所有资源
+     */
+    void openProject(const std::filesystem::path& projectPath);
+
+    /**
+     * @brief 获取当前项目
+     */
+    Project*       getCurrentProject() { return m_currentProject.get(); }
+    const Project* getCurrentProject() const { return m_currentProject.get(); }
+
+    /**
      * @brief 向当前活动的 Session 推送指令
      */
     void pushCommand(LogicCommand&& cmd);
+
 
     /**
      * @brief 获取指定摄像机/画布的同步缓冲区
@@ -85,7 +95,7 @@ public:
     /**
      * @brief 获取当前编辑器配置
      */
-    const Common::EditorConfig& getEditorConfig() const
+    const Config::EditorConfig& getEditorConfig() const
     {
         return m_editorConfig;
     }
@@ -93,9 +103,11 @@ public:
     /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
      */
-    void setEditorConfig(const Common::EditorConfig& config)
+    void setEditorConfig(const Config::EditorConfig& config)
     {
         m_editorConfig = config;
+        // 同步回全局 AppConfig 实例
+        Config::AppConfig::instance().getEditorConfig() = config;
         pushCommand(CmdUpdateEditorConfig{ config });
     }
 
@@ -114,6 +126,9 @@ private:
     /// @brief 当前激活的谱面会话 (ECS 核心)
     std::unique_ptr<BeatmapSession> m_activeSession;
 
+    /// @brief 当前打开的项目
+    std::unique_ptr<Project> m_currentProject;
+
     /// @brief 所有的同步缓冲区 (Key 为 CameraID)
     std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
         m_syncBuffers;
@@ -122,7 +137,7 @@ private:
     std::mutex m_bufferMutex;
 
     /// @brief 编辑器配置
-    Common::EditorConfig m_editorConfig;
+    Config::EditorConfig m_editorConfig;
 
     /// @brief 各摄像机独立的图集 UV 映射表
     std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>

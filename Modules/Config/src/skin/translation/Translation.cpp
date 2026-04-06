@@ -70,26 +70,30 @@ uint32_t Translator::getVersion() const
 }
 
 // 翻译
-const std::string& Translator::translate(uint32_t    keyHash,
-                                         const char* fallbackStr)
+const char* Translator::translate(uint32_t keyHash, const char* fallbackStr)
 {
-    // 如果字典还没加载，或者找不到，返回原文的包装
-    // 需要一个静态 string 来存储 fallback，以返回引用
-    static std::string fallback;
+    const char* resultStr = fallbackStr;
 
     if ( m_currentDictionary ) {
         // 整数查找，非常快
         auto it = m_currentDictionary->find(keyHash);
         if ( it != m_currentDictionary->end() ) {
-            return it->second;
+            resultStr = it->second.c_str();
         }
     }
 
-    // 找不到时，返回 fallbackStr
-    // 为了安全返回引用，需要赋值给静态变量
-    // (非线程安全，但 UI 线程通常是单线程)
-    fallback = fallbackStr;
-    return fallback;
+    // --- 核心修复：池化 ---
+    // 为了防止字典切换或皮肤重载导致 c_str() 指针失效，
+    // 我们将所有被 UI 访问过的字符串放入一个稳定的池中。
+    // 只要是在池里的字符串，其地址在程序运行期间就是绝对稳定的。
+    auto poolIt = m_stringPool.find(resultStr);
+    if ( poolIt == m_stringPool.end() ) {
+        // 插入池并获取稳定地址
+        auto [insertedIt, success] = m_stringPool.insert(resultStr);
+        return insertedIt->c_str();
+    }
+
+    return poolIt->c_str();
 }
 
 }  // namespace Translation
