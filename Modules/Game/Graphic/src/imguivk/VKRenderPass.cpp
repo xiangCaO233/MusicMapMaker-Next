@@ -22,7 +22,8 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
         // 图像格式用swapchain中的
         .setFormat(swapchain.info().imageFormat)
         // 附件进入时的布局 - 暂不关心
-        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setInitialLayout(loadOpClear ? vk::ImageLayout::eUndefined
+                                      : vk::ImageLayout::eShaderReadOnlyOptimal)
         // 附件输出时的布局 - 呈现附件
         .setFinalLayout(finalLayout)
         // 附件加载时需要的操作 - 加载时清空

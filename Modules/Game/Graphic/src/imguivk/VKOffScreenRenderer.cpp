@@ -85,7 +85,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 
         cmdBuf.pushConstants(
             m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
-            vk::ShaderStageFlagBits::eVertex,
+            vk::ShaderStageFlagBits::eVertex |
+                vk::ShaderStageFlagBits::eFragment,
             0,
             sizeof(glm::mat4),
             &ortho);
@@ -148,26 +149,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                 m_offScreenDescriptorSet);
         }
         cmdBuf.endRenderPass();
-
-        // 切换 m_glowImage 到 ShaderReadOnlyOptimal
-        vk::ImageMemoryBarrier barrier(
-            {},
-            {},
-            vk::ImageLayout::eColorAttachmentOptimal,
-            vk::ImageLayout::eShaderReadOnlyOptimal,
-            VK_QUEUE_FAMILY_IGNORED,
-            VK_QUEUE_FAMILY_IGNORED,
-            m_glowImage,
-            { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
-        barrier.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite;
-        barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-        cmdBuf.pipelineBarrier(
-            vk::PipelineStageFlagBits::eColorAttachmentOutput,
-            vk::PipelineStageFlagBits::eFragmentShader,
-            {},
-            nullptr,
-            nullptr,
-            barrier);
 
         // --- 7.2. Ping-Pong 模糊渲染 ---
         int passes = MMM::Config::SkinManager::instance().getGlowPasses();

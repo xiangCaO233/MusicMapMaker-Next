@@ -57,17 +57,30 @@ void NoteRenderSystem::renderNotes(
         float  visualH  = transform.m_size.y * renderScaleY;
         float  screenY  = judgmentLineY - (minY * renderScaleY);
 
+        float hitboxY = screenY;
+        float hitboxH = visualH;
+
+        if ( note.m_type == ::MMM::NoteType::NOTE ||
+             note.m_type == ::MMM::NoteType::FLICK ) {
+            hitboxY = screenY - noteH * 0.5f;
+            hitboxH = noteH;
+        } else if ( note.m_type == ::MMM::NoteType::HOLD ||
+                    note.m_type == ::MMM::NoteType::POLYLINE ) {
+            hitboxY = screenY - visualH - noteH * 0.5f;
+            hitboxH = visualH + noteH;
+        }
+
         // 视口剔除 (Y 轴剔除)
-        if ( screenY - visualH > bottomY || screenY < topY ) continue;
+        if ( hitboxY > bottomY || hitboxY + hitboxH < topY ) continue;
 
         // 同步拾取包围盒
         snapshot->hitboxes.push_back({ entity,
                                        leftX +
                                            note.m_trackIndex * singleTrackW +
                                            (singleTrackW - noteW) * 0.5f,
-                                       screenY - visualH,
+                                       hitboxY,
                                        noteW,
-                                       visualH });
+                                       hitboxH });
 
         if ( note.m_isSubNote ) {
             if ( note.m_parentPolyline != entt::null ) {
