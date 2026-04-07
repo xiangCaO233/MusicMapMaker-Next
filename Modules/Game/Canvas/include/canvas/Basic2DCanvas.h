@@ -64,6 +64,10 @@ protected:
                           vk::PipelineLayout pipelineLayout,
                           vk::DescriptorSet  defaultDescriptor) override;
 
+    void onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
+                          vk::PipelineLayout pipelineLayout,
+                          vk::DescriptorSet  defaultDescriptor) override;
+
 private:
     /// @brief 画布名称
     std::string m_canvasName;

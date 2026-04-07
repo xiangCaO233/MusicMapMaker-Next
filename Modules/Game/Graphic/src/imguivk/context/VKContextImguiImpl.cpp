@@ -171,8 +171,8 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     loadFontWithSize("menu", getFontSize("menu", 16.0f));
     loadFontWithSize("filemanager", getFontSize("filemanager", 14.0f));
     loadFontWithSize("side_bar", getFontSize("side_bar", 16.0f));
-    loadFontWithSize("setting_internel",
-                     getFontSize("setting_internel", 14.0f));
+    loadFontWithSize("setting_internal",
+                     getFontSize("setting_internal", 14.0f));
 
     XINFO("ImGui Vulkan backend initialized.");
 }

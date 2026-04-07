@@ -12,12 +12,15 @@ using BackgroundFillMode = MMM::Config::BackgroundFillMode;
 
 // 内部批处理器，负责根据 TextureID 自动切分 DrawCall
 struct Batcher {
-    RenderSnapshot*  snapshot;
-    TextureID        currentTex = TextureID::None;
-    UI::BrushDrawCmd currentCmd;
+    RenderSnapshot*                snapshot;
+    std::vector<UI::BrushDrawCmd>* targetCmds;
+    TextureID                      currentTex = TextureID::None;
+    UI::BrushDrawCmd               currentCmd;
 
-    Batcher(RenderSnapshot* s) : snapshot(s)
+    Batcher(RenderSnapshot* s, std::vector<UI::BrushDrawCmd>* cmds = nullptr)
+        : snapshot(s)
     {
+        targetCmds                 = cmds ? cmds : &s->cmds;
         currentCmd.indexOffset     = static_cast<uint32_t>(s->indices.size());
         currentCmd.vertexOffset    = 0;
         currentCmd.indexCount      = 0;
@@ -41,7 +44,7 @@ struct Batcher {
         }
 
         if ( needSplit ) {
-            snapshot->cmds.push_back(currentCmd);
+            targetCmds->push_back(currentCmd);
             currentCmd.indexCount   = 0;
             currentCmd.indexOffset  = snapshot->indices.size();
             currentCmd.vertexOffset = 0;
@@ -236,7 +239,7 @@ struct Batcher {
     void flush()
     {
         if ( currentCmd.indexCount > 0 ) {
-            snapshot->cmds.push_back(currentCmd);
+            targetCmds->push_back(currentCmd);
             currentCmd.indexCount = 0;
         }
     }

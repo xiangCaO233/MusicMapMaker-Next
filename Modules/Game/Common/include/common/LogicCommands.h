@@ -85,6 +85,16 @@ struct CmdEndDrag {
 };
 
 /**
+ * @brief 设置鼠标在视口中的位置指令
+ */
+struct CmdSetMousePosition {
+    std::string cameraId;
+    float       mouseX;
+    float       mouseY;
+    bool        isHovering;
+};
+
+/**
  * @brief 更新轨道数量指令
  */
 struct CmdUpdateTrackCount {
@@ -106,12 +116,30 @@ struct CmdSetPlaybackSpeed {
 };
 
 /**
+ * @brief 编辑工具类型
+ */
+enum class EditTool {
+    Move,     // 移动工具
+    Marquee,  // 矩形选取
+    Draw,     // 绘制工具
+    Cut,      // 裁剪工具
+};
+
+/**
+ * @brief 切换编辑工具指令
+ */
+struct CmdChangeTool {
+    EditTool tool;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
 using LogicCommand =
     std::variant<CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState,
                  CmdLoadBeatmap, CmdSetHoveredEntity, CmdSelectEntity,
                  CmdStartDrag, CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount,
-                 CmdSeek, CmdSetPlaybackSpeed>;
+                 CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool,
+                 CmdSetMousePosition>;
 
 }  // namespace MMM::Logic

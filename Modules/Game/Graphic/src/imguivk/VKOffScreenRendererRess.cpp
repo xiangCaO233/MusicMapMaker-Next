@@ -12,7 +12,8 @@ namespace MMM::Graphic
 void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool pool,
                                                   vk::Queue       queue,
                                                   vk::ImageLayout oldLayout,
-                                                  vk::ImageLayout newLayout)
+                                                  vk::ImageLayout newLayout,
+                                                  vk::Image       image)
 {
     vk::CommandBufferAllocateInfo allocInfo(
         pool, vk::CommandBufferLevel::ePrimary, 1);
@@ -26,7 +27,7 @@ void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool pool,
         newLayout,
         VK_QUEUE_FAMILY_IGNORED,
         VK_QUEUE_FAMILY_IGNORED,
-        m_image,
+        image ? image : m_image,
         { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
 
     // 这里根据布局设置具体的 AccessMask 和 StageMask (参考 VKTexture 里的实现)
@@ -40,6 +41,94 @@ void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool pool,
     queue.submit(submitInfo, nullptr);
     queue.waitIdle();  // 必须等待完成，因为后面要立刻用
     m_device.freeCommandBuffers(pool, cmd);
+}
+
+void VKOffScreenRenderer::createOffscreenBuffer(
+    vk::PhysicalDevice& phyDevice, vk::Device& logicalDevice,
+    VKSwapchain& swapchain, vk::CommandPool commandPool, vk::Queue queue,
+    uint32_t width, uint32_t height, vk::Image& image, vk::DeviceMemory& memory,
+    vk::ImageView& imageView, vk::Framebuffer& framebuffer,
+    vk::Sampler& sampler, VKRenderPass* pass)
+{
+    vk::ImageCreateInfo imageInfo;
+    imageInfo.setImageType(vk::ImageType::e2D)
+        .setFormat(swapchain.info().imageFormat)
+        .setExtent(vk::Extent3D{ width, height, 1 })
+        .setMipLevels(1)
+        .setArrayLayers(1)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setTiling(vk::ImageTiling::eOptimal)
+        .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
+                  vk::ImageUsageFlagBits::eSampled)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setInitialLayout(vk::ImageLayout::eUndefined);
+
+    image = logicalDevice.createImage(imageInfo);
+
+    vk::MemoryRequirements memRequirements =
+        logicalDevice.getImageMemoryRequirements(image);
+
+    auto findMemoryType = [&](uint32_t                typeFilter,
+                              vk::MemoryPropertyFlags properties) -> uint32_t {
+        vk::PhysicalDeviceMemoryProperties memProperties =
+            phyDevice.getMemoryProperties();
+        for ( uint32_t i = 0; i < memProperties.memoryTypeCount; i++ ) {
+            if ( (typeFilter & (1 << i)) &&
+                 (memProperties.memoryTypes[i].propertyFlags & properties) ==
+                     properties ) {
+                return i;
+            }
+        }
+        return 0;
+    };
+    vk::MemoryAllocateInfo allocInfo;
+    allocInfo.setAllocationSize(memRequirements.size)
+        .setMemoryTypeIndex(
+            findMemoryType(memRequirements.memoryTypeBits,
+                           vk::MemoryPropertyFlagBits::eDeviceLocal));
+
+    memory = logicalDevice.allocateMemory(allocInfo);
+    logicalDevice.bindImageMemory(image, memory, 0);
+
+    vk::ImageViewCreateInfo viewInfo;
+    viewInfo.setImage(image)
+        .setViewType(vk::ImageViewType::e2D)
+        .setFormat(swapchain.info().imageFormat)
+        .setSubresourceRange(vk::ImageSubresourceRange(
+            vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+
+    imageView = logicalDevice.createImageView(viewInfo);
+
+    if ( !sampler ) {
+        vk::SamplerCreateInfo samplerInfo;
+        samplerInfo.setMagFilter(vk::Filter::eLinear)
+            .setMinFilter(vk::Filter::eLinear)
+            .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+            .setAnisotropyEnable(VK_FALSE)
+            .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+            .setUnnormalizedCoordinates(VK_FALSE)
+            .setCompareEnable(VK_FALSE)
+            .setCompareOp(vk::CompareOp::eAlways)
+            .setMipmapMode(vk::SamplerMipmapMode::eLinear);
+
+        sampler = logicalDevice.createSampler(samplerInfo);
+    }
+
+    vk::FramebufferCreateInfo framebufferInfo;
+    framebufferInfo.setRenderPass(pass->getRenderPass())
+        .setAttachments(imageView)
+        .setWidth(width)
+        .setHeight(height)
+        .setLayers(1);
+
+    framebuffer = logicalDevice.createFramebuffer(framebufferInfo);
+    transitionImageInternal(commandPool,
+                            queue,
+                            vk::ImageLayout::eUndefined,
+                            vk::ImageLayout::eShaderReadOnlyOptimal,
+                            image);
 }
 
 /// @brief 重建帧缓冲
@@ -68,8 +157,17 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     uint32_t creationH = m_targetHeight;
 
     // 创建离屏渲染流程
-    m_offScreenRenderPass = std::make_unique<VKRenderPass>(
-        logicalDevice, swapchain, vk::ImageLayout::eShaderReadOnlyOptimal);
+    m_offScreenRenderPass =
+        std::make_unique<VKRenderPass>(logicalDevice,
+                                       swapchain,
+                                       vk::ImageLayout::eShaderReadOnlyOptimal,
+                                       true);
+
+    m_compositeRenderPass =
+        std::make_unique<VKRenderPass>(logicalDevice,
+                                       swapchain,
+                                       vk::ImageLayout::eShaderReadOnlyOptimal,
+                                       false);
 
     // 创建所有着色器模块
     createShaderModules();
@@ -81,6 +179,32 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
                                            *m_offScreenRenderPass,
                                            swapchain,
                                            true);
+
+    m_glowBrushRenderPipeline =
+        std::make_unique<VKRenderPipeline>(logicalDevice,
+                                           *m_vkShaders[getShaderName("main")],
+                                           *m_offScreenRenderPass,
+                                           swapchain,
+                                           true);
+
+    if ( m_vkShaders.count(getShaderName("effect")) ) {
+        m_blurRenderPipeline = std::make_unique<VKRenderPipeline>(
+            logicalDevice,
+            *m_vkShaders[getShaderName("effect")],
+            *m_offScreenRenderPass,
+            swapchain,
+            true);
+
+        m_compositeRenderPipeline = std::make_unique<VKRenderPipeline>(
+            logicalDevice,
+            *m_vkShaders[getShaderName("effect")],
+            *m_offScreenRenderPass,
+            swapchain,
+            true,
+            0,
+            0,
+            true);  // additive blend
+    }
 
     // 再重建
     // ==========================================
@@ -178,14 +302,53 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     // 刚创建的 Image 是 Undefined。虽然 RenderPass 会负责转换，
     // 但 ImGui 描述符集在录制时就会检查图像当前状态。
     {
-        // 你可以复用 VKTexture 里的 transitionImageLayout
-        // 逻辑，或者简单写一个： 注意：这里需要传入 physicalDevice,
-        // commandPool, queue
         transitionImageInternal(commandPool,
                                 queue,
                                 vk::ImageLayout::eUndefined,
-                                vk::ImageLayout::eShaderReadOnlyOptimal);
+                                vk::ImageLayout::eShaderReadOnlyOptimal,
+                                m_image);
     }
+
+    // --- 创建离屏效果缓冲 ---
+    createOffscreenBuffer(phyDevice,
+                          logicalDevice,
+                          swapchain,
+                          commandPool,
+                          queue,
+                          creationW,
+                          creationH,
+                          m_glowImage,
+                          m_glowImageMemory,
+                          m_glowImageView,
+                          m_glowFramebuffer,
+                          m_glowSampler,
+                          m_offScreenRenderPass.get());
+    createOffscreenBuffer(phyDevice,
+                          logicalDevice,
+                          swapchain,
+                          commandPool,
+                          queue,
+                          creationW,
+                          creationH,
+                          m_pingImage,
+                          m_pingImageMemory,
+                          m_pingImageView,
+                          m_pingFramebuffer,
+                          m_glowSampler,
+                          m_offScreenRenderPass.get());
+    createOffscreenBuffer(phyDevice,
+                          logicalDevice,
+                          swapchain,
+                          commandPool,
+                          queue,
+                          creationW,
+                          creationH,
+                          m_pongImage,
+                          m_pongImageMemory,
+                          m_pongImageView,
+                          m_pongFramebuffer,
+                          m_glowSampler,
+                          m_offScreenRenderPass.get());
 
     // ==========================================
     // 5. 注册到 ImGui
@@ -280,10 +443,10 @@ void VKOffScreenRenderer::createDescriptPool()
     vk::DescriptorPoolSize uniformPoolSize(vk::DescriptorType::eUniformBuffer,
                                            1);
     vk::DescriptorPoolSize samplerPoolSize(
-        vk::DescriptorType::eCombinedImageSampler, 1);
+        vk::DescriptorType::eCombinedImageSampler, 4);
     std::array<vk::DescriptorPoolSize, 2> poolSizes{ uniformPoolSize,
                                                      samplerPoolSize };
-    vk::DescriptorPoolCreateInfo          poolInfo({}, 2, 2, poolSizes.data());
+    vk::DescriptorPoolCreateInfo          poolInfo({}, 4, 2, poolSizes.data());
     m_descriptorPool = m_device.createDescriptorPool(poolInfo);
 }
 
@@ -300,6 +463,10 @@ void VKOffScreenRenderer::createDescriptSets()
     vk::DescriptorSetAllocateInfo allocInfo(
         m_descriptorPool, 1, &m_mainBrushRenderPipeline->m_descriptorSetLayout);
     m_offScreenDescriptorSet = m_device.allocateDescriptorSets(allocInfo)[0];
+
+    m_glowDescriptorSet = m_device.allocateDescriptorSets(allocInfo)[0];
+    m_pingDescriptorSet = m_device.allocateDescriptorSets(allocInfo)[0];
+    m_pongDescriptorSet = m_device.allocateDescriptorSets(allocInfo)[0];
 }
 
 /**
@@ -317,11 +484,46 @@ void VKOffScreenRenderer::updateDescriptorSets()
     write.setDstSet(m_offScreenDescriptorSet)
         .setDstBinding(0)
         .setDstArrayElement(0)
-        // 类型为纹理采样器
         .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
         .setImageInfo(imageInfo);
 
-    m_device.updateDescriptorSets(1, &write, 0, nullptr);
+    vk::DescriptorImageInfo glowInfo;
+    glowInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(m_glowImageView)
+        .setSampler(m_glowSampler);
+    vk::WriteDescriptorSet writeGlow;
+    writeGlow.setDstSet(m_glowDescriptorSet)
+        .setDstBinding(0)
+        .setDstArrayElement(0)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setImageInfo(glowInfo);
+
+    vk::DescriptorImageInfo pingInfo;
+    pingInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(m_pingImageView)
+        .setSampler(m_glowSampler);
+    vk::WriteDescriptorSet writePing;
+    writePing.setDstSet(m_pingDescriptorSet)
+        .setDstBinding(0)
+        .setDstArrayElement(0)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setImageInfo(pingInfo);
+
+    vk::DescriptorImageInfo pongInfo;
+    pongInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(m_pongImageView)
+        .setSampler(m_glowSampler);
+    vk::WriteDescriptorSet writePong;
+    writePong.setDstSet(m_pongDescriptorSet)
+        .setDstBinding(0)
+        .setDstArrayElement(0)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setImageInfo(pongInfo);
+
+    std::vector<vk::WriteDescriptorSet> writes = {
+        write, writeGlow, writePing, writePong
+    };
+    m_device.updateDescriptorSets(writes, nullptr);
 
     // 更新描述符集，指向 m_uniformBuffer
     // vk::DescriptorBufferInfo bufferInfo(
@@ -450,9 +652,32 @@ void VKOffScreenRenderer::releaseResources()
         m_device.destroyImage(m_image);
         m_device.freeMemory(m_imageMemory);
 
-        // 还要销毁管线和 RenderPass (虽然它们被 unique_ptr 包裹，但 reCreate
-        // 时 reset 也会触发销毁，确保它们也执行了销毁逻辑)
+        if ( m_glowFramebuffer ) m_device.destroyFramebuffer(m_glowFramebuffer);
+        if ( m_pingFramebuffer ) m_device.destroyFramebuffer(m_pingFramebuffer);
+        if ( m_pongFramebuffer ) m_device.destroyFramebuffer(m_pongFramebuffer);
+        if ( m_glowImageView ) m_device.destroyImageView(m_glowImageView);
+        if ( m_pingImageView ) m_device.destroyImageView(m_pingImageView);
+        if ( m_pongImageView ) m_device.destroyImageView(m_pongImageView);
+        if ( m_glowImage ) m_device.destroyImage(m_glowImage);
+        if ( m_pingImage ) m_device.destroyImage(m_pingImage);
+        if ( m_pongImage ) m_device.destroyImage(m_pongImage);
+        if ( m_glowImageMemory ) m_device.freeMemory(m_glowImageMemory);
+        if ( m_pingImageMemory ) m_device.freeMemory(m_pingImageMemory);
+        if ( m_pongImageMemory ) m_device.freeMemory(m_pongImageMemory);
+        if ( m_glowSampler ) m_device.destroySampler(m_glowSampler);
+
+        m_glowFramebuffer = m_pingFramebuffer = m_pongFramebuffer =
+            VK_NULL_HANDLE;
+        m_glowImageView = m_pingImageView = m_pongImageView = VK_NULL_HANDLE;
+        m_glowImage = m_pingImage = m_pongImage = VK_NULL_HANDLE;
+        m_glowImageMemory = m_pingImageMemory = m_pongImageMemory =
+            VK_NULL_HANDLE;
+        m_glowSampler = VK_NULL_HANDLE;
+
         m_mainBrushRenderPipeline.reset();
+        m_glowBrushRenderPipeline.reset();
+        m_blurRenderPipeline.reset();
+        m_compositeRenderPipeline.reset();
         m_offScreenRenderPass.reset();
 
         m_vertexBuffer.reset();

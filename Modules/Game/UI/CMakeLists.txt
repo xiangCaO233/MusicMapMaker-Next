@@ -9,6 +9,7 @@ add_library(UI STATIC
     src/ui/imgui/manager/AudioManagerView.cpp
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/SettingsView.cpp
+    src/ui/imgui/manager/ToolbarView.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp
 )

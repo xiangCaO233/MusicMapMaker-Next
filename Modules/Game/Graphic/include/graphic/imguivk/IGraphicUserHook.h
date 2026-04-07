@@ -12,9 +12,9 @@ public:
                                     vk::Device&         logicalDevice,
                                     VKSwapchain&        swapchain,
                                     vk::CommandPool&    cmdPool,
-                                    vk::Queue&          queue)      = 0;
-    virtual void onUpdateUI()                              = 0;
-    virtual void onRecordOffscreen(vk::CommandBuffer& cmd) = 0;
+                                    vk::Queue&          queue) = 0;
+    virtual void onUpdateUI()                                  = 0;
+    virtual void onRecordOffscreen(vk::CommandBuffer& cmd)     = 0;
 };
 
 }  // namespace MMM::Graphic

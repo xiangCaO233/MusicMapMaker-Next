@@ -35,8 +35,13 @@ void NoteRenderSystem::renderTap(Batcher&                           batcher,
                                  glm::vec4 color)
 {
     batcher.setTexture(TextureID::Note);
-    batcher.pushFilledQuad(
-        x, y + h * 0.5f, w, h, { aspect, 1.0f }, config.visual.noteFillMode, color);
+    batcher.pushFilledQuad(x,
+                           y + h * 0.5f,
+                           w,
+                           h,
+                           { aspect, 1.0f },
+                           config.visual.noteFillMode,
+                           color);
 }
 
 void NoteRenderSystem::renderHold(Batcher&                           batcher,

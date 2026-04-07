@@ -17,20 +17,29 @@ constexpr const char* ICON_MMM_DESKTOP = "\xef\x84\x88";  ///< \uf108 desktop
 constexpr const char* ICON_MMM_EYE     = "\xef\x81\xae";  ///< \uf06e eye
 constexpr const char* ICON_MMM_FOLDER  = "\xef\x81\xbb";  ///< \uf07b folder
 constexpr const char* ICON_MMM_FOLDER_OPEN =
-    "\xef\x81\xbc";                                      ///< \uf07c folder-open
-constexpr const char* ICON_MMM_PEN    = "\xef\x8c\x84";  ///< \uf304 pen
+    "\xef\x81\xbc";  ///< \uf07c folder-open
+constexpr const char* ICON_MMM_PEN =
+    "\xef\x81\x80";  ///< \uf040 pencil (Draw Tool) - NerdFont Safe
 constexpr const char* ICON_MMM_FILE   = "\xef\x85\x9b";  ///< \uf15b file
 constexpr const char* ICON_MMM_MUSIC  = "\xef\x80\x81";  ///< \uf001 music
 constexpr const char* ICON_MMM_COG    = "\xef\x80\x93";  ///< \uf013 cog
 constexpr const char* ICON_MMM_SEARCH = "\xef\x80\x82";  ///< \uf002 search
 
+// --- Edit Tool Icons ---
+constexpr const char* ICON_MMM_MOUSE_POINTER =
+    "\xef\x89\x85";  ///< \uf245 mouse-pointer (Move Tool)
+constexpr const char* ICON_MMM_MOVE_ARROWS =
+    "\xef\x81\x87";  ///< \uf047 arrows-alt
+constexpr const char* ICON_MMM_SQUARE_SELECT =
+    "\xef\x83\x88";  ///< \uf0c8 square (Marquee Tool)
+constexpr const char* ICON_MMM_SCISSORS =
+    "\xef\x83\x84";  ///< \uf0c4 scissors (Cut Tool)
+
 // --- Window Control Icons ---
 constexpr const char* ICON_MMM_MINIMIZE =
-    "\xef\x8b\x91";  ///< \uf2d1 window-minimize (actually maximize icon, but
-                     ///< used for minimize)
+    "\xef\x8b\x91";  ///< \uf2d1 window-minimize
 constexpr const char* ICON_MMM_MAXIMIZE =
-    "\xef\x8b\x90";  ///< \uf2d0 window-maximize (actually minimize icon, but
-                     ///< used for maximize)
+    "\xef\x8b\x90";  ///< \uf2d0 window-maximize
 constexpr const char* ICON_MMM_CLOSE =
     "\xef\x80\x8d";  ///< \uf00d xmark / close
 

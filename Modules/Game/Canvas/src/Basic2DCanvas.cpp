@@ -86,9 +86,30 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
         // 由于 Basic2DCanvas 是绘制在全屏 Dock 窗口中的 Image，
         // 我们需要计算相对于窗口内容的本地坐标。
-        ImVec2 windowPos     = ImGui::GetWindowPos();
+        ImVec2 windowPos     = ImGui::GetCursorScreenPos();
         ImVec2 localMousePos = { mousePos.x - windowPos.x,
                                  mousePos.y - windowPos.y };
+
+        // --- 交互：发送鼠标位置指令给逻辑线程 (用于工具提示等) ---
+        bool isHovered = ImGui::IsWindowHovered();
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSetMousePosition{
+                m_cameraId, localMousePos.x, localMousePos.y, isHovered }));
+
+        // --- 交互：显示精确时间戳工具提示 ---
+        if ( isHovered && m_currentSnapshot->isHoveringCanvas &&
+             m_currentSnapshot->currentTool != Logic::EditTool::Move &&
+             m_currentSnapshot->currentTool != Logic::EditTool::Marquee ) {
+
+            // 在鼠标右下方绘制一个半透明的小窗口
+            ImGui::SetNextWindowPos(ImVec2(mousePos.x + 15, mousePos.y + 15));
+            ImGui::SetNextWindowBgAlpha(0.6f);
+            ImGui::BeginTooltip();
+            ImGui::Text("Time: %.0f ms",
+                        m_currentSnapshot->hoveredTime * 1000.0);
+            ImGui::Text("Track: %d", m_currentSnapshot->hoveredTrack);
+            ImGui::EndTooltip();
+        }
 
         entt::entity hoveredEntity = entt::null;
 
@@ -203,6 +224,53 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
         }
 
         // 避免冗余绑定
+        if ( actualTexture != lastBoundTexture ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &actualTexture,
+                                      0,
+                                      nullptr);
+            lastBoundTexture = actualTexture;
+        }
+
+        cmdBuf.drawIndexed(
+            cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
+    }
+}
+
+void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
+                                     vk::PipelineLayout pipelineLayout,
+                                     vk::DescriptorSet  defaultDescriptor)
+{
+    if ( !m_currentSnapshot ) return;
+
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        atlasDescriptor = (vk::DescriptorSet)(VkDescriptorSet)
+                              m_textureAtlas->getImTextureID();
+    }
+
+    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
+
+    for ( const auto& cmd : m_currentSnapshot->glowCmds ) {
+        vk::DescriptorSet actualTexture = cmd.texture;
+
+        if ( m_atlasUVs.count(cmd.customTextureId) ) {
+            actualTexture = atlasDescriptor;
+        } else if ( cmd.customTextureId ==
+                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+            if ( m_bgTexture ) {
+                actualTexture = (vk::DescriptorSet)(VkDescriptorSet)
+                                    m_bgTexture->getImTextureID();
+            }
+        }
+
+        if ( actualTexture == VK_NULL_HANDLE ) {
+            actualTexture = defaultDescriptor;
+        }
+
         if ( actualTexture != lastBoundTexture ) {
             cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                       pipelineLayout,

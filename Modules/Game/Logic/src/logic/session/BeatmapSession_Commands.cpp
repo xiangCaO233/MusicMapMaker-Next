@@ -171,6 +171,13 @@ void BeatmapSession::processCommands()
                     m_hitFXSystem.clearActiveEffects();
                 } else if constexpr ( std::is_same_v<T, CmdSetPlaybackSpeed> ) {
                     Audio::AudioManager::instance().setPlaybackSpeed(arg.speed);
+                } else if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
+                    m_currentTool = arg.tool;
+                } else if constexpr ( std::is_same_v<T, CmdSetMousePosition> ) {
+                    m_mouseCameraId   = arg.cameraId;
+                    m_mouseX          = arg.mouseX;
+                    m_mouseY          = arg.mouseY;
+                    m_isMouseInCanvas = arg.isHovering;
                 }
             },
             cmd);

@@ -148,6 +148,36 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             snapshot->bgSize         = m_bgSize;
         }
 
+        // --- 注入交互状态 ---
+        snapshot->currentTool = m_currentTool;
+        snapshot->isHoveringCanvas =
+            m_isMouseInCanvas && (m_mouseCameraId == cameraId);
+
+        if ( snapshot->isHoveringCanvas ) {
+            auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
+            if ( cache ) {
+                float judgmentLineY =
+                    camera.viewportHeight * config.visual.judgeline_pos;
+
+                double currentAbsY = cache->getAbsY(m_currentTime);
+                double targetAbsY  = currentAbsY + (judgmentLineY - m_mouseY);
+                snapshot->hoveredTime = cache->getTime(targetAbsY);
+
+                // 计算轨道
+                float leftX =
+                    camera.viewportWidth * config.visual.trackLayout.left;
+                float rightX =
+                    camera.viewportWidth * config.visual.trackLayout.right;
+                float trackAreaW = rightX - leftX;
+                float singleTrackW =
+                    trackAreaW / static_cast<float>(m_trackCount);
+
+                int track = static_cast<int>(
+                    std::floor((m_mouseX - leftX) / singleTrackW));
+                snapshot->hoveredTrack = std::clamp(track, 0, m_trackCount - 1);
+            }
+        }
+
         // 判定线高度比例计算
         float judgmentLineY =
             camera.viewportHeight * config.visual.judgeline_pos;

@@ -11,7 +11,7 @@ namespace MMM::Graphic
  * @param swapchain 交换链引用 (用于获取图像格式)
  */
 VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
-                           vk::ImageLayout finalLayout)
+                           vk::ImageLayout finalLayout, bool loadOpClear)
     : m_logicalDevice(logicalDevice)
 {
     // 1:创建渲染流程
@@ -26,7 +26,8 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
         // 附件输出时的布局 - 呈现附件
         .setFinalLayout(finalLayout)
         // 附件加载时需要的操作 - 加载时清空
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
+        .setLoadOp(loadOpClear ? vk::AttachmentLoadOp::eClear
+                               : vk::AttachmentLoadOp::eLoad)
         // 附件保存时需要的操作 - 正常存储
         .setStoreOp(vk::AttachmentStoreOp::eStore)
         // 3d绘制时需要的深度模板操作

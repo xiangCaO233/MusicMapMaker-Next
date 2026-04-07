@@ -58,6 +58,12 @@ struct SkinData {
     float effectBaseFps{ 60.0f };
 
 
+    struct EffectsConfig {
+        struct Glow {
+            int passes{ 8 };
+        } glow;
+    } effects;
+
     // 画布配置结构
     struct CanvasConfig {
         // 画布名称
@@ -108,6 +114,9 @@ public:
     ///@brief 获取画布配置
     const SkinData::CanvasConfig& getCanvasConfig(
         const std::string& canvasName);
+
+    ///@brief 获取发光特效的渲染轮次
+    int getGlowPasses() const { return m_data.effects.glow.passes; }
 
     ///@brief 获取布局配置
     std::string getLayoutConfig(const std::string& key);

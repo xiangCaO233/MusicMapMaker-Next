@@ -30,6 +30,4 @@ struct QueueFamilyIndices final {
     }
 };
 
-} // namespace MMM::Graphic
-
-
+}  // namespace MMM::Graphic

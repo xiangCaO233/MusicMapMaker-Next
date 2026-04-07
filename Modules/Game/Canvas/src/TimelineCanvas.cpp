@@ -86,11 +86,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                                       ImVec4(0, 0, 0, 0));
 
+                bool isFocused =
+                    ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     float localMouseY = mousePos.y - canvasPos.y;
                     bool  isNear = std::abs(localMouseY - el.y) < proximity;
 
-                    if ( isNear ) {
+                    if ( isNear && isFocused ) {
                         // BPM 齿轮 (左侧)
                         if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
                             ImVec2 pos(canvasPos.x + padding,

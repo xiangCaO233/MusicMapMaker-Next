@@ -113,6 +113,12 @@ protected:
                                   vk::PipelineLayout pipelineLayout,
                                   vk::DescriptorSet  defaultDescriptor) = 0;
 
+    virtual void onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
+                                  vk::PipelineLayout pipelineLayout,
+                                  vk::DescriptorSet  defaultDescriptor)
+    {
+    }
+
 private:
     // --- 1. 物理资源 (独占) ---
     vk::Image        m_image;        // 画布纹理
@@ -139,6 +145,35 @@ private:
 
     // 离屏用白色纹理
     std::unique_ptr<VKTexture> m_whiteTexture;
+
+    // --- 离屏模糊发光相关 ---
+    vk::Image m_glowImage{ VK_NULL_HANDLE }, m_pingImage{ VK_NULL_HANDLE },
+        m_pongImage{ VK_NULL_HANDLE };
+    vk::DeviceMemory m_glowImageMemory{ VK_NULL_HANDLE },
+        m_pingImageMemory{ VK_NULL_HANDLE },
+        m_pongImageMemory{ VK_NULL_HANDLE };
+    vk::ImageView m_glowImageView{ VK_NULL_HANDLE },
+        m_pingImageView{ VK_NULL_HANDLE }, m_pongImageView{ VK_NULL_HANDLE };
+    vk::Framebuffer m_glowFramebuffer{ VK_NULL_HANDLE },
+        m_pingFramebuffer{ VK_NULL_HANDLE },
+        m_pongFramebuffer{ VK_NULL_HANDLE };
+    vk::Sampler       m_glowSampler{ VK_NULL_HANDLE };
+    vk::DescriptorSet m_pingDescriptorSet{ VK_NULL_HANDLE },
+        m_pongDescriptorSet{ VK_NULL_HANDLE },
+        m_glowDescriptorSet{ VK_NULL_HANDLE };
+
+    std::unique_ptr<VKRenderPass>     m_glowRenderPass{ nullptr };
+    std::unique_ptr<VKRenderPass>     m_compositeRenderPass{ nullptr };
+    std::unique_ptr<VKRenderPipeline> m_glowBrushRenderPipeline{ nullptr };
+    std::unique_ptr<VKRenderPipeline> m_blurRenderPipeline{ nullptr };
+    std::unique_ptr<VKRenderPipeline> m_compositeRenderPipeline{ nullptr };
+
+    void createOffscreenBuffer(
+        vk::PhysicalDevice& phyDevice, vk::Device& logicalDevice,
+        VKSwapchain& swapchain, vk::CommandPool commandPool, vk::Queue queue,
+        uint32_t width, uint32_t height, vk::Image& image,
+        vk::DeviceMemory& memory, vk::ImageView& imageView,
+        vk::Framebuffer& framebuffer, vk::Sampler& sampler, VKRenderPass* pass);
 
     /// @brief 编译好的 Shader 模块映射表 (Name -> Shader)
     std::unordered_map<std::string, std::unique_ptr<VKShader>> m_vkShaders;
@@ -173,7 +208,8 @@ private:
      */
     void transitionImageInternal(vk::CommandPool pool, vk::Queue queue,
                                  vk::ImageLayout oldLayout,
-                                 vk::ImageLayout newLayout);
+                                 vk::ImageLayout newLayout,
+                                 vk::Image       image = VK_NULL_HANDLE);
 
 
     // --- 3. UI 集成句柄 (独占) ---

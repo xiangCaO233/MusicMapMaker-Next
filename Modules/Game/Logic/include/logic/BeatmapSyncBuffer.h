@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/LogicCommands.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <atomic>
@@ -59,6 +60,7 @@ struct RenderSnapshot {
     std::vector<Graphic::Vertex::VKBasicVertex> vertices;
     std::vector<uint32_t>                       indices;
     std::vector<UI::BrushDrawCmd>               cmds;
+    std::vector<UI::BrushDrawCmd>               glowCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
 
@@ -76,6 +78,12 @@ struct RenderSnapshot {
     double currentTime{ 0.0 };
     double totalTime{ 0.0 };
 
+    // 交互状态
+    EditTool currentTool{ EditTool::Move };
+    bool     isHoveringCanvas{ false };
+    double   hoveredTime{ 0.0 };
+    int32_t  hoveredTrack{ 0 };
+
     // 是否已加载谱面
     bool hasBeatmap{ false };
 
@@ -85,15 +93,19 @@ struct RenderSnapshot {
         vertices.clear();
         indices.clear();
         cmds.clear();
+        glowCmds.clear();
         hitboxes.clear();
         timelineElements.clear();
         uvMap.clear();
         backgroundPath.clear();
-        bgSize      = glm::vec2(0.0f);
-        isPlaying   = false;
-        currentTime = 0.0;
-        totalTime   = 0.0;
-        hasBeatmap  = false;
+        bgSize           = glm::vec2(0.0f);
+        isPlaying        = false;
+        currentTime      = 0.0;
+        totalTime        = 0.0;
+        isHoveringCanvas = false;
+        hoveredTime      = 0.0;
+        hoveredTrack     = 0;
+        hasBeatmap       = false;
     }
 };
 

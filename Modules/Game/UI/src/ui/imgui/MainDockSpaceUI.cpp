@@ -24,6 +24,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     static float         sidebarWidth =
         std::stof(skinCfg.getLayoutConfig("side_bar.width"));
 
+    // 工具栏固定宽度计算 (按钮尺寸 + Padding)
+    // 这里我们先预设一个值，后续可以从配置读取
+    float toolbarWidth = 26.0f;
+
+
+
     // 1. 获取菜单栏标准高度
     float menuBarHeight = ImGui::GetFrameHeight();
     // ================== A. 顶部菜单栏窗口 ==================
@@ -201,12 +207,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // ================== B. 右侧停靠空间窗口 ==================
     {
-        // 位置偏移：X + 48, Y + 菜单高度
+        // 位置偏移：X + sidebarWidth, Y + 菜单高度
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + sidebarWidth,
                                        viewport->WorkPos.y + menuBarHeight));
-        // 尺寸：宽 - 48, 高 - 菜单高度
-        ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - sidebarWidth,
-                                        viewport->WorkSize.y - menuBarHeight));
+        // 尺寸：宽 - sidebarWidth - toolbarWidth, 高 - 菜单高度
+        ImGui::SetNextWindowSize(
+            ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
+                   viewport->WorkSize.y - menuBarHeight));
         ImGui::SetNextWindowViewport(viewport->ID);
 
         ImGuiWindowFlags dock_flags =
@@ -247,7 +254,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                       ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(
                 dockspace_id,
-                ImVec2(viewport->WorkSize.x - sidebarWidth,
+                ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
                        viewport->WorkSize.y - menuBarHeight));
 
             // --- 第三步：拆分空间 ---
@@ -272,24 +279,24 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                                        &dock_id_right);
 
             // 在右侧区域进一步拆分，分出 20% 给最右侧的预览窗
-            ImGuiID dock_id_center_pre;
+            ImGuiID dock_id_center_canvas;
             ImGuiID dock_id_preview;
-            dock_id_preview = ImGui::DockBuilderSplitNode(dock_id_right,
-                                                          ImGuiDir_Right,
-                                                          0.20f,
-                                                          nullptr,
-                                                          &dock_id_center_pre);
+            dock_id_preview =
+                ImGui::DockBuilderSplitNode(dock_id_right,
+                                            ImGuiDir_Right,
+                                            0.20f,
+                                            nullptr,
+                                            &dock_id_center_canvas);
 
-            // 在中心区域进一步拆分，分出 60 像素给左侧的时间线
+            // 在主画布区域进一步拆分，分出 20% 给左侧的时间线
             ImGuiID dock_id_center;
             ImGuiID dock_id_timeline;
-            // 由于比例是 0.0 到 1.0，我们需要估算 60 像素占中心区域的比例
-            // 假设中心区域约 1000 像素，给它 0.05
-            dock_id_timeline = ImGui::DockBuilderSplitNode(dock_id_center_pre,
-                                                           ImGuiDir_Left,
-                                                           0.20f,
-                                                           nullptr,
-                                                           &dock_id_center);
+            dock_id_timeline =
+                ImGui::DockBuilderSplitNode(dock_id_center_canvas,
+                                            ImGuiDir_Left,
+                                            0.20f,
+                                            nullptr,
+                                            &dock_id_center);
 
             // --- 第四步：把窗口填进拆好的坑位里 ---
 
@@ -311,6 +318,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
         ImGui::End();
         ImGui::PopStyleVar(3);
+
+        // ================== C. 右侧工具栏窗口 (固定) ==================
+        {
+            ImGui::SetNextWindowPos(ImVec2(
+                viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth,
+                viewport->WorkPos.y + menuBarHeight));
+            ImGui::SetNextWindowSize(
+                ImVec2(toolbarWidth, viewport->WorkSize.y - menuBarHeight));
+            ImGui::SetNextWindowViewport(viewport->ID);
+            m_toolbarView.update(sourceManager);
+        }
 
         // ImGui::ShowDemoWindow();
     }

@@ -14,7 +14,7 @@ struct BrushDrawCmd {
     vk::DescriptorSet texture;       // 绑定的纹理 (如果为空则画纯色)
     uint32_t          customTextureId{
         0
-    };                     // 自定义纹理ID，用于逻辑层与渲染层解耦的纹理映射
+    };  // 自定义纹理ID，用于逻辑层与渲染层解耦的纹理映射
     std::string shaderId;  // 绑定的自定义 Shader 管线名称 (留作扩展)
 };
 }  // namespace MMM::UI

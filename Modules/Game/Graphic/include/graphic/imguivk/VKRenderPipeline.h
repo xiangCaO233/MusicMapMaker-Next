@@ -27,7 +27,8 @@ public:
      */
     VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                      VKRenderPass& renderPass, VKSwapchain& swapchain,
-                     bool is2DCanvas, int w = 0, int h = 0);
+                     bool is2DCanvas, int w = 0, int h = 0,
+                     bool additiveBlend = false);
 
     // 禁用拷贝和移动
     VKRenderPipeline(VKRenderPipeline&&) = delete;

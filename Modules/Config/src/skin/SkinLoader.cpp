@@ -116,6 +116,16 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         parseAudiosRecursive(audiosTable, "");
     }
 
+    // 解析特效配置
+    sol::optional<sol::table> effectsTableOpt = skinTable["effects"];
+    if ( effectsTableOpt ) {
+        sol::table                effectsTable = effectsTableOpt.value();
+        sol::optional<sol::table> glowOpt      = effectsTable["glow"];
+        if ( glowOpt ) {
+            m_data.effects.glow.passes = glowOpt.value()["passes"].get_or(8);
+        }
+    }
+
     // 解析 canvases_2d
     // 使用 sol::optional 防止皮肤文件中没有配这个表导致崩溃
     sol::optional<sol::table> canvasesTableOpt = skinTable["canvases_2d"];

@@ -22,8 +22,6 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
 {
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     float sidebarWidth = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    float sidebarIconSize =
-        std::stof(skinCfg.getLayoutConfig("side_bar.icon_size"));
 
     CLayHBox rootHBox;
     rootHBox.setPadding(0, 0, 0, 0).setSpacing(0);
@@ -33,10 +31,10 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
         "SettingsCategoryList",
         Sizing::Fixed(sidebarWidth),
         Sizing::Grow(),
-        [this, sidebarWidth, sidebarIconSize, &skinCfg](Clay_BoundingBox r,
-                                                        bool isHovered) {
+        [this, sidebarWidth, &skinCfg](Clay_BoundingBox r, bool isHovered) {
             ImGui::BeginChild(
                 "SettingsCategories", { r.width, r.height }, false);
+
 
             // 强制 Flat 风格：无圆角、无边框、无间距
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
@@ -76,7 +74,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                 ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
                 // 应用设置面板内部的字体图标尺寸
-                ImFont* settingIconFont = skinCfg.getFont("setting_internel");
+                ImFont* settingIconFont = skinCfg.getFont("setting_internal");
                 if ( settingIconFont ) ImGui::PushFont(settingIconFont);
 
                 std::string btnId = std::string(iconStr) + "##setting_tab_" +

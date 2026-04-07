@@ -106,6 +106,15 @@ private:
     /// @brief 谱面是否正在播放
     bool m_isPlaying{ false };
 
+    /// @brief 当前激活的编辑工具
+    EditTool m_currentTool{ EditTool::Move };
+
+    /// @brief 当前鼠标在视口中的状态
+    std::string m_mouseCameraId;
+    float       m_mouseX{ 0.0f };
+    float       m_mouseY{ 0.0f };
+    bool        m_isMouseInCanvas{ false };
+
     /// @brief 当前轨道数
     int32_t m_trackCount{ 12 };
 

@@ -38,6 +38,13 @@ local Skin = {
 		},
 	},
 
+	-- 效果配置
+	effects = {
+		glow = {
+			passes = 8
+		}
+	},
+
 	-- 翻译配置
 	langs = {
 		en_us = "lang/en_us.lua",
@@ -65,7 +72,7 @@ local Skin = {
 		side_bar = 24,
 
 		-- 设置内部的字体图标的尺寸
-		setting_internel = 14,
+		setting_internal = 14,
 	},
 
 	-- 资产文件映射

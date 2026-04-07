@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include <memory>
+
 
 namespace MMM::UI
 {
@@ -36,6 +38,9 @@ private:
 
     ///@brief 主菜单
     MainMenuView m_mainMenuview;
+
+    ///@brief 工具栏
+    ToolbarView m_toolbarView{ "Toolbar" };
 
     ///@brief 图标纹理
     std::unique_ptr<Graphic::VKTexture> m_logo_texture;

@@ -79,6 +79,7 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 5. 统一渲染去重后的物件列表
+    std::vector<entt::entity> hoveredEntities;
     for ( auto entity : visibleEntities ) {
         if ( !registry.all_of<TransformComponent, NoteComponent>(entity) )
             continue;
@@ -96,7 +97,10 @@ void NoteRenderSystem::renderNotes(
         float  screenY  = judgmentLineY - (minY * renderScaleY);
 
         glm::vec4 hoverTint = { 1.0f, 1.0f, 1.0f, 1.0f };
-        if ( isHovered ) hoverTint = { 1.0f, 0.5f, 0.0f, 1.0f };
+        if ( isHovered ) {
+            hoverTint = { 1.0f, 0.5f, 0.0f, 1.0f };
+            hoveredEntities.push_back(entity);
+        }
 
         float trackX = leftX + note.m_trackIndex * singleTrackW;
 
@@ -156,6 +160,82 @@ void NoteRenderSystem::renderNotes(
                                              colorArrow,
                                              hoverTint);
         }
+    }
+    batcher.flush();
+
+    // 6. 渲染发光层
+    if ( !hoveredEntities.empty() ) {
+        Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+        for ( auto entity : hoveredEntities ) {
+            const auto& transform = registry.get<TransformComponent>(entity);
+            const auto& note      = registry.get<NoteComponent>(entity);
+
+            double noteAbsY = cache->getAbsY(note.m_timestamp);
+            float  minY     = static_cast<float>(noteAbsY - currentAbsY);
+            float  visualH  = transform.m_size.y * renderScaleY;
+            float  screenY  = judgmentLineY - (minY * renderScaleY);
+            float  trackX   = leftX + note.m_trackIndex * singleTrackW;
+
+            if ( note.m_type == ::MMM::NoteType::NOTE ) {
+                NoteRenderSystem::renderTap(
+                    glowBatcher,
+                    note,
+                    config,
+                    trackX + (singleTrackW - noteW) * 0.5f,
+                    screenY,
+                    noteW,
+                    noteH,
+                    baseAspect,
+                    colorTap);
+            } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+                NoteRenderSystem::renderHold(
+                    glowBatcher,
+                    note,
+                    config,
+                    snapshot,
+                    trackX + (singleTrackW - noteW) * 0.5f,
+                    screenY,
+                    noteW,
+                    noteH,
+                    visualH,
+                    singleTrackW,
+                    colorHold,
+                    { 1.0f, 1.0f, 1.0f, 1.0f });
+            } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+                NoteRenderSystem::renderFlick(
+                    glowBatcher,
+                    note,
+                    config,
+                    snapshot,
+                    trackX + (singleTrackW - noteW) * 0.5f,
+                    screenY,
+                    noteW,
+                    noteH,
+                    singleTrackW,
+                    colorHold,
+                    colorArrow,
+                    { 1.0f, 1.0f, 1.0f, 1.0f });
+            } else if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+                NoteRenderSystem::renderPolyline(registry,
+                                                 glowBatcher,
+                                                 note,
+                                                 config,
+                                                 snapshot,
+                                                 currentTime,
+                                                 judgmentLineY,
+                                                 leftX,
+                                                 rightX,
+                                                 topY,
+                                                 bottomY,
+                                                 singleTrackW,
+                                                 renderScaleY,
+                                                 colorHold,
+                                                 colorNode,
+                                                 colorArrow,
+                                                 { 1.0f, 1.0f, 1.0f, 1.0f });
+            }
+        }
+        glowBatcher.flush();
     }
 }
 
