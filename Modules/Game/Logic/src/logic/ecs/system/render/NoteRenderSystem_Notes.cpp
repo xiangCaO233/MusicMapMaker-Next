@@ -91,9 +91,24 @@ void NoteRenderSystem::renderNotes(
         }
     }
 
-    // 5. 统一渲染去重后的物件列表
+    // 5. 排序：按时间戳降序排列（时间越早越晚画，从而在最上层）
+    std::vector<entt::entity> sortedEntities(visibleEntities.begin(),
+                                             visibleEntities.end());
+    std::sort(
+        sortedEntities.begin(),
+        sortedEntities.end(),
+        [&registry](entt::entity a, entt::entity b) {
+            const auto& noteA = registry.get<NoteComponent>(a);
+            const auto& noteB = registry.get<NoteComponent>(b);
+            if ( std::abs(noteA.m_timestamp - noteB.m_timestamp) > 1e-6 ) {
+                return noteA.m_timestamp > noteB.m_timestamp;
+            }
+            return a > b;  // 时间相同时按实体 ID 排序，保证稳定性
+        });
+
+    // 6. 统一渲染去重后的物件列表
     std::vector<entt::entity> hoveredEntities;
-    for ( auto entity : visibleEntities ) {
+    for ( auto entity : sortedEntities ) {
         if ( !registry.all_of<TransformComponent, NoteComponent>(entity) )
             continue;
         const auto& transform = registry.get<TransformComponent>(entity);
@@ -176,7 +191,7 @@ void NoteRenderSystem::renderNotes(
     }
     batcher.flush();
 
-    // 6. 渲染发光层
+    // 7. 渲染发光层
     if ( !hoveredEntities.empty() ) {
         Batcher glowBatcher(snapshot, &snapshot->glowCmds);
         for ( auto entity : hoveredEntities ) {
