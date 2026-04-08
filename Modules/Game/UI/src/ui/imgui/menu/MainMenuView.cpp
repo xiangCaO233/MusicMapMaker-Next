@@ -27,10 +27,13 @@ void MainMenuView::dispatchCommand(const MMM::Logic::LogicCommand& cmd)
 void MainMenuView::handleHotkeys()
 {
     ImGuiIO& io = ImGui::GetIO();
+    // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
 
     if ( io.KeyCtrl ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {}
+        if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
+            // New project logic placeholder
+        }
         if ( ImGui::IsKeyPressed(ImGuiKey_O) ) {
             openFolderPicker();
         }
@@ -53,7 +56,9 @@ void MainMenuView::handleHotkeys()
             dispatchCommand(Logic::CmdCut{});
         }
     } else {
-        if ( ImGui::IsKeyPressed(ImGuiKey_Space) ) {}
+        if ( ImGui::IsKeyPressed(ImGuiKey_Space) ) {
+            // Toggle play state placeholder
+        }
     }
 }
 
@@ -70,7 +75,6 @@ void MainMenuView::openFolderPicker()
             Event::EventBus::instance().publish(ev);
             NFD_FreePath(outPath);
         }
-        // Error handling omitted for brevity as per existing logic
     } else {
         IGFD::FileDialogConfig fdConfig;
         fdConfig.path              = ".";
@@ -90,6 +94,10 @@ void MainMenuView::update()
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
 
+    // 增加全局边距，确保图标不被截断，并提供更好的视觉空间
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+
     auto MenuItemWithFontIcon = [&skinCfg](const char* icon,
                                            const char* label,
                                            const char* shortcut = nullptr,
@@ -99,14 +107,16 @@ void MainMenuView::update()
             ImGuiCol_Text,
             ImVec4(iconColor.r, iconColor.g, iconColor.b, iconColor.a));
 
-        // 调整间距：图标与文本间隔约半个字符宽
+        // 图标与文本间隔设为半个空格宽
         float gap = ImGui::CalcTextSize(" ").x * 0.5f;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap, 0));
 
-        // 使用 ImGui 内部 API 以实现完美的图标与文本对齐
-        // MenuItemEx 会自动处理图标列的宽度，即使 icon 为 nullptr
-        // 也能保持文本对齐
-        bool clicked = ImGui::MenuItemEx(label, icon, shortcut, false, enabled);
+        // 统一占位符，确保无图标项的文本对齐
+        // 这里使用两个空格作为图标列的基准占位
+        const char* iconPtr = icon ? icon : "  ";
+
+        bool clicked =
+            ImGui::MenuItemEx(label, iconPtr, shortcut, false, enabled);
 
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
@@ -137,6 +147,7 @@ void MainMenuView::update()
         if ( MenuItemWithFontIcon(nullptr, TR("ui.file.save_as")) ) {}
         ImGui::EndMenu();
     }
+
     if ( ImGui::BeginMenu(TR("ui.edit")) ) {
         if ( MenuItemWithFontIcon(
                  ICON_MMM_UNDO, TR("ui.edit.undo"), "Ctrl+Z") ) {
@@ -167,7 +178,9 @@ void MainMenuView::update()
     ImGuiIO& io = ImGui::GetIO();
     ImGui::Text(
         "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+
     if ( menuFont ) ImGui::PopFont();
+    ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
 }
 
 }  // namespace MMM::UI
