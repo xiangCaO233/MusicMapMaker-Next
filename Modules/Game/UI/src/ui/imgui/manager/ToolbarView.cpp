@@ -191,7 +191,10 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImGui::Separator();
 
+        if ( toolFont ) ImGui::PopFont();
+
         // --- 分拍数量设置 (Beat Divisor) ---
+        int currentDivisor = editorCfg.settings.beatDivisor;
         if ( m_showDivisorPopup ) {
             ImGui::PushStyleColor(ImGuiCol_Button,
                                   ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
@@ -207,7 +210,13 @@ void ToolbarView::update(UIManager* sourceManager)
                                   ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
         }
 
-        if ( ImGui::Button(ICON_MMM_BARS, ImVec2(drawW, drawW)) ) {
+        ImFont* contentFont = skinCfg.getFont("content");
+        if ( contentFont ) ImGui::PushFont(contentFont);
+
+        char divisorBuf[16];
+        snprintf(divisorBuf, sizeof(divisorBuf), "%d", currentDivisor);
+
+        if ( ImGui::Button(divisorBuf, ImVec2(drawW, drawW)) ) {
             m_showDivisorPopup = !m_showDivisorPopup;
         }
 
@@ -215,14 +224,26 @@ void ToolbarView::update(UIManager* sourceManager)
         m_lastBtnY = ImGui::GetItemRectMin().y;
 
         if ( ImGui::IsItemHovered() ) {
-            ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
+            // 响应滚轮调整分拍
+            float wheel = ImGui::GetIO().MouseWheel;
+            if ( std::abs(wheel) > 0.1f ) {
+                int delta = (wheel > 0) ? 1 : -1;
+                if ( ImGui::GetIO().KeyShift ) delta *= 4;
+                int newDivisor = std::clamp(currentDivisor + delta, 1, 64);
+                if ( newDivisor != currentDivisor ) {
+                    auto newConfig                 = editorCfg;
+                    newConfig.settings.beatDivisor = newDivisor;
+                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
+                }
+            }
+
             ImGui::SetTooltip("%s", TR("ui.toolbar.beat_divisor").data());
-            if ( contentFont ) ImGui::PopFont();
         }
+        if ( contentFont ) ImGui::PopFont();
         ImGui::PopStyleColor(3);
 
-        if ( toolFont ) ImGui::PopFont();
+        // 如果之前弹出了 toolFont，这里就不需要再 Pop 了
+        // 为了保持逻辑一致性，我们将最后的 PopFont 移到这个 if 外部或者调整逻辑
     }
 
     ImGui::End();
