@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
@@ -118,7 +119,8 @@ void BeatmapSession::syncHitIndex()
 
 BeatmapSession::SnapResult BeatmapSession::getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
-    const Config::EditorConfig& config) const
+    const Config::EditorConfig&                  config,
+    const std::vector<const TimelineComponent*>& bpmEvents) const
 {
     SnapResult result;
     int        beatDivisor = config.settings.beatDivisor;
@@ -127,21 +129,7 @@ BeatmapSession::SnapResult BeatmapSession::getSnapResult(
     auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
     if ( !cache ) return result;
 
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = m_timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
-        }
-    }
-
     if ( bpmEvents.empty() ) return result;
-
-    std::sort(
-        bpmEvents.begin(), bpmEvents.end(), [](const auto* a, const auto* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
 
     // 只有在首个 BPM 事件之后才进行磁吸计算
     if ( rawTime < bpmEvents[0]->m_timestamp ) return result;
@@ -265,6 +253,22 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
     System::NoteTransformSystem::update(
         m_noteRegistry, m_timelineRegistry, m_currentTime, config);
 
+    // 筛选出所有 BPM 标记供后续视口处理（磁吸、智能拟合等）
+    std::vector<const TimelineComponent*> bpmEvents;
+    auto tlView = m_timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tl = tlView.get<const TimelineComponent>(entity);
+        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+            bpmEvents.push_back(&tl);
+        }
+    }
+    std::stable_sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const TimelineComponent* a, const TimelineComponent* b) {
+            return a->m_timestamp < b->m_timestamp;
+        });
+
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_cameras ) {
         // 从 EditorEngine 获取该 Camera 专属的缓冲
@@ -321,7 +325,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 
                 // --- 磁吸拍线时间戳预览 ---
                 auto snap = getSnapResult(
-                    snapshot->hoveredTime, m_mouseY, camera, config);
+                    snapshot->hoveredTime, m_mouseY, camera, config, bpmEvents);
                 if ( snap.isSnapped ) {
                     snapshot->isSnapped          = true;
                     snapshot->snappedTime        = snap.snappedTime;
@@ -329,6 +333,83 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     snapshot->snappedDenominator = snap.denominator;
                 }
                 snapshot->currentBeatDivisor = config.settings.beatDivisor;
+
+                // --- 智能拟合：计算当前悬停物件的最简分拍 ---
+                auto interView = m_noteRegistry.view<InteractionComponent>();
+                for ( auto entity : interView ) {
+                    const auto& inter =
+                        interView.get<InteractionComponent>(entity);
+                    if ( inter.isHovered ) {
+                        if ( m_noteRegistry.all_of<NoteComponent>(entity) ) {
+                            const auto& note =
+                                m_noteRegistry.get<NoteComponent>(entity);
+                            double noteTime = note.m_timestamp;
+
+                            // 寻找该音符所在的 BPM 区段
+                            const TimelineComponent* activeBpm = nullptr;
+                            for ( const auto& bpmEv : bpmEvents ) {
+                                if ( bpmEv->m_timestamp <= noteTime + 1e-4 ) {
+                                    activeBpm = bpmEv;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            if ( activeBpm ) {
+                                double bpmVal = activeBpm->m_value;
+                                if ( bpmVal <= 0.0 ) bpmVal = 120.0;
+                                double beatDuration = 60.0 / bpmVal;
+
+                                // 尝试多个常用分母，找到误差最小且分母最小的拟合
+                                static const int denominators[] = {
+                                    1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64
+                                };
+                                int    bestNum   = 0;
+                                int    bestDen   = 1;
+                                double bestError = 1.0;
+
+                                for ( int den : denominators ) {
+                                    double stepDuration = beatDuration / den;
+                                    double relative =
+                                        noteTime - activeBpm->m_timestamp;
+                                    double steps =
+                                        std::round(relative / stepDuration);
+                                    double fitTime = activeBpm->m_timestamp +
+                                                     steps * stepDuration;
+                                    double error = std::abs(noteTime - fitTime);
+
+                                    // 如果误差足够小 (小于
+                                    // 1ms)，或者显著优于之前的拟合
+                                    if ( error < 0.001 ||
+                                         error < bestError * 0.5 ) {
+                                        bestError = error;
+                                        // 归一化分数
+                                        int64_t totalSteps =
+                                            static_cast<int64_t>(steps);
+                                        int beatIndex = totalSteps % den;
+                                        if ( beatIndex < 0 ) beatIndex += den;
+
+                                        if ( beatIndex == 0 ) {
+                                            bestNum = 1;
+                                            bestDen = 1;
+                                        } else {
+                                            int common =
+                                                std::gcd(beatIndex, den);
+                                            bestNum = beatIndex / common;
+                                            bestDen = den / common;
+                                        }
+
+                                        if ( error < 0.0001 )
+                                            break;  // 已经非常精确，停止搜索
+                                    }
+                                }
+                                snapshot->hoveredNoteNumerator   = bestNum;
+                                snapshot->hoveredNoteDenominator = bestDen;
+                            }
+                        }
+                        break;  // 只处理一个悬停物体
+                    }
+                }
             }
         }
 

@@ -88,6 +88,8 @@ struct RenderSnapshot {
     int      snappedDenominator{ 1 };
     int      currentBeatDivisor{ 4 };
     int32_t  hoveredTrack{ 0 };
+    int      hoveredNoteNumerator{ 0 };
+    int      hoveredNoteDenominator{ 1 };
 
     // 是否已加载谱面
     bool hasBeatmap{ false };
@@ -103,20 +105,22 @@ struct RenderSnapshot {
         timelineElements.clear();
         uvMap.clear();
         backgroundPath.clear();
-        bgSize             = glm::vec2(0.0f, 0.0f);
-        isPlaying          = false;
-        currentTime        = 0.0;
-        totalTime          = 0.0;
-        currentTool        = EditTool::Move;
-        isHoveringCanvas   = false;
-        hoveredTime        = 0.0;
-        snappedTime        = 0.0;
-        isSnapped          = false;
-        snappedNumerator   = 0;
-        snappedDenominator = 1;
-        currentBeatDivisor = 4;
-        hoveredTrack       = 0;
-        hasBeatmap         = false;
+        bgSize                 = glm::vec2(0.0f, 0.0f);
+        isPlaying              = false;
+        currentTime            = 0.0;
+        totalTime              = 0.0;
+        currentTool            = EditTool::Move;
+        isHoveringCanvas       = false;
+        hoveredTime            = 0.0;
+        snappedTime            = 0.0;
+        isSnapped              = false;
+        snappedNumerator       = 0;
+        snappedDenominator     = 1;
+        currentBeatDivisor     = 4;
+        hoveredTrack           = 0;
+        hoveredNoteNumerator   = 0;
+        hoveredNoteDenominator = 1;
+        hasBeatmap             = false;
     }
 };
 

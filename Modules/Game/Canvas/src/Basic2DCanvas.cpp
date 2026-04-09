@@ -122,11 +122,22 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 (m_currentSnapshot->currentTool != Logic::EditTool::Move &&
                  m_currentSnapshot->currentTool != Logic::EditTool::Marquee);
 
-            if ( m_currentSnapshot->isSnapped || isEditTool ) {
+            if ( m_currentSnapshot->isSnapped || isEditTool ||
+                 m_currentSnapshot->hoveredNoteNumerator > 0 ) {
                 ImGui::SetNextWindowPos(
                     ImVec2(mousePos.x + 15, mousePos.y + 15));
                 ImGui::SetNextWindowBgAlpha(0.7f);
                 ImGui::BeginTooltip();
+
+                if ( m_currentSnapshot->hoveredNoteNumerator > 0 ) {
+                    ImGui::TextColored(
+                        ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                        "%s: %d/%d",
+                        TR("ui.canvas.note_fraction").data(),
+                        m_currentSnapshot->hoveredNoteNumerator,
+                        m_currentSnapshot->hoveredNoteDenominator);
+                    ImGui::Separator();
+                }
 
                 if ( m_currentSnapshot->isSnapped ) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),

@@ -84,6 +84,7 @@ return {
 	["ui.canvas.snap"] = "Snap",
 	["ui.canvas.beat_divisor"] = "Beat Divisor",
 	["ui.canvas.beat_fraction"] = "Beat",
+	["ui.canvas.note_fraction"] = "Note Position",
 
 	["tips.welcome"] = "Welcome to MusicMapMaker!",
 }

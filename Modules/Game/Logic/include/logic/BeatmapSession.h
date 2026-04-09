@@ -3,6 +3,7 @@
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
 #include "logic/SyncClock.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "mmm/note/Note.h"
 #include "mmm/timing/Timing.h"
@@ -71,19 +72,21 @@ public:
         int    denominator{ 1 };
     };
 
+private:
     /**
      * @brief 计算给定时间点在特定视口下的磁吸结果
      * @param rawTime 原始时间点
      * @param mouseY 鼠标当前的 Y 坐标（用于阈值判断）
      * @param camera 所在的视口信息
      * @param config 当前编辑器配置
+     * @param bpmEvents 已排序的 BPM 事件列表
      * @return 磁吸结果
      */
-    SnapResult getSnapResult(double rawTime, float mouseY,
-                             const CameraInfo&           camera,
-                             const Config::EditorConfig& config) const;
+    SnapResult getSnapResult(
+        double rawTime, float mouseY, const CameraInfo& camera,
+        const Config::EditorConfig&                  config,
+        const std::vector<const TimelineComponent*>& bpmEvents) const;
 
-private:
     /**
      * @brief 加载新谱面数据到 ECS 中
      */

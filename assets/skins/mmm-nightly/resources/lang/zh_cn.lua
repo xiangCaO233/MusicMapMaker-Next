@@ -115,6 +115,7 @@ return {
 	["ui.canvas.snap"] = "吸附",
 	["ui.canvas.beat_divisor"] = "当前分拍",
 	["ui.canvas.beat_fraction"] = "拍",
+	["ui.canvas.note_fraction"] = "物件位置",
 
 
 	-- 带格式化参数的文本 (TR_FMT)

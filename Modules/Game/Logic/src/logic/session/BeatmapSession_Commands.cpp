@@ -117,11 +117,34 @@ void BeatmapSession::processCommands()
                                     currentAbsY + (judgmentLineY - arg.mouseY);
                                 double targetTime = cache->getTime(targetAbsY);
 
+                                // 获取已排序的 BPM 事件用于磁吸
+                                std::vector<const TimelineComponent*> bpmEvents;
+                                auto                                  tlView =
+                                    m_timelineRegistry
+                                        .view<const TimelineComponent>();
+                                for ( auto entity : tlView ) {
+                                    const auto& tl =
+                                        tlView.get<const TimelineComponent>(
+                                            entity);
+                                    if ( tl.m_effect ==
+                                         ::MMM::TimingEffect::BPM ) {
+                                        bpmEvents.push_back(&tl);
+                                    }
+                                }
+                                std::stable_sort(
+                                    bpmEvents.begin(),
+                                    bpmEvents.end(),
+                                    [](const TimelineComponent* a,
+                                       const TimelineComponent* b) {
+                                        return a->m_timestamp < b->m_timestamp;
+                                    });
+
                                 // 磁吸处理
                                 auto snap = getSnapResult(targetTime,
                                                           arg.mouseY,
                                                           it->second,
-                                                          m_lastConfig);
+                                                          m_lastConfig,
+                                                          bpmEvents);
                                 if ( snap.isSnapped ) {
                                     targetTime = snap.snappedTime;
                                 }
