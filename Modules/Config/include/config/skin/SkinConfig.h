@@ -80,6 +80,9 @@ struct SkinData {
 
     // 布局配置表 (Key: 布局配置ID, Value: 值)
     std::unordered_map<std::string, std::string> layoutConfigs;
+
+    // 数值配置表
+    std::unordered_map<std::string, float> values;
 };
 
 class SkinManager
@@ -123,6 +126,9 @@ public:
     ///@brief 获取布局配置
     std::string getLayoutConfig(const std::string& key);
 
+    ///@brief 获取数值配置
+    float getValue(const std::string& key, float defaultValue = 0.0f);
+
     ///@brief 获取颜色配置
     Color getColor(const std::string& key);
 
@@ -161,7 +167,13 @@ private:
     void parseLayoutRecursive(const sol::table&  currentTable,
                               const std::string& prefix);
 
-
+    /**
+     * @brief 递归解析数值配置表
+     * @param currentTable 当前处理的 Lua 表
+     * @param prefix 键前缀
+     */
+    void parseValuesRecursive(const sol::table&  currentTable,
+                              const std::string& prefix);
 
     SkinManager() = default;
 };

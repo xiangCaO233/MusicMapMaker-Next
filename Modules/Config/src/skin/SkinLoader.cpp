@@ -175,6 +175,12 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         parseLayoutRecursive(fontsizeTableOpt.value(), "fontsize");
     }
 
+    // 解析 values
+    sol::optional<sol::table> valuesTableOpt = skinTable["values"];
+    if ( valuesTableOpt ) {
+        parseValuesRecursive(valuesTableOpt.value(), "");
+    }
+
     XINFO("Skin loaded: " + m_data.themeName);
     return true;
 }
@@ -328,6 +334,23 @@ void SkinManager::parseLayoutRecursive(const sol::table&  currentTable,
     }
 }
 
+void SkinManager::parseValuesRecursive(const sol::table&  currentTable,
+                                       const std::string& prefix)
+{
+    for ( const auto& kv : currentTable ) {
+        std::string key   = kv.first.as<std::string>();
+        sol::object value = kv.second;
+
+        std::string fullKey = prefix.empty() ? key : prefix + "." + key;
+
+        if ( value.is<sol::table>() ) {
+            parseValuesRecursive(value.as<sol::table>(), fullKey);
+        } else if ( value.is<double>() ) {
+            m_data.values[fullKey] = static_cast<float>(value.as<double>());
+        }
+    }
+}
+
 std::filesystem::path SkinManager::getFontPath(const std::string& key)
 {
     if ( auto fontPathit = m_data.fontPaths.find(key);
@@ -388,6 +411,14 @@ std::string SkinManager::getLayoutConfig(const std::string& key)
         return layout_config_it->second;
     }
     return {};
+}
+
+float SkinManager::getValue(const std::string& key, float defaultValue)
+{
+    if ( auto it = m_data.values.find(key); it != m_data.values.end() ) {
+        return it->second;
+    }
+    return defaultValue;
 }
 
 Color SkinManager::getColor(const std::string& key)
