@@ -18,109 +18,115 @@ void NoteRenderSystem::renderNotes(
     float leftX, float rightX, float topY, float bottomY, float singleTrackW,
     float renderScaleY)
 {
-    auto noteView =
-        registry.view<const TransformComponent, const NoteComponent>();
+    // 1. 准备上下文与颜色
+    NoteRenderSystem::NoteRenderContext ctx =
+        NoteRenderSystem::prepareNoteRenderContext(
+            registry, snapshot, currentTime, singleTrackW, config);
+    if ( !ctx.cache ) return;
+
+    // 2. 生成碰撞盒并获取可见实体
+    NoteRenderSystem::generateNoteHitboxes(registry,
+                                           snapshot,
+                                           ctx,
+                                           judgmentLineY,
+                                           leftX,
+                                           topY,
+                                           bottomY,
+                                           singleTrackW,
+                                           renderScaleY,
+                                           config);
+
+    // 3. 基础层渲染
+    NoteRenderSystem::renderNoteBaseLayer(registry,
+                                          snapshot,
+                                          ctx,
+                                          config,
+                                          batcher,
+                                          (float)currentTime,
+                                          judgmentLineY,
+                                          leftX,
+                                          rightX,
+                                          topY,
+                                          bottomY,
+                                          singleTrackW,
+                                          renderScaleY);
+
+    // 4. 发光层渲染
+    NoteRenderSystem::renderNoteGlowLayer(registry,
+                                          snapshot,
+                                          ctx,
+                                          config,
+                                          (float)currentTime,
+                                          judgmentLineY,
+                                          leftX,
+                                          rightX,
+                                          topY,
+                                          bottomY,
+                                          singleTrackW,
+                                          renderScaleY);
+}
+
+NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
+    entt::registry& registry, RenderSnapshot* snapshot, double currentTime,
+    float singleTrackW, const Config::EditorConfig& config)
+{
+    NoteRenderSystem::NoteRenderContext ctx{};
 
     const auto** cachePtr = registry.ctx().find<const ScrollCache*>();
-    if ( !cachePtr || !(*cachePtr) ) return;
-    const auto* cache       = *cachePtr;
-    double      currentAbsY = cache->getAbsY(currentTime);
+    if ( !cachePtr || !(*cachePtr) ) return ctx;
+    ctx.cache       = *cachePtr;
+    ctx.currentAbsY = ctx.cache->getAbsY(currentTime);
 
-    // 1. 获取基准纹理 (Note) 的比例与信息
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
-    if ( itBase == snapshot->uvMap.end() ) return;
-    float baseAspect = itBase->second.z / itBase->second.w;
+    if ( itBase == snapshot->uvMap.end() ) return ctx;
+    ctx.baseAspect = itBase->second.z / itBase->second.w;
 
-    // 2. 计算基准尺寸 (画布空间)
-    float noteW = singleTrackW * config.visual.noteScaleX;
-    float noteH = noteW / baseAspect;
+    ctx.noteW = singleTrackW * config.visual.noteScaleX;
+    ctx.noteH = ctx.noteW / ctx.baseAspect;
 
-    // 3. 获取皮肤配色方案
-    auto& skin   = Config::SkinManager::instance();
-    auto  toVec4 = [](const Config::Color& c) {
-        return glm::vec4(c.r, c.g, c.b, c.a);
-    };
-    auto color_tap   = skin.getColor("note_tap");
-    auto color_hold  = skin.getColor("note_hold");
-    auto color_node  = skin.getColor("note_node");
+    auto& skin      = Config::SkinManager::instance();
+    auto  color_tap = skin.getColor("note_tap");
+    ctx.colorTap    = { color_tap.r, color_tap.g, color_tap.b, color_tap.a };
+
+    auto color_hold = skin.getColor("note_hold");
+    ctx.colorHold = { color_hold.r, color_hold.g, color_hold.b, color_hold.a };
+
+    auto color_node = skin.getColor("note_node");
+    ctx.colorNode = { color_node.r, color_node.g, color_node.b, color_node.a };
+
     auto color_arrow = skin.getColor("note_flick_arrow");
-
-    glm::vec4 colorTap = { color_tap.r, color_tap.g, color_tap.b, color_tap.a };
-    glm::vec4 colorHold = {
-        color_hold.r, color_hold.g, color_hold.b, color_hold.a
-    };
-    glm::vec4 colorNode = {
-        color_node.r, color_node.g, color_node.b, color_node.a
-    };
-    glm::vec4 colorArrow = {
+    ctx.colorArrow   = {
         color_arrow.r, color_arrow.g, color_arrow.b, color_arrow.a
     };
 
-    // 4. 生成精确碰撞盒 (分两遍确保优先级：Body 在下，Head 在上)
-    std::unordered_set<entt::entity> visibleEntities;
+    return ctx;
+}
 
-    // Pass 1: Body and Transition Hitboxes (Lower Priority)
+void NoteRenderSystem::generateNoteHitboxes(
+    entt::registry& registry, RenderSnapshot* snapshot,
+    const NoteRenderSystem::NoteRenderContext& ctx, float judgmentLineY,
+    float leftX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY, const Config::EditorConfig& config)
+{
+    auto noteView =
+        registry.view<const TransformComponent, const NoteComponent>();
+
+    // Pass 1: Body (Lower Priority)
     for ( auto entity : noteView ) {
         const auto& transform = noteView.get<const TransformComponent>(entity);
         const auto& note      = noteView.get<const NoteComponent>(entity);
 
-        double noteAbsY = cache->getAbsY(note.m_timestamp);
-        float  minY     = static_cast<float>(noteAbsY - currentAbsY);
-        float  visualH  = transform.m_size.y * renderScaleY;
-        float  screenY  = judgmentLineY - (minY * renderScaleY);
+        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
+        float  screenY =
+            judgmentLineY -
+            static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY;
+        float visualH = transform.m_size.y * renderScaleY;
 
-        if ( screenY - visualH - noteH > bottomY || screenY + noteH < topY )
+        if ( screenY - visualH - ctx.noteH > bottomY ||
+             screenY + ctx.noteH < topY )
             continue;
 
-        if ( note.m_isSubNote ) {
-            if ( note.m_parentPolyline != entt::null ) {
-                visibleEntities.insert(note.m_parentPolyline);
-                int         subIndex = -1;
-                const auto* parentNote =
-                    registry.try_get<NoteComponent>(note.m_parentPolyline);
-                if ( parentNote ) {
-                    for ( size_t i = 0; i < parentNote->m_subNotes.size();
-                          ++i ) {
-                        if ( std::abs(parentNote->m_subNotes[i].timestamp -
-                                      note.m_timestamp) < 1e-4 ) {
-                            subIndex = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                }
-
-                // 子物件自身 Body Hitbox
-                if ( note.m_type == ::MMM::NoteType::FLICK &&
-                     note.m_dtrack != 0 ) {
-                    float startTrack =
-                        std::min((float)note.m_trackIndex,
-                                 (float)note.m_trackIndex + note.m_dtrack);
-                    float drawW = std::abs(note.m_dtrack) * singleTrackW;
-                    float bodyX =
-                        leftX + startTrack * singleTrackW + singleTrackW * 0.5f;
-                    snapshot->hitboxes.push_back({ note.m_parentPolyline,
-                                                   HoverPart::HoldBody,
-                                                   subIndex,
-                                                   bodyX,
-                                                   screenY - noteH * 0.5f,
-                                                   drawW,
-                                                   noteH });
-                } else if ( note.m_type == ::MMM::NoteType::HOLD &&
-                            visualH > noteH * 0.1f ) {
-                    float headX = leftX + note.m_trackIndex * singleTrackW +
-                                  (singleTrackW - noteW) * 0.5f;
-                    snapshot->hitboxes.push_back(
-                        { note.m_parentPolyline,
-                          HoverPart::HoldBody,
-                          subIndex,
-                          headX,
-                          screenY - visualH + noteH * 0.5f,
-                          noteW,
-                          visualH - noteH });
-                }
-            }
-        } else {
-            visibleEntities.insert(entity);
+        if ( !note.m_isSubNote ) {
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
                 float startTrack =
                     std::min((float)note.m_trackIndex,
@@ -128,151 +134,201 @@ void NoteRenderSystem::renderNotes(
                 float drawW = std::abs(note.m_dtrack) * singleTrackW;
                 float bodyX =
                     leftX + startTrack * singleTrackW + singleTrackW * 0.5f;
+
+                float drawH   = ctx.noteH;
+                auto  itBodyH = snapshot->uvMap.find(
+                    static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
+                if ( itBodyH != snapshot->uvMap.end() ) {
+                    drawH = ctx.noteH *
+                            (itBodyH->second.w /
+                             snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
+                }
+
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                -1,
                                                bodyX,
-                                               screenY - noteH * 0.5f,
+                                               screenY - drawH * 0.5f,
                                                drawW,
-                                               noteH });
+                                               drawH });
             } else if ( note.m_type == ::MMM::NoteType::HOLD &&
-                        visualH > noteH * 0.1f ) {
+                        visualH > ctx.noteH * 0.1f ) {
                 float headX = leftX + note.m_trackIndex * singleTrackW +
-                              (singleTrackW - noteW) * 0.5f;
+                              (singleTrackW - ctx.noteW) * 0.5f;
+                // Hold Body 从 Head 中心向上拉到 End 中心 (visualH
+                // 是两者的距离)
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                -1,
                                                headX,
-                                               screenY - visualH + noteH * 0.5f,
-                                               noteW,
-                                               visualH - noteH });
-            } else if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-                // Polyline Hitboxes are now generated inside renderPolyline
-                // during the base pass
+                                               screenY - visualH,
+                                               ctx.noteW,
+                                               visualH });
             }
         }
     }
 
-    // Pass 2: Head, Node, Arrow, and End Hitboxes (Higher Priority)
+    // Pass 2: Head/End/Arrow (Higher Priority)
     for ( auto entity : noteView ) {
         const auto& transform = noteView.get<const TransformComponent>(entity);
         const auto& note      = noteView.get<const NoteComponent>(entity);
-        double      noteAbsY  = cache->getAbsY(note.m_timestamp);
+        double      noteAbsY  = ctx.cache->getAbsY(note.m_timestamp);
         float       screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - currentAbsY) * renderScaleY);
+            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
         float visualH = transform.m_size.y * renderScaleY;
-        if ( screenY - visualH - noteH > bottomY || screenY + noteH < topY )
+
+        if ( screenY - visualH - ctx.noteH > bottomY ||
+             screenY + ctx.noteH < topY )
             continue;
 
         float headX = leftX + note.m_trackIndex * singleTrackW +
-                      (singleTrackW - noteW) * 0.5f;
+                      (singleTrackW - ctx.noteW) * 0.5f;
 
-        if ( note.m_isSubNote ) {
-            // Polyline sub-note hitboxes are now handled inside renderPolyline
-            // for the parent entity
-        } else {
-            if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
-                snapshot->hitboxes.push_back({ entity,
-                                               HoverPart::Head,
-                                               -1,
-                                               headX,
-                                               screenY - noteH * 0.5f,
-                                               noteW,
-                                               noteH });
-                if ( note.m_type == ::MMM::NoteType::FLICK &&
-                     note.m_dtrack != 0 ) {
-                    float arrowX =
-                        leftX +
-                        (note.m_trackIndex + note.m_dtrack) * singleTrackW +
-                        (singleTrackW - noteW) * 0.5f;
-                    snapshot->hitboxes.push_back({ entity,
-                                                   HoverPart::FlickArrow,
-                                                   -1,
-                                                   arrowX,
-                                                   screenY - noteH * 0.5f,
-                                                   noteW,
-                                                   noteH });
-                } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
-                    snapshot->hitboxes.push_back(
-                        { entity,
-                          HoverPart::HoldEnd,
-                          -1,
-                          headX,
-                          screenY - visualH - noteH * 0.5f,
-                          noteW,
-                          noteH });
+        if ( !note.m_isSubNote && note.m_type != ::MMM::NoteType::POLYLINE ) {
+            // 所有非 Polyline 音符的 Head
+            snapshot->hitboxes.push_back({ entity,
+                                           HoverPart::Head,
+                                           -1,
+                                           headX,
+                                           screenY - ctx.noteH * 0.5f,
+                                           ctx.noteW,
+                                           ctx.noteH });
+
+            if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
+                TextureID arrowId = (note.m_dtrack < 0)
+                                        ? TextureID::FlickArrowLeft
+                                        : TextureID::FlickArrowRight;
+                auto  it = snapshot->uvMap.find(static_cast<uint32_t>(arrowId));
+                float arrowW = ctx.noteW;
+                float arrowH = ctx.noteH;
+                if ( it != snapshot->uvMap.end() ) {
+                    float baseWRatio =
+                        snapshot->uvMap.at(uint32_t(TextureID::Note)).z;
+                    float wRatio = it->second.z / baseWRatio;
+                    arrowW       = ctx.noteW * wRatio;
+                    arrowH       = arrowW * (it->second.w / it->second.z);
                 }
+
+                float arrowX =
+                    leftX + (note.m_trackIndex + note.m_dtrack) * singleTrackW +
+                    (singleTrackW - arrowW) * 0.5f;
+
+                snapshot->hitboxes.push_back({ entity,
+                                               HoverPart::FlickArrow,
+                                               -1,
+                                               arrowX,
+                                               screenY - arrowH * 0.5f,
+                                               arrowW,
+                                               arrowH });
+            } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+                snapshot->hitboxes.push_back(
+                    { entity,
+                      HoverPart::HoldEnd,
+                      -1,
+                      headX,
+                      screenY - visualH - ctx.noteH * 0.5f,
+                      ctx.noteW,
+                      ctx.noteH });
             }
         }
     }
+}
 
-    // 5. 排序渲染
-    std::vector<entt::entity> sortedEntities(visibleEntities.begin(),
-                                             visibleEntities.end());
-    std::sort(sortedEntities.begin(),
-              sortedEntities.end(),
-              [&registry, cache](entt::entity a, entt::entity b) {
-                  const auto &nA = registry.get<NoteComponent>(a),
-                             &nB = registry.get<NoteComponent>(b);
+void NoteRenderSystem::renderNoteBaseLayer(
+    entt::registry& registry, RenderSnapshot* snapshot,
+    const NoteRenderSystem::NoteRenderContext& ctx,
+    const Config::EditorConfig& config, Batcher& batcher, float currentTime,
+    float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
+    float singleTrackW, float renderScaleY)
+{
+    auto                      noteView = registry.view<const NoteComponent>();
+    std::vector<entt::entity> visibleEntities;
+    for ( auto entity : noteView ) {
+        const auto& note = noteView.get<const NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+
+        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
+        float  screenY =
+            judgmentLineY -
+            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
+
+        if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
+            const auto& transform =
+                registry.get<const TransformComponent>(entity);
+            float visualH = transform.m_size.y * renderScaleY;
+            if ( screenY - visualH - ctx.noteH > bottomY ||
+                 screenY + ctx.noteH < topY )
+                continue;
+        }
+
+        visibleEntities.push_back(entity);
+    }
+
+    std::sort(visibleEntities.begin(),
+              visibleEntities.end(),
+              [&registry, &ctx](entt::entity a, entt::entity b) {
+                  const auto &nA = registry.get<const NoteComponent>(a),
+                             &nB = registry.get<const NoteComponent>(b);
                   return (std::abs(nA.m_timestamp - nB.m_timestamp) > 1e-6)
                              ? (nA.m_timestamp > nB.m_timestamp)
                              : (a > b);
               });
 
-    // 6. 基础层渲染
-    for ( auto entity : sortedEntities ) {
-        const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& note      = registry.get<NoteComponent>(entity);
-        double      noteAbsY  = cache->getAbsY(note.m_timestamp);
+    for ( auto entity : visibleEntities ) {
+        const auto& transform = registry.get<const TransformComponent>(entity);
+        const auto& note      = registry.get<const NoteComponent>(entity);
+        double      noteAbsY  = ctx.cache->getAbsY(note.m_timestamp);
         float       screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - currentAbsY) * renderScaleY);
+            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
         float visualH = transform.m_size.y * renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         if ( note.m_type == ::MMM::NoteType::NOTE )
-            NoteRenderSystem::renderTap(batcher,
-                                        note,
-                                        config,
-                                        trackX + (singleTrackW - noteW) * 0.5f,
-                                        screenY,
-                                        noteW,
-                                        noteH,
-                                        baseAspect,
-                                        colorTap);
+            NoteRenderSystem::renderTap(
+                batcher,
+                note,
+                config,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                screenY,
+                ctx.noteW,
+                ctx.noteH,
+                ctx.baseAspect,
+                ctx.colorTap);
         else if ( note.m_type == ::MMM::NoteType::HOLD )
-            NoteRenderSystem::renderHold(batcher,
-                                         note,
-                                         config,
-                                         snapshot,
-                                         trackX + (singleTrackW - noteW) * 0.5f,
-                                         screenY,
-                                         noteW,
-                                         noteH,
-                                         visualH,
-                                         singleTrackW,
-                                         colorHold);
+            NoteRenderSystem::renderHold(
+                batcher,
+                note,
+                config,
+                snapshot,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                screenY,
+                ctx.noteW,
+                ctx.noteH,
+                visualH,
+                singleTrackW,
+                ctx.colorHold);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
                 batcher,
                 note,
                 config,
                 snapshot,
-                trackX + (singleTrackW - noteW) * 0.5f,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
                 screenY,
-                noteW,
-                noteH,
+                ctx.noteW,
+                ctx.noteH,
                 singleTrackW,
-                colorHold,
-                colorArrow);
+                ctx.colorHold,
+                ctx.colorArrow);
         else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(registry,
                                              batcher,
                                              note,
                                              config,
                                              snapshot,
-                                             currentTime,
+                                             (double)currentTime,
                                              judgmentLineY,
                                              leftX,
                                              rightX,
@@ -280,66 +336,94 @@ void NoteRenderSystem::renderNotes(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             colorHold,
-                                             colorNode,
-                                             colorArrow,
+                                             ctx.colorHold,
+                                             ctx.colorNode,
+                                             ctx.colorArrow,
                                              entity,
                                              true);
     }
     batcher.flush();
+}
 
-    // 7. 发光层渲染
+void NoteRenderSystem::renderNoteGlowLayer(
+    entt::registry& registry, RenderSnapshot* snapshot,
+    const NoteRenderSystem::NoteRenderContext& ctx,
+    const Config::EditorConfig& config, float currentTime, float judgmentLineY,
+    float leftX, float rightX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY)
+{
+    auto interactionView = registry.view<const InteractionComponent>();
+    std::vector<entt::entity> hoveredEntities;
+    for ( auto entity : interactionView ) {
+        const auto& ic =
+            interactionView.get<const InteractionComponent>(entity);
+        if ( ic.isHovered ) hoveredEntities.push_back(entity);
+    }
+
+    if ( hoveredEntities.empty() ) return;
+
+    std::sort(hoveredEntities.begin(),
+              hoveredEntities.end(),
+              [&registry, &ctx](entt::entity a, entt::entity b) {
+                  const auto &nA = registry.get<const NoteComponent>(a),
+                             &nB = registry.get<const NoteComponent>(b);
+                  return (std::abs(nA.m_timestamp - nB.m_timestamp) > 1e-6)
+                             ? (nA.m_timestamp > nB.m_timestamp)
+                             : (a > b);
+              });
+
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
-    for ( auto entity : sortedEntities ) {
-        const auto* ic = registry.try_get<InteractionComponent>(entity);
-        if ( !ic || !ic->isHovered ) continue;
-        const auto& transform = registry.get<TransformComponent>(entity);
-        const auto& note      = registry.get<NoteComponent>(entity);
-        double      noteAbsY  = cache->getAbsY(note.m_timestamp);
+    for ( auto entity : hoveredEntities ) {
+        const auto& transform = registry.get<const TransformComponent>(entity);
+        const auto& note      = registry.get<const NoteComponent>(entity);
+        const auto& ic       = registry.get<const InteractionComponent>(entity);
+        double      noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
         float       screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - currentAbsY) * renderScaleY);
+            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
         float     visualH  = transform.m_size.y * renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
-        HoverPart glowPart = static_cast<HoverPart>(ic->hoveredPart);
-        int       glowIdx  = ic->hoveredSubIndex;
+        HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
+        int       glowIdx  = ic.hoveredSubIndex;
 
         if ( note.m_type == ::MMM::NoteType::NOTE )
-            NoteRenderSystem::renderTap(glowBatcher,
-                                        note,
-                                        config,
-                                        trackX + (singleTrackW - noteW) * 0.5f,
-                                        screenY,
-                                        noteW,
-                                        noteH,
-                                        baseAspect,
-                                        colorTap);
+            NoteRenderSystem::renderTap(
+                glowBatcher,
+                note,
+                config,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                screenY,
+                ctx.noteW,
+                ctx.noteH,
+                ctx.baseAspect,
+                ctx.colorTap);
         else if ( note.m_type == ::MMM::NoteType::HOLD )
-            NoteRenderSystem::renderHold(glowBatcher,
-                                         note,
-                                         config,
-                                         snapshot,
-                                         trackX + (singleTrackW - noteW) * 0.5f,
-                                         screenY,
-                                         noteW,
-                                         noteH,
-                                         visualH,
-                                         singleTrackW,
-                                         colorHold,
-                                         glowPart);
+            NoteRenderSystem::renderHold(
+                glowBatcher,
+                note,
+                config,
+                snapshot,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                screenY,
+                ctx.noteW,
+                ctx.noteH,
+                visualH,
+                singleTrackW,
+                ctx.colorHold,
+                glowPart);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
                 glowBatcher,
                 note,
                 config,
                 snapshot,
-                trackX + (singleTrackW - noteW) * 0.5f,
+                trackX + (singleTrackW - ctx.noteW) * 0.5f,
                 screenY,
-                noteW,
-                noteH,
+                ctx.noteW,
+                ctx.noteH,
                 singleTrackW,
-                colorHold,
-                colorArrow,
+                ctx.colorHold,
+                ctx.colorArrow,
                 glowPart);
         else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(registry,
@@ -347,7 +431,7 @@ void NoteRenderSystem::renderNotes(
                                              note,
                                              config,
                                              snapshot,
-                                             currentTime,
+                                             (double)currentTime,
                                              judgmentLineY,
                                              leftX,
                                              rightX,
@@ -355,9 +439,9 @@ void NoteRenderSystem::renderNotes(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             colorHold,
-                                             colorNode,
-                                             colorArrow,
+                                             ctx.colorHold,
+                                             ctx.colorNode,
+                                             ctx.colorArrow,
                                              entity,
                                              false,
                                              glowPart,

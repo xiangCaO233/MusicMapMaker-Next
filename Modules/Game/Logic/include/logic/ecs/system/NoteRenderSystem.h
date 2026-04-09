@@ -42,6 +42,28 @@ public:
         const Config::EditorConfig& config, float mainViewportHeight = 1000.0f);
 
 private:
+    // --- 内部逻辑拆分方法 ---
+
+    static void generateTimelineSnapshot(
+        RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
+        float viewportWidth, float viewportHeight, float judgmentLineY,
+        const Config::EditorConfig& config, const ScrollCache* cache);
+
+    static void generatePreviewSnapshot(
+        RenderSnapshot* snapshot, Batcher& batcher, float viewportWidth,
+        float viewportHeight, float judgmentLineY, int32_t trackCount,
+        const Config::EditorConfig& config, float mainViewportHeight,
+        float& leftX, float& rightX, float& topY, float& bottomY,
+        float& trackAreaW, float& singleTrackW, float& renderScaleY);
+
+    static void generateMainCanvasSnapshot(
+        entt::registry& registry, const entt::registry& timelineRegistry,
+        RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
+        float viewportWidth, float viewportHeight, float judgmentLineY,
+        int32_t trackCount, const Config::EditorConfig& config,
+        const ScrollCache* cache, float& leftX, float& rightX, float& topY,
+        float& bottomY, float& trackAreaW, float& singleTrackW);
+
     static void renderTrackLayout(Batcher& batcher, float viewportWidth,
                                   float viewportHeight, float judgmentLineY,
                                   int32_t                     trackCount,
@@ -52,6 +74,23 @@ private:
                                   float& bottomY, float& trackAreaW,
                                   float& singleTrackW);
 
+    static void drawTrackBackground(Batcher& batcher, int32_t trackCount,
+                                    float leftX, float topY, float bottomY,
+                                    float singleTrackW);
+
+    static void drawJudgmentArea(Batcher& batcher, int32_t trackCount,
+                                 float leftX, float judgmentLineY,
+                                 float singleTrackW, float trackAreaW,
+                                 const Config::EditorConfig& config);
+
+    static void drawBeatLines(Batcher& batcher, float viewportHeight,
+                              float                       judgmentLineY,
+                              const Config::EditorConfig& config,
+                              const entt::registry&       timelineRegistry,
+                              double currentTime, const ScrollCache* cache,
+                              float leftX, float topY, float bottomY,
+                              float trackAreaW);
+
     static void renderNotes(entt::registry& registry, RenderSnapshot* snapshot,
                             const std::string& cameraId, double currentTime,
                             float judgmentLineY, int32_t trackCount,
@@ -59,6 +98,45 @@ private:
                             Batcher& batcher, float leftX, float rightX,
                             float topY, float bottomY, float singleTrackW,
                             float renderScaleY);
+
+    struct NoteRenderContext {
+        float              noteW;
+        float              noteH;
+        float              baseAspect;
+        glm::vec4          colorTap;
+        glm::vec4          colorHold;
+        glm::vec4          colorNode;
+        glm::vec4          colorArrow;
+        const ScrollCache* cache;
+        double             currentAbsY;
+    };
+
+    static NoteRenderContext prepareNoteRenderContext(
+        entt::registry& registry, RenderSnapshot* snapshot, double currentTime,
+        float singleTrackW, const Config::EditorConfig& config);
+
+    static void generateNoteHitboxes(entt::registry&          registry,
+                                     RenderSnapshot*          snapshot,
+                                     const NoteRenderContext& ctx,
+                                     float judgmentLineY, float leftX,
+                                     float topY, float bottomY,
+                                     float singleTrackW, float renderScaleY,
+                                     const Config::EditorConfig& config);
+
+    static void renderNoteBaseLayer(entt::registry&             registry,
+                                    RenderSnapshot*             snapshot,
+                                    const NoteRenderContext&    ctx,
+                                    const Config::EditorConfig& config,
+                                    Batcher& batcher, float currentTime,
+                                    float judgmentLineY, float leftX,
+                                    float rightX, float topY, float bottomY,
+                                    float singleTrackW, float renderScaleY);
+
+    static void renderNoteGlowLayer(
+        entt::registry& registry, RenderSnapshot* snapshot,
+        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        float currentTime, float judgmentLineY, float leftX, float rightX,
+        float topY, float bottomY, float singleTrackW, float renderScaleY);
 
     static void renderTap(Batcher& batcher, const NoteComponent& note,
                           const Config::EditorConfig& config, float x, float y,
@@ -86,6 +164,45 @@ private:
         glm::vec4 colorHold, glm::vec4 colorNode, glm::vec4 colorArrow,
         entt::entity entity = entt::null, bool generateHitboxes = false,
         HoverPart glowPart = HoverPart::None, int glowSubIndex = -1);
+
+    static void debugRenderHitboxes(Batcher& batcher, RenderSnapshot* snapshot);
+
+    static void drawPolylineBody(Batcher& batcher, const NoteComponent& note,
+                                 const ScrollCache* cache,
+                                 RenderSnapshot* snapshot, float judgmentLineY,
+                                 float leftX, float singleTrackW,
+                                 float renderScaleY, double currentAbsY,
+                                 float noteW, float noteH, glm::vec4 colorHold,
+                                 entt::entity entity, bool generateHitboxes,
+                                 HoverPart glowPart, int glowSubIndex);
+
+    static void drawPolylineNodes(Batcher& batcher, const NoteComponent& note,
+                                  const ScrollCache* cache,
+                                  RenderSnapshot* snapshot, float judgmentLineY,
+                                  float leftX, float singleTrackW,
+                                  float renderScaleY, double currentAbsY,
+                                  float noteW, float noteH, glm::vec4 colorNode,
+                                  const Config::EditorConfig& config,
+                                  entt::entity entity, bool generateHitboxes,
+                                  HoverPart glowPart, int glowSubIndex);
+
+    static void drawPolylineHead(Batcher& batcher, const NoteComponent& note,
+                                 const ScrollCache* cache,
+                                 RenderSnapshot* snapshot, float judgmentLineY,
+                                 float leftX, float singleTrackW,
+                                 float renderScaleY, double currentAbsY,
+                                 float noteW, float noteH, glm::vec4 colorHold,
+                                 const Config::EditorConfig& config,
+                                 entt::entity entity, bool generateHitboxes,
+                                 HoverPart glowPart, int glowSubIndex);
+
+    static void drawPolylineDecoration(
+        Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
+        RenderSnapshot* snapshot, float judgmentLineY, float leftX,
+        float singleTrackW, float renderScaleY, double currentAbsY, float noteW,
+        float noteH, glm::vec4 colorHold, glm::vec4 colorArrow,
+        const Config::EditorConfig& config, entt::entity entity,
+        bool generateHitboxes, HoverPart glowPart, int glowSubIndex);
 };
 
 }  // namespace MMM::Logic::System

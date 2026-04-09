@@ -96,8 +96,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // m_uiManager.registerView(
     //     "CLayoutTestUI",
     //     std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
-    m_uiManager.registerView(
-        "DebugWindowUI", std::make_unique<UI::DebugWindowUI>("DebugWindowUI"));
+    // m_uiManager.registerView(
+    //     "DebugWindowUI",
+    //     std::make_unique<UI::DebugWindowUI>("DebugWindowUI"));
 }
 
 GameLoop::~GameLoop() {}

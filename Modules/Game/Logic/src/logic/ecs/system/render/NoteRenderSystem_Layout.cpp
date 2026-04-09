@@ -16,71 +16,19 @@ void NoteRenderSystem::renderTrackLayout(
     const ScrollCache* cache, float& leftX, float& rightX, float& topY,
     float& bottomY, float& trackAreaW, float& singleTrackW)
 {
-    leftX            = viewportWidth * config.visual.trackLayout.left;
-    rightX           = viewportWidth * config.visual.trackLayout.right;
-    topY             = viewportHeight * config.visual.trackLayout.top;
-    bottomY          = viewportHeight * config.visual.trackLayout.bottom;
-    trackAreaW       = rightX - leftX;
-    float trackAreaH = bottomY - topY;
-    singleTrackW     = trackAreaW / static_cast<float>(trackCount);
+    // 1. 基础布局计算
+    leftX        = viewportWidth * config.visual.trackLayout.left;
+    rightX       = viewportWidth * config.visual.trackLayout.right;
+    topY         = viewportHeight * config.visual.trackLayout.top;
+    bottomY      = viewportHeight * config.visual.trackLayout.bottom;
+    trackAreaW   = rightX - leftX;
+    singleTrackW = trackAreaW / static_cast<float>(trackCount);
 
-    // 绘制轨道底板
-    batcher.setTexture(TextureID::Track);
-    auto uvIt =
-        batcher.snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Track));
-    if ( uvIt != batcher.snapshot->uvMap.end() ) {
-        // uvMap.z, w 是归一化的宽高，基于 2048 尺寸
-        float texW_px = uvIt->second.z * 2048.0f;
-        float texH_px = uvIt->second.w * 2048.0f;
+    // 2. 绘制轨道底板
+    NoteRenderSystem::drawTrackBackground(
+        batcher, trackCount, leftX, topY, bottomY, singleTrackW);
 
-        if ( texW_px > 0 && texH_px > 0 ) {
-            float texAspect = texW_px / texH_px;
-            float drawH =
-                singleTrackW /
-                texAspect;  // 每个轨道按照宽度等比缩放计算出的单块高度
-
-            // 为了防止图集边缘线性采样溢出产生黑边，向内收缩 0.5 个像素的 UV
-            const float halfPixelU = 0.5f / 2048.0f;
-            const float halfPixelV = 0.5f / 2048.0f;
-
-            float uMin = uvIt->second.x + halfPixelU;
-            float uMax = uvIt->second.x + uvIt->second.z - halfPixelU;
-
-            for ( int i = 0; i < trackCount; ++i ) {
-                float trackX   = leftX + i * singleTrackW;
-                float currentY = bottomY;  // 从底向上绘制
-
-                // 稍微扩展一点宽度，防止浮点数精度导致的轨道间隙
-                float drawW = singleTrackW + 0.5f;
-
-                while ( currentY > topY ) {
-                    float remainH     = currentY - topY;
-                    float actualDrawH = std::min(drawH, remainH);
-
-                    float vMax = 1.0f;
-                    float vMin = 1.0f - (actualDrawH / drawH);
-
-                    float finalVMin =
-                        uvIt->second.y + vMin * uvIt->second.w + halfPixelV;
-                    float finalVMax =
-                        uvIt->second.y + vMax * uvIt->second.w - halfPixelV;
-
-                    batcher.pushUVQuad(
-                        trackX,
-                        currentY,
-                        drawW,
-                        actualDrawH + 0.5f,  // 高度也稍微向下扩展防止横向接缝
-                        glm::vec2(uMin, finalVMin),
-                        glm::vec2(uMax, finalVMax),
-                        { 1.0f, 1.0f, 1.0f, 1.0f });
-
-                    currentY -= drawH;
-                }
-            }
-        }
-    }
-
-    // 绘制轨道布局包围框
+    // 3. 绘制轨道包围框
     batcher.setTexture(TextureID::None);
     batcher.pushStrokeRect(leftX,
                            topY,
@@ -89,27 +37,103 @@ void NoteRenderSystem::renderTrackLayout(
                            config.visual.trackBoxLineWidth,
                            { 0.5f, 0.5f, 0.5f, 1.0f });
 
-    // 绘制判定区域 (按轨道分别绘制)
+    // 4. 绘制判定区域
+    NoteRenderSystem::drawJudgmentArea(batcher,
+                                       trackCount,
+                                       leftX,
+                                       judgmentLineY,
+                                       singleTrackW,
+                                       trackAreaW,
+                                       config);
+
+    // 5. 绘制拍线
+    NoteRenderSystem::drawBeatLines(batcher,
+                                    viewportHeight,
+                                    judgmentLineY,
+                                    config,
+                                    timelineRegistry,
+                                    currentTime,
+                                    cache,
+                                    leftX,
+                                    topY,
+                                    bottomY,
+                                    trackAreaW);
+}
+
+void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
+                                           float leftX, float topY,
+                                           float bottomY, float singleTrackW)
+{
+    batcher.setTexture(TextureID::Track);
+    auto uvIt =
+        batcher.snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Track));
+    if ( uvIt == batcher.snapshot->uvMap.end() ) return;
+
+    float texW_px = uvIt->second.z * 2048.0f;
+    float texH_px = uvIt->second.w * 2048.0f;
+
+    if ( texW_px <= 0 || texH_px <= 0 ) return;
+
+    float texAspect = texW_px / texH_px;
+    float drawH     = singleTrackW / texAspect;
+
+    const float halfPixelU = 0.5f / 2048.0f;
+    const float halfPixelV = 0.5f / 2048.0f;
+
+    float uMin = uvIt->second.x + halfPixelU;
+    float uMax = uvIt->second.x + uvIt->second.z - halfPixelU;
+
+    for ( int i = 0; i < trackCount; ++i ) {
+        float trackX   = leftX + i * singleTrackW;
+        float currentY = bottomY;
+        float drawW    = singleTrackW + 0.5f;
+
+        while ( currentY > topY ) {
+            float remainH     = currentY - topY;
+            float actualDrawH = std::min(drawH, remainH);
+
+            float vMax = 1.0f;
+            float vMin = 1.0f - (actualDrawH / drawH);
+
+            float finalVMin =
+                uvIt->second.y + vMin * uvIt->second.w + halfPixelV;
+            float finalVMax =
+                uvIt->second.y + vMax * uvIt->second.w - halfPixelV;
+
+            batcher.pushUVQuad(trackX,
+                               currentY,
+                               drawW,
+                               actualDrawH + 0.5f,
+                               glm::vec2(uMin, finalVMin),
+                               glm::vec2(uMax, finalVMax),
+                               { 1.0f, 1.0f, 1.0f, 1.0f });
+
+            currentY -= drawH;
+        }
+    }
+}
+
+void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
+                                        float leftX, float judgmentLineY,
+                                        float singleTrackW, float trackAreaW,
+                                        const Config::EditorConfig& config)
+{
     batcher.setTexture(TextureID::JudgeArea);
     auto judgeUvIt = batcher.snapshot->uvMap.find(
         static_cast<uint32_t>(TextureID::JudgeArea));
+
     if ( judgeUvIt != batcher.snapshot->uvMap.end() ) {
         float texW = judgeUvIt->second.z * 2048.0f;
         float texH = judgeUvIt->second.w * 2048.0f;
         if ( texW > 0 && texH > 0 ) {
             float aspect = texW / texH;
+            float drawW  = singleTrackW * config.visual.noteScaleX;
+            float drawH  = (singleTrackW / aspect) * config.visual.noteScaleY;
 
-            // 应用 noteScaleX 和 noteScaleY 缩放判定区
-            float drawW = singleTrackW * config.visual.noteScaleX;
-            float drawH = (singleTrackW / aspect) * config.visual.noteScaleY;
-
-            // 为了防止图集边缘线性采样溢出产生黑边
             const float halfPixelU = 0.5f / 2048.0f;
             const float halfPixelV = 0.5f / 2048.0f;
 
             for ( int i = 0; i < trackCount; ++i ) {
-                // 计算当前轨道的中心 X，然后根据缩放后的宽度求得实际绘制的 left
-                // X
                 float trackCenterX =
                     leftX + i * singleTrackW + singleTrackW * 0.5f;
                 float drawX = trackCenterX - drawW * 0.5f;
@@ -128,7 +152,6 @@ void NoteRenderSystem::renderTrackLayout(
             }
         }
     } else {
-        // Fallback: 绘制原有的纯色判定线
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(leftX,
                          judgmentLineY + config.visual.judgelineWidth * 0.5f,
@@ -136,14 +159,19 @@ void NoteRenderSystem::renderTrackLayout(
                          config.visual.judgelineWidth,
                          { 1.0f, 1.0f, 1.0f, 1.0f });
     }
+}
 
-    // ================= 绘制拍线 =================
+void NoteRenderSystem::drawBeatLines(
+    Batcher& batcher, float viewportHeight, float judgmentLineY,
+    const Config::EditorConfig& config, const entt::registry& timelineRegistry,
+    double currentTime, const ScrollCache* cache, float leftX, float topY,
+    float bottomY, float trackAreaW)
+{
     if ( !cache ) return;
 
     int beatDivisor = config.settings.beatDivisor;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-    // 筛选出所有 BPM 标记
     std::vector<const TimelineComponent*> bpmEvents;
     auto tlView = timelineRegistry.view<const TimelineComponent>();
     for ( auto entity : tlView ) {
@@ -152,10 +180,8 @@ void NoteRenderSystem::renderTrackLayout(
             bpmEvents.push_back(&tl);
         }
     }
-
     if ( bpmEvents.empty() ) return;
 
-    // 按时间升序
     std::stable_sort(
         bpmEvents.begin(),
         bpmEvents.end(),
@@ -175,7 +201,6 @@ void NoteRenderSystem::renderTrackLayout(
         [&skin](int denominator) -> std::pair<glm::vec4, float> {
         std::string   key = "beat_lines.beat_" + std::to_string(denominator);
         Config::Color c   = skin.getColor(key);
-        // 如果返回了默认错误色(紫色)，尝试获取默认配置
         if ( c.r == 1.0f && c.g == 0.0f && c.b == 1.0f && c.a == 1.0f ) {
             c   = skin.getColor("beat_lines.default");
             key = "beat_lines_width.default";
@@ -203,23 +228,16 @@ void NoteRenderSystem::renderTrackLayout(
         double beatDuration = 60.0 / bpmVal;
         double stepDuration = beatDuration / beatDivisor;
 
-        // 找到第一个大于等于 startTime 且 >= bpmTime 的节拍时间点
-        double startCalcTime = std::max(bpmTime, startTime);
-
-        // 计算从 bpmTime 开始，到 startCalcTime 过了多少个 step
-        // 加上一个小偏移量避免浮点误差
-        int64_t stepOffset = 0;
+        double  startCalcTime = std::max(bpmTime, startTime);
+        int64_t stepOffset    = 0;
         if ( startCalcTime > bpmTime ) {
             stepOffset = static_cast<int64_t>(
                 std::ceil((startCalcTime - bpmTime) / stepDuration - 1e-4));
         }
 
         double t = bpmTime + stepOffset * stepDuration;
-
         while ( t < nextBpmTime && t <= endTime ) {
-            // 当前 step 在这拍里的索引 (0 代表一拍的开头)
-            int beatIndex = stepOffset % beatDivisor;
-
+            int beatIndex   = stepOffset % beatDivisor;
             int denominator = 1;
             if ( beatIndex != 0 ) {
                 int gcd     = std::gcd(beatIndex, beatDivisor);
@@ -227,16 +245,12 @@ void NoteRenderSystem::renderTrackLayout(
             }
 
             auto [color, width] = getBeatLineConfig(denominator);
-
-            double absY = cache->getAbsY(t);
+            double absY         = cache->getAbsY(t);
             float  y = judgmentLineY - static_cast<float>(absY - currentAbsY);
 
-            // 只绘制屏幕范围内的线
             if ( y >= topY && y <= bottomY ) {
-                // 检查是否为当前磁吸的拍线
                 if ( batcher.snapshot->isSnapped &&
                      std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
-                    // 绘制三层发光效果 (在其下方绘制)
                     glm::vec4 glowCol = color;
                     glowCol.a *= 0.6f;
                     batcher.pushQuad(leftX,
@@ -257,11 +271,9 @@ void NoteRenderSystem::renderTrackLayout(
                                      width + 20.0f,
                                      glowCol);
                 }
-
                 batcher.pushQuad(
                     leftX, y + width * 0.5f, trackAreaW, width, color);
             }
-
             stepOffset++;
             t = bpmTime + stepOffset * stepDuration;
         }
