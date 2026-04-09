@@ -1,3 +1,4 @@
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/render/Batcher.h"
@@ -50,7 +51,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                                   RenderSnapshot* snapshot, float x, float y,
                                   float w, float h, float visualH,
                                   float singleTrackW, glm::vec4 color,
-                                  glm::vec4 hoverTint)
+                                  HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
     glm::vec2 endSize  = getDrawSize(snapshot, TextureID::HoldEnd, w, h);
@@ -62,28 +63,36 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
     float bodyX = x + (w - bodySize.x) * 0.5f;
 
     // 1. Body
-    batcher.setTexture(TextureID::HoldBodyVertical);
-    batcher.pushQuad(bodyX, y, bodySize.x, visualH, color * hoverTint);
+    if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldBody ) {
+        batcher.setTexture(TextureID::HoldBodyVertical);
+        batcher.pushQuad(bodyX, y, bodySize.x, visualH, color);
+    }
 
     // 2. Head
-    batcher.setTexture(TextureID::Note);
-    batcher.pushFilledQuad(headX,
-                           y + headSize.y * 0.5f,
-                           headSize.x,
-                           headSize.y,
-                           { getTexAspect(snapshot, TextureID::Note), 1.0f },
-                           config.visual.noteFillMode,
-                           color * hoverTint);
+    if ( glowPart == HoverPart::None || glowPart == HoverPart::Head ) {
+        batcher.setTexture(TextureID::Note);
+        batcher.pushFilledQuad(
+            headX,
+            y + headSize.y * 0.5f,
+            headSize.x,
+            headSize.y,
+            { getTexAspect(snapshot, TextureID::Note), 1.0f },
+            config.visual.noteFillMode,
+            color);
+    }
 
     // 3. End
-    batcher.setTexture(TextureID::HoldEnd);
-    batcher.pushFilledQuad(endX,
-                           y - visualH + endSize.y * 0.5f,
-                           endSize.x,
-                           endSize.y,
-                           { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
-                           config.visual.noteFillMode,
-                           color * hoverTint);
+    if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd ) {
+        batcher.setTexture(TextureID::HoldEnd);
+        batcher.pushFilledQuad(
+            endX,
+            y - visualH + endSize.y * 0.5f,
+            endSize.x,
+            endSize.y,
+            { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
+            config.visual.noteFillMode,
+            color);
+    }
 }
 
 void NoteRenderSystem::renderFlick(Batcher&                           batcher,
@@ -92,13 +101,14 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    RenderSnapshot* snapshot, float x, float y,
                                    float w, float h, float singleTrackW,
                                    glm::vec4 color, glm::vec4 arrowColor,
-                                   glm::vec4 hoverTint)
+                                   HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
     float     headX    = x;
 
     // 1. BodyH
-    if ( note.m_dtrack != 0 ) {
+    if ( note.m_dtrack != 0 &&
+         (glowPart == HoverPart::None || glowPart == HoverPart::HoldBody) ) {
         auto itBodyH = snapshot->uvMap.find(
             static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
         if ( itBodyH != snapshot->uvMap.end() ) {
@@ -110,23 +120,26 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                startTrack * singleTrackW + singleTrackW * 0.5f;
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
-            batcher.pushQuad(
-                bodyX, y + drawH * 0.5f, drawW, drawH, color * hoverTint);
+            batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, color);
         }
     }
 
     // 2. Head
-    batcher.setTexture(TextureID::Note);
-    batcher.pushFilledQuad(headX,
-                           y + headSize.y * 0.5f,
-                           headSize.x,
-                           headSize.y,
-                           { getTexAspect(snapshot, TextureID::Note), 1.0f },
-                           config.visual.noteFillMode,
-                           color * hoverTint);
+    if ( glowPart == HoverPart::None || glowPart == HoverPart::Head ) {
+        batcher.setTexture(TextureID::Note);
+        batcher.pushFilledQuad(
+            headX,
+            y + headSize.y * 0.5f,
+            headSize.x,
+            headSize.y,
+            { getTexAspect(snapshot, TextureID::Note), 1.0f },
+            config.visual.noteFillMode,
+            color);
+    }
 
     // 3. Arrow
-    if ( note.m_dtrack != 0 ) {
+    if ( note.m_dtrack != 0 &&
+         (glowPart == HoverPart::None || glowPart == HoverPart::FlickArrow) ) {
         TextureID arrowId   = (note.m_dtrack < 0) ? TextureID::FlickArrowLeft
                                                   : TextureID::FlickArrowRight;
         glm::vec2 arrowSize = getDrawSize(snapshot, arrowId, w, h);
@@ -140,7 +153,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                arrowSize.y,
                                { getTexAspect(snapshot, arrowId), 1.0f },
                                config.visual.noteFillMode,
-                               arrowColor * hoverTint);
+                               arrowColor);
     }
 }
 

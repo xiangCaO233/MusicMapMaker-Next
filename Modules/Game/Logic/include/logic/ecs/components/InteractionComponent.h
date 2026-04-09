@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace MMM::Logic
 {
 
@@ -10,9 +12,11 @@ namespace MMM::Logic
  * 线程的指令进行更新。
  */
 struct InteractionComponent {
-    bool isHovered{ false };
-    bool isSelected{ false };
-    bool isDragging{ false };
+    bool    isHovered{ false };
+    bool    isSelected{ false };
+    bool    isDragging{ false };
+    uint8_t hoveredPart{ 0 };  // HoverPart
+    int     hoveredSubIndex{ -1 };
 };
 
 }  // namespace MMM::Logic

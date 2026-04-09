@@ -178,7 +178,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             }
         }
 
-        entt::entity hoveredEntity = entt::null;
+        entt::entity hoveredEntity   = entt::null;
+        uint8_t      hoveredPart     = 0;
+        int          hoveredSubIndex = -1;
 
         // 倒序遍历 Hitbox (最上层的优先)
         for ( auto it = m_currentSnapshot->hitboxes.rbegin();
@@ -187,14 +189,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
                  localMousePos.y >= it->y &&
                  localMousePos.y <= it->y + it->h ) {
-                hoveredEntity = it->entity;
+                hoveredEntity   = it->entity;
+                hoveredPart     = static_cast<uint8_t>(it->part);
+                hoveredSubIndex = it->subIndex;
                 break;
             }
         }
 
         // 推送悬停指令到逻辑线程
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdSetHoveredEntity{ hoveredEntity }));
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
+                hoveredEntity, hoveredPart, hoveredSubIndex }));
 
         // --- 交互：点击选择与拖拽 ---
         if ( ImGui::IsMouseClicked(0) ) {

@@ -57,8 +57,11 @@ void BeatmapSession::processCommands()
                 } else if constexpr ( std::is_same_v<T, CmdSetHoveredEntity> ) {
                     auto view = m_noteRegistry.view<InteractionComponent>();
                     for ( auto entity : view ) {
-                        m_noteRegistry.get<InteractionComponent>(entity)
-                            .isHovered = false;
+                        auto& ic =
+                            m_noteRegistry.get<InteractionComponent>(entity);
+                        ic.isHovered       = false;
+                        ic.hoveredPart     = 0;
+                        ic.hoveredSubIndex = -1;
                     }
                     if ( arg.entity != entt::null ) {
                         if ( !m_noteRegistry.all_of<InteractionComponent>(
@@ -66,8 +69,11 @@ void BeatmapSession::processCommands()
                             m_noteRegistry.emplace<InteractionComponent>(
                                 arg.entity);
                         }
-                        m_noteRegistry.get<InteractionComponent>(arg.entity)
-                            .isHovered = true;
+                        auto& ic = m_noteRegistry.get<InteractionComponent>(
+                            arg.entity);
+                        ic.isHovered       = true;
+                        ic.hoveredPart     = arg.part;
+                        ic.hoveredSubIndex = arg.subIndex;
                     }
                 } else if constexpr ( std::is_same_v<T, CmdSelectEntity> ) {
                     if ( arg.clearOthers ) {

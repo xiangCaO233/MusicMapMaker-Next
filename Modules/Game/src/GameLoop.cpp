@@ -14,6 +14,7 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/DebugWindowUI.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
@@ -95,9 +96,8 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // m_uiManager.registerView(
     //     "CLayoutTestUI",
     //     std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
-    // m_uiManager.registerView(
-    //     "DebugWindowUI",
-    //     std::make_unique<Graphic::UI::DebugWindowUI>("DebugWindowUI"));
+    m_uiManager.registerView(
+        "DebugWindowUI", std::make_unique<UI::DebugWindowUI>("DebugWindowUI"));
 }
 
 GameLoop::~GameLoop() {}

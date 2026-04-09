@@ -33,15 +33,28 @@ enum class TextureID : uint32_t {
     EffectStart = 1000
 };
 
+enum class HoverPart : uint8_t {
+    None = 0,
+    Head,
+    HoldBody,
+    HoldEnd,
+    FlickArrow,
+    PolylineNode
+};
+
 /**
  * @brief 碰撞拾取包围盒
  */
 struct Hitbox {
     entt::entity entity;
-    float        x;
-    float        y;
-    float        w;
-    float        h;
+    HoverPart    part{ HoverPart::None };
+    int          subIndex{
+                 -1
+    };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
+    float x;
+    float y;
+    float w;
+    float h;
 };
 
 /**

@@ -68,23 +68,24 @@ private:
                            const Config::EditorConfig& config,
                            RenderSnapshot* snapshot, float x, float y, float w,
                            float h, float visualH, float singleTrackW,
-                           glm::vec4 color, glm::vec4 hoverTint);
+                           glm::vec4 color,
+                           HoverPart glowPart = HoverPart::None);
 
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
                             const Config::EditorConfig& config,
                             RenderSnapshot* snapshot, float x, float y, float w,
                             float h, float singleTrackW, glm::vec4 color,
-                            glm::vec4 arrowColor, glm::vec4 hoverTint);
+                            glm::vec4 arrowColor,
+                            HoverPart glowPart = HoverPart::None);
 
-    static void renderPolyline(entt::registry& registry, Batcher& batcher,
-                               const NoteComponent&        note,
-                               const Config::EditorConfig& config,
-                               RenderSnapshot* snapshot, double currentTime,
-                               float judgmentLineY, float leftX, float rightX,
-                               float topY, float bottomY, float singleTrackW,
-                               float renderScaleY, glm::vec4 colorHold,
-                               glm::vec4 colorNode, glm::vec4 colorArrow,
-                               glm::vec4 hoverTint);
+    static void renderPolyline(
+        entt::registry& registry, Batcher& batcher, const NoteComponent& note,
+        const Config::EditorConfig& config, RenderSnapshot* snapshot,
+        double currentTime, float judgmentLineY, float leftX, float rightX,
+        float topY, float bottomY, float singleTrackW, float renderScaleY,
+        glm::vec4 colorHold, glm::vec4 colorNode, glm::vec4 colorArrow,
+        entt::entity entity = entt::null, bool generateHitboxes = false,
+        HoverPart glowPart = HoverPart::None, int glowSubIndex = -1);
 };
 
 }  // namespace MMM::Logic::System

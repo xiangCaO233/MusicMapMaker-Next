@@ -49,7 +49,9 @@ struct CmdLoadBeatmap {
  * @brief 设置悬停实体指令
  */
 struct CmdSetHoveredEntity {
-    entt::entity entity;  // 如果为 entt::null 则表示取消悬停
+    entt::entity entity;    // 如果为 entt::null 则表示取消悬停
+    uint8_t      part;      // 悬停的具体部位 (HoverPart)
+    int          subIndex;  // 悬停的具体子索引
 };
 
 /**

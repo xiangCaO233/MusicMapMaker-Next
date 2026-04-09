@@ -11,6 +11,7 @@ add_library(UI STATIC
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/SettingsView.cpp
     src/ui/imgui/manager/ToolbarView.cpp
+    src/ui/imgui/DebugWindowUI.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp
 )
@@ -18,6 +19,7 @@ add_library(UI STATIC
 target_include_directories(UI
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Logic/include
+    PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Canvas/include
 )
 
 target_link_libraries(UI
