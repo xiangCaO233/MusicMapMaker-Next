@@ -25,6 +25,7 @@ constexpr const char* ICON_MMM_MUSIC  = "\xef\x80\x81";  ///< \uf001 music
 constexpr const char* ICON_MMM_COG    = "\xef\x80\x93";  ///< \uf013 cog
 constexpr const char* ICON_MMM_SEARCH = "\xef\x80\x82";  ///< \uf002 search
 constexpr const char* ICON_MMM_SAVE   = "\xef\x83\x87";  ///< \uf0c7 floppy-disk
+constexpr const char* ICON_MMM_PACK   = "\xef\x86\x87";  ///< \uf187 box-archive
 constexpr const char* ICON_MMM_BOOK   = "\xef\x80\xad";  ///< \uf02d book
 constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
@@ -47,6 +48,13 @@ constexpr const char* ICON_MMM_REDO = "\xef\x8b\xb9";  ///< \uf2f9 rotate-right
 constexpr const char* ICON_MMM_COPY = "\xef\x83\x85";  ///< \uf0c5 copy
 constexpr const char* ICON_MMM_PASTE =
     "\xef\x8c\xa8";  ///< \uf328 clipboard / paste
+
+constexpr const char* ICON_MMM_ARROWS_UP_DOWN =
+    "\xef\x81\xbd";  ///< \uf07d arrows-up-down
+
+constexpr const char* ICON_MMM_MAGNET = "\xef\x81\xb6";  ///< \uf076 magnet
+constexpr const char* ICON_MMM_BARS =
+    "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
 
 // --- Window Control Icons ---
 constexpr const char* ICON_MMM_MINIMIZE =

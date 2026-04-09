@@ -21,7 +21,9 @@ public:
     void update(UIManager* sourceManager) override;
 
 private:
-    Logic::EditTool m_currentTool = Logic::EditTool::Move;
+    Logic::EditTool m_currentTool      = Logic::EditTool::Move;
+    bool            m_showDivisorPopup = false;
+    float           m_lastBtnY         = 0.0f;
 
     /**
      * @brief 绘制工具按钮

@@ -14,6 +14,9 @@ void ToolbarView::update(UIManager* sourceManager)
 {
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
 
+    // 从逻辑引擎同步当前工具状态
+    m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
+
     // 1. 获取图标字体尺寸以计算固定宽度
     ImFont* toolFont = skinCfg.getFont("setting_internal");
 
@@ -66,29 +69,210 @@ void ToolbarView::update(UIManager* sourceManager)
         // 1. 移动工具 (使用四向箭头图标 \uf047)
         drawToolButton(ICON_MMM_MOVE_ARROWS,
                        Logic::EditTool::Move,
-                       "Move Tool (V)",
+                       TR("ui.toolbar.move"),
                        drawW);
 
         // 2. 矩形选取工具
         drawToolButton(ICON_MMM_SQUARE_SELECT,
                        Logic::EditTool::Marquee,
-                       "Marquee Tool (M)",
+                       TR("ui.toolbar.marquee"),
                        drawW);
 
         // 3. 绘制工具 (铅笔)
         drawToolButton(
-            ICON_MMM_PEN, Logic::EditTool::Draw, "Draw Tool (P)", drawW);
+            ICON_MMM_PEN, Logic::EditTool::Draw, TR("ui.toolbar.draw"), drawW);
 
         // 4. 裁剪工具 (剪刀)
-        drawToolButton(
-            ICON_MMM_SCISSORS, Logic::EditTool::Cut, "Cut Tool (C)", drawW);
+        drawToolButton(ICON_MMM_SCISSORS,
+                       Logic::EditTool::Cut,
+                       TR("ui.toolbar.cut"),
+                       drawW);
+
+        ImGui::Separator();
+
+        // --- 鼠标滚动翻转开关 ---
+        auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+        bool isReverse = editorCfg.settings.reverseScroll;
+
+        if ( isReverse ) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
+        }
+
+        if ( ImGui::Button(ICON_MMM_ARROWS_UP_DOWN, ImVec2(drawW, drawW)) ) {
+            auto newConfig                   = editorCfg;
+            newConfig.settings.reverseScroll = !isReverse;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s", TR("ui.toolbar.reverse_scroll").data());
+        }
+        ImGui::PopStyleColor(3);
+
+        // --- 滚动磁吸开关 ---
+        bool isScrollSnap = editorCfg.settings.scrollSnap;
+        if ( isScrollSnap ) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+        }
+
+        if ( ImGui::Button(ICON_MMM_MAGNET, ImVec2(drawW, drawW)) ) {
+            auto newConfig                = editorCfg;
+            newConfig.settings.scrollSnap = !isScrollSnap;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s", TR("ui.toolbar.scroll_snap").data());
+        }
+        ImGui::PopStyleColor(3);
+
+        // --- 线性滚轮映射开关 (SCROLLTIMING) ---
+        // 选中: 使用SCROLLTIMING映射 (enableLinearScrollMapping = false)
+        // 未选中: 纯线性映射 (enableLinearScrollMapping = true)
+        bool isTimingMapped = !editorCfg.visual.enableLinearScrollMapping;
+        if ( isTimingMapped ) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+        }
+
+        if ( ImGui::Button(ICON_MMM_EYE, ImVec2(drawW, drawW)) ) {
+            auto newConfig = editorCfg;
+            newConfig.visual.enableLinearScrollMapping =
+                isTimingMapped;  // toggle it
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s",
+                              TR("ui.toolbar.scroll_timing_mapping").data());
+        }
+        ImGui::PopStyleColor(3);
+
+        ImGui::Separator();
+
+        // --- 分拍数量设置 (Beat Divisor) ---
+        if ( m_showDivisorPopup ) {
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+        }
+
+        if ( ImGui::Button(ICON_MMM_BARS, ImVec2(drawW, drawW)) ) {
+            m_showDivisorPopup = !m_showDivisorPopup;
+        }
+
+        // 记录按钮的Y坐标，用于悬浮窗对齐
+        m_lastBtnY = ImGui::GetItemRectMin().y;
+
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s", TR("ui.toolbar.beat_divisor").data());
+        }
+        ImGui::PopStyleColor(3);
 
         if ( toolFont ) ImGui::PopFont();
     }
 
     ImGui::End();
 
+    // 我们必须在这个位置把上面为 Begin() 推入的5个样式弹出来
     ImGui::PopStyleVar(5);
+
+    // --- 绘制分拍数量设置悬浮窗 ---
+    if ( m_showDivisorPopup ) {
+        // 在 Toolbar 窗口左侧显示悬浮窗
+
+        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
+        // X = 工具栏左边缘往左 4px
+        // Y = 按钮的顶部对齐
+        ImVec2 popupPos = ImVec2(toolbarPos.x - 4.0f, m_lastBtnY);
+
+        // Pivot(1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
+        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+        ImGuiWindowFlags popupFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                              ImVec4(0.15f, 0.15f, 0.15f, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+
+        if ( ImGui::Begin("##BeatDivisorPopup", nullptr, popupFlags) ) {
+            auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            int  currentDivisor = editorCfg.settings.beatDivisor;
+
+            ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor"));
+            ImGui::Separator();
+
+            ImGui::SetNextItemWidth(120.0f);
+            if ( ImGui::SliderInt("##DivisorSlider", &currentDivisor, 1, 64) ) {
+                auto newConfig                 = editorCfg;
+                newConfig.settings.beatDivisor = currentDivisor;
+                Logic::EditorEngine::instance().setEditorConfig(newConfig);
+            }
+
+            // 可以加一些常用的快速设置按钮
+            const int commonDivisors[] = { 1, 2, 3, 4, 6, 8, 12, 16 };
+            for ( int i = 0; i < 8; ++i ) {
+                if ( i > 0 && i % 4 != 0 ) ImGui::SameLine();
+                char buf[16];
+                snprintf(buf, sizeof(buf), "1/%d", commonDivisors[i]);
+                if ( ImGui::Button(buf, ImVec2(35, 24)) ) {
+                    auto newConfig                 = editorCfg;
+                    newConfig.settings.beatDivisor = commonDivisors[i];
+                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
+                }
+            }
+        }
+        ImGui::End();
+
+        ImGui::PopStyleColor(2);
+        ImGui::PopStyleVar(2);
+    }
 }
 
 void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
