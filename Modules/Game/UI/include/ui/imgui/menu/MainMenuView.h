@@ -20,6 +20,7 @@ public:
 
 private:
     void openFolderPicker();
+    void openPackFilePicker();
     void dispatchCommand(const Logic::LogicCommand& cmd);
 };
 

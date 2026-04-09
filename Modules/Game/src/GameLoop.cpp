@@ -20,6 +20,7 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
+#include "ui/imgui/manager/SearchView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include <nfd.h>
 
@@ -51,6 +52,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<UI::FloatingManagerUI>("SideBarManager"));
     auto sidebar_manager =
         m_uiManager.getView<UI::FloatingManagerUI>("SideBarManager");
+    sidebar_manager->registerSubView(
+        TR("title.search_manager"),
+        std::make_unique<UI::SearchView>(TR("title.search_manager")));
     sidebar_manager->registerSubView(
         TR("title.file_manager"),
         std::make_unique<UI::FileManagerView>(TR("title.file_manager")));

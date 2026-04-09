@@ -122,6 +122,13 @@ void SideBarUI::update(UIManager* sourceManager)
     CLayVBox vbox;
     vbox.setPadding(0, 0, 0, 0)
         .setSpacing(0)
+        .addElement("SearchButton",
+                    Sizing::Fixed(sidebarWidth),
+                    Sizing::Fixed(sidebarWidth),
+                    [=](Clay_BoundingBox rect, bool isHovered) {
+                        DrawSidebarButton(
+                            ICON_MMM_SEARCH, SideBarTab::Search, rect);
+                    })
         .addElement("FileExplorerButton",
                     Sizing::Fixed(sidebarWidth),
                     Sizing::Fixed(sidebarWidth),

@@ -169,6 +169,22 @@ struct CmdSaveBeatmap {
 };
 
 /**
+ * @brief 打包谱面指令
+ */
+struct CmdPackBeatmap {
+    std::string exportPath;
+};
+
+/**
+ * @brief 滚动指令 (鼠标滚轮)
+ */
+struct CmdScroll {
+    std::string cameraId;
+    float       wheel;
+    bool        isShiftDown;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
 using LogicCommand =
@@ -177,6 +193,6 @@ using LogicCommand =
                  CmdStartDrag, CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount,
                  CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool,
                  CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-                 CmdCut, CmdSaveBeatmap>;
+                 CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll>;
 
 }  // namespace MMM::Logic

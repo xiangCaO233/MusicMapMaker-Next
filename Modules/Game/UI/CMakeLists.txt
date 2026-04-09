@@ -6,6 +6,7 @@ add_library(UI STATIC
     src/ui/imgui/SideBarUI.cpp
     src/ui/imgui/menu/MainMenuView.cpp
     src/ui/imgui/manager/FileManagerView.cpp
+    src/ui/imgui/manager/SearchView.cpp
     src/ui/imgui/manager/AudioManagerView.cpp
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/SettingsView.cpp

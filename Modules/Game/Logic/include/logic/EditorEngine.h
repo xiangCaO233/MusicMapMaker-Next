@@ -101,6 +101,11 @@ public:
     }
 
     /**
+     * @brief 获取当前工具类型
+     */
+    EditTool getCurrentTool() const;
+
+    /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
      */
     void setEditorConfig(const Config::EditorConfig& config);

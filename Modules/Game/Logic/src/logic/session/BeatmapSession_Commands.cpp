@@ -3,6 +3,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -116,6 +117,15 @@ void BeatmapSession::processCommands()
                                     currentAbsY + (judgmentLineY - arg.mouseY);
                                 double targetTime = cache->getTime(targetAbsY);
 
+                                // 磁吸处理
+                                auto snap = getSnapResult(targetTime,
+                                                          arg.mouseY,
+                                                          it->second,
+                                                          m_lastConfig);
+                                if ( snap.isSnapped ) {
+                                    targetTime = snap.snappedTime;
+                                }
+
                                 if ( auto* note =
                                          m_noteRegistry.try_get<NoteComponent>(
                                              m_draggedEntity) ) {
@@ -154,6 +164,8 @@ void BeatmapSession::processCommands()
                                 .get<InteractionComponent>(m_draggedEntity)
                                 .isDragging = false;
                         }
+                        // 拖拽结束后重新构建打击事件列表，确保音效同步
+                        rebuildHitEvents();
                     }
                     m_draggedEntity = entt::null;
                 } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
@@ -163,9 +175,11 @@ void BeatmapSession::processCommands()
                             arg.trackCount;
                     }
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
-                    m_currentTime = arg.time;
-                    m_syncClock.reset(arg.time);
-                    Audio::AudioManager::instance().seek(arg.time);
+                    double totalTime =
+                        Audio::AudioManager::instance().getTotalTime();
+                    m_currentTime = std::clamp(arg.time, 0.0, totalTime);
+                    m_syncClock.reset(m_currentTime);
+                    Audio::AudioManager::instance().seek(m_currentTime);
                     // Seek 时同步索引并清理残留特效
                     syncHitIndex();
                     m_hitFXSystem.clearActiveEffects();
@@ -178,6 +192,96 @@ void BeatmapSession::processCommands()
                     m_mouseX          = arg.mouseX;
                     m_mouseY          = arg.mouseY;
                     m_isMouseInCanvas = arg.isHovering;
+                } else if constexpr ( std::is_same_v<T, CmdScroll> ) {
+                    float wheel = arg.wheel;
+                    if ( m_lastConfig.settings.reverseScroll ) {
+                        wheel = -wheel;
+                    }
+
+                    double targetTime = m_currentTime;
+
+                    if ( m_lastConfig.settings.scrollSnap ) {
+                        // 滚动磁吸逻辑
+                        int beatDivisor = m_lastConfig.settings.beatDivisor;
+                        if ( beatDivisor <= 0 ) beatDivisor = 4;
+
+                        // 获取所有 BPM 事件
+                        std::vector<const TimelineComponent*> bpmEvents;
+                        auto                                  tlView =
+                            m_timelineRegistry.view<const TimelineComponent>();
+                        for ( auto entity : tlView ) {
+                            const auto& tl =
+                                tlView.get<const TimelineComponent>(entity);
+                            if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+                                bpmEvents.push_back(&tl);
+                            }
+                        }
+
+                        if ( !bpmEvents.empty() ) {
+                            std::sort(bpmEvents.begin(),
+                                      bpmEvents.end(),
+                                      [](const auto* a, const auto* b) {
+                                          return a->m_timestamp <
+                                                 b->m_timestamp;
+                                      });
+
+                            // 找到当前时间所在的 BPM 区间
+                            size_t currentIdx = 0;
+                            for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+                                if ( m_currentTime >=
+                                     bpmEvents[i]->m_timestamp ) {
+                                    currentIdx = i;
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            const auto* currentBPM = bpmEvents[currentIdx];
+                            double      bpmVal     = currentBPM->m_value;
+                            double      beatDuration =
+                                60.0 / (bpmVal > 0 ? bpmVal : 120.0);
+                            double stepDuration = beatDuration / beatDivisor;
+
+                            double relativeTime =
+                                m_currentTime - currentBPM->m_timestamp;
+                            double stepCount = relativeTime / stepDuration;
+
+                            // 根据滚轮方向决定是向上取整还是向下取整，以确保“下一个”或“上一个”
+                            if ( wheel > 0 ) {
+                                // 向上滚动 (时间减小)
+                                // 我们想要寻找上一个分拍线
+                                targetTime = currentBPM->m_timestamp +
+                                             std::floor(stepCount - 0.001) *
+                                                 stepDuration;
+                            } else {
+                                // 向下滚动 (时间增大)
+                                // 我们想要寻找下一个分拍线
+                                targetTime =
+                                    currentBPM->m_timestamp +
+                                    std::ceil(stepCount + 0.001) * stepDuration;
+                            }
+                        } else {
+                            // 无 BPM 事件，回退到普通滚动
+                            double step = 0.25;
+                            if ( arg.isShiftDown ) step *= 3.0;
+                            targetTime = m_currentTime -
+                                         static_cast<double>(wheel) * step;
+                        }
+                    } else {
+                        // 普通滚动逻辑
+                        double step = 0.25;
+                        if ( arg.isShiftDown ) step *= 3.0;
+                        targetTime =
+                            m_currentTime - static_cast<double>(wheel) * step;
+                    }
+
+                    double totalTime =
+                        Audio::AudioManager::instance().getTotalTime();
+                    m_currentTime = std::clamp(targetTime, 0.0, totalTime);
+                    m_syncClock.reset(m_currentTime);
+                    Audio::AudioManager::instance().seek(m_currentTime);
+                    syncHitIndex();
+                    m_hitFXSystem.clearActiveEffects();
                 }
             },
             cmd);

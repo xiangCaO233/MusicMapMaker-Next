@@ -2,6 +2,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
@@ -349,6 +350,18 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             Event::OpenProjectEvent ev;
             ev.m_projectPath = folderPath;
             Event::EventBus::instance().publish(ev);
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified &&
+         ImGuiFileDialog::Instance()->Display(
+             "PackFilePicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            std::string filePath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdPackBeatmap{ filePath }));
         }
         ImGuiFileDialog::Instance()->Close();
     }

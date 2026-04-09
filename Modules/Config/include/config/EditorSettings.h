@@ -82,10 +82,17 @@ struct EditorSettings {
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
 
+    /// @brief 是否反转鼠标滚动方向
+    bool reverseScroll{ false };
+
+    /// @brief 是否开启滚动吸附
+    bool scrollSnap{ false };
+
     // TODO: 后续可在此添加自动保存(AutoSave)等配置
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
-                                   filePickerStyle, beatDivisor)
+                                   filePickerStyle, beatDivisor, reverseScroll,
+                                   scrollSnap)
 };
 
 }  // namespace MMM::Config

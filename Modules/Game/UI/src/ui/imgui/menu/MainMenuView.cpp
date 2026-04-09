@@ -88,6 +88,37 @@ void MainMenuView::openFolderPicker()
     }
 }
 
+void MainMenuView::openPackFilePicker()
+{
+    auto& config = Config::AppConfig::instance().getEditorSettings();
+    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        nfdu8char_t*      outPath    = nullptr;
+        nfdu8filteritem_t filters[1] = { { "Beatmap Package", "osz,mcz,zip" } };
+        nfdresult_t       result =
+            NFD_SaveDialogU8(&outPath, filters, 1, nullptr, "map.osz");
+
+        if ( result == NFD_OKAY ) {
+            dispatchCommand(Logic::CmdPackBeatmap{ outPath });
+            NFD_FreePath(outPath);
+        }
+    } else {
+        IGFD::FileDialogConfig fdConfig;
+        fdConfig.path              = ".";
+        fdConfig.countSelectionMax = 1;
+        fdConfig.fileName          = "map.osz";
+        fdConfig.flags             = ImGuiFileDialogFlags_Default;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "PackFilePicker", TR("ui.file.pack"), ".osz,.mcz,.zip", fdConfig);
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            // 这里获得了路径 filePath
+            std::string filePath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdPackBeatmap{ filePath }));
+        }
+    }
+}
+
 void MainMenuView::update()
 {
     handleHotkeys();
@@ -162,6 +193,9 @@ void MainMenuView::update()
             dispatchCommand(Logic::CmdSaveBeatmap{});
         }
         if ( MenuItemWithFontIcon(nullptr, TR("ui.file.save_as")) ) {}
+        if ( MenuItemWithFontIcon(ICON_MMM_PACK, TR("ui.file.pack")) ) {
+            openPackFilePicker();
+        }
         ImGui::EndMenu();
     }
 

@@ -11,6 +11,7 @@ namespace MMM::UI
 
 enum class SideBarTab {
     None,             // 无选中
+    Search,           // 选中搜索
     FileExplorer,     // 选中文件浏览器
     AudioExplorer,    // 选中音频浏览器
     BeatMapExplorer,  // 选中谱面浏览器
@@ -21,6 +22,7 @@ enum class SideBarTab {
 static std::string TabToSubViewId(SideBarTab tab)
 {
     switch ( tab ) {
+    case SideBarTab::Search: return TR("title.search_manager");
     case SideBarTab::FileExplorer: return TR("title.file_manager");
     case SideBarTab::AudioExplorer: return TR("title.audio_manager");
     case SideBarTab::BeatMapExplorer: return TR("title.beatmap_manager");
