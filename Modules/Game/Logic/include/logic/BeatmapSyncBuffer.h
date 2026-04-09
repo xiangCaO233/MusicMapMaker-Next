@@ -103,6 +103,9 @@ struct RenderSnapshot {
     int32_t  hoveredTrack{ 0 };
     int      hoveredNoteNumerator{ 0 };
     int      hoveredNoteDenominator{ 1 };
+    int      hoveredBeatIndex{
+             0
+    };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
 
     // 是否已加载谱面
     bool hasBeatmap{ false };
@@ -133,6 +136,7 @@ struct RenderSnapshot {
         hoveredTrack           = 0;
         hoveredNoteNumerator   = 0;
         hoveredNoteDenominator = 1;
+        hoveredBeatIndex       = 0;
         hasBeatmap             = false;
     }
 };

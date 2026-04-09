@@ -160,18 +160,40 @@ void SettingsView::drawSoftwareSettings()
 
     ImGui::SeparatorText(TR_CACHE("ui.settings.software.general").data());
 
-    // 1. 语言选择 (示例，目前只有 zh_cn 和 en_us)
+    // 1. 语言选择
     const char* langs[]     = { "简体中文 (zh_cn)", "English (en_us)" };
-    static int  currentLang = 0;  // TODO: 从配置中获取
+    const char* langIDs[]   = { "zh_cn", "en_us" };
+    int         currentLang = (settings.language == "en_us") ? 1 : 0;
+
     if ( ImGui::Combo(TR_CACHE("ui.settings.software.language").data(),
                       &currentLang,
                       langs,
                       IM_ARRAYSIZE(langs)) ) {
-        // TODO: 切换语言逻辑
+        settings.language = langIDs[currentLang];
+        // 实时切换语言
+        Config::SkinManager::instance().getTranslator().switchLang(
+            settings.language);
         changed = true;
     }
 
-    // 2. 文件选择器样式
+    // 2. 光标样式 (移至此处)
+    ImGui::Text("%s", TR_CACHE("ui.settings.editor.cursor_style").data());
+    ImGui::SameLine();
+    int cursorStyle = (int)settings.cursorStyle;
+    if ( ImGui::RadioButton(
+             TR_CACHE("ui.settings.editor.cursor_software").data(),
+             cursorStyle == (int)Config::CursorStyle::Software) ) {
+        settings.cursorStyle = Config::CursorStyle::Software;
+        changed              = true;
+    }
+    ImGui::SameLine();
+    if ( ImGui::RadioButton(TR_CACHE("ui.settings.editor.cursor_system").data(),
+                            cursorStyle == (int)Config::CursorStyle::System) ) {
+        settings.cursorStyle = Config::CursorStyle::System;
+        changed              = true;
+    }
+
+    // 3. 文件选择器样式
     int pickerStyle = (int)settings.filePickerStyle;
     if ( ImGui::RadioButton(
              TR_CACHE("ui.settings.software.picker_native").data(),
@@ -185,6 +207,14 @@ void SettingsView::drawSoftwareSettings()
              pickerStyle == (int)Config::FilePickerStyle::Unified) ) {
         settings.filePickerStyle = Config::FilePickerStyle::Unified;
         changed                  = true;
+    }
+
+    // 4. 最近项目上限
+    if ( ImGui::SliderInt(TR_CACHE("ui.settings.software.recent_limit").data(),
+                          &settings.recentProjectsLimit,
+                          1,
+                          50) ) {
+        changed = true;
     }
 
     ImGui::SeparatorText(TR_CACHE("ui.settings.software.sync").data());

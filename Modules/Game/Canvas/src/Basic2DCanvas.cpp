@@ -127,6 +127,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 ImGui::SetNextWindowPos(
                     ImVec2(mousePos.x + 15, mousePos.y + 15));
                 ImGui::SetNextWindowBgAlpha(0.7f);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(12, 12));
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+
                 ImGui::BeginTooltip();
 
                 if ( m_currentSnapshot->hoveredNoteNumerator > 0 ) {
@@ -136,7 +140,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                         TR("ui.canvas.note_fraction").data(),
                         m_currentSnapshot->hoveredNoteNumerator,
                         m_currentSnapshot->hoveredNoteDenominator);
+                    ImGui::Spacing();
                     ImGui::Separator();
+                    ImGui::Spacing();
                 }
 
                 if ( m_currentSnapshot->isSnapped ) {
@@ -165,16 +171,27 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                 m_currentSnapshot->hoveredTime);
                 }
 
+                if ( m_currentSnapshot->hoveredBeatIndex > 0 ) {
+                    ImGui::Text("%s: %d",
+                                TR("ui.canvas.beat_index").data(),
+                                m_currentSnapshot->hoveredBeatIndex);
+                }
+
                 ImGui::Text("%s: %d",
                             TR("ui.canvas.track").data(),
                             m_currentSnapshot->hoveredTrack + 1);
+
+                ImGui::Spacing();
                 ImGui::Separator();
+                ImGui::Spacing();
+
                 ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
-                                   "%s: 1/%d",
+                                   "%s: %d",
                                    TR("ui.canvas.beat_divisor").data(),
                                    m_currentSnapshot->currentBeatDivisor);
 
                 ImGui::EndTooltip();
+                ImGui::PopStyleVar(2);
             }
         }
 
@@ -303,7 +320,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 }
             } else {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdScroll{ m_cameraId, wheel, isShiftPressed }));
+                    Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
             }
         }
     }

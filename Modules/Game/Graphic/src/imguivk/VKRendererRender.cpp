@@ -1,3 +1,4 @@
+#include "config/AppConfig.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "graphic/imguivk/VKRenderer.h"
@@ -50,6 +51,17 @@ void VKRenderer::render(NativeWindow&                  window,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    // 根据配置决定是否隐藏系统光标
+    auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
+    if ( editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+        glfwSetInputMode(
+            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    } else {
+        glfwSetInputMode(
+            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    }
+
     // 准备所有资源
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onPrepareResources(m_vkPhysicalDevice,
@@ -66,7 +78,8 @@ void VKRenderer::render(NativeWindow&                  window,
     }
 
     // 更新光标管理器
-    if ( m_cursorManager ) {
+    if ( m_cursorManager &&
+         editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
         m_cursorManager->UpdateAndDraw();
     }
 

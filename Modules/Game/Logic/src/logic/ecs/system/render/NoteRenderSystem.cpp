@@ -1,9 +1,11 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include <algorithm>
 #include <cmath>
 
 namespace MMM::Logic::System
@@ -71,6 +73,62 @@ void NoteRenderSystem::generateSnapshot(
                                                      bottomY,
                                                      trackAreaW,
                                                      singleTrackW);
+
+        // --- 交互：计算当前悬浮时间点所在的拍序 ---
+        if ( snapshot->isHoveringCanvas ) {
+            double hoveredTime = snapshot->hoveredTime;
+            std::vector<const TimelineComponent*> bpmEvents;
+            auto tlView = timelineRegistry.view<const TimelineComponent>();
+            for ( auto entity : tlView ) {
+                const auto& tl = tlView.get<const TimelineComponent>(entity);
+                if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+                    bpmEvents.push_back(&tl);
+                }
+            }
+
+            if ( !bpmEvents.empty() ) {
+                std::stable_sort(
+                    bpmEvents.begin(),
+                    bpmEvents.end(),
+                    [](const TimelineComponent* a, const TimelineComponent* b) {
+                        return a->m_timestamp < b->m_timestamp;
+                    });
+
+                int64_t totalBeats = 0;
+                bool    found      = false;
+                for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+                    const auto* currentBPM = bpmEvents[i];
+                    double      bpmTime    = currentBPM->m_timestamp;
+                    double      bpmVal     = currentBPM->m_value;
+                    if ( bpmVal <= 0.0 ) bpmVal = 120.0;
+
+                    double nextBpmTime =
+                        (i + 1 < bpmEvents.size())
+                            ? bpmEvents[i + 1]->m_timestamp
+                            : std::numeric_limits<double>::infinity();
+
+                    if ( hoveredTime >= bpmTime && hoveredTime < nextBpmTime ) {
+                        double  beatDuration = 60.0 / bpmVal;
+                        double  timeInBpm    = hoveredTime - bpmTime;
+                        int64_t beatsInBpm   = static_cast<int64_t>(
+                            std::floor(timeInBpm / beatDuration + 1e-6));
+                        snapshot->hoveredBeatIndex =
+                            static_cast<int>(totalBeats + beatsInBpm + 1);
+                        found = true;
+                        break;
+                    } else if ( hoveredTime >= nextBpmTime ) {
+                        double beatDuration = 60.0 / bpmVal;
+                        double bpmDuration  = nextBpmTime - bpmTime;
+                        totalBeats += static_cast<int64_t>(
+                            std::round(bpmDuration / beatDuration));
+                    } else {
+                        // hoveredTime < bpmTime
+                        break;
+                    }
+                }
+                if ( !found ) snapshot->hoveredBeatIndex = 0;
+            }
+        }
     }
 
     // 统一绘制音符

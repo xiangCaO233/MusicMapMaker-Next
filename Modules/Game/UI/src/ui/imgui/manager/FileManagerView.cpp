@@ -70,12 +70,78 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
                 })
             .addSpring();
 
+        CLayVBox    recentVBox;
+        const auto& recent =
+            Config::AppConfig::instance().getEditorConfig().recentProjects;
+
+        if ( !recent.empty() ) {
+            recentVBox.setPadding(12, 0, 12, 0).setSpacing(8);
+
+            recentVBox.addElement(
+                "RecentTitle",
+                Sizing::Grow(),
+                Sizing::Fixed(20),
+                [](Clay_BoundingBox r, bool isHovered) {
+                    ImGui::TextDisabled("%s", TR("ui.file.open_recent").data());
+                });
+
+            for ( size_t i = 0; i < recent.size(); ++i ) {
+                const auto& path = recent[i];
+                std::string id   = fmt::format("RecentItem_{}", i);
+
+                recentVBox.addElement(
+                    id,
+                    Sizing::Grow(),
+                    Sizing::Fixed(20),
+                    [path, &skinCfg](Clay_BoundingBox r, bool isHovered) {
+                        std::filesystem::path p(path);
+                        std::string           name = p.filename().string();
+                        if ( name.empty() ) name = path;
+
+                        // 使用 Skin 中的 icon 颜色
+                        auto   iconCol = skinCfg.getColor("icon");
+                        ImVec4 col(iconCol.r, iconCol.g, iconCol.b, iconCol.a);
+
+                        if ( isHovered ) {
+                            col = ImGui::GetStyle()
+                                      .Colors[ImGuiCol_ButtonHovered];
+                        }
+
+                        ImGui::PushStyleColor(ImGuiCol_Text, col);
+                        ImGui::TextUnformatted(name.c_str());
+                        ImGui::PopStyleColor();
+
+                        ImVec2 min = ImGui::GetItemRectMin();
+                        ImVec2 max = ImGui::GetItemRectMax();
+                        min.y      = max.y;
+                        ImGui::GetWindowDrawList()->AddLine(
+                            min,
+                            max,
+                            ImGui::ColorConvertFloat4ToU32(col),
+                            1.0f);
+
+                        if ( isHovered ) {
+                            ImGui::SetTooltip("%s", path.c_str());
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                        }
+
+                        if ( ImGui::IsItemClicked() ) {
+                            Event::OpenProjectEvent ev;
+                            ev.m_projectPath = path;
+                            Event::EventBus::instance().publish(ev);
+                        }
+                    });
+            }
+        }
+
         rootVBox.setPadding(12, 12, 12, 12)
             .setSpacing(12)
             .addLayout(
                 "labelHBox", labelHBox, Sizing::Grow(), Sizing::Fixed(40))
             .addLayout(
-                "buttonHBox", buttonHBox, Sizing::Grow(), Sizing::Fixed(40));
+                "buttonHBox", buttonHBox, Sizing::Grow(), Sizing::Fixed(40))
+            .addLayout(
+                "recentVBox", recentVBox, Sizing::Grow(), Sizing::Grow());
 
         rootVBox.addSpring();
         rootVBox.render(layoutContext);

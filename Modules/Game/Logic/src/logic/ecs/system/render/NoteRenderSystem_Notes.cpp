@@ -278,12 +278,31 @@ void NoteRenderSystem::renderNoteBaseLayer(
     for ( auto entity : visibleEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
-        double      noteAbsY  = ctx.cache->getAbsY(note.m_timestamp);
-        float       screenY =
+
+        // 处理拖拽时的半透明预览效果
+        float alphaMul = 1.0f;
+        if ( auto* ic = registry.try_get<InteractionComponent>(entity) ) {
+            if ( ic->isDragging ) {
+                alphaMul = 0.5f;
+            }
+        }
+
+        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
+        float  screenY =
             judgmentLineY -
             (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
         float visualH = transform.m_size.y * renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
+
+        // 应用 Alpha 倍率
+        glm::vec4 curColorTap   = ctx.colorTap;
+        glm::vec4 curColorHold  = ctx.colorHold;
+        glm::vec4 curColorNode  = ctx.colorNode;
+        glm::vec4 curColorArrow = ctx.colorArrow;
+        curColorTap.a *= alphaMul;
+        curColorHold.a *= alphaMul;
+        curColorNode.a *= alphaMul;
+        curColorArrow.a *= alphaMul;
 
         if ( note.m_type == ::MMM::NoteType::NOTE )
             NoteRenderSystem::renderTap(
@@ -295,7 +314,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteW,
                 ctx.noteH,
                 ctx.baseAspect,
-                ctx.colorTap);
+                curColorTap);
         else if ( note.m_type == ::MMM::NoteType::HOLD )
             NoteRenderSystem::renderHold(
                 batcher,
@@ -308,7 +327,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteH,
                 visualH,
                 singleTrackW,
-                ctx.colorHold);
+                curColorHold);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
                 batcher,
@@ -320,8 +339,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteW,
                 ctx.noteH,
                 singleTrackW,
-                ctx.colorHold,
-                ctx.colorArrow);
+                curColorHold,
+                curColorArrow);
         else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(registry,
                                              batcher,
@@ -336,9 +355,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             ctx.colorHold,
-                                             ctx.colorNode,
-                                             ctx.colorArrow,
+                                             curColorHold,
+                                             curColorNode,
+                                             curColorArrow,
                                              entity,
                                              true);
     }

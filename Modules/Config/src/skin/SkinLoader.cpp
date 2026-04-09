@@ -1,3 +1,4 @@
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -72,8 +73,12 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     for ( auto& [langName, langLuaPath] : m_data.langLuaPaths ) {
         m_translator.loadLanguage(langLuaPath.generic_string());
     }
-    // 选择回退语言
-    m_translator.switchLang(m_data.fallBackLang);
+
+    // 从 AppConfig 获取保存的语言设置，如果未设置则回退
+    auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
+    if ( !m_translator.switchLang(settings.language) ) {
+        m_translator.switchLang(m_data.fallBackLang);
+    }
 
     // 解析 Fonts
     sol::table fontsTable = skinTable["fonts"];

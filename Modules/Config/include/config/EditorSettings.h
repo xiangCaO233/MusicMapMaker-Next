@@ -68,6 +68,17 @@ NLOHMANN_JSON_SERIALIZE_ENUM(FilePickerStyle,
                                  { FilePickerStyle::Unified, "Unified" },
                              })
 
+enum class CursorStyle {
+    Software,  ///< 软件内置光标 (CursorManager)
+    System     ///< 系统原生光标
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(CursorStyle,
+                             {
+                                 { CursorStyle::Software, "Software" },
+                                 { CursorStyle::System, "System" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -79,6 +90,9 @@ struct EditorSettings {
     /// @brief 文件选择器样式
     FilePickerStyle filePickerStyle{ FilePickerStyle::Unified };
 
+    /// @brief 光标样式
+    CursorStyle cursorStyle{ CursorStyle::Software };
+
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
 
@@ -88,11 +102,18 @@ struct EditorSettings {
     /// @brief 是否开启滚动吸附
     bool scrollSnap{ false };
 
+    /// @brief 最近打开项目的显示上限
+    int recentProjectsLimit{ 10 };
+
+    /// @brief 语言设置 (zh_cn, en_us)
+    std::string language{ "zh_cn" };
+
     // TODO: 后续可在此添加自动保存(AutoSave)等配置
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
-                                   filePickerStyle, beatDivisor, reverseScroll,
-                                   scrollSnap)
+                                   filePickerStyle, cursorStyle, beatDivisor,
+                                   reverseScroll, scrollSnap,
+                                   recentProjectsLimit, language)
 };
 
 }  // namespace MMM::Config
