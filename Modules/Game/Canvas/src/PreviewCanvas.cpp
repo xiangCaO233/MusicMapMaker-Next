@@ -56,9 +56,11 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         Event::LogicCommandEvent(Logic::CmdSetMousePosition{
             m_cameraId, localMousePos.x, localMousePos.y, isHovered }));
 
-    // --- 简单的点击跳转时间逻辑 ---
+    // --- 跳转时间逻辑 ---
     if ( m_currentSnapshot && isHovered ) {
-        if ( ImGui::IsMouseClicked(0) ) {
+        // 核心修复：仅在鼠标松开时触发跳转。
+        // 不论是单击还是拖拽，均在松开的一刻根据当时鼠标位置的时间戳进行 Seek。
+        if ( ImGui::IsMouseReleased(0) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSeek{ m_currentSnapshot->hoveredTime }));
         }

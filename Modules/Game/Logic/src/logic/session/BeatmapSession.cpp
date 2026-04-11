@@ -360,7 +360,36 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     camera.viewportHeight * config.visual.judgeline_pos;
 
                 double currentAbsY = cache->getAbsY(m_visualTime);
-                double targetAbsY  = currentAbsY + (judgmentLineY - m_mouseY);
+                double deltaY      = (judgmentLineY - m_mouseY);
+
+                // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
+                if ( cameraId == "Preview" ) {
+                    float mainHeight = 1000.0f;
+                    auto  itMain     = m_cameras.find("Main");
+                    if ( itMain != m_cameras.end() ) {
+                        mainHeight = itMain->second.viewportHeight;
+                    }
+
+                    float mainEffectiveH = (config.visual.trackLayout.bottom -
+                                            config.visual.trackLayout.top) *
+                                           mainHeight;
+
+                    // 计算预览区的有效绘图高度（扣除边距）
+                    float previewDrawH =
+                        camera.viewportHeight -
+                        (config.visual.previewConfig.margin.top +
+                         config.visual.previewConfig.margin.bottom);
+
+                    float renderScaleY =
+                        previewDrawH / (mainEffectiveH *
+                                        config.visual.previewConfig.areaRatio);
+
+                    if ( std::abs(renderScaleY) > 0.0001f ) {
+                        deltaY /= renderScaleY;
+                    }
+                }
+
+                double targetAbsY     = currentAbsY + deltaY;
                 snapshot->hoveredTime = cache->getTime(targetAbsY);
 
                 // 计算轨道
@@ -391,6 +420,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 if ( cameraId == "Preview" ) {
                     snapshot->isPreviewHovered = true;
                     snapshot->previewHoverY    = m_mouseY;
+
+                    // 核心修复：预览区的跳转不应基于当前的视觉时间（m_visualTime）偏移，
+                    // 而是应该计算鼠标位置在预览范围内映射的“绝对逻辑时间”。
+                    // 这里的 snapshot->hoveredTime 已经在上面通过
+                    // cache->getTime 计算出来了， 但它是以 m_visualTime
+                    // 为基准加上偏移。
+                    // 实际上对于预览区，我们希望它是一个大尺度的映射。
                     snapshot->previewHoverTime = snapshot->hoveredTime;
                 }
 
