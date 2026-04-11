@@ -48,6 +48,9 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             break;
         }
     }
+    // 限制 refBPM 范围，防止流速计算溢出
+    if ( refBPM < 1.0 ) refBPM = 120.0; 
+    if ( refBPM > 10000.0 ) refBPM = 10000.0;
 
     // 2. 初始参数
     double currentBPM        = refBPM;
@@ -64,7 +67,10 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             return BASE_SPEED * globalMultiplier;
         }
         if ( std::abs(refBPM) < 1e-6 ) return 0.0;
-        return (bpm / refBPM) * sm * BASE_SPEED * globalMultiplier;
+        
+        // 限制极端 BPM 导致的流速爆炸
+        double safeBPM = std::clamp(bpm, 0.0, 1000000.0);
+        return (safeBPM / refBPM) * sm * BASE_SPEED * globalMultiplier;
     };
 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
@@ -83,13 +89,19 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
             m_segments.back().effects |= SCROLL_EFFECT_BPM;
             currentBPM = tl->m_value;
+            // 在 osu! 逻辑中，新的 BPM 标记（红线）会重置继承的流速倍率
+            currentScrollMult = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             m_segments.back().effects |= SCROLL_EFFECT_SCROLL;
-            if ( tl->m_value < 0 ) {
+            if ( tl->m_value < -1e-6 ) {
                 currentScrollMult = -100.0 / tl->m_value;
-            } else {
+            } else if ( tl->m_value >= 0 ) {
                 currentScrollMult = tl->m_value;
+            } else {
+                currentScrollMult = 1.0; // 避免除以极小值或零
             }
+            // 限制倍率上限，防止溢出
+            if ( currentScrollMult > 10000.0 ) currentScrollMult = 10000.0;
         }
 
         // 更新当前路段速度

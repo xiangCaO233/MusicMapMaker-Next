@@ -111,6 +111,7 @@ void NoteRenderSystem::generateSnapshot(
                     double      bpmTime    = currentBPM->m_timestamp;
                     double      bpmVal     = currentBPM->m_value;
                     if ( bpmVal <= 0.0 ) bpmVal = 120.0;
+                    if ( bpmVal > 10000.0 ) bpmVal = 10000.0; // 增加安全限制
 
                     double nextBpmTime =
                         (i + 1 < bpmEvents.size())

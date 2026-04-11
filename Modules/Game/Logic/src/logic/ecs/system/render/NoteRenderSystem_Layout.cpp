@@ -218,6 +218,9 @@ void NoteRenderSystem::drawBeatLines(
         double      bpmVal     = currentBPM->m_value;
         if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
+        // 限制极端 BPM 导致的无限循环 (例如 osu! 谱面中的 6E-96 ms_per_beat)
+        if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+
         double nextBpmTime = (i + 1 < bpmEvents.size())
                                  ? bpmEvents[i + 1]->m_timestamp
                                  : std::numeric_limits<double>::infinity();

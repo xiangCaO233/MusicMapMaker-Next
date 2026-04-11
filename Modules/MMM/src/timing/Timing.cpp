@@ -1,4 +1,9 @@
 #include "mmm/timing/Timing.h"
+#include <cmath>
+#include <algorithm>
+#include <iomanip>
+#include <sstream>
+
 namespace MMM
 {
 
@@ -52,6 +57,15 @@ void Timing::from_osu_description(std::vector<std::string>& description)
     } else {
         // 真实bpm
         m_bpm                   = 1.0 / m_beat_length * 1000.0 * 60.0;
+        
+        // 限制极端数值，防止后续计算（如拍线生成）进入死循环或溢出
+        if (std::isinf(m_bpm) || std::isnan(m_bpm) || m_bpm > 1000000.0) {
+            m_bpm = 1000000.0;
+        }
+        if (m_bpm < 0.1) {
+            m_bpm = 0.1;
+        }
+
         last_base_bpm           = m_bpm;
         m_timingEffectParameter = m_bpm;
         m_timingEffect          = TimingEffect::BPM;

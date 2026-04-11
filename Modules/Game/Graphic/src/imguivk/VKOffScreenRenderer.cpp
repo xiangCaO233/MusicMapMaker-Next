@@ -34,6 +34,57 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 
     if ( vertices.empty() || indices.empty() ) return;
 
+    // --- 动态扩容检查 ---
+    size_t neededCount = std::max(vertices.size(), indices.size());
+    if ( neededCount > m_lastAllocatedCount ) {
+        XWARN("VKOffScreenRenderer: Buffer size insufficient ({} > {}), "
+              "reallocating...",
+              neededCount,
+              m_lastAllocatedCount);
+
+        // 1. 等待 GPU 完成当前工作
+        m_device.waitIdle();
+
+        // 2. 增加 50% 冗余防止频繁扩容
+        size_t newCount = static_cast<size_t>(neededCount * 1.5f);
+
+        // 3. 释放旧资源 (顶点/索引/Uniform 缓冲以及相关的描述符池)
+        // 注意：由于资源是 unique_ptr，reset() 会自动调用析构
+        m_vertexBuffer.reset();
+        m_indexBuffer.reset();
+        m_uniformBuffer.reset();
+
+        // 4. 重新分配
+        size_t bufferSize = sizeof(Vertex::VKBasicVertex) * newCount;
+        m_vertexBuffer    = std::make_unique<VKMemBuffer>(
+            m_physicalDevice,
+            m_device,
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        m_indexBuffer = std::make_unique<VKMemBuffer>(
+            m_physicalDevice,
+            m_device,
+            bufferSize,
+            vk::BufferUsageFlagBits::eIndexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        m_uniformBuffer = std::make_unique<VKMemBuffer>(
+            m_physicalDevice,
+            m_device,
+            sizeof(float),
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent);
+
+        m_lastAllocatedCount = newCount;
+        XINFO("VKOffScreenRenderer: Reallocated buffers with capacity: {}",
+              newCount);
+    }
+
     uploadUniformBuffer2GPU();
 
     // 每一帧将 CPU 的顶点数据上传到 GPU

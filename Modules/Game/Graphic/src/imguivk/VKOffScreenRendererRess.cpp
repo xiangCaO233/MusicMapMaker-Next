@@ -144,13 +144,17 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     if ( m_targetWidth == 0 || m_targetHeight == 0 ) return;
 
     // 1. 先等待设备空闲，防止正在渲染时销毁
-    if ( m_device ) m_device.waitIdle();
+    // 核心修复：无论 m_device 是否有效，都尝试等待当前已有的设备
+    if ( m_device ) {
+        m_device.waitIdle();
+    }
 
     // 先释放
     releaseResources();
 
     // 赋值引用
-    m_device = logicalDevice;
+    m_device         = logicalDevice;
+    m_physicalDevice = phyDevice;
 
     // 赋值实际尺寸
     uint32_t creationW = m_targetWidth;
@@ -424,6 +428,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_width  = creationW;
     m_height = creationH;
 
+    m_lastAllocatedCount = maxVertexCount;
     m_need_reCreate.store(false);
 
     XINFO(

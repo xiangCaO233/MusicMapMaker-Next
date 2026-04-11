@@ -229,6 +229,12 @@ private:
     // 逻辑设备引用
     vk::Device m_device{ VK_NULL_HANDLE };
 
+    // 缓存分配时的最大顶点数，用于动态扩容判断
+    size_t m_lastAllocatedCount{ 0 };
+
+    // 物理设备句柄，用于动态扩容
+    vk::PhysicalDevice m_physicalDevice{ VK_NULL_HANDLE };
+
     // 离屏渲染流程
     std::unique_ptr<VKRenderPass> m_offScreenRenderPass{ nullptr };
 
