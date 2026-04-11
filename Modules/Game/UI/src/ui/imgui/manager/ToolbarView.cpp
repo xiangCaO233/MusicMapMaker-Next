@@ -12,7 +12,9 @@ ToolbarView::ToolbarView(const std::string& name) : IUIView(name) {}
 
 void ToolbarView::update(UIManager* sourceManager)
 {
-    Config::SkinManager& skinCfg = Config::SkinManager::instance();
+    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float                dpiScale = viewport->DpiScale;
 
     // 从逻辑引擎同步当前工具状态
     m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
@@ -27,10 +29,9 @@ void ToolbarView::update(UIManager* sourceManager)
         fontSize = toolFont->LegacySize;
     }
 
-    float btnSize  = fontSize + 8.0f;
-    float paddingX = 4.0f;
     // 强制固定宽度为 32.0f (略微放宽以适配内容)
-    float fixedW = 32.0f;
+    float fixedBaseW = 32.0f;
+    float fixedW     = std::floor(fixedBaseW * dpiScale);
 
     // 2. 锁定窗口尺寸约束
     ImGui::SetNextWindowSizeConstraints(ImVec2(fixedW, -1), ImVec2(fixedW, -1));
@@ -51,7 +52,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
     // 4. 使用 " ###Toolbar" 保持 ID 稳定
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
-        // --- [绘制左侧分隔线] ---
+        // --- 绘制左侧分隔线 ---
         ImVec2 p1 = ImGui::GetWindowPos();
         // 向内偏移 1px 绘制 2px
         // 宽度的线，使其一半在边界外一半在边界内，视觉效果最稳重
@@ -59,7 +60,8 @@ void ToolbarView::update(UIManager* sourceManager)
         ImVec2 p2 = ImVec2(p1.x, p1.y + ImGui::GetWindowHeight());
         // 使用标准的边框颜色，带 0.6 不透明度，2px 厚度
         ImU32 col = ImGui::GetColorU32(ImGuiCol_Border, 0.6f);
-        ImGui::GetWindowDrawList()->AddLine(p1, p2, col, 2.0f);
+        ImGui::GetWindowDrawList()->AddLine(
+            p1, p2, col, std::floor(2.0f * dpiScale));
 
         if ( toolFont ) ImGui::PushFont(toolFont);
 
@@ -266,7 +268,8 @@ void ToolbarView::update(UIManager* sourceManager)
         ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
         // X = 工具栏左边缘往左 4px
         // Y = 按钮的顶部对齐
-        ImVec2 popupPos = ImVec2(toolbarPos.x - 4.0f, m_lastBtnY);
+        ImVec2 popupPos =
+            ImVec2(toolbarPos.x - std::floor(4.0f * dpiScale), m_lastBtnY);
 
         // Pivot(1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
         ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
@@ -276,8 +279,11 @@ void ToolbarView::update(UIManager* sourceManager)
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_AlwaysAutoResize;
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
+                            std::floor(4.0f * dpiScale));
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_WindowPadding,
+            ImVec2(std::floor(8.0f * dpiScale), std::floor(8.0f * dpiScale)));
         ImGui::PushStyleColor(ImGuiCol_WindowBg,
                               ImVec4(0.15f, 0.15f, 0.15f, 0.95f));
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
@@ -289,7 +295,7 @@ void ToolbarView::update(UIManager* sourceManager)
             ImGui::TextUnformatted(TR("ui.toolbar.beat_divisor"));
             ImGui::Separator();
 
-            ImGui::SetNextItemWidth(120.0f);
+            ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
             if ( ImGui::SliderInt("##DivisorSlider", &currentDivisor, 1, 64) ) {
                 auto newConfig                 = editorCfg;
                 newConfig.settings.beatDivisor = currentDivisor;
@@ -302,7 +308,9 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( i > 0 && i % 4 != 0 ) ImGui::SameLine();
                 char buf[16];
                 snprintf(buf, sizeof(buf), "1/%d", commonDivisors[i]);
-                if ( ImGui::Button(buf, ImVec2(35, 24)) ) {
+                if ( ImGui::Button(buf,
+                                   ImVec2(std::floor(35.0f * dpiScale),
+                                          std::floor(24.0f * dpiScale))) ) {
                     auto newConfig                 = editorCfg;
                     newConfig.settings.beatDivisor = commonDivisors[i];
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);

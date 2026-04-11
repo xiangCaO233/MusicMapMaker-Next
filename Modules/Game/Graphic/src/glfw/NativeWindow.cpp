@@ -27,17 +27,28 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+    glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 
     // 不再需要初始化 ImGui 的辅助窗口
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
 
     // 窗口启动时居中
     if ( m_windowHandle ) {
+        float xscale, yscale;
+        glfwGetWindowContentScale(m_windowHandle, &xscale, &yscale);
+
+        int scaledW = static_cast<int>(w * xscale);
+        int scaledH = static_cast<int>(h * yscale);
+
+        if ( xscale > 1.0f || yscale > 1.0f ) {
+            glfwSetWindowSize(m_windowHandle, scaledW, scaledH);
+        }
+
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
         if ( monitor && mode ) {
-            int xPos = ( mode->width - w ) / 2;
-            int yPos = ( mode->height - h ) / 2;
+            int xPos = (mode->width - scaledW) / 2;
+            int yPos = (mode->height - scaledH) / 2;
             glfwSetWindowPos(m_windowHandle, xPos, yPos);
         }
     }
@@ -61,9 +72,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetWindowMaximizeCallback(
         m_windowHandle, [](GLFWwindow* w, int maximized) {
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
-                .type           = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE,
+                .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE,
                 .hasStateChange = true,
-                .isMaximized    = ( maximized == GLFW_TRUE ) });
+                .isMaximized    = (maximized == GLFW_TRUE) });
         });
 
     // 1. 鼠标点击事件封装

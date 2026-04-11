@@ -23,28 +23,30 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float                dpiScale = viewport->DpiScale;
 
     // 首次运行初始化窗口状态
     if ( !m_initializedWindow && viewport->PlatformHandle ) {
         if ( GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle ) {
-            m_isMaximized       = glfwGetWindowAttrib(nativeWin, GLFW_MAXIMIZED);
+            m_isMaximized = glfwGetWindowAttrib(nativeWin, GLFW_MAXIMIZED);
             m_initializedWindow = true;
         }
     }
 
-    static float sidebarWidth =
+    float sidebarBaseWidth =
         std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    float sidebarWidth = std::floor(sidebarBaseWidth * dpiScale);
 
     // 工具栏固定宽度计算 (按钮尺寸 + Padding)
     // 这里我们先预设一个值，后续可以从配置读取
-    float toolbarWidth = 28.0f;
-
-
+    float toolbarBaseWidth = 28.0f;
+    float toolbarWidth     = std::floor(toolbarBaseWidth * dpiScale);
 
     // 1. 计算加高后的菜单栏高度
     // 我们手动增加垂直方向的 FramePadding 来撑开菜单项和背景
-    float       extraPaddingY = 4.0f;
-    ImGuiStyle& style         = ImGui::GetStyle();
+    float       extraPaddingBaseY = 4.0f;
+    float       extraPaddingY     = std::floor(extraPaddingBaseY * dpiScale);
+    ImGuiStyle& style             = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
 
@@ -139,8 +141,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
             // ================== 2. 标准菜单区域 ==================
             // 菜单项需要正常的 Padding，所以局部推入
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                ImVec2(10.0f, defaultFramePadding.y));
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_FramePadding,
+                ImVec2(std::floor(10.0f * dpiScale), defaultFramePadding.y));
             ImGui::SetCursorPosX(buttonSize + 4.0f);
 
             // 应用菜单字体
@@ -184,7 +187,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             if ( ImGui::IsItemHovered() &&
                  ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
-                    .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+                    .type =
+                        Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
             }
             ImGui::SetCursorPosX(dragEndX);
 
@@ -207,12 +211,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::SameLine();
 
             // 2. 最大化/还原
-            const char* maxIcon = m_isMaximized ? ICON_MMM_RESTORE : ICON_MMM_MAXIMIZE;
-            const char* maxTip  = m_isMaximized ? TR("ui.window.restore").data() : TR("ui.window.maximize").data();
+            const char* maxIcon =
+                m_isMaximized ? ICON_MMM_RESTORE : ICON_MMM_MAXIMIZE;
+            const char* maxTip = m_isMaximized
+                                     ? TR("ui.window.restore").data()
+                                     : TR("ui.window.maximize").data();
 
-            if ( DrawFontIconButton(maxIcon, buttonSize, ImVec4(1, 1, 1, 0.1f)) ) {
+            if ( DrawFontIconButton(
+                     maxIcon, buttonSize, ImVec4(1, 1, 1, 0.1f)) ) {
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
-                    .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+                    .type =
+                        Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
             }
             if ( contentFont ) ImGui::PushFont(contentFont);
             ImGui::SetItemTooltip("%s", maxTip);

@@ -17,17 +17,21 @@ SideBarUI::~SideBarUI() {}
 
 void SideBarUI::update(UIManager* sourceManager)
 {
-    Config::SkinManager& skinCfg = Config::SkinManager::instance();
-    static float         sidebarWidth =
+    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float                dpiScale = viewport->DpiScale;
+
+    float sidebarBaseWidth =
         std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    const ImGuiViewport* viewport      = ImGui::GetMainViewport();
-    float                menuBarHeight = ImGui::GetFrameHeight() + 8.0f;
+    float sidebarWidth = std::floor(sidebarBaseWidth * dpiScale);
+
+    float menuBarHeight = ImGui::GetFrameHeight() + 8.0f;
 
     // ================== C. 左侧侧边栏窗口 ==================
-    // 位置：X=0, Y=菜单高度
+    // 位置：X=0, Y=菜单高度 (使用 WorkPos 确保在多视口/缩放环境下坐标正确)
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + menuBarHeight));
-    // 尺寸：宽=48, 高=总高 - 菜单高度
+    // 尺寸：宽=sidebarWidth, 高=总高 - 菜单高度
     ImGui::SetNextWindowSize(
         ImVec2(sidebarWidth, viewport->WorkSize.y - menuBarHeight));
     ImGui::SetNextWindowViewport(viewport->ID);
