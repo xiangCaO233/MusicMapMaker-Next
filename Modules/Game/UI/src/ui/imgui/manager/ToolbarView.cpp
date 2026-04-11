@@ -65,8 +65,8 @@ void ToolbarView::update(UIManager* sourceManager)
 
         if ( toolFont ) ImGui::PushFont(toolFont);
 
-        // 获取实际可用的内容宽度作为按钮宽度，确保填满
-        float drawW = ImGui::GetContentRegionAvail().x;
+        // 使用当前窗口的实际宽度作为按钮宽度，确保完全一致
+        float drawW = ImGui::GetWindowWidth();
 
         // 1. 移动工具 (使用四向箭头图标 \uf047)
         ImGui::SetCursorPosX(0);

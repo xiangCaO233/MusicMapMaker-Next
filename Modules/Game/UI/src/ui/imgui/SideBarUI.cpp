@@ -25,7 +25,11 @@ void SideBarUI::update(UIManager* sourceManager)
         std::stof(skinCfg.getLayoutConfig("side_bar.width"));
     float sidebarWidth = std::floor(sidebarBaseWidth * dpiScale);
 
-    float menuBarHeight = ImGui::GetFrameHeight() + 8.0f;
+    float       extraPaddingBaseY = 4.0f;
+    float       extraPaddingY     = std::floor(extraPaddingBaseY * dpiScale);
+    ImGuiStyle& style             = ImGui::GetStyle();
+    float       menuBarHeight =
+        ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
 
     // ================== C. 左侧侧边栏窗口 ==================
     // 位置：X=0, Y=菜单高度 (使用 WorkPos 确保在多视口/缩放环境下坐标正确)

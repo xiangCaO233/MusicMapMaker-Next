@@ -79,8 +79,8 @@ public:
                 } else {
                     ImGui::Text("%s", TR("Loading Surface...").data());
                 }
-                ImGui::End();
             }
+            ImGui::End();
         };
 
     private:

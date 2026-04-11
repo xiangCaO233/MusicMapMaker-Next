@@ -39,7 +39,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // 工具栏固定宽度计算 (按钮尺寸 + Padding)
     // 这里我们先预设一个值，后续可以从配置读取
-    float toolbarBaseWidth = 28.0f;
+    float toolbarBaseWidth = 32.0f;
     float toolbarWidth     = std::floor(toolbarBaseWidth * dpiScale);
 
     // 1. 计算加高后的菜单栏高度

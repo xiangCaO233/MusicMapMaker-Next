@@ -125,9 +125,16 @@ void MainMenuView::update()
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
 
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float                dpiScale = viewport->DpiScale;
+
     // 增加全局边距，确保图标不被截断，并提供更好的视觉空间
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 3.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
+    // 保持已有的垂直 Padding（由外部 Host 窗口决定），仅增加水平边距
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_FramePadding,
+        ImVec2(6.0f * dpiScale, ImGui::GetStyle().FramePadding.y));
 
     auto MenuItemWithFontIcon = [&skinCfg](const char* icon,
                                            const char* label,
