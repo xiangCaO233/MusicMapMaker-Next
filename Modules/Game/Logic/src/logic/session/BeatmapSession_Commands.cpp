@@ -222,10 +222,20 @@ void BeatmapSession::processCommands()
                 } else if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
                     m_currentTool = arg.tool;
                 } else if constexpr ( std::is_same_v<T, CmdSetMousePosition> ) {
-                    m_mouseCameraId   = arg.cameraId;
-                    m_mouseX          = arg.mouseX;
-                    m_mouseY          = arg.mouseY;
-                    m_isMouseInCanvas = arg.isHovering;
+                    // 核心修复：只有当鼠标在当前视口内，或者当前视口正是之前记录的鼠标所在视口时，才更新状态。
+                    // 这样可以防止多个视口（如主画布、预览区、时间轴）在同一帧内互相覆盖
+                    // hover 状态导致闪烁。
+                    if ( arg.isHovering || m_mouseCameraId == arg.cameraId ) {
+                        m_mouseCameraId   = arg.cameraId;
+                        m_mouseX          = arg.mouseX;
+                        m_mouseY          = arg.mouseY;
+                        m_isMouseInCanvas = arg.isHovering;
+
+                        if ( !arg.isHovering ) {
+                            m_mouseCameraId =
+                                "";  // 离开视口后清除 ID，允许其他视口接管
+                        }
+                    }
                 } else if constexpr ( std::is_same_v<T, CmdScroll> ) {
                     float wheel = arg.wheel;
                     if ( m_lastConfig.settings.reverseScroll ) {
