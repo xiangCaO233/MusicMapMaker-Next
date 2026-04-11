@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -37,6 +38,13 @@ public:
     /// @brief 播放一次音效
     /// @param volume 播放音量
     void play(float volume);
+
+    /// @brief 在指定时间播放音效
+    /// @param volume 播放音量
+    /// @param targetFrame 目标帧位置（基于 BGM）
+    /// @param refProvider 参考源位置提供者
+    void playScheduled(float volume, size_t targetFrame,
+                       std::function<size_t()> refProvider);
 
     /// @brief 释放节点回池 (供回调内部调用)
     void releaseNode(std::shared_ptr<ice::SourceNode> node);

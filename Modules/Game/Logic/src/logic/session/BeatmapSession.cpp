@@ -118,10 +118,24 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             syncHitIndex();
         } else {
             // 正常的帧推进
+
+            // A. 音频预测触发 (提前 200ms)
+            double predictWindow = 0.2;
+            while ( m_nextPredictHitIndex < m_hitEvents.size() &&
+                    m_hitEvents[m_nextPredictHitIndex].timestamp <=
+                        (m_visualTime + predictWindow) ) {
+                const auto& ev = m_hitEvents[m_nextPredictHitIndex];
+                // 仅对未来且未预测过的事件进行预测
+                if ( ev.timestamp > (prevVisualTime + predictWindow) ) {
+                    m_hitFXSystem.triggerAudio(ev, config);
+                }
+                m_nextPredictHitIndex++;
+            }
+
+            // B. 视觉特效触发 (精确到帧)
             while ( m_nextHitIndex < m_hitEvents.size() &&
                     m_hitEvents[m_nextHitIndex].timestamp <= m_visualTime ) {
                 const auto& ev = m_hitEvents[m_nextHitIndex];
-                // 确保只有在 prevVisualTime 之后触发的才发声
                 if ( ev.timestamp > prevVisualTime ) {
                     triggeredEvents.push_back(ev);
                 }
@@ -151,6 +165,9 @@ void BeatmapSession::syncHitIndex()
         m_hitEvents.end(),
         System::HitFXSystem::HitEvent{ m_visualTime, ::MMM::NoteType::NOTE });
     m_nextHitIndex = std::distance(m_hitEvents.begin(), it);
+
+    // 预测索引也同步到同样的位置（预测逻辑会自动往后扫）
+    m_nextPredictHitIndex = m_nextHitIndex;
 }
 
 BeatmapSession::SnapResult BeatmapSession::getSnapResult(

@@ -178,8 +178,11 @@ private:
     /// @brief 预排序的所有音符时间事件
     std::vector<System::HitFXSystem::HitEvent> m_hitEvents;
 
-    /// @brief 下一个等待触发的音频事件索引
+    /// @brief 下一个等待触发的视觉事件索引
     size_t m_nextHitIndex{ 0 };
+
+    /// @brief 下一个等待触发的音频预测事件索引
+    size_t m_nextPredictHitIndex{ 0 };
 
     /// @brief 打击音效与视觉特效系统
     System::HitFXSystem m_hitFXSystem;

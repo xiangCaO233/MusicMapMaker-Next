@@ -18,74 +18,96 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
     return (currentTime - startTime) >= totalDuration;
 }
 
+void HitFXSystem::triggerAudio(const HitEvent&             ev,
+                               const Config::EditorConfig& config)
+{
+    auto& audioManager = Audio::AudioManager::instance();
+
+    // 1. 根据策略确定最终播放类型
+    ::MMM::NoteType effectiveType = ev.type;
+
+    if ( ev.isSubNote ) {
+        const auto& strategy = config.settings.sfxConfig.polylineStrategy;
+        switch ( strategy ) {
+        case Config::PolylineSfxStrategy::Exact: break;
+        case Config::PolylineSfxStrategy::InternalAsNormal:
+            if ( ev.role == HitEvent::Role::Internal )
+                effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        case Config::PolylineSfxStrategy::OnlyTailExact:
+            if ( ev.role != HitEvent::Role::Tail )
+                effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        case Config::PolylineSfxStrategy::AllAsNormal:
+            effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        }
+    }
+
+    // 2. 播放音效 (使用预定播放接口)
+    float volumeFactor = 1.0f;
+    if ( effectiveType == ::MMM::NoteType::FLICK &&
+         config.settings.sfxConfig.enableFlickWidthVolumeScaling ) {
+        volumeFactor =
+            1.0f + (ev.trackSpan - 1) *
+                       config.settings.sfxConfig.flickWidthVolumeMultiplier;
+    }
+
+    std::string sfxKey = (effectiveType == ::MMM::NoteType::FLICK)
+                             ? "hiteffect.flick"
+                             : "hiteffect.note";
+
+    audioManager.playSoundEffectScheduled(sfxKey, ev.timestamp, volumeFactor);
+}
+
+void HitFXSystem::triggerVisual(const HitEvent&             ev,
+                                const Config::EditorConfig& config)
+{
+    ::MMM::NoteType effectiveType = ev.type;
+    std::string     effectKey     = "note";
+
+    if ( ev.isSubNote ) {
+        const auto& strategy = config.settings.sfxConfig.polylineStrategy;
+        switch ( strategy ) {
+        case Config::PolylineSfxStrategy::Exact: break;
+        case Config::PolylineSfxStrategy::InternalAsNormal:
+            if ( ev.role == HitEvent::Role::Internal )
+                effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        case Config::PolylineSfxStrategy::OnlyTailExact:
+            if ( ev.role != HitEvent::Role::Tail )
+                effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        case Config::PolylineSfxStrategy::AllAsNormal:
+            effectiveType = ::MMM::NoteType::NOTE;
+            break;
+        }
+    }
+
+    if ( effectiveType == ::MMM::NoteType::FLICK ) {
+        effectKey = "flick";
+    }
+
+    ActiveEffect newEffect;
+    newEffect.startTime   = ev.timestamp;
+    newEffect.duration    = ev.duration;
+    newEffect.trackIndex  = ev.trackIndex;
+    newEffect.trackSpan   = ev.trackSpan;
+    newEffect.trackOffset = ev.trackOffset;
+    newEffect.isLooping   = (ev.type == ::MMM::NoteType::HOLD);
+    newEffect.effectKey   = effectKey;
+
+    m_trackActiveEffects[ev.trackIndex] = newEffect;
+}
+
 void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
                          const Config::EditorConfig& config)
 {
-    auto& audioManager = Audio::AudioManager::instance();
-    auto& skinManager  = Config::SkinManager::instance();
-
     for ( const auto& ev : events ) {
-        // 1. 根据策略确定最终播放类型和动画 Key
-        ::MMM::NoteType effectiveType = ev.type;
-        std::string     effectKey     = "note";
-
-        if ( ev.isSubNote ) {
-            const auto& strategy = config.settings.sfxConfig.polylineStrategy;
-            switch ( strategy ) {
-            case Config::PolylineSfxStrategy::Exact: break;
-            case Config::PolylineSfxStrategy::InternalAsNormal:
-                if ( ev.role == HitEvent::Role::Internal )
-                    effectiveType = ::MMM::NoteType::NOTE;
-                break;
-            case Config::PolylineSfxStrategy::OnlyTailExact:
-                if ( ev.role != HitEvent::Role::Tail )
-                    effectiveType = ::MMM::NoteType::NOTE;
-                break;
-            case Config::PolylineSfxStrategy::AllAsNormal:
-                effectiveType = ::MMM::NoteType::NOTE;
-                break;
-            }
-        }
-
-        if ( effectiveType == ::MMM::NoteType::FLICK ) {
-            effectKey = "flick";
-        }
-
-        // 2. 播放音效
-        float volumeFactor = 1.0f;
-        if ( effectiveType == ::MMM::NoteType::FLICK &&
-             config.settings.sfxConfig.enableFlickWidthVolumeScaling ) {
-            volumeFactor =
-                1.0f + (ev.trackSpan - 1) *
-                           config.settings.sfxConfig.flickWidthVolumeMultiplier;
-        }
-
-        if ( effectiveType == ::MMM::NoteType::FLICK ) {
-            audioManager.playSoundEffect("hiteffect.flick", volumeFactor);
-        } else {
-            audioManager.playSoundEffect("hiteffect.note", volumeFactor);
-        }
-
-        // 3. 启动/覆盖视觉特效
-        ActiveEffect newEffect;
-        newEffect.startTime   = ev.timestamp;  // 使用音符精确时间点作为动画基准
-        newEffect.duration    = ev.duration;
-        newEffect.trackIndex  = ev.trackIndex;
-        newEffect.trackSpan   = ev.trackSpan;
-        newEffect.trackOffset = ev.trackOffset;
-        newEffect.isLooping   = (ev.type == ::MMM::NoteType::HOLD);
-        newEffect.effectKey   = effectKey;
-
-        // XINFO("覆盖轨道{}上的{}特效 (Offset: {})",
-        //       newEffect.trackIndex,
-        //       effectKey,
-        //       newEffect.trackOffset);
-
-        // "之前没播放完的动画帧立即清空并立即播放下一个动画序列帧"
-        // 针对同一个轨道，直接覆盖即代表清空
-        m_trackActiveEffects[ev.trackIndex] = newEffect;
+        triggerVisual(ev, config);
     }
 
+    auto& skinManager = Config::SkinManager::instance();
     // 4. 清理已经播放完成的非循环特效
     float baseFps = skinManager.getEffectBaseFps();
     for ( auto it = m_trackActiveEffects.begin();

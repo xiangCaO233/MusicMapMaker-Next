@@ -43,6 +43,16 @@ public:
                 const Config::EditorConfig& config);
 
     /**
+     * @brief 触发音效（仅音效，带预测支持）
+     */
+    void triggerAudio(const HitEvent& ev, const Config::EditorConfig& config);
+
+    /**
+     * @brief 触发视觉特效
+     */
+    void triggerVisual(const HitEvent& ev, const Config::EditorConfig& config);
+
+    /**
      * @brief 生成打击特效的渲染指令
      * @param snapshot 目标渲染快照
      * @param visualTime 当前视觉时间

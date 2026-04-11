@@ -92,6 +92,36 @@ void SoundEffectPool::play(float volume)
     }
 
     if ( node ) {
+        node->set_scheduled_start_frame(0);  // 确保没有残留的预定
+        node->setvolume(volume);
+        node->play();
+    }
+}
+
+void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
+                                    std::function<size_t()> refProvider)
+{
+    std::shared_ptr<ice::SourceNode> node;
+    {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        if ( m_readyQueue.empty() ) {
+            node = std::make_shared<ice::SourceNode>(m_track);
+            auto callback =
+                std::make_shared<SFXPlayCallback>(shared_from_this(), node);
+            node->add_playcallback(callback);
+            m_allNodes.push_back(node);
+            if ( m_mixer ) {
+                m_mixer->add_source(node);
+            }
+        } else {
+            node = m_readyQueue.front();
+            m_readyQueue.pop();
+        }
+    }
+
+    if ( node ) {
+        node->set_scheduled_start_frame(targetFrame);
+        node->set_reference_pos_provider(std::move(refProvider));
         node->setvolume(volume);
         node->play();
     }

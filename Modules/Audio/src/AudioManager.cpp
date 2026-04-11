@@ -233,4 +233,27 @@ void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
     it->second->play(m_volume * volumeFactor);
 }
 
+void AudioManager::playSoundEffectScheduled(const std::string& key,
+                                            double             targetTime,
+                                            float              volumeFactor)
+{
+    auto it = m_sfxPools.find(key);
+    if ( it == m_sfxPools.end() ) return;
+
+    if ( !m_bgmSource ) return;
+
+    double samplerate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    size_t targetFrame = static_cast<size_t>(targetTime * samplerate);
+
+    // 获取 BGM 播放位置的闭包，用于 SourceNode 内部参考
+    auto bgmRef = [this]() -> size_t {
+        if ( m_bgmSource ) return m_bgmSource->get_playpos();
+        return 0;
+    };
+
+    it->second->playScheduled(m_volume * volumeFactor, targetFrame, bgmRef);
+}
+
+
 }  // namespace MMM::Audio

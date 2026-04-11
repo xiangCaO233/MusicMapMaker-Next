@@ -89,6 +89,13 @@ public:
     /// @param volumeFactor 额外音量倍率 (默认 1.0)
     void playSoundEffect(const std::string& key, float volumeFactor = 1.0f);
 
+    /// @brief 在指定时间播放音效（预测系统使用）
+    /// @param key 标识符
+    /// @param targetTime 目标播放时间 (秒)
+    /// @param volumeFactor 额外音量倍率
+    void playSoundEffectScheduled(const std::string& key, double targetTime,
+                                  float volumeFactor = 1.0f);
+
 private:
     AudioManager() = default;
     ~AudioManager();
