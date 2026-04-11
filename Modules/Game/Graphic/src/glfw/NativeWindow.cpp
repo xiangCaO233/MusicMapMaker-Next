@@ -27,7 +27,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+#ifdef _WIN32
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
+#endif
 
     // 不再需要初始化 ImGui 的辅助窗口
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
@@ -37,18 +39,27 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
         float xscale, yscale;
         glfwGetWindowContentScale(m_windowHandle, &xscale, &yscale);
 
-        int scaledW = static_cast<int>(w * xscale);
-        int scaledH = static_cast<int>(h * yscale);
+        int actualW, actualH;
+        glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
 
+#ifdef _WIN32
+        // Windows 下如果内容缩放大于 1.0 且窗口尚未缩放，则手动调整
         if ( xscale > 1.0f || yscale > 1.0f ) {
-            glfwSetWindowSize(m_windowHandle, scaledW, scaledH);
+            int scaledW = static_cast<int>(w * xscale);
+            int scaledH = static_cast<int>(h * yscale);
+            if ( actualW < scaledW ) {
+                glfwSetWindowSize(m_windowHandle, scaledW, scaledH);
+                actualW = scaledW;
+                actualH = scaledH;
+            }
         }
+#endif
 
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
         if ( monitor && mode ) {
-            int xPos = (mode->width - scaledW) / 2;
-            int yPos = (mode->height - scaledH) / 2;
+            int xPos = (mode->width - actualW) / 2;
+            int yPos = (mode->height - actualH) / 2;
             glfwSetWindowPos(m_windowHandle, xPos, yPos);
         }
     }
