@@ -21,9 +21,9 @@ void Basic2DCanvas::handleDrops(UI::UIManager* sourceManager)
 {
     if ( m_pendingDrops.empty() ) return;
 
-    bool isHovered = ImGui::IsWindowHovered(
-        ImGuiHoveredFlags_RootAndChildWindows |
-        ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    bool isHovered =
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
+                               ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
     if ( isHovered ) {
         for ( const auto& drop : m_pendingDrops ) {
@@ -95,8 +95,35 @@ void Basic2DCanvas::handleHotkeys()
             Logic::CmdChangeTool{ Logic::EditTool::Draw }));
     } else if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_R, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Cut }));
+        if ( !ImGui::GetIO().KeyCtrl ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdChangeTool{ Logic::EditTool::Cut }));
+        }
+    }
+
+    // --- 快捷键：编辑操作 (Ctrl+C/X/V, Ctrl+Z/Y) ---
+    if ( ImGui::GetIO().KeyCtrl ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCopy{}));
+        } else if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCut{}));
+        } else if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdPaste{}));
+        } else if ( ImGui::IsKeyPressed(ImGuiKey_Z, false) ) {
+            if ( ImGui::GetIO().KeyShift ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdRedo{}));
+            } else {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUndo{}));
+            }
+        } else if ( ImGui::IsKeyPressed(ImGuiKey_Y, false) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdRedo{}));
+        }
     }
 }
 
@@ -112,12 +139,12 @@ void Basic2DCanvas::handleInteractions()
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-        Logic::CmdSetMousePosition{ m_cameraId,
-                                    localMousePos.x,
-                                    localMousePos.y,
-                                    isHovered,
-                                    isDragging }));
+    Event::EventBus::instance().publish(
+        Event::LogicCommandEvent(Logic::CmdSetMousePosition{ m_cameraId,
+                                                             localMousePos.x,
+                                                             localMousePos.y,
+                                                             isHovered,
+                                                             isDragging }));
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && m_currentSnapshot->isHoveringCanvas &&
@@ -235,28 +262,44 @@ void Basic2DCanvas::handleInteractions()
             hoveredEntity, hoveredPart, hoveredSubIndex }));
 
     if ( ImGui::IsMouseClicked(0) ) {
-        if ( hoveredEntity != entt::null ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdSelectEntity{
-                    hoveredEntity, !ImGui::GetIO().KeyCtrl }));
+        if ( isHovered ) {
+            if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdStartMarquee{
+                        m_cameraId, localMousePos.x, localMousePos.y }));
+            } else if ( hoveredEntity != entt::null ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                        hoveredEntity, !ImGui::GetIO().KeyCtrl }));
 
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdStartDrag{ hoveredEntity, m_cameraId }));
-        } else {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSelectEntity{ entt::null, true }));
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdStartDrag{ hoveredEntity, m_cameraId }));
+            } else {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSelectEntity{ entt::null, true }));
+            }
         }
     }
 
     if ( ImGui::IsMouseDragging(0) ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdUpdateDrag{
-                m_cameraId, localMousePos.x, localMousePos.y }));
+        if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
+        } else {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpdateDrag{
+                    m_cameraId, localMousePos.x, localMousePos.y }));
+        }
     }
 
     if ( ImGui::IsMouseReleased(0) ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+        if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+        } else {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+        }
     }
 
     // --- 交互：鼠标滚轮控制时间跳转与属性修改 ---
@@ -267,8 +310,8 @@ void Basic2DCanvas::handleInteractions()
         bool isShiftPressed = ImGui::GetIO().KeyShift;
 
         if ( isCtrlPressed ) {
-            auto editorCfg     = Logic::EditorEngine::instance().getEditorConfig();
-            int  direction     = editorCfg.settings.reverseScroll ? -1 : 1;
+            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
             float adjustedWheel = wheel * direction;
             float step          = 0.1f;
             if ( isShiftPressed )
@@ -278,8 +321,8 @@ void Basic2DCanvas::handleInteractions()
                 std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
             Logic::EditorEngine::instance().setEditorConfig(editorCfg);
         } else if ( isAltPressed ) {
-            auto editorCfg     = Logic::EditorEngine::instance().getEditorConfig();
-            int  direction     = editorCfg.settings.reverseScroll ? -1 : 1;
+            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
             float adjustedWheel = wheel * direction;
 
             static std::unordered_map<std::string, float> wheelAccumulator;
@@ -297,8 +340,9 @@ void Basic2DCanvas::handleInteractions()
 
             if ( steps != 0 ) {
                 if ( isShiftPressed ) {
-                    const std::vector<int> presets = { 1, 2, 3,  4,
-                                                       6, 8, 12, 16 };
+                    const std::vector<int> presets = {
+                        1, 2, 3, 4, 6, 8, 12, 16
+                    };
                     int current = editorCfg.settings.beatDivisor;
 
                     if ( steps > 0 ) {
@@ -337,4 +381,4 @@ void Basic2DCanvas::handleInteractions()
     }
 }
 
-} // namespace MMM::Canvas
+}  // namespace MMM::Canvas

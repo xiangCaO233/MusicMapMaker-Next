@@ -123,6 +123,11 @@ private:
      */
     void updateECSAndRender(const Config::EditorConfig& config);
 
+    /**
+     * @brief 更新框选状态 (仅在 m_isSelecting 为 true 时执行)
+     */
+    void updateMarqueeSelection();
+
     // --- 指令处理器 (Command Handlers) ---
     void handleCommand(const CmdUpdateEditorConfig& cmd);
     void handleCommand(const CmdUpdateViewport& cmd);
@@ -139,11 +144,14 @@ private:
     void handleCommand(const CmdChangeTool& cmd);
     void handleCommand(const CmdSetMousePosition& cmd);
     void handleCommand(const CmdScroll& cmd);
+    void handleCommand(const CmdStartMarquee& cmd);
+    void handleCommand(const CmdUpdateMarquee& cmd);
+    void handleCommand(const CmdEndMarquee& cmd);
     void handleCommand(const CmdUndo& cmd);
     void handleCommand(const CmdRedo& cmd);
     void handleCommand(const CmdCopy& cmd);
-    void handleCommand(const CmdPaste& cmd);
     void handleCommand(const CmdCut& cmd);
+    void handleCommand(const CmdPaste& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
     void handleCommand(const CmdUpdateTimelineEvent& cmd);
@@ -184,11 +192,12 @@ private:
     EditTool m_currentTool{ EditTool::Move };
 
     /// @brief 当前鼠标在视口中的状态
-    std::string m_mouseCameraId;
-    float       m_mouseX{ 0.0f };
-    float       m_mouseY{ 0.0f };
-    bool        m_isMouseInCanvas{ false };
-    bool        m_isDragging{ false };
+    std::string  m_mouseCameraId;
+    glm::vec2    m_lastMousePos{ 0.0f, 0.0f };
+    entt::entity m_hoveredEntity{ entt::null };
+    int32_t      m_hoveredPart{ 0 };
+    bool         m_isMouseInCanvas{ false };
+    bool         m_isDragging{ false };
     double      m_previewHoverTime{ 0.0 };
     double      m_previewEdgeScrollVelocity{ 0.0 };
 
@@ -210,6 +219,20 @@ private:
     std::optional<NoteComponent> m_dragInitialNote;
     /// @brief 拖拽发起时的摄像机 ID
     std::string m_dragCameraId;
+
+    /// @brief 框选状态
+    bool        m_isSelecting{ false };
+    std::string m_selectionCameraId;
+    double      m_selectionStartTime{ 0.0 };
+    float       m_selectionStartTrack{ 0.0f };
+    double      m_selectionEndTime{ 0.0 };
+    float       m_selectionEndTrack{ 0.0f };
+
+    /// @brief 剪切板内容
+    struct ClipboardItem {
+        NoteComponent note;
+    };
+    std::vector<ClipboardItem> m_clipboard;
 
     /// @brief 背景图片的尺寸缓存
     glm::vec2 m_bgSize{ 0.0f, 0.0f };

@@ -15,6 +15,7 @@ struct InteractionComponent {
     bool    isHovered{ false };
     bool    isSelected{ false };
     bool    isDragging{ false };
+    bool    isCut{ false };
     uint8_t hoveredPart{ 0 };  // HoverPart
     int     hoveredSubIndex{ -1 };
 };

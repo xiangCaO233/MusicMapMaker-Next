@@ -34,7 +34,7 @@ void NoteRenderSystem::generateSnapshot(
     // 将 ScrollCache 指针存入 context 供 renderPolyline 等后续使用
     registry.ctx().erase<const ScrollCache*>();
     registry.ctx().emplace<const ScrollCache*>(cache);
-    
+
     // 拷贝缓存段供 UI 线程计算时间映射
     snapshot->scrollSegments = cache->getSegments();
 
@@ -79,6 +79,8 @@ void NoteRenderSystem::generateSnapshot(
         // 主画布背景不裁剪
         batcher.setScissor(0, 0, viewportWidth, viewportHeight);
 
+        renderScaleY = config.visual.noteScaleY;
+
         NoteRenderSystem::generateMainCanvasSnapshot(registry,
                                                      timelineRegistry,
                                                      snapshot,
@@ -95,7 +97,8 @@ void NoteRenderSystem::generateSnapshot(
                                                      topY,
                                                      bottomY,
                                                      trackAreaW,
-                                                     singleTrackW);
+                                                     singleTrackW,
+                                                     renderScaleY);
 
         // --- 交互：计算当前悬浮时间点所在的拍序 ---
         if ( snapshot->isHoveringCanvas || snapshot->isPreviewDragging ) {
@@ -172,7 +175,63 @@ void NoteRenderSystem::generateSnapshot(
                                   singleTrackW,
                                   renderScaleY);
 
+    if ( snapshot->isSelecting ) {
+        NoteRenderSystem::renderMarquee(batcher,
+                                        snapshot,
+                                        judgmentLineY,
+                                        leftX,
+                                        singleTrackW,
+                                        renderScaleY,
+                                        cache,
+                                        renderTime,
+                                        viewportWidth,
+                                        viewportHeight);
+    }
+
     batcher.flush();
+}
+
+void NoteRenderSystem::renderMarquee(Batcher& batcher, RenderSnapshot* snapshot,
+                                     float judgmentLineY, float leftX,
+                                     float singleTrackW, float renderScaleY,
+                                     const ScrollCache* cache,
+                                     double renderTime, float viewportWidth,
+                                     float viewportHeight)
+{
+    float x1 = leftX + snapshot->selectionStartTrack * singleTrackW;
+    float x2 = leftX + snapshot->selectionEndTrack * singleTrackW;
+
+    double currentAbsY = cache->getAbsY(renderTime);
+    double startAbsY   = cache->getAbsY(snapshot->selectionStartTime);
+    double endAbsY     = cache->getAbsY(snapshot->selectionEndTime);
+
+    float y1 = judgmentLineY -
+               static_cast<float>(startAbsY - currentAbsY) * renderScaleY;
+    float y2 = judgmentLineY -
+               static_cast<float>(endAbsY - currentAbsY) * renderScaleY;
+
+    float left   = std::min(x1, x2);
+    float right  = std::max(x1, x2);
+    float top    = std::min(y1, y2);
+    float bottom = std::max(y1, y2);
+    float w      = right - left;
+    float h      = bottom - top;
+
+    auto& settings  = Config::AppConfig::instance().getEditorSettings();
+    float borderW   = settings.marqueeThickness;
+    float cornerR   = settings.marqueeRounding;
+
+    // 重置 scissor 到全屏，确保框选矩形不被轨道裁剪掉
+    batcher.setScissor(0, 0, viewportWidth, viewportHeight);
+    batcher.setTexture(TextureID::None);
+
+    // 绘制半透明填充
+    glm::vec4 fillCol   = { 0.2f, 0.6f, 1.0f, 0.15f };
+    glm::vec4 strokeCol = { 0.3f, 0.7f, 1.0f, 0.85f };
+
+    batcher.pushRoundedQuad(left, bottom, w, h, cornerR, fillCol);
+    batcher.pushRoundedStrokeRect(
+        left, bottom, w, h, cornerR, borderW, strokeCol);
 }
 
 void NoteRenderSystem::generateTimelineSnapshot(
@@ -215,14 +274,13 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
 
         batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
-        snapshot->timelineElements.push_back(
-            { seg.time,
-              y,
-              seg.effects,
-              seg.bpmEntity,
-              seg.scrollEntity,
-              seg.bpmValue,
-              seg.scrollValue });
+        snapshot->timelineElements.push_back({ seg.time,
+                                               y,
+                                               seg.effects,
+                                               seg.bpmEntity,
+                                               seg.scrollEntity,
+                                               seg.bpmValue,
+                                               seg.scrollValue });
     }
 
     batcher.pushQuad(paddingX,
@@ -350,7 +408,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
     const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-    float& bottomY, float& trackAreaW, float& singleTrackW)
+    float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
 {
     BackgroundRenderSystem::render(
         batcher, viewportWidth, viewportHeight, config, snapshot);
@@ -387,7 +445,8 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                             topY,
                                             bottomY,
                                             trackAreaW,
-                                            singleTrackW);
+                                            singleTrackW,
+                                            renderScaleY);
     }
 }
 

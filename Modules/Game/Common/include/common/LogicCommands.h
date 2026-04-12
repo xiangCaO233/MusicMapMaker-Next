@@ -99,6 +99,29 @@ struct CmdSetMousePosition {
 };
 
 /**
+ * @brief 开始框选指令
+ */
+struct CmdStartMarquee {
+    std::string cameraId;
+    float       mouseX;
+    float       mouseY;
+};
+
+/**
+ * @brief 更新框选指令
+ */
+struct CmdUpdateMarquee {
+    float mouseX;
+    float mouseY;
+};
+
+/**
+ * @brief 结束框选指令
+ */
+struct CmdEndMarquee {
+};
+
+/**
  * @brief 更新轨道数量指令
  */
 struct CmdUpdateTrackCount {
@@ -216,14 +239,13 @@ struct CmdCreateTimelineEvent {
 /**
  * @brief 所有可能的逻辑指令变体
  */
-using LogicCommand =
-    std::variant<CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState,
-                 CmdLoadBeatmap, CmdSetHoveredEntity, CmdSelectEntity,
-                 CmdStartDrag, CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount,
-                 CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool,
-                 CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-                 CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll,
-                 CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
-                 CmdCreateTimelineEvent>;
+using LogicCommand = std::variant<
+    CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
+    CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag, CmdUpdateDrag,
+    CmdEndDrag, CmdUpdateTrackCount, CmdSeek, CmdSetPlaybackSpeed,
+    CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
+    CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
+    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
+    CmdUpdateMarquee, CmdEndMarquee>;
 
 }  // namespace MMM::Logic

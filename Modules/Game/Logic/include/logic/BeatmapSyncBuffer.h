@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/LogicCommands.h"
-#include "logic/ecs/system/ScrollCache.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
 #include <atomic>
 #include <concurrentqueue.h>
@@ -83,7 +83,8 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               glowCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
-    std::vector<System::ScrollSegment>          scrollSegments; // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
+    std::vector<System::ScrollSegment>
+        scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
 
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
@@ -121,6 +122,13 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
+    // 框选状态
+    bool   isSelecting{ false };
+    double selectionStartTime{ 0.0 };
+    float  selectionStartTrack{ 0.0f };
+    double selectionEndTime{ 0.0 };
+    float  selectionEndTrack{ 0.0f };
+
     // 是否已加载谱面
     bool hasBeatmap{ false };
 
@@ -157,6 +165,11 @@ struct RenderSnapshot {
         previewHoverY          = 0.0f;
         previewHoverTime       = 0.0;
         isPreviewDragging      = false;
+        isSelecting            = false;
+        selectionStartTime     = 0.0;
+        selectionStartTrack    = 0.0f;
+        selectionEndTime       = 0.0;
+        selectionEndTrack      = 0.0f;
         hasBeatmap             = false;
     }
 };

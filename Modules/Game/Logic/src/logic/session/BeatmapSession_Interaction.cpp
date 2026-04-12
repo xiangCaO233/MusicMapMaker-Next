@@ -1,35 +1,25 @@
+#include "config/AppConfig.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
-#include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/NoteAction.h"
 #include "mmm/beatmap/BeatMap.h"
-#include <algorithm>
 
 namespace MMM::Logic
 {
 
+// --- Interaction Handlers ---
+
 void BeatmapSession::handleCommand(const CmdSetHoveredEntity& cmd)
 {
-    auto view = m_noteRegistry.view<InteractionComponent>();
-    for ( auto entity : view ) {
-        auto& ic           = m_noteRegistry.get<InteractionComponent>(entity);
-        ic.isHovered       = false;
-        ic.hoveredPart     = 0;
-        ic.hoveredSubIndex = -1;
-    }
-    if ( cmd.entity != entt::null ) {
-        if ( !m_noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
-            m_noteRegistry.emplace<InteractionComponent>(cmd.entity);
-        }
-        auto& ic           = m_noteRegistry.get<InteractionComponent>(cmd.entity);
-        ic.isHovered       = true;
-        ic.hoveredPart     = cmd.part;
-        ic.hoveredSubIndex = cmd.subIndex;
-    }
+    m_hoveredEntity = cmd.entity;
+    m_hoveredPart   = cmd.part;
 }
 
 void BeatmapSession::handleCommand(const CmdSelectEntity& cmd)
@@ -58,8 +48,7 @@ void BeatmapSession::handleCommand(const CmdStartDrag& cmd)
             m_noteRegistry.emplace<InteractionComponent>(cmd.entity);
         }
         m_noteRegistry.get<InteractionComponent>(cmd.entity).isDragging = true;
-        
-        // 备份初始状态用于撤销
+
         if ( auto* note = m_noteRegistry.try_get<NoteComponent>(cmd.entity) ) {
             m_dragInitialNote = *note;
         }
@@ -72,8 +61,8 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
          m_noteRegistry.valid(m_draggedEntity) ) {
         auto it = m_cameras.find(cmd.cameraId);
         if ( it != m_cameras.end() ) {
-            float judgmentLineY = it->second.viewportHeight *
-                                  m_lastConfig.visual.judgeline_pos;
+            float judgmentLineY =
+                it->second.viewportHeight * m_lastConfig.visual.judgeline_pos;
             auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
             if ( cache ) {
                 double currentAbsY = cache->getAbsY(m_visualTime);
@@ -81,9 +70,11 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
                 double targetTime  = cache->getTime(targetAbsY);
 
                 std::vector<const TimelineComponent*> bpmEvents;
-                auto tlView = m_timelineRegistry.view<const TimelineComponent>();
+                auto                                  tlView =
+                    m_timelineRegistry.view<const TimelineComponent>();
                 for ( auto entity : tlView ) {
-                    const auto& tl = tlView.get<const TimelineComponent>(entity);
+                    const auto& tl =
+                        tlView.get<const TimelineComponent>(entity);
                     if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
                         bpmEvents.push_back(&tl);
                     }
@@ -94,28 +85,32 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
                                      return a->m_timestamp < b->m_timestamp;
                                  });
 
-                auto snap = getSnapResult(
-                    targetTime, cmd.mouseY, it->second, m_lastConfig, bpmEvents);
+                auto snap = getSnapResult(targetTime,
+                                          cmd.mouseY,
+                                          it->second,
+                                          m_lastConfig,
+                                          bpmEvents);
                 if ( snap.isSnapped ) {
                     targetTime = snap.snappedTime;
                 }
 
-                if ( auto* note =
-                         m_noteRegistry.try_get<NoteComponent>(m_draggedEntity) ) {
-                    note->m_timestamp = targetTime;
-                    float leftX       = it->second.viewportWidth *
-                                  m_lastConfig.visual.trackLayout.left;
-                    float rightX = it->second.viewportWidth *
-                                   m_lastConfig.visual.trackLayout.right;
-                    float trackAreaW = rightX - leftX;
-                    float noteW      = trackAreaW / m_trackCount;
-                    int   track      = static_cast<int>(std::round(
+                if ( auto* note = m_noteRegistry.try_get<NoteComponent>(
+                         m_draggedEntity) ) {
+                    note->m_timestamp  = targetTime;
+                    float leftX        = it->second.viewportWidth *
+                                         m_lastConfig.visual.trackLayout.left;
+                    float rightX       = it->second.viewportWidth *
+                                         m_lastConfig.visual.trackLayout.right;
+                    float trackAreaW   = rightX - leftX;
+                    float noteW        = trackAreaW / m_trackCount;
+                    int   track        = static_cast<int>(std::round(
                         (cmd.mouseX - leftX - noteW / 2.0f) / noteW));
-                    track            = std::clamp(track, 0, m_trackCount - 1);
+                    track              = std::clamp(track, 0, m_trackCount - 1);
                     note->m_trackIndex = track;
 
-                    if ( auto* trans = m_noteRegistry.try_get<TransformComponent>(
-                             m_draggedEntity) ) {
+                    if ( auto* trans =
+                             m_noteRegistry.try_get<TransformComponent>(
+                                 m_draggedEntity) ) {
                         trans->m_pos.x = leftX + track * noteW;
                     }
                 }
@@ -135,16 +130,18 @@ void BeatmapSession::handleCommand(const CmdEndDrag& cmd)
 
         // 提交撤销操作
         if ( m_dragInitialNote.has_value() ) {
-            auto* currentNote = m_noteRegistry.try_get<NoteComponent>(m_draggedEntity);
+            auto* currentNote =
+                m_noteRegistry.try_get<NoteComponent>(m_draggedEntity);
             if ( currentNote ) {
-                auto action = std::make_unique<NoteAction>(
-                    NoteAction::Type::Update, m_draggedEntity, *m_dragInitialNote, *currentNote);
-                // 注意：pushAndExecute 会再次调用 execute，其中的 rebuildHitEvents 会执行。
-                // 但由于数据已经在 CmdUpdateDrag 中修改过了，Action::execute 只是覆盖一遍相同数据。
+                auto action =
+                    std::make_unique<NoteAction>(NoteAction::Type::Update,
+                                                 m_draggedEntity,
+                                                 *m_dragInitialNote,
+                                                 *currentNote);
                 m_actionStack.pushAndExecute(std::move(action), *this);
             }
         }
-        
+
         rebuildHitEvents();
     }
     m_draggedEntity   = entt::null;
@@ -157,86 +154,38 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
     if ( cmd.isHovering ) {
         if ( !m_isDragging || m_mouseCameraId == cmd.cameraId ||
              m_mouseCameraId == "" ) {
-            canUpdate = true;
+            m_mouseCameraId = cmd.cameraId;
+            canUpdate       = true;
         }
-    } else if ( m_isDragging && m_mouseCameraId == cmd.cameraId ) {
-        canUpdate = true;
     }
 
     if ( canUpdate ) {
-        m_mouseCameraId   = cmd.cameraId;
-        m_mouseX          = cmd.mouseX;
-        m_mouseY          = cmd.mouseY;
-        m_isMouseInCanvas = cmd.isHovering;
-        m_isDragging      = cmd.isDragging;
+        m_lastMousePos = { cmd.mouseX, cmd.mouseY };
 
-        if ( m_mouseCameraId == "Preview" ) {
-            auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
-            if ( cache ) {
-                auto itP = m_cameras.find("Preview");
-                if ( itP != m_cameras.end() ) {
-                    const auto& camera        = itP->second;
-                    float       judgmentLineY = camera.viewportHeight *
-                                  m_lastConfig.visual.judgeline_pos;
-                    double currentAbsY = cache->getAbsY(m_visualTime);
-                    double deltaY      = (judgmentLineY - m_mouseY);
+        // 预览区边缘滚动
+        if ( cmd.cameraId == "PreviewCanvas" ) {
+            auto it = m_cameras.find(cmd.cameraId);
+            if ( it != m_cameras.end() ) {
+                float margin = 20.0f;
+                float dist   = 0.0f;
+                if ( cmd.mouseY < margin )
+                    dist = margin - cmd.mouseY;
+                else if ( cmd.mouseY > it->second.viewportHeight - margin )
+                    dist = (it->second.viewportHeight - margin) - cmd.mouseY;
 
-                    float mainHeight = 1000.0f;
-                    auto  itMain     = m_cameras.find("Basic2DCanvas");
-                    if ( itMain != m_cameras.end() ) {
-                        mainHeight = itMain->second.viewportHeight;
-                    }
-
-                    float mainEffectiveH = (m_lastConfig.visual.trackLayout.bottom -
-                                            m_lastConfig.visual.trackLayout.top) *
-                                           mainHeight;
-                    float previewDrawH = camera.viewportHeight -
-                                         (m_lastConfig.visual.previewConfig.margin
-                                              .top +
-                                          m_lastConfig.visual.previewConfig.margin
-                                              .bottom);
-                    float renderScaleY =
-                        previewDrawH /
-                        (mainEffectiveH *
-                         m_lastConfig.visual.previewConfig.areaRatio);
-
-                    if ( std::abs(renderScaleY) > 0.0001f ) {
-                        deltaY /= renderScaleY;
-                    }
-
-                    double targetAbsY  = currentAbsY + deltaY;
-                    m_previewHoverTime = cache->getTime(targetAbsY);
-
-                    float topM      = m_lastConfig.visual.previewConfig.margin.top;
-                    float bottomM   = m_lastConfig.visual.previewConfig.margin.bottom;
-                    float viewH     = camera.viewportHeight;
-                    float threshold = 60.0f;
-
-                    m_previewEdgeScrollVelocity = 0.0;
-                    if ( m_isDragging ) {
-                        float sensitivity =
-                            0.1f *
-                            m_lastConfig.visual.previewConfig.edgeScrollSensitivity;
-                        if ( m_mouseY < topM + threshold ) {
-                            float dist = (topM + threshold) - m_mouseY;
-                            m_previewEdgeScrollVelocity =
-                                static_cast<double>(dist) * sensitivity;
-                        } else if ( m_mouseY > viewH - bottomM - threshold ) {
-                            float dist = m_mouseY - (viewH - bottomM - threshold);
-                            m_previewEdgeScrollVelocity =
-                                -static_cast<double>(dist) * sensitivity;
-                        }
-                    }
-                }
+                float sensitivity           = m_lastConfig.visual.previewConfig
+                                        .edgeScrollSensitivity;
+                m_previewEdgeScrollVelocity =
+                    -static_cast<double>(dist) * sensitivity;
             }
-        } else {
-            m_previewEdgeScrollVelocity = 0.0;
         }
+    } else {
+        m_previewEdgeScrollVelocity = 0.0;
+    }
 
-        if ( !cmd.isHovering && !m_isDragging ) {
-            m_mouseCameraId             = "";
-            m_previewEdgeScrollVelocity = 0.0;
-        }
+    if ( !cmd.isHovering && !m_isDragging ) {
+        m_mouseCameraId             = "";
+        m_previewEdgeScrollVelocity = 0.0;
     }
 }
 
@@ -253,4 +202,104 @@ void BeatmapSession::handleCommand(const CmdChangeTool& cmd)
     m_currentTool = cmd.tool;
 }
 
-} // namespace MMM::Logic
+void BeatmapSession::handleCommand(const CmdStartMarquee& cmd)
+{
+    m_isSelecting       = true;
+    m_selectionCameraId = cmd.cameraId;
+    auto* cache         = m_timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( cache ) {
+        auto it = m_cameras.find(cmd.cameraId);
+        if ( it != m_cameras.end() ) {
+            float judgmentLineY =
+                it->second.viewportHeight * m_lastConfig.visual.judgeline_pos;
+
+            float renderScaleY = 1.0f;
+            if ( cmd.cameraId == "Preview" ) {
+                auto  itMain             = m_cameras.find("Basic2DCanvas");
+                float mainViewportHeight = itMain != m_cameras.end()
+                                               ? itMain->second.viewportHeight
+                                               : it->second.viewportHeight;
+
+                float mainEffectiveH = (m_lastConfig.visual.trackLayout.bottom -
+                                        m_lastConfig.visual.trackLayout.top) *
+                                       mainViewportHeight;
+                float ty = m_lastConfig.visual.previewConfig.margin.top;
+                float by = it->second.viewportHeight -
+                           m_lastConfig.visual.previewConfig.margin.bottom;
+                float previewDrawH = by - ty;
+
+                renderScaleY = previewDrawH / (mainEffectiveH *
+                                               m_lastConfig.visual.previewConfig.areaRatio);
+            } else {
+                renderScaleY = m_lastConfig.visual.noteScaleY;
+            }
+
+            double currentAbsY   = cache->getAbsY(m_visualTime);
+            double targetAbsY    = currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+            m_selectionStartTime = cache->getTime(targetAbsY);
+            m_selectionEndTime   = m_selectionStartTime;
+
+            float leftX =
+                it->second.viewportWidth * m_lastConfig.visual.trackLayout.left;
+            float rightX     = it->second.viewportWidth *
+                               m_lastConfig.visual.trackLayout.right;
+            float trackAreaW = rightX - leftX;
+            m_selectionStartTrack =
+                (cmd.mouseX - leftX) / (trackAreaW / m_trackCount);
+            m_selectionEndTrack = m_selectionStartTrack;
+        }
+    }
+}
+
+void BeatmapSession::handleCommand(const CmdUpdateMarquee& cmd)
+{
+    if ( !m_isSelecting ) return;
+    auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( cache ) {
+        auto it = m_cameras.find(m_selectionCameraId);
+        if ( it != m_cameras.end() ) {
+            float judgmentLineY =
+                it->second.viewportHeight * m_lastConfig.visual.judgeline_pos;
+
+            float renderScaleY = 1.0f;
+            if ( m_selectionCameraId == "Preview" ) {
+                auto  itMain             = m_cameras.find("Basic2DCanvas");
+                float mainViewportHeight = itMain != m_cameras.end()
+                                               ? itMain->second.viewportHeight
+                                               : it->second.viewportHeight;
+
+                float mainEffectiveH = (m_lastConfig.visual.trackLayout.bottom -
+                                        m_lastConfig.visual.trackLayout.top) *
+                                       mainViewportHeight;
+                float ty = m_lastConfig.visual.previewConfig.margin.top;
+                float by = it->second.viewportHeight -
+                           m_lastConfig.visual.previewConfig.margin.bottom;
+                float previewDrawH = by - ty;
+
+                renderScaleY = previewDrawH / (mainEffectiveH *
+                                               m_lastConfig.visual.previewConfig.areaRatio);
+            } else {
+                renderScaleY = m_lastConfig.visual.noteScaleY;
+            }
+
+            double currentAbsY = cache->getAbsY(m_visualTime);
+            double targetAbsY  = currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+            m_selectionEndTime = cache->getTime(targetAbsY);
+
+            float leftX =
+                it->second.viewportWidth * m_lastConfig.visual.trackLayout.left;
+            float rightX     = it->second.viewportWidth *
+                               m_lastConfig.visual.trackLayout.right;
+            float trackAreaW = rightX - leftX;
+            m_selectionEndTrack =
+                (cmd.mouseX - leftX) / (trackAreaW / m_trackCount);
+        }
+    }
+}
+
+void BeatmapSession::handleCommand(const CmdEndMarquee& cmd)
+{
+    m_isSelecting = false;
+}
+
+}  // namespace MMM::Logic

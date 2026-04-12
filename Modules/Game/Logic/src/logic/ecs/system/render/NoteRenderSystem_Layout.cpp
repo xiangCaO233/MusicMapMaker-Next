@@ -14,7 +14,7 @@ void NoteRenderSystem::renderTrackLayout(
     float judgmentLineY, int32_t trackCount, const Config::EditorConfig& config,
     const entt::registry& timelineRegistry, double currentTime,
     const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-    float& bottomY, float& trackAreaW, float& singleTrackW)
+    float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
 {
     // 1. 基础布局计算
     leftX        = viewportWidth * config.visual.trackLayout.left;
@@ -57,7 +57,8 @@ void NoteRenderSystem::renderTrackLayout(
                                     leftX,
                                     topY,
                                     bottomY,
-                                    trackAreaW);
+                                    trackAreaW,
+                                    renderScaleY);
 }
 
 void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
@@ -165,7 +166,7 @@ void NoteRenderSystem::drawBeatLines(
     Batcher& batcher, float viewportHeight, float judgmentLineY,
     const Config::EditorConfig& config, const entt::registry& timelineRegistry,
     double currentTime, const ScrollCache* cache, float leftX, float topY,
-    float bottomY, float trackAreaW)
+    float bottomY, float trackAreaW, float renderScaleY)
 {
     if ( !cache ) return;
 
@@ -191,8 +192,8 @@ void NoteRenderSystem::drawBeatLines(
 
     double currentAbsY = cache->getAbsY(currentTime);
     double startTime =
-        cache->getTime(currentAbsY - (viewportHeight - judgmentLineY));
-    double endTime = cache->getTime(currentAbsY + judgmentLineY);
+        cache->getTime(currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
+    double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
 
     batcher.setTexture(TextureID::None);
 
@@ -250,7 +251,7 @@ void NoteRenderSystem::drawBeatLines(
 
             auto [color, width] = getBeatLineConfig(denominator);
             double absY         = cache->getAbsY(t);
-            float  y = judgmentLineY - static_cast<float>(absY - currentAbsY);
+            float  y = judgmentLineY - static_cast<float>(absY - currentAbsY) * renderScaleY;
 
             if ( y >= topY && y <= bottomY ) {
                 if ( batcher.snapshot->isSnapped &&

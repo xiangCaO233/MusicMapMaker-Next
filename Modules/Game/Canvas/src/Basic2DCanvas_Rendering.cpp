@@ -296,4 +296,4 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
           m_cameraId);
 }
 
-} // namespace MMM::Canvas
+}  // namespace MMM::Canvas

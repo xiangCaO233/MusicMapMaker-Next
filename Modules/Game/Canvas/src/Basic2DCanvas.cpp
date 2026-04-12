@@ -1,10 +1,11 @@
 #include "canvas/Basic2DCanvas.h"
-#include "event/core/EventBus.h"
 #include "event/canvas/interactive/ResizeEvent.h"
+#include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include <chrono>
 #include <fmt/format.h>
 #include <utility>
 
@@ -85,4 +86,4 @@ bool Basic2DCanvas::needReload()
     return std::exchange(m_needReload, false);
 }
 
-} // namespace MMM::Canvas
+}  // namespace MMM::Canvas

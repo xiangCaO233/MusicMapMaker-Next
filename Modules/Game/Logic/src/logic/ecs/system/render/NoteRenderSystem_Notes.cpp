@@ -279,12 +279,14 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
 
-        // 处理拖拽时的半透明预览效果
-        float alphaMul = 1.0f;
+        // 处理拖拽/选中/剪切时的视觉反馈
+        float alphaMul   = 1.0f;
+        bool  isSelected = false;
         if ( auto* ic = registry.try_get<InteractionComponent>(entity) ) {
-            if ( ic->isDragging ) {
+            if ( ic->isDragging || ic->isCut ) {
                 alphaMul = 0.5f;
             }
+            isSelected = ic->isSelected;
         }
 
         double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
@@ -294,11 +296,17 @@ void NoteRenderSystem::renderNoteBaseLayer(
         float visualH = transform.m_size.y * renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
-        // 应用 Alpha 倍率
+        // 应用 Alpha 与 选中高亮
         glm::vec4 curColorTap   = ctx.colorTap;
         glm::vec4 curColorHold  = ctx.colorHold;
         glm::vec4 curColorNode  = ctx.colorNode;
         glm::vec4 curColorArrow = ctx.colorArrow;
+
+        if ( isSelected ) {
+            curColorTap  = { 1.0f, 1.0f, 0.4f, 1.0f };
+            curColorHold = { 1.0f, 1.0f, 0.4f, 1.0f };
+        }
+
         curColorTap.a *= alphaMul;
         curColorHold.a *= alphaMul;
         curColorNode.a *= alphaMul;

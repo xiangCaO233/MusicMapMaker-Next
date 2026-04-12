@@ -254,11 +254,120 @@ struct Batcher {
         currentCmd.indexCount += 6;
     }
 
+    /// @brief 推送一个圆角矩形
+    void pushRoundedQuad(float x, float y, float w, float h, float r,
+                         glm::vec4 color)
+    {
+        if ( r <= 0.05f ) {
+            pushQuad(x, y, w, h, color);
+            return;
+        }
+        r = std::min({ r, std::abs(w) * 0.5f, std::abs(h) * 0.5f });
+
+        // Center cross
+        pushQuad(x + r, y, w - 2 * r, h, color);
+        // Left & Right bars
+        pushQuad(x, y - r, r, h - 2 * r, color);
+        pushQuad(x + w - r, y - r, r, h - 2 * r, color);
+
+        auto pushCorner =
+            [&](float cx, float cy, float startAng, float endAng) {
+                const int segments = 6;
+                uint32_t  centerIdx =
+                    static_cast<uint32_t>(snapshot->vertices.size());
+                Graphic::Vertex::VKBasicVertex center;
+                center.pos   = { cx, cy, 0.0f };
+                center.color = { color.r, color.g, color.b, color.a };
+
+                // 固定使用 TextureID::None 的 UV (白色像素)
+                glm::vec2 whiteUv(0, 0);
+                auto      it = snapshot->uvMap.find(
+                    static_cast<uint32_t>(TextureID::None));
+                if ( it != snapshot->uvMap.end() ) {
+                    whiteUv = { it->second.x + it->second.z * 0.5f,
+                                it->second.y + it->second.w * 0.5f };
+                }
+                center.uv = { whiteUv.x, whiteUv.y };
+                snapshot->vertices.push_back(center);
+
+                for ( int i = 0; i <= segments; ++i ) {
+                    float ang =
+                        startAng + (endAng - startAng) * (float)i / segments;
+                    Graphic::Vertex::VKBasicVertex v;
+                    v.pos   = { cx + r * std::cos(ang),
+                                cy + r * std::sin(ang),
+                                0.0f };
+                    v.color = { color.r, color.g, color.b, color.a };
+                    v.uv    = { whiteUv.x, whiteUv.y };
+                    snapshot->vertices.push_back(v);
+
+                    if ( i > 0 ) {
+                        uint32_t cur  = centerIdx + i + 1;
+                        uint32_t prev = cur - 1;
+                        snapshot->indices.push_back(centerIdx);
+                        snapshot->indices.push_back(prev);
+                        snapshot->indices.push_back(cur);
+                        currentCmd.indexCount += 3;
+                    }
+                }
+            };
+
+        const float PI = 3.14159265f;
+        pushCorner(x + r, y - r, PI, 1.5f * PI);             // Top-Left
+        pushCorner(x + w - r, y - r, 1.5f * PI, 2.0f * PI);  // Top-Right
+        pushCorner(x + w - r, y - h + r, 0, 0.5f * PI);      // Bottom-Right
+        pushCorner(x + r, y - h + r, 0.5f * PI, PI);         // Bottom-Left
+    }
+
+    /// @brief 推送一个圆角空心矩形 (y 为底边)
+    void pushRoundedStrokeRect(float x, float y, float w, float h, float r,
+                               float thickness, glm::vec4 color)
+    {
+        if ( r <= 0.05f ) {
+            pushStrokeRect(x, y - h, x + w, y, thickness, color);
+            return;
+        }
+        r = std::min({ r, std::abs(w) * 0.5f, std::abs(h) * 0.5f });
+
+        // 4 Straight edges
+        pushQuad(x + r, y, w - 2 * r, thickness, color);
+        pushQuad(x + r, y - h + thickness, w - 2 * r, thickness, color);
+        pushQuad(x, y - r, thickness, h - 2 * r, color);
+        pushQuad(x + w - thickness, y - r, thickness, h - 2 * r, color);
+
+        // 4 Rounded corners (Arc strokes)
+        auto pushArc = [&](float cx, float cy, float startAng, float endAng) {
+            const int segments = 6;
+            for ( int i = 0; i < segments; ++i ) {
+                float a1 = startAng + (endAng - startAng) * (float)i / segments;
+                float a2 =
+                    startAng + (endAng - startAng) * (float)(i + 1) / segments;
+
+                glm::vec2 p1(cx + (r - thickness) * std::cos(a1),
+                             cy + (r - thickness) * std::sin(a1));
+                glm::vec2 p2(cx + r * std::cos(a1), cy + r * std::sin(a1));
+                glm::vec2 p3(cx + r * std::cos(a2), cy + r * std::sin(a2));
+                glm::vec2 p4(cx + (r - thickness) * std::cos(a2),
+                             cy + (r - thickness) * std::sin(a2));
+
+                pushFreeQuad(p1, p2, p3, p4, color);
+            }
+        };
+
+        const float PI = 3.14159265f;
+        pushArc(x + r, y - r, PI, 1.5f * PI);             // Top-Left
+        pushArc(x + w - r, y - r, 1.5f * PI, 2.0f * PI);  // Top-Right
+        pushArc(x + w - r, y - h + r, 0, 0.5f * PI);      // Bottom-Right
+        pushArc(x + r, y - h + r, 0.5f * PI, PI);         // Bottom-Left
+    }
+
     void flush()
     {
         if ( currentCmd.indexCount > 0 ) {
             targetCmds->push_back(currentCmd);
             currentCmd.indexCount = 0;
+            currentCmd.indexOffset =
+                static_cast<uint32_t>(snapshot->indices.size());
         }
     }
 };

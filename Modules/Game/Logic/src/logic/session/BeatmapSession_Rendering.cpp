@@ -1,5 +1,5 @@
-#include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
+#include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -36,6 +36,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         [](const TimelineComponent* a, const TimelineComponent* b) {
             return a->m_timestamp < b->m_timestamp;
         });
+
+    // 0. 如果正在框选，更新选中状态 (每帧只执行一次，避免 Command 堆积)
+    if ( m_isSelecting ) {
+        updateMarqueeSelection();
+    }
 
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_cameras ) {
@@ -75,6 +80,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             (m_dragCameraId == "Preview" || m_mouseCameraId == "Preview");
         snapshot->previewHoverTime = m_previewHoverTime;
 
+        // --- 注入框选状态 ---
+        snapshot->isSelecting =
+            m_isSelecting && (m_selectionCameraId == cameraId);
+        snapshot->selectionStartTime  = m_selectionStartTime;
+        snapshot->selectionStartTrack = m_selectionStartTrack;
+        snapshot->selectionEndTime    = m_selectionEndTime;
+        snapshot->selectionEndTrack   = m_selectionEndTrack;
+
         if ( snapshot->isHoveringCanvas ) {
             auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
             if ( cache ) {
@@ -82,7 +95,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     camera.viewportHeight * config.visual.judgeline_pos;
 
                 double currentAbsY = cache->getAbsY(m_visualTime);
-                double deltaY      = (judgmentLineY - m_mouseY);
+                double deltaY      = (judgmentLineY - m_lastMousePos.y);
 
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
                 if ( cameraId == "Preview" ) {
@@ -125,12 +138,15 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     trackAreaW / static_cast<float>(m_trackCount);
 
                 int track = static_cast<int>(
-                    std::floor((m_mouseX - leftX) / singleTrackW));
+                    std::floor((m_lastMousePos.x - leftX) / singleTrackW));
                 snapshot->hoveredTrack = std::clamp(track, 0, m_trackCount - 1);
 
                 // --- 磁吸拍线时间戳预览 ---
-                auto snap = getSnapResult(
-                    snapshot->hoveredTime, m_mouseY, camera, config, bpmEvents);
+                auto snap = getSnapResult(snapshot->hoveredTime,
+                                          m_lastMousePos.y,
+                                          camera,
+                                          config,
+                                          bpmEvents);
                 if ( snap.isSnapped ) {
                     snapshot->isSnapped          = true;
                     snapshot->snappedTime        = snap.snappedTime;
@@ -143,7 +159,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 if ( cameraId == "Preview" ) {
                     snapshot->isPreviewHovered  = true;
                     snapshot->isPreviewDragging = m_isDragging;
-                    snapshot->previewHoverY     = m_mouseY;
+                    snapshot->previewHoverY     = m_lastMousePos.y;
 
                     // 核心逻辑：拖动预览区时，主画布应该渲染拖拽处的内容
                     snapshot->previewHoverTime = snapshot->hoveredTime;
@@ -286,4 +302,65 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
     }
 }
 
-} // namespace MMM::Logic
+void BeatmapSession::updateMarqueeSelection()
+{
+    // 获取当前时间戳和轨道范围
+    double minTime  = std::min(m_selectionStartTime, m_selectionEndTime);
+    double maxTime  = std::max(m_selectionStartTime, m_selectionEndTime);
+    float  minTrack = std::min(m_selectionStartTrack, m_selectionEndTrack);
+    float  maxTrack = std::max(m_selectionStartTrack, m_selectionEndTrack);
+
+    auto mode = m_lastConfig.settings.selectionMode;
+    auto view = m_noteRegistry.view<NoteComponent>();
+
+    for ( auto entity : view ) {
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+
+        bool isSelected = false;
+        if ( mode == Config::SelectionMode::Strict ) {
+            // 严格模式：物件必须完全在框内
+            double noteEnd = note.m_timestamp + note.m_duration;
+            float  trackL  = static_cast<float>(note.m_trackIndex);
+            float  trackR  = trackL + 1.0f;
+            if ( note.m_type == ::MMM::NoteType::FLICK ) {
+                if ( note.m_dtrack > 0 )
+                    trackR += note.m_dtrack;
+                else
+                    trackL += note.m_dtrack;
+            }
+
+            if ( note.m_timestamp >= minTime && noteEnd <= maxTime &&
+                 trackL >= minTrack && trackR <= maxTrack ) {
+                isSelected = true;
+            }
+        } else {
+            // 相交模式
+            double noteEnd = note.m_timestamp + note.m_duration;
+            float  trackL  = static_cast<float>(note.m_trackIndex);
+            float  trackR  = trackL + 1.0f;
+            if ( note.m_type == ::MMM::NoteType::FLICK ) {
+                if ( note.m_dtrack > 0 )
+                    trackR += note.m_dtrack;
+                else
+                    trackL += note.m_dtrack;
+            }
+
+            bool timeOverlap = std::max(note.m_timestamp, minTime) <=
+                               std::min(noteEnd, maxTime);
+            bool trackOverlap =
+                std::max(trackL, minTrack) <= std::min(trackR, maxTrack);
+            if ( timeOverlap && trackOverlap ) {
+                isSelected = true;
+            }
+        }
+
+        if ( !m_noteRegistry.all_of<InteractionComponent>(entity) ) {
+            m_noteRegistry.emplace<InteractionComponent>(entity);
+        }
+        m_noteRegistry.get<InteractionComponent>(entity).isSelected =
+            isSelected;
+    }
+}
+
+}  // namespace MMM::Logic

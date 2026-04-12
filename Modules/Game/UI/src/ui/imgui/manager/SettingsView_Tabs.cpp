@@ -1,4 +1,3 @@
-#include "ui/imgui/manager/SettingsView.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -7,6 +6,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "ui/imgui/manager/SettingsView.h"
 
 namespace MMM::UI
 {
@@ -344,6 +344,32 @@ void SettingsView::drawEditorSettings()
         changed              = true;
     }
 
+    ImGui::SeparatorText("Selection (框选)");
+    int mode = (int)settings.selectionMode;
+    if ( ImGui::RadioButton("Strict (严格)",
+                            mode == (int)Config::SelectionMode::Strict) ) {
+        settings.selectionMode = Config::SelectionMode::Strict;
+        changed                = true;
+    }
+    ImGui::SameLine();
+    if ( ImGui::RadioButton(
+             "Intersection (相交)",
+             mode == (int)Config::SelectionMode::Intersection) ) {
+        settings.selectionMode = Config::SelectionMode::Intersection;
+        changed                = true;
+    }
+
+    changed |= ImGui::SliderFloat("Thickness (边框宽度)",
+                                  &settings.marqueeThickness,
+                                  1.0f,
+                                  10.0f,
+                                  "%.1f px");
+    changed |= ImGui::SliderFloat("Rounding (圆角范围)",
+                                  &settings.marqueeRounding,
+                                  0.0f,
+                                  20.0f,
+                                  "%.1f px");
+
     ImGui::SeparatorText(TR_CACHE("ui.settings.editor.sfx").data());
 
     int         strategy     = (int)settings.sfxConfig.polylineStrategy;
@@ -388,4 +414,4 @@ void SettingsView::drawEditorSettings()
     }
 }
 
-} // namespace MMM::UI
+}  // namespace MMM::UI

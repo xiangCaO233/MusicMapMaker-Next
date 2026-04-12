@@ -62,7 +62,8 @@ private:
         float viewportWidth, float viewportHeight, float judgmentLineY,
         int32_t trackCount, const Config::EditorConfig& config,
         const ScrollCache* cache, float& leftX, float& rightX, float& topY,
-        float& bottomY, float& trackAreaW, float& singleTrackW);
+        float& bottomY, float& trackAreaW, float& singleTrackW,
+        float renderScaleY);
 
     static void renderTrackLayout(Batcher& batcher, float viewportWidth,
                                   float viewportHeight, float judgmentLineY,
@@ -72,7 +73,7 @@ private:
                                   double currentTime, const ScrollCache* cache,
                                   float& leftX, float& rightX, float& topY,
                                   float& bottomY, float& trackAreaW,
-                                  float& singleTrackW);
+                                  float& singleTrackW, float renderScaleY);
 
     static void drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                     float leftX, float topY, float bottomY,
@@ -89,7 +90,7 @@ private:
                               const entt::registry&       timelineRegistry,
                               double currentTime, const ScrollCache* cache,
                               float leftX, float topY, float bottomY,
-                              float trackAreaW);
+                              float trackAreaW, float renderScaleY);
 
     static void renderNotes(entt::registry& registry, RenderSnapshot* snapshot,
                             const std::string& cameraId, double currentTime,
@@ -203,6 +204,12 @@ private:
         float noteH, glm::vec4 colorHold, glm::vec4 colorArrow,
         const Config::EditorConfig& config, entt::entity entity,
         bool generateHitboxes, HoverPart glowPart, int glowSubIndex);
+
+    static void renderMarquee(Batcher& batcher, RenderSnapshot* snapshot,
+                              float judgmentLineY, float leftX,
+                              float singleTrackW, float renderScaleY,
+                              const ScrollCache* cache, double renderTime,
+                              float viewportWidth, float viewportHeight);
 };
 
 }  // namespace MMM::Logic::System

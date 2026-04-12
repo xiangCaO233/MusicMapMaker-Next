@@ -92,6 +92,18 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CursorStyle,
                                  { CursorStyle::System, "System" },
                              })
 
+enum class SelectionMode {
+    Strict,       ///< 严格模式 (必须完全包含)
+    Intersection  ///< 相交模式 (只要相交即选中)
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(SelectionMode,
+                             {
+                                 { SelectionMode::Strict, "Strict" },
+                                 { SelectionMode::Intersection,
+                                   "Intersection" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -130,13 +142,24 @@ struct EditorSettings {
     /// @brief 全局主音量 (0.0 ~ 1.0)
     float globalVolume{ 0.25f };
 
+    /// @brief 框选模式
+    SelectionMode selectionMode{ SelectionMode::Intersection };
+
+    /// @brief 框选边框粗细
+    float marqueeThickness{ 2.0f };
+
+    /// @brief 框选圆角半径
+    float marqueeRounding{ 0.0f };
+
     // TODO: 后续可在此添加自动保存(AutoSave)等配置
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
                                    filePickerStyle, cursorStyle, beatDivisor,
                                    reverseScroll, scrollSnap,
                                    recentProjectsLimit, language, vsync,
-                                   scrollSpeedMultiplier, globalVolume)
+                                   scrollSpeedMultiplier, globalVolume,
+                                   selectionMode, marqueeThickness,
+                                   marqueeRounding)
 };
 
 }  // namespace MMM::Config
