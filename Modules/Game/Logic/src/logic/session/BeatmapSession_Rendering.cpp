@@ -97,8 +97,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 double currentAbsY = cache->getAbsY(m_visualTime);
                 double deltaY      = (judgmentLineY - m_lastMousePos.y);
 
+                float renderScaleY = config.visual.noteScaleY;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
-                if ( cameraId == "Preview" ) {
+                if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
                     float previewMainHeight = 1000.0f;
                     auto  itMainPreview     = m_cameras.find("Basic2DCanvas");
                     if ( itMainPreview != m_cameras.end() ) {
@@ -116,13 +117,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                         (config.visual.previewConfig.margin.top +
                          config.visual.previewConfig.margin.bottom);
 
-                    float renderScaleY =
+                    renderScaleY =
                         previewDrawH / (mainEffectiveH *
                                         config.visual.previewConfig.areaRatio);
-
-                    if ( std::abs(renderScaleY) > 0.0001f ) {
-                        deltaY /= renderScaleY;
-                    }
+                }
+                
+                if ( std::abs(renderScaleY) > 0.0001f ) {
+                    deltaY /= renderScaleY;
                 }
 
                 double targetAbsY     = currentAbsY + deltaY;

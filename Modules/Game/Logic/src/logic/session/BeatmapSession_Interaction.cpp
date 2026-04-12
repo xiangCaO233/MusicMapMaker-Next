@@ -18,8 +18,24 @@ namespace MMM::Logic
 
 void BeatmapSession::handleCommand(const CmdSetHoveredEntity& cmd)
 {
+    if ( m_hoveredEntity != cmd.entity && m_hoveredEntity != entt::null ) {
+        if ( m_noteRegistry.valid(m_hoveredEntity) && m_noteRegistry.all_of<InteractionComponent>(m_hoveredEntity) ) {
+            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity).isHovered = false;
+            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity).hoveredPart = static_cast<uint8_t>(HoverPart::None);
+        }
+    }
+
     m_hoveredEntity = cmd.entity;
     m_hoveredPart   = cmd.part;
+
+    if ( m_hoveredEntity != entt::null && m_noteRegistry.valid(m_hoveredEntity) ) {
+        if ( !m_noteRegistry.all_of<InteractionComponent>(m_hoveredEntity) ) {
+            m_noteRegistry.emplace<InteractionComponent>(m_hoveredEntity);
+        }
+        auto& ic = m_noteRegistry.get<InteractionComponent>(m_hoveredEntity);
+        ic.isHovered = true;
+        ic.hoveredPart = cmd.part;
+    }
 }
 
 void BeatmapSession::handleCommand(const CmdSelectEntity& cmd)
@@ -156,8 +172,9 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
     if ( cmd.isHovering ) {
         if ( !m_isDragging || m_mouseCameraId == cmd.cameraId ||
              m_mouseCameraId == "" ) {
-            m_mouseCameraId = cmd.cameraId;
-            canUpdate       = true;
+            m_mouseCameraId   = cmd.cameraId;
+            m_isMouseInCanvas = true;
+            canUpdate         = true;
         }
     }
 
@@ -186,8 +203,11 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
     }
 
     if ( !cmd.isHovering && !m_isDragging ) {
-        m_mouseCameraId             = "";
-        m_previewEdgeScrollVelocity = 0.0;
+        if ( m_mouseCameraId == cmd.cameraId ) {
+            m_mouseCameraId             = "";
+            m_isMouseInCanvas           = false;
+            m_previewEdgeScrollVelocity = 0.0;
+        }
     }
 }
 

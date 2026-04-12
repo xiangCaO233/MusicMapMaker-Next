@@ -39,6 +39,25 @@ BeatmapSession::SnapResult BeatmapSession::getSnapResult(
     float  judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
     double currentAbsY   = cache->getAbsY(m_visualTime);
 
+    float renderScaleY = config.visual.noteScaleY;
+    if ( camera.id == "Preview" || camera.id == "PreviewCanvas" ) {
+        auto  itMain             = m_cameras.find("Basic2DCanvas");
+        float mainViewportHeight = itMain != m_cameras.end()
+                                       ? itMain->second.viewportHeight
+                                       : camera.viewportHeight;
+
+        float mainEffectiveH = (config.visual.trackLayout.bottom -
+                                config.visual.trackLayout.top) *
+                               mainViewportHeight;
+        float ty = config.visual.previewConfig.margin.top;
+        float by = camera.viewportHeight -
+                   config.visual.previewConfig.margin.bottom;
+        float previewDrawH = by - ty;
+
+        renderScaleY = previewDrawH / (mainEffectiveH *
+                                       config.visual.previewConfig.areaRatio);
+    }
+
     for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
         const auto* currentBPM  = bpmEvents[i];
         double      bpmTime     = currentBPM->m_timestamp;
@@ -61,7 +80,7 @@ BeatmapSession::SnapResult BeatmapSession::getSnapResult(
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
         float  snapY =
-            judgmentLineY - static_cast<float>(snapAbsY - currentAbsY);
+            judgmentLineY - static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
             result.isSnapped   = true;
