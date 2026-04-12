@@ -8,6 +8,7 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
+#include "config/AppConfig.h"
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
@@ -66,6 +67,10 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             int xPos = (mode->width - actualW) / 2;
             int yPos = (mode->height - actualH) / 2;
             glfwSetWindowPos(m_windowHandle, xPos, yPos);
+            
+            // 写入屏幕刷新率到全局配置，供逻辑线程等限制最高帧率使用
+            Config::AppConfig::instance().setDeviceRefreshRate(mode->refreshRate);
+            XINFO("Detected primary monitor refresh rate: {} Hz", mode->refreshRate);
         }
     }
 

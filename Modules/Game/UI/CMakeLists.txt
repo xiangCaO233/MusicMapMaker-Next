@@ -17,6 +17,8 @@ add_library(UI STATIC
     src/ui/imgui/manager/SettingsView_Tabs.cpp
     src/ui/imgui/manager/ToolbarView.cpp
     src/ui/imgui/audio/AudioTrackControllerUI.cpp
+    src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
+    src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
     src/ui/imgui/DebugWindowUI.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp

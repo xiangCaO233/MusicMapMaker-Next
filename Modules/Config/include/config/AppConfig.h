@@ -46,6 +46,12 @@ public:
     /// @param path 项目文件夹路径
     void addRecentProject(const std::string& path);
 
+    /// @brief 获取设备屏幕刷新率
+    int getDeviceRefreshRate() const { return m_deviceRefreshRate; }
+
+    /// @brief 设置设备屏幕刷新率（由图形模块在启动时写入）
+    void setDeviceRefreshRate(int rate) { m_deviceRefreshRate = rate; }
+
 private:
     AppConfig();
     ~AppConfig() = default;
@@ -57,6 +63,7 @@ private:
 
     EditorConfig       m_editorConfig;
     mutable std::mutex m_mutex;
+    int                m_deviceRefreshRate{ 60 }; // 默认60Hz
 };
 
 }  // namespace MMM::Config

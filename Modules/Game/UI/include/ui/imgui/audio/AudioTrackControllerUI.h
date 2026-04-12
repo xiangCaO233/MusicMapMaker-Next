@@ -29,6 +29,12 @@ public:
     bool               isOpen() const { return m_isOpen; }
 
 private:
+    void renderVolumeSection(float& volume, bool& muted, bool& changed);
+    void renderSpeedAndPitchSection(float& speed, float& pitch, bool& changed);
+    void renderEQSection(bool& changed);
+    void renderEffectPreviewSection();
+
+private:
     std::string m_trackId;
     std::string m_trackName;
     TrackType   m_type;

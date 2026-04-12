@@ -349,16 +349,21 @@ void EditorEngine::saveProject()
 void EditorEngine::loop()
 {
     auto lastTime = std::chrono::high_resolution_clock::now();
-    // 限制逻辑线程最高帧率约为 240Hz (4.16ms)
-    // 这能确保 Logic 线程拥有极高的平滑度且不会100%占用CPU核心引发调度抖动
-    const double targetDt = 1.0 / 240.0;
 
     while ( m_running ) {
+        // 动态获取当前的延迟目标
+        double targetDt = 0.0;
+        if ( m_editorConfig.settings.vsync ) {
+            int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
+            if ( refreshRate <= 0 ) refreshRate = 60; // 兜底
+            targetDt = 1.0 / static_cast<double>(refreshRate);
+        }
+
         auto currentTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> passed = currentTime - lastTime;
 
-        // 如果距离上一帧还没有达到 1/240 秒，就主动让出 CPU
-        if ( passed.count() < targetDt ) {
+        // 如果设置了帧率限制，并且距离上一帧还没有达到目标时间，就主动让出 CPU
+        if ( targetDt > 0.0 && passed.count() < targetDt ) {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
             continue;
         }
