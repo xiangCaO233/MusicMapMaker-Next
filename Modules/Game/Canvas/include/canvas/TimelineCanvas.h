@@ -55,21 +55,13 @@ protected:
                           vk::DescriptorSet  defaultDescriptor) override;
 
 private:
-    /// @brief 绘制背景
-    void drawBackground(float width, float height);
-
-    /// @brief 绘制刻度线
-    void drawTicks(float width, float height, double visualTime, float zoom);
-
-    /// @brief 绘制当前时间指示器
-    void drawCurrentTimeIndicator(float width, float height, double visualTime,
-                                  double currentTime, float zoom);
-
     // 渲染编辑器弹窗
     void renderEventEditorPopup();
 
     // 渲染创建事件弹窗
     void renderEventCreationPopup();
+
+    void handleRightClick(const ImVec2& size);
 
     std::string                               m_canvasName;
     bool                                      m_needReload{ true };

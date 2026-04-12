@@ -117,6 +117,12 @@ private:
     };
     std::vector<PendingDrop> m_pendingDrops;
     Event::SubscriptionID    m_dropSubId;
+
+private:
+    void handleDrops(UI::UIManager* sourceManager);
+    void handleHotkeys();
+    void handleInteractions();
+    void updateBackgroundTexture();
 };
 
 }  // namespace MMM::Canvas
