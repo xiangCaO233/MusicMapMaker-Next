@@ -1,11 +1,19 @@
 #pragma once
 
+#include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "ui/IRenderableView.h"
 #include <glm/glm.hpp>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <vector>
+
+namespace MMM::Event
+{
+struct GLFWDropEvent;
+}
 
 namespace MMM::Logic
 {
@@ -25,7 +33,7 @@ public:
     Basic2DCanvas& operator=(Basic2DCanvas&&)      = delete;
     Basic2DCanvas& operator=(const Basic2DCanvas&) = delete;
 
-    ~Basic2DCanvas() override = default;
+    ~Basic2DCanvas() override;
 
     // 接口实现
     void update(UI::UIManager* sourceManager) override;
@@ -102,6 +110,13 @@ private:
 
     std::unique_ptr<Graphic::VKTexture> m_bgTexture{ nullptr };
     std::string                         m_loadedBgPath{ "" };
+
+    struct PendingDrop {
+        std::vector<std::string> paths;
+        glm::vec2                pos;
+    };
+    std::vector<PendingDrop> m_pendingDrops;
+    Event::SubscriptionID    m_dropSubId;
 };
 
 }  // namespace MMM::Canvas

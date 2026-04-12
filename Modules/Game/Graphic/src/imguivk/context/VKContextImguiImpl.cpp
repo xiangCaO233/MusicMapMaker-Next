@@ -1,4 +1,5 @@
 #include "config/skin/SkinConfig.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
@@ -173,6 +174,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     loadFontWithSize("side_bar", getFontSize("side_bar", 16.0f));
     loadFontWithSize("setting_internal",
                      getFontSize("setting_internal", 14.0f));
+
+    // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
+    glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
 
     XINFO("ImGui Vulkan backend initialized.");
 }

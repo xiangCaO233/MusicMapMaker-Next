@@ -4,16 +4,21 @@
 #include "config/skin/SkinConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
+#include "event/input/glfw/GLFWDropEvent.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/ui/UISubViewToggleEvent.h"
+#include "event/ui/menu/OpenProjectEvent.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/SideBarUI.h"
 #include <algorithm>
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -34,6 +39,18 @@ Basic2DCanvas::Basic2DCanvas(
 {
     m_targetWidth  = w;
     m_targetHeight = h;
+
+    m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
+        [this](const Event::GLFWDropEvent& e) {
+            XINFO("Basic2DCanvas received GLFWDropEvent with {} paths",
+                  e.paths.size());
+            m_pendingDrops.push_back({ e.paths, e.pos });
+        });
+}
+
+Basic2DCanvas::~Basic2DCanvas()
+{
+    Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
 // 接口实现
@@ -44,6 +61,76 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     UI::LayoutContext lctx(m_layoutCtx, windowName);
     RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
+
+    // 处理拖拽
+    if ( !m_pendingDrops.empty() ) {
+        bool isHovered = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_RootAndChildWindows |
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        ImVec2 mousePos = ImGui::GetMousePos();
+        ImVec2 winPos   = ImGui::GetWindowPos();
+        ImVec2 winSize  = ImGui::GetWindowSize();
+
+        XINFO(
+            "Canvas [{}] checking {} drops. Hovered: {}, Mouse:({}, {}), "
+            "WinPos:({}, {}), WinSize:({}, {})",
+            m_canvasName,
+            m_pendingDrops.size(),
+            isHovered,
+            mousePos.x,
+            mousePos.y,
+            winPos.x,
+            winPos.y,
+            winSize.x,
+            winSize.y);
+
+        if ( isHovered ) {
+            for ( const auto& drop : m_pendingDrops ) {
+                if ( !drop.paths.empty() ) {
+                    std::filesystem::path p(drop.paths[0]);
+                    std::filesystem::path projectPath =
+                        std::filesystem::is_directory(p) ? p : p.parent_path();
+                    auto ext = p.extension().string();
+
+                    XINFO("File dropped on Canvas: {}, opening project: {}",
+                          p.string(),
+                          projectPath.string());
+
+                    // 1. 打开项目
+                    Event::OpenProjectEvent ev;
+                    ev.m_projectPath = projectPath;
+                    Event::EventBus::instance().publish(ev);
+
+                    // 2. 跳转到谱面管理器
+                    Event::UISubViewToggleEvent evt;
+                    evt.sourceUiName           = m_canvasName;
+                    evt.uiManager              = sourceManager;
+                    evt.targetFloatManagerName = "SideBarManager";
+                    evt.subViewId =
+                        UI::TabToSubViewId(UI::SideBarTab::BeatMapExplorer);
+                    evt.showSubView = true;
+                    Event::EventBus::instance().publish(evt);
+
+                    // 3. 如果是谱面文件，直接加载
+                    if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                        XINFO("Auto-loading beatmap from drop: {}",
+                              p.filename().string());
+                        try {
+                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                                MMM::BeatMap::loadFromFile(p));
+                            Logic::EditorEngine::instance().pushCommand(
+                                Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        } catch ( const std::exception& e ) {
+                            XERROR("Failed to load dropped beatmap: {}",
+                                   e.what());
+                        }
+                    }
+                }
+            }
+        }
+        m_pendingDrops.clear();
+    }
 
     // 尝试拉取最新的逻辑线程渲染快照 (专属摄像机缓冲)
     if ( m_syncBuffer ) {

@@ -2,6 +2,7 @@
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/input/glfw/GLFWDropEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
@@ -26,12 +27,85 @@ FileManagerView::FileManagerView(const std::string& subViewName)
     : ISubView(subViewName)
 {
     m_currentRoot = std::filesystem::current_path();
+
+    m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
+        [this](const Event::GLFWDropEvent& e) {
+            XINFO("FileManagerView received GLFWDropEvent with {} paths",
+                  e.paths.size());
+            m_pendingDrops.push_back({ e.paths, e.pos });
+        });
+}
+
+FileManagerView::~FileManagerView()
+{
+    Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
 // 内部绘制逻辑 (Clay/ImGui)
 void FileManagerView::onUpdate(LayoutContext& layoutContext,
                                UIManager*     sourceManager)
 {
+    // 处理拖拽
+    if ( !m_pendingDrops.empty() ) {
+        bool isHovered = ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_RootAndChildWindows |
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+
+        ImVec2 mousePos = ImGui::GetMousePos();
+        ImVec2 winPos   = ImGui::GetWindowPos();
+        ImVec2 winSize  = ImGui::GetWindowSize();
+
+        XINFO(
+            "FileManagerView checking {} drops. Hovered: {}, Mouse:({}, {}), "
+            "WinPos:({}, {}), WinSize:({}, {})",
+            m_pendingDrops.size(),
+            isHovered,
+            mousePos.x,
+            mousePos.y,
+            winPos.x,
+            winPos.y,
+            winSize.x,
+            winSize.y);
+
+        if ( isHovered ) {
+            for ( const auto& drop : m_pendingDrops ) {
+                if ( !drop.paths.empty() ) {
+                    std::filesystem::path p(drop.paths[0]);
+                    std::filesystem::path projectPath =
+                        std::filesystem::is_directory(p) ? p : p.parent_path();
+
+                    XINFO(
+                        "File dropped on FileManager: {}, opening project: {}",
+                        p.string(),
+                        projectPath.string());
+
+                    Event::OpenProjectEvent ev;
+                    ev.m_projectPath = projectPath;
+                    Event::EventBus::instance().publish(ev);
+
+                    auto       ext       = p.extension().string();
+                    SideBarTab targetTab = SideBarTab::FileExplorer;
+                    if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                        targetTab = SideBarTab::BeatMapExplorer;
+                    } else if ( ext == ".mp3" || ext == ".ogg" ||
+                                ext == ".wav" || ext == ".flac" ) {
+                        targetTab = SideBarTab::AudioExplorer;
+                    }
+
+                    // 确保侧边栏跳转到对应的管理器
+                    Event::UISubViewToggleEvent evt;
+                    evt.sourceUiName           = m_subViewName;
+                    evt.uiManager              = sourceManager;
+                    evt.targetFloatManagerName = "SideBarManager";
+                    evt.subViewId              = TabToSubViewId(targetTab);
+                    evt.showSubView            = true;
+                    Event::EventBus::instance().publish(evt);
+                }
+            }
+        }
+        m_pendingDrops.clear();
+    }
+
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();

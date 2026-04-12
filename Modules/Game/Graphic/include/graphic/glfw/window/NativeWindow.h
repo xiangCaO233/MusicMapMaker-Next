@@ -55,6 +55,8 @@ public:
     static void GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,
                                  int action, int mods);
 
+    static void GLFW_DropCallback(GLFWwindow* w, int count, const char** paths);
+
     static void framebufferResizeCallback(GLFWwindow* window, int w, int h);
 
 private:

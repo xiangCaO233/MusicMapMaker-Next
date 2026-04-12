@@ -1,5 +1,6 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "event/core/EventBus.h"
+#include "event/input/glfw/GLFWDropEvent.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
 #include "event/input/glfw/GLFWMouseEvent.h"
 #include "event/input/translators/GLFWTranslator.h"
@@ -23,6 +24,10 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     if ( !glfwVulkanSupported() ) {
         XERROR("GLFW: Vulkan Not Supported");
     }
+
+    XINFO("GLFW Version: {}", glfwGetVersionString());
+    XINFO("GLFW Platform code: {}", glfwGetPlatform());
+
     // 隐藏系统标题栏
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -78,6 +83,7 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetFramebufferSizeCallback(m_windowHandle,
                                    &NativeWindow::framebufferResizeCallback);
     glfwSetKeyCallback(m_windowHandle, GLFW_KeyCallback);
+    glfwSetDropCallback(m_windowHandle, GLFW_DropCallback);
 
     // 窗口最大化/还原回调 (处理系统级别的状态变更)
     glfwSetWindowMaximizeCallback(
@@ -213,6 +219,22 @@ void NativeWindow::GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,
     MMM::Event::EventBus::instance().publish(e);
 }
 
+
+void NativeWindow::GLFW_DropCallback(GLFWwindow* w, int count,
+                                     const char** paths)
+{
+    XINFO("GLFW Drop Callback triggered! count: {}", count);
+    MMM::Event::GLFWDropEvent e;
+    for ( int i = 0; i < count; ++i ) {
+        XINFO("  Dropped path[{}]: {}", i, paths[i]);
+        e.paths.emplace_back(paths[i]);
+    }
+    double xpos, ypos;
+    glfwGetCursorPos(w, &xpos, &ypos);
+    e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
+
+    MMM::Event::EventBus::instance().publish(e);
+}
 
 bool NativeWindow::shouldClose() const
 {
