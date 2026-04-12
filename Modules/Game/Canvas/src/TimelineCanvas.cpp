@@ -111,10 +111,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     float localMouseY = mousePos.y - canvasPos.y;
-                    // 核心修复：坐标映射，el.y 是相对于底部的(Vulkan Ortho
-                    // 0是底部) 而 localMouseY
-                    // 是相对于顶部的。需要进行翻转映射。
-                    float mappedY = size.y - el.y;
+                    // el.y 已经是相对于顶部的(Vulkan Ortho 0是顶部, 与
+                    // localMouseY 一致)
+                    float mappedY = el.y;
                     bool  isNear  = std::abs(localMouseY - mappedY) < proximity;
 
                     if ( isNear && isFocused ) {
