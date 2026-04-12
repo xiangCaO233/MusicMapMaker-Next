@@ -1,5 +1,6 @@
 #include "ui/imgui/DebugWindowUI.h"
 #include "canvas/Basic2DCanvas.h"
+#include "config/skin/SkinConfig.h"
 #include "ui/UIManager.h"
 #include <imgui.h>
 
@@ -10,6 +11,7 @@ DebugWindowUI::DebugWindowUI(const std::string& name) : IUIView(name) {}
 
 void DebugWindowUI::update(UIManager* sourceManager)
 {
+    Config::SkinManager& skinCfg = Config::SkinManager::instance();
     if ( ImGui::Begin("Renderer Debug Window") ) {
         // 获取主画布实例
         auto canvas =
@@ -42,12 +44,16 @@ void DebugWindowUI::update(UIManager* sourceManager)
                     ImGui::EndTooltip();
                 }
             } else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1),
-                                   "Glow Mask texture not available.");
+                auto dangerCol = skinCfg.getColor("ui.danger");
+                ImGui::TextColored(
+                    ImVec4(dangerCol.r, dangerCol.g, dangerCol.b, dangerCol.a),
+                    "Glow Mask texture not available.");
             }
         } else {
-            ImGui::TextColored(ImVec4(1, 1, 0, 1),
-                               "Basic2DCanvas ('Basic2DCanvas') not found.");
+            auto warningCol = skinCfg.getColor("ui.warning");
+            ImGui::TextColored(
+                ImVec4(warningCol.r, warningCol.g, warningCol.b, warningCol.a),
+                "Basic2DCanvas ('Basic2DCanvas') not found.");
         }
     }
     ImGui::End();

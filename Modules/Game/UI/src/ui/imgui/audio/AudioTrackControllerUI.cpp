@@ -79,11 +79,18 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         bool pushedTextColor = false;
         if ( muted ) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+            auto dangerCol =
+                Config::SkinManager::instance().getColor("ui.danger");
+            ImGui::PushStyleColor(
+                ImGuiCol_Text,
+                ImVec4(dangerCol.r, dangerCol.g, dangerCol.b, dangerCol.a));
             pushedTextColor = true;
         }
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        auto btnTransCol =
+            Config::SkinManager::instance().getColor("ui.button.transparent");
+        ImGui::PushStyleColor(
+            ImGuiCol_Button,
+            ImVec4(btnTransCol.r, btnTransCol.g, btnTransCol.b, btnTransCol.a));
         if ( ImGui::Button(icon, ImVec2(30, 0)) ) {
             muted   = !muted;
             changed = true;
@@ -174,7 +181,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
             // 滑块
             if ( ImGui::SliderFloat(
-                     "##PitchSlider", &pitch, -24.0f, 12.0f, "%.1f st") ) {
+                     "##PitchSlider", &pitch, -24.0f, 24.0f, "%.1f st") ) {
                 changed = true;
             }
         }

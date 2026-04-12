@@ -84,19 +84,25 @@ void SideBarUI::update(UIManager* sourceManager)
             // --- 样式处理 ---
             if ( isActive ) {
                 // 激活态：深灰色背景（VS Code 风格）
+                auto c1 = skinCfg.getColor("ui.button.sidebar_active");
+                auto c2 = skinCfg.getColor("ui.button.normal");
                 ImGui::PushStyleColor(ImGuiCol_Button,
-                                      ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+                                      ImVec4(c1.r, c1.g, c1.b, c1.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                      ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+                                      ImVec4(c1.r, c1.g, c1.b, c1.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                      ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+                                      ImVec4(c2.r, c2.g, c2.b, c2.a));
             } else {
                 // 非激活态：全透明，仅悬停时有微弱反馈
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                auto c1 = skinCfg.getColor("ui.button.transparent");
+                auto c2 = skinCfg.getColor("ui.button.transparent_hovered");
+                auto c3 = skinCfg.getColor("ui.button.transparent_active");
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(c1.r, c1.g, c1.b, c1.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                      ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
+                                      ImVec4(c2.r, c2.g, c2.b, c2.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                      ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+                                      ImVec4(c3.r, c3.g, c3.b, c3.a));
             }
 
             // 使用不同的文字颜色（未激活时稍显灰色）

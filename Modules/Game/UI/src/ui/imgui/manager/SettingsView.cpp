@@ -50,19 +50,25 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
 
                 if ( isActive ) {
                     // 激活态：深灰色背景（VS Code 风格，与 SideBarUI 一致）
+                    auto c1 = skinCfg.getColor("ui.button.sidebar_active");
+                    auto c2 = skinCfg.getColor("ui.button.normal");
                     ImGui::PushStyleColor(ImGuiCol_Button,
-                                          ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+                                          ImVec4(c1.r, c1.g, c1.b, c1.a));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                          ImVec4(0.25f, 0.25f, 0.25f, 1.0f));
+                                          ImVec4(c1.r, c1.g, c1.b, c1.a));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                          ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+                                          ImVec4(c2.r, c2.g, c2.b, c2.a));
                 } else {
                     // 非激活态：全透明，仅悬停反馈
-                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                    auto c1 = skinCfg.getColor("ui.button.transparent");
+                    auto c2 = skinCfg.getColor("ui.button.transparent_hovered");
+                    auto c3 = skinCfg.getColor("ui.button.transparent_active");
+                    ImGui::PushStyleColor(ImGuiCol_Button,
+                                          ImVec4(c1.r, c1.g, c1.b, c1.a));
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                          ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
+                                          ImVec4(c2.r, c2.g, c2.b, c2.a));
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                          ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+                                          ImVec4(c3.r, c3.g, c3.b, c3.a));
                 }
 
                 // 应用皮肤配置的图标颜色
@@ -428,9 +434,11 @@ void SettingsView::drawProjectSettings()
     auto* project = engine.getCurrentProject();
 
     if ( !project ) {
-        ImGui::TextColored(ImVec4(1, 0, 0, 1),
-                           "%s",
-                           TR_CACHE("ui.settings.project.no_project").data());
+        auto dangerCol = Config::SkinManager::instance().getColor("ui.danger");
+        ImGui::TextColored(
+            ImVec4(dangerCol.r, dangerCol.g, dangerCol.b, dangerCol.a),
+            "%s",
+            TR("ui.settings.project.no_project").data());
         return;
     }
 

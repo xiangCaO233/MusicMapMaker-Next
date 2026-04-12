@@ -233,9 +233,13 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
             "ProjectTitle",
             Sizing::Grow(),
             Sizing::Fixed(ImGui::GetFrameHeight()),
-            [project](Clay_BoundingBox r, bool isHovered) {
+            [project, &skinCfg](Clay_BoundingBox r, bool isHovered) {
+                auto highlightCol = skinCfg.getColor("ui.highlight");
                 ImGui::TextColored(
-                    { 0.4f, 0.8f, 1.0f, 1.0f },
+                    { highlightCol.r,
+                      highlightCol.g,
+                      highlightCol.b,
+                      highlightCol.a },
                     "Root: %s",
                     project->m_projectRoot.filename().string().c_str());
                 if ( ImGui::IsItemHovered() ) {

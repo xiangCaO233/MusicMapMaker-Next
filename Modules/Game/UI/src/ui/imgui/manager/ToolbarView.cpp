@@ -50,6 +50,30 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
+    auto pushBtnStyle = [&](bool active) {
+        if ( active ) {
+            auto c1 = skinCfg.getColor("ui.button.normal");
+            auto c2 = skinCfg.getColor("ui.button.normal_hovered");
+            auto c3 = skinCfg.getColor("ui.button.normal_active");
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(c1.r, c1.g, c1.b, c1.a));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(c2.r, c2.g, c2.b, c2.a));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(c3.r, c3.g, c3.b, c3.a));
+        } else {
+            auto c1 = skinCfg.getColor("ui.button.transparent");
+            auto c2 = skinCfg.getColor("ui.button.transparent_hovered");
+            auto c3 = skinCfg.getColor("ui.button.transparent_active");
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImVec4(c1.r, c1.g, c1.b, c1.a));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                  ImVec4(c2.r, c2.g, c2.b, c2.a));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                  ImVec4(c3.r, c3.g, c3.b, c3.a));
+        }
+    };
+
     // 4. 使用 " ###Toolbar" 保持 ID 稳定
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
         // --- 绘制左侧分隔线 ---
@@ -100,20 +124,7 @@ void ToolbarView::update(UIManager* sourceManager)
         auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
         bool isReverse = editorCfg.settings.reverseScroll;
 
-        if ( isReverse ) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
-        }
+        pushBtnStyle(isReverse);
 
         ImGui::SetCursorPosX(0);
         if ( ImGui::Button(ICON_MMM_ARROWS_UP_DOWN, ImVec2(drawW, drawW)) ) {
@@ -132,20 +143,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         // --- 滚动磁吸开关 ---
         bool isScrollSnap = editorCfg.settings.scrollSnap;
-        if ( isScrollSnap ) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
-        }
+        pushBtnStyle(isScrollSnap);
 
         ImGui::SetCursorPosX(0);
         if ( ImGui::Button(ICON_MMM_MAGNET, ImVec2(drawW, drawW)) ) {
@@ -166,20 +164,7 @@ void ToolbarView::update(UIManager* sourceManager)
         // 选中: 使用SCROLLTIMING映射 (enableLinearScrollMapping = false)
         // 未选中: 纯线性映射 (enableLinearScrollMapping = true)
         bool isTimingMapped = !editorCfg.visual.enableLinearScrollMapping;
-        if ( isTimingMapped ) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
-        }
+        pushBtnStyle(isTimingMapped);
 
         ImGui::SetCursorPosX(0);
         if ( ImGui::Button(ICON_MMM_EYE, ImVec2(drawW, drawW)) ) {
@@ -204,20 +189,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         // --- 分拍数量设置 (Beat Divisor) ---
         int currentDivisor = editorCfg.settings.beatDivisor;
-        if ( m_showDivisorPopup ) {
-            ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.05f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
-        }
+        pushBtnStyle(m_showDivisorPopup);
 
         ImFont* contentFont = skinCfg.getFont("content");
         if ( contentFont ) ImGui::PushFont(contentFont);
@@ -286,9 +258,13 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::PushStyleVar(
             ImGuiStyleVar_WindowPadding,
             ImVec2(std::floor(8.0f * dpiScale), std::floor(8.0f * dpiScale)));
+        auto bgCol     = skinCfg.getColor("ui.button.disabled_bg");
+        auto borderCol = skinCfg.getColor("ui.border");
         ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                              ImVec4(0.15f, 0.15f, 0.15f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+                              ImVec4(bgCol.r, bgCol.g, bgCol.b, bgCol.a));
+        ImGui::PushStyleColor(
+            ImGuiCol_Border,
+            ImVec4(borderCol.r, borderCol.g, borderCol.b, borderCol.a));
 
         if ( ImGui::Begin("##BeatDivisorPopup", nullptr, popupFlags) ) {
             auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
@@ -337,17 +313,23 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
 
 
     if ( isActive ) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+        auto c1 = skinCfg.getColor("ui.button.normal");
+        auto c2 = skinCfg.getColor("ui.button.normal_hovered");
+        auto c3 = skinCfg.getColor("ui.button.normal_active");
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(c1.r, c1.g, c1.b, c1.a));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              ImVec4(0.35f, 0.35f, 0.35f, 1.0f));
+                              ImVec4(c2.r, c2.g, c2.b, c2.a));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
+                              ImVec4(c3.r, c3.g, c3.b, c3.a));
     } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+        auto c1 = skinCfg.getColor("ui.button.transparent");
+        auto c2 = skinCfg.getColor("ui.button.transparent_hovered");
+        auto c3 = skinCfg.getColor("ui.button.transparent_active");
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(c1.r, c1.g, c1.b, c1.a));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                              ImVec4(1.0f, 1.0f, 1.0f, 0.1f));
+                              ImVec4(c2.r, c2.g, c2.b, c2.a));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                              ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
+                              ImVec4(c3.r, c3.g, c3.b, c3.a));
     }
 
     Config::Color iconColor = skinCfg.getColor("icon");

@@ -87,8 +87,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                       std::unique_ptr<Graphic::VKTexture>& tex,
                                       float  btnSize,
                                       ImVec4 hoverColor) -> bool {
+                auto transparentCol = skinCfg.getColor("ui.button.transparent");
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(transparentCol.r,
+                                             transparentCol.g,
+                                             transparentCol.b,
+                                             transparentCol.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
                 bool clicked = ImGui::Button(str_id, ImVec2(btnSize, btnSize));
@@ -116,8 +121,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             auto DrawFontIconButton = [&](const char* icon,
                                           float       btnSize,
                                           ImVec4      hoverColor) -> bool {
+                auto transparentCol = skinCfg.getColor("ui.button.transparent");
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(transparentCol.r,
+                                             transparentCol.g,
+                                             transparentCol.b,
+                                             transparentCol.a));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
                 // 应用图标颜色
@@ -134,10 +144,16 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             };
 
 
+            auto transparentHoverCol =
+                skinCfg.getColor("ui.button.transparent_hovered");
+            ImVec4 hoverVec4(transparentHoverCol.r,
+                             transparentHoverCol.g,
+                             transparentHoverCol.b,
+                             transparentHoverCol.a);
+
             // ================== 1. Logo 区域 ==================
             ImGui::SetCursorPosX(0.0f);
-            DrawIconButton(
-                "##logo", m_logo_texture, buttonSize, ImVec4(1, 1, 1, 0.1f));
+            DrawIconButton("##logo", m_logo_texture, buttonSize, hoverVec4);
 
             // ================== 2. 标准菜单区域 ==================
             // 菜单项需要正常的 Padding，所以局部推入
@@ -200,7 +216,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
             // 1. 最小化
             if ( DrawFontIconButton(
-                     ICON_MMM_MINIMIZE, buttonSize, ImVec4(1, 1, 1, 0.1f)) ) {
+                     ICON_MMM_MINIMIZE, buttonSize, hoverVec4) ) {
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                     .type = Event::NativeEventType::GLFW_ICONFY_WINDOW });
             }
@@ -217,8 +233,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                      ? TR("ui.window.restore").data()
                                      : TR("ui.window.maximize").data();
 
-            if ( DrawFontIconButton(
-                     maxIcon, buttonSize, ImVec4(1, 1, 1, 0.1f)) ) {
+            if ( DrawFontIconButton(maxIcon, buttonSize, hoverVec4) ) {
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                     .type =
                         Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
@@ -230,9 +245,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::SameLine();
 
             // 3. 关闭
+            auto dangerCol = skinCfg.getColor("ui.danger");
             if ( DrawFontIconButton(ICON_MMM_CLOSE,
                                     buttonSize,
-                                    ImVec4(0.9f, 0.1f, 0.1f, 1.0f)) ) {
+                                    ImVec4(dangerCol.r,
+                                           dangerCol.g,
+                                           dangerCol.b,
+                                           dangerCol.a)) ) {
                 Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                     .type = Event::NativeEventType::GLFW_CLOSE_WINDOW });
             }
