@@ -88,9 +88,9 @@ public:
         if ( m_cameraUVMaps.find(cameraId) != m_cameraUVMaps.end() ) {
             return m_cameraUVMaps[cameraId];
         }
-        // 回退到默认图集 (Main)
-        if ( cameraId != "Main" ) {
-            auto it = m_cameraUVMaps.find("Main");
+        // 回退到默认图集 (Basic2DCanvas)
+        if ( cameraId != "Basic2DCanvas" ) {
+            auto it = m_cameraUVMaps.find("Basic2DCanvas");
             if ( it != m_cameraUVMaps.end() ) return it->second;
         }
         return {};

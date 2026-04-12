@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -222,21 +223,30 @@ void BeatmapSession::processCommands()
                 } else if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
                     m_currentTool = arg.tool;
                 } else if constexpr ( std::is_same_v<T, CmdSetMousePosition> ) {
-                    // 核心修复：只有当鼠标在当前视口内，或者当前视口正是之前记录的鼠标所在视口时，才更新状态。
-                    // 这样可以防止多个视口（如主画布、预览区、时间轴）在同一帧内互相覆盖
-                    // hover 状态导致闪烁。
-                    if ( arg.isHovering || m_mouseCameraId == arg.cameraId ||
-                         m_isDragging ) {
+                    // 核心逻辑：锁定拖拽视口，防止 MainCanvas
+                    // 等其它视口在拖拽期间干扰状态
+                    bool canUpdate = false;
+                    if ( arg.isHovering ) {
+                        // 如果当前没有在拖拽，或者正在更新的就是当前锁定的视口，则允许更新
+                        if ( !m_isDragging || m_mouseCameraId == arg.cameraId ||
+                             m_mouseCameraId == "" ) {
+                            canUpdate = true;
+                        }
+                    } else if ( m_isDragging &&
+                                m_mouseCameraId == arg.cameraId ) {
+                        // 如果正在拖拽且是当前锁定的视口，即使鼠标移出边界也允许更新坐标
+                        canUpdate = true;
+                    }
+
+                    if ( canUpdate ) {
                         m_mouseCameraId   = arg.cameraId;
                         m_mouseX          = arg.mouseX;
                         m_mouseY          = arg.mouseY;
                         m_isMouseInCanvas = arg.isHovering;
-                        m_isDragging =
-                            arg.isDragging;  // 直接更新为最新的拖拽状态
+                        m_isDragging      = arg.isDragging;
 
-                        // 在此处提前计算预览区悬停时间，供其他逻辑同步
-                        if ( (arg.cameraId == "Preview" && arg.isHovering) ||
-                             m_isDragging ) {
+                        // 如果当前视口是预览区，或者正在预览区拖拽，则更新全局预览时间点
+                        if ( m_mouseCameraId == "Preview" ) {
                             auto* cache = m_timelineRegistry.ctx()
                                               .find<System::ScrollCache>();
                             if ( cache ) {
@@ -252,7 +262,8 @@ void BeatmapSession::processCommands()
                                     double deltaY = (judgmentLineY - m_mouseY);
 
                                     float mainHeight = 1000.0f;
-                                    auto  itMain     = m_cameras.find("Main");
+                                    auto  itMain =
+                                        m_cameras.find("Basic2DCanvas");
                                     if ( itMain != m_cameras.end() ) {
                                         mainHeight =
                                             itMain->second.viewportHeight;
@@ -289,8 +300,7 @@ void BeatmapSession::processCommands()
                         }
 
                         if ( !arg.isHovering && !m_isDragging ) {
-                            m_mouseCameraId =
-                                "";  // 离开视口后清除 ID，允许其他视口接管
+                            m_mouseCameraId = "";
                         }
                     }
                 } else if constexpr ( std::is_same_v<T, CmdScroll> ) {

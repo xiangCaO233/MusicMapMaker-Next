@@ -371,15 +371,16 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
                 if ( cameraId == "Preview" ) {
-                    float mainHeight = 1000.0f;
-                    auto  itMain     = m_cameras.find("Main");
-                    if ( itMain != m_cameras.end() ) {
-                        mainHeight = itMain->second.viewportHeight;
+                    float previewMainHeight = 1000.0f;
+                    auto  itMainPreview     = m_cameras.find("Basic2DCanvas");
+                    if ( itMainPreview != m_cameras.end() ) {
+                        previewMainHeight =
+                            itMainPreview->second.viewportHeight;
                     }
 
                     float mainEffectiveH = (config.visual.trackLayout.bottom -
                                             config.visual.trackLayout.top) *
-                                           mainHeight;
+                                           previewMainHeight;
 
                     // 计算预览区的有效绘图高度（扣除边距）
                     float previewDrawH =
@@ -518,11 +519,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             camera.viewportHeight * config.visual.judgeline_pos;
 
         // 获取主视口高度用于预览区比例对齐
-        float mainHeight =
+        float finalMainHeight =
             camera.viewportHeight;  // 默认为当前视口高度，防止除以 0 或比例错乱
-        auto itMain = m_cameras.find("Main");
-        if ( itMain != m_cameras.end() ) {
-            mainHeight = itMain->second.viewportHeight;
+        auto itMainFinal = m_cameras.find("Basic2DCanvas");
+        if ( itMainFinal != m_cameras.end() ) {
+            finalMainHeight = itMainFinal->second.viewportHeight;
         }
 
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
@@ -537,7 +538,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                                    judgmentLineY,
                                                    m_trackCount,
                                                    config,
-                                                   mainHeight);
+                                                   finalMainHeight);
 
         // 4. 生成打击特效
         float leftX  = camera.viewportWidth * config.visual.trackLayout.left;

@@ -20,12 +20,11 @@ void NoteRenderSystem::generateSnapshot(
     int32_t trackCount, const Config::EditorConfig& config,
     float mainViewportHeight)
 {
-    // 核心同步：如果预览区正在拖拽，主画布（Main）渲染的时间应该是预览区当前的悬停时间
+    // 核心同步：如果预览区正在拖拽，主画布（Basic2DCanvas）渲染的时间应该是预览区当前的悬停时间
     // 但必须确保 currentTime
     // 不断更新导致死循环问题，所以这里只做渲染偏移，不改写真实的逻辑时间
     double renderTime = currentTime;
-    if ( cameraId == "Main" && snapshot->isPreviewDragging ) {
-        XINFO("主画布时间更新为:{}s", snapshot->previewHoverTime);
+    if ( cameraId == "Basic2DCanvas" && snapshot->isPreviewDragging ) {
         renderTime = snapshot->previewHoverTime;
     }
 
