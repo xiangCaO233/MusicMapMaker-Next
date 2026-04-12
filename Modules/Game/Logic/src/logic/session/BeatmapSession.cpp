@@ -71,6 +71,20 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
     // 处理来自 UI 的指令
     processCommands();
 
+    // --- 边缘自动滚动处理 ---
+    if ( std::abs(m_previewEdgeScrollVelocity) > 0.0001 ) {
+        double delta     = m_previewEdgeScrollVelocity * dt;
+        double totalTime = Audio::AudioManager::instance().getTotalTime();
+        m_currentTime    = std::clamp(m_currentTime + delta, 0.0, totalTime);
+
+        // 由于手动改变了时间，需要同步时钟和打击索引
+        m_syncClock.reset(m_currentTime);
+        if ( m_isPlaying ) {
+            Audio::AudioManager::instance().seek(m_currentTime);
+        }
+        syncHitIndex();
+    }
+
     double prevVisualTime = m_visualTime;
 
     // 更新播放时间

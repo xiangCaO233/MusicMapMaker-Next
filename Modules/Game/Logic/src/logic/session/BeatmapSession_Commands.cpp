@@ -295,12 +295,45 @@ void BeatmapSession::processCommands()
                                     double targetAbsY = currentAbsY + deltaY;
                                     m_previewHoverTime =
                                         cache->getTime(targetAbsY);
+
+                                    // --- 边缘自动滚动逻辑 ---
+                                    float topM = m_lastConfig.visual
+                                                     .previewConfig.margin.top;
+                                    float bottomM =
+                                        m_lastConfig.visual.previewConfig.margin
+                                            .bottom;
+                                    float viewH     = camera.viewportHeight;
+                                    float threshold = 60.0f;  // 感应区 60 像素
+
+                                    m_previewEdgeScrollVelocity = 0.0;
+                                    if ( m_isDragging ) {
+                                        if ( m_mouseY < topM + threshold ) {
+                                            float dist =
+                                                (topM + threshold) - m_mouseY;
+                                            // 速度随距离边缘越近而越快，系数
+                                            // 0.1 左右比较平滑
+                                            m_previewEdgeScrollVelocity =
+                                                -static_cast<double>(dist) *
+                                                0.1;
+                                        } else if ( m_mouseY > viewH - bottomM -
+                                                                   threshold ) {
+                                            float dist =
+                                                m_mouseY -
+                                                (viewH - bottomM - threshold);
+                                            m_previewEdgeScrollVelocity =
+                                                static_cast<double>(dist) * 0.1;
+                                        }
+                                    }
                                 }
                             }
+                        } else {
+                            // 非预览区，重置滚动速度
+                            m_previewEdgeScrollVelocity = 0.0;
                         }
 
                         if ( !arg.isHovering && !m_isDragging ) {
-                            m_mouseCameraId = "";
+                            m_mouseCameraId             = "";
+                            m_previewEdgeScrollVelocity = 0.0;
                         }
                     }
                 } else if constexpr ( std::is_same_v<T, CmdScroll> ) {

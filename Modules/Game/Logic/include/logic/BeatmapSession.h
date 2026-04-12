@@ -156,6 +156,7 @@ private:
     bool        m_isMouseInCanvas{ false };
     bool        m_isDragging{ false };
     double      m_previewHoverTime{ 0.0 };
+    double      m_previewEdgeScrollVelocity{ 0.0 };
 
     /// @brief 当前轨道数
     int32_t m_trackCount{ 12 };
