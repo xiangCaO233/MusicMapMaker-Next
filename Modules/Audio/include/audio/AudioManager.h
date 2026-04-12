@@ -91,6 +91,15 @@ public:
     /// @brief 获取当前播放倍率
     double getPlaybackSpeed() const;
 
+    /// @brief 获取实际生效的播放倍率
+    double getActualPlaybackSpeed() const;
+
+    /// @brief 设置主音轨音高偏移 (半音，-24.0 ~ +24.0)
+    void setPlaybackPitch(double semitones);
+
+    /// @brief 获取主音轨音高偏移
+    double getPlaybackPitch() const;
+
     /// @brief 设置特定 SFX 池的音量
     /// @param key 标识符
     /// @param volume 音量
@@ -110,6 +119,9 @@ public:
 
     /// @brief 获取特定 SFX 池的时长
     double getSFXDuration(const std::string& key) const;
+
+    /// @brief 实时更新 SFX 路由策略 (决定音效是否跟随主音轨拉伸器)
+    void updateSFXSyncSpeedRouting(bool syncSpeed);
 
     /// @brief 获取特定 SFX 池最近一次播放进度
     double getSFXPlaybackTime(const std::string& key) const;
@@ -144,7 +156,8 @@ private:
 
     std::shared_ptr<ice::SourceNode>    m_bgmSource;
     std::shared_ptr<ice::TimeStretcher> m_stretcher;
-    std::shared_ptr<ice::MixBus>        m_mixer;
+    std::shared_ptr<ice::MixBus>        m_mainMixer;
+    std::shared_ptr<ice::MixBus>        m_preStretcherMixer;
 
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
         m_sfxPools;

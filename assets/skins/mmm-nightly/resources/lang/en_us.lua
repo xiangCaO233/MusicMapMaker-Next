@@ -94,6 +94,7 @@ return {
 	["ui.settings.editor.sfx_strategy"] = "Internal Polyline SFX",
 	["ui.settings.editor.sfx_flick_scale"] = "Flick Volume Scaling",
 	["ui.settings.editor.sfx_flick_mul"] = "Per-Track Volume Multiplier",
+	["ui.settings.editor.sfx_sync_speed"] = "Sync Skin SFX Speed with Main Track",
 
 	["ui.file_manager.initial_hint"] = "No project opened",
 	["ui.file_manager.open_directory"] = "Open Folder",
@@ -113,6 +114,11 @@ return {
 	["ui.audio_manager.main_track_volume"] = "Main Track Volume",
 	["ui.audio_manager.volume"] = "Volume",
 	["ui.audio_manager.play_preview"] = "Play Preview",
+	["ui.audio_manager.mute"] = "Mute",
+	["ui.audio_manager.unmute"] = "Unmute",
+	["ui.audio_manager.speed_control"] = "Playback Speed Control",
+	["ui.audio_manager.pitch_control"] = "Pitch Offset Control",
+	["ui.audio_manager.speed_info"] = "Expected: %.4fx | Actual: %.4fx",
 
 	["title.beatmap_manager"] = "Beatmap Manager",
 	["ui.beatmap_manager.initial_hint"] = "No project opened, no beatmap resources",

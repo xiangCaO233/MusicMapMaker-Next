@@ -29,10 +29,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
 
-    ImGui::SetNextWindowSize(ImVec2(350, 150), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 180), ImGuiCond_FirstUseEver);
     if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
         float volume = 0.5f;
         float speed  = 1.0f;
+        float pitch  = 0.0f;
         bool  muted  = false;
 
         AudioTrackConfig* config = nullptr;
@@ -48,12 +49,14 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         if ( config ) {
             volume = config->volume;
             speed  = config->playbackSpeed;
+            pitch  = config->playbackPitch;
             muted  = config->muted;
         } else {
             // 回退到内存状态
             if ( m_type == TrackType::Main ) {
                 volume = audio.getMainTrackVolume();
                 speed  = (float)audio.getPlaybackSpeed();
+                pitch  = (float)audio.getPlaybackPitch();
                 muted  = audio.isMainTrackMuted();
             } else {
                 volume = audio.getSFXPoolVolume(m_trackId);
@@ -90,7 +93,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             ImGui::PopStyleColor();  // Pop ImGuiCol_Text
         }
         if ( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip(muted ? "Unmute" : "Mute");
+            ImGui::SetTooltip("%s",
+                              muted ? TR("ui.audio_manager.unmute").data()
+                                    : TR("ui.audio_manager.mute").data());
         }
 
         ImGui::SameLine();
@@ -107,7 +112,69 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         // --- 3. 播放速度控制 (仅对 Main 有效) ---
         if ( m_type == TrackType::Main ) {
-            if ( ImGui::SliderFloat("Speed", &speed, 0.5f, 2.0f, "%.2fx") ) {
+            ImGui::Separator();
+            ImGui::Text("%s", TR("ui.audio_manager.speed_control").data());
+
+            // 显示期望和实际倍率
+            float actualSpeed = (float)audio.getActualPlaybackSpeed();
+            ImGui::Text(
+                TR("ui.audio_manager.speed_info").data(), speed, actualSpeed);
+
+            // 预设按钮
+            if ( ImGui::Button("0.25x") ) {
+                speed   = 0.25f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("0.5x") ) {
+                speed   = 0.5f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("0.75x") ) {
+                speed   = 0.75f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("1.0x") ) {
+                speed   = 1.0f;
+                changed = true;
+            }
+
+            // 滑块
+            if ( ImGui::SliderFloat(
+                     "##SpeedSlider", &speed, 0.25f, 2.0f, "%.4fx") ) {
+                changed = true;
+            }
+
+            // --- 3.5 音高控制 ---
+            ImGui::Separator();
+            ImGui::Text("%s", TR("ui.audio_manager.pitch_control").data());
+
+            // 预设按钮
+            if ( ImGui::Button("0.25x (-24)") ) {
+                pitch   = -24.0f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("0.5x (-12)") ) {
+                pitch   = -12.0f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("0.75x (-5)") ) {
+                pitch   = -5.0f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button("1.0x (0)") ) {
+                pitch   = 0.0f;
+                changed = true;
+            }
+
+            // 滑块
+            if ( ImGui::SliderFloat(
+                     "##PitchSlider", &pitch, -24.0f, 12.0f, "%.1f st") ) {
                 changed = true;
             }
         }
@@ -136,12 +203,14 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 config->volume        = volume;
                 config->muted         = muted;
                 config->playbackSpeed = speed;
+                config->playbackPitch = pitch;
             }
 
             if ( m_type == TrackType::Main ) {
                 audio.setMainTrackVolume(volume);
                 audio.setMainTrackMute(muted);
                 audio.setPlaybackSpeed(speed);
+                audio.setPlaybackPitch(pitch);
             } else {
                 bool  isPermanent = true;
                 auto& skinData    = Config::SkinManager::instance().getData();

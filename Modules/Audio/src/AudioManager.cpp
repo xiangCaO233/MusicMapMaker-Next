@@ -76,11 +76,10 @@ void AudioManager::init()
     m_audioPool  = std::make_unique<ice::AudioPool>();
     m_player     = std::make_unique<ice::SDLPlayer>();
 
-    m_mixer     = std::make_shared<ice::MixBus>();
-    m_stretcher = std::make_shared<ice::TimeStretcher>();
+    m_mainMixer         = std::make_shared<ice::MixBus>();
+    m_preStretcherMixer = std::make_shared<ice::MixBus>();
 
-    m_stretcher->set_inputnode(m_mixer);
-    m_player->set_source(m_stretcher);
+    m_player->set_source(m_mainMixer);
 
     if ( !m_player->open() ) {
         XERROR("Failed to open SDL audio device.");
@@ -100,7 +99,8 @@ void AudioManager::shutdown()
 
     m_bgmSource.reset();
     m_stretcher.reset();
-    m_mixer.reset();
+    m_mainMixer.reset();
+    m_preStretcherMixer.reset();
     m_player.reset();
     m_audioPool.reset();
     m_threadPool.reset();
@@ -123,8 +123,13 @@ bool AudioManager::loadBGM(const std::string&      filePath,
 
     stop();
 
+    if ( m_stretcher ) {
+        m_mainMixer->remove_source(m_stretcher);
+    } else if ( m_bgmSource ) {
+        m_mainMixer->remove_source(m_bgmSource);
+    }
     if ( m_bgmSource ) {
-        m_mixer->remove_source(m_bgmSource);
+        m_preStretcherMixer->remove_source(m_bgmSource);
     }
 
     m_mainTrackVolume = config.volume;
@@ -135,10 +140,15 @@ bool AudioManager::loadBGM(const std::string&      filePath,
         m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
     m_bgmSource->add_playcallback(g_callback);
 
-    m_mixer->add_source(m_bgmSource);
+    m_stretcher = std::make_shared<ice::TimeStretcher>();
+    m_stretcher->set_inputnode(m_preStretcherMixer);
 
-    // 应用播放速度
+    m_preStretcherMixer->add_source(m_bgmSource);
+    m_mainMixer->add_source(m_stretcher);
+
+    // 应用播放速度与音高
     setPlaybackSpeed(config.playbackSpeed);
+    setPlaybackPitch(config.playbackPitch);
 
     XINFO("BGM loaded successfully.");
     return true;
@@ -268,6 +278,30 @@ double AudioManager::getPlaybackSpeed() const
     return m_speed;
 }
 
+double AudioManager::getActualPlaybackSpeed() const
+{
+    if ( m_stretcher ) {
+        return m_stretcher->get_actual_playback_ratio();
+    }
+    return m_speed;
+}
+
+void AudioManager::setPlaybackPitch(double semitones)
+{
+    // range check -24.0 to 24.0 is inside TimeStretcher
+    if ( m_stretcher ) {
+        m_stretcher->set_pitch_semitones(semitones);
+    }
+}
+
+double AudioManager::getPlaybackPitch() const
+{
+    if ( m_stretcher ) {
+        return m_stretcher->get_pitch_semitones();
+    }
+    return 0.0;
+}
+
 void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
                                     bool isPermanent)
 {
@@ -303,6 +337,24 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
     auto it = m_sfxPools.find(key);
     if ( it != m_sfxPools.end() ) {
         it->second->updateEffectiveVolume(m_globalVolume, muted);
+    }
+}
+
+void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
+{
+    if ( !m_mainMixer || !m_preStretcherMixer ) return;
+
+    for ( auto& [key, pool] : m_sfxPools ) {
+        auto mixer = pool->getMixer();
+        if ( !mixer ) continue;
+
+        if ( syncSpeed ) {
+            m_mainMixer->remove_source(mixer);
+            m_preStretcherMixer->add_source(mixer);
+        } else {
+            m_preStretcherMixer->remove_source(mixer);
+            m_mainMixer->add_source(mixer);
+        }
     }
 }
 
@@ -346,7 +398,7 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
                                       const std::string& filePath,
                                       float              defaultVolume)
 {
-    if ( !m_audioPool || !m_threadPool || !m_mixer ) return false;
+    if ( !m_audioPool || !m_threadPool || !m_mainMixer ) return false;
 
     // 检查是否已经有配置好的音量 (来自 EditorSettings 或之前的加载)
     float activeVolume = defaultVolume;
@@ -365,10 +417,17 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
         return false;
     }
 
-    auto pool = std::make_shared<SoundEffectPool>(track, m_mixer);
+    auto pool = std::make_shared<SoundEffectPool>(track);
     pool->init(8);  // 预分配 8 个并发节点
     pool->setVolume(activeVolume);
     pool->updateEffectiveVolume(m_globalVolume, getSFXPoolMute(key));
+
+    // 根据配置决定连接到哪个 Mixer
+    if ( sfxCfg.hitSfxSyncSpeed ) {
+        m_preStretcherMixer->add_source(pool->getMixer());
+    } else {
+        m_mainMixer->add_source(pool->getMixer());
+    }
 
     m_sfxPools[key] = std::move(pool);
     return true;

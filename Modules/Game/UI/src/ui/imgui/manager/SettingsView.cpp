@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/SettingsView.h"
+#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -503,6 +504,16 @@ void SettingsView::drawEditorSettings()
             &settings.sfxConfig.flickWidthVolumeMultiplier,
             0.0f,
             10.0f);
+    }
+
+    bool syncSpeedChanged =
+        ImGui::Checkbox(TR_CACHE("ui.settings.editor.sfx_sync_speed").data(),
+                        &settings.sfxConfig.hitSfxSyncSpeed);
+
+    if ( syncSpeedChanged ) {
+        changed = true;
+        Audio::AudioManager::instance().updateSFXSyncSpeedRouting(
+            settings.sfxConfig.hitSfxSyncSpeed);
     }
 
     if ( changed ) {

@@ -38,20 +38,25 @@ private:
     std::weak_ptr<ice::SourceNode> m_node;
 };
 
-SoundEffectPool::SoundEffectPool(std::shared_ptr<ice::AudioTrack> track,
-                                 std::shared_ptr<ice::MixBus>     mixer)
-    : m_track(std::move(track)), m_mixer(std::move(mixer))
+SoundEffectPool::SoundEffectPool(std::shared_ptr<ice::AudioTrack> track)
+    : m_track(std::move(track))
 {
+    m_localMixer = std::make_shared<ice::MixBus>();
 }
 
 SoundEffectPool::~SoundEffectPool()
 {
     std::lock_guard<std::mutex> lock(m_mtx);
     for ( auto& node : m_allNodes ) {
-        if ( m_mixer ) {
-            m_mixer->remove_source(node);
+        if ( m_localMixer ) {
+            m_localMixer->remove_source(node);
         }
     }
+}
+
+std::shared_ptr<ice::MixBus> SoundEffectPool::getMixer() const
+{
+    return m_localMixer;
 }
 
 void SoundEffectPool::init(int count)
@@ -64,8 +69,8 @@ void SoundEffectPool::init(int count)
         node->add_playcallback(callback);
         m_allNodes.push_back(node);
         m_readyQueue.push(node);
-        if ( m_mixer ) {
-            m_mixer->add_source(node);
+        if ( m_localMixer ) {
+            m_localMixer->add_source(node);
         }
     }
 }
@@ -82,8 +87,8 @@ void SoundEffectPool::play(float volume)
                 std::make_shared<SFXPlayCallback>(shared_from_this(), node);
             node->add_playcallback(callback);
             m_allNodes.push_back(node);
-            if ( m_mixer ) {
-                m_mixer->add_source(node);
+            if ( m_localMixer ) {
+                m_localMixer->add_source(node);
             }
         } else {
             node = m_readyQueue.front();
@@ -114,8 +119,8 @@ void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
                 std::make_shared<SFXPlayCallback>(shared_from_this(), node);
             node->add_playcallback(callback);
             m_allNodes.push_back(node);
-            if ( m_mixer ) {
-                m_mixer->add_source(node);
+            if ( m_localMixer ) {
+                m_localMixer->add_source(node);
             }
         } else {
             node = m_readyQueue.front();

@@ -25,11 +25,12 @@ class SoundEffectPool : public std::enable_shared_from_this<SoundEffectPool>
 public:
     /// @brief 构造音效池
     /// @param track 音轨资源
-    /// @param mixer 混合器，音效节点将加入其中
-    SoundEffectPool(std::shared_ptr<ice::AudioTrack> track,
-                    std::shared_ptr<ice::MixBus>     mixer);
+    SoundEffectPool(std::shared_ptr<ice::AudioTrack> track);
 
     ~SoundEffectPool();
+
+    /// @brief 获取该音效池的局部混音器输出节点，供外部路由
+    std::shared_ptr<ice::MixBus> getMixer() const;
 
     /// @brief 预分配节点 (必须在构造后调用一次)
     /// @param count 初始数量
@@ -66,7 +67,7 @@ public:
 
 private:
     std::shared_ptr<ice::AudioTrack> m_track;
-    std::shared_ptr<ice::MixBus>     m_mixer;
+    std::shared_ptr<ice::MixBus>     m_localMixer;
 
     std::queue<std::shared_ptr<ice::SourceNode>>  m_readyQueue;
     std::vector<std::shared_ptr<ice::SourceNode>> m_allNodes;

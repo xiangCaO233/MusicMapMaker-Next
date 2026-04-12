@@ -60,10 +60,14 @@ struct SfxConfig {
     /// @brief 皮肤常驻音效的静音状态 (Key: 音效ID)
     std::map<std::string, bool> permanentSfxMutes;
 
+    /// @brief 皮肤全局打击音效的播放速率是否跟随主音轨
+    bool hitSfxSyncSpeed{ true };
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(SfxConfig, polylineStrategy,
                                    enableFlickWidthVolumeScaling,
                                    flickWidthVolumeMultiplier,
-                                   permanentSfxVolumes, permanentSfxMutes)
+                                   permanentSfxVolumes, permanentSfxMutes,
+                                   hitSfxSyncSpeed)
 };
 
 enum class FilePickerStyle {

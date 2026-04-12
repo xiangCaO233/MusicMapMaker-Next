@@ -94,6 +94,7 @@ return {
 	["ui.settings.editor.sfx_strategy"] = "折线内部音效",
 	["ui.settings.editor.sfx_flick_scale"] = "Flick音量随宽度增益",
 	["ui.settings.editor.sfx_flick_mul"] = "每轨道增益倍率",
+	["ui.settings.editor.sfx_sync_speed"] = "皮肤音效速率跟随主音轨",
 
 	["ui.file_manager.initial_hint"] = "暂未打开项目",
 	["ui.file_manager.open_directory"] = "打开文件夹",
@@ -113,6 +114,11 @@ return {
 	["ui.audio_manager.main_track_volume"] = "主音轨音量",
 	["ui.audio_manager.volume"] = "音量",
 	["ui.audio_manager.play_preview"] = "试听预览",
+	["ui.audio_manager.mute"] = "静音",
+	["ui.audio_manager.unmute"] = "取消静音",
+	["ui.audio_manager.speed_control"] = "播放倍速控制",
+	["ui.audio_manager.pitch_control"] = "音高偏移控制",
+	["ui.audio_manager.speed_info"] = "期望: %.4fx | 实际: %.4fx",
 
 	["title.beatmap_manager"] = "谱面管理",
 	["ui.beatmap_manager.initial_hint"] = "暂未打开项目, 无谱面资源",

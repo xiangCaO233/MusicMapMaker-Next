@@ -25,11 +25,14 @@ struct AudioTrackConfig {
     /// @brief 播放速度倍率 (0.5 ~ 2.0)
     float playbackSpeed{ 1.0f };
 
+    /// @brief 播放音高偏移 (-24.0 ~ 24.0)
+    float playbackPitch{ 0.0f };
+
     /// @brief 是否静音
     bool muted{ false };
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AudioTrackConfig, volume, playbackSpeed,
-                                   muted)
+                                   playbackPitch, muted)
 };
 
 /// @brief 项目管理的音频资源
