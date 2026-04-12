@@ -1,6 +1,7 @@
 #pragma once
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 namespace MMM
 {
@@ -31,8 +32,21 @@ struct AudioTrackConfig {
     /// @brief 是否静音
     bool muted{ false };
 
+    /// @brief EQ 是否启用
+    bool eqEnabled{ false };
+
+    /// @brief EQ 预设类型 (0=None, 1=10-Band, 2=15-Band)
+    int eqPreset{ 0 };
+
+    /// @brief 每个频段的增益 (dB)
+    std::vector<float> eqBandGains{};
+
+    /// @brief 每个频段的 Q 值
+    std::vector<float> eqBandQs{};
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(AudioTrackConfig, volume, playbackSpeed,
-                                   playbackPitch, muted)
+                                   playbackPitch, muted, eqEnabled, eqPreset,
+                                   eqBandGains, eqBandQs)
 };
 
 /// @brief 项目管理的音频资源

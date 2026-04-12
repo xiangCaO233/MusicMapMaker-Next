@@ -131,7 +131,12 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                          .c_str(),
                                      ImVec2(iconSize, iconSize)) ) {
                                 XINFO("BPM gear clicked at time: {}", el.time);
-                                // TODO: 发送事件或打开编辑弹窗
+                                m_editingEntity = el.bpmEntity;
+                                m_editTime      = el.time;
+                                m_editValue     = el.bpmValue;
+                                m_editType      = "BPM";
+                                m_isPopupOpen   = true;
+                                ImGui::OpenPopup("TimelineEventEditor");
                             }
                             ImGui::PopStyleColor();
 
@@ -157,7 +162,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                      ImVec2(iconSize, iconSize)) ) {
                                 XINFO("Scroll gear clicked at time: {}",
                                       el.time);
-                                // TODO: 发送事件或打开编辑弹窗
+                                m_editingEntity = el.scrollEntity;
+                                m_editTime      = el.time;
+                                m_editValue   = (el.scrollValue < -1e-6)
+                                                    ? (-100.0 / el.scrollValue)
+                                                    : el.scrollValue;
+                                m_editType    = "Scroll";
+                                m_isPopupOpen = true;
+                                ImGui::OpenPopup("TimelineEventEditor");
                             }
                             ImGui::PopStyleColor();
 
@@ -170,6 +182,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 }
                 ImGui::PopStyleColor(2);
                 ImGui::PopStyleVar();
+
+                renderEventEditorPopup();
             }
         }
     }
@@ -278,6 +292,79 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.drawIndexed(
             cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
+}
+
+void TimelineCanvas::renderEventEditorPopup()
+{
+    ImGui::SetNextWindowSize(ImVec2(300, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
+    if ( ImGui::BeginPopupModal(
+             "TimelineEventEditor",
+             &m_isPopupOpen,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        std::string typeTitle =
+            (m_editType == "BPM") ? TR("ui.timeline.event_type.bpm").data()
+                                  : TR("ui.timeline.event_type.scroll").data();
+
+        ImGui::Text(
+            TR_FMT("ui.timeline.event_editor.title", typeTitle).c_str());
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
+        ImGui::InputDouble("##Time", &m_editTime, 0.001, 0.01, "%.3f");
+
+        if ( m_editType == "BPM" ) {
+            ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
+            ImGui::InputDouble("##Value", &m_editValue, 0.1, 1.0, "%.2f");
+        } else {
+            ImGui::TextUnformatted(
+                TR("ui.timeline.event_editor.scroll").data());
+            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.3f");
+            ImGui::TextDisabled(
+                "%s", TR("ui.timeline.event_editor.scroll_hint").data());
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if ( ImGui::Button(TR("ui.timeline.event_editor.apply").data(),
+                           ImVec2(80, 0)) ) {
+            double finalValue = m_editValue;
+            if ( m_editType == "Scroll" ) {
+                // 如果用户输入的是倍率 (如 1.0, 2.0)，转换回内部参数 (-100/x)
+                if ( m_editValue > 1e-6 ) {
+                    finalValue = -100.0 / m_editValue;
+                }
+            }
+
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                    m_editingEntity, m_editTime, finalValue }));
+            ImGui::CloseCurrentPopup();
+            m_isPopupOpen = false;
+        }
+
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.timeline.event_editor.delete").data(),
+                           ImVec2(80, 0)) ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
+            ImGui::CloseCurrentPopup();
+            m_isPopupOpen = false;
+        }
+
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.timeline.event_editor.cancel").data(),
+                           ImVec2(80, 0)) ) {
+            ImGui::CloseCurrentPopup();
+            m_isPopupOpen = false;
+        }
+
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleVar();
 }
 
 }  // namespace MMM::Canvas

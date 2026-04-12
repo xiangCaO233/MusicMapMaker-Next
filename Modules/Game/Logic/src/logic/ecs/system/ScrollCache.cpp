@@ -17,10 +17,14 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     const bool   isLinearMapping  = visualConfig.enableLinearScrollMapping;
 
     // 获取并排序时间线点
-    std::vector<const TimelineComponent*> timings;
+    struct TimingEntry {
+        entt::entity             entity;
+        const TimelineComponent* component;
+    };
+    std::vector<TimingEntry> timings;
     auto tlView = timelineRegistry.view<const TimelineComponent>();
     for ( auto entity : tlView ) {
-        timings.push_back(&tlView.get<const TimelineComponent>(entity));
+        timings.push_back({ entity, &tlView.get<const TimelineComponent>(entity) });
     }
 
     if ( timings.empty() ) {
@@ -30,21 +34,21 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 
     // 排序逻辑：时间戳升序；时间戳相同时，BPM 类型优先于 SCROLL 类型
     std::stable_sort(
-        timings.begin(), timings.end(), [](const auto* a, const auto* b) {
-            if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-9 ) {
-                return a->m_timestamp < b->m_timestamp;
+        timings.begin(), timings.end(), [](const auto& a, const auto& b) {
+            if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) > 1e-9 ) {
+                return a.component->m_timestamp < b.component->m_timestamp;
             }
-            if ( a->m_effect != b->m_effect ) {
-                return a->m_effect == ::MMM::TimingEffect::BPM;
+            if ( a.component->m_effect != b.component->m_effect ) {
+                return a.component->m_effect == ::MMM::TimingEffect::BPM;
             }
             return false;  // 保持原始顺序
         });
 
     // 1. 查找基准 BPM (第一个出现的 BPM 类型点)
     double refBPM = 120.0;
-    for ( const auto* tl : timings ) {
-        if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
-            refBPM = tl->m_value;
+    for ( const auto& entry : timings ) {
+        if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
+            refBPM = entry.component->m_value;
             break;
         }
     }
@@ -59,7 +63,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     // 如果第一个点在 0ms 之后，我们需要从 0ms 开始的一段默认速度
     // 如果第一个点就在 0ms
     // 或更早，这个初始段会在后续循环中被同步时间戳的点修正速度
-    double lastTime    = std::min(0.0, timings[0]->m_timestamp);
+    double lastTime    = std::min(0.0, timings[0].component->m_timestamp);
     double currentAbsY = 0.0;
 
     auto calcSpeed = [&](double bpm, double sm) {
@@ -76,7 +80,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
     m_segments.push_back({ lastTime, 0.0, currentSpeed, 0 });
 
-    for ( const auto* tl : timings ) {
+    for ( const auto& entry : timings ) {
+        const auto* tl = entry.component;
         // 如果时间戳推进了，则结算上一段的积分
         if ( tl->m_timestamp > lastTime ) {
             double dt = tl->m_timestamp - lastTime;
@@ -88,11 +93,15 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         // 累计当前时间戳的效果类型
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
             m_segments.back().effects |= SCROLL_EFFECT_BPM;
+            m_segments.back().bpmEntity = entry.entity;
+            m_segments.back().bpmValue   = tl->m_value;
             currentBPM = tl->m_value;
             // 在 osu! 逻辑中，新的 BPM 标记（红线）会重置继承的流速倍率
             currentScrollMult = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             m_segments.back().effects |= SCROLL_EFFECT_SCROLL;
+            m_segments.back().scrollEntity = entry.entity;
+            m_segments.back().scrollValue   = tl->m_value;
             if ( tl->m_value < -1e-6 ) {
                 currentScrollMult = -100.0 / tl->m_value;
             } else if ( tl->m_value >= 0 ) {

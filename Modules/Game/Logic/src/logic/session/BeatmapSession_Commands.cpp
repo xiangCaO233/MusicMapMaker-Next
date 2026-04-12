@@ -456,6 +456,18 @@ void BeatmapSession::processCommands()
                     Audio::AudioManager::instance().seek(m_currentTime);
                     syncHitIndex();
                     m_hitFXSystem.clearActiveEffects();
+                } else if constexpr ( std::is_same_v<T, CmdUpdateTimelineEvent> ) {
+                    if ( m_timelineRegistry.valid(arg.entity) ) {
+                        auto& tl =
+                            m_timelineRegistry.get<TimelineComponent>(arg.entity);
+                        tl.m_timestamp = arg.newTime;
+                        tl.m_value     = arg.newValue;
+                        m_timelineRegistry.patch<TimelineComponent>(arg.entity);
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdDeleteTimelineEvent> ) {
+                    if ( m_timelineRegistry.valid(arg.entity) ) {
+                        m_timelineRegistry.destroy(arg.entity);
+                    }
                 }
             },
             cmd);

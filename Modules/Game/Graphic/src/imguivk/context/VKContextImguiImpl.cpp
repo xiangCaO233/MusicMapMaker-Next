@@ -2,6 +2,7 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
+#include "implot.h"
 #include "log/colorful-log.h"
 
 namespace MMM::Graphic
@@ -23,6 +24,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImPlot::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     (void)io;
     // Enable Keyboard Controls

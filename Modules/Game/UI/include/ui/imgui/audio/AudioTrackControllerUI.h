@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/AudioManager.h"
 #include "ui/IUIView.h"
 #include <string>
 
@@ -32,6 +33,8 @@ private:
     std::string m_trackName;
     TrackType   m_type;
     bool        m_isOpen{ true };
+
+    Audio::EQPreset m_currentPreset{ Audio::EQPreset::None };
 };
 
 }  // namespace MMM::UI

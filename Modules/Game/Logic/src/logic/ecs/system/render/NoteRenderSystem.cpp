@@ -212,7 +212,14 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
 
         batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
-        snapshot->timelineElements.push_back({ seg.time, y, seg.effects });
+        snapshot->timelineElements.push_back(
+            { seg.time,
+              y,
+              seg.effects,
+              seg.bpmEntity,
+              seg.scrollEntity,
+              seg.bpmValue,
+              seg.scrollValue });
     }
 
     batcher.pushQuad(paddingX,

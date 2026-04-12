@@ -2,6 +2,7 @@
 
 #include "logic/BeatmapSyncBuffer.h"
 #include "ui/IRenderableView.h"
+#include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -64,10 +65,20 @@ private:
     void drawCurrentTimeIndicator(float width, float height, double visualTime,
                                   double currentTime, float zoom);
 
+    // 渲染编辑器弹窗
+    void renderEventEditorPopup();
+
     std::string                               m_canvasName;
     bool                                      m_needReload{ true };
     std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
     Logic::RenderSnapshot*                    m_currentSnapshot{ nullptr };
+
+    // 弹窗状态
+    bool         m_isPopupOpen{ false };
+    entt::entity m_editingEntity{ entt::null };
+    double       m_editTime{ 0.0 };
+    double       m_editValue{ 1.0 };
+    std::string  m_editType; // "BPM" or "Scroll"
 
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>

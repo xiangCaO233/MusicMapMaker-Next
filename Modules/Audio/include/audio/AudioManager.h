@@ -13,6 +13,7 @@ class SourceNode;
 class ThreadPool;
 class MixBus;
 class TimeStretcher;
+class GraphicEqualizer;
 }  // namespace ice
 
 namespace MMM::Audio
@@ -24,6 +25,17 @@ class SoundEffectPool;
  * @brief 播放状态
  */
 enum class PlaybackStatus { Stopped, Playing, Paused };
+
+/**
+ * @brief EQ 频段预设
+ */
+enum class EQPreset {
+    None,
+    TenBand,     // 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k
+    FifteenBand  // 25, 40, 63, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k,
+                 // 4k, 6.3k, 10k, 16k
+};
+
 
 /**
  * @brief 音频管理器，封装 IonCachyEngine 的核心功能
@@ -100,7 +112,54 @@ public:
     /// @brief 获取主音轨音高偏移
     double getPlaybackPitch() const;
 
-    /// @brief 设置特定 SFX 池的音量
+    // --- EQ 相关接口 ---
+
+    /// @brief 为主音轨创建均衡器
+    /// @param preset 预设类型
+    void createMainTrackEQ(EQPreset preset);
+
+    /// @brief 销毁主音轨均衡器
+    void destroyMainTrackEQ();
+
+    /// @brief 设置指定频段的增益
+    /// @param bandIndex 频段索引
+    /// @param gainDb 增益 (dB)
+    void setMainTrackEQBandGain(size_t bandIndex, float gainDb);
+
+    /// @brief 获取指定频段的增益
+    /// @param bandIndex 频段索引
+    /// @return 增益 (dB)
+    float getMainTrackEQBandGain(size_t bandIndex) const;
+
+    /// @brief 设置指定频段的 Q 值
+    /// @param bandIndex 频段索引
+    /// @param q Q 值
+    void setMainTrackEQBandQ(size_t bandIndex, float q);
+
+    /// @brief 获取指定频段的 Q 值
+    /// @param bandIndex 频段索引
+    /// @return Q 值
+    float getMainTrackEQBandQ(size_t bandIndex) const;
+
+    /// @brief 获取当前 EQ 频段数量
+    size_t getMainTrackEQBandCount() const;
+
+    /// @brief 获取指定频段的中心频率
+    /// @param bandIndex 频段索引
+    /// @return 中心频率 (Hz)
+    float getMainTrackEQBandFrequency(size_t bandIndex) const;
+
+    /// @brief 获取当前是否启用了 EQ
+    bool isMainTrackEQEnabled() const;
+
+    /// @brief 获取当前 EQ 预设类型
+    EQPreset getMainTrackEQPreset() const;
+
+    /// @brief 获取 EQ 在指定频率处的幅频响应 (dB)
+    /// @param frequency 频率 (Hz)
+    float getMainTrackEQResponse(float frequency) const;
+
+    // --- SFX 相关接口 ---
     /// @param key 标识符
     /// @param volume 音量
     /// @param isPermanent 是否为常驻音效 (若为真，则保存到软件配置)
@@ -154,10 +213,12 @@ private:
     std::unique_ptr<ice::AudioPool>  m_audioPool;
     std::unique_ptr<ice::SDLPlayer>  m_player;
 
-    std::shared_ptr<ice::SourceNode>    m_bgmSource;
-    std::shared_ptr<ice::TimeStretcher> m_stretcher;
-    std::shared_ptr<ice::MixBus>        m_mainMixer;
-    std::shared_ptr<ice::MixBus>        m_preStretcherMixer;
+    std::shared_ptr<ice::SourceNode>       m_bgmSource;
+    std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
+    EQPreset                               m_mainEQPreset{ EQPreset::None };
+    std::shared_ptr<ice::TimeStretcher>    m_stretcher;
+    std::shared_ptr<ice::MixBus>           m_mainMixer;
+    std::shared_ptr<ice::MixBus>           m_preStretcherMixer;
 
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
         m_sfxPools;

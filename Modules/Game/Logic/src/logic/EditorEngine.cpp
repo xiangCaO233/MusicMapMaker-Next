@@ -152,7 +152,10 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                                       : AudioTrackType::Effect;
             res.m_config.volume = 0.5f;
             res.m_config.playbackSpeed = 1.0f;
+            res.m_config.playbackPitch = 0.0f;
             res.m_config.muted         = false;
+            res.m_config.eqEnabled     = false;
+            res.m_config.eqPreset      = 0;
 
             newProject->m_audioResources.push_back(res);
             XINFO("Found {} audio resource: {}",

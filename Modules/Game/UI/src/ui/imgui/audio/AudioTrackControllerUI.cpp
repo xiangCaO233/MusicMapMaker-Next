@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
+#include "implot.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -29,7 +30,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
 
-    ImGui::SetNextWindowSize(ImVec2(350, 180), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 450), ImGuiCond_FirstUseEver);
     if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
         float volume = 0.5f;
         float speed  = 1.0f;
@@ -51,6 +52,12 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             speed  = config->playbackSpeed;
             pitch  = config->playbackPitch;
             muted  = config->muted;
+            if ( m_type == TrackType::Main ) {
+                m_currentPreset =
+                    config->eqEnabled
+                        ? static_cast<Audio::EQPreset>(config->eqPreset)
+                        : Audio::EQPreset::None;
+            }
         } else {
             // 回退到内存状态
             if ( m_type == TrackType::Main ) {
@@ -107,6 +114,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         ImGui::SameLine();
 
+        ImGui::AlignTextToFramePadding();
+
         // --- 2. 音量拉条 ---
         ImGui::SetNextItemWidth(-50);
         if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
@@ -117,7 +126,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- 3. 播放速度控制 (仅对 Main 有效) ---
+        // --- 3. 播放速度与均衡器控制 (仅对 Main 有效) ---
         if ( m_type == TrackType::Main ) {
             ImGui::Separator();
             ImGui::Text("%s", TR("ui.audio_manager.speed_control").data());
@@ -128,22 +137,22 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 TR("ui.audio_manager.speed_info").data(), speed, actualSpeed);
 
             // 预设按钮
-            if ( ImGui::Button("0.25x") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.speed_025x").data()) ) {
                 speed   = 0.25f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("0.5x") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.speed_050x").data()) ) {
                 speed   = 0.5f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("0.75x") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.speed_075x").data()) ) {
                 speed   = 0.75f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("1.0x") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.speed_100x").data()) ) {
                 speed   = 1.0f;
                 changed = true;
             }
@@ -159,22 +168,22 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             ImGui::Text("%s", TR("ui.audio_manager.pitch_control").data());
 
             // 预设按钮
-            if ( ImGui::Button("0.25x (-24)") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.pitch_n24").data()) ) {
                 pitch   = -24.0f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("0.5x (-12)") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.pitch_n12").data()) ) {
                 pitch   = -12.0f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("0.75x (-5)") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.pitch_n5").data()) ) {
                 pitch   = -5.0f;
                 changed = true;
             }
             ImGui::SameLine();
-            if ( ImGui::Button("1.0x (0)") ) {
+            if ( ImGui::Button(TR("ui.audio_manager.pitch_0").data()) ) {
                 pitch   = 0.0f;
                 changed = true;
             }
@@ -183,6 +192,174 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             if ( ImGui::SliderFloat(
                      "##PitchSlider", &pitch, -24.0f, 24.0f, "%.1f st") ) {
                 changed = true;
+            }
+
+            // --- 3.6 图形均衡器 (Graphic EQ) ---
+            ImGui::Separator();
+            ImGui::Text("%s", TR("ui.audio_manager.eq_control").data());
+
+            const char* presets[] = {
+                TR("ui.audio_manager.eq_none").data(),
+                TR("ui.audio_manager.eq_10_band").data(),
+                TR("ui.audio_manager.eq_15_band").data()
+            };
+            int presetIdx = static_cast<int>(m_currentPreset);
+            if ( ImGui::Combo("##EQPreset",
+                              &presetIdx,
+                              presets,
+                              IM_ARRAYSIZE(presets)) ) {
+                m_currentPreset = static_cast<Audio::EQPreset>(presetIdx);
+                audio.createMainTrackEQ(m_currentPreset);
+                changed = true;
+            }
+
+            if ( audio.isMainTrackEQEnabled() ) {
+                size_t bandCount = audio.getMainTrackEQBandCount();
+
+                // 绘制增益预览图
+                if ( ImPlot::BeginPlot(
+                         "##EQCurve",
+                         ImVec2(-1, 150),
+                         ImPlotFlags_NoLegend | ImPlotFlags_NoMenus) ) {
+                    ImPlot::SetupAxis(ImAxis_X1,
+                                      TR("ui.audio_manager.freq_hz").data());
+                    ImPlot::SetupAxis(ImAxis_Y1,
+                                      TR("ui.audio_manager.gain_db").data());
+                    ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
+                    ImPlot::SetupAxisLimits(ImAxis_X1, 20, 20000);
+                    ImPlot::SetupAxisLimits(ImAxis_Y1, -24, 24);
+                    ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f dB");
+
+                    // 绘制平滑的真幅频响应曲线
+                    const int                  sampleCount = 128;
+                    static std::vector<double> curveX(sampleCount);
+                    static std::vector<double> curveY(sampleCount);
+
+                    for ( int j = 0; j < sampleCount; ++j ) {
+                        // 对数空间采样 20Hz - 20kHz
+                        double t = (double)j / (double)(sampleCount - 1);
+                        double freq =
+                            20.0 * std::pow(1000.0, t);  // 20 * 10^(3*t)
+                        curveX[j] = freq;
+                        curveY[j] =
+                            (double)audio.getMainTrackEQResponse((float)freq);
+                    }
+
+                    ImPlot::PlotLine(TR("ui.audio_manager.response").data(),
+                                     curveX.data(),
+                                     curveY.data(),
+                                     sampleCount,
+                                     ImPlotSpec(ImPlotProp_LineColor,
+                                                ImVec4(0.2f, 0.8f, 1.0f, 1.0f),
+                                                ImPlotProp_LineWeight,
+                                                2.0f));
+
+                    // 绘制各频段控制点
+                    std::vector<double> plotX(bandCount);
+                    std::vector<double> plotY(bandCount);
+                    for ( size_t i = 0; i < bandCount; ++i ) {
+                        plotX[i] = audio.getMainTrackEQBandFrequency(i);
+                        plotY[i] = audio.getMainTrackEQBandGain(i);
+                    }
+
+                    ImPlot::PlotScatter(
+                        TR("ui.audio_manager.bands").data(),
+                        plotX.data(),
+                        plotY.data(),
+                        (int)bandCount,
+                        ImPlotSpec(ImPlotProp_Marker, ImPlotMarker_Circle));
+
+                    ImPlot::EndPlot();
+                }
+
+                // 绘制滑块组
+                ImGui::Separator();
+
+                float sliderWidth = ImGui::GetFrameHeight();
+                float eqSpacing   = 8.0f;  // 增加间距以提高可读性
+
+                // 启用水平滚动条，高度增加以容纳滚动条
+                ImGui::BeginChild("EQSliders",
+                                  ImVec2(0, 220),
+                                  ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_HorizontalScrollbar);
+
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                    ImVec2(eqSpacing, 4));
+
+                float startY = ImGui::GetCursorPosY();
+                for ( size_t i = 0; i < bandCount; ++i ) {
+                    ImGui::PushID((int)i);
+
+                    ImGui::SetCursorPosY(i == 0 ? startY + 3 : startY);
+
+                    ImGui::BeginGroup();
+
+                    float gain = audio.getMainTrackEQBandGain(i);
+                    float q    = audio.getMainTrackEQBandQ(i);
+                    char  label[32];
+                    float freq = audio.getMainTrackEQBandFrequency(i);
+                    if ( freq >= 1000.0f )
+                        snprintf(label, sizeof(label), "%.1fk", freq / 1000.0f);
+                    else
+                        snprintf(label, sizeof(label), "%.0f", freq);
+
+                    // 1. 频率标签 (居中对齐)
+                    float textWidth = ImGui::CalcTextSize(label).x;
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                         (sliderWidth - textWidth) * 0.5f);
+                    ImGui::TextUnformatted(label);
+
+                    // 2. 增益滑块 (固定宽度)
+                    if ( ImGui::VSliderFloat("##Gain",
+                                             ImVec2(sliderWidth, 110),
+                                             &gain,
+                                             -24.0f,
+                                             24.0f,
+                                             "") ) {
+                        audio.setMainTrackEQBandGain(i, gain);
+                        changed = true;
+                    }
+                    if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip(
+                            TR("ui.audio_manager.eq_tooltip").data(),
+                            label,
+                            gain);
+                    }
+
+                    // 3. Q 值滑块 (改为竖直布局，交互更稳定)
+                    if ( ImGui::VSliderFloat("##Q",
+                                             ImVec2(sliderWidth, 72),
+                                             &q,
+                                             0.1f,
+                                             10.0f,
+                                             "") ) {
+                        audio.setMainTrackEQBandQ(i, q);
+                        changed = true;
+                    }
+                    if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip(
+                            TR("ui.audio_manager.q_factor_tooltip").data(), q);
+                    }
+
+                    ImGui::EndGroup();
+                    ImGui::PopID();
+
+                    if ( i < bandCount - 1 ) {
+                        ImGui::SameLine();
+                    }
+                }
+                ImGui::PopStyleVar();
+                ImGui::EndChild();
+
+
+                if ( ImGui::Button(TR("ui.audio_manager.reset_eq").data()) ) {
+                    for ( size_t i = 0; i < bandCount; ++i ) {
+                        audio.setMainTrackEQBandGain(i, 0.0f);
+                        audio.setMainTrackEQBandQ(i, 1.414f);
+                    }
+                    changed = true;
+                }
             }
         }
 
@@ -211,6 +388,23 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 config->muted         = muted;
                 config->playbackSpeed = speed;
                 config->playbackPitch = pitch;
+                if ( m_type == TrackType::Main ) {
+                    config->eqEnabled = audio.isMainTrackEQEnabled();
+                    config->eqPreset =
+                        static_cast<int>(audio.getMainTrackEQPreset());
+                    config->eqBandGains.clear();
+                    config->eqBandQs.clear();
+
+                    const size_t bandCount = audio.getMainTrackEQBandCount();
+                    config->eqBandGains.reserve(bandCount);
+                    config->eqBandQs.reserve(bandCount);
+                    for ( size_t i = 0; i < bandCount; ++i ) {
+                        config->eqBandGains.push_back(
+                            audio.getMainTrackEQBandGain(i));
+                        config->eqBandQs.push_back(
+                            audio.getMainTrackEQBandQ(i));
+                    }
+                }
             }
 
             if ( m_type == TrackType::Main ) {

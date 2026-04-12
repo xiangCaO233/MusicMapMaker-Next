@@ -9,6 +9,7 @@
 #include <ice/core/MixBus.hpp>
 #include <ice/core/PlayCallBack.hpp>
 #include <ice/core/SourceNode.hpp>
+#include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/out/play/sdl/SDLPlayer.hpp>
@@ -128,7 +129,9 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     } else if ( m_bgmSource ) {
         m_mainMixer->remove_source(m_bgmSource);
     }
-    if ( m_bgmSource ) {
+    if ( m_mainEQ ) {
+        m_preStretcherMixer->remove_source(m_mainEQ);
+    } else if ( m_bgmSource ) {
         m_preStretcherMixer->remove_source(m_bgmSource);
     }
 
@@ -143,12 +146,34 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     m_stretcher = std::make_shared<ice::TimeStretcher>();
     m_stretcher->set_inputnode(m_preStretcherMixer);
 
-    m_preStretcherMixer->add_source(m_bgmSource);
+    if ( m_mainEQ ) {
+        m_mainEQ->set_inputnode(m_bgmSource);
+        m_preStretcherMixer->add_source(m_mainEQ);
+    } else {
+        m_preStretcherMixer->add_source(m_bgmSource);
+    }
     m_mainMixer->add_source(m_stretcher);
 
     // 应用播放速度与音高
     setPlaybackSpeed(config.playbackSpeed);
     setPlaybackPitch(config.playbackPitch);
+
+    // 应用图形均衡器设置
+    if ( config.eqEnabled &&
+         config.eqPreset != static_cast<int>(EQPreset::None) ) {
+        createMainTrackEQ(static_cast<EQPreset>(config.eqPreset));
+        const size_t bandCount = getMainTrackEQBandCount();
+        for ( size_t i = 0; i < bandCount; ++i ) {
+            if ( i < config.eqBandGains.size() ) {
+                setMainTrackEQBandGain(i, config.eqBandGains[i]);
+            }
+            if ( i < config.eqBandQs.size() ) {
+                setMainTrackEQBandQ(i, config.eqBandQs[i]);
+            }
+        }
+    } else {
+        destroyMainTrackEQ();
+    }
 
     XINFO("BGM loaded successfully.");
     return true;
@@ -468,6 +493,122 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
         m_globalVolume * it->second->getVolume() * volumeFactor,
         targetFrame,
         bgmRef);
+}
+
+void AudioManager::createMainTrackEQ(EQPreset preset)
+{
+    if ( preset == EQPreset::None ) {
+        destroyMainTrackEQ();
+        return;
+    }
+
+    std::vector<double> freqs;
+    if ( preset == EQPreset::TenBand ) {
+        freqs = { 31.25,  62.5,   125.0,  250.0,  500.0,
+                  1000.0, 2000.0, 4000.0, 8000.0, 16000.0 };
+    } else if ( preset == EQPreset::FifteenBand ) {
+        freqs = { 25.0,   40.0,   63.0,   100.0,   160.0,
+                  250.0,  400.0,  630.0,  1000.0,  1600.0,
+                  2500.0, 4000.0, 6300.0, 10000.0, 16000.0 };
+    }
+
+    auto newEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
+
+    // 如果当前正在播放 BGM，需要热插拔
+    if ( m_bgmSource && m_preStretcherMixer ) {
+        m_preStretcherMixer->remove_source(
+            m_mainEQ ? std::static_pointer_cast<ice::IAudioNode>(m_mainEQ)
+                     : std::static_pointer_cast<ice::IAudioNode>(m_bgmSource));
+
+        newEQ->set_inputnode(m_bgmSource);
+        m_preStretcherMixer->add_source(newEQ);
+    }
+
+    m_mainEQ       = std::move(newEQ);
+    m_mainEQPreset = preset;
+    XINFO("Main track EQ created with {} bands.", freqs.size());
+}
+
+void AudioManager::destroyMainTrackEQ()
+{
+    if ( !m_mainEQ ) return;
+
+    if ( m_bgmSource && m_preStretcherMixer ) {
+        m_preStretcherMixer->remove_source(m_mainEQ);
+        m_preStretcherMixer->add_source(m_bgmSource);
+    }
+
+    m_mainEQ.reset();
+    m_mainEQPreset = EQPreset::None;
+    XINFO("Main track EQ destroyed.");
+}
+
+void AudioManager::setMainTrackEQBandGain(size_t bandIndex, float gainDb)
+{
+    if ( m_mainEQ ) {
+        m_mainEQ->set_band_gain_db(bandIndex, gainDb);
+    }
+}
+
+float AudioManager::getMainTrackEQBandGain(size_t bandIndex) const
+{
+    if ( m_mainEQ ) {
+        return static_cast<float>(m_mainEQ->get_band_gain_db(bandIndex));
+    }
+    return 0.0f;
+}
+
+void AudioManager::setMainTrackEQBandQ(size_t bandIndex, float q)
+{
+    if ( m_mainEQ ) {
+        m_mainEQ->set_band_q_factor(bandIndex, q);
+    }
+}
+
+float AudioManager::getMainTrackEQBandQ(size_t bandIndex) const
+{
+    if ( m_mainEQ ) {
+        return static_cast<float>(m_mainEQ->get_band_q_factor(bandIndex));
+    }
+    return 1.414f;  // 默认 Q 值 (sqrt(2))
+}
+
+size_t AudioManager::getMainTrackEQBandCount() const
+{
+    if ( m_mainEQ ) {
+        return m_mainEQ->get_band_count();
+    }
+    return 0;
+}
+
+float AudioManager::getMainTrackEQBandFrequency(size_t bandIndex) const
+{
+    if ( m_mainEQ ) {
+        return static_cast<float>(m_mainEQ->get_band_frequency(bandIndex));
+    }
+    return 0.0f;
+}
+
+
+bool AudioManager::isMainTrackEQEnabled() const
+{
+    return m_mainEQ != nullptr;
+}
+
+EQPreset AudioManager::getMainTrackEQPreset() const
+{
+    return m_mainEQPreset;
+}
+
+float AudioManager::getMainTrackEQResponse(float frequency) const
+{
+    if ( m_mainEQ ) {
+        double mag = m_mainEQ->get_total_magnitude_response(
+            static_cast<double>(frequency));
+        if ( mag <= 1e-6 ) return -120.0f;  // 避免 log10(0)
+        return static_cast<float>(20.0 * std::log10(mag));
+    }
+    return 0.0f;
 }
 
 }  // namespace MMM::Audio

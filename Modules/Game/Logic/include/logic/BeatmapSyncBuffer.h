@@ -63,9 +63,13 @@ struct Hitbox {
  * @brief 时间线上的交互元素 (BPM/Scroll 调整点)
  */
 struct TimelineInteractiveElement {
-    double   time;
-    float    y;
-    uint32_t effects;
+    double       time;
+    float        y;
+    uint32_t     effects;
+    entt::entity bpmEntity{ entt::null };
+    entt::entity scrollEntity{ entt::null };
+    double       bpmValue{ 0.0 };
+    double       scrollValue{ 0.0 };
 };
 
 /**

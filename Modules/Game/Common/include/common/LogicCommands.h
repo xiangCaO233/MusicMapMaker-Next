@@ -188,6 +188,22 @@ struct CmdScroll {
 };
 
 /**
+ * @brief 更新时间线事件指令
+ */
+struct CmdUpdateTimelineEvent {
+    entt::entity entity;
+    double       newTime;
+    double       newValue;
+};
+
+/**
+ * @brief 删除时间线事件指令
+ */
+struct CmdDeleteTimelineEvent {
+    entt::entity entity;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
 using LogicCommand =
@@ -196,6 +212,7 @@ using LogicCommand =
                  CmdStartDrag, CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount,
                  CmdSeek, CmdSetPlaybackSpeed, CmdChangeTool,
                  CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-                 CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll>;
+                 CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll,
+                 CmdUpdateTimelineEvent, CmdDeleteTimelineEvent>;
 
 }  // namespace MMM::Logic
