@@ -355,12 +355,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                             nullptr,
                                             &dock_id_center_canvas);
 
-            // 在主画布区域进一步拆分，分出 20% 给左侧的时间线
+            // 在右侧区域进一步拆分，在主画布和预览窗之间分出 20% 给时间线
             ImGuiID dock_id_center;
             ImGuiID dock_id_timeline;
             dock_id_timeline =
                 ImGui::DockBuilderSplitNode(dock_id_center_canvas,
-                                            ImGuiDir_Left,
+                                            ImGuiDir_Right,
                                             0.20f,
                                             nullptr,
                                             &dock_id_center);

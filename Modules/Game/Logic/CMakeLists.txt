@@ -4,6 +4,9 @@ add_library(Logic STATIC
 	src/logic/session/BeatmapSession.cpp
 	src/logic/session/BeatmapSession_Loading.cpp
 	src/logic/session/BeatmapSession_Commands.cpp
+	src/logic/session/BeatmapSession_Interaction.cpp
+	src/logic/session/BeatmapSession_Playback.cpp
+	src/logic/session/BeatmapSession_Editing.cpp
 	src/logic/EditorEngine.cpp
 	src/logic/BeatmapSyncBuffer.cpp
 	src/logic/ecs/system/render/NoteRenderSystem.cpp

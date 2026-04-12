@@ -124,7 +124,7 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
                 "InitialHint",
                 Sizing::Grow(),
                 Sizing::Fixed(fh),
-                [=](Clay_BoundingBox r, bool isHovered) {
+                [&layoutContext](Clay_BoundingBox r, bool isHovered) {
                     float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
                     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offY);
                     ImVec2 textSize =
@@ -254,12 +254,19 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
                 "FileTree",
                 Sizing::Grow(),
                 Sizing::Grow(),
-                [this, sourceManager](Clay_BoundingBox r, bool isHovered) {
-                    ImGui::BeginChild("FileTreeChild");
+                [this, sourceManager, &layoutContext](Clay_BoundingBox r, bool isHovered) {
+                    // 关键：给子窗口内容预留足够的宽度以触发水平滚动条
+                    ImGui::SetNextWindowContentSize(ImVec2(2000.0f, 0.0f));
+                    ImGui::BeginChild("FileTreeChild", { 0, 0 }, false, ImGuiWindowFlags_HorizontalScrollbar);
+                    
+                    // 同样需要重定向上下文可用区域以防裁剪
+                    ImVec2 oldAvail = layoutContext.m_avail;
+                    layoutContext.m_avail = { 2000.0f, 10000.0f };
                     float indent = ImGui::CalcTextSize("AA").x;
                     ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
                     this->drawDirectoryRecursive(m_currentRoot, sourceManager);
                     ImGui::PopStyleVar();
+                    layoutContext.m_avail = oldAvail;
                     ImGui::EndChild();
                 });
 

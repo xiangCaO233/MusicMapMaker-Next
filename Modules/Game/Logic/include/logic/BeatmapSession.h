@@ -116,6 +116,33 @@ private:
      */
     void rebuildHitEvents();
 
+    // --- 指令处理器 (Command Handlers) ---
+    void handleCommand(const CmdUpdateEditorConfig& cmd);
+    void handleCommand(const CmdUpdateViewport& cmd);
+    void handleCommand(const CmdSetPlayState& cmd);
+    void handleCommand(const CmdLoadBeatmap& cmd);
+    void handleCommand(const CmdSetHoveredEntity& cmd);
+    void handleCommand(const CmdSelectEntity& cmd);
+    void handleCommand(const CmdStartDrag& cmd);
+    void handleCommand(const CmdUpdateDrag& cmd);
+    void handleCommand(const CmdEndDrag& cmd);
+    void handleCommand(const CmdUpdateTrackCount& cmd);
+    void handleCommand(const CmdSeek& cmd);
+    void handleCommand(const CmdSetPlaybackSpeed& cmd);
+    void handleCommand(const CmdChangeTool& cmd);
+    void handleCommand(const CmdSetMousePosition& cmd);
+    void handleCommand(const CmdScroll& cmd);
+    void handleCommand(const CmdUndo& cmd);
+    void handleCommand(const CmdRedo& cmd);
+    void handleCommand(const CmdCopy& cmd);
+    void handleCommand(const CmdPaste& cmd);
+    void handleCommand(const CmdCut& cmd);
+    void handleCommand(const CmdSaveBeatmap& cmd);
+    void handleCommand(const CmdPackBeatmap& cmd);
+    void handleCommand(const CmdUpdateTimelineEvent& cmd);
+    void handleCommand(const CmdDeleteTimelineEvent& cmd);
+    void handleCommand(const CmdCreateTimelineEvent& cmd);
+
     /// @brief ECS 注册表：音符
     entt::registry m_noteRegistry;
 

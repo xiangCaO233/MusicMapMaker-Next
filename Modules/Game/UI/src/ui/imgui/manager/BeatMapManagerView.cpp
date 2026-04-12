@@ -64,6 +64,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             float indent = ImGui::CalcTextSize("AA").x;
             ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
             ImGui::SeparatorText(TR("ui.beatmap_manager.beatmaps").data());
+            ImGui::PopStyleVar();
         });
 
     for ( const auto& beatmap : project->m_beatmaps ) {
@@ -91,12 +92,32 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
     rootVBox.setPadding(12, 12, 12, 12)
         .setSpacing(8)
-        .addLayout("listVBox", listVBox, Sizing::Grow(), Sizing::Grow());
+        .addElement(
+            "BeatmapListArea",
+            Sizing::Grow(),
+            Sizing::Grow(),
+            [&listVBox, &layoutContext](Clay_BoundingBox r, bool isHovered) {
+                ImGui::BeginChild("BeatmapListChild",
+                                  { r.width, r.height },
+                                  false,
+                                  ImGuiWindowFlags_HorizontalScrollbar);
 
-    rootVBox.addSpring();
+                // 统一处理 LayoutContext 的重映射，由于是在子窗口绘制，需要重定向
+                ImVec2 oldStartPos = layoutContext.m_startPos;
+                ImVec2 oldAvail    = layoutContext.m_avail;
+
+                layoutContext.m_startPos = ImGui::GetCursorScreenPos();
+                layoutContext.m_avail    = { 2000.0f, 10000.0f }; // 给予极大的垂直/水平空间以便显示滚动条
+
+                listVBox.render(layoutContext);
+
+                layoutContext.m_startPos = oldStartPos;
+                layoutContext.m_avail    = oldAvail;
+
+                ImGui::EndChild();
+            });
+
     rootVBox.render(layoutContext);
-
-    ImGui::PopStyleVar();
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

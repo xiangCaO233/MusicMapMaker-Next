@@ -208,7 +208,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::BeginChild("AudioListChild",
                                   { r.width, r.height },
                                   false,
-                                  ImGuiWindowFlags_None);
+                                  ImGuiWindowFlags_HorizontalScrollbar);
 
                 // 直接修改临时的 LayoutContext
                 // 字段，而不触发其析构函数（LayoutContext 析构会调用 End()）
@@ -217,7 +217,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImVec2 oldAvail    = layoutContext.m_avail;
 
                 layoutContext.m_startPos = ImGui::GetCursorScreenPos();
-                layoutContext.m_avail    = { r.width, 10000.0f };
+                layoutContext.m_avail    = { 2000.0f, 10000.0f };
 
                 listVBox.render(layoutContext);
 
