@@ -13,7 +13,7 @@ VKOffScreenRenderer::VKOffScreenRenderer() {}
 VKOffScreenRenderer::~VKOffScreenRenderer()
 {
     // 1. 先等待设备空闲，防止正在渲染时销毁
-    if ( m_device ) m_device.waitIdle();
+    if ( m_device ) (void)m_device.waitIdle();
 
     releaseResources();
     XINFO("VKOffScreenRenderer destroyed.");
@@ -43,7 +43,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
               m_lastAllocatedCount);
 
         // 1. 等待 GPU 完成当前工作
-        m_device.waitIdle();
+        (void)m_device.waitIdle();
 
         // 2. 增加 50% 冗余防止频繁扩容
         size_t newCount = static_cast<size_t>(neededCount * 1.5f);

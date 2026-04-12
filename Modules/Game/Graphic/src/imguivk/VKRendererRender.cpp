@@ -44,7 +44,7 @@ void VKRenderer::render(NativeWindow&                  window,
     }
 
     // 恢复fence
-    m_vkLogicalDevice.resetFences(m_cmdAvailableFences[m_currentFrameIndex]);
+    (void)m_vkLogicalDevice.resetFences(m_cmdAvailableFences[m_currentFrameIndex]);
 
     // --- 1. ImGui 准备新帧 ---
     ImGui_ImplVulkan_NewFrame();
@@ -116,7 +116,7 @@ void VKRenderer::render(NativeWindow&                  window,
 
     // 重置命令缓冲
     auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
-    currentCmdBuffer.reset();
+    (void)currentCmdBuffer.reset();
 
     // 准备开始输入命令
     vk::CommandBufferBeginInfo commandBufferBeginInfo;
@@ -138,7 +138,7 @@ void VKRenderer::render(NativeWindow&                  window,
     clearValues[1].setDepthStencil({ 1.0f, 0 });
 
     // 命令录制
-    currentCmdBuffer.begin(commandBufferBeginInfo);
+    (void)currentCmdBuffer.begin(commandBufferBeginInfo);
 
     // 录制所有离屏渲染命令
     for ( auto& graphicUserHook : graphicUserHooks ) {
@@ -175,7 +175,7 @@ void VKRenderer::render(NativeWindow&                  window,
         // 结束渲染流程
         currentCmdBuffer.endRenderPass();
     }
-    currentCmdBuffer.end();  // 结束命令录制
+    (void)currentCmdBuffer.end();  // 结束命令录制
 
     // 准备等待的阶段掩码
     // 这表示：在流水线的“颜色附件输出”阶段等待信号量
@@ -195,7 +195,7 @@ void VKRenderer::render(NativeWindow&                  window,
         .setWaitDstStageMask(waitStages)
         // 发出信号量
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
-    m_LogicDeviceGraphicsQueue.submit(
+    (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
 
     // 呈现
