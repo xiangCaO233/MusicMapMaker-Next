@@ -1,8 +1,12 @@
 #include "graphic/imguivk/VKContext.h"
+#include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/input/MMMInput.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
+#include "event/logic/LogicCommandEvent.h"
+
 #include "graphic/glfw/window/NativeWindow.h"
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
@@ -61,8 +65,10 @@ VKContext::VKContext()
         // debug模式初始化vk调试信息工具
         // 创建 Messenger 对象
         // 这里必须传入 dldy 否则会链接报错
-        m_vkDebugMessenger = m_vkInstance.createDebugUtilsMessengerEXT(
-            m_vkDebugUtilCreateInfo, nullptr, m_vkDldy).value;
+        m_vkDebugMessenger = m_vkInstance
+                                 .createDebugUtilsMessengerEXT(
+                                     m_vkDebugUtilCreateInfo, nullptr, m_vkDldy)
+                                 .value;
         XINFO("Vulkan Debug Messenger Initialize Successed");
     }
 
@@ -70,22 +76,52 @@ VKContext::VKContext()
     // 后续显卡设备初始化
     // 放在窗口相关资源初始化函数中
 
-    Event::EventBus::instance().subscribe<Event::GLFWKeyEvent>(
-        [&](Event::GLFWKeyEvent e) {
-            if ( e.key == Event::Input::Key::F7 &&
-                 e.action == Event::Input::Action::Press ) {
-                /// @brief f7 开启垂直同步
-                setVSync(true);
+    MMM::Event::EventBus::instance().subscribe<MMM::Event::GLFWKeyEvent>(
+        [&](MMM::Event::GLFWKeyEvent e) {
+            if ( e.key == MMM::Event::Input::Key::F7 &&
+                 e.action == MMM::Event::Input::Action::Press ) {
+                /// @brief F7 切换垂直同步状态
+                auto& config =
+                    MMM::Config::AppConfig::instance().getEditorConfig();
+                config.settings.vsync = !config.settings.vsync;
+
+                // 发布配置更新事件，触发所有监听者（包括本类中的
+                // LogicCommandEvent 监听器）
+                MMM::Event::EventBus::instance().publish(
+                    MMM::Event::LogicCommandEvent(
+                        MMM::Logic::CmdUpdateEditorConfig{ config }));
+
+                // 持久化配置
+                MMM::Config::AppConfig::instance().save();
+
+                XINFO("VSync toggled by shortcut: {}",
+                      config.settings.vsync ? "ON" : "OFF");
             }
-            if ( e.key == Event::Input::Key::F8 &&
-                 e.action == Event::Input::Action::Press ) {
-                /// @brief f8 关闭垂直同步
-                setVSync(false);
-            }
-            if ( e.key == Event::Input::Key::F11 &&
-                 e.action == Event::Input::Action::Press ) {
-                /// @brief f8 切换全屏
+            if ( e.key == MMM::Event::Input::Key::F11 &&
+                 e.action == MMM::Event::Input::Action::Press ) {
+                /// @brief F11 切换全屏
                 ToggleFullscreen();
+            }
+        });
+
+    MMM::Event::EventBus::instance().subscribe<MMM::Event::LogicCommandEvent>(
+        [&](MMM::Event::LogicCommandEvent e) {
+            if ( std::holds_alternative<MMM::Logic::CmdUpdateEditorConfig>(
+                     e.command) ) {
+                auto& cmd =
+                    std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
+                setVSync(cmd.config.settings.vsync);
+            }
+        });
+
+
+    Event::EventBus::instance().subscribe<Event::LogicCommandEvent>(
+        [&](Event::LogicCommandEvent e) {
+            if ( std::holds_alternative<MMM::Logic::CmdUpdateEditorConfig>(
+                     e.command) ) {
+                auto& cmd =
+                    std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
+                setVSync(cmd.config.settings.vsync);
             }
         });
 }
@@ -192,6 +228,9 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
     // 使用imgui自动选择物理设备和队列族
     imguiAutoSelect();
 
+    // 在创建交换链之前，根据配置预设全局呈现模式，避免启动后再次重建
+    updateGlobalPresentMode(
+        Config::AppConfig::instance().getEditorSettings().vsync);
 
     // 初始化逻辑设备
     initLogicDevice();
@@ -203,7 +242,7 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
                                                 m_queueFamilyIndices,
                                                 w,
                                                 h);
-    setVSync(true);
+
 
 
     // 创建最终呈现的渲染流程
@@ -273,26 +312,39 @@ void VKContext::setVSync(bool enabled)
     (void)m_vkLogicalDevice.waitIdle();
 
     // 2. 修改交换链配置类里的 PresentMode 偏好
+    updateGlobalPresentMode(enabled);
+
+    // 3. 标记需要重建
+    if ( m_swapchain ) {
+        m_swapchain->markDirty();
+    }
+}
+
+/**
+ * @brief 仅更新全局呈现模式参数，不触发重建
+ */
+void VKContext::updateGlobalPresentMode(bool enabled)
+{
     if ( enabled ) {
         VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
     } else {
         // fallback 为立即模式
         VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
         // 查询物理设备支持的呈现模式
-        std::vector<vk::PresentModeKHR> supported_presentModes =
-            m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface).value;
-        for ( const auto& presentMode : supported_presentModes ) {
-            // 无限帧数优选mailbox模式
-            // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
-            if ( presentMode == vk::PresentModeKHR::eMailbox ) {
-                VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eMailbox;
-                break;
+        if ( m_vkPhysicalDevice && m_vkSurface ) {
+            std::vector<vk::PresentModeKHR> supported_presentModes =
+                m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface).value;
+            for ( const auto& presentMode : supported_presentModes ) {
+                // 无限帧数优选mailbox模式
+                // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
+                if ( presentMode == vk::PresentModeKHR::eMailbox ) {
+                    VKSwapchain::s_globalPresentMode =
+                        vk::PresentModeKHR::eMailbox;
+                    break;
+                }
             }
         }
     }
-
-    // 3. 标记需要重建
-    m_swapchain->markDirty();
 }
 
 /**

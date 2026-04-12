@@ -40,6 +40,7 @@ target_link_libraries(Graphic
   Font
   Event
   Config
+  Common
   3rd_glfw
   3rd_glm
   3rd_imgui

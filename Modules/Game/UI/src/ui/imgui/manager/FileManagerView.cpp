@@ -2,11 +2,16 @@
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/box/CLayBox.h"
 #include <filesystem>
 
@@ -167,18 +172,18 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
 
         CLayVBox treeVBox;
         treeVBox.setPadding(4, 4, 4, 4)
-            .addElement("FileTree",
-                        Sizing::Grow(),
-                        Sizing::Grow(),
-                        [this](Clay_BoundingBox r, bool isHovered) {
-                            ImGui::BeginChild("FileTreeChild");
-                            float indent = ImGui::CalcTextSize("AA").x;
-                            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,
-                                                indent);
-                            this->drawDirectoryRecursive(m_currentRoot);
-                            ImGui::PopStyleVar();
-                            ImGui::EndChild();
-                        });
+            .addElement(
+                "FileTree",
+                Sizing::Grow(),
+                Sizing::Grow(),
+                [this, sourceManager](Clay_BoundingBox r, bool isHovered) {
+                    ImGui::BeginChild("FileTreeChild");
+                    float indent = ImGui::CalcTextSize("AA").x;
+                    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
+                    this->drawDirectoryRecursive(m_currentRoot, sourceManager);
+                    ImGui::PopStyleVar();
+                    ImGui::EndChild();
+                });
 
         rootVBox.setPadding(8, 8, 8, 8)
             .setSpacing(4)
@@ -192,7 +197,8 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
     if ( fileManagerFont ) ImGui::PopFont();
 }
 
-void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path)
+void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
+                                             UIManager* sourceManager)
 {
     try {
         for ( const auto& entry : std::filesystem::directory_iterator(path) ) {
@@ -206,7 +212,7 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path)
                                            ImGuiTreeNodeFlags_OpenOnDoubleClick;
                 bool open = ImGui::TreeNodeEx(filename.c_str(), flags);
                 if ( open ) {
-                    drawDirectoryRecursive(p);
+                    drawDirectoryRecursive(p, sourceManager);
                     ImGui::TreePop();
                 }
             } else {
@@ -215,6 +221,76 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path)
                 ImGui::TreeNodeEx(filename.c_str(), flags);
                 if ( ImGui::IsItemClicked() ) {
                     XINFO("Clicked file: {}", p.string());
+
+                    auto& engine  = Logic::EditorEngine::instance();
+                    auto* project = engine.getCurrentProject();
+                    if ( project ) {
+                        auto relPath =
+                            std::filesystem::relative(p, project->m_projectRoot)
+                                .generic_string();
+                        auto ext = p.extension().string();
+
+                        auto publishToggleEvent = [&](SideBarTab tab) {
+                            Event::UISubViewToggleEvent evt;
+                            evt.sourceUiName           = m_subViewName;
+                            evt.uiManager              = sourceManager;
+                            evt.targetFloatManagerName = "SideBarManager";
+                            evt.subViewId              = TabToSubViewId(tab);
+                            evt.showSubView            = true;
+                            Event::EventBus::instance().publish(evt);
+                        };
+
+                        // Beatmap extensions
+                        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                            publishToggleEvent(SideBarTab::BeatMapExplorer);
+                            for ( const auto& bm : project->m_beatmaps ) {
+                                if ( bm.m_filePath == relPath ) {
+                                    XINFO(
+                                        "Auto-loading beatmap from file "
+                                        "browser: {}",
+                                        bm.m_name);
+                                    auto loadedBeatmap =
+                                        std::make_shared<MMM::BeatMap>(
+                                            MMM::BeatMap::loadFromFile(p));
+                                    engine.pushCommand(
+                                        Logic::CmdLoadBeatmap{ loadedBeatmap });
+                                    break;
+                                }
+                            }
+                        }
+                        // Audio extensions
+                        else if ( ext == ".mp3" || ext == ".wav" ||
+                                  ext == ".ogg" || ext == ".flac" ) {
+                            publishToggleEvent(SideBarTab::AudioExplorer);
+                            for ( const auto& audio :
+                                  project->m_audioResources ) {
+                                if ( audio.m_path == relPath ) {
+                                    XINFO(
+                                        "Auto-opening audio track "
+                                        "controller from file browser: {}",
+                                        audio.m_id);
+                                    std::string viewName =
+                                        "TrackController_" + audio.m_id;
+                                    if ( !sourceManager
+                                              ->getView<AudioTrackControllerUI>(
+                                                  viewName) ) {
+                                        auto controller = std::make_unique<
+                                            AudioTrackControllerUI>(
+                                            audio.m_id,
+                                            audio.m_id,
+                                            audio.m_type == AudioTrackType::Main
+                                                ? AudioTrackControllerUI::
+                                                      TrackType::Main
+                                                : AudioTrackControllerUI::
+                                                      TrackType::Effect);
+                                        sourceManager->registerView(
+                                            viewName, std::move(controller));
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

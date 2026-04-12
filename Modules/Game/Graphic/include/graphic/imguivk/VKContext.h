@@ -83,6 +83,11 @@ public:
 
 private:
     /**
+     * @brief 仅更新全局呈现模式参数，不触发重建
+     */
+    void updateGlobalPresentMode(bool enabled);
+
+    /**
      * @brief 初始化 GLFW 上下文
      */
     static void initGLFW();

@@ -11,9 +11,27 @@
 namespace MMM::UI
 {
 
-SideBarUI::SideBarUI(const std::string& name) : IUIView(name) {}
+SideBarUI::SideBarUI(const std::string& name) : IUIView(name)
+{
+    m_subId =
+        Event::EventBus::instance().subscribe<Event::UISubViewToggleEvent>(
+            [this](const Event::UISubViewToggleEvent& e) {
+                if ( e.targetFloatManagerName == "SideBarManager" ) {
+                    auto tab = SubViewIdToTab(e.subViewId);
+                    if ( tab != SideBarTab::None ) {
+                        m_activeTab = tab;
+                    }
+                }
+            });
+}
 
-SideBarUI::~SideBarUI() {}
+SideBarUI::~SideBarUI()
+{
+    if ( m_subId != 0 ) {
+        Event::EventBus::instance().unsubscribe<Event::UISubViewToggleEvent>(
+            m_subId);
+    }
+}
 
 void SideBarUI::update(UIManager* sourceManager)
 {

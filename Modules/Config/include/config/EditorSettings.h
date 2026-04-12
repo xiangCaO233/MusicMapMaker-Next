@@ -114,6 +114,9 @@ struct EditorSettings {
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
+    /// @brief 是否开启垂直同步
+    bool vsync{ false };
+
     /// @brief 滚动操作时的步长加速倍率 (用于非 Snap 滚动、缩放等)
     float scrollSpeedMultiplier{ 4.0f };
 
@@ -125,7 +128,7 @@ struct EditorSettings {
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
                                    filePickerStyle, cursorStyle, beatDivisor,
                                    reverseScroll, scrollSnap,
-                                   recentProjectsLimit, language,
+                                   recentProjectsLimit, language, vsync,
                                    scrollSpeedMultiplier, globalVolume)
 };
 

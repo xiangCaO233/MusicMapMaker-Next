@@ -122,8 +122,6 @@ int GameLoop::start(Graphic::NativeWindow& window)
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
         context.initVKWindowRess(&window, fbWidth, fbHeight);
-        context.setVSync(false);
-        // context.ToggleFullscreen();
 
         // 初始化音频引擎
         Audio::AudioManager::instance().init();

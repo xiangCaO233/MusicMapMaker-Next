@@ -32,6 +32,7 @@ return {
 	["ui.settings.software"] = "软件配置",
 	["ui.settings.software.general"] = "通用设置",
 	["ui.settings.software.language"] = "界面语言",
+	["ui.settings.software.vsync"] = "开启垂直同步",
 	["ui.settings.software.picker_native"] = "系统原生选择器",
 	["ui.settings.software.picker_unified"] = "编辑器统一选择器",
 	["ui.settings.software.recent_limit"] = "最近项目显示上限",

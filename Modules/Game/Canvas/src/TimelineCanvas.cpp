@@ -28,6 +28,9 @@ TimelineCanvas::TimelineCanvas(
 
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float                dpiScale = viewport->DpiScale;
+
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
 
@@ -44,7 +47,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 float time = static_cast<float>(m_currentSnapshot->currentTime);
                 float total = static_cast<float>(m_currentSnapshot->totalTime);
 
-                ImVec2 sliderSize(20.0f, size.y);
+                float  sliderWidth = std::floor(20.0f * dpiScale);
+                ImVec2 sliderSize(sliderWidth, size.y);
                 if ( ImGui::VSliderFloat("##AudioTimeSlider",
                                          sliderSize,
                                          &time,
@@ -65,6 +69,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             // 扣除掉上面 slider 占据的空间后剩下的空间绘制画布
             size = ImGui::GetContentRegionAvail();
+            // 核心修复：强制对齐到像素，防止出现采样导致的可疑像素/模糊
+            size.x = std::floor(size.x);
+            size.y = std::floor(size.y);
+
             if ( size.x > 0 && size.y > 0 ) {
                 setTargetSize(static_cast<uint32_t>(size.x),
                               static_cast<uint32_t>(size.y));
@@ -103,13 +111,17 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     float localMouseY = mousePos.y - canvasPos.y;
-                    bool  isNear = std::abs(localMouseY - el.y) < proximity;
+                    // 核心修复：坐标映射，el.y 是相对于底部的(Vulkan Ortho
+                    // 0是底部) 而 localMouseY
+                    // 是相对于顶部的。需要进行翻转映射。
+                    float mappedY = size.y - el.y;
+                    bool  isNear  = std::abs(localMouseY - mappedY) < proximity;
 
                     if ( isNear && isFocused ) {
                         // BPM 齿轮 (左侧)
                         if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
                             ImVec2 pos(canvasPos.x + padding,
-                                       canvasPos.y + el.y - iconSize * 0.5f);
+                                       canvasPos.y + mappedY - iconSize * 0.5f);
                             ImGui::SetCursorScreenPos(pos);
 
                             ImGui::PushStyleColor(
@@ -134,7 +146,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                              Logic::System::SCROLL_EFFECT_SCROLL ) {
                             ImVec2 pos(
                                 canvasPos.x + size.x - iconSize - padding,
-                                canvasPos.y + el.y - iconSize * 0.5f);
+                                canvasPos.y + mappedY - iconSize * 0.5f);
                             ImGui::SetCursorScreenPos(pos);
 
                             ImGui::PushStyleColor(

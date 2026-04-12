@@ -32,6 +32,7 @@ return {
 	["ui.settings.software"] = "Software Config",
 	["ui.settings.software.general"] = "General Settings",
 	["ui.settings.software.language"] = "Language",
+	["ui.settings.software.vsync"] = "Enable VSync",
 	["ui.settings.software.picker_native"] = "Native File Picker",
 	["ui.settings.software.picker_unified"] = "Unified File Picker",
 	["ui.settings.software.recent_limit"] = "Recent Projects Limit",

@@ -43,6 +43,21 @@ static std::string TabToTooltip(SideBarTab tab)
     }
 }
 
+static SideBarTab SubViewIdToTab(const std::string& subViewId)
+{
+    if ( subViewId == TR("title.search_manager").view )
+        return SideBarTab::Search;
+    if ( subViewId == TR("title.file_manager").view )
+        return SideBarTab::FileExplorer;
+    if ( subViewId == TR("title.audio_manager").view )
+        return SideBarTab::AudioExplorer;
+    if ( subViewId == TR("title.beatmap_manager").view )
+        return SideBarTab::BeatMapExplorer;
+    if ( subViewId == TR("title.settings_manager").view )
+        return SideBarTab::Settings;
+    return SideBarTab::None;
+}
+
 class SideBarUI : virtual public IUIView
 {
 public:
@@ -57,6 +72,7 @@ public:
     void update(UIManager* sourceManager) override;
 
 private:
+    uint64_t m_subId = 0;
     ///@brief 激活的tab,默认选中第一个
     SideBarTab m_activeTab = SideBarTab::FileExplorer;
 };

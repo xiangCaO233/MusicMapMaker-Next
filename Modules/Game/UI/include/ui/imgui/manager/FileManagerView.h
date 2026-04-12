@@ -21,7 +21,8 @@ public:
                   UIManager*     sourceManager) override;
 
 private:
-    void drawDirectoryRecursive(const std::filesystem::path& path);
+    void drawDirectoryRecursive(const std::filesystem::path& path,
+                                UIManager*                   sourceManager);
     void openFolderPicker();
 
     std::filesystem::path m_currentRoot;

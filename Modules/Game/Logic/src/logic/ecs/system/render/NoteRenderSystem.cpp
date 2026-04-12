@@ -180,6 +180,11 @@ void NoteRenderSystem::generateTimelineSnapshot(
     if ( !snapshot->hasBeatmap ) return;
 
     batcher.setTexture(TextureID::None);
+
+    // 绘制背景 (确保全覆盖，消除透明混合带来的边缘可疑像素)
+    batcher.pushQuad(
+        0, viewportHeight, viewportWidth, viewportHeight, { 0, 0, 0, 0.01f });
+
     auto& skin    = Config::SkinManager::instance();
     auto  tickCol = skin.getColor("timeline.tick");
 

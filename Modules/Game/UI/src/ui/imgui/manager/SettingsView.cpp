@@ -176,6 +176,10 @@ void SettingsView::drawSoftwareSettings()
         changed = true;
     }
 
+    // 1.5 垂直同步
+    changed |= ImGui::Checkbox(TR_CACHE("ui.settings.software.vsync").data(),
+                               &settings.vsync);
+
     // 2. 光标样式 (移至此处)
     ImGui::Text("%s", TR_CACHE("ui.settings.editor.cursor_style").data());
     ImGui::SameLine();
