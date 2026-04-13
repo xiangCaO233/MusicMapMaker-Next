@@ -6,4 +6,4 @@ namespace MMM::Logic
 
 // Reserved for Draw Tool logic implementation
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic

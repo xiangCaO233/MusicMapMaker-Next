@@ -109,24 +109,24 @@ struct RenderSnapshot {
     };
 
     // 交互状态
-    EditTool currentTool{ EditTool::Move };
-    bool     isHoveringCanvas{ false };
-    bool     isSelecting{ false };
+    EditTool                        currentTool{ EditTool::Move };
+    bool                            isHoveringCanvas{ false };
+    bool                            isSelecting{ false };
     std::vector<MarqueeBoxSnapshot> marqueeBoxes;
-    std::string                     activeSelectionCameraId; // 只有在 isSelecting 为 true 时有效
+    std::string activeSelectionCameraId;  // 只有在 isSelecting 为 true 时有效
 
-    double   hoveredTime{ 0.0 };
-    double   snappedTime{ 0.0 };  // 磁吸后的精确拍线时间
-    bool     isSnapped{ false };  // 是否磁吸到了拍线
-    int      snappedNumerator{ 0 };
-    int      snappedDenominator{ 1 };
-    int      currentBeatDivisor{ 4 };
-    int32_t  hoveredTrack{ 0 };
-    int      hoveredNoteNumerator{ 0 };
-    int      hoveredNoteDenominator{ 1 };
-    double   hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
-    int      hoveredBeatIndex{
-             0
+    double  hoveredTime{ 0.0 };
+    double  snappedTime{ 0.0 };  // 磁吸后的精确拍线时间
+    bool    isSnapped{ false };  // 是否磁吸到了拍线
+    int     snappedNumerator{ 0 };
+    int     snappedDenominator{ 1 };
+    int     currentBeatDivisor{ 4 };
+    int32_t hoveredTrack{ 0 };
+    int     hoveredNoteNumerator{ 0 };
+    int     hoveredNoteDenominator{ 1 };
+    double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
+    int     hoveredBeatIndex{
+            0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
 
     bool   isPreviewHovered{ false };
@@ -149,13 +149,13 @@ struct RenderSnapshot {
         scrollSegments.clear();
         uvMap.clear();
         backgroundPath.clear();
-        bgSize                 = glm::vec2(0.0f, 0.0f);
-        isPlaying              = false;
-        currentTime            = 0.0;
-        totalTime              = 0.0;
-        currentTool            = EditTool::Move;
-        isHoveringCanvas       = false;
-        isSelecting            = false;
+        bgSize           = glm::vec2(0.0f, 0.0f);
+        isPlaying        = false;
+        currentTime      = 0.0;
+        totalTime        = 0.0;
+        currentTool      = EditTool::Move;
+        isHoveringCanvas = false;
+        isSelecting      = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
         hoveredTime            = 0.0;
@@ -209,7 +209,7 @@ public:
      * 最新的快照指针。如果队列为空，返回上一帧使用的缓存快照以防画面闪烁。
      */
     RenderSnapshot* pullLatestSnapshot();
-    
+
     /**
      * @brief [逻辑线程] 重置缓冲区，清空所有待读快照
      */

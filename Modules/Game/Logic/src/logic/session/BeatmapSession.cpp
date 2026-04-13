@@ -1,14 +1,14 @@
 #include "logic/BeatmapSession.h"
-#include "logic/session/tool/GrabTool.h"
-#include "logic/session/tool/MarqueeTool.h"
-#include "logic/session/tool/DrawTool.h"
-#include "logic/session/tool/CutTool.h"
 #include "audio/AudioManager.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/tool/CutTool.h"
+#include "logic/session/tool/DrawTool.h"
+#include "logic/session/tool/GrabTool.h"
+#include "logic/session/tool/MarqueeTool.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <chrono>
 
@@ -25,10 +25,10 @@ namespace MMM::Logic
 
 BeatmapSession::BeatmapSession()
 {
-    m_tools[EditTool::Move] = std::make_unique<GrabTool>();
+    m_tools[EditTool::Move]    = std::make_unique<GrabTool>();
     m_tools[EditTool::Marquee] = std::make_unique<MarqueeTool>();
-    m_tools[EditTool::Draw] = std::make_unique<DrawTool>();
-    m_tools[EditTool::Cut] = std::make_unique<CutTool>();
+    m_tools[EditTool::Draw]    = std::make_unique<DrawTool>();
+    m_tools[EditTool::Cut]     = std::make_unique<CutTool>();
 
     // 初始化时注册 TimelineComponent 的增删改信号，并注入 ScrollCache 上下文
     m_timelineRegistry.ctx().emplace<System::ScrollCache>();
@@ -176,4 +176,4 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
     updateECSAndRender(config);
 }
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic

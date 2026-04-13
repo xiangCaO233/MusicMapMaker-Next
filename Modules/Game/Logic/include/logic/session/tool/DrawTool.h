@@ -11,4 +11,4 @@ public:
     // TODO: implement specific handlers
 };
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic

@@ -8,9 +8,9 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
+#include "logic/session/tool/IEditTool.h"
 #include "mmm/note/Note.h"
 #include "mmm/timing/Timing.h"
-#include "logic/session/tool/IEditTool.h"
 #include <concurrentqueue.h>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>

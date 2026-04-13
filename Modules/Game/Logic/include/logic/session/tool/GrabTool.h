@@ -8,9 +8,11 @@ namespace MMM::Logic
 class GrabTool : public IEditTool
 {
 public:
-    void handleStartDrag(BeatmapSession& session, const CmdStartDrag& cmd) override;
-    void handleUpdateDrag(BeatmapSession& session, const CmdUpdateDrag& cmd) override;
+    void handleStartDrag(BeatmapSession&     session,
+                         const CmdStartDrag& cmd) override;
+    void handleUpdateDrag(BeatmapSession&      session,
+                          const CmdUpdateDrag& cmd) override;
     void handleEndDrag(BeatmapSession& session, const CmdEndDrag& cmd) override;
 };
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic

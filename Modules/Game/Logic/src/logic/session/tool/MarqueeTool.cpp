@@ -6,7 +6,8 @@
 namespace MMM::Logic
 {
 
-void MarqueeTool::handleStartMarquee(BeatmapSession& session, const CmdStartMarquee& cmd)
+void MarqueeTool::handleStartMarquee(BeatmapSession&        session,
+                                     const CmdStartMarquee& cmd)
 {
     session.m_isSelecting         = true;
     session.m_hasMarqueeSelection = true;
@@ -17,7 +18,8 @@ void MarqueeTool::handleStartMarquee(BeatmapSession& session, const CmdStartMarq
         session.m_marqueeBoxes.clear();
         auto view = session.m_noteRegistry.view<InteractionComponent>();
         for ( auto entity : view ) {
-            session.m_noteRegistry.get<InteractionComponent>(entity).isSelected = false;
+            session.m_noteRegistry.get<InteractionComponent>(entity)
+                .isSelected = false;
         }
     }
 
@@ -28,27 +30,30 @@ void MarqueeTool::handleStartMarquee(BeatmapSession& session, const CmdStartMarq
             BeatmapSession::MarqueeBox newBox;
             newBox.cameraId = cmd.cameraId;
 
-            float judgmentLineY =
-                it->second.viewportHeight * session.m_lastConfig.visual.judgeline_pos;
+            float judgmentLineY = it->second.viewportHeight *
+                                  session.m_lastConfig.visual.judgeline_pos;
 
             float renderScaleY = 1.0f;
             if ( cmd.cameraId == "Preview" ) {
-                auto  itMain             = session.m_cameras.find("Basic2DCanvas");
+                auto  itMain = session.m_cameras.find("Basic2DCanvas");
                 float mainViewportHeight = itMain != session.m_cameras.end()
                                                ? itMain->second.viewportHeight
                                                : it->second.viewportHeight;
 
-                float mainEffectiveH = (session.m_lastConfig.visual.trackLayout.bottom -
-                                        session.m_lastConfig.visual.trackLayout.top) *
-                                       mainViewportHeight;
+                float mainEffectiveH =
+                    (session.m_lastConfig.visual.trackLayout.bottom -
+                     session.m_lastConfig.visual.trackLayout.top) *
+                    mainViewportHeight;
                 float ty = session.m_lastConfig.visual.previewConfig.margin.top;
-                float by = it->second.viewportHeight -
-                           session.m_lastConfig.visual.previewConfig.margin.bottom;
+                float by =
+                    it->second.viewportHeight -
+                    session.m_lastConfig.visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                session.m_lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY =
+                    previewDrawH /
+                    (mainEffectiveH *
+                     session.m_lastConfig.visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = session.m_lastConfig.visual.noteScaleY;
             }
@@ -59,8 +64,8 @@ void MarqueeTool::handleStartMarquee(BeatmapSession& session, const CmdStartMarq
             newBox.startTime = cache->getTime(targetAbsY);
             newBox.endTime   = newBox.startTime;
 
-            float leftX =
-                it->second.viewportWidth * session.m_lastConfig.visual.trackLayout.left;
+            float leftX      = it->second.viewportWidth *
+                               session.m_lastConfig.visual.trackLayout.left;
             float rightX     = it->second.viewportWidth *
                                session.m_lastConfig.visual.trackLayout.right;
             float trackAreaW = rightX - leftX;
@@ -73,7 +78,8 @@ void MarqueeTool::handleStartMarquee(BeatmapSession& session, const CmdStartMarq
     }
 }
 
-void MarqueeTool::handleUpdateMarquee(BeatmapSession& session, const CmdUpdateMarquee& cmd)
+void MarqueeTool::handleUpdateMarquee(BeatmapSession&         session,
+                                      const CmdUpdateMarquee& cmd)
 {
     if ( !session.m_isSelecting || session.m_marqueeBoxes.empty() ) return;
     auto& currentBox = session.m_marqueeBoxes.back();
@@ -82,27 +88,30 @@ void MarqueeTool::handleUpdateMarquee(BeatmapSession& session, const CmdUpdateMa
     if ( cache ) {
         auto it = session.m_cameras.find(currentBox.cameraId);
         if ( it != session.m_cameras.end() ) {
-            float judgmentLineY =
-                it->second.viewportHeight * session.m_lastConfig.visual.judgeline_pos;
+            float judgmentLineY = it->second.viewportHeight *
+                                  session.m_lastConfig.visual.judgeline_pos;
 
             float renderScaleY = 1.0f;
             if ( currentBox.cameraId == "Preview" ) {
-                auto  itMain             = session.m_cameras.find("Basic2DCanvas");
+                auto  itMain = session.m_cameras.find("Basic2DCanvas");
                 float mainViewportHeight = itMain != session.m_cameras.end()
                                                ? itMain->second.viewportHeight
                                                : it->second.viewportHeight;
 
-                float mainEffectiveH = (session.m_lastConfig.visual.trackLayout.bottom -
-                                        session.m_lastConfig.visual.trackLayout.top) *
-                                       mainViewportHeight;
+                float mainEffectiveH =
+                    (session.m_lastConfig.visual.trackLayout.bottom -
+                     session.m_lastConfig.visual.trackLayout.top) *
+                    mainViewportHeight;
                 float ty = session.m_lastConfig.visual.previewConfig.margin.top;
-                float by = it->second.viewportHeight -
-                           session.m_lastConfig.visual.previewConfig.margin.bottom;
+                float by =
+                    it->second.viewportHeight -
+                    session.m_lastConfig.visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                session.m_lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY =
+                    previewDrawH /
+                    (mainEffectiveH *
+                     session.m_lastConfig.visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = session.m_lastConfig.visual.noteScaleY;
             }
@@ -112,8 +121,8 @@ void MarqueeTool::handleUpdateMarquee(BeatmapSession& session, const CmdUpdateMa
                 currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             currentBox.endTime = cache->getTime(targetAbsY);
 
-            float leftX =
-                it->second.viewportWidth * session.m_lastConfig.visual.trackLayout.left;
+            float leftX      = it->second.viewportWidth *
+                               session.m_lastConfig.visual.trackLayout.left;
             float rightX     = it->second.viewportWidth *
                                session.m_lastConfig.visual.trackLayout.right;
             float trackAreaW = rightX - leftX;
@@ -123,7 +132,8 @@ void MarqueeTool::handleUpdateMarquee(BeatmapSession& session, const CmdUpdateMa
     }
 }
 
-void MarqueeTool::handleEndMarquee(BeatmapSession& session, const CmdEndMarquee& cmd)
+void MarqueeTool::handleEndMarquee(BeatmapSession&      session,
+                                   const CmdEndMarquee& cmd)
 {
     session.m_isSelecting = false;
     // 如果框的大小极小，可以认为是一个无效框，清理掉
@@ -136,7 +146,8 @@ void MarqueeTool::handleEndMarquee(BeatmapSession& session, const CmdEndMarquee&
     }
 }
 
-void MarqueeTool::handleRemoveMarqueeAt(BeatmapSession& session, const CmdRemoveMarqueeAt& cmd)
+void MarqueeTool::handleRemoveMarqueeAt(BeatmapSession&           session,
+                                        const CmdRemoveMarqueeAt& cmd)
 {
     auto* cache = session.m_timelineRegistry.ctx().find<System::ScrollCache>();
     if ( !cache ) return;
@@ -175,8 +186,8 @@ void MarqueeTool::handleRemoveMarqueeAt(BeatmapSession& session, const CmdRemove
 
     float leftX =
         it->second.viewportWidth * session.m_lastConfig.visual.trackLayout.left;
-    float rightX =
-        it->second.viewportWidth * session.m_lastConfig.visual.trackLayout.right;
+    float rightX     = it->second.viewportWidth *
+                       session.m_lastConfig.visual.trackLayout.right;
     float trackAreaW = rightX - leftX;
     float clickTrack =
         (cmd.mouseX - leftX) / (trackAreaW / session.m_trackCount);
@@ -212,4 +223,4 @@ void MarqueeTool::handleRemoveMarqueeAt(BeatmapSession& session, const CmdRemove
     }
 }
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic

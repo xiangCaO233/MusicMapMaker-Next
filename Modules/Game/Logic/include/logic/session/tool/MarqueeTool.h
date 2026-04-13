@@ -8,10 +8,14 @@ namespace MMM::Logic
 class MarqueeTool : public IEditTool
 {
 public:
-    void handleStartMarquee(BeatmapSession& session, const CmdStartMarquee& cmd) override;
-    void handleUpdateMarquee(BeatmapSession& session, const CmdUpdateMarquee& cmd) override;
-    void handleEndMarquee(BeatmapSession& session, const CmdEndMarquee& cmd) override;
-    void handleRemoveMarqueeAt(BeatmapSession& session, const CmdRemoveMarqueeAt& cmd) override;
+    void handleStartMarquee(BeatmapSession&        session,
+                            const CmdStartMarquee& cmd) override;
+    void handleUpdateMarquee(BeatmapSession&         session,
+                             const CmdUpdateMarquee& cmd) override;
+    void handleEndMarquee(BeatmapSession&      session,
+                          const CmdEndMarquee& cmd) override;
+    void handleRemoveMarqueeAt(BeatmapSession&           session,
+                               const CmdRemoveMarqueeAt& cmd) override;
 };
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic
