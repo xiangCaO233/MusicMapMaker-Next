@@ -205,6 +205,11 @@ public:
      * 最新的快照指针。如果队列为空，返回上一帧使用的缓存快照以防画面闪烁。
      */
     RenderSnapshot* pullLatestSnapshot();
+    
+    /**
+     * @brief [逻辑线程] 重置缓冲区，清空所有待读快照
+     */
+    void reset();
 
 private:
     moodycamel::ConcurrentQueue<RenderSnapshot*> m_freeQueue;

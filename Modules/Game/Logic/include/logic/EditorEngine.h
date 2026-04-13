@@ -73,7 +73,7 @@ public:
     void setAtlasUVMap(const std::string&                             cameraId,
                        const std::unordered_map<uint32_t, glm::vec4>& uvMap)
     {
-        std::lock_guard<std::mutex> lock(m_atlasMutex);
+        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
         m_cameraUVMaps[cameraId] = uvMap;
     }
 
@@ -83,7 +83,7 @@ public:
     std::unordered_map<uint32_t, glm::vec4> getAtlasUVMap(
         const std::string& cameraId)
     {
-        std::lock_guard<std::mutex> lock(m_atlasMutex);
+        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
         if ( m_cameraUVMaps.find(cameraId) != m_cameraUVMaps.end() ) {
             return m_cameraUVMaps[cameraId];
         }
@@ -131,7 +131,7 @@ private:
     std::atomic<bool> m_running{ false };
 
     /// @brief 当前激活的谱面会话 (ECS 核心)
-    std::unique_ptr<BeatmapSession> m_activeSession;
+    std::shared_ptr<BeatmapSession> m_activeSession;
 
     /// @brief 当前打开的项目
     std::unique_ptr<Project> m_currentProject;
@@ -140,16 +140,27 @@ private:
     std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
         m_syncBuffers;
 
-    /// @brief 保护缓冲区的锁
-    std::mutex m_bufferMutex;
+    /// @brief 保护会话和缓冲区的递归锁
+    mutable std::recursive_mutex m_sessionMutex;
 
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
 
-    /// @brief 各摄像机独立的图集 UV 映射表
+    /// @brief 各摄像机独立的图集 UV 映射表 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
                m_cameraUVMaps;
-    std::mutex m_atlasMutex;
+
+    /// @brief 保护 m_syncBuffers 和 m_cameraUVMaps 的独立锁（与 m_sessionMutex 无交叉，防止死锁）
+    mutable std::recursive_mutex m_buffersMutex;
+
+    /// @brief 待处理的项目路径（由 EventBus 回调写入，由逻辑线程消费）
+    std::filesystem::path m_pendingProjectPath;
+
+    /// @brief 保护 m_pendingProjectPath 的轻量级锁
+    mutable std::mutex m_pendingMutex;
+
+    /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
+    std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
 };
 
 }  // namespace MMM::Logic

@@ -9,39 +9,69 @@
 namespace MMM::Graphic
 {
 
-void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool pool,
+void VKOffScreenRenderer::transitionImageInternal(vk::CommandPool commandPool,
                                                   vk::Queue       queue,
                                                   vk::ImageLayout oldLayout,
                                                   vk::ImageLayout newLayout,
                                                   vk::Image       image)
 {
-    vk::CommandBufferAllocateInfo allocInfo(
-        pool, vk::CommandBufferLevel::ePrimary, 1);
+    vk::CommandBufferAllocateInfo allocInfo;
+    allocInfo.setCommandPool(commandPool)
+        .setLevel(vk::CommandBufferLevel::ePrimary)
+        .setCommandBufferCount(1);
+
     vk::CommandBuffer cmd = m_device.allocateCommandBuffers(allocInfo).value[0];
-    (void)cmd.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
 
+    vk::CommandBufferBeginInfo beginInfo;
+    beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    (void)cmd.begin(beginInfo);
 
-    vk::ImageMemoryBarrier barrier(
-        {},
-        {},
-        oldLayout,
-        newLayout,
-        VK_QUEUE_FAMILY_IGNORED,
-        VK_QUEUE_FAMILY_IGNORED,
-        image ? image : m_image,
-        { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
+    vk::ImageMemoryBarrier barrier;
+    barrier.setOldLayout(oldLayout)
+        .setNewLayout(newLayout)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setImage(image ? image : m_image)
+        .setSubresourceRange({ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
 
-    // 这里根据布局设置具体的 AccessMask 和 StageMask (参考 VKTexture 里的实现)
-    vk::PipelineStageFlags srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
-    vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eAllCommands;
+    vk::PipelineStageFlags srcStage;
+    vk::PipelineStageFlags dstStage;
+
+    // 核心修正：针对 Intel 核显驱动，必须显式指定 AccessMask 和 StageMask
+    // 的同步关系
+    if ( oldLayout == vk::ImageLayout::eUndefined &&
+         newLayout == vk::ImageLayout::eShaderReadOnlyOptimal ) {
+        barrier.setSrcAccessMask(vk::AccessFlagBits::eNone)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+    } else if ( oldLayout == vk::ImageLayout::eUndefined &&
+                newLayout == vk::ImageLayout::eColorAttachmentOptimal ) {
+        barrier.setSrcAccessMask(vk::AccessFlagBits::eNone)
+            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
+        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        dstStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    } else {
+        // 通用兜底
+        barrier
+            .setSrcAccessMask(vk::AccessFlagBits::eMemoryRead |
+                              vk::AccessFlagBits::eMemoryWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eMemoryRead |
+                              vk::AccessFlagBits::eMemoryWrite);
+        srcStage = vk::PipelineStageFlagBits::eAllCommands;
+        dstStage = vk::PipelineStageFlagBits::eAllCommands;
+    }
 
     cmd.pipelineBarrier(srcStage, dstStage, {}, nullptr, nullptr, barrier);
+
     (void)cmd.end();
 
-    vk::SubmitInfo submitInfo(0, nullptr, nullptr, 1, &cmd);
-    (void)queue.submit(submitInfo, nullptr);
+    vk::SubmitInfo submitInfo;
+    submitInfo.setCommandBuffers(cmd);
+    (void)queue.submit(submitInfo);
     (void)queue.waitIdle();  // 必须等待完成，因为后面要立刻用
-    m_device.freeCommandBuffers(pool, cmd);
+
+    m_device.freeCommandBuffers(commandPool, cmd);
 }
 
 void VKOffScreenRenderer::createOffscreenBuffer(
@@ -53,14 +83,16 @@ void VKOffScreenRenderer::createOffscreenBuffer(
 {
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D)
-        .setFormat(swapchain.info().imageFormat)
-        .setExtent(vk::Extent3D{ width, height, 1 })
+        .setFormat(vk::Format::eR8G8B8A8Unorm)  // 修正：强制使用 R8G8B8A8Unorm
+        .setExtent({ width, height, 1 })
         .setMipLevels(1)
         .setArrayLayers(1)
         .setSamples(vk::SampleCountFlagBits::e1)
         .setTiling(vk::ImageTiling::eOptimal)
         .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
-                  vk::ImageUsageFlagBits::eSampled)
+                  vk::ImageUsageFlagBits::eSampled |
+                  vk::ImageUsageFlagBits::eTransferSrc |
+                  vk::ImageUsageFlagBits::eTransferDst)
         .setSharingMode(vk::SharingMode::eExclusive)
         .setInitialLayout(vk::ImageLayout::eUndefined);
 
@@ -94,7 +126,7 @@ void VKOffScreenRenderer::createOffscreenBuffer(
     vk::ImageViewCreateInfo viewInfo;
     viewInfo.setImage(image)
         .setViewType(vk::ImageViewType::e2D)
-        .setFormat(swapchain.info().imageFormat)
+        .setFormat(vk::Format::eR8G8B8A8Unorm)
         .setSubresourceRange(vk::ImageSubresourceRange(
             vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 
@@ -167,20 +199,23 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         std::make_unique<VKRenderPass>(logicalDevice,
                                        swapchain,
                                        vk::ImageLayout::eShaderReadOnlyOptimal,
-                                       true);
+                                       true,
+                                       vk::Format::eR8G8B8A8Unorm);
 
     m_compositeRenderPass =
         std::make_unique<VKRenderPass>(logicalDevice,
                                        swapchain,
                                        vk::ImageLayout::eShaderReadOnlyOptimal,
-                                       false);
+                                       false,
+                                       vk::Format::eR8G8B8A8Unorm);
 
     // 创建模糊用的 RenderPass，不执行 Clear (因为是全屏绘制)
     m_blurRenderPass =
         std::make_unique<VKRenderPass>(logicalDevice,
                                        swapchain,
                                        vk::ImageLayout::eShaderReadOnlyOptimal,
-                                       false);
+                                       false,
+                                       vk::Format::eR8G8B8A8Unorm);
 
     // 创建所有着色器模块
     createShaderModules();
@@ -234,15 +269,17 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     // ==========================================
     vk::ImageCreateInfo imageInfo;
     imageInfo.setImageType(vk::ImageType::e2D)
-        .setFormat(swapchain.info().imageFormat)  // 与SwapChain中保持一致
+        .setFormat(vk::Format::eR8G8B8A8Unorm)  // 修正：强制使用 R8G8B8A8Unorm
         .setExtent(vk::Extent3D{ creationW, creationH, 1 })
         .setMipLevels(1)
         .setArrayLayers(1)
         .setSamples(vk::SampleCountFlagBits::e1)
         .setTiling(vk::ImageTiling::eOptimal)
-        // 关键：作为颜色附件输出，并且可以被采样器读取
+        // 关键：作为颜色附件输出，并且可以被采样器读取，增加传输支持以兼容部分驱动特性
         .setUsage(vk::ImageUsageFlagBits::eColorAttachment |
-                  vk::ImageUsageFlagBits::eSampled)
+                  vk::ImageUsageFlagBits::eSampled |
+                  vk::ImageUsageFlagBits::eTransferSrc |
+                  vk::ImageUsageFlagBits::eTransferDst)
         .setSharingMode(vk::SharingMode::eExclusive)
         .setInitialLayout(vk::ImageLayout::eUndefined);
 
@@ -285,7 +322,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     vk::ImageViewCreateInfo viewInfo;
     viewInfo.setImage(m_image)
         .setViewType(vk::ImageViewType::e2D)
-        .setFormat(swapchain.info().imageFormat)  // 与SwapChain中保持一致
+        .setFormat(vk::Format::eR8G8B8A8Unorm)  // 修正：修正格式一致性
         .setSubresourceRange(vk::ImageSubresourceRange(
             vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
 
@@ -490,7 +527,8 @@ void VKOffScreenRenderer::createDescriptSets()
     // (m_brushRenderPipeline->m_descriptorSetLayout)
     vk::DescriptorSetAllocateInfo allocInfo(
         m_descriptorPool, 1, &m_mainBrushRenderPipeline->m_descriptorSetLayout);
-    m_offScreenDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];
+    m_offScreenDescriptorSet =
+        m_device.allocateDescriptorSets(allocInfo).value[0];
 
     m_glowDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];
     m_pingDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];

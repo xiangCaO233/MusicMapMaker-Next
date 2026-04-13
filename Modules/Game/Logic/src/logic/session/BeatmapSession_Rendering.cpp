@@ -164,6 +164,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 
                     // 核心逻辑：拖动预览区时，主画布应该渲染拖拽处的内容
                     snapshot->previewHoverTime = snapshot->hoveredTime;
+                    m_previewHoverTime          = snapshot->hoveredTime;
                 }
 
                 // --- 智能拟合：计算当前悬停物件的最简分拍 ---

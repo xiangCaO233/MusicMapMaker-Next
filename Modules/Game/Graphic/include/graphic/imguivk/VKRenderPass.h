@@ -21,7 +21,8 @@ public:
      * @param swapchain 交换链引用 (用于获取图像格式)
      */
     VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
-                 vk::ImageLayout finalLayout, bool loadOpClear = true);
+                 vk::ImageLayout finalLayout, bool loadOpClear = true,
+                 vk::Format format = vk::Format::eUndefined);
 
     // 禁用拷贝和移动
     VKRenderPass(VKRenderPass&&)                 = delete;

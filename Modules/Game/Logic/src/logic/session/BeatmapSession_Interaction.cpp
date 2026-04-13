@@ -176,13 +176,21 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
             m_isMouseInCanvas = true;
             canUpdate         = true;
         }
+    } else if ( m_isDragging && m_mouseCameraId == cmd.cameraId ) {
+        // 如果正在往外拖拽，依然允许更新坐标以便主画布跟随
+        canUpdate = true;
     }
 
     if ( canUpdate ) {
         m_lastMousePos = { cmd.mouseX, cmd.mouseY };
+        
+        // 如果是从预览区发起的，或者正在预览区拖动，更新全局拖拽状态
+        if ( cmd.cameraId == "Preview" ) {
+             m_isDragging = cmd.isDragging;
+        }
 
         // 预览区边缘滚动
-        if ( cmd.cameraId == "PreviewCanvas" ) {
+        if ( cmd.cameraId == "Preview" ) {
             auto it = m_cameras.find(cmd.cameraId);
             if ( it != m_cameras.end() ) {
                 float margin = 20.0f;
@@ -195,7 +203,7 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
                 float sensitivity           = m_lastConfig.visual.previewConfig
                                         .edgeScrollSensitivity;
                 m_previewEdgeScrollVelocity =
-                    -static_cast<double>(dist) * sensitivity;
+                    static_cast<double>(dist) * sensitivity;
             }
         }
     } else {

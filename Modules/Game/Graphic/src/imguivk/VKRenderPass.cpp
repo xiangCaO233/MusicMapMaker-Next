@@ -11,22 +11,27 @@ namespace MMM::Graphic
  * @param swapchain 交换链引用 (用于获取图像格式)
  */
 VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
-                           vk::ImageLayout finalLayout, bool loadOpClear)
+                           vk::ImageLayout finalLayout, bool loadOpClear,
+                           vk::Format format)
     : m_logicalDevice(logicalDevice)
 {
+    // 如果没给格式，默认用swapchain中的
+    vk::Format targetFormat =
+        (format == vk::Format::eUndefined) ? swapchain.info().imageFormat : format;
+
     // 1:创建渲染流程
     vk::RenderPassCreateInfo renderPassCreateInfo;
     // 1.1:附件描述
     vk::AttachmentDescription attachmentDescription;
     attachmentDescription
-        // 图像格式用swapchain中的
-        .setFormat(swapchain.info().imageFormat)
-        // 附件进入时的布局 - 暂不关心
+        // 图像格式
+        .setFormat(targetFormat)
+        // 附件进入时的布局
         .setInitialLayout(loadOpClear ? vk::ImageLayout::eUndefined
                                       : vk::ImageLayout::eShaderReadOnlyOptimal)
-        // 附件输出时的布局 - 呈现附件
+        // 附件输出时的布局
         .setFinalLayout(finalLayout)
-        // 附件加载时需要的操作 - 加载时清空
+        // 附件加载时需要的操作
         .setLoadOp(loadOpClear ? vk::AttachmentLoadOp::eClear
                                : vk::AttachmentLoadOp::eLoad)
         // 附件保存时需要的操作 - 正常存储
@@ -54,20 +59,20 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
         .setColorAttachments(attachmentReference);
     renderPassCreateInfo.setSubpasses(subpassDescription);
 
-    // 判断当前 RenderPass 的用途
-    bool isOffScreen = (finalLayout == vk::ImageLayout::eShaderReadOnlyOptimal);
-
     // 1.3:流程依赖
+    // 核心修正：Intel 核显驱动非常依赖正确的 StageMask 和 AccessMask 组合
     std::array<vk::SubpassDependency, 2> dependencies;
 
-    // 依赖 1: 外部读取结束 -> 开始离屏写入 (Undefined/ReadOnly ->
-    // AttachmentOptimal)
+    // 依赖 1: 外部读取结束 -> 开始离屏写入 (Undefined/ReadOnly -> AttachmentOptimal)
+    // 必须包含 FragmentShader 阶段的读取等待（如果之前被采样过）
     dependencies[0]
         .setSrcSubpass(VK_SUBPASS_EXTERNAL)
         .setDstSubpass(0)
-        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                         vk::PipelineStageFlagBits::eFragmentShader)
         .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-        .setSrcAccessMask(vk::AccessFlagBits::eNone)
+        .setSrcAccessMask(vk::AccessFlagBits::eShaderRead |
+                          vk::AccessFlagBits::eColorAttachmentWrite)
         .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
 
     // 依赖 2: 离屏写入结束 -> 外部读取开始 (AttachmentOptimal -> ReadOnly)

@@ -42,9 +42,15 @@ EditorEngine::EditorEngine()
         });
 
     // 订阅打开项目事件
+    // 重要：不在回调里直接调用 openProject！
+    // 原因：EventBus::publish 持有 shared_lock，而 openProject 内部会创建
+    // BeatmapSession， 其构造函数又会调用 EventBus::subscribe（需
+    // unique_lock）。 同一线程无法将 shared_lock 升级为 unique_lock →
+    // 永久卡死。 正确做法：将路径存入队列，在逻辑线程 loop() 里境外处理。
     Event::EventBus::instance().subscribe<Event::OpenProjectEvent>(
         [this](const Event::OpenProjectEvent& e) {
-            openProject(e.m_projectPath);
+            std::lock_guard<std::mutex> lk(m_pendingMutex);
+            m_pendingProjectPath = e.m_projectPath;
         });
 
     // 订阅逻辑指令事件
@@ -234,7 +240,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     // 更新当前项目单例状态
     {
-        std::lock_guard<std::mutex> lock(m_bufferMutex);
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
         m_currentProject = std::move(newProject);
     }
 
@@ -249,10 +255,30 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
           loadedEv.m_projectTitle,
           loadedEv.m_beatmapCount);
 
+    // 关键修正：在将新 Session 设为激活前，先同步历史视口尺寸
+    // 逻辑线程必须知道画布宽高，否则无法生成几何体
+    auto newSession = std::make_shared<BeatmapSession>();
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
+        // 重要：不再调用 m_syncBuffers.clear()！
+        // 核心原因是 UI 线程的组件（如 TimelineCanvas）持有这些 Buffer 的
+        // shared_ptr。 如果清空并重新创建，UI 和逻辑线程将指向不同的 Buffer
+        // 对象，导致画面永不更新。
+        for ( const auto& [cid, size] : m_lastViewportSizes ) {
+            newSession->pushCommand(CmdUpdateViewport{ cid, size.x, size.y });
+        }
+    }
+
     // 记录到最近打开列表
     Config::AppConfig::instance().addRecentProject(projectPath.string());
-    m_editorConfig.recentProjects =
-        Config::AppConfig::instance().getEditorConfig().recentProjects;
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        m_activeSession = newSession;
+    }
+
+    // 设置初始配置
+    pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
 
     // 新加载项目时，清空当前 Session 的所有谱面数据
     pushCommand(CmdLoadBeatmap{ nullptr });
@@ -286,6 +312,14 @@ void EditorEngine::stop()
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
+    // 拦截视口更新指令，缓存最新的尺寸
+    if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
+        const auto&     v = std::get<CmdUpdateViewport>(cmd);
+        std::lock_guard lk(m_buffersMutex);
+        m_lastViewportSizes[v.cameraId] = { v.width, v.height };
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
     if ( m_activeSession ) {
         m_activeSession->pushCommand(std::move(cmd));
     }
@@ -294,7 +328,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {
-    std::lock_guard<std::mutex> lock(m_bufferMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
     if ( m_syncBuffers.find(cameraId) == m_syncBuffers.end() ) {
         m_syncBuffers[cameraId] = std::make_shared<BeatmapSyncBuffer>();
     }
@@ -303,6 +337,7 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
 
 EditTool EditorEngine::getCurrentTool() const
 {
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
     if ( m_activeSession ) {
         return m_activeSession->getCurrentTool();
     }
@@ -330,6 +365,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
 void EditorEngine::saveProject()
 {
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
     if ( !m_currentProject ) return;
 
     std::filesystem::path projectFile =
@@ -354,8 +390,9 @@ void EditorEngine::loop()
         // 动态获取当前的延迟目标
         double targetDt = 0.0;
         if ( m_editorConfig.settings.vsync ) {
-            int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
-            if ( refreshRate <= 0 ) refreshRate = 60; // 兜底
+            int refreshRate =
+                Config::AppConfig::instance().getDeviceRefreshRate();
+            if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
             targetDt = 1.0 / static_cast<double>(refreshRate);
         }
 
@@ -371,8 +408,32 @@ void EditorEngine::loop()
         lastTime  = currentTime;
         double dt = passed.count();
 
-        if ( m_activeSession ) {
-            m_activeSession->update(dt, m_editorConfig);
+        // 关键修复：使用 shared_ptr 在锁内获取引用。
+        // 这样即使 UI 线程在此时 openProject 销毁了原有 Session，
+        // 逻辑线程持有的这个共享引用也能保证 session 在 update
+        // 期间一直有效，避免 Use-After-Free 导致的死锁或崩溃。
+        // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
+        // 交叉）
+        std::filesystem::path pendingPath;
+        {
+            std::lock_guard<std::mutex> lk(m_pendingMutex);
+            if ( !m_pendingProjectPath.empty() ) {
+                pendingPath = m_pendingProjectPath;
+                m_pendingProjectPath.clear();
+            }
+        }
+        if ( !pendingPath.empty() ) {
+            openProject(pendingPath);
+        }
+
+        std::shared_ptr<BeatmapSession> session;
+        {
+            std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+            session = m_activeSession;
+        }
+
+        if ( session ) {
+            session->update(dt, m_editorConfig);
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
