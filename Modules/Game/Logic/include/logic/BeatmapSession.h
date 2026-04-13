@@ -197,6 +197,7 @@ private:
     glm::vec2    m_lastMousePos{ 0.0f, 0.0f };
     entt::entity m_hoveredEntity{ entt::null };
     int32_t      m_hoveredPart{ 0 };
+    int32_t      m_hoveredSubIndex{ -1 };
     bool         m_isMouseInCanvas{ false };
     bool         m_isDragging{ false };
     double       m_previewHoverTime{ 0.0 };
@@ -216,6 +217,10 @@ private:
 
     /// @brief 当前正在拖拽的实体
     entt::entity m_draggedEntity{ entt::null };
+    /// @brief 拖拽发起时的部位
+    HoverPart m_draggedPart{ HoverPart::None };
+    /// @brief 拖拽发起时的子索引
+    int m_draggedSubIndex{ -1 };
     /// @brief 拖拽开始时的状态备份 (用于撤销)
     std::optional<NoteComponent> m_dragInitialNote;
     /// @brief 拖拽发起时的摄像机 ID

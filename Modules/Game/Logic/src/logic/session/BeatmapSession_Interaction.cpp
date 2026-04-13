@@ -19,22 +19,28 @@ namespace MMM::Logic
 void BeatmapSession::handleCommand(const CmdSetHoveredEntity& cmd)
 {
     if ( m_hoveredEntity != cmd.entity && m_hoveredEntity != entt::null ) {
-        if ( m_noteRegistry.valid(m_hoveredEntity) && m_noteRegistry.all_of<InteractionComponent>(m_hoveredEntity) ) {
-            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity).isHovered = false;
-            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity).hoveredPart = static_cast<uint8_t>(HoverPart::None);
+        if ( m_noteRegistry.valid(m_hoveredEntity) &&
+             m_noteRegistry.all_of<InteractionComponent>(m_hoveredEntity) ) {
+            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity)
+                .isHovered = false;
+            m_noteRegistry.get<InteractionComponent>(m_hoveredEntity)
+                .hoveredPart = static_cast<uint8_t>(HoverPart::None);
         }
     }
 
-    m_hoveredEntity = cmd.entity;
-    m_hoveredPart   = cmd.part;
+    m_hoveredEntity   = cmd.entity;
+    m_hoveredPart     = cmd.part;
+    m_hoveredSubIndex = cmd.subIndex;
 
-    if ( m_hoveredEntity != entt::null && m_noteRegistry.valid(m_hoveredEntity) ) {
+    if ( m_hoveredEntity != entt::null &&
+         m_noteRegistry.valid(m_hoveredEntity) ) {
         if ( !m_noteRegistry.all_of<InteractionComponent>(m_hoveredEntity) ) {
             m_noteRegistry.emplace<InteractionComponent>(m_hoveredEntity);
         }
         auto& ic = m_noteRegistry.get<InteractionComponent>(m_hoveredEntity);
-        ic.isHovered = true;
-        ic.hoveredPart = cmd.part;
+        ic.isHovered       = true;
+        ic.hoveredPart     = cmd.part;
+        ic.hoveredSubIndex = cmd.subIndex;
     }
 }
 
@@ -43,7 +49,7 @@ void BeatmapSession::handleCommand(const CmdSelectEntity& cmd)
     // 如果清空其他选中，则也清空当前可能的框选留存
     if ( cmd.clearOthers ) {
         m_hasMarqueeSelection = false;
-        auto view = m_noteRegistry.view<InteractionComponent>();
+        auto view             = m_noteRegistry.view<InteractionComponent>();
         for ( auto entity : view ) {
             m_noteRegistry.get<InteractionComponent>(entity).isSelected = false;
         }
@@ -60,8 +66,11 @@ void BeatmapSession::handleCommand(const CmdSelectEntity& cmd)
 void BeatmapSession::handleCommand(const CmdStartDrag& cmd)
 {
     if ( cmd.entity != entt::null && m_noteRegistry.valid(cmd.entity) ) {
-        m_draggedEntity = cmd.entity;
-        m_dragCameraId  = cmd.cameraId;
+        m_draggedEntity   = cmd.entity;
+        m_dragCameraId    = cmd.cameraId;
+        m_draggedPart     = static_cast<HoverPart>(m_hoveredPart);
+        m_draggedSubIndex = m_hoveredSubIndex;
+
         if ( !m_noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
             m_noteRegistry.emplace<InteractionComponent>(cmd.entity);
         }
@@ -97,8 +106,9 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
                            m_lastConfig.visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH / (mainEffectiveH *
-                                               m_lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY = previewDrawH /
+                               (mainEffectiveH *
+                                m_lastConfig.visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = m_lastConfig.visual.noteScaleY;
             }
@@ -106,8 +116,9 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
             auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
             if ( cache ) {
                 double currentAbsY = cache->getAbsY(m_visualTime);
-                double targetAbsY  = currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
-                double targetTime  = cache->getTime(targetAbsY);
+                double targetAbsY =
+                    currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+                double targetTime = cache->getTime(targetAbsY);
 
                 std::vector<const TimelineComponent*> bpmEvents;
                 auto                                  tlView =
@@ -136,22 +147,32 @@ void BeatmapSession::handleCommand(const CmdUpdateDrag& cmd)
 
                 if ( auto* note = m_noteRegistry.try_get<NoteComponent>(
                          m_draggedEntity) ) {
-                    note->m_timestamp  = targetTime;
-                    float leftX        = it->second.viewportWidth *
-                                         m_lastConfig.visual.trackLayout.left;
-                    float rightX       = it->second.viewportWidth *
-                                         m_lastConfig.visual.trackLayout.right;
-                    float trackAreaW   = rightX - leftX;
-                    float noteW        = trackAreaW / m_trackCount;
-                    int   track        = static_cast<int>(std::round(
-                        (cmd.mouseX - leftX - noteW / 2.0f) / noteW));
-                    track              = std::clamp(track, 0, m_trackCount - 1);
-                    note->m_trackIndex = track;
+                    if ( note->m_type == ::MMM::NoteType::HOLD &&
+                         m_draggedPart == HoverPart::HoldEnd ) {
+                        // 1. 拖拽 Hold 尾部：调整持续时间 (Duration)
+                        double newDuration = targetTime - note->m_timestamp;
+                        if ( newDuration < 0.0 ) newDuration = 0.0;
+                        note->m_duration = newDuration;
+                    } else {
+                        // 2. 拖拽音符头部或身体（或非 Hold 物件）：移动整个音符
+                        note->m_timestamp = targetTime;
 
-                    if ( auto* trans =
-                             m_noteRegistry.try_get<TransformComponent>(
-                                 m_draggedEntity) ) {
-                        trans->m_pos.x = leftX + track * noteW;
+                        float leftX  = it->second.viewportWidth *
+                                       m_lastConfig.visual.trackLayout.left;
+                        float rightX = it->second.viewportWidth *
+                                       m_lastConfig.visual.trackLayout.right;
+                        float trackAreaW = rightX - leftX;
+                        float noteW      = trackAreaW / m_trackCount;
+                        int   track      = static_cast<int>(std::round(
+                            (cmd.mouseX - leftX - noteW / 2.0f) / noteW));
+                        track = std::clamp(track, 0, m_trackCount - 1);
+                        note->m_trackIndex = track;
+
+                        if ( auto* trans =
+                                 m_noteRegistry.try_get<TransformComponent>(
+                                     m_draggedEntity) ) {
+                            trans->m_pos.x = leftX + track * noteW;
+                        }
                     }
                 }
             }
@@ -205,10 +226,10 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
 
     if ( canUpdate ) {
         m_lastMousePos = { cmd.mouseX, cmd.mouseY };
-        
+
         // 如果是从预览区发起的，或者正在预览区拖动，更新全局拖拽状态
         if ( cmd.cameraId == "Preview" ) {
-             m_isDragging = cmd.isDragging;
+            m_isDragging = cmd.isDragging;
         }
 
         // 预览区边缘滚动
@@ -222,8 +243,8 @@ void BeatmapSession::handleCommand(const CmdSetMousePosition& cmd)
                 else if ( cmd.mouseY > it->second.viewportHeight - margin )
                     dist = (it->second.viewportHeight - margin) - cmd.mouseY;
 
-                float sensitivity           = m_lastConfig.visual.previewConfig
-                                        .edgeScrollSensitivity;
+                float sensitivity =
+                    m_lastConfig.visual.previewConfig.edgeScrollSensitivity;
                 m_previewEdgeScrollVelocity =
                     static_cast<double>(dist) * sensitivity;
             }
@@ -261,7 +282,7 @@ void BeatmapSession::handleCommand(const CmdStartMarquee& cmd)
     m_isSelecting         = true;
     m_hasMarqueeSelection = true;
     m_selectionCameraId   = cmd.cameraId;
-    auto* cache         = m_timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = m_timelineRegistry.ctx().find<System::ScrollCache>();
     if ( cache ) {
         auto it = m_cameras.find(cmd.cameraId);
         if ( it != m_cameras.end() ) {
@@ -283,14 +304,16 @@ void BeatmapSession::handleCommand(const CmdStartMarquee& cmd)
                            m_lastConfig.visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH / (mainEffectiveH *
-                                               m_lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY = previewDrawH /
+                               (mainEffectiveH *
+                                m_lastConfig.visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = m_lastConfig.visual.noteScaleY;
             }
 
-            double currentAbsY   = cache->getAbsY(m_visualTime);
-            double targetAbsY    = currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+            double currentAbsY = cache->getAbsY(m_visualTime);
+            double targetAbsY =
+                currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             m_selectionStartTime = cache->getTime(targetAbsY);
             m_selectionEndTime   = m_selectionStartTime;
 
@@ -331,14 +354,16 @@ void BeatmapSession::handleCommand(const CmdUpdateMarquee& cmd)
                            m_lastConfig.visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH / (mainEffectiveH *
-                                               m_lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY = previewDrawH /
+                               (mainEffectiveH *
+                                m_lastConfig.visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = m_lastConfig.visual.noteScaleY;
             }
 
             double currentAbsY = cache->getAbsY(m_visualTime);
-            double targetAbsY  = currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+            double targetAbsY =
+                currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             m_selectionEndTime = cache->getTime(targetAbsY);
 
             float leftX =

@@ -159,7 +159,7 @@ return {
 	["ui.sidebar.settings"] = "Settings",
 
 	-- Toolbar tooltips
-	["ui.toolbar.move"] = "Move Tool (V/E)",
+	["ui.toolbar.move"] = "Grab Tool (V/E)",
 	["ui.toolbar.marquee"] = "Marquee Tool (M/Q)",
 	["ui.toolbar.draw"] = "Draw Tool (P/W)",
 	["ui.toolbar.cut"] = "Cut Tool (C/R)",

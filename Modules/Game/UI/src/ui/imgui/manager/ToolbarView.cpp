@@ -92,12 +92,10 @@ void ToolbarView::update(UIManager* sourceManager)
         // 使用当前窗口的实际宽度作为按钮宽度，确保完全一致
         float drawW = ImGui::GetWindowWidth();
 
-        // 1. 移动工具 (使用四向箭头图标 \uf047)
+        // 1. 移动工具 (握拳图标 \uf256)
         ImGui::SetCursorPosX(0);
-        drawToolButton(ICON_MMM_MOVE_ARROWS,
-                       Logic::EditTool::Move,
-                       TR("ui.toolbar.move"),
-                       drawW);
+        drawToolButton(
+            ICON_MMM_HAND, Logic::EditTool::Move, TR("ui.toolbar.move"), drawW);
 
         // 2. 矩形选取工具
         ImGui::SetCursorPosX(0);

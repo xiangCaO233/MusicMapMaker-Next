@@ -39,6 +39,8 @@ constexpr const char* ICON_MMM_MOUSE_POINTER =
     "\xef\x89\x85";  ///< \uf245 mouse-pointer (Move Tool)
 constexpr const char* ICON_MMM_MOVE_ARROWS =
     "\xef\x81\x87";  ///< \uf047 arrows-alt
+constexpr const char* ICON_MMM_HAND =
+    "\xef\x89\x96";  ///< \uf256 hand-back-fist (Move tool)
 constexpr const char* ICON_MMM_SQUARE_SELECT =
     "\xef\x83\x88";  ///< \uf0c8 square (Marquee Tool)
 constexpr const char* ICON_MMM_SCISSORS =

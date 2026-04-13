@@ -159,7 +159,7 @@ return {
 	["ui.sidebar.settings"] = "设置",
 
 	-- 工具栏 tooltips
-	["ui.toolbar.move"] = "移动工具 (V/E)",
+	["ui.toolbar.move"] = "抓取工具 (V/E)",
 	["ui.toolbar.marquee"] = "选取工具 (M/Q)",
 	["ui.toolbar.draw"] = "绘制工具 (P/W)",
 	["ui.toolbar.cut"] = "裁剪工具 (C/R)",
