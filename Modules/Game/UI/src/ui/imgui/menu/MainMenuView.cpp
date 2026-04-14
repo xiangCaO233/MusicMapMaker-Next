@@ -119,9 +119,70 @@ void MainMenuView::openPackFilePicker()
     }
 }
 
+void MainMenuView::openExportFilePicker(const std::string& ext)
+{
+    auto& config = Config::AppConfig::instance().getEditorSettings();
+    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        nfdu8char_t*      outPath = nullptr;
+        nfdu8filteritem_t filters[2];
+        int               filterCount = 0;
+
+        if ( ext == ".osu" || ext == "" ) {
+            filters[filterCount++] = { "osu!mania Beatmap", "osu" };
+        }
+        if ( ext == ".imd" || ext == "" ) {
+            filters[filterCount++] = { "IvoryMusicData", "imd" };
+        }
+
+        std::string defaultName = "map" + (ext.empty() ? ".osu" : ext);
+        nfdresult_t result      = NFD_SaveDialogU8(
+            &outPath, filters, filterCount, nullptr, defaultName.c_str());
+
+        if ( result == NFD_OKAY ) {
+            dispatchCommand(Logic::CmdSaveBeatmapAs{ outPath });
+            NFD_FreePath(outPath);
+        }
+    } else {
+        IGFD::FileDialogConfig fdConfig;
+        fdConfig.path              = ".";
+        fdConfig.countSelectionMax = 1;
+        fdConfig.fileName          = "map" + (ext.empty() ? ".osu" : ext);
+        fdConfig.flags             = ImGuiFileDialogFlags_Default;
+
+        std::string filterStr;
+        if ( ext == ".osu" )
+            filterStr = ".osu";
+        else if ( ext == ".imd" )
+            filterStr = ".imd";
+        else
+            filterStr = ".osu,.imd";
+
+        ImGuiFileDialog::Instance()->OpenDialog("ExportFilePicker",
+                                                TR("ui.file.export"),
+                                                filterStr.c_str(),
+                                                fdConfig);
+
+        // 注意：IGFD 需要在后续 update 中轮询 IsOk()。这里仅触发打开。
+        // 为了保持逻辑简单，我们目前主要依赖 Native 对话框或是在 update
+        // 里轮询。 由于 MainMenuView::update 每一帧都在跑，我们可以检查。
+    }
+}
+
 void MainMenuView::update()
 {
     handleHotkeys();
+
+    // 检查文件对话框结果 (针对非 Native 模式)
+    if ( ImGuiFileDialog::Instance()->Display("ExportFilePicker",
+                                              ImGuiWindowFlags_NoCollapse,
+                                              ImVec2(600, 400)) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            std::string filePath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            dispatchCommand(Logic::CmdSaveBeatmapAs{ filePath });
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
 
@@ -199,7 +260,21 @@ void MainMenuView::update()
                  ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
             dispatchCommand(Logic::CmdSaveBeatmap{});
         }
-        if ( MenuItemWithFontIcon(nullptr, TR("ui.file.save_as")) ) {}
+        if ( MenuItemWithFontIcon(nullptr, TR("ui.file.save_as")) ) {
+            openExportFilePicker("");
+        }
+
+        ImGui::Separator();
+        if ( ImGui::BeginMenu(TR("ui.file.export")) ) {
+            if ( ImGui::MenuItem("osu!mania (.osu)") ) {
+                openExportFilePicker(".osu");
+            }
+            if ( ImGui::MenuItem("IvoryMusicData (.imd)") ) {
+                openExportFilePicker(".imd");
+            }
+            ImGui::EndMenu();
+        }
+
         if ( MenuItemWithFontIcon(ICON_MMM_PACK, TR("ui.file.pack")) ) {
             openPackFilePicker();
         }

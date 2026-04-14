@@ -21,6 +21,7 @@ public:
 private:
     void openFolderPicker();
     void openPackFilePicker();
+    void openExportFilePicker(const std::string& ext);
     void dispatchCommand(const Logic::LogicCommand& cmd);
 };
 

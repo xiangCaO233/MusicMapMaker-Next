@@ -11,8 +11,7 @@ SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
-    entt::registry& timelineRegistry,
-    double visualTime,
+    entt::registry& timelineRegistry, double visualTime,
     const std::unordered_map<std::string, CameraInfo>& cameras)
 {
     SnapResult result;
@@ -37,16 +36,16 @@ SnapResult getSnapResult(
                                        ? itMain->second.viewportHeight
                                        : camera.viewportHeight;
 
-        float mainEffectiveH = (config.visual.trackLayout.bottom -
-                                config.visual.trackLayout.top) *
-                               mainViewportHeight;
+        float mainEffectiveH =
+            (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
+            mainViewportHeight;
         float ty = config.visual.previewConfig.margin.top;
-        float by = camera.viewportHeight -
-                   config.visual.previewConfig.margin.bottom;
+        float by =
+            camera.viewportHeight - config.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
 
-        renderScaleY = previewDrawH / (mainEffectiveH *
-                                       config.visual.previewConfig.areaRatio);
+        renderScaleY = previewDrawH /
+                       (mainEffectiveH * config.visual.previewConfig.areaRatio);
     }
 
     for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
@@ -54,8 +53,8 @@ SnapResult getSnapResult(
         double      bpmTime     = currentBPM->m_timestamp;
         double      bpmVal      = currentBPM->m_value;
         double      nextBpmTime = (i + 1 < bpmEvents.size())
-                                       ? bpmEvents[i + 1]->m_timestamp
-                                       : std::numeric_limits<double>::infinity();
+                                      ? bpmEvents[i + 1]->m_timestamp
+                                      : std::numeric_limits<double>::infinity();
 
         if ( rawTime < bpmTime && i > 0 ) continue;
         if ( rawTime > nextBpmTime ) continue;
@@ -70,8 +69,8 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float  snapY =
-            judgmentLineY - static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
+        float snapY = judgmentLineY -
+                      static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
             result.isSnapped   = true;
@@ -106,7 +105,7 @@ void syncHitIndex(SessionContext& ctx)
         ctx.hitEvents.begin(),
         ctx.hitEvents.end(),
         System::HitFXSystem::HitEvent{ ctx.visualTime, ::MMM::NoteType::NOTE });
-    ctx.nextHitIndex = std::distance(ctx.hitEvents.begin(), it);
+    ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
     ctx.nextPredictHitIndex = ctx.nextHitIndex;
 }
 
@@ -115,12 +114,19 @@ void rebuildHitEvents(SessionContext& ctx)
     ctx.hitEvents.clear();
     ctx.nextHitIndex = 0;
 
+    double maxEndTime = 0.0;
+
     auto view     = ctx.noteRegistry.view<NoteComponent>();
     using HitRole = System::HitFXSystem::HitEvent::Role;
 
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
         if ( note.m_isSubNote ) continue;
+
+        double noteEndTime = note.m_timestamp + note.m_duration;
+        if ( noteEndTime > maxEndTime ) {
+            maxEndTime = noteEndTime;
+        }
 
         if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
             size_t subNoteCount = note.m_subNotes.size();
@@ -138,13 +144,18 @@ void rebuildHitEvents(SessionContext& ctx)
                 }
 
                 ctx.hitEvents.push_back({ sn.timestamp,
-                                        sn.type,
-                                        role,
-                                        span,
-                                        sn.trackIndex,
-                                        sn.dtrack,
-                                        sn.duration,
-                                        true });
+                                          sn.type,
+                                          role,
+                                          span,
+                                          sn.trackIndex,
+                                          sn.dtrack,
+                                          sn.duration,
+                                          true });
+
+                double snEndTime = sn.timestamp + sn.duration;
+                if ( snEndTime > maxEndTime ) {
+                    maxEndTime = snEndTime;
+                }
             }
         } else {
             int span = 1;
@@ -153,17 +164,23 @@ void rebuildHitEvents(SessionContext& ctx)
             }
 
             ctx.hitEvents.push_back({ note.m_timestamp,
-                                    note.m_type,
-                                    HitRole::None,
-                                    span,
-                                    note.m_trackIndex,
-                                    note.m_dtrack,
-                                    note.m_duration,
-                                    false });
+                                      note.m_type,
+                                      HitRole::None,
+                                      span,
+                                      note.m_trackIndex,
+                                      note.m_dtrack,
+                                      note.m_duration,
+                                      false });
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
     syncHitIndex(ctx);
+
+    if ( ctx.currentBeatmap ) {
+        if ( maxEndTime > ctx.currentBeatmap->m_baseMapMetadata.map_length ) {
+            ctx.currentBeatmap->m_baseMapMetadata.map_length = maxEndTime;
+        }
+    }
 }
 
-} // namespace MMM::Logic::SessionUtils
+}  // namespace MMM::Logic::SessionUtils

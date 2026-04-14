@@ -1,6 +1,6 @@
 #include "mmm/timing/Timing.h"
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 
@@ -56,13 +56,13 @@ void Timing::from_osu_description(std::vector<std::string>& description)
         m_timingEffectParameter = m_beat_length;
     } else {
         // 真实bpm
-        m_bpm                   = 1.0 / m_beat_length * 1000.0 * 60.0;
-        
+        m_bpm = 1.0 / m_beat_length * 1000.0 * 60.0;
+
         // 限制极端数值，防止后续计算（如拍线生成）进入死循环或溢出
-        if (std::isinf(m_bpm) || std::isnan(m_bpm) || m_bpm > 1000000.0) {
+        if ( std::isinf(m_bpm) || std::isnan(m_bpm) || m_bpm > 1000000.0 ) {
             m_bpm = 1000000.0;
         }
-        if (m_bpm < 0.1) {
+        if ( m_bpm < 0.1 ) {
             m_bpm = 0.1;
         }
 
@@ -104,15 +104,12 @@ std::string Timing::to_osu_description()
     case TimingEffect::BPM: {
         // 非继承时间点(红线): 拍长为正，表示毫秒每拍
         double ms_per_beat = 60000.0 / m_bpm;
-        oss << std::fixed << std::setprecision(2) << std::to_string(ms_per_beat)
-            << ",";
+        oss << std::fixed << std::setprecision(12) << ms_per_beat << ",";
         break;
     }
     case TimingEffect::SCROLL: {
         // 继承时间点(绿线): 拍长为负值，表示滑条速度倍数
-        double slider_velocity_multiplier = 100.0 / m_bpm;
-        oss << std::fixed << std::setprecision(2)
-            << std::to_string(m_beat_length) << ",";
+        oss << std::fixed << std::setprecision(12) << m_beat_length << ",";
         break;
     }
     }

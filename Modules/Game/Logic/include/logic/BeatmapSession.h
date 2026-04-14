@@ -58,6 +58,7 @@ private:
     void handleCommand(const CmdUpdateViewport& cmd);
     void handleCommand(const CmdLoadBeatmap& cmd);
     void handleCommand(const CmdSaveBeatmap& cmd);
+    void handleCommand(const CmdSaveBeatmapAs& cmd);
     void handleCommand(const CmdPackBeatmap& cmd);
 
     std::unique_ptr<SessionContext>        m_ctx;          ///< 共享上下文状态

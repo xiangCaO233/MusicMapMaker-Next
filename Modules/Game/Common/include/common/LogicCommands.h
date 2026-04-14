@@ -206,6 +206,13 @@ struct CmdSaveBeatmap {
 };
 
 /**
+ * @brief 另存为谱面指令
+ */
+struct CmdSaveBeatmapAs {
+    std::string path;
+};
+
+/**
  * @brief 打包谱面指令
  */
 struct CmdPackBeatmap {
@@ -254,8 +261,8 @@ using LogicCommand = std::variant<
     CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag, CmdUpdateDrag,
     CmdEndDrag, CmdUpdateTrackCount, CmdSeek, CmdSetPlaybackSpeed,
     CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-    CmdCut, CmdSaveBeatmap, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt>;
+    CmdCut, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll,
+    CmdUpdateTimelineEvent, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt>;
 
 }  // namespace MMM::Logic

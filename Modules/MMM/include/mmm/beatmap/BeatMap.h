@@ -44,6 +44,13 @@ public:
      */
     static BeatMap loadFromFile(std::filesystem::path mapFilePath);
 
+    /**
+     * @brief 保存谱面到文件
+     * @param mapFilePath 保存的目标路径
+     * @return 是否保存成功
+     */
+    bool saveToFile(std::filesystem::path mapFilePath) const;
+
     /// @brief 所有物件引用
     std::vector<std::reference_wrapper<Note>> m_allNotes;
 
