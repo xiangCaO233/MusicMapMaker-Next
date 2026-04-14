@@ -2,99 +2,106 @@
 
 #include "config/EditorConfig.h"
 #include "event/audio/AudioPlaybackEvent.h"
+#include "event/core/EventBus.h"
 #include "logic/SyncClock.h"
 #include "logic/ecs/components/NoteComponent.h"
-#include "event/core/EventBus.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <optional>
 
 namespace MMM::Logic
 {
 
+/// @brief 相机/视口信息
 struct CameraInfo {
-    std::string id;
-    float       viewportWidth{ 800.0f };
-    float       viewportHeight{ 600.0f };
+    std::string id;                        ///< 视口唯一标识符
+    float       viewportWidth{ 800.0f };   ///< 视口宽度
+    float       viewportHeight{ 600.0f };  ///< 视口高度
 };
 
+/// @brief 矩形框选区域
 struct MarqueeBox {
-    double      startTime{ 0.0 };
-    double      endTime{ 0.0 };
-    float       startTrack{ 0.0f };
-    float       endTrack{ 0.0f };
-    std::string cameraId;
+    double      startTime{ 0.0 };    ///< 起始逻辑时间
+    double      endTime{ 0.0 };      ///< 结束逻辑时间
+    float       startTrack{ 0.0f };  ///< 起始轨道索引
+    float       endTrack{ 0.0f };    ///< 结束轨道索引
+    std::string cameraId;            ///< 所属视口 ID
 };
 
+/// @brief 剪贴板条目
 struct ClipboardItem {
-    NoteComponent note;
+    NoteComponent note;  ///< 复制的音符组件数据
 };
 
-/**
- * @brief 共享的上下文状态，供各个 Session Controller 和 Tool 访问。
- */
+/// @brief 共享的上下文状态，记录了当前会话的所有运行时数据，供各个 Controller
+/// 和 Tool 访问。
 struct SessionContext {
     // --- 核心状态 ---
-    entt::registry noteRegistry;
-    entt::registry timelineRegistry;
+    entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
+    entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
 
-    double currentTime{ 0.0 };
-    double visualTime{ 0.0 };
-    bool isPlaying{ false };
-    int32_t trackCount{ 12 };
+    double  currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
+    double  visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
+    bool    isPlaying{ false };  ///< 是否正在播放
+    int32_t trackCount{ 12 };    ///< 当前轨道总数
 
-    std::shared_ptr<MMM::BeatMap> currentBeatmap;
-    Config::EditorConfig lastConfig;
-    std::unordered_map<std::string, CameraInfo> cameras;
-    glm::vec2 bgSize{ 0.0f, 0.0f };
+    std::shared_ptr<MMM::BeatMap> currentBeatmap;  ///< 当前载入的谱面对象
+    Config::EditorConfig          lastConfig;      ///< 最近一次同步的编辑器配置
+    std::unordered_map<std::string, CameraInfo>
+              cameras;               ///< 当前所有活跃视口的信息
+    glm::vec2 bgSize{ 0.0f, 0.0f };  ///< 背景图原始尺寸
 
     // --- 音频与播放状态 ---
-    double lastAudioPos{ 0.0 };
-    double lastAudioSysTime{ 0.0 };
-    SyncClock syncClock;
-    double syncTimer{ 0.0 };
+    double    lastAudioPos{ 0.0 };      ///< 最近一次音频同步包中的时间戳
+    double    lastAudioSysTime{ 0.0 };  ///< 最近一次音频同步包时的系统时间
+    SyncClock syncClock;                ///< 用于平滑音频时间与逻辑时间的时钟
+    double    syncTimer{ 0.0 };         ///< 音频强制同步计时器
 
-    std::vector<System::HitFXSystem::HitEvent> hitEvents;
-    size_t nextHitIndex{ 0 };
-    size_t nextPredictHitIndex{ 0 };
-    System::HitFXSystem hitFXSystem;
+    std::vector<System::HitFXSystem::HitEvent>
+           hitEvents;                 ///< 当前谱面所有的打击事件序列
+    size_t nextHitIndex{ 0 };         ///< 下一个待触发的视觉打击事件索引
+    size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
+    System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
 
-    Event::ScopedSubscription<Event::AudioFinishedEvent> audioFinishedToken;
-    Event::ScopedSubscription<Event::AudioPositionEvent> audioPositionToken;
+    Event::ScopedSubscription<Event::AudioFinishedEvent>
+        audioFinishedToken;  ///< 音频播放完成订阅令牌
+    Event::ScopedSubscription<Event::AudioPositionEvent>
+        audioPositionToken;  ///< 音频位置同步订阅令牌
 
     // --- 交互与工具状态 ---
-    EditTool currentTool{ EditTool::Move };
-    std::string  mouseCameraId;
-    glm::vec2    lastMousePos{ 0.0f, 0.0f };
-    entt::entity hoveredEntity{ entt::null };
-    int32_t      hoveredPart{ 0 };
-    int32_t      hoveredSubIndex{ -1 };
-    bool         isMouseInCanvas{ false };
-    bool         isDragging{ false };
-    double       previewHoverTime{ 0.0 };
-    double       previewEdgeScrollVelocity{ 0.0 };
+    EditTool     currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
+    std::string  mouseCameraId;                  ///< 鼠标当前所在的视口 ID
+    glm::vec2    lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
+    entt::entity hoveredEntity{ entt::null };    ///< 当前悬停的实体 ID
+    int32_t      hoveredPart{ 0 };               ///< 悬停的音符部位 (HoverPart)
+    int32_t      hoveredSubIndex{ -1 };          ///< 悬停的子索引 (针对折线)
+    bool         isMouseInCanvas{ false };       ///< 鼠标是否在任何画布内
+    bool         isDragging{ false };            ///< 是否正在执行拖拽操作
+    double       previewHoverTime{ 0.0 };        ///< 预览区当前悬停的时间点
+    double       previewEdgeScrollVelocity{ 0.0 };  ///< 预览区边缘滚动速度
 
-    entt::entity draggedEntity{ entt::null };
-    HoverPart draggedPart{ HoverPart::None };
-    int draggedSubIndex{ -1 };
-    std::optional<NoteComponent> dragInitialNote;
-    std::string dragCameraId;
+    entt::entity draggedEntity{ entt::null };     ///< 正在拖拽的实体 ID
+    HoverPart    draggedPart{ HoverPart::None };  ///< 正在拖拽的音符部位
+    int          draggedSubIndex{ -1 };           ///< 正在拖拽的子索引
+    std::optional<NoteComponent>
+        dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
+    std::string dragCameraId;  ///< 发起拖拽的视口 ID
 
-    bool                    isSelecting{ false };
-    bool                    hasMarqueeSelection{ false };
-    bool                    marqueeIsAdditive{ false };
-    std::vector<MarqueeBox> marqueeBoxes;
+    bool isSelecting{ false };             ///< 是否正在进行框选操作
+    bool hasMarqueeSelection{ false };     ///< 是否当前存在有效的框选结果
+    bool marqueeIsAdditive{ false };       ///< 框选是否为加选模式 (Ctrl)
+    std::vector<MarqueeBox> marqueeBoxes;  ///< 当前活跃的框选框列表
 
     // --- 编辑操作栈 ---
-    EditorActionStack actionStack;
-    std::vector<ClipboardItem> clipboard;
+    EditorActionStack          actionStack;  ///< 撤销/重做操作栈
+    std::vector<ClipboardItem> clipboard;    ///< 编辑器剪贴板
 };
 
-} // namespace MMM::Logic
+}  // namespace MMM::Logic
