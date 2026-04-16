@@ -210,14 +210,13 @@ inline BeatMap loadRMMap(std::filesystem::path path)
         // 防止ivm生成的一万个重复timing
         // 在这里，我们将所有不同的 timing 点加入表中
         if ( beatMap.m_timings.empty() ||
-             read_timing.m_bpm != referenceTiming.m_bpm ||
-             read_timing.m_timestamp != referenceTiming.m_timestamp ) {
+             read_timing.m_bpm != referenceTiming.m_bpm ) {
             referenceTiming = read_timing;
-            // 加入谱面timing表
-            beatMap.m_timings.push_back(read_timing);
             XINFO("读取到timing:[time:" +
                   std::to_string(read_timing.m_timestamp) +
                   ",bpm:" + std::to_string(read_timing.m_bpm) + "]");
+            // 加入谱面timing表
+            beatMap.m_timings.push_back(read_timing);
         }
     }
 

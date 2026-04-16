@@ -146,7 +146,7 @@ std::string Timing::to_osu_description()
     if ( auto it = osutiming_prop.find("effect"); it != osutiming_prop.end() ) {
         oss << it->second << ",";
     } else {
-        oss << "0" << ",";
+        oss << "0";
     }
     return oss.str();
 }

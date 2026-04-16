@@ -26,16 +26,16 @@ public:
     double m_timestamp{ 0 };
 
     /// @brief bpm或继承的bpm
-    double m_bpm;
+    double m_bpm{ 0.0 };
 
     /// @brief 拍长
-    double m_beat_length;
+    double m_beat_length{ 0.0 };
 
     /// @brief 时间线效果类型
     TimingEffect m_timingEffect{ TimingEffect::BPM };
 
     /// @brief 时间线效果参数
-    double m_timingEffectParameter;
+    double m_timingEffectParameter{ 0.0 };
 
     /// @brief 所有时间线元数据
     TimingMetadata m_metadata;

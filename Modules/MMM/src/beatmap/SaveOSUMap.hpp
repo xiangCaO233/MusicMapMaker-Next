@@ -170,9 +170,10 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "[TimingPoints]\n";
     // Timings are not const qualified in their to_osu_description? We might
     // need to copy or cast. Let's check Timing.h
-    for ( const auto& timing_const : beatMap.m_timings ) {
+    for ( auto& timing_const : beatMap.m_timings ) {
         Timing timing =
             timing_const;  // create a mutable copy to call to_osu_description()
+        XINFO("写出OSU Timing 时bpm=[{}]", timing_const.m_bpm);
         ofs << timing.to_osu_description() << "\n";
     }
     ofs << "\n";

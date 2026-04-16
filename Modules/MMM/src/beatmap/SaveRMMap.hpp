@@ -32,8 +32,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
     // 每12字节一组: 4字节int32 时间戳 + 8字节double bpm
     for ( const auto& timing : beatMap.m_timings ) {
         write_value(static_cast<int32_t>(timing.m_timestamp));
-        write_value(static_cast<double>(
-            timing.m_timingEffectParameter));  // BPM is effect param
+        write_value(static_cast<double>(timing.m_bpm));  // BPM
     }
 
     // 一个03 03未知意义的int16
