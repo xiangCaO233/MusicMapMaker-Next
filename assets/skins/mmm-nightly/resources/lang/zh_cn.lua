@@ -34,6 +34,7 @@ return {
 	["ui.settings.software.language"] = "界面语言",
 	["ui.settings.software.vsync"] = "开启垂直同步",
 	["ui.settings.software.theme"] = "UI 主题",
+	["ui.settings.software.theme.auto"] = "自动 (跟随皮肤)",
 	["ui.settings.software.picker_style"] = "选择器样式",
 	["ui.settings.software.picker_native"] = "系统原生选择器",
 	["ui.settings.software.picker_unified"] = "编辑器统一选择器",

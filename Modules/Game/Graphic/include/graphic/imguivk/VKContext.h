@@ -275,6 +275,106 @@ private:
      */
     void setPhotoshopStyle();
 
+    /**
+     * @brief 设置Unreal样式
+     */
+    void setUnrealStyle();
+
+    /**
+     * @brief 设置Gold样式
+     */
+    void setGoldStyle();
+
+    /**
+     * @brief 设置RoundedVisualStudio样式
+     */
+    void setRoundedVisualStudioStyle();
+
+    /**
+     * @brief 设置SonicRiders样式
+     */
+    void setSonicRidersStyle();
+
+    /**
+     * @brief 设置DarkRuda样式
+     */
+    void setDarkRudaStyle();
+
+    /**
+     * @brief 设置SoftCherry样式
+     */
+    void setSoftCherryStyle();
+
+    /**
+     * @brief 设置Enemymouse样式
+     */
+    void setEnemymouseStyle();
+
+    /**
+     * @brief 设置DiscordDark样式
+     */
+    void setDiscordDarkStyle();
+
+    /**
+     * @brief 设置Comfy样式
+     */
+    void setComfyStyle();
+
+    /**
+     * @brief 设置PurpleComfy样式
+     */
+    void setPurpleComfyStyle();
+
+    /**
+     * @brief 设置FutureDark样式
+     */
+    void setFutureDarkStyle();
+
+    /**
+     * @brief 设置CleanDark样式
+     */
+    void setCleanDarkStyle();
+
+    /**
+     * @brief 设置Moonlight样式
+     */
+    void setMoonlightStyle();
+
+    /**
+     * @brief 设置ComfortableLight样式
+     */
+    void setComfortableLightStyle();
+
+    /**
+     * @brief 设置HazyDark样式
+     */
+    void setHazyDarkStyle();
+
+    /**
+     * @brief 设置Everforest样式
+     */
+    void setEverforestStyle();
+
+    /**
+     * @brief 设置Windark样式
+     */
+    void setWindarkStyle();
+
+    /**
+     * @brief 设置Rest样式
+     */
+    void setRestStyle();
+
+    /**
+     * @brief 设置ComfortableDarkCyan样式
+     */
+    void setComfortableDarkCyanStyle();
+
+    /**
+     * @brief 设置KazamCherry样式
+     */
+    void setKazamCherryStyle();
+
     friend class VKRenderer;
 };
 

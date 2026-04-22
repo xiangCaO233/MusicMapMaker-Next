@@ -101,6 +101,26 @@ enum class UITheme {
     Microsoft,  ///< Microsoft 风格
     Darcula,    ///< Darcula 风格
     Photoshop,  ///< Photoshop 风格
+    Unreal,
+    Gold,
+    RoundedVisualStudio,
+    SonicRiders,
+    DarkRuda,
+    SoftCherry,
+    Enemymouse,
+    DiscordDark,
+    Comfy,
+    PurpleComfy,
+    FutureDark,
+    CleanDark,
+    Moonlight,
+    ComfortableLight,
+    HazyDark,
+    Everforest,
+    Windark,
+    Rest,
+    ComfortableDarkCyan,
+    KazamCherry,
 };
 
 NLOHMANN_JSON_SERIALIZE_ENUM(UITheme, {
@@ -112,6 +132,26 @@ NLOHMANN_JSON_SERIALIZE_ENUM(UITheme, {
                                           { UITheme::Microsoft, "Microsoft" },
                                           { UITheme::Darcula, "Darcula" },
                                           { UITheme::Photoshop, "Photoshop" },
+                                          { UITheme::Unreal, "Unreal" },
+                                          { UITheme::Gold, "Gold" },
+                                          { UITheme::RoundedVisualStudio, "RoundedVisualStudio" },
+                                          { UITheme::SonicRiders, "SonicRiders" },
+                                          { UITheme::DarkRuda, "DarkRuda" },
+                                          { UITheme::SoftCherry, "SoftCherry" },
+                                          { UITheme::Enemymouse, "Enemymouse" },
+                                          { UITheme::DiscordDark, "DiscordDark" },
+                                          { UITheme::Comfy, "Comfy" },
+                                          { UITheme::PurpleComfy, "PurpleComfy" },
+                                          { UITheme::FutureDark, "FutureDark" },
+                                          { UITheme::CleanDark, "CleanDark" },
+                                          { UITheme::Moonlight, "Moonlight" },
+                                          { UITheme::ComfortableLight, "ComfortableLight" },
+                                          { UITheme::HazyDark, "HazyDark" },
+                                          { UITheme::Everforest, "Everforest" },
+                                          { UITheme::Windark, "Windark" },
+                                          { UITheme::Rest, "Rest" },
+                                          { UITheme::ComfortableDarkCyan, "ComfortableDarkCyan" },
+                                          { UITheme::KazamCherry, "KazamCherry" },
                                       })
 
 enum class SelectionMode {

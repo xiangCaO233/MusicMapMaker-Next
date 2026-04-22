@@ -34,6 +34,7 @@ return {
 	["ui.settings.software.language"] = "Language",
 	["ui.settings.software.vsync"] = "Enable VSync",
 	["ui.settings.software.theme"] = "UI Theme",
+	["ui.settings.software.theme.auto"] = "Auto (Follow Skin)",
 	["ui.settings.software.picker_style"] = "Picker Style",
 	["ui.settings.software.picker_native"] = "Native File Picker",
 	["ui.settings.software.picker_unified"] = "Unified File Picker",

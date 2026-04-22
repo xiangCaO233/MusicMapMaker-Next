@@ -43,10 +43,35 @@ void SettingsView::drawSoftwareSettings()
     ImGui::Text("%s", TR_CACHE("ui.settings.software.theme").data());
     ImGui::SameLine();
     int         theme    = (int)settings.theme;
-    const char* themes[] = { "Auto (跟随皮肤)", "DeepDark", "Dark",
-                             "Light",           "Classic",  "Microsoft",
-                             "Darcula",         "Photoshop" };
-    ImGui::SetNextItemWidth(150.0f);
+    const char* themes[] = { TR_CACHE("ui.settings.software.theme.auto").data(),
+                             "DeepDark",
+                             "Dark",
+                             "Light",
+                             "Classic",
+                             "Microsoft",
+                             "Darcula",
+                             "Photoshop",
+                             "Unreal",
+                             "Gold",
+                             "RoundedVisualStudio",
+                             "SonicRiders",
+                             "DarkRuda",
+                             "SoftCherry",
+                             "Enemymouse",
+                             "DiscordDark",
+                             "Comfy",
+                             "PurpleComfy",
+                             "FutureDark",
+                             "CleanDark",
+                             "Moonlight",
+                             "ComfortableLight",
+                             "HazyDark",
+                             "Everforest",
+                             "Windark",
+                             "Rest",
+                             "ComfortableDarkCyan",
+                             "KazamCherry" };
+    ImGui::SetNextItemWidth(200.0f);
     if ( ImGui::Combo("##ThemeCombo", &theme, themes, IM_ARRAYSIZE(themes)) ) {
         settings.theme = (Config::UITheme)theme;
         changed        = true;
@@ -74,16 +99,16 @@ void SettingsView::drawSoftwareSettings()
     ImGui::SameLine();
     int pickerStyle = (int)settings.filePickerStyle;
     if ( ImGui::RadioButton(
-             TR_CACHE("ui.settings.software.picker_native").data(),
-             pickerStyle == (int)Config::FilePickerStyle::Native) ) {
-        settings.filePickerStyle = Config::FilePickerStyle::Native;
+             TR_CACHE("ui.settings.software.picker_unified").data(),
+             pickerStyle == (int)Config::FilePickerStyle::Unified) ) {
+        settings.filePickerStyle = Config::FilePickerStyle::Unified;
         changed                  = true;
     }
     ImGui::SameLine();
     if ( ImGui::RadioButton(
-             TR_CACHE("ui.settings.software.picker_unified").data(),
-             pickerStyle == (int)Config::FilePickerStyle::Unified) ) {
-        settings.filePickerStyle = Config::FilePickerStyle::Unified;
+             TR_CACHE("ui.settings.software.picker_native").data(),
+             pickerStyle == (int)Config::FilePickerStyle::Native) ) {
+        settings.filePickerStyle = Config::FilePickerStyle::Native;
         changed                  = true;
     }
 
