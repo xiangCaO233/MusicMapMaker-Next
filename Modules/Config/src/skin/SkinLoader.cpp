@@ -88,6 +88,12 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         m_data.fontPaths[key] = m_data.skinPath / "resources" / rpath;
     }
 
+    // 解析 Theme 并保存为皮肤的默认推荐主题
+    sol::optional<std::string> themeOpt = skinTable["theme"];
+    if ( themeOpt ) {
+        m_data.defaultTheme = themeOpt.value();
+    }
+
     // 在你的解析代码中
     sol::table assetsTable = skinTable["assets"];
     if ( assetsTable.valid() ) {

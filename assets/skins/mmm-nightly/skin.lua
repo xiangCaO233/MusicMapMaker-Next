@@ -72,6 +72,9 @@ local Skin = {
 		}
 	},
 
+    -- UI 默认主题 (DeepDark, Dark, Light, Classic)
+    theme = "DeepDark",
+
 	-- 音频配置
 	audios = {
 		hiteffect = {

@@ -92,6 +92,28 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CursorStyle,
                                  { CursorStyle::System, "System" },
                              })
 
+enum class UITheme {
+    Auto,       ///< 自动跟随皮肤配置 (skin.lua 中的 theme)
+    DeepDark,   ///< DeepDark 风格暗色主题
+    Dark,       ///< ImGui 默认的 Dark 主题
+    Light,      ///< ImGui 默认的 Light 主题
+    Classic,    ///< ImGui 默认的 Classic 主题
+    Microsoft,  ///< Microsoft 风格
+    Darcula,    ///< Darcula 风格
+    Photoshop,  ///< Photoshop 风格
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(UITheme, {
+                                          { UITheme::Auto, "Auto" },
+                                          { UITheme::DeepDark, "DeepDark" },
+                                          { UITheme::Dark, "Dark" },
+                                          { UITheme::Light, "Light" },
+                                          { UITheme::Classic, "Classic" },
+                                          { UITheme::Microsoft, "Microsoft" },
+                                          { UITheme::Darcula, "Darcula" },
+                                          { UITheme::Photoshop, "Photoshop" },
+                                      })
+
 enum class SelectionMode {
     Strict,       ///< 严格模式 (必须完全包含)
     Intersection  ///< 相交模式 (只要相交即选中)
@@ -117,6 +139,9 @@ struct EditorSettings {
 
     /// @brief 光标样式
     CursorStyle cursorStyle{ CursorStyle::Software };
+
+    /// @brief UI 主题样式
+    UITheme theme{ UITheme::Auto };
 
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
@@ -154,8 +179,8 @@ struct EditorSettings {
     // TODO: 后续可在此添加自动保存(AutoSave)等配置
 
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
-                                   filePickerStyle, cursorStyle, beatDivisor,
-                                   reverseScroll, scrollSnap,
+                                   filePickerStyle, cursorStyle, theme,
+                                   beatDivisor, reverseScroll, scrollSnap,
                                    recentProjectsLimit, language, vsync,
                                    scrollSpeedMultiplier, globalVolume,
                                    selectionMode, marqueeThickness,

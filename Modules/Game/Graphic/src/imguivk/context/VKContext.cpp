@@ -111,6 +111,7 @@ VKContext::VKContext()
                 auto& cmd =
                     std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
                 setVSync(cmd.config.settings.vsync);
+                applyTheme();
             }
         });
 }
@@ -254,7 +255,7 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 初始化 ImGui
     imguiVulkanInit(native_window_ptr->getWindowHandle());
-    setImguiStyle();
+    applyTheme();
 }
 
 /**

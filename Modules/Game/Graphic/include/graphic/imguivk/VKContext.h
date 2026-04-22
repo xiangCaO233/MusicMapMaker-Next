@@ -236,9 +236,44 @@ private:
     void imguiVulkanInit(GLFWwindow* iwindow_handle);
 
     /**
-     * @brief 设置imgui样式包
+     * @brief 应用当前主题配置
      */
-    void setImguiStyle();
+    void applyTheme();
+
+    /**
+     * @brief 设置DeepDark样式
+     */
+    void setDeepDarkStyle();
+
+    /**
+     * @brief 设置Dark样式
+     */
+    void setDarkStyle();
+
+    /**
+     * @brief 设置Light样式
+     */
+    void setLightStyle();
+
+    /**
+     * @brief 设置Classic样式
+     */
+    void setClassicStyle();
+
+    /**
+     * @brief 设置Microsoft样式
+     */
+    void setMicrosoftStyle();
+
+    /**
+     * @brief 设置Darcula样式
+     */
+    void setDarculaStyle();
+
+    /**
+     * @brief 设置Photoshop样式
+     */
+    void setPhotoshopStyle();
 
     friend class VKRenderer;
 };

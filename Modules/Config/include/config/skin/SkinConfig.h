@@ -35,6 +35,9 @@ struct SkinData {
     std::unordered_map<std::string, std::filesystem::path> langLuaPaths;
     std::string fallBackLang{ "zh_cn" };
 
+    /// @brief 皮肤推荐的默认主题
+    std::string defaultTheme{ "DeepDark" };
+
     // 字体表
     std::unordered_map<std::string, std::filesystem::path> fontPaths;
 
@@ -98,6 +101,9 @@ public:
 
     ///@brief 直接获取皮肤数据
     const SkinData& getData() const { return m_data; }
+
+    ///@brief 获取皮肤默认主题
+    std::string getDefaultTheme() const { return m_data.defaultTheme; }
 
     ///@brief 获取字体路径
     std::filesystem::path getFontPath(const std::string& key);

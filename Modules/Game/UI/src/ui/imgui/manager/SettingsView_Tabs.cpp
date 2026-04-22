@@ -38,6 +38,19 @@ void SettingsView::drawSoftwareSettings()
     changed |= ImGui::Checkbox(TR_CACHE("ui.settings.software.vsync").data(),
                                &settings.vsync);
 
+    // 1.6 UI 主题
+    ImGui::Text("%s", TR_CACHE("ui.settings.software.theme").data());
+    ImGui::SameLine();
+    int         theme    = (int)settings.theme;
+    const char* themes[] = { "Auto (跟随皮肤)", "DeepDark", "Dark",
+                             "Light",           "Classic",  "Microsoft",
+                             "Darcula",         "Photoshop" };
+    ImGui::SetNextItemWidth(150.0f);
+    if ( ImGui::Combo("##ThemeCombo", &theme, themes, IM_ARRAYSIZE(themes)) ) {
+        settings.theme = (Config::UITheme)theme;
+        changed        = true;
+    }
+
     // 2. 光标样式
     ImGui::Text("%s", TR_CACHE("ui.settings.editor.cursor_style").data());
     ImGui::SameLine();
@@ -56,6 +69,8 @@ void SettingsView::drawSoftwareSettings()
     }
 
     // 3. 文件选择器样式
+    ImGui::Text("%s", TR_CACHE("ui.settings.software.picker_style").data());
+    ImGui::SameLine();
     int pickerStyle = (int)settings.filePickerStyle;
     if ( ImGui::RadioButton(
              TR_CACHE("ui.settings.software.picker_native").data(),
