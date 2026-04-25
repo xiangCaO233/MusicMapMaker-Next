@@ -143,6 +143,7 @@ struct RenderSnapshot {
         double          time{ 0.0 };                    ///< 位置/起始时间
         double          duration{ 0.0 };                ///< 持续时间 (Hold)
         int             track{ 0 };                     ///< 轨道
+        int             dtrack{ 0 };                    ///< Flick 偏移轨道
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };  ///< 物件类型
     } brush;
 

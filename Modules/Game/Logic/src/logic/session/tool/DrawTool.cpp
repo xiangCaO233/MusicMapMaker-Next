@@ -11,6 +11,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 {
     ctx.brushState.isActive = true;
     ctx.brushState.duration = 0.0;
+    ctx.brushState.dtrack   = 0;
 
     // 计算初始吸附位置
     auto itCamera = ctx.cameras.find(cmd.cameraId);
@@ -74,13 +75,6 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
 
-    if ( cmd.isShiftDown ) {
-        ctx.brushState.type          = ::MMM::NoteType::HOLD;
-        ctx.brushState.holdStartTime = ctx.brushState.time;
-    } else {
-        ctx.brushState.type = ::MMM::NoteType::NOTE;
-    }
-
     // 计算轨道
     float leftX =
         itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
@@ -96,6 +90,15 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     int   track =
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
+
+    if ( cmd.isShiftDown ) {
+        ctx.brushState.type          = ::MMM::NoteType::NOTE;  // 初始为 Note
+        ctx.brushState.holdStartTime = ctx.brushState.time;
+        ctx.brushState.startTrack    = ctx.brushState.track;
+        ctx.brushState.startMouseY   = cmd.mouseY;
+    } else {
+        ctx.brushState.type = ::MMM::NoteType::NOTE;
+    }
 }
 
 void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
@@ -158,23 +161,6 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
     double currentPosTime = snap.isSnapped ? snap.snappedTime : rawTime;
 
-    if ( cmd.isShiftDown ) {
-        if ( ctx.brushState.type == ::MMM::NoteType::NOTE ) {
-            // 切换为 Hold，记录起始位置
-            ctx.brushState.type          = ::MMM::NoteType::HOLD;
-            ctx.brushState.holdStartTime = currentPosTime;
-            ctx.brushState.time          = currentPosTime;
-        }
-        // 更新持续时间
-        ctx.brushState.duration =
-            std::max(0.0, currentPosTime - ctx.brushState.holdStartTime);
-    } else {
-        // 切换回 Note
-        ctx.brushState.type     = ::MMM::NoteType::NOTE;
-        ctx.brushState.time     = currentPosTime;
-        ctx.brushState.duration = 0.0;
-    }
-
     float leftX =
         itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
     float rightX = itCamera->second.viewportWidth *
@@ -186,9 +172,53 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     }
     float trackAreaW   = rightX - leftX;
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
-    int   track =
+    int   currentTrack =
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
-    ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
+    currentTrack = std::clamp(currentTrack, 0, ctx.trackCount - 1);
+
+    if ( cmd.isShiftDown ) {
+        if ( ctx.brushState.type == ::MMM::NoteType::NOTE &&
+             ctx.brushState.duration == 0.0 && ctx.brushState.dtrack == 0 ) {
+            // 刚按下 Shift 或处于 Note 状态，锁定初始状态
+            if ( ctx.brushState.holdStartTime == 0.0 ) {
+                ctx.brushState.holdStartTime = currentPosTime;
+                ctx.brushState.startTrack    = currentTrack;
+                ctx.brushState.startMouseY   = cmd.mouseY;
+            }
+        }
+
+        float threshold = ctx.lastConfig.visual.snapThreshold;
+        float diffY     = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
+
+        if ( diffY <= threshold ) {
+            int dtrack = currentTrack - ctx.brushState.startTrack;
+            if ( dtrack != 0 && (ctx.brushState.startTrack + dtrack >= 0) &&
+                 (ctx.brushState.startTrack + dtrack < ctx.trackCount) ) {
+                ctx.brushState.type   = ::MMM::NoteType::FLICK;
+                ctx.brushState.dtrack = dtrack;
+            } else {
+                ctx.brushState.type   = ::MMM::NoteType::NOTE;
+                ctx.brushState.dtrack = 0;
+            }
+            ctx.brushState.duration = 0.0;
+        } else {
+            // 延续之前的 Hold 逻辑
+            ctx.brushState.type = ::MMM::NoteType::HOLD;
+            ctx.brushState.duration =
+                std::max(0.0, currentPosTime - ctx.brushState.holdStartTime);
+            ctx.brushState.dtrack = 0;
+        }
+        ctx.brushState.track = ctx.brushState.startTrack;
+        ctx.brushState.time  = ctx.brushState.holdStartTime;
+    } else {
+        // 切换回 Note，重置锁定状态
+        ctx.brushState.type          = ::MMM::NoteType::NOTE;
+        ctx.brushState.time          = currentPosTime;
+        ctx.brushState.track         = currentTrack;
+        ctx.brushState.duration      = 0.0;
+        ctx.brushState.dtrack        = 0;
+        ctx.brushState.holdStartTime = 0.0;
+    }
 }
 
 void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
@@ -200,6 +230,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_timestamp  = ctx.brushState.time;
     note.m_duration   = ctx.brushState.duration;
     note.m_trackIndex = ctx.brushState.track;
+    note.m_dtrack     = ctx.brushState.dtrack;
     note.m_type       = ctx.brushState.type;
 
     auto action = std::make_unique<NoteAction>(

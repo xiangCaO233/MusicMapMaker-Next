@@ -525,6 +525,7 @@ void NoteRenderSystem::renderBrushPreview(
     tempNote.m_timestamp  = brush.time;
     tempNote.m_duration   = brush.duration;
     tempNote.m_trackIndex = brush.track;
+    tempNote.m_dtrack     = brush.dtrack;
 
     if ( brush.type == ::MMM::NoteType::NOTE ) {
         NoteRenderSystem::renderTap(batcher,
@@ -551,6 +552,19 @@ void NoteRenderSystem::renderBrushPreview(
                                      visualH,
                                      singleTrackW,
                                      color);
+    } else if ( brush.type == ::MMM::NoteType::FLICK ) {
+        NoteRenderSystem::renderFlick(
+            batcher,
+            tempNote,
+            config,
+            snapshot,
+            trackX + (singleTrackW - ctx.noteW) * 0.5f,
+            screenY,
+            ctx.noteW,
+            ctx.noteH,
+            singleTrackW,
+            color,
+            ctx.colorArrow * glm::vec4(1, 1, 1, 0.5f));
     } else {
         // Fallback debug drawing
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;

@@ -343,6 +343,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             snapshot->brush.time     = m_ctx->brushState.time;
             snapshot->brush.duration = m_ctx->brushState.duration;
             snapshot->brush.track    = m_ctx->brushState.track;
+            snapshot->brush.dtrack   = m_ctx->brushState.dtrack;
             snapshot->brush.type     = m_ctx->brushState.type;
         }
 

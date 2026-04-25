@@ -101,11 +101,14 @@ struct SessionContext {
 
     // --- 笔刷工具状态 ---
     struct BrushState {
-        bool            isActive{ false };
-        double          time{ 0.0 };  ///< 当前选中的位置(对 Hold 为起始点)
-        double          holdStartTime{ 0.0 };  ///< 记录按下 Shift 瞬间的时间点
-        double          duration{ 0.0 };       ///< Hold 持续时间
-        int             track{ 0 };
+        bool   isActive{ false };
+        double time{ 0.0 };  ///< 当前选中的位置(对 Hold/Flick 为起始点)
+        double holdStartTime{ 0.0 };  ///< 记录按下 Shift 瞬间的时间点
+        double duration{ 0.0 };       ///< Hold 持续时间
+        int    track{ 0 };            ///< 当前轨道 (对 Flick 为起始轨道)
+        int    startTrack{ 0 };       ///< Flick 起始轨道
+        int    dtrack{ 0 };           ///< Flick 偏移轨道
+        float  startMouseY{ 0.0f };   ///< 按下 Shift 瞬间的鼠标 Y 坐标 (像素)
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
     } brushState;
 
