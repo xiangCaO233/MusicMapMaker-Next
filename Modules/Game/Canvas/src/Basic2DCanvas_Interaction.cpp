@@ -1,12 +1,14 @@
-#include "canvas/Basic2DCanvas.h"
+#include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
+#include "event/input/glfw/GLFWDropEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
@@ -17,7 +19,36 @@
 namespace MMM::Canvas
 {
 
-void Basic2DCanvas::handleDrops(UI::UIManager* sourceManager)
+Basic2DCanvasInteraction::Basic2DCanvasInteraction(const std::string& canvasName,
+                                                   const std::string& cameraId)
+    : m_canvasName(canvasName), m_cameraId(cameraId)
+{
+    m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
+        [this](const Event::GLFWDropEvent& e) {
+            XINFO("CanvasInteraction received GLFWDropEvent with {} paths",
+                  e.paths.size());
+            m_pendingDrops.push_back({ e.paths, e.pos });
+        });
+}
+
+Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
+{
+    Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
+}
+
+void Basic2DCanvasInteraction::update(UI::UIManager*               sourceManager,
+                                      const Logic::RenderSnapshot* currentSnapshot,
+                                      float targetWidth, float targetHeight)
+{
+    handleDrops(sourceManager);
+    
+    if ( currentSnapshot ) {
+        handleHotkeys(currentSnapshot);
+        handleInteractions(currentSnapshot, targetWidth, targetHeight);
+    }
+}
+
+void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 {
     if ( m_pendingDrops.empty() ) return;
 
@@ -53,7 +84,7 @@ void Basic2DCanvas::handleDrops(UI::UIManager* sourceManager)
                 Event::EventBus::instance().publish(evt);
 
                 // 3. 如果是谱面文件，直接加载
-                if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                if ( ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm" ) {
                     auto        u8 = p.filename().u8string();
                     std::string u8_filename(
                         reinterpret_cast<const char*>(u8.c_str()), u8.size());
@@ -73,15 +104,13 @@ void Basic2DCanvas::handleDrops(UI::UIManager* sourceManager)
     m_pendingDrops.clear();
 }
 
-void Basic2DCanvas::handleHotkeys()
+void Basic2DCanvasInteraction::handleHotkeys(const Logic::RenderSnapshot* currentSnapshot)
 {
-    if ( !m_currentSnapshot ) return;
-
     auto& io = ImGui::GetIO();
     if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) && !io.KeyCtrl &&
          !io.KeyShift && !io.KeyAlt && !io.KeySuper ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdSetPlayState{ !m_currentSnapshot->isPlaying }));
+            Logic::CmdSetPlayState{ !currentSnapshot->isPlaying }));
     }
 
     // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw) ---
@@ -122,10 +151,9 @@ void Basic2DCanvas::handleHotkeys()
     }
 }
 
-void Basic2DCanvas::handleInteractions()
+void Basic2DCanvasInteraction::handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
+                                                  float targetWidth, float targetHeight)
 {
-    if ( !m_currentSnapshot ) return;
-
     ImVec2 mousePos      = ImGui::GetMousePos();
     ImVec2 windowPos     = ImGui::GetCursorScreenPos();
     ImVec2 localMousePos = { mousePos.x - windowPos.x,
@@ -142,24 +170,24 @@ void Basic2DCanvas::handleInteractions()
                                                              isDragging }));
 
     // --- 交互：显示精确时间戳工具提示 ---
-    if ( isHovered && m_currentSnapshot->isHoveringCanvas &&
-         !m_currentSnapshot->isPlaying ) {
+    if ( isHovered && currentSnapshot->isHoveringCanvas &&
+         !currentSnapshot->isPlaying ) {
         auto& visual = Config::AppConfig::instance().getVisualConfig();
         auto& layout = visual.trackLayout;
 
-        float normX = localMousePos.x / m_targetWidth;
-        float normY = localMousePos.y / m_targetHeight;
+        float normX = localMousePos.x / targetWidth;
+        float normY = localMousePos.y / targetHeight;
 
         bool isInTrackLayout = (normX >= layout.left && normX <= layout.right &&
                                 normY >= layout.top && normY <= layout.bottom);
 
         if ( isInTrackLayout ) {
             bool isEditTool =
-                (m_currentSnapshot->currentTool != Logic::EditTool::Move &&
-                 m_currentSnapshot->currentTool != Logic::EditTool::Marquee);
+                (currentSnapshot->currentTool != Logic::EditTool::Move &&
+                 currentSnapshot->currentTool != Logic::EditTool::Marquee);
 
-            if ( m_currentSnapshot->isSnapped || isEditTool ||
-                 m_currentSnapshot->hoveredNoteNumerator > 0 ) {
+            if ( currentSnapshot->isSnapped || isEditTool ||
+                 currentSnapshot->hoveredNoteNumerator > 0 ) {
                 ImGui::SetNextWindowPos(
                     ImVec2(mousePos.x + 15, mousePos.y + 15));
                 ImGui::SetNextWindowBgAlpha(0.7f);
@@ -169,31 +197,31 @@ void Basic2DCanvas::handleInteractions()
 
                 ImGui::BeginTooltip();
 
-                if ( m_currentSnapshot->hoveredNoteNumerator > 0 ) {
+                if ( currentSnapshot->hoveredNoteNumerator > 0 ) {
                     ImGui::TextColored(
                         ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                         "%s: %d + %d/%d",
                         TR("ui.canvas.note_fraction").data(),
-                        m_currentSnapshot->hoveredNoteBeatIndex,
-                        m_currentSnapshot->hoveredNoteNumerator,
-                        m_currentSnapshot->hoveredNoteDenominator);
+                        currentSnapshot->hoveredNoteBeatIndex,
+                        currentSnapshot->hoveredNoteNumerator,
+                        currentSnapshot->hoveredNoteDenominator);
                     ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                        "%s: %.3f s",
                                        TR("ui.canvas.note_time").data(),
-                                       m_currentSnapshot->hoveredNoteTime);
+                                       currentSnapshot->hoveredNoteTime);
                     ImGui::Spacing();
                     ImGui::Separator();
                     ImGui::Spacing();
                 }
 
-                if ( m_currentSnapshot->isSnapped ) {
+                if ( currentSnapshot->isSnapped ) {
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
                                        "%s: %.3f s",
                                        TR("ui.canvas.snap").data(),
-                                       m_currentSnapshot->snappedTime);
+                                       currentSnapshot->snappedTime);
 
-                    if ( m_currentSnapshot->snappedNumerator == 1 &&
-                         m_currentSnapshot->snappedDenominator == 1 ) {
+                    if ( currentSnapshot->snappedNumerator == 1 &&
+                         currentSnapshot->snappedDenominator == 1 ) {
                         ImGui::TextColored(
                             ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
                             "%s (1/1)",
@@ -203,24 +231,24 @@ void Basic2DCanvas::handleInteractions()
                             ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
                             "%s (%d/%d)",
                             TR("ui.canvas.beat_fraction").data(),
-                            m_currentSnapshot->snappedNumerator,
-                            m_currentSnapshot->snappedDenominator);
+                            currentSnapshot->snappedNumerator,
+                            currentSnapshot->snappedDenominator);
                     }
                 } else {
                     ImGui::Text("%s: %.3f s",
                                 TR("ui.canvas.time").data(),
-                                m_currentSnapshot->hoveredTime);
+                                currentSnapshot->hoveredTime);
                 }
 
-                if ( m_currentSnapshot->hoveredBeatIndex > 0 ) {
+                if ( currentSnapshot->hoveredBeatIndex > 0 ) {
                     ImGui::Text("%s: %d",
                                 TR("ui.canvas.beat_index").data(),
-                                m_currentSnapshot->hoveredBeatIndex);
+                                currentSnapshot->hoveredBeatIndex);
                 }
 
                 ImGui::Text("%s: %d",
                             TR("ui.canvas.track").data(),
-                            m_currentSnapshot->hoveredTrack + 1);
+                            currentSnapshot->hoveredTrack + 1);
 
                 ImGui::Spacing();
                 ImGui::Separator();
@@ -229,7 +257,7 @@ void Basic2DCanvas::handleInteractions()
                 ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
                                    "%s: %d",
                                    TR("ui.canvas.beat_divisor").data(),
-                                   m_currentSnapshot->currentBeatDivisor);
+                                   currentSnapshot->currentBeatDivisor);
 
                 ImGui::EndTooltip();
                 ImGui::PopStyleVar(2);
@@ -241,8 +269,8 @@ void Basic2DCanvas::handleInteractions()
     uint8_t      hoveredPart     = 0;
     int          hoveredSubIndex = -1;
 
-    for ( auto it = m_currentSnapshot->hitboxes.rbegin();
-          it != m_currentSnapshot->hitboxes.rend();
+    for ( auto it = currentSnapshot->hitboxes.rbegin();
+          it != currentSnapshot->hitboxes.rend();
           ++it ) {
         if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
              localMousePos.y >= it->y && localMousePos.y <= it->y + it->h ) {
@@ -259,7 +287,7 @@ void Basic2DCanvas::handleInteractions()
 
     if ( ImGui::IsMouseClicked(0) ) {
         if ( isHovered ) {
-            if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 if ( hoveredEntity != entt::null ) {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdSelectEntity{
@@ -272,7 +300,7 @@ void Basic2DCanvas::handleInteractions()
                                                     localMousePos.y,
                                                     ImGui::GetIO().KeyCtrl }));
                 }
-            } else if ( m_currentSnapshot->currentTool ==
+            } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Move ) {
                 if ( hoveredEntity != entt::null ) {
                     // 抓取工具不再负责选中，只负责发起拖拽
@@ -282,17 +310,23 @@ void Basic2DCanvas::handleInteractions()
                 } else {
                     // 抓取工具点击空白处不再清除选中（只有框选工具可以管理选中）
                 }
-            } else if ( m_currentSnapshot->currentTool ==
+            } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
-                // TODO: 绘制工具点击逻辑
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdStartBrush{
+                        m_cameraId, localMousePos.x, localMousePos.y }));
             }
         }
     }
 
     if ( ImGui::IsMouseDragging(0) ) {
-        if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
+        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpdateBrush{
+                    m_cameraId, localMousePos.x, localMousePos.y }));
         } else {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdUpdateDrag{
@@ -301,9 +335,12 @@ void Basic2DCanvas::handleInteractions()
     }
 
     if ( ImGui::IsMouseReleased(0) ) {
-        if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
         } else {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));

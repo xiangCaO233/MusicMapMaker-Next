@@ -59,6 +59,15 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdRemoveMarqueeAt& cmd);
 
+    /// @brief 处理开始画笔的命令
+    void handleCommand(const CmdStartBrush& cmd);
+
+    /// @brief 处理画笔更新的命令
+    void handleCommand(const CmdUpdateBrush& cmd);
+
+    /// @brief 处理结束画笔的命令
+    void handleCommand(const CmdEndBrush& cmd);
+
     /// @brief 处理更新轨道数量的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdUpdateTrackCount& cmd);

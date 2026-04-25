@@ -135,6 +135,14 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
+    // 笔刷预览状态
+    struct BrushSnapshot {
+        bool            isActive{ false };
+        double          time{ 0.0 };
+        int             track{ 0 };
+        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+    } brush;
+
     // 是否已加载谱面
     bool hasBeatmap{ false };
 
@@ -175,6 +183,7 @@ struct RenderSnapshot {
         previewHoverY          = 0.0f;
         previewHoverTime       = 0.0;
         isPreviewDragging      = false;
+        brush.isActive         = false;
         hasBeatmap             = false;
     }
 };

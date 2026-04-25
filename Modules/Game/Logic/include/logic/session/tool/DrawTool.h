@@ -9,7 +9,9 @@ namespace MMM::Logic
 class DrawTool : public IEditTool
 {
 public:
-    // TODO: 实现具体的绘制逻辑回调
+    void handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd) override;
+    void handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd) override;
+    void handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd) override;
 };
 
 }  // namespace MMM::Logic

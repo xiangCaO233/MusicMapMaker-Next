@@ -211,6 +211,13 @@ private:
                                  float singleTrackW, float renderScaleY,
                                  const ScrollCache* cache, double renderTime,
                                  float viewportWidth, float viewportHeight);
+
+    static void renderBrushPreview(RenderSnapshot*             snapshot,
+                                   const NoteRenderContext&    ctx,
+                                   const Config::EditorConfig& config,
+                                   Batcher& batcher, float judgmentLineY,
+                                   float leftX, float singleTrackW,
+                                   float renderScaleY);
 };
 
 }  // namespace MMM::Logic::System

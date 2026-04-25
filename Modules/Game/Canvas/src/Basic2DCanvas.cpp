@@ -1,7 +1,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
-#include "event/input/glfw/GLFWDropEvent.h"
+#include "canvas/Basic2DCanvasInteraction.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -25,17 +25,11 @@ Basic2DCanvas::Basic2DCanvas(
     m_targetWidth  = w;
     m_targetHeight = h;
 
-    m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
-        [this](const Event::GLFWDropEvent& e) {
-            XINFO("Basic2DCanvas received GLFWDropEvent with {} paths",
-                  e.paths.size());
-            m_pendingDrops.push_back({ e.paths, e.pos });
-        });
+    m_interaction = std::make_unique<Basic2DCanvasInteraction>(m_canvasName, m_cameraId);
 }
 
 Basic2DCanvas::~Basic2DCanvas()
 {
-    Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
@@ -46,24 +40,18 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
 
-    // 1. 处理拖拽文件
-    handleDrops(sourceManager);
-
-    // 2. 拉取快照
+    // 拉取快照
     if ( m_syncBuffer ) {
         m_currentSnapshot = m_syncBuffer->pullLatestSnapshot();
     }
 
     if ( m_currentSnapshot ) {
-        // 3. 处理快捷键
-        handleHotkeys();
-
-        // 4. 更新背景纹理
+        // 更新背景纹理
         updateBackgroundTexture();
-
-        // 5. 处理交互 (拾取、选择、拖拽、滚轮)
-        handleInteractions();
     }
+
+    // 交互统一交给 Interaction 处理
+    m_interaction->update(sourceManager, m_currentSnapshot, m_targetWidth, m_targetHeight);
 }
 
 bool Basic2DCanvas::isDirty() const

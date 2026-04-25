@@ -70,6 +70,19 @@ public:
                                        const CmdRemoveMarqueeAt& cmd)
     {
     }
+    
+    /// @brief 处理画笔工具开始事件
+    virtual void handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
+    {
+    }
+
+    /// @brief 处理画笔工具更新事件
+    virtual void handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
+    {
+    }
+
+    /// @brief 处理画笔工具结束事件
+    virtual void handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd) {}
 };
 
 }  // namespace MMM::Logic

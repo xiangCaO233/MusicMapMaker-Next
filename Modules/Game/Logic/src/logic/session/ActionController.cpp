@@ -2,7 +2,9 @@
 #include "logic/session/ActionController.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
+#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/TimelineAction.h"
 
@@ -73,6 +75,8 @@ void NoteAction::execute(SessionContext& ctx)
     if ( m_type == Type::Create ) {
         if ( !reg.valid(m_entity) ) m_entity = reg.create();
         reg.emplace<NoteComponent>(m_entity, *m_after);
+        reg.emplace<TransformComponent>(m_entity);
+        reg.emplace<InteractionComponent>(m_entity);
         XINFO("[Action] Create Note: Type={}, Time={:.3f}, Track={}",
               (int)m_after->m_type,
               m_after->m_timestamp,
@@ -109,6 +113,8 @@ void NoteAction::undo(SessionContext& ctx)
     } else if ( m_type == Type::Delete ) {
         if ( !reg.valid(m_entity) ) m_entity = reg.create();
         reg.emplace<NoteComponent>(m_entity, *m_before);
+        reg.emplace<TransformComponent>(m_entity);
+        reg.emplace<InteractionComponent>(m_entity);
     } else if ( m_type == Type::Update ) {
         if ( reg.valid(m_entity) ) {
             reg.patch<NoteComponent>(m_entity,
@@ -135,6 +141,7 @@ void BatchNoteAction::execute(SessionContext& ctx)
             if ( !reg.valid(entry.entity) ) entry.entity = reg.create();
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
+            reg.emplace_or_replace<InteractionComponent>(entry.entity);
         } else if ( entry.before.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
@@ -151,6 +158,7 @@ void BatchNoteAction::undo(SessionContext& ctx)
             if ( !reg.valid(entry.entity) ) entry.entity = reg.create();
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
+            reg.emplace_or_replace<InteractionComponent>(entry.entity);
         } else if ( entry.after.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }

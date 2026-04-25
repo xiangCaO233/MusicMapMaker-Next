@@ -99,6 +99,14 @@ struct SessionContext {
     bool marqueeIsAdditive{ false };       ///< 框选是否为加选模式 (Ctrl)
     std::vector<MarqueeBox> marqueeBoxes;  ///< 当前活跃的框选框列表
 
+    // --- 笔刷工具状态 ---
+    struct BrushState {
+        bool            isActive{ false };
+        double          time{ 0.0 };
+        int             track{ 0 };
+        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+    } brushState;
+
     // --- 编辑操作栈 ---
     EditorActionStack          actionStack;  ///< 撤销/重做操作栈
     std::vector<ClipboardItem> clipboard;    ///< 编辑器剪贴板

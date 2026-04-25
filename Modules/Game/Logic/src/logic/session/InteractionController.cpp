@@ -200,6 +200,30 @@ void InteractionController::handleCommand(const CmdRemoveMarqueeAt& cmd)
     }
 }
 
+void InteractionController::handleCommand(const CmdStartBrush& cmd)
+{
+    if ( m_tools.count(m_ctx.currentTool) ) {
+        m_ctx.isDragging   = true;
+        m_ctx.dragCameraId = cmd.cameraId;
+        m_tools[m_ctx.currentTool]->handleStartBrush(m_ctx, cmd);
+    }
+}
+
+void InteractionController::handleCommand(const CmdUpdateBrush& cmd)
+{
+    if ( m_tools.count(m_ctx.currentTool) ) {
+        m_tools[m_ctx.currentTool]->handleUpdateBrush(m_ctx, cmd);
+    }
+}
+
+void InteractionController::handleCommand(const CmdEndBrush& cmd)
+{
+    if ( m_tools.count(m_ctx.currentTool) ) {
+        m_tools[m_ctx.currentTool]->handleEndBrush(m_ctx, cmd);
+    }
+    m_ctx.isDragging = false;
+}
+
 
 void InteractionController::updateMarqueeSelection(bool forceFullSync)
 {

@@ -337,6 +337,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             finalMainHeight = itMainFinal->second.viewportHeight;
         }
 
+        // --- 注入画笔预览状态 ---
+        if ( m_ctx->brushState.isActive ) {
+            snapshot->brush.isActive = true;
+            snapshot->brush.time     = m_ctx->brushState.time;
+            snapshot->brush.track    = m_ctx->brushState.track;
+            snapshot->brush.type     = m_ctx->brushState.type;
+        }
+
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
         // 使用视觉时间 m_ctx->visualTime 进行剔除 and 位置映射
         System::NoteRenderSystem::generateSnapshot(m_ctx->noteRegistry,
@@ -350,6 +358,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                                    m_ctx->trackCount,
                                                    config,
                                                    finalMainHeight);
+
 
         // 4. 生成打击特效 (仅在主画布和预览区显示)
         if ( cameraId == "Basic2DCanvas" || cameraId == "Preview" ) {

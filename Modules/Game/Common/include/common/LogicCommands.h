@@ -133,6 +133,31 @@ struct CmdRemoveMarqueeAt {
 };
 
 /**
+ * @brief 开始画笔操作指令
+ */
+struct CmdStartBrush {
+    std::string cameraId;
+    float       mouseX;
+    float       mouseY;
+};
+
+/**
+ * @brief 更新画笔操作指令
+ */
+struct CmdUpdateBrush {
+    std::string cameraId;
+    float       mouseX;
+    float       mouseY;
+};
+
+/**
+ * @brief 结束画笔操作指令
+ */
+struct CmdEndBrush {
+    std::string cameraId;
+};
+
+/**
  * @brief 更新轨道数量指令
  */
 struct CmdUpdateTrackCount {
@@ -279,6 +304,7 @@ using LogicCommand = std::variant<
     CmdCut, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll,
     CmdUpdateTimelineEvent, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
     CmdUpdateBeatmapMetadata>;
 
 }  // namespace MMM::Logic

@@ -1,4 +1,5 @@
 #include "config/skin/SkinConfig.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -64,6 +65,13 @@ void NoteRenderSystem::renderNotes(
                                           bottomY,
                                           singleTrackW,
                                           renderScaleY);
+
+    // 5. 笔刷预览渲染
+    if ( snapshot->brush.isActive ) {
+        NoteRenderSystem::renderBrushPreview(
+            snapshot, ctx, config, batcher, judgmentLineY, leftX, singleTrackW,
+            renderScaleY);
+    }
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
@@ -475,6 +483,53 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              glowIdx);
     }
     glowBatcher.flush();
+}
+
+void NoteRenderSystem::renderBrushPreview(
+    RenderSnapshot* snapshot, const NoteRenderSystem::NoteRenderContext& ctx,
+    const Config::EditorConfig& config, Batcher& batcher, float judgmentLineY,
+    float leftX, float singleTrackW, float renderScaleY)
+{
+    const auto& brush = snapshot->brush;
+    if ( !brush.isActive ) return;
+
+    double noteAbsY = ctx.cache->getAbsY(brush.time);
+    float  screenY =
+        judgmentLineY -
+        (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
+
+    float trackX = leftX + brush.track * singleTrackW;
+
+    glm::vec4 color = ctx.colorTap;
+    if ( brush.type == ::MMM::NoteType::HOLD ||
+         brush.type == ::MMM::NoteType::POLYLINE ) {
+        color = ctx.colorHold;
+    }
+    color.a *= 0.5f;  // 半透明效果
+
+    NoteComponent tempNote;
+    tempNote.m_type       = brush.type;
+    tempNote.m_timestamp  = brush.time;
+    tempNote.m_trackIndex = brush.track;
+
+    if ( brush.type == ::MMM::NoteType::NOTE ) {
+        NoteRenderSystem::renderTap(batcher,
+                                    tempNote,
+                                    config,
+                                    trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                                    screenY,
+                                    ctx.noteW,
+                                    ctx.noteH,
+                                    ctx.baseAspect,
+                                    color);
+    } else {
+        // Fallback debug drawing
+        float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;
+        batcher.setTexture(TextureID::None);
+        batcher.pushQuad(x, screenY + ctx.noteH * 0.5f, ctx.noteW, ctx.noteH, {1.0f, 0.0f, 0.0f, 0.5f});
+    }
+    // 目前只实现了单音符的笔刷，以后可以扩展 HOLD 等
+    batcher.flush();
 }
 
 }  // namespace MMM::Logic::System

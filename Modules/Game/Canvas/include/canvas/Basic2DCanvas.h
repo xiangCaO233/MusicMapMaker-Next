@@ -8,7 +8,12 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_map>
 #include <vector>
+
+namespace MMM::Canvas {
+class Basic2DCanvasInteraction;
+}
 
 namespace MMM::Event
 {
@@ -111,17 +116,9 @@ private:
     std::unique_ptr<Graphic::VKTexture> m_bgTexture{ nullptr };
     std::string                         m_loadedBgPath{ "" };
 
-    struct PendingDrop {
-        std::vector<std::string> paths;
-        glm::vec2                pos;
-    };
-    std::vector<PendingDrop> m_pendingDrops;
-    Event::SubscriptionID    m_dropSubId;
+    std::unique_ptr<Basic2DCanvasInteraction> m_interaction;
 
 private:
-    void handleDrops(UI::UIManager* sourceManager);
-    void handleHotkeys();
-    void handleInteractions();
     void updateBackgroundTexture();
 };
 
