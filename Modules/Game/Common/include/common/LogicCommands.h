@@ -136,18 +136,20 @@ struct CmdRemoveMarqueeAt {
  * @brief 开始画笔操作指令
  */
 struct CmdStartBrush {
-    std::string cameraId;
-    float       mouseX;
-    float       mouseY;
+    std::string cameraId;     ///< 发起画笔操作的视口 ID
+    float       mouseX;       ///< 鼠标相对于视口的 X 坐标
+    float       mouseY;       ///< 鼠标相对于视口的 Y 坐标
+    bool        isShiftDown;  ///< 当前 Shift 键是否按下 (用于创建 Hold)
 };
 
 /**
  * @brief 更新画笔操作指令
  */
 struct CmdUpdateBrush {
-    std::string cameraId;
-    float       mouseX;
-    float       mouseY;
+    std::string cameraId;     ///< 更新画笔操作的视口 ID
+    float       mouseX;       ///< 鼠标相对于视口的 X 坐标
+    float       mouseY;       ///< 鼠标相对于视口的 Y 坐标
+    bool        isShiftDown;  ///< 当前 Shift 键是否按下 (用于创建 Hold)
 };
 
 /**
@@ -321,15 +323,13 @@ struct CmdUpdateBeatmapMetadata {
  */
 using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
-    CmdCreateBeatmap,
-    CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag, CmdUpdateDrag,
-    CmdEndDrag, CmdUpdateTrackCount, CmdSeek, CmdSetPlaybackSpeed,
-    CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste,
-    CmdCut, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll,
-    CmdUpdateTimelineEvent, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
-    CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata>;
+    CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
+    CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
+    CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
+    CmdCopy, CmdPaste, CmdCut, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap,
+    CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
+    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
+    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata>;
 
 }  // namespace MMM::Logic

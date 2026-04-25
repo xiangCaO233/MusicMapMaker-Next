@@ -10,7 +10,7 @@ namespace MMM::Logic
 void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 {
     ctx.brushState.isActive = true;
-    ctx.brushState.type     = ::MMM::NoteType::NOTE;  // 目前固定为单音符
+    ctx.brushState.duration = 0.0;
 
     // 计算初始吸附位置
     auto itCamera = ctx.cameras.find(cmd.cameraId);
@@ -73,6 +73,13 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                             ctx.cameras);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
+
+    if ( cmd.isShiftDown ) {
+        ctx.brushState.type          = ::MMM::NoteType::HOLD;
+        ctx.brushState.holdStartTime = ctx.brushState.time;
+    } else {
+        ctx.brushState.type = ::MMM::NoteType::NOTE;
+    }
 
     // 计算轨道
     float leftX =
@@ -149,7 +156,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                                                  ctx.visualTime,
                                                  ctx.cameras);
 
-    ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
+    double currentPosTime = snap.isSnapped ? snap.snappedTime : rawTime;
+
+    if ( cmd.isShiftDown ) {
+        if ( ctx.brushState.type == ::MMM::NoteType::NOTE ) {
+            // 切换为 Hold，记录起始位置
+            ctx.brushState.type          = ::MMM::NoteType::HOLD;
+            ctx.brushState.holdStartTime = currentPosTime;
+            ctx.brushState.time          = currentPosTime;
+        }
+        // 更新持续时间
+        ctx.brushState.duration =
+            std::max(0.0, currentPosTime - ctx.brushState.holdStartTime);
+    } else {
+        // 切换回 Note
+        ctx.brushState.type     = ::MMM::NoteType::NOTE;
+        ctx.brushState.time     = currentPosTime;
+        ctx.brushState.duration = 0.0;
+    }
 
     float leftX =
         itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
@@ -174,6 +198,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     // 创建正式音符
     NoteComponent note;
     note.m_timestamp  = ctx.brushState.time;
+    note.m_duration   = ctx.brushState.duration;
     note.m_trackIndex = ctx.brushState.track;
     note.m_type       = ctx.brushState.type;
 

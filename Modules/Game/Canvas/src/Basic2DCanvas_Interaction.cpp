@@ -313,9 +313,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdStartBrush{
-                        m_cameraId, localMousePos.x, localMousePos.y }));
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdStartBrush{ m_cameraId,
+                                          localMousePos.x,
+                                          localMousePos.y,
+                                          ImGui::GetIO().KeyShift }));
             }
         }
     }
@@ -325,9 +327,11 @@ void Basic2DCanvasInteraction::handleInteractions(
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
         } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdUpdateBrush{
-                    m_cameraId, localMousePos.x, localMousePos.y }));
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateBrush{ m_cameraId,
+                                       localMousePos.x,
+                                       localMousePos.y,
+                                       ImGui::GetIO().KeyShift }));
         } else {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdUpdateDrag{

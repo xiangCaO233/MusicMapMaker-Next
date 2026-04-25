@@ -139,10 +139,11 @@ struct RenderSnapshot {
 
     // 笔刷预览状态
     struct BrushSnapshot {
-        bool            isActive{ false };
-        double          time{ 0.0 };
-        int             track{ 0 };
-        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+        bool            isActive{ false };              ///< 是否激活
+        double          time{ 0.0 };                    ///< 位置/起始时间
+        double          duration{ 0.0 };                ///< 持续时间 (Hold)
+        int             track{ 0 };                     ///< 轨道
+        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };  ///< 物件类型
     } brush;
 
     // 橡皮擦预览状态
@@ -190,7 +191,7 @@ struct RenderSnapshot {
         isPreviewDragging      = false;
         brush.isActive         = false;
         erasingEntities.clear();
-        hasBeatmap             = false;
+        hasBeatmap = false;
     }
 };
 

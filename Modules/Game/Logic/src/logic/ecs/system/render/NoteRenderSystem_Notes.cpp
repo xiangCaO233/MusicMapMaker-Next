@@ -68,9 +68,14 @@ void NoteRenderSystem::renderNotes(
 
     // 5. 笔刷预览渲染
     if ( snapshot->brush.isActive ) {
-        NoteRenderSystem::renderBrushPreview(
-            snapshot, ctx, config, batcher, judgmentLineY, leftX, singleTrackW,
-            renderScaleY);
+        NoteRenderSystem::renderBrushPreview(snapshot,
+                                             ctx,
+                                             config,
+                                             batcher,
+                                             judgmentLineY,
+                                             leftX,
+                                             singleTrackW,
+                                             renderScaleY);
     }
 }
 
@@ -320,7 +325,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
             curColorHold  = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorNode  = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorArrow = { 1.0f, 0.2f, 0.2f, 1.0f };
-            alphaMul      *= 0.5f;
+            alphaMul *= 0.5f;
         }
 
         curColorTap.a *= alphaMul;
@@ -518,6 +523,7 @@ void NoteRenderSystem::renderBrushPreview(
     NoteComponent tempNote;
     tempNote.m_type       = brush.type;
     tempNote.m_timestamp  = brush.time;
+    tempNote.m_duration   = brush.duration;
     tempNote.m_trackIndex = brush.track;
 
     if ( brush.type == ::MMM::NoteType::NOTE ) {
@@ -530,13 +536,31 @@ void NoteRenderSystem::renderBrushPreview(
                                     ctx.noteH,
                                     ctx.baseAspect,
                                     color);
+    } else if ( brush.type == ::MMM::NoteType::HOLD ) {
+        double endAbsY = ctx.cache->getAbsY(brush.time + brush.duration);
+        float  visualH = static_cast<float>(endAbsY - noteAbsY) * renderScaleY;
+
+        NoteRenderSystem::renderHold(batcher,
+                                     tempNote,
+                                     config,
+                                     snapshot,
+                                     trackX + (singleTrackW - ctx.noteW) * 0.5f,
+                                     screenY,
+                                     ctx.noteW,
+                                     ctx.noteH,
+                                     visualH,
+                                     singleTrackW,
+                                     color);
     } else {
         // Fallback debug drawing
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;
         batcher.setTexture(TextureID::None);
-        batcher.pushQuad(x, screenY + ctx.noteH * 0.5f, ctx.noteW, ctx.noteH, {1.0f, 0.0f, 0.0f, 0.5f});
+        batcher.pushQuad(x,
+                         screenY + ctx.noteH * 0.5f,
+                         ctx.noteW,
+                         ctx.noteH,
+                         { 1.0f, 0.0f, 0.0f, 0.5f });
     }
-    // 目前只实现了单音符的笔刷，以后可以扩展 HOLD 等
     batcher.flush();
 }
 

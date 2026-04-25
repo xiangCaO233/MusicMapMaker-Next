@@ -102,14 +102,16 @@ struct SessionContext {
     // --- 笔刷工具状态 ---
     struct BrushState {
         bool            isActive{ false };
-        double          time{ 0.0 };
+        double          time{ 0.0 };  ///< 当前选中的位置(对 Hold 为起始点)
+        double          holdStartTime{ 0.0 };  ///< 记录按下 Shift 瞬间的时间点
+        double          duration{ 0.0 };       ///< Hold 持续时间
         int             track{ 0 };
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
     } brushState;
 
     // --- 橡皮擦工具状态 ---
     struct EraserState {
-        bool isActive{ false };
+        bool                             isActive{ false };
         std::unordered_set<entt::entity> targetEntities;
     } eraserState;
 

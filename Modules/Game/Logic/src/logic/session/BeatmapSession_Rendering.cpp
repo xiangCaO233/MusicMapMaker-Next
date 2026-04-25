@@ -215,11 +215,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                 if ( bpmVal <= 0.0 ) {
                                     bpmVal = 120.0;
                                     if ( m_ctx->currentBeatmap &&
-                                         m_ctx->currentBeatmap->m_baseMapMetadata
+                                         m_ctx->currentBeatmap
+                                                 ->m_baseMapMetadata
                                                  .preference_bpm > 0.0 ) {
-                                        bpmVal =
-                                            m_ctx->currentBeatmap
-                                                ->m_baseMapMetadata.preference_bpm;
+                                        bpmVal = m_ctx->currentBeatmap
+                                                     ->m_baseMapMetadata
+                                                     .preference_bpm;
                                     }
                                 }
                                 double beatDuration = 60.0 / bpmVal;
@@ -301,10 +302,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                              m_ctx->currentBeatmap
                                                      ->m_baseMapMetadata
                                                      .preference_bpm > 0.0 ) {
-                                            bVal =
-                                                m_ctx->currentBeatmap
-                                                    ->m_baseMapMetadata
-                                                    .preference_bpm;
+                                            bVal = m_ctx->currentBeatmap
+                                                       ->m_baseMapMetadata
+                                                       .preference_bpm;
                                         }
                                     }
                                     totalBeatsPrefix += static_cast<int64_t>(
@@ -341,6 +341,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         if ( m_ctx->brushState.isActive ) {
             snapshot->brush.isActive = true;
             snapshot->brush.time     = m_ctx->brushState.time;
+            snapshot->brush.duration = m_ctx->brushState.duration;
             snapshot->brush.track    = m_ctx->brushState.track;
             snapshot->brush.type     = m_ctx->brushState.type;
         }
