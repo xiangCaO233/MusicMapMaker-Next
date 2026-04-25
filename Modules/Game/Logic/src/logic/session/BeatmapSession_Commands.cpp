@@ -124,6 +124,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
     if ( m_ctx->currentBeatmap ) {
         auto oldAudio = m_ctx->currentBeatmap->m_baseMapMetadata.main_audio_path;
         auto oldCover = m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
+        auto oldBPM   = m_ctx->currentBeatmap->m_baseMapMetadata.preference_bpm;
+        auto oldTrack = m_ctx->currentBeatmap->m_baseMapMetadata.track_count;
 
         m_ctx->currentBeatmap->m_baseMapMetadata = cmd.baseMeta;
         XINFO("BeatmapSession: Metadata updated for {}",
@@ -132,14 +134,21 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 同步轨道数到上下文，确保渲染实时更新
         m_ctx->trackCount = cmd.baseMeta.track_count;
 
+        // 如果关键渲染参数发生变化，刷新 ScrollCache
+        if ( oldBPM != cmd.baseMeta.preference_bpm || oldTrack != cmd.baseMeta.track_count ) {
+            XINFO("BeatmapSession: Critical metadata changed, dirtying ScrollCache...");
+            auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
+            if ( cache ) {
+                cache->isDirty = true;
+            }
+        }
+
         // 如果音频路径发生变化，重新加载音频
         if ( oldAudio != cmd.baseMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
             auto audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path.parent_path() /
                              cmd.baseMeta.main_audio_path;
             if ( std::filesystem::exists(audioPath) ) {
-                // 这里可以调用 AudioManager::instance().loadBGM
-                // 暂时简单处理，复用 loadBeatmap 中的逻辑部分（实际上应该抽取为工具函数）
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
                 auto*            project = EditorEngine::instance().getCurrentProject();

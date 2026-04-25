@@ -4,6 +4,7 @@
 
 namespace MMM::UI
 {
+class UIManager;
 
 class MainMenuView
 {
@@ -15,8 +16,8 @@ public:
     MainMenuView& operator=(const MainMenuView&) = delete;
     ~MainMenuView();
 
-    void update();
-    void handleHotkeys();
+    void update(UIManager* sourceManager);
+    void handleHotkeys(UIManager* sourceManager);
 
 private:
     void openFolderPicker();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/EditorConfig.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include <entt/entt.hpp>
 #include <memory>
@@ -256,6 +257,7 @@ struct CmdCreateTimelineEvent {
  * @brief 新建谱面指令
  */
 struct CmdCreateBeatmap {
+    ::MMM::BaseMapMeta baseMeta;
 };
 
 /**

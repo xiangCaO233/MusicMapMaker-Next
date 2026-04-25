@@ -6,6 +6,8 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/layout/box/CLayBox.h"
 
 namespace MMM::UI
@@ -131,7 +133,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             "Beatmap_CreateNew",
             Sizing::Fixed(32),
             Sizing::Fixed(32),
-            [&engine](Clay_BoundingBox r, bool isHovered) {
+            [&engine, sourceManager](Clay_BoundingBox r, bool isHovered) {
                 ImGui::PushStyleColor(
                     ImGuiCol_Text,
                     ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
@@ -145,7 +147,9 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                      (r.width - 32.0f) * 0.5f);
                 if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(32, 32)) ) {
-                    engine.pushCommand(Logic::CmdCreateBeatmap{});
+                    auto* wizard = sourceManager->getView<NewBeatmapWizard>(
+                        "NewBeatmapWizard");
+                    if ( wizard ) wizard->open();
                 }
 
                 ImGui::PopStyleVar();

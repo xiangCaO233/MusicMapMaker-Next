@@ -204,6 +204,14 @@ return {
 	["ui.canvas.note_fraction"] = "Note Position",
 	["ui.canvas.note_time"] = "Exact Time",
 
+	["ui.wizard.new_beatmap.title"] = "New Beatmap Wizard",
+	["ui.wizard.new_beatmap.create"] = "Create Now",
+	["ui.wizard.new_beatmap.cancel"] = "Cancel",
+	["ui.wizard.new_beatmap.select_audio"] = "Select Audio File",
+	["ui.wizard.new_beatmap.select_cover"] = "Select Background Image",
+	["ui.wizard.new_beatmap.audio_not_selected"] = "Please select an audio file first",
+	["ui.wizard.new_beatmap.no_project"] = "Cannot create: Please open or create a project first",
+
 	["canvas.preview.jump_to"] = "Jump to: %.3f s",
 	["tips.welcome"] = "Welcome to MusicMapMaker!",
 

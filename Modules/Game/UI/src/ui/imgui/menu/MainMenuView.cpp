@@ -1,15 +1,18 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "ui/imgui/menu/MainMenuView.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/ui/UISettingsTabEvent.h"
+#include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
-#include "event/ui/UISubViewToggleEvent.h"
-#include "event/ui/UISettingsTabEvent.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include <ImGuiFileDialog.h>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -19,8 +22,10 @@ namespace MMM::UI
 {
 
 MainMenuView::MainMenuView()
-    : m_openFileMenuNextFrame(false), m_openEditMenuNextFrame(false),
-      m_closeFileMenuNextFrame(false), m_closeEditMenuNextFrame(false)
+    : m_openFileMenuNextFrame(false)
+    , m_openEditMenuNextFrame(false)
+    , m_closeFileMenuNextFrame(false)
+    , m_closeEditMenuNextFrame(false)
 {
 }
 
@@ -31,8 +36,11 @@ void MainMenuView::dispatchCommand(const MMM::Logic::LogicCommand& cmd)
     Event::EventBus::instance().publish(Event::LogicCommandEvent(cmd));
 }
 
-void MainMenuView::handleHotkeys()
+void MainMenuView::handleHotkeys(UIManager* sourceManager)
 {
+    auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+    bool  hasProject = (project != nullptr);
+
     ImGuiIO& io = ImGui::GetIO();
     // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
@@ -41,8 +49,10 @@ void MainMenuView::handleHotkeys()
         if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
             if ( io.KeyShift ) {
                 // New project logic placeholder
-            } else {
-                dispatchCommand(Logic::CmdCreateBeatmap{});
+            } else if ( hasProject ) {
+                auto* wizard = sourceManager->getView<NewBeatmapWizard>(
+                    "NewBeatmapWizard");
+                if ( wizard ) wizard->open();
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_O) ) {
@@ -190,19 +200,14 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
                                                 TR("ui.file.save_as"),
                                                 filterStr.c_str(),
                                                 fdConfig);
-
-        // 注意：IGFD 需要在后续 update 中轮询 IsOk()。这里仅触发打开。
-        // 为了保持逻辑简单，我们目前主要依赖 Native 对话框或是在 update
-        // 里轮询。 由于 MainMenuView::update 每一帧都在跑，我们可以检查。
     }
 }
 
-void MainMenuView::update()
+void MainMenuView::update(UIManager* sourceManager)
 {
-    handleHotkeys();
+    handleHotkeys(sourceManager);
 
     // 检查文件对话框结果 (针对非 Native 模式)
-    // 另存为/导出
     if ( ImGuiFileDialog::Instance()->Display("SaveAsFilePicker",
                                               ImGuiWindowFlags_NoCollapse,
                                               ImVec2(600, 400)) ) {
@@ -214,7 +219,6 @@ void MainMenuView::update()
         ImGuiFileDialog::Instance()->Close();
     }
 
-    // 打开项目
     if ( ImGuiFileDialog::Instance()->Display("ProjectFolderPicker",
                                               ImGuiWindowFlags_NoCollapse,
                                               ImVec2(600, 400)) ) {
@@ -229,7 +233,6 @@ void MainMenuView::update()
         ImGuiFileDialog::Instance()->Close();
     }
 
-    // 打包
     if ( ImGuiFileDialog::Instance()->Display("PackFilePicker",
                                               ImGuiWindowFlags_NoCollapse,
                                               ImVec2(600, 400)) ) {
@@ -246,27 +249,22 @@ void MainMenuView::update()
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float                dpiScale = viewport->DpiScale;
 
-    // 增加全局边距，确保图标不被截断，并提供更好的视觉空间
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
-    // 保持已有的垂直 Padding（由外部 Host 窗口决定），仅增加水平边距
     ImGui::PushStyleVar(
         ImGuiStyleVar_FramePadding,
         ImVec2(6.0f * dpiScale, ImGui::GetStyle().FramePadding.y));
 
     auto MenuItemWithFontIcon = [](const char* icon,
-                                           const char* label,
-                                           const char* shortcut = nullptr,
-                                           bool        enabled = true) -> bool {
+                                   const char* label,
+                                   const char* shortcut = nullptr,
+                                   bool        enabled  = true) -> bool {
         ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
         ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
-        // 图标与文本间隔设为半个空格宽
         float gap = ImGui::CalcTextSize(" ").x * 0.5f;
         ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap, 0));
 
-        // 统一占位符，确保无图标项的文本对齐
-        // 这里使用两个空格作为图标列的基准占位
         const char* iconPtr = icon ? icon : "  ";
 
         bool clicked =
@@ -289,14 +287,20 @@ void MainMenuView::update()
             ImGui::CloseCurrentPopup();
             m_closeFileMenuNextFrame = false;
         }
+
+        auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+        bool  hasProject = (project != nullptr);
+
         if ( MenuItemWithFontIcon(
                  ICON_MMM_BOOK, TR("ui.file.new_pro"), "Ctrl+Shift+N") ) {}
         if ( MenuItemWithFontIcon(
-                 ICON_MMM_FILE, TR("ui.file.new_map"), "Ctrl+N") ) {
-            Logic::EditorEngine::instance().pushCommand(
-                Logic::CmdCreateBeatmap{});
+                 ICON_MMM_FILE, TR("ui.file.new_map"), "Ctrl+N", hasProject) ) {
+            auto* wizard =
+                sourceManager->getView<NewBeatmapWizard>("NewBeatmapWizard");
+            if ( wizard ) wizard->open();
         }
         ImGui::Separator();
+
 
         if ( MenuItemWithFontIcon(
                  ICON_MMM_FOLDER_OPEN, TR("ui.file.open_pro"), "Ctrl+O") ) {
@@ -335,7 +339,6 @@ void MainMenuView::update()
                  nullptr, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
             openExportFilePicker("");
         }
-
 
         if ( MenuItemWithFontIcon(ICON_MMM_PACK, TR("ui.file.pack")) ) {
             openPackFilePicker();
@@ -379,7 +382,8 @@ void MainMenuView::update()
             dispatchCommand(Logic::CmdSetPlayState{ !playing });
         }
         ImGui::Separator();
-        if ( MenuItemWithFontIcon(ICON_MMM_FILE, TR("ui.edit.beatmap_settings")) ) {
+        if ( MenuItemWithFontIcon(ICON_MMM_FILE,
+                                  TR("ui.edit.beatmap_settings")) ) {
             Event::UISubViewToggleEvent evt;
             evt.targetFloatManagerName = "SideBarManager";
             evt.subViewId              = TR("title.settings_manager").data();

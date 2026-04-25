@@ -21,6 +21,7 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
+#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/SearchView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include <chrono>
@@ -69,6 +70,11 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     sidebar_manager->registerSubView(
         TR("title.settings_manager"),
         std::make_unique<UI::SettingsView>(TR("title.settings_manager")));
+
+    // 注册新建谱面向导
+    m_uiManager.registerView(
+        "NewBeatmapWizard",
+        std::make_unique<UI::NewBeatmapWizard>());
 
     // 初始化时默认激活第一个 Tab（文件管理器）
     sidebar_manager->toggleSubView(TR("title.file_manager"));

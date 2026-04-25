@@ -1,4 +1,3 @@
-#include "ui/imgui/MainDockSpaceUI.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -7,6 +6,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ui/Icons.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <GLFW/glfw3.h>
 #include <memory>
@@ -14,9 +14,9 @@
 namespace MMM::UI
 {
 
-void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeight,
-                                    float sidebarWidth, float toolbarWidth,
-                                    float dpiScale)
+void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
+                                    float menuBarHeight, float sidebarWidth,
+                                    float toolbarWidth, float dpiScale)
 {
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -30,7 +30,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground;
 
-    ImGuiStyle& style = ImGui::GetStyle();
+    ImGuiStyle& style             = ImGui::GetStyle();
     float       extraPaddingBaseY = 4.0f;
     float       extraPaddingY     = std::floor(extraPaddingBaseY * dpiScale);
 
@@ -49,9 +49,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 
-        auto DrawIconButton = [&](const char* str_id,
+        auto DrawIconButton = [&](const char*                          str_id,
                                   std::unique_ptr<Graphic::VKTexture>& tex,
-                                  float  btnSize,
+                                  float                                btnSize,
                                   ImVec4 hoverColor) -> bool {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -63,13 +63,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
                 ImTextureID imTexId  = (ImTextureID)tex->getImTextureID();
                 float       iconSize = btnSize * 0.65f;
                 ImVec2      p_min    = ImGui::GetItemRectMin();
-                float  offsetX = std::floor((btnSize - iconSize) * 0.5f);
-                float  offsetY = std::floor((btnSize - iconSize) * 0.5f);
-                ImVec2 img_p1  = { p_min.x + offsetX, p_min.y + offsetY };
-                ImVec2 img_p2  = { img_p1.x + iconSize, img_p1.y + iconSize };
-                ImU32  tint    = ImGui::IsItemActive()
-                                     ? IM_COL32(180, 180, 180, 255)
-                                     : IM_COL32_WHITE;
+                float       offsetX  = std::floor((btnSize - iconSize) * 0.5f);
+                float       offsetY  = std::floor((btnSize - iconSize) * 0.5f);
+                ImVec2      img_p1   = { p_min.x + offsetX, p_min.y + offsetY };
+                ImVec2 img_p2 = { img_p1.x + iconSize, img_p1.y + iconSize };
+                ImU32  tint   = ImGui::IsItemActive()
+                                    ? IM_COL32(180, 180, 180, 255)
+                                    : IM_COL32_WHITE;
                 ImGui::GetWindowDrawList()->AddImage(
                     imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
             }
@@ -78,9 +78,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
             return clicked;
         };
 
-        auto DrawFontIconButton = [&](const char* icon,
-                                      float       btnSize,
-                                      ImVec4      hoverColor) -> bool {
+        auto DrawFontIconButton =
+            [&](const char* icon, float btnSize, ImVec4 hoverColor) -> bool {
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
@@ -95,7 +94,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
             return clicked;
         };
 
-        ImVec4 textCol = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        ImVec4 textCol   = ImGui::GetStyleColorVec4(ImGuiCol_Text);
         ImVec4 hoverVec4 = ImVec4(textCol.x, textCol.y, textCol.z, 0.1f);
 
         ImGui::SetCursorPosX(0.0f);
@@ -108,12 +107,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
 
         ImFont* menuFont = skinCfg.getFont("menu");
         if ( menuFont ) ImGui::PushFont(menuFont);
-        m_mainMenuview.update();
+        m_mainMenuview.update(sourceManager);
         if ( menuFont ) ImGui::PopFont();
 
         ImGui::PopStyleVar(1);
 
-        float dragStartX = ImGui::GetCursorPosX();
+        float dragStartX      = ImGui::GetCursorPosX();
         float numberOfButtons = 3;
         float dragEndX =
             ImGui::GetWindowWidth() - (buttonSize * numberOfButtons);
@@ -133,8 +132,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
         }
 
         ImGui::SetCursorPosX(dragStartX);
-        ImGui::InvisibleButton(
-            "DragArea", ImVec2(dragEndX - dragStartX, menuBarHeight));
+        ImGui::InvisibleButton("DragArea",
+                               ImVec2(dragEndX - dragStartX, menuBarHeight));
         if ( ImGui::IsItemHovered() &&
              ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
@@ -157,9 +156,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
 
         const char* maxIcon =
             m_isMaximized ? ICON_MMM_RESTORE : ICON_MMM_MAXIMIZE;
-        const char* maxTip = m_isMaximized
-                                 ? TR("ui.window.restore").data()
-                                 : TR("ui.window.maximize").data();
+        const char* maxTip = m_isMaximized ? TR("ui.window.restore").data()
+                                           : TR("ui.window.maximize").data();
 
         if ( DrawFontIconButton(maxIcon, buttonSize, hoverVec4) ) {
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
@@ -172,9 +170,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
         ImGui::SameLine();
 
         ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
-        if ( DrawFontIconButton(ICON_MMM_CLOSE,
-                                buttonSize,
-                                dangerCol) ) {
+        if ( DrawFontIconButton(ICON_MMM_CLOSE, buttonSize, dangerCol) ) {
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_CLOSE_WINDOW });
         }
@@ -190,4 +186,4 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager, float menuBarHeigh
     ImGui::PopStyleVar(3);
 }
 
-} // namespace MMM::UI
+}  // namespace MMM::UI

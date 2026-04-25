@@ -326,11 +326,97 @@ void EditorEngine::stop()
 
 void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 {
-    // FIXME: 后续在这里对接完整的“新建谱面向导”逻辑。
-    // 包括：填写谱面名称、选择音频、确定轨道数等信息。
-    // 目前仅梳理出入口，不再直接粗暴地生成一个空白谱面并切过去。
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) {
+        XERROR("Cannot create beatmap: No project opened.");
+        return;
+    }
 
-    XINFO("Triggered Create Beatmap flow. Wizard to be implemented.");
+    auto meta = cmd.baseMeta;
+    XINFO("Creating new beatmap: {} (Title: {})", meta.name, meta.title);
+
+    // 1. 确定文件保存路径 (默认在项目根目录下，以 name.imd 命名)
+    std::string safeFilename = meta.name;
+    // 替换非法字符
+    std::replace_if(
+        safeFilename.begin(),
+        safeFilename.end(),
+        [](char c) {
+            return c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+                   c == '"' || c == '<' || c == '>' || c == '|';
+        },
+        '_');
+
+    std::filesystem::path mapPath =
+        m_currentProject->m_projectRoot / (safeFilename + ".imd");
+
+    // 如果文件已存在，增加后缀
+    int suffix = 1;
+    while ( std::filesystem::exists(mapPath) ) {
+        mapPath = m_currentProject->m_projectRoot /
+                  (safeFilename + "_" + std::to_string(suffix++) + ".imd");
+    }
+
+    meta.map_path = mapPath;
+
+    // 处理音频资源路径 (如果是绝对路径，尝试转为相对路径)
+    auto processPath = [&](std::filesystem::path& p) {
+        if ( p.empty() ) return;
+        if ( p.is_absolute() ) {
+            try {
+                p = std::filesystem::relative(p,
+                                              m_currentProject->m_projectRoot);
+            } catch ( ... ) {
+            }
+        }
+    };
+    processPath(meta.main_audio_path);
+    processPath(meta.main_cover_path);
+
+    // 2. 创建 BeatMap 对象
+    auto newBeatmap               = std::make_shared<MMM::BeatMap>();
+    newBeatmap->m_baseMapMetadata = meta;
+
+    // 3. 保存文件
+    try {
+        newBeatmap->saveToFile(mapPath);
+        XINFO("Beatmap saved to: {}", mapPath.string());
+    } catch ( const std::exception& e ) {
+        XERROR("Failed to save new beatmap: {}", e.what());
+        return;
+    }
+
+    // 4. 更新项目列表
+    Project::BeatmapEntry entry;
+    entry.m_name = meta.name;
+    entry.m_filePath =
+        std::filesystem::relative(mapPath, m_currentProject->m_projectRoot)
+            .generic_string();
+    entry.m_audioTrackId = meta.main_audio_path.filename().string();
+    m_currentProject->m_beatmaps.push_back(entry);
+
+    // 5. 如果音频资源不在列表中，添加进去
+    bool audioExists = false;
+    for ( const auto& res : m_currentProject->m_audioResources ) {
+        if ( res.m_path == meta.main_audio_path.generic_string() ) {
+            audioExists = true;
+            break;
+        }
+    }
+    if ( !audioExists && !meta.main_audio_path.empty() ) {
+        AudioResource res;
+        res.m_id            = meta.main_audio_path.filename().string();
+        res.m_path          = meta.main_audio_path.generic_string();
+        res.m_type          = AudioTrackType::Main;
+        res.m_config.volume = 0.5f;
+        m_currentProject->m_audioResources.push_back(res);
+    }
+
+    // 保存项目文件
+    saveProject();
+
+    // 6. 立即加载这个新谱面
+    pushCommand(CmdLoadBeatmap{ newBeatmap });
 }
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)

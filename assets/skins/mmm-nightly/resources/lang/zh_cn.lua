@@ -200,6 +200,14 @@ return {
 	["ui.canvas.note_fraction"] = "物件位置",
 	["ui.canvas.note_time"] = "精确时间",
 
+	["ui.wizard.new_beatmap.title"] = "新建谱面向导",
+	["ui.wizard.new_beatmap.create"] = "立即创建",
+	["ui.wizard.new_beatmap.cancel"] = "取消",
+	["ui.wizard.new_beatmap.select_audio"] = "选择音频文件",
+	["ui.wizard.new_beatmap.select_cover"] = "选择背景图片",
+	["ui.wizard.new_beatmap.audio_not_selected"] = "请先选择音频文件",
+	["ui.wizard.new_beatmap.no_project"] = "无法创建：请先打开或创建一个项目",
+
 	["canvas.preview.jump_to"] = "跳转至: %.3f s",
 	["tips.welcome"] = "欢迎使用MusicMapMaker!",
 
