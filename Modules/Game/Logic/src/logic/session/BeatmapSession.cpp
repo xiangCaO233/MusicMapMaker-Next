@@ -6,11 +6,11 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
-#include "logic/session/PlaybackController.h"
-#include "logic/session/InteractionController.h"
 #include "logic/session/ActionController.h"
-#include "logic/session/context/SessionContext.h"
+#include "logic/session/InteractionController.h"
+#include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <chrono>
 
@@ -26,10 +26,10 @@ namespace MMM::Logic
 
 BeatmapSession::BeatmapSession()
 {
-    m_ctx = std::make_unique<SessionContext>();
-    m_playback = std::make_unique<PlaybackController>(*m_ctx);
+    m_ctx         = std::make_unique<SessionContext>();
+    m_playback    = std::make_unique<PlaybackController>(*m_ctx);
     m_interaction = std::make_unique<InteractionController>(*m_ctx);
-    m_actions = std::make_unique<ActionController>(*m_ctx);
+    m_actions     = std::make_unique<ActionController>(*m_ctx);
 
     m_ctx->timelineRegistry.ctx().emplace<System::ScrollCache>();
     m_ctx->timelineRegistry.on_construct<TimelineComponent>()
@@ -77,7 +77,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
     if ( std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001 ) {
         double delta     = m_ctx->previewEdgeScrollVelocity * dt;
         double totalTime = Audio::AudioManager::instance().getTotalTime();
-        m_ctx->currentTime    = std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
+        m_ctx->currentTime =
+            std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
 
         m_ctx->syncClock.reset(m_ctx->currentTime);
         if ( m_ctx->isPlaying ) {
@@ -111,16 +112,30 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             m_ctx->syncTimer   = 0.0;
         }
 
-        m_ctx->visualTime = m_ctx->syncClock.getVisualTime() + config.visual.visualOffset;
+        m_ctx->visualTime =
+            m_ctx->syncClock.getVisualTime() + config.visual.visualOffset;
 
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
 
         bool isJump = (std::abs(m_ctx->visualTime - prevVisualTime) > 0.2) ||
-                      (m_ctx->visualTime < prevVisualTime);
+                      (m_ctx->visualTime < prevVisualTime) || !m_wasPlaying;
 
         if ( isJump ) {
             m_ctx->hitFXSystem.clearActiveEffects();
             SessionUtils::syncHitIndex(*m_ctx);
+
+            // 核心修复：Jump/Start 后立即预测播放窗口内的所有音效
+            double predictWindow = 0.2;
+            while ( m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
+                    m_ctx->hitEvents[m_ctx->nextPredictHitIndex].timestamp <=
+                        (m_ctx->visualTime + predictWindow) ) {
+                const auto& ev = m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
+                // 只要物件在当前播放点之后，都触发
+                if ( ev.timestamp >= m_ctx->visualTime ) {
+                    m_ctx->hitFXSystem.triggerAudio(ev, config);
+                }
+                m_ctx->nextPredictHitIndex++;
+            }
         } else {
             double predictWindow = 0.2;
             while ( m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
@@ -134,7 +149,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             }
 
             while ( m_ctx->nextHitIndex < m_ctx->hitEvents.size() &&
-                    m_ctx->hitEvents[m_ctx->nextHitIndex].timestamp <= m_ctx->visualTime ) {
+                    m_ctx->hitEvents[m_ctx->nextHitIndex].timestamp <=
+                        m_ctx->visualTime ) {
                 const auto& ev = m_ctx->hitEvents[m_ctx->nextHitIndex];
                 if ( ev.timestamp > prevVisualTime ) {
                     triggeredEvents.push_back(ev);
@@ -151,6 +167,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             SessionUtils::syncHitIndex(*m_ctx);
         }
     }
+
+    m_wasPlaying = m_ctx->isPlaying;
 
     updateECSAndRender(config);
 }

@@ -609,6 +609,10 @@ void SettingsView::drawEditorSettings()
     changed |=
         ImGui::Checkbox(TR_CACHE("ui.settings.editor.scroll_snap").data(),
                         &settings.scrollSnap);
+    changed |= ImGui::Checkbox(
+        TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
+            .data(),
+        &settings.disableScrollAccelerationWhileDrawing);
 
     changed |= ImGui::SliderFloat(
         TR_CACHE("ui.settings.editor.scroll_multiplier").data(),

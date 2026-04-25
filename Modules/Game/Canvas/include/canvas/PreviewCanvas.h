@@ -63,9 +63,10 @@ protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;
     const std::vector<uint32_t>& getIndices() const override;
-    void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                          vk::PipelineLayout pipelineLayout,
-                          vk::DescriptorSet  defaultDescriptor) override;
+    void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                          vk::PipelineLayout     pipelineLayout,
+                          vk::DescriptorSetLayout setLayout,
+                          vk::DescriptorSet      defaultDescriptor) override;
 
 private:
     /// @brief 画布名称 (对应翻译和 ID)

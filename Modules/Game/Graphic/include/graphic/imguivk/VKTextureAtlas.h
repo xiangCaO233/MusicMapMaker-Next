@@ -56,6 +56,12 @@ public:
      */
     vk::DescriptorSet getDescriptorSet() const;
 
+    /**
+     * @brief 获取适配本项目原生管线的描述符集 (CombinedImageSampler)
+     */
+    vk::DescriptorSet getNativeDescriptorSet(vk::DescriptorPool      pool,
+                                             vk::DescriptorSetLayout layout);
+
 private:
     struct TextureData {
         uint32_t                   id;

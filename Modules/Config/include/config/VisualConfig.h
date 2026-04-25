@@ -104,7 +104,7 @@ struct VisualConfig {
     bool enableLinearScrollMapping{ false };
 
     /// @brief 磁吸阈值 (px)，鼠标距离拍线在此范围内触发磁吸提示
-    float snapThreshold{ 5.0f };
+    float snapThreshold{ 32.0f };
 
     /// @brief 分拍线透明度 (0.0~1.0)
     float beatLineAlpha{ 1.0f };

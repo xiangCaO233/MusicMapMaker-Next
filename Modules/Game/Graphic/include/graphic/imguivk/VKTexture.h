@@ -3,6 +3,7 @@
 #include "imgui_impl_vulkan.h"
 #include <imgui.h>
 #include <string>
+#include <unordered_map>
 #include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
@@ -47,6 +48,12 @@ public:
     vk::Sampler       getSampler() const { return m_sampler; }
     vk::DescriptorSet getDescriptorSet() const { return m_descriptorSet; }
 
+    /**
+     * @brief 获取适配本项目原生管线的描述符集 (CombinedImageSampler)
+     */
+    vk::DescriptorSet getNativeDescriptorSet(vk::DescriptorPool      pool,
+                                             vk::DescriptorSetLayout layout);
+
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
 
@@ -73,6 +80,12 @@ private:
     vk::ImageView     m_imageView{ nullptr };
     vk::Sampler       m_sampler{ nullptr };
     vk::DescriptorSet m_descriptorSet{ nullptr };
+
+    // 原生管线用的描述符集映射 (Layout -> DescriptorSet)
+    std::unordered_map<VkDescriptorSetLayout, vk::DescriptorSet> m_nativeSets;
+    vk::DescriptorPool                                           m_nativePool{
+        nullptr
+    };
 
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };

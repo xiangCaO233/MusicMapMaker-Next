@@ -174,4 +174,13 @@ vk::DescriptorSet VKTextureAtlas::getDescriptorSet() const
     return nullptr;
 }
 
+vk::DescriptorSet VKTextureAtlas::getNativeDescriptorSet(
+    vk::DescriptorPool pool, vk::DescriptorSetLayout layout)
+{
+    if ( m_atlasTexture ) {
+        return m_atlasTexture->getNativeDescriptorSet(pool, layout);
+    }
+    return nullptr;
+}
+
 }  // namespace MMM::Graphic

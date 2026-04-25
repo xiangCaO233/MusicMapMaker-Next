@@ -234,14 +234,15 @@ struct EditorSettings {
     /// @brief 上次打开文件的路径 (用于文件对话框记忆)
     std::string lastFilePickerPath{ "." };
 
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorSettings, syncConfig, sfxConfig,
-                                   filePickerStyle, cursorStyle, theme,
-                                   beatDivisor, reverseScroll, scrollSnap,
-                                   recentProjectsLimit, language, vsync,
-                                   scrollSpeedMultiplier, globalVolume,
-                                   selectionMode, marqueeThickness,
-                                   marqueeRounding, saveFormatPreference,
-                                   lastFilePickerPath)
+    /// @brief 绘制物件(按住Shift)时是否屏蔽滚动加速
+    bool disableScrollAccelerationWhileDrawing{ true };
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(
+        EditorSettings, syncConfig, sfxConfig, filePickerStyle, cursorStyle,
+        theme, beatDivisor, reverseScroll, scrollSnap, recentProjectsLimit,
+        language, vsync, scrollSpeedMultiplier, globalVolume, selectionMode,
+        marqueeThickness, marqueeRounding, saveFormatPreference,
+        lastFilePickerPath, disableScrollAccelerationWhileDrawing)
 };
 
 }  // namespace MMM::Config

@@ -107,9 +107,10 @@ protected:
     /**
      * @brief 录制具体的绘制指令 (由 UI 层实现)
      */
-    void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                          vk::PipelineLayout pipelineLayout,
-                          vk::DescriptorSet  defaultDescriptor) override
+    void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                          vk::PipelineLayout     pipelineLayout,
+                          vk::DescriptorSetLayout setLayout,
+                          vk::DescriptorSet      defaultDescriptor) override
     {
         for ( const auto& cmd : m_brush.getCmds() ) {
             if ( cmd.texture != VK_NULL_HANDLE ) {

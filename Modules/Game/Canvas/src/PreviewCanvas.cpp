@@ -13,6 +13,7 @@
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
+#include "graphic/imguivk/VKContext.h"
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <utility>
@@ -256,16 +257,19 @@ const std::vector<uint32_t>& PreviewCanvas::getIndices() const
     return empty;
 }
 
-void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                                     vk::PipelineLayout pipelineLayout,
-                                     vk::DescriptorSet  defaultDescriptor)
+void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::DescriptorSetLayout setLayout,
+                                     vk::DescriptorSet      defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = (vk::DescriptorSet)(VkDescriptorSet)
-                              m_textureAtlas->getImTextureID();
+        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBound = VK_NULL_HANDLE;

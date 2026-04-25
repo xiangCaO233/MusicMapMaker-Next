@@ -116,8 +116,16 @@ void VKRenderer::createDescriptPool()
         .setPoolSizes(poolSizes);
 
     m_vkDescriptorPool = m_vkLogicalDevice.createDescriptorPool(poolInfo).value;
-
     XINFO("Created Global Descriptor Pool for ImGui.");
+
+    // 创建画笔纹理共享布局
+    vk::DescriptorSetLayoutBinding binding0(
+        0, vk::DescriptorType::eCombinedImageSampler, 1,
+        vk::ShaderStageFlagBits::eFragment, nullptr);
+    vk::DescriptorSetLayoutCreateInfo layoutInfo({}, binding0);
+    m_brushTextureLayout =
+        m_vkLogicalDevice.createDescriptorSetLayout(layoutInfo).value;
+    XINFO("Created Shared Brush Texture Layout.");
 }
 
 }  // namespace MMM::Graphic

@@ -22,17 +22,26 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                                    VKRenderPass& renderPass,
                                    VKSwapchain& swapchain, bool is2DCanvas,
                                    int w, int h, bool additiveBlend,
-                                   bool blendEnable)
+                                   bool blendEnable,
+                                   vk::DescriptorSetLayout sharedLayout)
     : m_logicalDevice(logicalDevice)
 {
-    // 2:创建Descriptor Set布局
-    vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
-    // 包括uniform在内的所有描述符绑定配置
-    descriptorSetLayoutCreateInfo.setBindings(
-        { Graphic::BRUSH_TEXTURE_BIND_DESC });
-    m_descriptorSetLayout =
-        logicalDevice.createDescriptorSetLayout(descriptorSetLayoutCreateInfo).value;
-    XINFO("Created VK Descriptor Set Layout.");
+    if ( sharedLayout != VK_NULL_HANDLE ) {
+        m_descriptorSetLayout    = sharedLayout;
+        m_ownDescriptorSetLayout = false;
+        XINFO("Using Shared VK Descriptor Set Layout.");
+    } else {
+        // 2:创建Descriptor Set布局
+        vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
+        // 包括uniform在内的所有描述符绑定配置
+        descriptorSetLayoutCreateInfo.setBindings(
+            { Graphic::BRUSH_TEXTURE_BIND_DESC });
+        m_descriptorSetLayout =
+            logicalDevice.createDescriptorSetLayout(descriptorSetLayoutCreateInfo)
+                .value;
+        m_ownDescriptorSetLayout = true;
+        XINFO("Created VK Descriptor Set Layout.");
+    }
 
     // --- 定义 Push Constant 范围 ---
     vk::PushConstantRange pushConstantRange;
@@ -227,8 +236,10 @@ VKRenderPipeline::~VKRenderPipeline()
     XINFO("Destroyed VK Graphics RenderPipeline Layout.");
 
     // 销毁Descriptor Set布局
-    m_logicalDevice.destroyDescriptorSetLayout(m_descriptorSetLayout);
-    XINFO("Destroyed VK Descriptor Set Layout.");
+    if ( m_ownDescriptorSetLayout ) {
+        m_logicalDevice.destroyDescriptorSetLayout(m_descriptorSetLayout);
+        XINFO("Destroyed VK Descriptor Set Layout.");
+    }
 }
 
 }  // namespace MMM::Graphic

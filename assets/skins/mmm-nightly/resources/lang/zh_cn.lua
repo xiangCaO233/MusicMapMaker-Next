@@ -117,6 +117,7 @@ return {
 	["ui.settings.editor.cursor_software"] = "软件内置 (带拖尾)",
 	["ui.settings.editor.cursor_system"] = "系统原生",
 	["ui.settings.editor.beat_divisor"] = "全局分拍数设置",
+	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "绘制物件(Shift)时屏蔽滚动加速",
 	["ui.settings.editor.sfx"] = "音效触发策略",
 	["ui.settings.editor.sfx_strategy"] = "折线内部音效",
 	["ui.settings.editor.sfx_flick_scale"] = "Flick音量随宽度增益",

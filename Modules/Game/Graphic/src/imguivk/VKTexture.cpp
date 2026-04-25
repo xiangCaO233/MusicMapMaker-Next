@@ -46,6 +46,53 @@ VKTexture::VKTexture(const unsigned char* pixels, uint32_t width,
     XINFO("Texture created from memory buffer [{}x{}]", width, height);
 }
 
+VKTexture::VKTexture(VKTexture&& other) noexcept
+    : m_device(other.m_device)
+    , m_image(other.m_image)
+    , m_memory(other.m_memory)
+    , m_imageView(other.m_imageView)
+    , m_sampler(other.m_sampler)
+    , m_descriptorSet(other.m_descriptorSet)
+    , m_nativeSets(std::move(other.m_nativeSets))
+    , m_nativePool(other.m_nativePool)
+    , m_width(other.m_width)
+    , m_height(other.m_height)
+{
+    other.m_device        = nullptr;
+    other.m_image         = nullptr;
+    other.m_memory        = nullptr;
+    other.m_imageView     = nullptr;
+    other.m_sampler       = nullptr;
+    other.m_descriptorSet = nullptr;
+    other.m_nativePool    = nullptr;
+}
+
+VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
+{
+    if ( this != &other ) {
+        this->~VKTexture();
+        m_device        = other.m_device;
+        m_image         = other.m_image;
+        m_memory        = other.m_memory;
+        m_imageView     = other.m_imageView;
+        m_sampler       = other.m_sampler;
+        m_descriptorSet = other.m_descriptorSet;
+        m_nativeSets    = std::move(other.m_nativeSets);
+        m_nativePool    = other.m_nativePool;
+        m_width         = other.m_width;
+        m_height        = other.m_height;
+
+        other.m_device        = nullptr;
+        other.m_image         = nullptr;
+        other.m_memory        = nullptr;
+        other.m_imageView     = nullptr;
+        other.m_sampler       = nullptr;
+        other.m_descriptorSet = nullptr;
+        other.m_nativePool    = nullptr;
+    }
+    return *this;
+}
+
 VKTexture::~VKTexture()
 {
     if ( !m_device ) return;
@@ -53,6 +100,12 @@ VKTexture::~VKTexture()
     // 顺序非常重要：先从 ImGui 注销，再销毁资源
     if ( m_descriptorSet ) {
         ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_descriptorSet);
+    }
+
+    if ( m_nativePool ) {
+        for ( auto& [layout, set] : m_nativeSets ) {
+            (void)m_device.freeDescriptorSets(m_nativePool, set);
+        }
     }
 
     m_device.destroySampler(m_sampler);
@@ -158,6 +211,40 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
                                       vk::BorderColor::eIntOpaqueBlack,
                                       VK_FALSE);
     m_sampler = m_device.createSampler(samplerInfo).value;
+}
+
+vk::DescriptorSet VKTexture::getNativeDescriptorSet(vk::DescriptorPool      pool,
+                                                    vk::DescriptorSetLayout layout)
+{
+    VkDescriptorSetLayout lHandle = (VkDescriptorSetLayout)layout;
+
+    if ( m_nativeSets.count(lHandle) ) {
+        return m_nativeSets[lHandle];
+    }
+
+    // 如果 pool 变更了，逻辑上应该清空所有旧 pool 的 set
+    if ( m_nativePool && m_nativePool != pool ) {
+        for ( auto& [oldLayout, set] : m_nativeSets ) {
+            (void)m_device.freeDescriptorSets(m_nativePool, set);
+        }
+        m_nativeSets.clear();
+    }
+    m_nativePool = pool;
+
+    vk::DescriptorSetAllocateInfo allocInfo(pool, 1, &layout);
+    vk::DescriptorSet             newSet =
+        m_device.allocateDescriptorSets(allocInfo).value[0];
+
+    vk::DescriptorImageInfo imageInfo(
+        m_sampler, m_imageView, vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    vk::WriteDescriptorSet descriptorWrite(
+        newSet, 0, 0, 1, vk::DescriptorType::eCombinedImageSampler, &imageInfo);
+
+    m_device.updateDescriptorSets(descriptorWrite, nullptr);
+
+    m_nativeSets[lHandle] = newSet;
+    return newSet;
 }
 
 uint32_t VKTexture::findMemoryType(vk::PhysicalDevice&     physDevice,

@@ -69,6 +69,8 @@ private:
 
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
+
+    bool m_wasPlaying{ false };  ///< 上一帧是否正在播放
 };
 
 }  // namespace MMM::Logic

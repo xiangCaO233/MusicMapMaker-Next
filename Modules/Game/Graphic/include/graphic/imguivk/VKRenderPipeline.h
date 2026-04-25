@@ -28,7 +28,8 @@ public:
     VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                      VKRenderPass& renderPass, VKSwapchain& swapchain,
                      bool is2DCanvas, int w = 0, int h = 0,
-                     bool additiveBlend = false, bool blendEnable = true);
+                     bool additiveBlend = false, bool blendEnable = true,
+                     vk::DescriptorSetLayout sharedLayout = VK_NULL_HANDLE);
 
     // 禁用拷贝和移动
     VKRenderPipeline(VKRenderPipeline&&) = delete;
@@ -41,6 +42,16 @@ public:
 
     ~VKRenderPipeline();
 
+    inline vk::DescriptorSetLayout getDescriptorSetLayout() const
+    {
+        return m_descriptorSetLayout;
+    }
+
+    inline vk::PipelineLayout getPipelineLayout() const
+    {
+        return m_graphicsPipelineLayout;
+    }
+
 private:
     /// @brief 逻辑设备引用
     vk::Device& m_logicalDevice;
@@ -51,11 +62,11 @@ private:
     /// @brief Vulkan Descriptor Sets布局句柄 (描述 Uniform等资源布局)
     vk::DescriptorSetLayout m_descriptorSetLayout;
 
+    /// @brief 是否拥有该布局 (是否需要在析构时销毁)
+    bool m_ownDescriptorSetLayout{ true };
+
     /// @brief Vulkan 管线布局句柄 (描述 Push Constants 和 Descriptor Sets)
     vk::PipelineLayout m_graphicsPipelineLayout;
-
-    // 允许 Renderer 访问内部 Pipeline 句柄进行绑定
-    friend class VKRenderer;
     friend class VKOffScreenRenderer;
 };
 

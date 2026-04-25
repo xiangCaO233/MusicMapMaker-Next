@@ -57,12 +57,20 @@ public:
     void render(NativeWindow&                  window,
                 std::vector<IGraphicUserHook*> uiManagers);
 
-    /**
-     * @brief 触发重建交换链
-     *
-     * @param window 原生窗口
-     */
     void triggerRecreate(NativeWindow& window);
+
+    /**
+     * @brief 获取描述符池
+     */
+    inline vk::DescriptorPool getDescriptorPool() const { return m_vkDescriptorPool; }
+
+    /**
+     * @brief 获取画笔纹理专用的共享描述符集布局
+     */
+    inline vk::DescriptorSetLayout getBrushTextureLayout() const
+    {
+        return m_brushTextureLayout;
+    }
 
 private:
     /// @brief 清屏颜色
@@ -98,6 +106,9 @@ private:
 
     /// @brief 描述符池
     vk::DescriptorPool m_vkDescriptorPool;
+
+    /// @brief 共享的画笔纹理布局 (Set 0: CombinedImageSampler)
+    vk::DescriptorSetLayout m_brushTextureLayout;
 
     /// @brief 描述符集列表 - 每帧都需要
     std::vector<vk::DescriptorSet> m_vkDescriptorSets;

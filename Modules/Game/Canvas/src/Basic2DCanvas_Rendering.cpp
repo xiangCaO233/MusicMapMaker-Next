@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "graphic/imguivk/VKContext.h"
 #include <filesystem>
 
 namespace MMM::Canvas
@@ -54,16 +55,19 @@ const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
     return empty;
 }
 
-void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                                     vk::PipelineLayout pipelineLayout,
-                                     vk::DescriptorSet  defaultDescriptor)
+void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::DescriptorSetLayout setLayout,
+                                     vk::DescriptorSet      defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = (vk::DescriptorSet)(VkDescriptorSet)
-                              m_textureAtlas->getImTextureID();
+        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
@@ -77,8 +81,7 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
             if ( m_bgTexture ) {
-                actualTexture = (vk::DescriptorSet)(VkDescriptorSet)
-                                    m_bgTexture->getImTextureID();
+                actualTexture = m_bgTexture->getNativeDescriptorSet(pool, setLayout);
             }
         }
 
@@ -107,16 +110,19 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
     }
 }
 
-void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
-                                     vk::PipelineLayout pipelineLayout,
-                                     vk::DescriptorSet  defaultDescriptor)
+void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
+                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::DescriptorSetLayout setLayout,
+                                     vk::DescriptorSet      defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = (vk::DescriptorSet)(VkDescriptorSet)
-                              m_textureAtlas->getImTextureID();
+        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
@@ -130,8 +136,7 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
             if ( m_bgTexture ) {
-                actualTexture = (vk::DescriptorSet)(VkDescriptorSet)
-                                    m_bgTexture->getImTextureID();
+                actualTexture = m_bgTexture->getNativeDescriptorSet(pool, setLayout);
             }
         }
 

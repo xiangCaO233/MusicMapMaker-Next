@@ -150,6 +150,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         // 6. 解析 DrawCmds 进行批次渲染 (回调到 UI 实现层)
         onRecordDrawCmds(cmdBuf,
                          m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                         m_mainBrushRenderPipeline->getDescriptorSetLayout(),
                          m_offScreenDescriptorSet);
     }
     cmdBuf.endRenderPass();
@@ -195,8 +196,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 
             // 绘制发光几何体
             onRecordGlowCmds(
-                cmdBuf,
-                m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
+                cmdBuf, m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
+                m_glowBrushRenderPipeline->getDescriptorSetLayout(),
                 m_offScreenDescriptorSet);
         }
         cmdBuf.endRenderPass();

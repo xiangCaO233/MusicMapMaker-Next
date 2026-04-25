@@ -68,6 +68,9 @@ VKRenderer::~VKRenderer()
     m_vkLogicalDevice.destroyDescriptorPool(m_vkDescriptorPool);
     XINFO("Destroyed Descriptor Pool.");
 
+    m_vkLogicalDevice.destroyDescriptorSetLayout(m_brushTextureLayout);
+    XINFO("Destroyed Brush Texture Layout.");
+
     for ( auto& cmdAvailableFence : m_cmdAvailableFences ) {
         m_vkLogicalDevice.destroyFence(cmdAvailableFence);
     }

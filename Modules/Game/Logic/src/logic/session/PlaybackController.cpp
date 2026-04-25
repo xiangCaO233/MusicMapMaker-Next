@@ -1,8 +1,8 @@
-#include "audio/AudioManager.h"
 #include "logic/session/PlaybackController.h"
-#include "logic/session/context/SessionContext.h"
-#include "logic/session/SessionUtils.h"
+#include "audio/AudioManager.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include <algorithm>
 
 namespace MMM::Logic
@@ -27,7 +27,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
-    double totalTime   = Audio::AudioManager::instance().getTotalTime();
+    double totalTime       = Audio::AudioManager::instance().getTotalTime();
     m_ctx.currentTime      = std::clamp(cmd.time, 0.0, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
@@ -47,6 +47,12 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     float wheel = cmd.wheel;
     if ( m_ctx.lastConfig.settings.reverseScroll ) {
         wheel = -wheel;
+    }
+
+    bool isShiftAccelerated = cmd.isShiftDown;
+    if ( isShiftAccelerated && m_ctx.brushState.isActive &&
+         m_ctx.lastConfig.settings.disableScrollAccelerationWhileDrawing ) {
+        isShiftAccelerated = false;
     }
 
     double targetTime   = m_ctx.currentTime;
@@ -82,9 +88,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
                 }
             }
 
-            const auto* currentBPM   = bpmEvents[currentIdx];
-            double      bpmVal       = currentBPM->m_value;
-            double      bVal = bpmVal;
+            const auto* currentBPM = bpmEvents[currentIdx];
+            double      bpmVal     = currentBPM->m_value;
+            double      bVal       = bpmVal;
             if ( bVal <= 0.0 ) {
                 bVal = 120.0;
                 if ( m_ctx.currentBeatmap &&
@@ -94,15 +100,15 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
                         m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
                 }
             }
-            double      beatDuration = 60.0 / bVal;
-            double      stepDuration = cmd.isShiftDown
-                                           ? beatDuration
-                                           : (beatDuration / beatDivisor);
+            double beatDuration = 60.0 / bVal;
+            double stepDuration = isShiftAccelerated
+                                      ? beatDuration
+                                      : (beatDuration / beatDivisor);
 
             double relativeVisualTime =
                 visualCurrentTime - currentBPM->m_timestamp;
             double stepCount = relativeVisualTime / stepDuration;
-            double jump      = std::max(1.0, static_cast<double>(std::abs(wheel)));
+            double jump = std::max(1.0, static_cast<double>(std::abs(wheel)));
 
             double targetVisualTime = visualCurrentTime;
             if ( wheel > 0 ) {
@@ -117,18 +123,18 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
             targetTime = targetVisualTime - visualOffset;
         } else {
             double step = 0.25;
-            if ( cmd.isShiftDown )
+            if ( isShiftAccelerated )
                 step *= m_ctx.lastConfig.settings.scrollSpeedMultiplier;
             targetTime = m_ctx.currentTime - static_cast<double>(wheel) * step;
         }
     } else {
         double step = 0.25;
-        if ( cmd.isShiftDown )
+        if ( isShiftAccelerated )
             step *= m_ctx.lastConfig.settings.scrollSpeedMultiplier;
         targetTime = m_ctx.currentTime - static_cast<double>(wheel) * step;
     }
 
-    double totalTime   = Audio::AudioManager::instance().getTotalTime();
+    double totalTime       = Audio::AudioManager::instance().getTotalTime();
     m_ctx.currentTime      = std::clamp(targetTime, 0.0, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
@@ -139,4 +145,4 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 }
 
 
-}
+}  // namespace MMM::Logic

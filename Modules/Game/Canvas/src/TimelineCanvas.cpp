@@ -7,6 +7,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "ui/Icons.h"
+#include "graphic/imguivk/VKContext.h"
 #include <filesystem>
 #include <cmath>
 
@@ -262,9 +263,10 @@ void TimelineCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
 {
 }
 
-void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                                      vk::PipelineLayout pipelineLayout,
-                                      vk::DescriptorSet  defaultDescriptor)
+void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                                      vk::PipelineLayout     pipelineLayout,
+                                      vk::DescriptorSetLayout setLayout,
+                                      vk::DescriptorSet      defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 

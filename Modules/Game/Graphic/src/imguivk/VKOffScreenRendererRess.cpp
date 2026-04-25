@@ -1,4 +1,5 @@
 #include "graphic/imguivk/VKOffScreenRenderer.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "imgui_impl_vulkan.h"
@@ -220,13 +221,22 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     // 创建所有着色器模块
     createShaderModules();
 
+    // 获取共享布局
+    auto& renderer     = VKContext::get().value().get().getRenderer();
+    auto  sharedLayout = renderer.getBrushTextureLayout();
+
     // 用主着色器创建画笔主渲染管线(2DCanvas)
     m_mainBrushRenderPipeline =
         std::make_unique<VKRenderPipeline>(logicalDevice,
                                            *m_vkShaders[getShaderName("main")],
                                            *m_offScreenRenderPass,
                                            swapchain,
-                                           true);
+                                           true,
+                                           0,
+                                           0,
+                                           false,
+                                           true,
+                                           sharedLayout);
 
     m_glowBrushRenderPipeline = std::make_unique<VKRenderPipeline>(
         logicalDevice,
@@ -237,7 +247,8 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         0,
         0,
         false,  // 使用标准混合渲染发光遮罩层，保持外观一致
-        true);
+        true,
+        sharedLayout);
 
     if ( m_vkShaders.count(getShaderName("effect")) ) {
         m_blurRenderPipeline = std::make_unique<VKRenderPipeline>(
@@ -523,10 +534,11 @@ void VKOffScreenRenderer::createDescriptSets()
     // ==========================================
     // 8. 分配并绑定描述符集
     // ==========================================
-    // 使用离屏管线创建时自动生成的 Layout
-    // (m_brushRenderPipeline->m_descriptorSetLayout)
-    vk::DescriptorSetAllocateInfo allocInfo(
-        m_descriptorPool, 1, &m_mainBrushRenderPipeline->m_descriptorSetLayout);
+    // 使用画笔共享布局
+    auto& renderer     = VKContext::get().value().get().getRenderer();
+    auto  sharedLayout = renderer.getBrushTextureLayout();
+
+    vk::DescriptorSetAllocateInfo allocInfo(m_descriptorPool, 1, &sharedLayout);
     m_offScreenDescriptorSet =
         m_device.allocateDescriptorSets(allocInfo).value[0];
 

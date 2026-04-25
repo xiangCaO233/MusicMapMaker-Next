@@ -119,13 +119,15 @@ protected:
     /**
      * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)
      */
-    virtual void onRecordDrawCmds(vk::CommandBuffer& cmdBuf,
-                                  vk::PipelineLayout pipelineLayout,
-                                  vk::DescriptorSet  defaultDescriptor) = 0;
+    virtual void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                                  vk::PipelineLayout     pipelineLayout,
+                                  vk::DescriptorSetLayout setLayout,
+                                  vk::DescriptorSet      defaultDescriptor) = 0;
 
-    virtual void onRecordGlowCmds(vk::CommandBuffer& cmdBuf,
-                                  vk::PipelineLayout pipelineLayout,
-                                  vk::DescriptorSet  defaultDescriptor)
+    virtual void onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
+                                  vk::PipelineLayout     pipelineLayout,
+                                  vk::DescriptorSetLayout setLayout,
+                                  vk::DescriptorSet      defaultDescriptor)
     {
     }
 
