@@ -111,7 +111,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
             if ( !entry.is_regular_file() ) continue;
 
             auto ext = pathToStr(entry.path().extension());
-            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm" ) {
                 mapFiles.push_back(entry.path());
             } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
                         ext == ".flac" ) {
@@ -348,13 +348,13 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
         '_');
 
     std::filesystem::path mapPath =
-        m_currentProject->m_projectRoot / (safeFilename + ".imd");
+        m_currentProject->m_projectRoot / (safeFilename + ".mmm");
 
     // 如果文件已存在，增加后缀
     int suffix = 1;
     while ( std::filesystem::exists(mapPath) ) {
         mapPath = m_currentProject->m_projectRoot /
-                  (safeFilename + "_" + std::to_string(suffix++) + ".imd");
+                  (safeFilename + "_" + std::to_string(suffix++) + ".mmm");
     }
 
     meta.map_path = mapPath;

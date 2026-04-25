@@ -163,9 +163,12 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         nfdu8char_t*      outPath = nullptr;
-        nfdu8filteritem_t filters[2];
+        nfdu8filteritem_t filters[3];
         int               filterCount = 0;
 
+        if ( ext == ".mmm" || ext == "" ) {
+            filters[filterCount++] = { "MusicMapMaker Beatmap", "mmm" };
+        }
         if ( ext == ".osu" || ext == "" ) {
             filters[filterCount++] = { "osu!mania Beatmap", "osu" };
         }
@@ -173,7 +176,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
             filters[filterCount++] = { "IvoryMusicData", "imd" };
         }
 
-        std::string defaultName = "map" + (ext.empty() ? ".osu" : ext);
+        std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
         nfdresult_t result      = NFD_SaveDialogU8(
             &outPath, filters, filterCount, nullptr, defaultName.c_str());
 
@@ -185,16 +188,18 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
         IGFD::FileDialogConfig fdConfig;
         fdConfig.path              = ".";
         fdConfig.countSelectionMax = 1;
-        fdConfig.fileName          = "map" + (ext.empty() ? ".osu" : ext);
+        fdConfig.fileName          = "map" + (ext.empty() ? ".mmm" : ext);
         fdConfig.flags             = ImGuiFileDialogFlags_Default;
 
         std::string filterStr;
-        if ( ext == ".osu" )
+        if ( ext == ".mmm" )
+            filterStr = ".mmm";
+        else if ( ext == ".osu" )
             filterStr = ".osu";
         else if ( ext == ".imd" )
             filterStr = ".imd";
         else
-            filterStr = ".osu,.imd";
+            filterStr = ".mmm,.osu,.imd";
 
         ImGuiFileDialog::Instance()->OpenDialog("SaveAsFilePicker",
                                                 TR("ui.file.save_as"),
