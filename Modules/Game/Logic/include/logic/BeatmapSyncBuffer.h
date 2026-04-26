@@ -170,8 +170,12 @@ struct RenderSnapshot {
     uint32_t staticCmdCount{ 0 };
 
     /// @brief 静态布局顶点数量 (与 staticCmdCount 对应的顶点分界)
-    /// 从此索引开始的所有顶点属于动态元素 (拍线、音符等)
+    /// 从此索引开始到 staticVertexCount + dynamicVertexCount 的所有顶点属于动态元素
     uint32_t staticVertexCount{ 0 };
+
+    /// @brief 动态元素的顶点数量
+    /// 用于区分“动态层”之后是否还有“置顶静态层”
+    uint32_t dynamicVertexCount{ 0 };
 
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
@@ -217,6 +221,7 @@ struct RenderSnapshot {
         hasBeatmap        = false;
         staticCmdCount    = 0;
         staticVertexCount = 0;
+        dynamicVertexCount = 0;
     }
 };
 

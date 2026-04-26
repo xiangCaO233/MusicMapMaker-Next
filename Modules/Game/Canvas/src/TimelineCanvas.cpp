@@ -79,18 +79,21 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             // 应用顶点级 Y 偏移 (仅修改动态顶点: 标尺刻度、事件线等)
             uint32_t startVtx = m_currentSnapshot->staticVertexCount;
             auto&    vertices  = m_currentSnapshot->vertices;
+            uint32_t endVtx   = m_currentSnapshot->dynamicVertexCount > 0
+                                    ? (startVtx + m_currentSnapshot->dynamicVertexCount)
+                                    : static_cast<uint32_t>(vertices.size());
 
             // 如果是同一个快照被复用，先撤销上一帧的偏移
             if ( m_lastOffsetSnapshot == m_currentSnapshot &&
                  std::abs(m_lastAppliedYOffset) > 0.0001f ) {
-                for ( size_t i = startVtx; i < vertices.size(); ++i ) {
+                for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
                     vertices[i].pos.y -= m_lastAppliedYOffset;
                 }
             }
 
             // 应用新偏移
             if ( std::abs(newYOffset) > 0.0001f ) {
-                for ( size_t i = startVtx; i < vertices.size(); ++i ) {
+                for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
                     vertices[i].pos.y += newYOffset;
                 }
             }

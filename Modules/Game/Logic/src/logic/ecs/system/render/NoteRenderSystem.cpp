@@ -214,11 +214,26 @@ void NoteRenderSystem::generateSnapshot(
         static_cast<uint32_t>(snapshot->vertices.size());
     snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
 
-    // --- Phase 2: 动态音符生成 ---
+    // --- Phase 2: 动态内容生成 (拍线、音符等) ---
+    // 这些内容会受到 UI 线程 yOffset 补偿的影响，从而消除亚帧抖动
     snapshot->trackCount   = trackCount;
     snapshot->renderScaleY = renderScaleY;
 
     if ( cameraId != "Timeline" ) {
+        // 先绘制拍线，使其在物件下方
+        NoteRenderSystem::drawBeatLines(batcher,
+                                        viewportHeight,
+                                        judgmentLineY,
+                                        config,
+                                        timelineRegistry,
+                                        renderTime,
+                                        cache,
+                                        leftX,
+                                        topY,
+                                        bottomY,
+                                        trackAreaW,
+                                        renderScaleY);
+
         NoteRenderSystem::renderNotes(registry,
                                       snapshot,
                                       cameraId,
@@ -235,14 +250,6 @@ void NoteRenderSystem::generateSnapshot(
                                       renderScaleY);
     }
 
-    // --- Phase 3: 置顶层渲染 ---
-    // 将之前生成的打击特效命令插入到最后，使其绘制在物件上方
-    if ( !deferredHitCmds.empty() ) {
-        snapshot->cmds.insert(snapshot->cmds.end(),
-                              deferredHitCmds.begin(),
-                              deferredHitCmds.end());
-    }
-
     for ( const auto& box : snapshot->marqueeBoxes ) {
         NoteRenderSystem::renderMarqueeBox(batcher,
                                            box,
@@ -254,6 +261,101 @@ void NoteRenderSystem::generateSnapshot(
                                            renderTime,
                                            viewportWidth,
                                            viewportHeight);
+    }
+
+    // 记录动态顶点数量
+    snapshot->dynamicVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size()) -
+        snapshot->staticVertexCount;
+
+    // --- Phase 3: 置顶层渲染 (静态或动态) ---
+    // 将之前生成的打击特效命令插入到最后，使其绘制在物件上方
+    if ( !deferredHitCmds.empty() ) {
+        snapshot->cmds.insert(snapshot->cmds.end(),
+                              deferredHitCmds.begin(),
+                              deferredHitCmds.end());
+    }
+
+    // 预览区包围盒：用户要求作为静态元素且在最上层
+    if ( cameraId == "Preview" ) {
+        auto& skin     = Config::SkinManager::instance();
+        auto  boxCol   = skin.getColor("preview.boundingbox");
+        auto  lineCol  = skin.getColor("preview.judgeline");
+        bool  isDragging = snapshot->isPreviewDragging;
+
+        float mainEffectiveH =
+            (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
+            mainViewportHeight;
+        float boxDrawH = mainEffectiveH * renderScaleY;
+
+        // 1. [展示中] 始终绘制当前主视窗位置的包围盒 (除非正在拖拽)
+        if ( !isDragging ) {
+            float boxBottom =
+                judgmentLineY +
+                (config.visual.trackLayout.bottom - config.visual.judgeline_pos) *
+                    mainViewportHeight * renderScaleY;
+
+            batcher.setTexture(TextureID::None);
+            batcher.pushQuad(leftX,
+                             boxBottom,
+                             trackAreaW,
+                             boxDrawH,
+                             { boxCol.r, boxCol.g, boxCol.b, boxCol.a });
+            batcher.pushStrokeRect(leftX,
+                                   boxBottom - boxDrawH,
+                                   rightX,
+                                   boxBottom,
+                                   2.0f,
+                                   { boxCol.r, boxCol.g, boxCol.b, 1.0f });
+        }
+
+        // 2. [悬浮中/拖拽中] 绘制参考包围盒
+        if ( snapshot->isPreviewHovered || isDragging ) {
+            float hoverBoxBottom =
+                snapshot->previewHoverY +
+                (config.visual.trackLayout.bottom - config.visual.judgeline_pos) *
+                    mainViewportHeight * renderScaleY;
+
+            auto hoverBoxCol = skin.getColor("preview.hoverbox");
+            if ( hoverBoxCol.r == 1.0f && hoverBoxCol.g == 0.0f &&
+                 hoverBoxCol.b == 1.0f ) {
+                hoverBoxCol = { 1.0f, 1.0f, 0.6f, 0.3f };
+            }
+            if ( isDragging ) {
+                hoverBoxCol.a = std::min(1.0f, hoverBoxCol.a * 2.0f);
+            }
+
+            batcher.setTexture(TextureID::None);
+            batcher.pushQuad(
+                leftX,
+                hoverBoxBottom,
+                trackAreaW,
+                boxDrawH,
+                { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, hoverBoxCol.a });
+            batcher.pushStrokeRect(
+                leftX,
+                hoverBoxBottom - boxDrawH,
+                rightX,
+                hoverBoxBottom,
+                2.0f,
+                { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.8f });
+
+            // 在鼠标位置绘制临时的判定线预览
+            batcher.pushQuad(
+                leftX,
+                snapshot->previewHoverY + config.visual.judgelineWidth * 0.5f,
+                trackAreaW,
+                config.visual.judgelineWidth,
+                { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
+        }
+
+        // 3. 绘制预览区判定红线 (最上层静态)
+        batcher.setTexture(TextureID::None);
+        batcher.pushQuad(leftX,
+                         judgmentLineY + config.visual.judgelineWidth * 0.5f,
+                         trackAreaW,
+                         config.visual.judgelineWidth,
+                         { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
     }
 
     batcher.flush();
@@ -391,101 +493,10 @@ void NoteRenderSystem::generatePreviewSnapshot(
     renderScaleY =
         previewDrawH / (mainEffectiveH * config.visual.previewConfig.areaRatio);
 
-    auto& skin    = Config::SkinManager::instance();
-    auto  boxCol  = skin.getColor("preview.boundingbox");
-    auto  lineCol = skin.getColor("preview.judgeline");
-
-    float mainJudgelineInPreviewY = judgmentLineY;
-
-    // 核心修正：包围盒的高度应该代表主视窗在预览比例下的可见范围。
-    // 在 Batcher 中，pushQuad(x, y, w, h) 的 y 是底边坐标。
-    float boxDrawH = mainEffectiveH * renderScaleY;
-
-    // --- 区分状态进行绘制 ---
-    bool isDragging = snapshot->isPreviewDragging;
-
-    // 1. [展示中] 始终绘制当前主视窗位置的包围盒 (除非正在拖拽)
-    if ( !isDragging ) {
-        // boxBottom 计算：判定线位置 + (视觉底部 - 判定线位置) * 缩放
-        float boxBottom =
-            mainJudgelineInPreviewY +
-            (config.visual.trackLayout.bottom - config.visual.judgeline_pos) *
-                mainViewportHeight * renderScaleY;
-
-        batcher.setTexture(TextureID::None);
-        batcher.pushQuad(leftX,
-                         boxBottom,
-                         trackAreaW,
-                         boxDrawH,
-                         { boxCol.r, boxCol.g, boxCol.b, boxCol.a });
-        batcher.pushStrokeRect(leftX,
-                               boxBottom - boxDrawH,
-                               rightX,
-                               boxBottom,
-                               2.0f,
-                               { boxCol.r, boxCol.g, boxCol.b, 1.0f });
-    }
-
-    // 2. [悬浮中/拖拽中] 绘制参考包围盒
-    if ( snapshot->isPreviewHovered || isDragging ) {
-        float previewHoverY =
-            isDragging ? snapshot->previewHoverY
-                       : snapshot->previewHoverY;  // 实际上拖拽时也是由
-                                                   // mousePosition 驱动的
-        float hoverBoxBottom =
-            previewHoverY +
-            (config.visual.trackLayout.bottom - config.visual.judgeline_pos) *
-                mainViewportHeight * renderScaleY;
-
-        auto hoverBoxCol = skin.getColor("preview.hoverbox");
-        if ( hoverBoxCol.r == 1.0f && hoverBoxCol.g == 0.0f &&
-             hoverBoxCol.b == 1.0f ) {
-            hoverBoxCol = { 1.0f, 1.0f, 0.6f, 0.3f };
-        }
-
-        // 如果正在拖动，使用更亮的颜色
-        if ( isDragging ) {
-            hoverBoxCol.a = std::min(1.0f, hoverBoxCol.a * 2.0f);
-        }
-
-        batcher.setTexture(TextureID::None);
-        batcher.pushQuad(
-            leftX,
-            hoverBoxBottom,
-            trackAreaW,
-            boxDrawH,
-            { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, hoverBoxCol.a });
-        batcher.pushStrokeRect(
-            leftX,
-            hoverBoxBottom - boxDrawH,
-            rightX,
-            hoverBoxBottom,
-            2.0f,
-            { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.8f });
-
-        // 在鼠标位置绘制临时的判定线预览
-        batcher.pushQuad(leftX,
-                         previewHoverY + config.visual.judgelineWidth * 0.5f,
-                         trackAreaW,
-                         config.visual.judgelineWidth,
-                         { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
-    }
-
-    // 0. 绘制预览区判定红线 (静态)
-    batcher.setTexture(TextureID::None);
-    batcher.pushQuad(
-        leftX,
-        mainJudgelineInPreviewY + config.visual.judgelineWidth * 0.5f,
-        trackAreaW,
-        config.visual.judgelineWidth,
-        { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
-
     // 记录静态边界
     snapshot->staticVertexCount =
         static_cast<uint32_t>(snapshot->vertices.size());
     snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
-
-    // --- 动态元素绘制开始 ---
 }
 
 void NoteRenderSystem::generateMainCanvasSnapshot(
@@ -503,8 +514,6 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     float lx = viewportWidth * config.visual.trackLayout.left;
     float rx = viewportWidth * config.visual.trackLayout.right;
     // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量
-    // 这样即便在亚帧补偿（yOffset）极大或极高 SV
-    // 情况下，物件也不会在靠近视口边缘时被硬件 Scissor 裁切
     batcher.setScissor(
         lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
 

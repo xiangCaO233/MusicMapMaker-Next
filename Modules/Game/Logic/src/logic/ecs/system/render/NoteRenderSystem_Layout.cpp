@@ -53,19 +53,6 @@ void NoteRenderSystem::renderTrackLayout(
 
 
 
-    // 5. 绘制拍线
-    NoteRenderSystem::drawBeatLines(batcher,
-                                    viewportHeight,
-                                    judgmentLineY,
-                                    config,
-                                    timelineRegistry,
-                                    currentTime,
-                                    cache,
-                                    leftX,
-                                    topY,
-                                    bottomY,
-                                    trackAreaW,
-                                    renderScaleY);
 }
 
 void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
