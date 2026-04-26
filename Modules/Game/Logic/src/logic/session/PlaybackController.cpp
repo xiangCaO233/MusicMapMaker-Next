@@ -4,6 +4,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <chrono>
 
 namespace MMM::Logic
 {
@@ -12,9 +13,16 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
     m_ctx.isPlaying = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
-        m_ctx.syncTimer        = 0.0;
-        m_ctx.lastAudioPos     = 0.0;
-        m_ctx.lastAudioSysTime = 0.0;
+        m_ctx.syncTimer             = 0.0;
+        m_ctx.lastAudioPos          = 0.0;
+        m_ctx.lastAudioSysTime      = 0.0;
+        m_ctx.hasInitialAudioOffset = false;
+        // 初始化壁钟基准，用于后续无抖动的 visualTime 计算
+        m_ctx.playStartSysTime =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        m_ctx.playStartVisualTime = m_ctx.currentTime;
         Audio::AudioManager::instance().play();
         m_ctx.syncClock.reset(m_ctx.currentTime);
         SessionUtils::syncHitIndex(m_ctx);
@@ -31,6 +39,13 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
     m_ctx.currentTime      = std::clamp(cmd.time, 0.0, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
+    m_ctx.hasInitialAudioOffset = false;
+    // 重置壁钟基准
+    m_ctx.playStartSysTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    m_ctx.playStartVisualTime = m_ctx.currentTime;
     m_ctx.syncClock.reset(m_ctx.currentTime);
     Audio::AudioManager::instance().seek(m_ctx.currentTime);
     SessionUtils::syncHitIndex(m_ctx);
@@ -138,6 +153,13 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     m_ctx.currentTime      = std::clamp(targetTime, 0.0, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
+    m_ctx.hasInitialAudioOffset = false;
+    // 重置壁钟基准
+    m_ctx.playStartSysTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    m_ctx.playStartVisualTime = m_ctx.currentTime;
     m_ctx.syncClock.reset(m_ctx.currentTime);
     Audio::AudioManager::instance().seek(m_ctx.currentTime);
     SessionUtils::syncHitIndex(m_ctx);

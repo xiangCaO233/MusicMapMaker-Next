@@ -1,10 +1,11 @@
 #include "canvas/Basic2DCanvas.h"
 #include "config/skin/SkinConfig.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include "graphic/imguivk/VKContext.h"
+#include <cmath>
 #include <filesystem>
 
 namespace MMM::Canvas
@@ -56,9 +57,9 @@ const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
 }
 
 void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
-                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
-                                     vk::DescriptorSet      defaultDescriptor)
+                                     vk::DescriptorSet       defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 
@@ -67,7 +68,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
@@ -81,7 +83,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
             if ( m_bgTexture ) {
-                actualTexture = m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+                actualTexture =
+                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
             }
         }
 
@@ -112,9 +115,9 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 }
 
 void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
-                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
-                                     vk::DescriptorSet      defaultDescriptor)
+                                     vk::DescriptorSet       defaultDescriptor)
 {
     if ( !m_currentSnapshot ) return;
 
@@ -123,7 +126,8 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
 
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
@@ -137,7 +141,8 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
             if ( m_bgTexture ) {
-                actualTexture = m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+                actualTexture =
+                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
             }
         }
 

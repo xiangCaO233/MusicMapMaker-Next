@@ -133,16 +133,16 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
     }
 }
 
-void HitFXSystem::generateSnapshot(RenderSnapshot* snapshot, double visualTime,
+void HitFXSystem::generateSnapshot(Batcher& batcher, double visualTime,
                                    const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,
                                    float leftX, float singleTrackW)
 {
     if ( m_trackActiveEffects.empty() ) return;
 
-    Batcher batcher(snapshot);
-    auto&   skinManager = Config::SkinManager::instance();
-    float   baseFps     = skinManager.getEffectBaseFps();
+    RenderSnapshot* snapshot    = batcher.snapshot;
+    auto&           skinManager = Config::SkinManager::instance();
+    float           baseFps     = skinManager.getEffectBaseFps();
 
     for ( const auto& [track, active] : m_trackActiveEffects ) {
         const auto* seq =

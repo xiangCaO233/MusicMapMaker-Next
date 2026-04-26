@@ -37,10 +37,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
     // --- 动态扩容检查 ---
     size_t neededCount = std::max(vertices.size(), indices.size());
     if ( neededCount > m_lastAllocatedCount ) {
-        XWARN("VKOffScreenRenderer: Buffer size insufficient ({} > {}), "
-              "reallocating...",
-              neededCount,
-              m_lastAllocatedCount);
+        XWARN(
+            "VKOffScreenRenderer: Buffer size insufficient ({} > {}), "
+            "reallocating...",
+            neededCount,
+            m_lastAllocatedCount);
 
         // 1. 等待 GPU 完成当前工作
         (void)m_device.waitIdle();
@@ -105,6 +106,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
     cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
     {
         // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
+        glm::mat4    ortho = glm::ortho(0.0f,
+                                        (float)m_logicalWidth,
+                                        0.0f - m_yOffset,
+                                        (float)m_logicalHeight - m_yOffset,
+                                        -1.0f,
+                                        1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -129,12 +136,9 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         // ==========================================
         // ★ 发送 Push Constant：正交投影矩阵
         // ==========================================
-        // 作用：将屏幕像素坐标 (0,0) 到 (logicalWidth, logicalHeight) 映射到 Vulkan
-        // 设备标准坐标 (-1 到 1)
-        // 这样 UI 层的坐标计算可以维持在逻辑坐标系下，而渲染输出是物理分辨率
-        glm::mat4 ortho = glm::ortho(
-            0.0f, (float)m_logicalWidth, 0.0f, (float)m_logicalHeight, -1.0f, 1.0f);
-
+        // 作用：将屏幕像素坐标 (0,0) 到 (logicalWidth, logicalHeight) 映射到
+        // Vulkan 设备标准坐标 (-1 到 1) 这样 UI
+        // 层的坐标计算可以维持在逻辑坐标系下，而渲染输出是物理分辨率
         cmdBuf.pushConstants(
             m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
             vk::ShaderStageFlagBits::eVertex |
@@ -163,6 +167,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         rpBegin.setFramebuffer(m_glowFramebuffer);
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
+            glm::mat4    ortho = glm::ortho(0.0f,
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -181,8 +191,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                 0,
                 nullptr);
 
-            glm::mat4 ortho = glm::ortho(
-                0.0f, (float)m_logicalWidth, 0.0f, (float)m_logicalHeight, -1.0f, 1.0f);
             cmdBuf.pushConstants(
                 m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
                 vk::ShaderStageFlagBits::eVertex |
@@ -197,7 +205,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 
             // 绘制发光几何体
             onRecordGlowCmds(
-                cmdBuf, m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
+                cmdBuf,
+                m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
                 m_glowBrushRenderPipeline->getDescriptorSetLayout(),
                 m_offScreenDescriptorSet);
         }

@@ -99,6 +99,12 @@ private:
     vk::Device         m_logicalDevice{ nullptr };
     vk::CommandPool    m_cmdPool{ nullptr };
     vk::Queue          m_queue{ nullptr };
+
+    /// @brief 上一次应用到动态顶点上的 Y 偏移量
+    float m_lastAppliedYOffset{ 0.0f };
+
+    /// @brief 上一次应用偏移的快照指针
+    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 };
 
 }  // namespace MMM::Canvas

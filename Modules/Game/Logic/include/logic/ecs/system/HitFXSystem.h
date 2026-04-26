@@ -9,6 +9,8 @@
 
 namespace MMM::Logic::System
 {
+struct Batcher;
+
 
 /**
  * @brief 打击音效与视觉特效系统
@@ -62,7 +64,7 @@ public:
      * @param leftX 轨道区域左边界
      * @param singleTrackW 单个轨道宽度
      */
-    void generateSnapshot(RenderSnapshot* snapshot, double visualTime,
+    void generateSnapshot(Batcher& batcher, double visualTime,
                           const Config::EditorConfig& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
                           float singleTrackW);

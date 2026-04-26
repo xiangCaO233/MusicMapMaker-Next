@@ -10,6 +10,8 @@
 #include "graphic/imguivk/VKContext.h"
 #include <filesystem>
 #include <cmath>
+#include <chrono>
+#include <algorithm>
 
 namespace MMM::Canvas
 {
@@ -41,6 +43,61 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     if ( m_syncBuffer ) {
         m_currentSnapshot = m_syncBuffer->pullLatestSnapshot();
         if ( m_currentSnapshot ) {
+            // --- 亚帧时间补偿 (直接修改动态顶点 Y 坐标) ---
+            float newYOffset = 0.0f;
+
+            if ( m_currentSnapshot->isPlaying &&
+                 m_currentSnapshot->snapshotSysTime > 0.0 ) {
+                double now =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now().time_since_epoch())
+                        .count();
+                double dt = now - m_currentSnapshot->snapshotSysTime;
+                if ( dt > 0.0 && dt < 0.1 ) {
+                    double      scrollSpeed  = 500.0;
+                    double      snapshotTime = m_currentSnapshot->currentTime;
+                    const auto& segs         = m_currentSnapshot->scrollSegments;
+                    if ( !segs.empty() ) {
+                        auto it = std::upper_bound(
+                            segs.begin(),
+                            segs.end(),
+                            snapshotTime,
+                            [](double                              val,
+                               const Logic::System::ScrollSegment& seg) {
+                                return val < seg.time;
+                            });
+                        if ( it != segs.begin() ) {
+                            --it;
+                        }
+                        scrollSpeed = it->speed;
+                    }
+                    newYOffset = static_cast<float>(
+                        dt * m_currentSnapshot->playbackSpeed * scrollSpeed);
+                }
+            }
+
+            // 应用顶点级 Y 偏移 (仅修改动态顶点: 标尺刻度、事件线等)
+            uint32_t startVtx = m_currentSnapshot->staticVertexCount;
+            auto&    vertices  = m_currentSnapshot->vertices;
+
+            // 如果是同一个快照被复用，先撤销上一帧的偏移
+            if ( m_lastOffsetSnapshot == m_currentSnapshot &&
+                 std::abs(m_lastAppliedYOffset) > 0.0001f ) {
+                for ( size_t i = startVtx; i < vertices.size(); ++i ) {
+                    vertices[i].pos.y -= m_lastAppliedYOffset;
+                }
+            }
+
+            // 应用新偏移
+            if ( std::abs(newYOffset) > 0.0001f ) {
+                for ( size_t i = startVtx; i < vertices.size(); ++i ) {
+                    vertices[i].pos.y += newYOffset;
+                }
+            }
+
+            m_lastOffsetSnapshot = m_currentSnapshot;
+            m_lastAppliedYOffset = newYOffset;
+
             // 1. 绘制垂直音频时间滚动条
             if ( m_currentSnapshot->hasBeatmap &&
                  m_currentSnapshot->totalTime > 0.0 ) {

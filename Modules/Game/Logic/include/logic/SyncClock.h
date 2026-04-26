@@ -40,6 +40,12 @@ public:
             return;
         }
 
+        // 死区 (Deadzone)：如果误差小于 2ms，我们认为内部高精度的 advance(dt)
+        // 是完全准确的 从而拒绝这种微小扰动带来的渲染抖动
+        if ( std::abs(error) < 0.002 ) {
+            return;
+        }
+
         switch ( config.mode ) {
         case Config::SyncMode::None: m_visualTime = audioTime; break;
         case Config::SyncMode::Integral:

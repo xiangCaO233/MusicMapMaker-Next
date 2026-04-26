@@ -108,11 +108,17 @@ protected:
     uint32_t m_logicalWidth{ 0 };
     uint32_t m_logicalHeight{ 0 };
 
+    /// @brief 亚帧时间补偿 Y 轴偏移 (逻辑像素)
+    /// 当逻辑线程生成快照的时间落后于渲染帧时，通过偏移正交投影矩阵
+    /// 来补偿时间差对应的像素移动量，消除因采样混叠导致的周期性停顿
+    float m_yOffset{ 0.0f };
+
     /// @brief 获取 DPI 缩放倍率
     inline float getDpiScale() const
     {
         if ( m_logicalWidth == 0 ) return 1.0f;
-        return static_cast<float>(m_targetWidth) / static_cast<float>(m_logicalWidth);
+        return static_cast<float>(m_targetWidth) /
+               static_cast<float>(m_logicalWidth);
     }
 
     /// @brief 将逻辑裁剪矩形转换为物理裁剪矩形 (Vulkan Scissor 使用物理坐标)
@@ -120,10 +126,14 @@ protected:
     {
         float      scale = getDpiScale();
         vk::Rect2D physical;
-        physical.offset.x      = static_cast<int32_t>(logicalScissor.offset.x * scale);
-        physical.offset.y      = static_cast<int32_t>(logicalScissor.offset.y * scale);
-        physical.extent.width  = static_cast<uint32_t>(logicalScissor.extent.width * scale);
-        physical.extent.height = static_cast<uint32_t>(logicalScissor.extent.height * scale);
+        physical.offset.x =
+            static_cast<int32_t>(logicalScissor.offset.x * scale);
+        physical.offset.y =
+            static_cast<int32_t>(logicalScissor.offset.y * scale);
+        physical.extent.width =
+            static_cast<uint32_t>(logicalScissor.extent.width * scale);
+        physical.extent.height =
+            static_cast<uint32_t>(logicalScissor.extent.height * scale);
         return physical;
     }
 
@@ -151,14 +161,14 @@ protected:
      * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)
      */
     virtual void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
-                                  vk::PipelineLayout     pipelineLayout,
+                                  vk::PipelineLayout      pipelineLayout,
                                   vk::DescriptorSetLayout setLayout,
-                                  vk::DescriptorSet      defaultDescriptor) = 0;
+                                  vk::DescriptorSet defaultDescriptor) = 0;
 
     virtual void onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
-                                  vk::PipelineLayout     pipelineLayout,
+                                  vk::PipelineLayout      pipelineLayout,
                                   vk::DescriptorSetLayout setLayout,
-                                  vk::DescriptorSet      defaultDescriptor)
+                                  vk::DescriptorSet       defaultDescriptor)
     {
     }
 

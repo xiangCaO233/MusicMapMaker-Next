@@ -135,9 +135,9 @@ void NoteRenderSystem::generateNoteHitboxes(
             static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY;
         float visualH = transform.m_size.y * renderScaleY;
 
-        if ( screenY - visualH - ctx.noteH > bottomY ||
-             screenY + ctx.noteH < topY )
-            continue;
+        float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
+        float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
+        if ( minY > bottomY || maxY < topY ) continue;
 
         if ( !note.m_isSubNote ) {
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
@@ -191,9 +191,9 @@ void NoteRenderSystem::generateNoteHitboxes(
             (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
         float visualH = transform.m_size.y * renderScaleY;
 
-        if ( screenY - visualH - ctx.noteH > bottomY ||
-             screenY + ctx.noteH < topY )
-            continue;
+        float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
+        float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
+        if ( minY > bottomY || maxY < topY ) continue;
 
         float headX = leftX + note.m_trackIndex * singleTrackW +
                       (singleTrackW - ctx.noteW) * 0.5f;
@@ -270,9 +270,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
             const auto& transform =
                 registry.get<const TransformComponent>(entity);
             float visualH = transform.m_size.y * renderScaleY;
-            if ( screenY - visualH - ctx.noteH > bottomY ||
-                 screenY + ctx.noteH < topY )
-                continue;
+            float minY    = std::min(screenY, screenY - visualH) - ctx.noteH;
+            float maxY    = std::max(screenY, screenY - visualH) + ctx.noteH;
+            if ( minY > bottomY || maxY < topY ) continue;
         }
 
         visibleEntities.push_back(entity);

@@ -8,10 +8,10 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <unordered_map>
 #include <vector>
 
-namespace MMM::Canvas {
+namespace MMM::Canvas
+{
 class Basic2DCanvasInteraction;
 }
 
@@ -74,14 +74,14 @@ protected:
                                  getVertices() const override;
     const std::vector<uint32_t>& getIndices() const override;
     void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
-                          vk::PipelineLayout     pipelineLayout,
+                          vk::PipelineLayout      pipelineLayout,
                           vk::DescriptorSetLayout setLayout,
-                          vk::DescriptorSet      defaultDescriptor) override;
+                          vk::DescriptorSet       defaultDescriptor) override;
 
     void onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
-                          vk::PipelineLayout     pipelineLayout,
+                          vk::PipelineLayout      pipelineLayout,
                           vk::DescriptorSetLayout setLayout,
-                          vk::DescriptorSet      defaultDescriptor) override;
+                          vk::DescriptorSet       defaultDescriptor) override;
 
 private:
     /// @brief 画布名称
@@ -119,6 +119,12 @@ private:
     std::string                         m_loadedBgPath{ "" };
 
     std::unique_ptr<Basic2DCanvasInteraction> m_interaction;
+
+    /// @brief 上一次应用到动态顶点上的 Y 偏移量
+    float m_lastAppliedYOffset{ 0.0f };
+
+    /// @brief 上一次应用偏移的快照指针 (用于检测快照是否更新)
+    Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
 
 private:
     void updateBackgroundTexture();

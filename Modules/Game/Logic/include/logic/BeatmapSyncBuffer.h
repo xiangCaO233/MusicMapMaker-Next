@@ -102,6 +102,11 @@ struct RenderSnapshot {
     double currentTime{ 0.0 };
     double totalTime{ 0.0 };
 
+    /// @brief 逻辑线程写入该快照时的高精度系统时钟 (steady_clock, 秒)
+    double snapshotSysTime{ 0.0 };
+    /// @brief 当前播放速度倍率 (用于 UI 侧亚帧插值)
+    double playbackSpeed{ 1.0 };
+
     // 框选盒子快照
     struct MarqueeBoxSnapshot {
         double      startTime{ 0.0 };
@@ -139,6 +144,7 @@ struct RenderSnapshot {
     bool   isPreviewDragging{ false };
 
     int32_t trackCount{ 4 };  ///< 谱面轨道数量
+    float   renderScaleY{ 1.0f };  ///< 垂直缩放倍率 (用于亚帧补偿计算)
 
     // 笔刷预览状态
     struct BrushSnapshot {
@@ -159,6 +165,14 @@ struct RenderSnapshot {
     // 是否已加载谱面
     bool hasBeatmap{ false };
 
+    /// @brief 静态布局绘制指令数量 (轨道底板 + 轨道边框 + 判定区)
+    /// 这些指令对应的几何体不随时间变化，亚帧补偿不应偏移它们
+    uint32_t staticCmdCount{ 0 };
+
+    /// @brief 静态布局顶点数量 (与 staticCmdCount 对应的顶点分界)
+    /// 从此索引开始的所有顶点属于动态元素 (拍线、音符等)
+    uint32_t staticVertexCount{ 0 };
+
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
     {
@@ -175,6 +189,8 @@ struct RenderSnapshot {
         isPlaying        = false;
         currentTime      = 0.0;
         totalTime        = 0.0;
+        snapshotSysTime  = 0.0;
+        playbackSpeed    = 1.0;
         currentTool      = EditTool::Move;
         isHoveringCanvas = false;
         isSelecting      = false;
@@ -198,7 +214,9 @@ struct RenderSnapshot {
         isPreviewDragging      = false;
         brush.isActive         = false;
         erasingEntities.clear();
-        hasBeatmap = false;
+        hasBeatmap        = false;
+        staticCmdCount    = 0;
+        staticVertexCount = 0;
     }
 };
 

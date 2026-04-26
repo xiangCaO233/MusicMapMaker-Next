@@ -63,7 +63,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         snapshot->isPlaying = m_ctx->isPlaying;
         snapshot->currentTime = m_ctx->visualTime;  // 快照使用视觉平滑时间
         snapshot->totalTime   = Audio::AudioManager::instance().getTotalTime();
-        snapshot->hasBeatmap  = (m_ctx->currentBeatmap != nullptr);
+        snapshot->snapshotSysTime =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        snapshot->playbackSpeed =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+        snapshot->hasBeatmap = (m_ctx->currentBeatmap != nullptr);
 
         if ( m_ctx->currentBeatmap ) {
             auto bgPath =
@@ -369,36 +375,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                                    judgmentLineY,
                                                    m_ctx->trackCount,
                                                    config,
-                                                   finalMainHeight);
-
-
-        // 4. 生成打击特效 (仅在主画布和预览区显示)
-        if ( cameraId == "Basic2DCanvas" || cameraId == "Preview" ) {
-            float leftX = camera.viewportWidth * config.visual.trackLayout.left;
-            float rightX =
-                camera.viewportWidth * config.visual.trackLayout.right;
-            float trackAreaW = rightX - leftX;
-            float singleTrackW =
-                trackAreaW / static_cast<float>(m_ctx->trackCount);
-
-            // 针对预览区，布局参数略有不同
-            if ( cameraId == "Preview" ) {
-                leftX      = config.visual.previewConfig.margin.left;
-                rightX     = camera.viewportWidth -
-                             config.visual.previewConfig.margin.right;
-                trackAreaW = rightX - leftX;
-                singleTrackW =
-                    trackAreaW / static_cast<float>(m_ctx->trackCount);
-            }
-
-            m_ctx->hitFXSystem.generateSnapshot(snapshot,
-                                                m_ctx->visualTime,
-                                                config,
-                                                m_ctx->trackCount,
-                                                judgmentLineY,
-                                                leftX,
-                                                singleTrackW);
-        }
+                                                   finalMainHeight,
+                                                   &m_ctx->hitFXSystem);
 
         // 5. 提交专属快照
         syncBuffer->pushWorkingSnapshot();

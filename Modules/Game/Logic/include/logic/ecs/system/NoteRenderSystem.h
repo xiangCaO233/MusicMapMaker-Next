@@ -33,13 +33,15 @@ public:
      * @param trackCount 轨道数量
      * @param config 编辑器配置
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
+     * @param hitFXSystem 打击特效系统 (可选)
      */
     static void generateSnapshot(
         entt::registry& registry, const entt::registry& timelineRegistry,
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount,
-        const Config::EditorConfig& config, float mainViewportHeight = 1000.0f);
+        const Config::EditorConfig& config, float mainViewportHeight = 1000.0f,
+        class HitFXSystem* hitFXSystem = nullptr);
 
 private:
     // --- 内部逻辑拆分方法 ---
@@ -50,11 +52,12 @@ private:
         const Config::EditorConfig& config, const ScrollCache* cache);
 
     static void generatePreviewSnapshot(
-        RenderSnapshot* snapshot, Batcher& batcher, float viewportWidth,
-        float viewportHeight, float judgmentLineY, int32_t trackCount,
-        const Config::EditorConfig& config, float mainViewportHeight,
-        float& leftX, float& rightX, float& topY, float& bottomY,
-        float& trackAreaW, float& singleTrackW, float& renderScaleY);
+        RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
+        float viewportWidth, float viewportHeight, float judgmentLineY,
+        int32_t trackCount, const Config::EditorConfig& config,
+        float mainViewportHeight, float& leftX, float& rightX, float& topY,
+        float& bottomY, float& trackAreaW, float& singleTrackW,
+        float& renderScaleY);
 
     static void generateMainCanvasSnapshot(
         entt::registry& registry, const entt::registry& timelineRegistry,

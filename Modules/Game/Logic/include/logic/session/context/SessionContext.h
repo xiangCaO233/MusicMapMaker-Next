@@ -59,10 +59,17 @@ struct SessionContext {
     glm::vec2 bgSize{ 0.0f, 0.0f };  ///< 背景图原始尺寸
 
     // --- 音频与播放状态 ---
-    double    lastAudioPos{ 0.0 };      ///< 最近一次音频同步包中的时间戳
-    double    lastAudioSysTime{ 0.0 };  ///< 最近一次音频同步包时的系统时间
-    SyncClock syncClock;                ///< 用于平滑音频时间与逻辑时间的时钟
-    double    syncTimer{ 0.0 };         ///< 音频强制同步计时器
+    double    lastAudioPos{ 0.0 };         ///< 最近一次音频同步包中的时间戳
+    double    lastAudioSysTime{ 0.0 };     ///< 最近一次音频同步包时的系统时间
+    double    smoothedAudioOffset{ 0.0 };  ///< 平滑后的系统时间与音频时间差
+    bool      hasInitialAudioOffset{ false };  ///< 是否已初始化平滑偏移
+    SyncClock syncClock;         ///< 用于平滑音频时间与逻辑时间的时钟
+    double    syncTimer{ 0.0 };  ///< 音频强制同步计时器
+
+    /// @brief 播放开始时的系统时钟 (steady_clock, 秒)
+    double playStartSysTime{ 0.0 };
+    /// @brief 播放开始时的视觉时间基准
+    double playStartVisualTime{ 0.0 };
 
     std::vector<System::HitFXSystem::HitEvent>
            hitEvents;                 ///< 当前谱面所有的打击事件序列

@@ -2,14 +2,16 @@
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+
+#include "logic/ecs/system/HitFXSystem.h"
 
 namespace MMM::Logic::System
 {
@@ -19,11 +21,9 @@ void NoteRenderSystem::generateSnapshot(
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    float mainViewportHeight)
+    float mainViewportHeight, HitFXSystem* hitFXSystem)
 {
     // 核心同步：如果预览区正在拖拽，主画布（Basic2DCanvas）渲染的时间应该是预览区当前的悬停时间
-    // 但必须确保 currentTime
-    // 不断更新导致死循环问题，所以这里只做渲染偏移，不改写真实的逻辑时间
     double renderTime = currentTime;
     if ( cameraId == "Basic2DCanvas" && snapshot->isPreviewDragging ) {
         renderTime = snapshot->previewHoverTime;
@@ -44,6 +44,44 @@ void NoteRenderSystem::generateSnapshot(
             singleTrackW = 0;
     float   renderScaleY = 1.0f;
 
+    // --- Phase 1: 静态布局与打击特效预生成 ---
+    // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
+    // 因此，我们在设置 staticVertexCount
+    // 之前生成它的顶点，但将其命令延迟到最后插入。
+    uint32_t fxCmdStart = static_cast<uint32_t>(snapshot->cmds.size());
+    if ( hitFXSystem &&
+         (cameraId == "Basic2DCanvas" || cameraId == "Preview") ) {
+        // 提前计算轨道参数
+        float tempLX = 0, tempRX = 0;
+        if ( cameraId == "Basic2DCanvas" ) {
+            tempLX = viewportWidth * config.visual.trackLayout.left;
+            tempRX = viewportWidth * config.visual.trackLayout.right;
+        } else {
+            tempLX = config.visual.previewConfig.margin.left;
+            tempRX = viewportWidth - config.visual.previewConfig.margin.right;
+        }
+        float tempSTW = (tempRX - tempLX) / static_cast<float>(trackCount);
+
+        hitFXSystem->generateSnapshot(batcher,
+                                      renderTime,
+                                      config,
+                                      trackCount,
+                                      judgmentLineY,
+                                      tempLX,
+                                      tempSTW);
+    }
+    uint32_t fxCmdEnd = static_cast<uint32_t>(snapshot->cmds.size());
+
+    // 提取并暂存打击特效命令
+    std::vector<UI::BrushDrawCmd> deferredHitCmds;
+    if ( fxCmdEnd > fxCmdStart ) {
+        deferredHitCmds.assign(snapshot->cmds.begin() + fxCmdStart,
+                               snapshot->cmds.end());
+        snapshot->cmds.erase(snapshot->cmds.begin() + fxCmdStart,
+                             snapshot->cmds.end());
+    }
+
+    // 正常生成基础布局
     if ( cameraId == "Timeline" ) {
         batcher.setScissor(0, 0, viewportWidth, viewportHeight);
         NoteRenderSystem::generateTimelineSnapshot(snapshot,
@@ -63,6 +101,7 @@ void NoteRenderSystem::generateSnapshot(
 
         NoteRenderSystem::generatePreviewSnapshot(snapshot,
                                                   batcher,
+                                                  renderTime,
                                                   viewportWidth,
                                                   viewportHeight,
                                                   judgmentLineY,
@@ -77,9 +116,7 @@ void NoteRenderSystem::generateSnapshot(
                                                   singleTrackW,
                                                   renderScaleY);
     } else {
-        // 主画布背景不裁剪
         batcher.setScissor(0, 0, viewportWidth, viewportHeight);
-
         renderScaleY = 1.0f;
 
         NoteRenderSystem::generateMainCanvasSnapshot(registry,
@@ -101,7 +138,6 @@ void NoteRenderSystem::generateSnapshot(
                                                      singleTrackW,
                                                      renderScaleY);
 
-        // --- 交互：计算当前悬浮时间点所在的拍序 ---
         if ( snapshot->isHoveringCanvas || snapshot->isPreviewDragging ) {
             double hoveredTime = snapshot->isPreviewDragging
                                      ? snapshot->previewHoverTime
@@ -131,10 +167,14 @@ void NoteRenderSystem::generateSnapshot(
                     double      bpmVal     = currentBPM->m_value;
                     if ( bpmVal <= 0.0 ) {
                         bpmVal = 120.0;
-                        if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                            if ( auto beatmap = session->getContext().currentBeatmap ) {
-                                if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                                    bpmVal = beatmap->m_baseMapMetadata.preference_bpm;
+                        if ( auto session =
+                                 EditorEngine::instance().getActiveSession() ) {
+                            if ( auto beatmap =
+                                     session->getContext().currentBeatmap ) {
+                                if ( beatmap->m_baseMapMetadata.preference_bpm >
+                                     0.0 ) {
+                                    bpmVal = beatmap->m_baseMapMetadata
+                                                 .preference_bpm;
                                 }
                             }
                         }
@@ -161,7 +201,6 @@ void NoteRenderSystem::generateSnapshot(
                         totalBeats += static_cast<int64_t>(
                             std::round(bpmDuration / beatDuration));
                     } else {
-                        // hoveredTime < bpmTime
                         break;
                     }
                 }
@@ -170,28 +209,41 @@ void NoteRenderSystem::generateSnapshot(
         }
     }
 
-    NoteRenderSystem::renderNotes(registry,
-                                  snapshot,
-                                  cameraId,
-                                  renderTime,
-                                  judgmentLineY,
-                                  trackCount,
-                                  config,
-                                  batcher,
-                                  leftX,
-                                  rightX,
-                                  topY,
-                                  bottomY,
-                                  singleTrackW,
-                                  renderScaleY);
+    // 记录静态边界 (此时 snapshot->vertices 包含了特效和布局的顶点)
+    snapshot->staticVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size());
+    snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+
+    // --- Phase 2: 动态音符生成 ---
+    snapshot->trackCount   = trackCount;
+    snapshot->renderScaleY = renderScaleY;
+
+    if ( cameraId != "Timeline" ) {
+        NoteRenderSystem::renderNotes(registry,
+                                      snapshot,
+                                      cameraId,
+                                      renderTime,
+                                      judgmentLineY,
+                                      trackCount,
+                                      config,
+                                      batcher,
+                                      leftX,
+                                      rightX,
+                                      -viewportHeight * 0.5f,
+                                      viewportHeight * 1.5f,
+                                      singleTrackW,
+                                      renderScaleY);
+    }
+
+    // --- Phase 3: 置顶层渲染 ---
+    // 将之前生成的打击特效命令插入到最后，使其绘制在物件上方
+    if ( !deferredHitCmds.empty() ) {
+        snapshot->cmds.insert(snapshot->cmds.end(),
+                              deferredHitCmds.begin(),
+                              deferredHitCmds.end());
+    }
 
     for ( const auto& box : snapshot->marqueeBoxes ) {
-        // 只有与当前视口匹配的框才进行渲染
-        // 注意：目前 NoteRenderSystem 处理时并没有显式传递当前摄像机 ID 信息给
-        // renderMarquee 但我们可以从 snapshot
-        // 结构中推断，或者暂且认为所有框都渲染（渲染器坐标系已由外部变换）
-        // 实际上 handleStartMarquee 记录了 cameraId，这里我们应该校验
-        // 由于 NoteRenderSystem 是通用生成的，我们可以根据坐标范围自动裁剪
         NoteRenderSystem::renderMarqueeBox(batcher,
                                            box,
                                            judgmentLineY,
@@ -275,6 +327,19 @@ void NoteRenderSystem::generateTimelineSnapshot(
     float paddingX = 30.0f;
     float lineW    = viewportWidth - paddingX * 2.0f;
 
+    // 2. 绘制当前时间红线 (静态)
+    batcher.pushQuad(paddingX,
+                     judgmentLineY + 1.0f,
+                     lineW,
+                     2.0f,
+                     { 1.0f, 0.2f, 0.2f, 1.0f });
+
+    // 记录静态边界
+    snapshot->staticVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size());
+    snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+
+    // 3. 绘制 Ticks (动态)
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.time < startTime || seg.time > endTime ) continue;
 
@@ -299,20 +364,14 @@ void NoteRenderSystem::generateTimelineSnapshot(
                                                seg.bpmValue,
                                                seg.scrollValue });
     }
-
-    batcher.pushQuad(paddingX,
-                     judgmentLineY + 1.0f,
-                     lineW,
-                     2.0f,
-                     { 1.0f, 0.2f, 0.2f, 1.0f });
 }
 
 void NoteRenderSystem::generatePreviewSnapshot(
-    RenderSnapshot* snapshot, Batcher& batcher, float viewportWidth,
-    float viewportHeight, float judgmentLineY, int32_t trackCount,
-    const Config::EditorConfig& config, float mainViewportHeight, float& leftX,
-    float& rightX, float& topY, float& bottomY, float& trackAreaW,
-    float& singleTrackW, float& renderScaleY)
+    RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
+    float viewportWidth, float viewportHeight, float judgmentLineY,
+    int32_t trackCount, const Config::EditorConfig& config,
+    float mainViewportHeight, float& leftX, float& rightX, float& topY,
+    float& bottomY, float& trackAreaW, float& singleTrackW, float& renderScaleY)
 {
     if ( !snapshot->hasBeatmap ) return;
 
@@ -326,7 +385,9 @@ void NoteRenderSystem::generatePreviewSnapshot(
     float mainEffectiveH =
         (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
         mainViewportHeight;
+
     float previewDrawH = bottomY - topY;
+
     renderScaleY =
         previewDrawH / (mainEffectiveH * config.visual.previewConfig.areaRatio);
 
@@ -410,6 +471,7 @@ void NoteRenderSystem::generatePreviewSnapshot(
                          { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
     }
 
+    // 0. 绘制预览区判定红线 (静态)
     batcher.setTexture(TextureID::None);
     batcher.pushQuad(
         leftX,
@@ -417,6 +479,13 @@ void NoteRenderSystem::generatePreviewSnapshot(
         trackAreaW,
         config.visual.judgelineWidth,
         { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
+
+    // 记录静态边界
+    snapshot->staticVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size());
+    snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+
+    // --- 动态元素绘制开始 ---
 }
 
 void NoteRenderSystem::generateMainCanvasSnapshot(
@@ -433,9 +502,11 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     // 设置轨道区域裁剪
     float lx = viewportWidth * config.visual.trackLayout.left;
     float rx = viewportWidth * config.visual.trackLayout.right;
-    float ty = viewportHeight * config.visual.trackLayout.top;
-    float by = viewportHeight * config.visual.trackLayout.bottom;
-    batcher.setScissor(lx, ty, rx - lx, by - ty);
+    // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量
+    // 这样即便在亚帧补偿（yOffset）极大或极高 SV
+    // 情况下，物件也不会在靠近视口边缘时被硬件 Scissor 裁切
+    batcher.setScissor(
+        lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
 
     if ( !snapshot->hasBeatmap ) {
         batcher.setTexture(TextureID::Logo);

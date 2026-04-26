@@ -1,13 +1,15 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <numeric>
+
+#include "logic/ecs/system/HitFXSystem.h"
 
 namespace MMM::Logic::System
 {
@@ -48,6 +50,8 @@ void NoteRenderSystem::renderTrackLayout(
                                        singleTrackW,
                                        trackAreaW,
                                        config);
+
+
 
     // 5. 绘制拍线
     NoteRenderSystem::drawBeatLines(batcher,
@@ -194,8 +198,8 @@ void NoteRenderSystem::drawBeatLines(
         });
 
     double currentAbsY = cache->getAbsY(currentTime);
-    double startTime =
-        cache->getTime(currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
+    double startTime   = cache->getTime(
+        currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
     double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
 
     batcher.setTexture(TextureID::None);
@@ -263,7 +267,8 @@ void NoteRenderSystem::drawBeatLines(
 
             auto [color, width] = getBeatLineConfig(denominator);
             double absY         = cache->getAbsY(t);
-            float  y = judgmentLineY - static_cast<float>(absY - currentAbsY) * renderScaleY;
+            float  y = judgmentLineY -
+                       static_cast<float>(absY - currentAbsY) * renderScaleY;
 
             if ( y >= topY && y <= bottomY ) {
                 if ( batcher.snapshot->isSnapped &&

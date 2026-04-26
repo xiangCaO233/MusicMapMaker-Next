@@ -56,6 +56,24 @@ BeatmapSession::BeatmapSession()
                     if ( m_ctx->isPlaying ) {
                         m_ctx->lastAudioPos     = e.positionSeconds;
                         m_ctx->lastAudioSysTime = e.systemTimeSeconds;
+
+                        float speed =
+                            Audio::AudioManager::instance().getPlaybackSpeed();
+                        double currentOffset =
+                            e.systemTimeSeconds - (e.positionSeconds / speed);
+
+                        if ( !m_ctx->hasInitialAudioOffset ) {
+                            m_ctx->smoothedAudioOffset   = currentOffset;
+                            m_ctx->hasInitialAudioOffset = true;
+                        } else {
+                            // 低通滤波器平滑处理音频时间与系统时间的误差，消除
+                            // 50Hz 音频块回调抖动 alpha
+                            // 值越小越平滑，但响应音频偏移(如缓冲卡顿)的速度越慢
+                            double alpha = 0.05;
+                            m_ctx->smoothedAudioOffset =
+                                m_ctx->smoothedAudioOffset * (1.0 - alpha) +
+                                currentOffset * alpha;
+                        }
                     }
                 });
 }
@@ -81,6 +99,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
 
         m_ctx->syncClock.reset(m_ctx->currentTime);
+        // 重置壁钟基准
+        m_ctx->playStartSysTime =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        m_ctx->playStartVisualTime = m_ctx->currentTime;
         if ( m_ctx->isPlaying ) {
             Audio::AudioManager::instance().seek(m_ctx->currentTime);
         }
@@ -91,29 +115,53 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
 
     // --- Playback 更新 ---
     if ( m_ctx->isPlaying ) {
-        float speed = Audio::AudioManager::instance().getPlaybackSpeed();
-        m_ctx->currentTime += static_cast<double>(dt * speed);
-        m_ctx->syncClock.advance(dt, speed);
+        float  speed = Audio::AudioManager::instance().getPlaybackSpeed();
+        double currentSysTime =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
 
+        // 核心修复：直接用系统时钟计算 currentTime，而非累加逻辑线程的 dt
+        // 这样无论逻辑线程的帧间隔如何波动，currentTime
+        // 都是系统时钟的严格线性函数 彻底消除因 dt 采样精度差异导致的周期性抖动
+        m_ctx->currentTime = m_ctx->playStartVisualTime +
+                             (currentSysTime - m_ctx->playStartSysTime) * speed;
+
+        // --- 周期性音频同步校准 ---
         m_ctx->syncTimer += dt;
         if ( m_ctx->syncTimer >= config.settings.syncConfig.syncInterval ) {
-            double currentSysTime =
-                std::chrono::duration<double>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
-            double audioTime =
-                (m_ctx->lastAudioPos > 0.0)
-                    ? (m_ctx->lastAudioPos +
-                       (currentSysTime - m_ctx->lastAudioSysTime) * speed)
-                    : Audio::AudioManager::instance().getCurrentTime();
+            double audioTime = 0.0;
+            if ( m_ctx->hasInitialAudioOffset ) {
+                audioTime =
+                    (currentSysTime - m_ctx->smoothedAudioOffset) * speed;
+            } else {
+                audioTime = Audio::AudioManager::instance().getCurrentTime();
+            }
 
-            m_ctx->syncClock.sync(audioTime, config.settings.syncConfig);
-            m_ctx->currentTime = audioTime;
-            m_ctx->syncTimer   = 0.0;
+            double error = audioTime - m_ctx->currentTime;
+            // 只有误差超过死区 (2ms) 才进行校准
+            if ( std::abs(error) > 0.002 ) {
+                if ( std::abs(error) > 0.5 ) {
+                    // 大幅度跳转 (Seek)，直接重置基准
+                    m_ctx->playStartVisualTime = audioTime;
+                    m_ctx->playStartSysTime    = currentSysTime;
+                } else {
+                    // 微小偏移：将基准做渐进修正，避免跳跃
+                    double correction =
+                        error * static_cast<double>(
+                                    config.settings.syncConfig.integralFactor);
+                    m_ctx->playStartVisualTime += correction;
+                }
+                // 重新计算 currentTime 以应用修正
+                m_ctx->currentTime =
+                    m_ctx->playStartVisualTime +
+                    (currentSysTime - m_ctx->playStartSysTime) * speed;
+            }
+            m_ctx->syncTimer = 0.0;
         }
 
-        m_ctx->visualTime =
-            m_ctx->syncClock.getVisualTime() + config.visual.visualOffset;
+        // visualTime = currentTime + 视觉偏移
+        m_ctx->visualTime = m_ctx->currentTime + config.visual.visualOffset;
 
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
 
