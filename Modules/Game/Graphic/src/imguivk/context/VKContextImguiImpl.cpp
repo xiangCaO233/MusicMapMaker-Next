@@ -20,13 +20,14 @@ static void check_vk_result(VkResult err)
  */
 void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 {
-    float main_scale = Config::AppConfig::instance().getWindowContentScale();
+    float native_scale = Config::AppConfig::instance().getNativeContentScale();
+    float ui_scale     = Config::AppConfig::instance().getUIScale();
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
     ImGuiStyle& style = ImGui::GetStyle();
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO&    io    = ImGui::GetIO();
     (void)io;
     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -50,13 +51,11 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // ImGui::StyleColorsLight();
 
     // Setup scaling
-    // Bake a fixed style scale. (until we have a solution for
-    // dynamic style scaling, changing this requires resetting
-    // Style + calling this again)
-    // style.ScaleAllSizes(main_scale); // Removed manual scaling
+    // style.ScaleAllSizes(ui_scale); // We don't scale style sizes globally
+    // here yet
     style.FontScaleDpi = 1.0f;
 
-    io.ConfigDpiScaleFonts     = true;
+    io.ConfigDpiScaleFonts     = false;  // Handled manually below
     io.ConfigDpiScaleViewports = true;
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform
@@ -127,11 +126,12 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
         config.OversampleH = 2;
         config.OversampleV = 2;
 
-        float scaledSize = size; // Load at logical size
+        // Load at physical pixel size for sharpness
+        float atlasSize = size * native_scale;
 
         // 加载基础 ASCII 字体
         ImFont* font = io.Fonts->AddFontFromFileTTF(
-            asciiFontPath.generic_string().c_str(), scaledSize, &config);
+            asciiFontPath.generic_string().c_str(), atlasSize, &config);
 
         if ( font ) {
             // 配置合并参数加载 CJK 字体
@@ -142,9 +142,16 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
             io.Fonts->AddFontFromFileTTF(
                 chineseFontPath.generic_string().c_str(),
-                scaledSize,
+                atlasSize,
                 &mergeConfig,
                 ranges);
+
+            // 设置缩放以匹配 UI 布局
+            // 如果是在 Wayland 等逻辑缩放环境下，atlasSize 是
+            // 2x，但我们希望它在 ImGui 中只占用 1x 的逻辑空间 如果是在 X11
+            // 等物理缩放环境下，atlasSize 是 2x，我们也希望它占用 2x 的空间
+            // (ui_scale=2.0)
+            font->Scale = ui_scale / native_scale;
 
             skinMgr.setFont(key, font);
         }
@@ -244,34 +251,38 @@ void VKContext::applyTheme()
     }
 
     switch ( appliedTheme ) {
-        case Config::UITheme::DeepDark: setDeepDarkStyle(); break;
-        case Config::UITheme::Dark: setDarkStyle(); break;
-        case Config::UITheme::Light: setLightStyle(); break;
-        case Config::UITheme::Classic: setClassicStyle(); break;
-        case Config::UITheme::Microsoft: setMicrosoftStyle(); break;
-        case Config::UITheme::Darcula: setDarculaStyle(); break;
-        case Config::UITheme::Photoshop: setPhotoshopStyle(); break;
-        case Config::UITheme::Unreal: setUnrealStyle(); break;
-        case Config::UITheme::Gold: setGoldStyle(); break;
-        case Config::UITheme::RoundedVisualStudio: setRoundedVisualStudioStyle(); break;
-        case Config::UITheme::SonicRiders: setSonicRidersStyle(); break;
-        case Config::UITheme::DarkRuda: setDarkRudaStyle(); break;
-        case Config::UITheme::SoftCherry: setSoftCherryStyle(); break;
-        case Config::UITheme::Enemymouse: setEnemymouseStyle(); break;
-        case Config::UITheme::DiscordDark: setDiscordDarkStyle(); break;
-        case Config::UITheme::Comfy: setComfyStyle(); break;
-        case Config::UITheme::PurpleComfy: setPurpleComfyStyle(); break;
-        case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
-        case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
-        case Config::UITheme::Moonlight: setMoonlightStyle(); break;
-        case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
-        case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
-        case Config::UITheme::Everforest: setEverforestStyle(); break;
-        case Config::UITheme::Windark: setWindarkStyle(); break;
-        case Config::UITheme::Rest: setRestStyle(); break;
-        case Config::UITheme::ComfortableDarkCyan: setComfortableDarkCyanStyle(); break;
-        case Config::UITheme::KazamCherry: setKazamCherryStyle(); break;
-        default: setDeepDarkStyle(); break;
+    case Config::UITheme::DeepDark: setDeepDarkStyle(); break;
+    case Config::UITheme::Dark: setDarkStyle(); break;
+    case Config::UITheme::Light: setLightStyle(); break;
+    case Config::UITheme::Classic: setClassicStyle(); break;
+    case Config::UITheme::Microsoft: setMicrosoftStyle(); break;
+    case Config::UITheme::Darcula: setDarculaStyle(); break;
+    case Config::UITheme::Photoshop: setPhotoshopStyle(); break;
+    case Config::UITheme::Unreal: setUnrealStyle(); break;
+    case Config::UITheme::Gold: setGoldStyle(); break;
+    case Config::UITheme::RoundedVisualStudio:
+        setRoundedVisualStudioStyle();
+        break;
+    case Config::UITheme::SonicRiders: setSonicRidersStyle(); break;
+    case Config::UITheme::DarkRuda: setDarkRudaStyle(); break;
+    case Config::UITheme::SoftCherry: setSoftCherryStyle(); break;
+    case Config::UITheme::Enemymouse: setEnemymouseStyle(); break;
+    case Config::UITheme::DiscordDark: setDiscordDarkStyle(); break;
+    case Config::UITheme::Comfy: setComfyStyle(); break;
+    case Config::UITheme::PurpleComfy: setPurpleComfyStyle(); break;
+    case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
+    case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
+    case Config::UITheme::Moonlight: setMoonlightStyle(); break;
+    case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
+    case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
+    case Config::UITheme::Everforest: setEverforestStyle(); break;
+    case Config::UITheme::Windark: setWindarkStyle(); break;
+    case Config::UITheme::Rest: setRestStyle(); break;
+    case Config::UITheme::ComfortableDarkCyan:
+        setComfortableDarkCyanStyle();
+        break;
+    case Config::UITheme::KazamCherry: setKazamCherryStyle(); break;
+    default: setDeepDarkStyle(); break;
     }
 }
 
@@ -3646,37 +3657,37 @@ void VKContext::setComfortableDarkCyanStyle()
     // Comfortable Dark Cyan style by SouthCraftX from ImThemes
     ImGuiStyle& style = ImGui::GetStyle();
 
-    style.Alpha                     = 1.0f;
-    style.DisabledAlpha             = 1.0f;
-    style.WindowPadding             = ImVec2(20.0f, 20.0f);
-    style.WindowRounding            = 11.5f;
-    style.WindowBorderSize          = 0.0f;
-    style.WindowMinSize             = ImVec2(20.0f, 20.0f);
-    style.WindowTitleAlign          = ImVec2(0.5f, 0.5f);
-    style.WindowMenuButtonPosition  = ImGuiDir_None;
-    style.ChildRounding             = 20.0f;
-    style.ChildBorderSize           = 1.0f;
-    style.PopupRounding             = 17.4f;
-    style.PopupBorderSize           = 1.0f;
-    style.FramePadding              = ImVec2(20.0f, 3.4f);
-    style.FrameRounding             = 11.9f;
-    style.FrameBorderSize           = 0.0f;
-    style.ItemSpacing               = ImVec2(8.9f, 13.4f);
-    style.ItemInnerSpacing          = ImVec2(7.1f, 1.8f);
-    style.CellPadding               = ImVec2(12.1f, 9.2f);
-    style.IndentSpacing             = 0.0f;
-    style.ColumnsMinSpacing         = 8.7f;
-    style.ScrollbarSize             = 11.6f;
-    style.ScrollbarRounding         = 15.9f;
-    style.GrabMinSize               = 3.7f;
-    style.GrabRounding              = 20.0f;
-    style.TabRounding               = 9.8f;
-    style.TabBorderSize             = 0.0f;
-    style.TabCloseButtonMinWidthSelected = 0.0f;
+    style.Alpha                            = 1.0f;
+    style.DisabledAlpha                    = 1.0f;
+    style.WindowPadding                    = ImVec2(20.0f, 20.0f);
+    style.WindowRounding                   = 11.5f;
+    style.WindowBorderSize                 = 0.0f;
+    style.WindowMinSize                    = ImVec2(20.0f, 20.0f);
+    style.WindowTitleAlign                 = ImVec2(0.5f, 0.5f);
+    style.WindowMenuButtonPosition         = ImGuiDir_None;
+    style.ChildRounding                    = 20.0f;
+    style.ChildBorderSize                  = 1.0f;
+    style.PopupRounding                    = 17.4f;
+    style.PopupBorderSize                  = 1.0f;
+    style.FramePadding                     = ImVec2(20.0f, 3.4f);
+    style.FrameRounding                    = 11.9f;
+    style.FrameBorderSize                  = 0.0f;
+    style.ItemSpacing                      = ImVec2(8.9f, 13.4f);
+    style.ItemInnerSpacing                 = ImVec2(7.1f, 1.8f);
+    style.CellPadding                      = ImVec2(12.1f, 9.2f);
+    style.IndentSpacing                    = 0.0f;
+    style.ColumnsMinSpacing                = 8.7f;
+    style.ScrollbarSize                    = 11.6f;
+    style.ScrollbarRounding                = 15.9f;
+    style.GrabMinSize                      = 3.7f;
+    style.GrabRounding                     = 20.0f;
+    style.TabRounding                      = 9.8f;
+    style.TabBorderSize                    = 0.0f;
+    style.TabCloseButtonMinWidthSelected   = 0.0f;
     style.TabCloseButtonMinWidthUnselected = 0.0f;
-    style.ColorButtonPosition       = ImGuiDir_Right;
-    style.ButtonTextAlign           = ImVec2(0.5f, 0.5f);
-    style.SelectableTextAlign       = ImVec2(0.0f, 0.0f);
+    style.ColorButtonPosition              = ImGuiDir_Right;
+    style.ButtonTextAlign                  = ImVec2(0.5f, 0.5f);
+    style.SelectableTextAlign              = ImVec2(0.0f, 0.0f);
 
     style.Colors[ImGuiCol_Text] = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
     style.Colors[ImGuiCol_TextDisabled] =

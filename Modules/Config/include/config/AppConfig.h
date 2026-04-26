@@ -52,11 +52,23 @@ public:
     /// @brief 设置设备屏幕刷新率（由图形模块在启动时写入）
     void setDeviceRefreshRate(int rate) { m_deviceRefreshRate = rate; }
 
-    /// @brief 获取窗口缩放比例 (DPI Scale)
-    float getWindowContentScale() const { return m_windowContentScale; }
+    /// @brief 获取窗口缩放比例 (GLFW 原生报告的比例，用于字体加载等)
+    float getNativeContentScale() const { return m_nativeContentScale; }
 
-    /// @brief 设置窗口缩放比例 (DPI Scale)
-    void setWindowContentScale(float scale) { m_windowContentScale = scale; }
+    /// @brief 设置窗口缩放比例
+    void setNativeContentScale(float scale) { m_nativeContentScale = scale; }
+
+    /// @brief 获取 UI 布局缩放比例 (已减去系统自动缩放部分)
+    float getUIScale() const { return m_uiScale; }
+
+    /// @brief 设置 UI 布局缩放比例
+    void setUIScale(float scale) { m_uiScale = scale; }
+
+    /// @brief 获取窗口缩放比例 (保持旧接口兼容，返回 UI 缩放)
+    float getWindowContentScale() const { return m_uiScale; }
+
+    /// @brief 设置窗口缩放比例 (保持旧接口兼容)
+    void setWindowContentScale(float scale) { m_uiScale = scale; }
 
 private:
     AppConfig();
@@ -70,7 +82,8 @@ private:
     EditorConfig       m_editorConfig;
     mutable std::mutex m_mutex;
     int                m_deviceRefreshRate{ 60 };  // 默认60Hz
-    float              m_windowContentScale{ 1.0f };
+    float              m_nativeContentScale{ 1.0f };
+    float              m_uiScale{ 1.0f };
 };
 
 }  // namespace MMM::Config

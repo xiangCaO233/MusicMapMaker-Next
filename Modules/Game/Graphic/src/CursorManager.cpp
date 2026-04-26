@@ -1,8 +1,8 @@
 #include "graphic/CursorManager.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "config/AppConfig.h"
 #include <filesystem>
 
 namespace MMM::Graphic
@@ -53,17 +53,18 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
     ImGuiIO& io        = ImGui::GetIO();
     ImVec2   mousePos  = io.MousePos;
     float    deltaTime = io.DeltaTime;
-    
-    auto& config = Config::AppConfig::instance();
+
+    auto& config    = Config::AppConfig::instance();
     float dpiScale  = config.getWindowContentScale();
     auto& cursorCfg = config.getEditorSettings().softwareCursorConfig;
 
     // 同步配置参数
-    float cursorSize    = cursorCfg.cursorSize;
-    float trailSize     = cursorCfg.trailSize;
+    float cursorSize    = cursorCfg.cursorSize * dpiScale;
+    float trailSize     = cursorCfg.trailSize * dpiScale;
     float trailLifeTime = cursorCfg.trailLifeTime;
-    float smokeSize     = cursorCfg.smokeSize;
-    float smokeLifeTime = (smokeLifeOverride > 0.0f) ? smokeLifeOverride : cursorCfg.smokeLifeTime;
+    float smokeSize     = cursorCfg.smokeSize * dpiScale;
+    float smokeLifeTime = (smokeLifeOverride > 0.0f) ? smokeLifeOverride
+                                                     : cursorCfg.smokeLifeTime;
 
     // 1. 生成新的点
     bool isMoving =

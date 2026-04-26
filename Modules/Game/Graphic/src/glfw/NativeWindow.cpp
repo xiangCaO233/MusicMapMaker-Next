@@ -1,4 +1,5 @@
 #include "graphic/glfw/window/NativeWindow.h"
+#include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
@@ -8,7 +9,6 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
-#include "config/AppConfig.h"
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
@@ -33,7 +33,7 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
     glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_TRUE);
 #endif
 
@@ -52,21 +52,44 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
         int actualW, actualH;
         glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
 
-#ifdef _WIN32
-        // Windows 下如果内容缩放大于 1.0 且窗口尚未缩放，则手动调整
-        if ( xscale > 1.0f || yscale > 1.0f ) {
+#if defined(_WIN32) || defined(__linux__)
+        // 获取 framebuffer 尺寸以检测系统是否已经自动处理了逻辑像素缩放 (如
+        // Wayland)
+        int fbW, fbH;
+        glfwGetFramebufferSize(m_windowHandle, &fbW, &fbH);
+        float fbScaleX =
+            (actualW > 0) ? static_cast<float>(fbW) / actualW : 1.0f;
+
+        // 如果内容缩放大于系统已处理的缩放 (fbScaleX)，说明在 X11 或某些
+        // Windows 环境下， 我们需要手动调整窗口尺寸以匹配预期的逻辑大小
+        if ( xscale > fbScaleX ) {
             int scaledW = static_cast<int>(w * xscale);
             int scaledH = static_cast<int>(h * yscale);
             if ( actualW < scaledW ) {
                 glfwSetWindowSize(m_windowHandle, scaledW, scaledH);
-                actualW = scaledW;
-                actualH = scaledH;
+                glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
+                glfwGetFramebufferSize(m_windowHandle, &fbW, &fbH);
+                fbScaleX =
+                    (actualW > 0) ? static_cast<float>(fbW) / actualW : 1.0f;
             }
         }
+#else
+        int fbW, fbH;
+        glfwGetFramebufferSize(m_windowHandle, &fbW, &fbH);
+        float fbScaleX =
+            (actualW > 0) ? static_cast<float>(fbW) / actualW : 1.0f;
 #endif
-        // 同步当前缩放到全局配置
-        Config::AppConfig::instance().setWindowContentScale(xscale);
-        XINFO("Detected content scale: x={} y={}", xscale, yscale);
+
+        // 同步缩放到全局配置
+        // nativeContentScale 是原生 DPI (用于字体加载)
+        // uiScale 是我们需要手动补偿的比例 (xscale / fbScaleX)
+        Config::AppConfig::instance().setNativeContentScale(xscale);
+        Config::AppConfig::instance().setUIScale(xscale / fbScaleX);
+
+        XINFO("Detected scales: native={}, fb_auto={}, ui_manual={}",
+              xscale,
+              fbScaleX,
+              xscale / fbScaleX);
 
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
@@ -74,10 +97,12 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             int xPos = (mode->width - actualW) / 2;
             int yPos = (mode->height - actualH) / 2;
             glfwSetWindowPos(m_windowHandle, xPos, yPos);
-            
+
             // 写入屏幕刷新率到全局配置，供逻辑线程等限制最高帧率使用
-            Config::AppConfig::instance().setDeviceRefreshRate(mode->refreshRate);
-            XINFO("Detected primary monitor refresh rate: {} Hz", mode->refreshRate);
+            Config::AppConfig::instance().setDeviceRefreshRate(
+                mode->refreshRate);
+            XINFO("Detected primary monitor refresh rate: {} Hz",
+                  mode->refreshRate);
         }
     }
 
@@ -90,13 +115,14 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetInputMode(m_windowHandle, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
 #ifdef __linux__
     // 确保不禁止系统快捷键 (针对 Wayland)
-    if ( glfwRawMouseMotionSupported() ) { // 只是为了检查是否是现代 GLFW
+    if ( glfwRawMouseMotionSupported() ) {  // 只是为了检查是否是现代 GLFW
         // GLFW_MOUSE_PASSTHROUGH 也可以考虑，但这里不是需要的
     }
-    // 显式确保不拦截系统组合键
-    #if defined(GLFW_KEYBOARD_SHORTCUTS_INHIBIT)
-    glfwSetInputMode(m_windowHandle, GLFW_KEYBOARD_SHORTCUTS_INHIBIT, GLFW_FALSE);
-    #endif
+// 显式确保不拦截系统组合键
+#    if defined(GLFW_KEYBOARD_SHORTCUTS_INHIBIT)
+    glfwSetInputMode(
+        m_windowHandle, GLFW_KEYBOARD_SHORTCUTS_INHIBIT, GLFW_FALSE);
+#    endif
 #endif
 
 
@@ -110,8 +136,17 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     // 监听内容缩放变化 (跨显示器移动)
     glfwSetWindowContentScaleCallback(
         m_windowHandle, [](GLFWwindow* w, float xscale, float yscale) {
-            Config::AppConfig::instance().setWindowContentScale(xscale);
-            XINFO("Content scale changed: x={} y={}", xscale, yscale);
+            int winW, winH, fbW, fbH;
+            glfwGetWindowSize(w, &winW, &winH);
+            glfwGetFramebufferSize(w, &fbW, &fbH);
+            float fbScaleX = (winW > 0) ? static_cast<float>(fbW) / winW : 1.0f;
+
+            Config::AppConfig::instance().setNativeContentScale(xscale);
+            Config::AppConfig::instance().setUIScale(xscale / fbScaleX);
+
+            XINFO("Content scale changed: native={}, ui={}",
+                  xscale,
+                  xscale / fbScaleX);
 
             // 发布事件，通知 UI 重载资源
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
