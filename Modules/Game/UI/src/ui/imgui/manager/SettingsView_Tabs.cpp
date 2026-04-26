@@ -97,8 +97,8 @@ void SettingsView::drawSoftwareSettings()
     }
 
     if ( settings.cursorStyle == Config::CursorStyle::Software ) {
-        ImGui::Indent();
-        ImGui::SeparatorText(TR_CACHE("ui.settings.software.cursor_params").data());
+        ImGui::SeparatorText(
+            TR_CACHE("ui.settings.software.cursor_params").data());
         changed |= ImGui::SliderFloat(
             TR_CACHE("ui.settings.software.cursor_size").data(),
             &settings.softwareCursorConfig.cursorSize,
@@ -128,15 +128,16 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
             &settings.softwareCursorConfig.enableBpmSyncSmokeLife);
 
-        if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife ) ImGui::BeginDisabled();
+        if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife )
+            ImGui::BeginDisabled();
         changed |= ImGui::SliderFloat(
             TR_CACHE("ui.settings.software.smoke_life").data(),
             &settings.softwareCursorConfig.smokeLifeTime,
             0.05f,
             10.0f,
             "%.2f s");
-        if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife ) ImGui::EndDisabled();
-        ImGui::Unindent();
+        if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife )
+            ImGui::EndDisabled();
     }
 
     // 3. 文件选择器样式

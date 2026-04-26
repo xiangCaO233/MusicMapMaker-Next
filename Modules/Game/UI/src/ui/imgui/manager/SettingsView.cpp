@@ -13,8 +13,11 @@ namespace MMM::UI
 SettingsView::SettingsView(const std::string& subViewName)
     : ISubView(subViewName)
 {
-    m_tabSubId = Event::EventBus::instance().subscribe<Event::UISettingsTabEvent>(
-        [this](const Event::UISettingsTabEvent& e) { m_currentTab = e.tab; });
+    m_tabSubId =
+        Event::EventBus::instance().subscribe<Event::UISettingsTabEvent>(
+            [this](const Event::UISettingsTabEvent& e) {
+                m_currentTab = e.tab;
+            });
 }
 
 SettingsView::~SettingsView()
@@ -49,12 +52,13 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
             auto DrawCategoryIcon = [&](Event::SettingsTab tab,
-                                        const char* iconStr,
-                                        const char* tooltip) {
+                                        const char*        iconStr,
+                                        const char*        tooltip) {
                 bool isActive = (m_currentTab == tab);
 
                 if ( isActive ) {
-                    ImVec4 activeCol = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+                    ImVec4 activeCol =
+                        ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
                     ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
                     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, activeCol);
                     ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeCol);
@@ -87,7 +91,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                 }
 
                 ImGui::PopStyleColor(1);
-                
+
                 if ( isActive ) {
                     ImGui::PopStyleColor(3);
                 } else {
@@ -133,27 +137,43 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
         Sizing::Grow(),
         Sizing::Grow(),
         [this, &skinCfg](Clay_BoundingBox r, bool isHovered) {
-            ImGui::BeginChild("SettingsContent", { r.width, r.height }, false);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 10));
+            // 在 BeginChild 之前推入样式变量，确保子窗口内部布局使用该边距
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                ImVec2(35.0f, 25.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                ImVec2(10.0f, 15.0f));
 
-            ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
+            if ( ImGui::BeginChild(
+                     "SettingsContent", { r.width, r.height }, false) ) {
+                ImFont* contentFont = skinCfg.getFont("content");
+                if ( contentFont ) ImGui::PushFont(contentFont);
 
-            switch ( m_currentTab ) {
-            case Event::SettingsTab::Software: drawSoftwareSettings(); break;
-            case Event::SettingsTab::Visual: drawVisualSettings(); break;
-            case Event::SettingsTab::Project: drawProjectSettings(); break;
-            case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
-            case Event::SettingsTab::Editor: drawEditorSettings(); break;
+                // 强制全局缩进，确保即便某些组件忽略 WindowPadding
+                // 也能有基础间距
+                ImGui::Indent(10.0f);
+
+                switch ( m_currentTab ) {
+                case Event::SettingsTab::Software:
+                    drawSoftwareSettings();
+                    break;
+                case Event::SettingsTab::Visual: drawVisualSettings(); break;
+                case Event::SettingsTab::Project: drawProjectSettings(); break;
+                case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
+                case Event::SettingsTab::Editor: drawEditorSettings(); break;
+                }
+
+                ImGui::Unindent(10.0f);
+
+                // 底部增加大量留白，防止最后一个控件贴边
+                ImGui::Dummy(ImVec2(0, 50));
+
+                if ( contentFont ) ImGui::PopFont();
             }
-
-            if ( contentFont ) ImGui::PopFont();
-
-            ImGui::PopStyleVar();
             ImGui::EndChild();
+            ImGui::PopStyleVar(2);
         });
 
     rootHBox.render(layoutContext);
 }
 
-} // namespace MMM::UI
+}  // namespace MMM::UI
