@@ -41,12 +41,9 @@ void SideBarUI::update(UIManager* sourceManager)
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float                dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    float sidebarBaseWidth =
-        std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    float sidebarWidth = std::floor(sidebarBaseWidth * dpiScale);
+    float sidebarWidth = std::floor(std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
 
-    float       extraPaddingBaseY = 4.0f;
-    float       extraPaddingY     = std::floor(extraPaddingBaseY * dpiScale);
+    float       extraPaddingY     = std::floor(4.0f * dpiScale);
     ImGuiStyle& style             = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;

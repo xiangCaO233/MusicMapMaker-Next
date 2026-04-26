@@ -26,14 +26,11 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    float sidebarBaseWidth =
-        std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    float sidebarWidth     = std::floor(sidebarBaseWidth * dpiScale);
-    float toolbarBaseWidth = 32.0f;
-    float toolbarWidth     = std::floor(toolbarBaseWidth * dpiScale);
+    float sidebarWidth =
+        std::floor(std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
+    float toolbarWidth     = std::floor(32.0f * dpiScale);
 
-    float       extraPaddingBaseY = 4.0f;
-    float       extraPaddingY     = std::floor(extraPaddingBaseY * dpiScale);
+    float       extraPaddingY     = std::floor(4.0f * dpiScale);
     ImGuiStyle& style             = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;

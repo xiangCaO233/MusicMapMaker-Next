@@ -10,6 +10,7 @@
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
@@ -161,6 +162,19 @@ void MainMenuView::openPackFilePicker()
 void MainMenuView::openExportFilePicker(const std::string& ext)
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
+
+    std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
+    auto        session     = Logic::EditorEngine::instance().getActiveSession();
+    if ( session && session->getContext().currentBeatmap ) {
+        auto& meta = session->getContext().currentBeatmap->m_baseMapMetadata;
+        if ( ext == ".imd" ) {
+            defaultName = fmt::format(
+                "{}_{}k_{}.imd", meta.title, meta.track_count, meta.version);
+        } else {
+            defaultName = meta.name + (ext.empty() ? ".mmm" : ext);
+        }
+    }
+
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         nfdu8char_t*      outPath = nullptr;
         nfdu8filteritem_t filters[3];
@@ -176,8 +190,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
             filters[filterCount++] = { "IvoryMusicData", "imd" };
         }
 
-        std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
-        nfdresult_t result      = NFD_SaveDialogU8(
+        nfdresult_t result = NFD_SaveDialogU8(
             &outPath, filters, filterCount, nullptr, defaultName.c_str());
 
         if ( result == NFD_OKAY ) {
@@ -188,7 +201,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
         IGFD::FileDialogConfig fdConfig;
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
-        fdConfig.fileName          = "map" + (ext.empty() ? ".mmm" : ext);
+        fdConfig.fileName          = defaultName;
         fdConfig.flags             = ImGuiFileDialogFlags_Default;
 
         std::string filterStr;

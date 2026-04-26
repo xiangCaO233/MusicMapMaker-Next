@@ -96,7 +96,7 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
 
         // 扩张公式：初始大小 * (1.0 + (1.0 - 剩余寿命) * 扩张系数)
         float currentSize =
-            smokeSize * dpiScale * (1.0f + (1.0f - p.life) * m_smokeExpansion);
+            smokeSize * (1.0f + (1.0f - p.life) * m_smokeExpansion);
         float hs = currentSize * 0.5f;
 
         if ( m_texSmoke ) {
@@ -120,7 +120,7 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
 
         int   alpha       = (int)(p.life * 255.0f);
         ImU32 color       = IM_COL32(255, 255, 255, alpha);
-        float currentSize = trailSize * dpiScale * (0.3f + 0.7f * p.life);  // 拖尾会收缩
+        float currentSize = trailSize * (0.3f + 0.7f * p.life);  // 拖尾会收缩
         float hs          = currentSize * 0.5f;
 
         if ( m_texTrail ) {
@@ -135,7 +135,7 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
 
     // 4. 绘制主光标头 (最顶层)
     if ( m_texCursor ) {
-        float hs = cursorSize * dpiScale * 0.5f;
+        float hs = cursorSize * 0.5f;
         drawList->AddImage(m_texCursor->getImTextureID(),
                            ImVec2(mousePos.x - hs, mousePos.y - hs),
                            ImVec2(mousePos.x + hs, mousePos.y + hs));

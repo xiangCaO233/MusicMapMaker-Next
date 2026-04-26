@@ -292,7 +292,8 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            cmdBuf.setScissor(0, 1, &cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
 

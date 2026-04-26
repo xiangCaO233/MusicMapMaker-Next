@@ -87,7 +87,9 @@ protected:
         uint32_t physicalH = static_cast<uint32_t>(logicalH * dpiScale);
 
         if ( physicalW != m_targetWidth || physicalH != m_targetHeight ) {
-            resizeCall(m_targetWidth, m_targetHeight, physicalW, physicalH);
+            // 核心修复：向逻辑线程同步逻辑尺寸而非物理尺寸
+            // 因为逻辑线程的渲染系统 (NoteRenderSystem) 基于逻辑坐标生成几何体
+            resizeCall(m_logicalWidth, m_logicalHeight, logicalW, logicalH);
             m_targetWidth     = physicalW;
             m_targetHeight    = physicalH;
             m_logicalWidth    = logicalW;
@@ -105,6 +107,25 @@ protected:
     /// @brief 逻辑画布尺寸 (ImGui 空间)
     uint32_t m_logicalWidth{ 0 };
     uint32_t m_logicalHeight{ 0 };
+
+    /// @brief 获取 DPI 缩放倍率
+    inline float getDpiScale() const
+    {
+        if ( m_logicalWidth == 0 ) return 1.0f;
+        return static_cast<float>(m_targetWidth) / static_cast<float>(m_logicalWidth);
+    }
+
+    /// @brief 将逻辑裁剪矩形转换为物理裁剪矩形 (Vulkan Scissor 使用物理坐标)
+    inline vk::Rect2D getPhysicalScissor(const vk::Rect2D& logicalScissor) const
+    {
+        float      scale = getDpiScale();
+        vk::Rect2D physical;
+        physical.offset.x      = static_cast<int32_t>(logicalScissor.offset.x * scale);
+        physical.offset.y      = static_cast<int32_t>(logicalScissor.offset.y * scale);
+        physical.extent.width  = static_cast<uint32_t>(logicalScissor.extent.width * scale);
+        physical.extent.height = static_cast<uint32_t>(logicalScissor.extent.height * scale);
+        return physical;
+    }
 
     /// @brief 是否需要重建
     std::atomic<bool> m_need_reCreate{ true };

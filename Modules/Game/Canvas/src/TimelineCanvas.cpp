@@ -47,7 +47,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 float time = static_cast<float>(m_currentSnapshot->currentTime);
                 float total = static_cast<float>(m_currentSnapshot->totalTime);
 
-                float  sliderWidth = std::floor(20.0f * dpiScale);
+                float  sliderWidth = 20.0f;
                 ImVec2 sliderSize(sliderWidth, size.y);
                 if ( ImGui::VSliderFloat("##AudioTimeSlider",
                                          sliderSize,
@@ -290,7 +290,8 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         }
 
         if ( cmd.scissor != lastScissor ) {
-            cmdBuf.setScissor(0, 1, &cmd.scissor);
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
 
