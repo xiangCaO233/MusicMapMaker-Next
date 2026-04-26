@@ -8,7 +8,7 @@ namespace MMM
 class Hold : public Note
 {
 public:
-    Hold()                       = default;
+    Hold() { m_type = NoteType::HOLD; }
     Hold(Hold&&)                 = default;
     Hold(const Hold&)            = default;
     Hold& operator=(Hold&&)      = default;

@@ -8,7 +8,7 @@ namespace MMM
 class Flick : public Note
 {
 public:
-    Flick()                        = default;
+    Flick() { m_type = NoteType::FLICK; }
     Flick(Flick&&)                 = default;
     Flick(const Flick&)            = default;
     Flick& operator=(Flick&&)      = default;

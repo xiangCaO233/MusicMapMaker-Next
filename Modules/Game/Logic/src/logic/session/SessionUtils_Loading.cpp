@@ -355,6 +355,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
 
         if ( nc.m_type == ::MMM::NoteType::NOTE ) {
             Note n;
+            n.m_type      = ::MMM::NoteType::NOTE;
             n.m_timestamp = nc.m_timestamp * 1000.0;
             n.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
             ctx.currentBeatmap->m_noteData.notes.push_back(std::move(n));
@@ -363,6 +364,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             ctx.currentBeatmap->m_allNotes.push_back(ref);
         } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
             Hold h;
+            h.m_type      = ::MMM::NoteType::HOLD;
             h.m_timestamp = nc.m_timestamp * 1000.0;
             h.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
             h.m_duration  = nc.m_duration * 1000.0;
@@ -372,6 +374,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             ctx.currentBeatmap->m_allNotes.push_back(ref);
         } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
             Flick f;
+            f.m_type      = ::MMM::NoteType::FLICK;
             f.m_timestamp = nc.m_timestamp * 1000.0;
             f.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
             f.m_dtrack    = nc.m_dtrack;
@@ -388,6 +391,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
         if ( nc.m_type != ::MMM::NoteType::POLYLINE ) continue;
 
         Polyline p;
+        p.m_type      = ::MMM::NoteType::POLYLINE;
         p.m_timestamp = nc.m_timestamp * 1000.0;
         p.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
 
@@ -427,6 +431,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             for ( const auto& sn : nc.m_subNotes ) {
                 if ( sn.type == ::MMM::NoteType::NOTE ) {
                     Note n;
+                    n.m_type      = ::MMM::NoteType::NOTE;
                     n.m_timestamp = sn.timestamp * 1000.0;
                     n.m_track     = static_cast<uint32_t>(sn.trackIndex);
                     ctx.currentBeatmap->m_noteData.notes.push_back(
@@ -436,6 +441,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     ctx.currentBeatmap->m_allNotes.push_back(ref);
                 } else if ( sn.type == ::MMM::NoteType::HOLD ) {
                     Hold h;
+                    h.m_type      = ::MMM::NoteType::HOLD;
                     h.m_timestamp = sn.timestamp * 1000.0;
                     h.m_track     = static_cast<uint32_t>(sn.trackIndex);
                     h.m_duration  = sn.duration * 1000.0;
@@ -447,6 +453,7 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                     ctx.currentBeatmap->m_allNotes.push_back(ref);
                 } else if ( sn.type == ::MMM::NoteType::FLICK ) {
                     Flick f;
+                    f.m_type      = ::MMM::NoteType::FLICK;
                     f.m_timestamp = sn.timestamp * 1000.0;
                     f.m_track     = static_cast<uint32_t>(sn.trackIndex);
                     f.m_dtrack    = sn.dtrack;

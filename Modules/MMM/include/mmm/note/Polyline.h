@@ -11,7 +11,7 @@ namespace MMM
 class Polyline : public Note
 {
 public:
-    Polyline()                           = default;
+    Polyline() { m_type = NoteType::POLYLINE; }
     Polyline(Polyline&&)                 = default;
     Polyline(const Polyline&)            = default;
     Polyline& operator=(Polyline&&)      = default;
