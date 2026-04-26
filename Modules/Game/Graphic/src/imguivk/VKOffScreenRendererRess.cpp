@@ -437,37 +437,40 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     // ==========================================
-    // 6. 创建顶点缓冲区和uniform缓冲区
+    // 6. 创建顶点缓冲区和uniform缓冲区 (多帧)
     // ==========================================
     // 计算缓冲区大小
     size_t bufferSize = sizeof(Vertex::VKBasicVertex) * maxVertexCount;
 
-    // 创建缓冲区
-    m_vertexBuffer = std::make_unique<VKMemBuffer>(
-        phyDevice,
-        m_device,
-        bufferSize,
-        vk::BufferUsageFlagBits::eVertexBuffer,  // 作为顶点缓冲区
-        vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
-    );
+    m_vertexBuffers.clear();
+    m_indexBuffers.clear();
+    m_uniformBuffers.clear();
 
-    m_indexBuffer = std::make_unique<VKMemBuffer>(
-        phyDevice,
-        m_device,
-        bufferSize,
-        vk::BufferUsageFlagBits::eIndexBuffer,  // 作为顶点索引缓冲区
-        vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent  // CPU 可见且自动同步
-    );
+    for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+        m_vertexBuffers.push_back(std::make_unique<VKMemBuffer>(
+            phyDevice,
+            m_device,
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent));
 
-    m_uniformBuffer = std::make_unique<VKMemBuffer>(
-        phyDevice,
-        m_device,
-        sizeof(float),
-        vk::BufferUsageFlagBits::eUniformBuffer,
-        vk::MemoryPropertyFlagBits::eHostVisible |
-            vk::MemoryPropertyFlagBits::eHostCoherent);
+        m_indexBuffers.push_back(std::make_unique<VKMemBuffer>(
+            phyDevice,
+            m_device,
+            bufferSize,
+            vk::BufferUsageFlagBits::eIndexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent));
+
+        m_uniformBuffers.push_back(std::make_unique<VKMemBuffer>(
+            phyDevice,
+            m_device,
+            sizeof(float),
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent));
+    }
 
     // ==========================================
     // 7. 创建uniform需要的描述符池和描述符集
@@ -514,15 +517,18 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
 void VKOffScreenRenderer::createDescriptPool()
 {
     // ==========================================
-    // 7. 创建独立的描述符池 (分配2个 Set)
+    // 7. 创建独立的描述符池 (分配多帧所需的 Sets)
     // ==========================================
+    // 每个 Frame 需要 4 个 Set (offscreen, glow, ping, pong)
+    uint32_t totalSets = 4 * MAX_FRAMES_IN_FLIGHT;
+    
     vk::DescriptorPoolSize uniformPoolSize(vk::DescriptorType::eUniformBuffer,
-                                           1);
+                                           totalSets);
     vk::DescriptorPoolSize samplerPoolSize(
-        vk::DescriptorType::eCombinedImageSampler, 4);
+        vk::DescriptorType::eCombinedImageSampler, totalSets);
     std::array<vk::DescriptorPoolSize, 2> poolSizes{ uniformPoolSize,
                                                      samplerPoolSize };
-    vk::DescriptorPoolCreateInfo          poolInfo({}, 4, 2, poolSizes.data());
+    vk::DescriptorPoolCreateInfo poolInfo({}, totalSets, (uint32_t)poolSizes.size(), poolSizes.data());
     m_descriptorPool = m_device.createDescriptorPool(poolInfo).value;
 }
 
@@ -538,13 +544,18 @@ void VKOffScreenRenderer::createDescriptSets()
     auto& renderer     = VKContext::get().value().get().getRenderer();
     auto  sharedLayout = renderer.getBrushTextureLayout();
 
-    vk::DescriptorSetAllocateInfo allocInfo(m_descriptorPool, 1, &sharedLayout);
-    m_offScreenDescriptorSet =
-        m_device.allocateDescriptorSets(allocInfo).value[0];
+    m_offScreenDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    m_glowDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    m_pingDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    m_pongDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 
-    m_glowDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];
-    m_pingDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];
-    m_pongDescriptorSet = m_device.allocateDescriptorSets(allocInfo).value[0];
+    for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+        vk::DescriptorSetAllocateInfo allocInfo(m_descriptorPool, 1, &sharedLayout);
+        m_offScreenDescriptorSets[i] = m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_glowDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_pingDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_pongDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
+    }
 }
 
 /**
@@ -558,49 +569,36 @@ void VKOffScreenRenderer::updateDescriptorSets()
         .setImageView(m_whiteTexture->getImageView())  // 绑白色纹理视图
         .setSampler(m_whiteTexture->getSampler());     // 绑白色纹理采样器
 
-    vk::WriteDescriptorSet write;
-    write.setDstSet(m_offScreenDescriptorSet)
-        .setDstBinding(0)
-        .setDstArrayElement(0)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setImageInfo(imageInfo);
-
     vk::DescriptorImageInfo glowInfo;
     glowInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setImageView(m_glowImageView)
         .setSampler(m_glowSampler);
-    vk::WriteDescriptorSet writeGlow;
-    writeGlow.setDstSet(m_glowDescriptorSet)
-        .setDstBinding(0)
-        .setDstArrayElement(0)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setImageInfo(glowInfo);
 
     vk::DescriptorImageInfo pingInfo;
     pingInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setImageView(m_pingImageView)
         .setSampler(m_glowSampler);
-    vk::WriteDescriptorSet writePing;
-    writePing.setDstSet(m_pingDescriptorSet)
-        .setDstBinding(0)
-        .setDstArrayElement(0)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setImageInfo(pingInfo);
 
     vk::DescriptorImageInfo pongInfo;
     pongInfo.setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setImageView(m_pongImageView)
         .setSampler(m_glowSampler);
-    vk::WriteDescriptorSet writePong;
-    writePong.setDstSet(m_pongDescriptorSet)
-        .setDstBinding(0)
-        .setDstArrayElement(0)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setImageInfo(pongInfo);
 
-    std::vector<vk::WriteDescriptorSet> writes = {
-        write, writeGlow, writePing, writePong
-    };
+    std::vector<vk::WriteDescriptorSet> writes;
+    for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+        writes.push_back(vk::WriteDescriptorSet(m_offScreenDescriptorSets[i], 0, 0, 1,
+                                                vk::DescriptorType::eCombinedImageSampler,
+                                                &imageInfo, nullptr, nullptr));
+        writes.push_back(vk::WriteDescriptorSet(m_glowDescriptorSets[i], 0, 0, 1,
+                                                vk::DescriptorType::eCombinedImageSampler,
+                                                &glowInfo, nullptr, nullptr));
+        writes.push_back(vk::WriteDescriptorSet(m_pingDescriptorSets[i], 0, 0, 1,
+                                                vk::DescriptorType::eCombinedImageSampler,
+                                                &pingInfo, nullptr, nullptr));
+        writes.push_back(vk::WriteDescriptorSet(m_pongDescriptorSets[i], 0, 0, 1,
+                                                vk::DescriptorType::eCombinedImageSampler,
+                                                &pongInfo, nullptr, nullptr));
+    }
     m_device.updateDescriptorSets(writes, nullptr);
 
     // 更新描述符集，指向 m_uniformBuffer
@@ -764,9 +762,9 @@ void VKOffScreenRenderer::releaseResources()
         m_blurRenderPass.reset();
         m_compositeRenderPass.reset();
 
-        m_vertexBuffer.reset();
-        m_indexBuffer.reset();
-        m_uniformBuffer.reset();
+        m_vertexBuffers.clear();
+        m_indexBuffers.clear();
+        m_uniformBuffers.clear();
     }
 }
 

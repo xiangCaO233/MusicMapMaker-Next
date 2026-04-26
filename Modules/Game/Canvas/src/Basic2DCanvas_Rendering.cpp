@@ -59,7 +59,8 @@ const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
 void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
-                                     vk::DescriptorSet       defaultDescriptor)
+                                     vk::DescriptorSet       defaultDescriptor,
+                                     uint32_t                frameIndex)
 {
     if ( !m_currentSnapshot ) return;
 
@@ -117,7 +118,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
-                                     vk::DescriptorSet       defaultDescriptor)
+                                     vk::DescriptorSet       defaultDescriptor,
+                                     uint32_t                frameIndex)
 {
     if ( !m_currentSnapshot ) return;
 

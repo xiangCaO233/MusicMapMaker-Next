@@ -41,7 +41,7 @@ public:
     }
 
     /// @brief 录制gpu指令
-    void recordCmds(vk::CommandBuffer& cmdBuf);
+    void recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIndex);
 
     /// @brief 重建帧缓冲
     void reCreateFrameBuffer(vk::PhysicalDevice& phyDevice,
@@ -163,12 +163,14 @@ protected:
     virtual void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                                   vk::PipelineLayout      pipelineLayout,
                                   vk::DescriptorSetLayout setLayout,
-                                  vk::DescriptorSet defaultDescriptor) = 0;
+                                  vk::DescriptorSet       defaultDescriptor,
+                                  uint32_t                frameIndex) = 0;
 
     virtual void onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
                                   vk::PipelineLayout      pipelineLayout,
                                   vk::DescriptorSetLayout setLayout,
-                                  vk::DescriptorSet       defaultDescriptor)
+                                  vk::DescriptorSet       defaultDescriptor,
+                                  uint32_t                frameIndex)
     {
     }
 
@@ -180,21 +182,23 @@ private:
     vk::Framebuffer  m_framebuffer;  // 绑定到此纹理的帧缓冲
     vk::Sampler      m_sampler;      // 绑定到此纹理的采样器
 
-    // --- 2. 几何资源 (独占) ---
+    // --- 2. 几何资源 (多帧并发) ---
+    static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+
     // 存 Brush 的顶点
-    std::unique_ptr<VKMemBuffer> m_vertexBuffer;
+    std::vector<std::unique_ptr<VKMemBuffer>> m_vertexBuffers;
 
     // 存 Brush 的索引
-    std::unique_ptr<VKMemBuffer> m_indexBuffer;
+    std::vector<std::unique_ptr<VKMemBuffer>> m_indexBuffers;
 
     // 离屏用的 Uniform Buffer
-    std::unique_ptr<VKMemBuffer> m_uniformBuffer;
+    std::vector<std::unique_ptr<VKMemBuffer>> m_uniformBuffers;
 
     // 离屏用描述符池
     vk::DescriptorPool m_descriptorPool;
 
-    // 离屏用描述符集
-    vk::DescriptorSet m_offScreenDescriptorSet;
+    // 离屏用描述符集 (每帧独立，因为它们指向不同的 Uniform Buffer)
+    std::vector<vk::DescriptorSet> m_offScreenDescriptorSets;
 
     // 离屏用白色纹理
     std::unique_ptr<VKTexture> m_whiteTexture;
@@ -211,9 +215,9 @@ private:
         m_pingFramebuffer{ VK_NULL_HANDLE },
         m_pongFramebuffer{ VK_NULL_HANDLE };
     vk::Sampler       m_glowSampler{ VK_NULL_HANDLE };
-    vk::DescriptorSet m_pingDescriptorSet{ VK_NULL_HANDLE },
-        m_pongDescriptorSet{ VK_NULL_HANDLE },
-        m_glowDescriptorSet{ VK_NULL_HANDLE };
+    std::vector<vk::DescriptorSet> m_pingDescriptorSets;
+    std::vector<vk::DescriptorSet> m_pongDescriptorSets;
+    std::vector<vk::DescriptorSet> m_glowDescriptorSets;
 
     std::unique_ptr<VKRenderPass>     m_glowRenderPass{ nullptr };
     std::unique_ptr<VKRenderPass>     m_blurRenderPass{ nullptr };

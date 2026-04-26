@@ -322,9 +322,10 @@ const std::vector<uint32_t>& PreviewCanvas::getIndices() const
 }
 
 void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
-                                     vk::PipelineLayout     pipelineLayout,
+                                     vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
-                                     vk::DescriptorSet      defaultDescriptor)
+                                     vk::DescriptorSet       defaultDescriptor,
+                                     uint32_t                frameIndex)
 {
     if ( !m_currentSnapshot ) return;
 

@@ -56,7 +56,7 @@ public:
     void onUpdateUI() override;
 
     /// @brief 录制所有离屏渲染指令
-    void onRecordOffscreen(vk::CommandBuffer& cmd) override;
+    void onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex) override;
 
 private:
     /// @brief 所有ui接口

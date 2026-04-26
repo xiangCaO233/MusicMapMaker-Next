@@ -21,8 +21,13 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 
 
 /// @brief 录制gpu指令
-void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
+void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIndex)
 {
+    if ( frameIndex >= MAX_FRAMES_IN_FLIGHT ) {
+        XERROR("VKOffScreenRenderer: frameIndex out of bounds!");
+        return;
+    }
+
     // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
     vk::ClearValue clearValue;
     clearValue.setColor(
@@ -49,37 +54,37 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         // 2. 增加 50% 冗余防止频繁扩容
         size_t newCount = static_cast<size_t>(neededCount * 1.5f);
 
-        // 3. 释放旧资源 (顶点/索引/Uniform 缓冲以及相关的描述符池)
-        // 注意：由于资源是 unique_ptr，reset() 会自动调用析构
-        m_vertexBuffer.reset();
-        m_indexBuffer.reset();
-        m_uniformBuffer.reset();
+        // 3. 释放并重新分配所有并发帧的资源
+        m_vertexBuffers.clear();
+        m_indexBuffers.clear();
+        m_uniformBuffers.clear();
 
-        // 4. 重新分配
         size_t bufferSize = sizeof(Vertex::VKBasicVertex) * newCount;
-        m_vertexBuffer    = std::make_unique<VKMemBuffer>(
-            m_physicalDevice,
-            m_device,
-            bufferSize,
-            vk::BufferUsageFlagBits::eVertexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent);
+        for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+            m_vertexBuffers.push_back(std::make_unique<VKMemBuffer>(
+                m_physicalDevice,
+                m_device,
+                bufferSize,
+                vk::BufferUsageFlagBits::eVertexBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent));
 
-        m_indexBuffer = std::make_unique<VKMemBuffer>(
-            m_physicalDevice,
-            m_device,
-            bufferSize,
-            vk::BufferUsageFlagBits::eIndexBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent);
+            m_indexBuffers.push_back(std::make_unique<VKMemBuffer>(
+                m_physicalDevice,
+                m_device,
+                bufferSize,
+                vk::BufferUsageFlagBits::eIndexBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent));
 
-        m_uniformBuffer = std::make_unique<VKMemBuffer>(
-            m_physicalDevice,
-            m_device,
-            sizeof(float),
-            vk::BufferUsageFlagBits::eUniformBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent);
+            m_uniformBuffers.push_back(std::make_unique<VKMemBuffer>(
+                m_physicalDevice,
+                m_device,
+                sizeof(float),
+                vk::BufferUsageFlagBits::eUniformBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible |
+                    vk::MemoryPropertyFlagBits::eHostCoherent));
+        }
 
         m_lastAllocatedCount = newCount;
         XINFO("VKOffScreenRenderer: Reallocated buffers with capacity: {}",
@@ -88,12 +93,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
 
     uploadUniformBuffer2GPU();
 
-    // 每一帧将 CPU 的顶点数据上传到 GPU
-    m_vertexBuffer->uploadData(vertices.data(),
-                               vertices.size() * sizeof(Vertex::VKBasicVertex));
+    // 每一帧将 CPU 的顶点数据上传到当前帧的 GPU 缓冲区
+    m_vertexBuffers[frameIndex]->uploadData(
+        vertices.data(), vertices.size() * sizeof(Vertex::VKBasicVertex));
     if ( !indices.empty() ) {
-        m_indexBuffer->uploadData(indices.data(),
-                                  indices.size() * sizeof(uint32_t));
+        m_indexBuffers[frameIndex]->uploadData(
+            indices.data(), indices.size() * sizeof(uint32_t));
     }
 
     // 2. 开始渲染流程 (针对离屏 Framebuffer)
@@ -106,12 +111,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
     cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
     {
         // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
-        glm::mat4    ortho = glm::ortho(0.0f,
-                                        (float)m_logicalWidth,
-                                        0.0f - m_yOffset,
-                                        (float)m_logicalHeight - m_yOffset,
-                                        -1.0f,
-                                        1.0f);
+        glm::mat4 ortho = glm::ortho(0.0f,
+                                     (float)m_logicalWidth,
+                                     0.0f - m_yOffset,
+                                     (float)m_logicalHeight - m_yOffset,
+                                     -1.0f,
+                                     1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -122,23 +127,16 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics,
                             m_mainBrushRenderPipeline->m_graphicsPipeline);
 
-        // 4. 绑定描述符集
-        // 这里使用的 Layout 必须是创建该 Pipeline 时用的那个 Layout
+        // 4. 绑定当前帧的描述符集
         cmdBuf.bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
             m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
             0,
             1,
-            &m_offScreenDescriptorSet,
+            &m_offScreenDescriptorSets[frameIndex],
             0,
             nullptr);
 
-        // ==========================================
-        // ★ 发送 Push Constant：正交投影矩阵
-        // ==========================================
-        // 作用：将屏幕像素坐标 (0,0) 到 (logicalWidth, logicalHeight) 映射到
-        // Vulkan 设备标准坐标 (-1 到 1) 这样 UI
-        // 层的坐标计算可以维持在逻辑坐标系下，而渲染输出是物理分辨率
         cmdBuf.pushConstants(
             m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
             vk::ShaderStageFlagBits::eVertex |
@@ -147,16 +145,18 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
             sizeof(glm::mat4),
             &ortho);
 
-        // 5. 绑定顶点缓冲区
-        cmdBuf.bindVertexBuffers(0, m_vertexBuffer->m_vkBuffer, { 0 });
+        // 5. 绑定当前帧的顶点/索引缓冲区
+        cmdBuf.bindVertexBuffers(
+            0, m_vertexBuffers[frameIndex]->m_vkBuffer, { 0 });
         cmdBuf.bindIndexBuffer(
-            m_indexBuffer->m_vkBuffer, 0, vk::IndexType::eUint32);
+            m_indexBuffers[frameIndex]->m_vkBuffer, 0, vk::IndexType::eUint32);
 
         // 6. 解析 DrawCmds 进行批次渲染 (回调到 UI 实现层)
         onRecordDrawCmds(cmdBuf,
                          m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
                          m_mainBrushRenderPipeline->getDescriptorSetLayout(),
-                         m_offScreenDescriptorSet);
+                         m_offScreenDescriptorSets[frameIndex],
+                         frameIndex);
     }
     cmdBuf.endRenderPass();
 
@@ -167,12 +167,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
         rpBegin.setFramebuffer(m_glowFramebuffer);
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
-            glm::mat4    ortho = glm::ortho(0.0f,
-                                            (float)m_logicalWidth,
-                                            0.0f - m_yOffset,
-                                            (float)m_logicalHeight - m_yOffset,
-                                            -1.0f,
-                                            1.0f);
+            glm::mat4 ortho = glm::ortho(0.0f,
+                                         (float)m_logicalWidth,
+                                         0.0f - m_yOffset,
+                                         (float)m_logicalHeight - m_yOffset,
+                                         -1.0f,
+                                         1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -187,7 +187,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                 m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
                 0,
                 1,
-                &m_offScreenDescriptorSet,
+                &m_offScreenDescriptorSets[frameIndex],
                 0,
                 nullptr);
 
@@ -199,16 +199,18 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                 sizeof(glm::mat4),
                 &ortho);
 
-            cmdBuf.bindVertexBuffers(0, m_vertexBuffer->m_vkBuffer, { 0 });
+            cmdBuf.bindVertexBuffers(
+                0, m_vertexBuffers[frameIndex]->m_vkBuffer, { 0 });
             cmdBuf.bindIndexBuffer(
-                m_indexBuffer->m_vkBuffer, 0, vk::IndexType::eUint32);
+                m_indexBuffers[frameIndex]->m_vkBuffer, 0, vk::IndexType::eUint32);
 
             // 绘制发光几何体
             onRecordGlowCmds(
                 cmdBuf,
                 m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
                 m_glowBrushRenderPipeline->getDescriptorSetLayout(),
-                m_offScreenDescriptorSet);
+                m_offScreenDescriptorSets[frameIndex],
+                frameIndex);
         }
         cmdBuf.endRenderPass();
 
@@ -223,9 +225,9 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                 vk::Framebuffer currentFb =
                     ping ? m_pingFramebuffer : m_pongFramebuffer;
                 vk::DescriptorSet currentSampleSet =
-                    (i == 0)
-                        ? m_glowDescriptorSet
-                        : (ping ? m_pongDescriptorSet : m_pingDescriptorSet);
+                    (i == 0) ? m_glowDescriptorSets[frameIndex]
+                             : (ping ? m_pongDescriptorSets[frameIndex]
+                                     : m_pingDescriptorSets[frameIndex]);
 
                 rpBegin.setFramebuffer(currentFb);
                 cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
@@ -292,7 +294,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf)
                     m_compositeRenderPipeline->m_graphicsPipeline);
 
                 vk::DescriptorSet finalSampleSet =
-                    ping ? m_pongDescriptorSet : m_pingDescriptorSet;
+                    ping ? m_pongDescriptorSets[frameIndex]
+                         : m_pingDescriptorSets[frameIndex];
                 cmdBuf.bindDescriptorSets(
                     vk::PipelineBindPoint::eGraphics,
                     m_compositeRenderPipeline->m_graphicsPipelineLayout,

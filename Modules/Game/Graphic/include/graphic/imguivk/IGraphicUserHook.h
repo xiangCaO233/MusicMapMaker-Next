@@ -14,7 +14,7 @@ public:
                                     vk::CommandPool&    cmdPool,
                                     vk::Queue&          queue) = 0;
     virtual void onUpdateUI()                                  = 0;
-    virtual void onRecordOffscreen(vk::CommandBuffer& cmd)     = 0;
+    virtual void onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex) = 0;
 };
 
 }  // namespace MMM::Graphic

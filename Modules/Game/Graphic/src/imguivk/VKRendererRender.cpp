@@ -142,7 +142,7 @@ void VKRenderer::render(NativeWindow&                  window,
 
     // 录制所有离屏渲染命令
     for ( auto& graphicUserHook : graphicUserHooks ) {
-        graphicUserHook->onRecordOffscreen(currentCmdBuffer);
+        graphicUserHook->onRecordOffscreen(currentCmdBuffer, (uint32_t)m_currentFrameIndex);
     }
 
     {

@@ -100,13 +100,13 @@ void UIManager::onUpdateUI()
 }
 
 /// @brief 录制所有离屏渲染指令
-void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd)
+void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 {
     for ( const auto& name : m_renderableUiSequence ) {
         auto renderableView =
             dynamic_cast<IRenderableView*>(m_uiviews[name].get());
         if ( renderableView ) {
-            renderableView->recordCmds(cmd);
+            renderableView->recordCmds(cmd, frameIndex);
         }
     }
 }
