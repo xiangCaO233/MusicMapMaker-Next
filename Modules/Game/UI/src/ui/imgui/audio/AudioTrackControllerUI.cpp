@@ -1,8 +1,12 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "audio/AudioManager.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/audio/AudioWaveformView.h"
+#include "ui/imgui/audio/AudioSpectrumView.h"
 
 namespace MMM::UI
 {
@@ -75,6 +79,28 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         if ( m_type == TrackType::Main ) {
             renderSpeedAndPitchSection(speed, pitch, changed);
             renderEQSection(changed);
+
+            ImGui::Separator();
+            if ( ImGui::Button(TR("ui.audio_manager.open_waveform").data(),
+                               ImVec2(-1, 0)) ) {
+                std::string viewName = "AudioWaveform";
+                if ( !sourceManager->getView<AudioWaveformView>(viewName) ) {
+                    sourceManager->registerView(
+                        viewName,
+                        std::make_unique<AudioWaveformView>(
+                            TR("ui.audio_manager.waveform_title").data()));
+                }
+            }
+            if ( ImGui::Button(TR("ui.audio_manager.open_spectrum").data(),
+                               ImVec2(-1, 0)) ) {
+                std::string viewName = "AudioSpectrum";
+                if ( !sourceManager->getView<AudioSpectrumView>(viewName) ) {
+                    sourceManager->registerView(
+                        viewName,
+                        std::make_unique<AudioSpectrumView>(
+                            TR("ui.audio_manager.spectrum_title").data()));
+                }
+            }
         }
 
         if ( m_type == TrackType::Effect ) {

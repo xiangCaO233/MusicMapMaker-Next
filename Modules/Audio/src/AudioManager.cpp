@@ -98,6 +98,7 @@ void AudioManager::shutdown()
     }
     ice::SDLPlayer::quit_backend();
 
+    m_bgmTrack.reset();
     m_bgmSource.reset();
     m_stretcher.reset();
     m_mainMixer.reset();
@@ -124,6 +125,7 @@ bool AudioManager::loadBGM(const std::string&      filePath,
 
     stop();
 
+    m_bgmTrack.reset();
     if ( m_stretcher ) {
         m_mainMixer->remove_source(m_stretcher);
     } else if ( m_bgmSource ) {
@@ -138,6 +140,7 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     m_mainTrackVolume = config.volume;
     m_mainTrackMuted  = config.muted;
 
+    m_bgmTrack  = track;
     m_bgmSource = std::make_shared<ice::SourceNode>(track);
     m_bgmSource->setvolume(
         m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
@@ -609,6 +612,11 @@ float AudioManager::getMainTrackEQResponse(float frequency) const
         return static_cast<float>(20.0 * std::log10(mag));
     }
     return 0.0f;
+}
+
+std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
+{
+    return m_bgmTrack;
 }
 
 }  // namespace MMM::Audio

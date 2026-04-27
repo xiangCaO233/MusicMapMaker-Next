@@ -7,6 +7,7 @@
 #include "mmm/project/AudioResource.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/layout/box/CLayBox.h"
 
 namespace MMM::UI

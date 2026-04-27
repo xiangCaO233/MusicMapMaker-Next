@@ -9,6 +9,7 @@ namespace ice
 {
 class AudioPool;
 class SDLPlayer;
+class AudioTrack;
 class SourceNode;
 class ThreadPool;
 class MixBus;
@@ -205,6 +206,9 @@ public:
     void playSoundEffectScheduled(const std::string& key, double targetTime,
                                   float volumeFactor = 1.0f);
 
+    /// @brief 获取当前加载的 BGM 轨道数据 (用于可视化)
+    std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
+
 private:
     AudioManager();
     ~AudioManager();
@@ -213,6 +217,7 @@ private:
     std::unique_ptr<ice::AudioPool>  m_audioPool;
     std::unique_ptr<ice::SDLPlayer>  m_player;
 
+    std::shared_ptr<ice::AudioTrack>       m_bgmTrack;
     std::shared_ptr<ice::SourceNode>       m_bgmSource;
     std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
     EQPreset                               m_mainEQPreset{ EQPreset::None };

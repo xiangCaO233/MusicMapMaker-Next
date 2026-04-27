@@ -13,12 +13,11 @@ target_link_libraries(Audio
 		3rd_rubberband
 		MMM
 		Config
+		fftw3
 )
 if(WIN32)
 	target_link_libraries(Audio
 		PUBLIC
-			3rd_rubberband
-			fftw3
 			samplerate
 			SDL3-static
 	)

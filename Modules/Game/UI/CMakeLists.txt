@@ -20,6 +20,8 @@ add_library(UI STATIC
     src/ui/imgui/audio/AudioTrackControllerUI.cpp
     src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
     src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
+    src/ui/imgui/audio/AudioWaveformView.cpp
+    src/ui/imgui/audio/AudioSpectrumView.cpp
     src/ui/imgui/DebugWindowUI.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp
