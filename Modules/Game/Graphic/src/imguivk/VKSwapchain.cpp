@@ -44,7 +44,7 @@ VKSwapchain::~VKSwapchain()
         m_vkLogicalDevice.destroySwapchainKHR(m_swapchain);
     }
 
-    XINFO("SwapChain destroyed.");
+    XDEBUG("SwapChain destroyed.");
 }
 
 // 提取出的公共初始化逻辑
@@ -88,10 +88,10 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         imageCount = caps.maxImageCount;
     }
 
-    XINFO("Swapchain image count: requested {}, min {}, max {}",
-          imageCount,
-          caps.minImageCount,
-          caps.maxImageCount);
+    XDEBUG("Swapchain image count: requested {}, min {}, max {}",
+           imageCount,
+           caps.minImageCount,
+           caps.maxImageCount);
 
     // 确定尺寸
     vk::Extent2D extent;
@@ -122,7 +122,7 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
 
     m_swapchain =
         m_vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo).value;
-    XINFO("SwapChain Created (Extent: {}x{})", extent.width, extent.height);
+    XDEBUG("SwapChain Created (Extent: {}x{})", extent.width, extent.height);
 
     // 5. 获取图像并创建 ImageView
     auto imagesResult = m_vkLogicalDevice.getSwapchainImagesKHR(m_swapchain);
@@ -142,7 +142,7 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
               .vk_imageView = m_vkLogicalDevice.createImageView(viewInfo).value,
               .vk_frameBuffer = nullptr });
     }
-    XINFO("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
+    XDEBUG("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
 }
 
 // 清理 ImageView 的逻辑（不销毁 Swapchain 句柄，用于 recreate 过程中间）
@@ -154,7 +154,7 @@ void VKSwapchain::cleanupImageViews()
         }
     }
     m_vkImageBuffers.clear();
-    XINFO("ImageView all destroyed.");
+    XDEBUG("ImageView all destroyed.");
 }
 
 
@@ -182,7 +182,7 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
     }
 
     m_needsRecreate = false;
-    XINFO("Swapchain creation completed.");
+    XDEBUG("Swapchain creation completed.");
 }
 
 /**
@@ -221,7 +221,7 @@ void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
         imageBuffer.vk_frameBuffer =
             m_vkLogicalDevice.createFramebuffer(framebufferCreateInfo).value;
     }
-    XINFO("Successfully Created [{}] FrameBuffers", m_vkImageBuffers.size());
+    XDEBUG("Successfully Created [{}] FrameBuffers", m_vkImageBuffers.size());
 }
 
 /**
@@ -236,7 +236,7 @@ void VKSwapchain::destroyFramebuffers()
         m_vkLogicalDevice.destroyFramebuffer(imageBuffer.vk_frameBuffer);
         imageBuffer.vk_frameBuffer = nullptr;
     }
-    XINFO("FrameBuffers all destroyed.");
+    XDEBUG("FrameBuffers all destroyed.");
 }
 
 }  // namespace MMM::Graphic

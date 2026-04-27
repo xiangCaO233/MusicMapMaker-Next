@@ -118,7 +118,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     auto& skinMgr         = Config::SkinManager::instance();
     auto  asciiFontPath   = skinMgr.getFontPath("ascii");
     auto  chineseFontPath = skinMgr.getFontPath("cjk");
-    XINFO("asciiFontPath: {}", asciiFontPath.generic_string());
+    XDEBUG("asciiFontPath: {}", asciiFontPath.generic_string());
 
     // 辅助 Lambda: 加载并合并 CJK 字体
     auto loadFontWithSize = [&](const std::string& key, float size) {
@@ -170,7 +170,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     // 2. 加载其他范围的字体
     float titleFontSize = getFontSize("title", 20.0f);
-    XINFO("Loading title font with size: {}", titleFontSize);
+    XDEBUG("Loading title font with size: {}", titleFontSize);
     loadFontWithSize("title", titleFontSize);
 
     loadFontWithSize("menu", getFontSize("menu", 16.0f));
@@ -182,7 +182,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
     glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
 
-    XINFO("ImGui Vulkan backend initialized.");
+    XDEBUG("ImGui Vulkan backend initialized.");
 }
 
 // --- Added applyTheme definition earlier

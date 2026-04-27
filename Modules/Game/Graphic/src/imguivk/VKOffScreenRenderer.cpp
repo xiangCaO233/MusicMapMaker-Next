@@ -16,12 +16,13 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
     if ( m_device ) (void)m_device.waitIdle();
 
     releaseResources();
-    XINFO("VKOffScreenRenderer destroyed.");
+    XDEBUG("VKOffScreenRenderer destroyed.");
 }
 
 
 /// @brief 录制gpu指令
-void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIndex)
+void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
+                                     uint32_t           frameIndex)
 {
     if ( frameIndex >= MAX_FRAMES_IN_FLIGHT ) {
         XERROR("VKOffScreenRenderer: frameIndex out of bounds!");
@@ -87,8 +88,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIn
         }
 
         m_lastAllocatedCount = newCount;
-        XINFO("VKOffScreenRenderer: Reallocated buffers with capacity: {}",
-              newCount);
+        XDEBUG("VKOffScreenRenderer: Reallocated buffers with capacity: {}",
+               newCount);
     }
 
     uploadUniformBuffer2GPU();
@@ -111,12 +112,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIn
     cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
     {
         // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
-        glm::mat4 ortho = glm::ortho(0.0f,
-                                     (float)m_logicalWidth,
-                                     0.0f - m_yOffset,
-                                     (float)m_logicalHeight - m_yOffset,
-                                     -1.0f,
-                                     1.0f);
+        glm::mat4    ortho = glm::ortho(0.0f,
+                                        (float)m_logicalWidth,
+                                        0.0f - m_yOffset,
+                                        (float)m_logicalHeight - m_yOffset,
+                                        -1.0f,
+                                        1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -167,12 +168,12 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIn
         rpBegin.setFramebuffer(m_glowFramebuffer);
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
-            glm::mat4 ortho = glm::ortho(0.0f,
-                                         (float)m_logicalWidth,
-                                         0.0f - m_yOffset,
-                                         (float)m_logicalHeight - m_yOffset,
-                                         -1.0f,
-                                         1.0f);
+            glm::mat4    ortho = glm::ortho(0.0f,
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -201,8 +202,9 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIn
 
             cmdBuf.bindVertexBuffers(
                 0, m_vertexBuffers[frameIndex]->m_vkBuffer, { 0 });
-            cmdBuf.bindIndexBuffer(
-                m_indexBuffers[frameIndex]->m_vkBuffer, 0, vk::IndexType::eUint32);
+            cmdBuf.bindIndexBuffer(m_indexBuffers[frameIndex]->m_vkBuffer,
+                                   0,
+                                   vk::IndexType::eUint32);
 
             // 绘制发光几何体
             onRecordGlowCmds(

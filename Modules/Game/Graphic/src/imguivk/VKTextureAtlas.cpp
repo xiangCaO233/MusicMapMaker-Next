@@ -43,10 +43,10 @@ void VKTextureAtlas::addTexture(uint32_t id, const std::string& filePath)
     stbi_image_free(pixels);
     m_pendingTextures.push_back(std::move(data));
 
-    XINFO("Texture added to atlas pending list: {} ({}x{})",
-          filePath,
-          data.w,
-          data.h);
+    XDEBUG("Texture added to atlas pending list: {} ({}x{})",
+           filePath,
+           data.w,
+           data.h);
 }
 
 void VKTextureAtlas::addTexture(uint32_t id, const unsigned char* pixels,
@@ -121,12 +121,12 @@ void VKTextureAtlas::build(uint32_t atlasSize)
                 static_cast<float>(src.h) / static_cast<float>(atlasSize);
             m_uvRects[src.id] = glm::vec4(u, v, rw, rh);
 
-            XINFO("Atlas packed ID {}: [{}, {}] size [{}x{}]",
-                  src.id,
-                  rects[i].x,
-                  rects[i].y,
-                  src.w,
-                  src.h);
+            XDEBUG("Atlas packed ID {}: [{}, {}] size [{}x{}]",
+                   src.id,
+                   rects[i].x,
+                   rects[i].y,
+                   src.w,
+                   src.h);
         } else {
             XWARN("Failed to pack texture ID {} into atlas!",
                   m_pendingTextures[rects[i].id].id);
@@ -144,7 +144,7 @@ void VKTextureAtlas::build(uint32_t atlasSize)
 
     // 清理缓存数据
     m_pendingTextures.clear();
-    XINFO(
+    XDEBUG(
         "Texture Atlas built successfully. Size: {}x{}", atlasSize, atlasSize);
 }
 

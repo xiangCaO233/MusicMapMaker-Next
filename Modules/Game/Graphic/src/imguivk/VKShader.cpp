@@ -42,8 +42,9 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
     shaderCreateInfo.setPCode(
         reinterpret_cast<const uint32_t*>(vertexSource.data()));
     // 创建顶点着色器模块
-    m_vertexShaderModule = vkLogicalDevice.createShaderModule(shaderCreateInfo).value;
-    XINFO("Created vertex shader module");
+    m_vertexShaderModule =
+        vkLogicalDevice.createShaderModule(shaderCreateInfo).value;
+    XDEBUG("Created vertex shader module");
     // 管线着色器模块stage创建信息
     vk::PipelineShaderStageCreateInfo pipelineVertexShaderStageCreateInfo;
     pipelineVertexShaderStageCreateInfo
@@ -62,7 +63,7 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
     // 创建片段着色器模块
     m_fragmentShaderModule =
         vkLogicalDevice.createShaderModule(shaderCreateInfo).value;
-    XINFO("Created fragment shader module");
+    XDEBUG("Created fragment shader module");
     // 管线着色器模块stage创建信息
     vk::PipelineShaderStageCreateInfo pipelineFragmentShaderStageCreateInfo;
     pipelineFragmentShaderStageCreateInfo
@@ -93,7 +94,7 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
     // 创建几何着色器模块
     m_geometryShaderModule =
         vkLogicalDevice.createShaderModule(shaderCreateInfo).value;
-    XINFO("Created geometry shader module");
+    XDEBUG("Created geometry shader module");
     // 管线着色器模块stage创建信息
     vk::PipelineShaderStageCreateInfo pipelineGeometryShaderStageCreateInfo;
     pipelineGeometryShaderStageCreateInfo
@@ -107,14 +108,14 @@ VKShader::~VKShader()
 {
     // 销毁着色器模块
     m_vkLogicalDevice.destroyShaderModule(m_vertexShaderModule);
-    XINFO("Destroyed vertex shader module");
+    XDEBUG("Destroyed vertex shader module");
 
     m_vkLogicalDevice.destroyShaderModule(m_fragmentShaderModule);
-    XINFO("Destroyed fragment shader module");
+    XDEBUG("Destroyed fragment shader module");
 
     if ( m_geometryShaderModule ) {
         m_vkLogicalDevice.destroyShaderModule(m_geometryShaderModule);
-        XINFO("Destroyed geometry shader module");
+        XDEBUG("Destroyed geometry shader module");
     }
 }
 

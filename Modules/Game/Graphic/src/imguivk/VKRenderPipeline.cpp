@@ -22,14 +22,14 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
                                    VKRenderPass& renderPass,
                                    VKSwapchain& swapchain, bool is2DCanvas,
                                    int w, int h, bool additiveBlend,
-                                   bool blendEnable,
+                                   bool                    blendEnable,
                                    vk::DescriptorSetLayout sharedLayout)
     : m_logicalDevice(logicalDevice)
 {
     if ( sharedLayout != VK_NULL_HANDLE ) {
         m_descriptorSetLayout    = sharedLayout;
         m_ownDescriptorSetLayout = false;
-        XINFO("Using Shared VK Descriptor Set Layout.");
+        XDEBUG("Using Shared VK Descriptor Set Layout.");
     } else {
         // 2:创建Descriptor Set布局
         vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
@@ -37,10 +37,11 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
         descriptorSetLayoutCreateInfo.setBindings(
             { Graphic::BRUSH_TEXTURE_BIND_DESC });
         m_descriptorSetLayout =
-            logicalDevice.createDescriptorSetLayout(descriptorSetLayoutCreateInfo)
+            logicalDevice
+                .createDescriptorSetLayout(descriptorSetLayoutCreateInfo)
                 .value;
         m_ownDescriptorSetLayout = true;
-        XINFO("Created VK Descriptor Set Layout.");
+        XDEBUG("Created VK Descriptor Set Layout.");
     }
 
     // --- 定义 Push Constant 范围 ---
@@ -62,7 +63,7 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
         .setPushConstantRanges(pushConstantRange);
     m_graphicsPipelineLayout =
         logicalDevice.createPipelineLayout(pipelineLayoutCreateInfo).value;
-    XINFO("Created VK Graphics RenderPipeline Layout.");
+    XDEBUG("Created VK Graphics RenderPipeline Layout.");
 
     // 4:图形管线创建信息
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo;
@@ -222,23 +223,23 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
         nullptr, graphicsPipelineCreateInfo);
     assert(pipelineCreateResult.result == vk::Result::eSuccess);
     m_graphicsPipeline = pipelineCreateResult.value;
-    XINFO("Created VK Graphics RenderPipeline.");
+    XDEBUG("Created VK Graphics RenderPipeline.");
 }
 
 VKRenderPipeline::~VKRenderPipeline()
 {
     // 销毁图形渲染管线
     m_logicalDevice.destroyPipeline(m_graphicsPipeline);
-    XINFO("Destroyed VK Graphics RenderPipeline.");
+    XDEBUG("Destroyed VK Graphics RenderPipeline.");
 
     // 销毁图形渲染管线布局
     m_logicalDevice.destroyPipelineLayout(m_graphicsPipelineLayout);
-    XINFO("Destroyed VK Graphics RenderPipeline Layout.");
+    XDEBUG("Destroyed VK Graphics RenderPipeline Layout.");
 
     // 销毁Descriptor Set布局
     if ( m_ownDescriptorSetLayout ) {
         m_logicalDevice.destroyDescriptorSetLayout(m_descriptorSetLayout);
-        XINFO("Destroyed VK Descriptor Set Layout.");
+        XDEBUG("Destroyed VK Descriptor Set Layout.");
     }
 }
 

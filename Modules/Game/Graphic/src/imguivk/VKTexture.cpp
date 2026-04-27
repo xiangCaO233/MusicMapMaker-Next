@@ -31,7 +31,7 @@ VKTexture::VKTexture(const std::string&  filePath,
                    queue);
 
     stbi_image_free(pixels);
-    XINFO("Texture loaded from file: {}", filePath);
+    XDEBUG("Texture loaded from file: {}", filePath);
 }
 
 // 构造函数 B：从内存数据
@@ -43,7 +43,7 @@ VKTexture::VKTexture(const unsigned char* pixels, uint32_t width,
 {
     // 直接调用共通逻辑
     initFromPixels(pixels, width, height, physicalDevice, commandPool, queue);
-    XINFO("Texture created from memory buffer [{}x{}]", width, height);
+    XDEBUG("Texture created from memory buffer [{}x{}]", width, height);
 }
 
 VKTexture::VKTexture(VKTexture&& other) noexcept
@@ -213,8 +213,8 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
     m_sampler = m_device.createSampler(samplerInfo).value;
 }
 
-vk::DescriptorSet VKTexture::getNativeDescriptorSet(vk::DescriptorPool      pool,
-                                                    vk::DescriptorSetLayout layout)
+vk::DescriptorSet VKTexture::getNativeDescriptorSet(
+    vk::DescriptorPool pool, vk::DescriptorSetLayout layout)
 {
     VkDescriptorSetLayout lHandle = (VkDescriptorSetLayout)layout;
 

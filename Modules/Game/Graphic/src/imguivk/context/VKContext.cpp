@@ -54,12 +54,12 @@ VKContext::VKContext()
 
     // 创建vk实例
     m_vkInstance = vk::createInstance(m_vkInstanceCreateInfo).value;
-    XINFO("VK Instance created.");
+    XDEBUG("VK Instance created.");
 
     // 初始化vk动态加载器(要在创建vkInstance后)
     // (它会去找到扩展函数 如 vkCreateDebugUtilsMessengerEXT的地址)
     m_vkDldy.init(m_vkInstance, vkGetInstanceProcAddr);
-    XINFO("VK dldy initialized.");
+    XDEBUG("VK dldy initialized.");
 
     if ( is_debug() ) {
         // debug模式初始化vk调试信息工具
@@ -69,7 +69,7 @@ VKContext::VKContext()
                                  .createDebugUtilsMessengerEXT(
                                      m_vkDebugUtilCreateInfo, nullptr, m_vkDldy)
                                  .value;
-        XINFO("Vulkan Debug Messenger Initialize Successed");
+        XDEBUG("Vulkan Debug Messenger Initialize Successed");
     }
 
     // 初始化窗口表面和
@@ -94,8 +94,8 @@ VKContext::VKContext()
                 // 持久化配置
                 MMM::Config::AppConfig::instance().save();
 
-                XINFO("VSync toggled by shortcut: {}",
-                      config.settings.vsync ? "ON" : "OFF");
+                XDEBUG("VSync toggled by shortcut: {}",
+                       config.settings.vsync ? "ON" : "OFF");
             }
             if ( e.key == MMM::Event::Input::Key::F11 &&
                  e.action == MMM::Event::Input::Action::Press ) {
@@ -129,7 +129,7 @@ VKContext::~VKContext()
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    XINFO("ImGui Destroyed.");
+    XDEBUG("ImGui Destroyed.");
 
     // 销毁渲染器
     m_vkRenderer.reset();
@@ -149,22 +149,22 @@ VKContext::~VKContext()
     // 销毁逻辑设备
     if ( m_vkLogicalDevice ) {
         m_vkLogicalDevice.destroy();
-        XINFO("VK Logical Device destroyed.");
+        XDEBUG("VK Logical Device destroyed.");
     }
 
     // 销毁vk表面
     if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
-    XINFO("VK Surface destroyed.");
+    XDEBUG("VK Surface destroyed.");
 
     // 销毁可能的vk调试信息工具实例
     if ( is_debug() && m_vkDebugMessenger ) {
         m_vkInstance.destroyDebugUtilsMessengerEXT(
             m_vkDebugMessenger, nullptr, m_vkDldy);
-        XINFO("VK Debug Messenger destroyed.");
+        XDEBUG("VK Debug Messenger destroyed.");
     }
     // 销毁vk实例
     m_vkInstance.destroy();
-    XINFO("VK Instance destroyed.");
+    XDEBUG("VK Instance destroyed.");
 
     // 释放GLFW上下文
     releaseGLFW();
@@ -213,7 +213,7 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 转换为 vk::SurfaceKHR
     m_vkSurface = surface;
-    XINFO("Vulkan Surface created.");
+    XDEBUG("Vulkan Surface created.");
 
     // 使用imgui自动选择物理设备和队列族
     imguiAutoSelect();
@@ -290,7 +290,7 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
     // 后续如果渲染器内部存了 imageCount 之类的缓存，更新它
     // m_vkRenderer->onSwapchainChanged();
 
-    XINFO("Swapchain recreation finished.");
+    XDEBUG("Swapchain recreation finished.");
 }
 
 /**

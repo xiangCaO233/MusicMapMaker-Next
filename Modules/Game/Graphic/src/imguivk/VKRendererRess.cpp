@@ -33,7 +33,7 @@ void VKRenderer::createCommandPool()
         .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
     m_vkCommandPool =
         m_vkLogicalDevice.createCommandPool(commandPoolCreateInfo).value;
-    XINFO("Created VK Command Pool.");
+    XDEBUG("Created VK Command Pool.");
 }
 
 /**
@@ -53,9 +53,10 @@ void VKRenderer::allocateCommandBuffers()
         // 这里分配主要的
         .setLevel(vk::CommandBufferLevel::ePrimary);
     m_vkCommandBuffers =
-        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo).value;
+        m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo)
+            .value;
 
-    XINFO("Allocated VK Command Buffers.");
+    XDEBUG("Allocated VK Command Buffers.");
 }
 
 /**
@@ -75,7 +76,7 @@ void VKRenderer::createSemsWithFences()
             m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
         m_renderFinishedSems[i] =
             m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
-        XINFO("Created image Semaphores For ImageBuffer{}.", i);
+        XDEBUG("Created image Semaphores For ImageBuffer{}.", i);
 
         // 创建同步栅
         vk::FenceCreateInfo fenceCreateInfo;
@@ -83,7 +84,7 @@ void VKRenderer::createSemsWithFences()
         fenceCreateInfo.setFlags(vk::FenceCreateFlagBits::eSignaled);
         m_cmdAvailableFences[i] =
             m_vkLogicalDevice.createFence(fenceCreateInfo).value;
-        XINFO("Created cmd Sync Fence For ImageBuffer{}.", i);
+        XDEBUG("Created cmd Sync Fence For ImageBuffer{}.", i);
     }
 }
 
@@ -116,16 +117,19 @@ void VKRenderer::createDescriptPool()
         .setPoolSizes(poolSizes);
 
     m_vkDescriptorPool = m_vkLogicalDevice.createDescriptorPool(poolInfo).value;
-    XINFO("Created Global Descriptor Pool for ImGui.");
+    XDEBUG("Created Global Descriptor Pool for ImGui.");
 
     // 创建画笔纹理共享布局
     vk::DescriptorSetLayoutBinding binding0(
-        0, vk::DescriptorType::eCombinedImageSampler, 1,
-        vk::ShaderStageFlagBits::eFragment, nullptr);
+        0,
+        vk::DescriptorType::eCombinedImageSampler,
+        1,
+        vk::ShaderStageFlagBits::eFragment,
+        nullptr);
     vk::DescriptorSetLayoutCreateInfo layoutInfo({}, binding0);
     m_brushTextureLayout =
         m_vkLogicalDevice.createDescriptorSetLayout(layoutInfo).value;
-    XINFO("Created Shared Brush Texture Layout.");
+    XDEBUG("Created Shared Brush Texture Layout.");
 }
 
 }  // namespace MMM::Graphic

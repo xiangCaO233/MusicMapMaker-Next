@@ -75,7 +75,7 @@ void VKContext::enableVKValidateLayer()
         throw std::runtime_error(
             "Fatal: Not all requested validation layers are available!");
     } else {
-        XINFO("Validation layers enabled.");
+        XDEBUG("Validation layers enabled.");
     }
 }
 
@@ -112,7 +112,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VKContext::vkDebug_callback(
         XWARN("{} {}", typeHeader, pCallbackData->pMessage);
     } else if ( messageSeverity &
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT ) {
-        XINFO("{} {}", typeHeader, pCallbackData->pMessage);
+        XDEBUG("{} {}", typeHeader, pCallbackData->pMessage);
     } else if ( messageSeverity &
                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT ) {
         // 对应 Debug 或 Trace 级别

@@ -16,8 +16,9 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
     : m_logicalDevice(logicalDevice)
 {
     // 如果没给格式，默认用swapchain中的
-    vk::Format targetFormat =
-        (format == vk::Format::eUndefined) ? swapchain.info().imageFormat : format;
+    vk::Format targetFormat = (format == vk::Format::eUndefined)
+                                  ? swapchain.info().imageFormat
+                                  : format;
 
     // 1:创建渲染流程
     vk::RenderPassCreateInfo renderPassCreateInfo;
@@ -63,8 +64,9 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
     // 核心修正：Intel 核显驱动非常依赖正确的 StageMask 和 AccessMask 组合
     std::array<vk::SubpassDependency, 2> dependencies;
 
-    // 依赖 1: 外部读取结束 -> 开始离屏写入 (Undefined/ReadOnly -> AttachmentOptimal)
-    // 必须包含 FragmentShader 阶段的读取等待（如果之前被采样过）
+    // 依赖 1: 外部读取结束 -> 开始离屏写入 (Undefined/ReadOnly ->
+    // AttachmentOptimal) 必须包含 FragmentShader
+    // 阶段的读取等待（如果之前被采样过）
     dependencies[0]
         .setSrcSubpass(VK_SUBPASS_EXTERNAL)
         .setDstSubpass(0)
@@ -103,16 +105,16 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
     // renderPassCreateInfo.setDependencies(subpassDependency);
 
     // 2:创建renderpass
-    auto result = logicalDevice.createRenderPass(renderPassCreateInfo);
+    auto result         = logicalDevice.createRenderPass(renderPassCreateInfo);
     m_graphicRenderPass = result.value;
-    XINFO("Created VK Graphics RenderPipeline RenderPass.");
+    XDEBUG("Created VK Graphics RenderPipeline RenderPass.");
 }
 
 VKRenderPass::~VKRenderPass()
 {
     // 销毁图形渲染流程
     m_logicalDevice.destroyRenderPass(m_graphicRenderPass);
-    XINFO("Destroyed VK Graphics RenderPipeline RenderPass.");
+    XDEBUG("Destroyed VK Graphics RenderPipeline RenderPass.");
 }
 
 }  // namespace MMM::Graphic

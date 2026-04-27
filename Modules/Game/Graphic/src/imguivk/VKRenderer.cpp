@@ -35,9 +35,9 @@ VKRenderer::VKRenderer(vk::PhysicalDevice& vkPhysicalDevice,
     , m_LogicDevicePresentQueue(logicDevicePresentQueue)
 {
     m_avalableImageBufferCount = swapchain.m_vkImageBuffers.size();
-    XINFO("Available Image Buffer Count:{}.", m_avalableImageBufferCount);
+    XDEBUG("Available Image Buffer Count:{}.", m_avalableImageBufferCount);
 
-    XINFO("Max In Flight Frame Count set to:{}.", MAX_FRAMES_IN_FLIGHT);
+    XDEBUG("Max In Flight Frame Count set to:{}.", MAX_FRAMES_IN_FLIGHT);
 
     // 创建命令池
     createCommandPool();
@@ -66,15 +66,15 @@ VKRenderer::~VKRenderer()
     // 释放描述符池
     // 描述符集会随描述符池一同销毁，不必再手动销毁
     m_vkLogicalDevice.destroyDescriptorPool(m_vkDescriptorPool);
-    XINFO("Destroyed Descriptor Pool.");
+    XDEBUG("Destroyed Descriptor Pool.");
 
     m_vkLogicalDevice.destroyDescriptorSetLayout(m_brushTextureLayout);
-    XINFO("Destroyed Brush Texture Layout.");
+    XDEBUG("Destroyed Brush Texture Layout.");
 
     for ( auto& cmdAvailableFence : m_cmdAvailableFences ) {
         m_vkLogicalDevice.destroyFence(cmdAvailableFence);
     }
-    XINFO("Destroyed cmd Sync Fences.");
+    XDEBUG("Destroyed cmd Sync Fences.");
 
     for ( auto& imageAvailableSem : m_imageAvailableSems ) {
         m_vkLogicalDevice.destroySemaphore(imageAvailableSem);
@@ -82,7 +82,7 @@ VKRenderer::~VKRenderer()
     for ( auto& renderFinishedSem : m_renderFinishedSems ) {
         m_vkLogicalDevice.destroySemaphore(renderFinishedSem);
     }
-    XINFO("Destroyed All image Semaphores.");
+    XDEBUG("Destroyed All image Semaphores.");
 
     // 分配的命令缓冲区会自动随pool一起释放
     // for ( auto& vkCommandBuffer : m_vkCommandBuffers ) {
@@ -92,7 +92,7 @@ VKRenderer::~VKRenderer()
     // XINFO("Destroyed VK Command Buffers.");
 
     m_vkLogicalDevice.destroyCommandPool(m_vkCommandPool);
-    XINFO("Destroyed VK Command Pool.");
+    XDEBUG("Destroyed VK Command Pool.");
 }
 
 void VKRenderer::triggerRecreate(NativeWindow& window)

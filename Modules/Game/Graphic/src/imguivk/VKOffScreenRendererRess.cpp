@@ -1,5 +1,5 @@
-#include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "imgui_impl_vulkan.h"
@@ -484,7 +484,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_lastAllocatedCount = maxVertexCount;
     m_need_reCreate.store(false);
 
-    XINFO(
+    XDEBUG(
         "VKOffScreenRenderer recreate successfully[{}x{}]", m_width, m_height);
 
     // 在 reCreateFrameBuffer 中
@@ -521,14 +521,15 @@ void VKOffScreenRenderer::createDescriptPool()
     // ==========================================
     // 每个 Frame 需要 4 个 Set (offscreen, glow, ping, pong)
     uint32_t totalSets = 4 * MAX_FRAMES_IN_FLIGHT;
-    
+
     vk::DescriptorPoolSize uniformPoolSize(vk::DescriptorType::eUniformBuffer,
                                            totalSets);
     vk::DescriptorPoolSize samplerPoolSize(
         vk::DescriptorType::eCombinedImageSampler, totalSets);
     std::array<vk::DescriptorPoolSize, 2> poolSizes{ uniformPoolSize,
                                                      samplerPoolSize };
-    vk::DescriptorPoolCreateInfo poolInfo({}, totalSets, (uint32_t)poolSizes.size(), poolSizes.data());
+    vk::DescriptorPoolCreateInfo          poolInfo(
+        {}, totalSets, (uint32_t)poolSizes.size(), poolSizes.data());
     m_descriptorPool = m_device.createDescriptorPool(poolInfo).value;
 }
 
@@ -550,11 +551,16 @@ void VKOffScreenRenderer::createDescriptSets()
     m_pongDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 
     for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-        vk::DescriptorSetAllocateInfo allocInfo(m_descriptorPool, 1, &sharedLayout);
-        m_offScreenDescriptorSets[i] = m_device.allocateDescriptorSets(allocInfo).value[0];
-        m_glowDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
-        m_pingDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
-        m_pongDescriptorSets[i]      = m_device.allocateDescriptorSets(allocInfo).value[0];
+        vk::DescriptorSetAllocateInfo allocInfo(
+            m_descriptorPool, 1, &sharedLayout);
+        m_offScreenDescriptorSets[i] =
+            m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_glowDescriptorSets[i] =
+            m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_pingDescriptorSets[i] =
+            m_device.allocateDescriptorSets(allocInfo).value[0];
+        m_pongDescriptorSets[i] =
+            m_device.allocateDescriptorSets(allocInfo).value[0];
     }
 }
 
@@ -586,18 +592,42 @@ void VKOffScreenRenderer::updateDescriptorSets()
 
     std::vector<vk::WriteDescriptorSet> writes;
     for ( int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
-        writes.push_back(vk::WriteDescriptorSet(m_offScreenDescriptorSets[i], 0, 0, 1,
-                                                vk::DescriptorType::eCombinedImageSampler,
-                                                &imageInfo, nullptr, nullptr));
-        writes.push_back(vk::WriteDescriptorSet(m_glowDescriptorSets[i], 0, 0, 1,
-                                                vk::DescriptorType::eCombinedImageSampler,
-                                                &glowInfo, nullptr, nullptr));
-        writes.push_back(vk::WriteDescriptorSet(m_pingDescriptorSets[i], 0, 0, 1,
-                                                vk::DescriptorType::eCombinedImageSampler,
-                                                &pingInfo, nullptr, nullptr));
-        writes.push_back(vk::WriteDescriptorSet(m_pongDescriptorSets[i], 0, 0, 1,
-                                                vk::DescriptorType::eCombinedImageSampler,
-                                                &pongInfo, nullptr, nullptr));
+        writes.push_back(
+            vk::WriteDescriptorSet(m_offScreenDescriptorSets[i],
+                                   0,
+                                   0,
+                                   1,
+                                   vk::DescriptorType::eCombinedImageSampler,
+                                   &imageInfo,
+                                   nullptr,
+                                   nullptr));
+        writes.push_back(
+            vk::WriteDescriptorSet(m_glowDescriptorSets[i],
+                                   0,
+                                   0,
+                                   1,
+                                   vk::DescriptorType::eCombinedImageSampler,
+                                   &glowInfo,
+                                   nullptr,
+                                   nullptr));
+        writes.push_back(
+            vk::WriteDescriptorSet(m_pingDescriptorSets[i],
+                                   0,
+                                   0,
+                                   1,
+                                   vk::DescriptorType::eCombinedImageSampler,
+                                   &pingInfo,
+                                   nullptr,
+                                   nullptr));
+        writes.push_back(
+            vk::WriteDescriptorSet(m_pongDescriptorSets[i],
+                                   0,
+                                   0,
+                                   1,
+                                   vk::DescriptorType::eCombinedImageSampler,
+                                   &pongInfo,
+                                   nullptr,
+                                   nullptr));
     }
     m_device.updateDescriptorSets(writes, nullptr);
 

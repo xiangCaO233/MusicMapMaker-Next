@@ -68,17 +68,17 @@ void VKContext::initLogicDevice()
     // 5.创建vk逻辑设备 (通过物理设备)
     m_vkLogicalDevice =
         m_vkPhysicalDevice.createDevice(vkDeviceCreateInfo).value;
-    XINFO("VK Logic Device Initialized.");
+    XDEBUG("VK Logic Device Initialized.");
 
     // 6.获取图形队列族句柄
     m_LogicDeviceGraphicsQueue = m_vkLogicalDevice.getQueue(
         m_queueFamilyIndices.graphicsQueueIndex.value(), 0);
-    XINFO("Graphics Queue handle retrieved.");
+    XDEBUG("Graphics Queue handle retrieved.");
 
     // 7.获取呈现队列族句柄
     m_LogicDevicePresentQueue = m_vkLogicalDevice.getQueue(
         m_queueFamilyIndices.presentQueueIndex.value(), 0);
-    XINFO("Present Queue handle retrieved.");
+    XDEBUG("Present Queue handle retrieved.");
 }
 
 

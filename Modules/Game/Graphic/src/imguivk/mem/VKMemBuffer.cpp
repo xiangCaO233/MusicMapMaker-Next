@@ -34,7 +34,7 @@ VKMemBuffer::VKMemBuffer(const vk::PhysicalDevice& vkPhysicalDevice,
     // 2.创建缓冲区
     m_vkBuffer = vkLogicalDevice.createBuffer(bufferCreateInfo).value;
 
-    XINFO("Created VK Memory Buffer.");
+    XDEBUG("Created VK Memory Buffer.");
 
     // 3.查询内存需求
     const vk::MemoryRequirements bufferMemoryRequirements =
@@ -75,19 +75,20 @@ VKMemBuffer::VKMemBuffer(const vk::PhysicalDevice& vkPhysicalDevice,
         .setAllocationSize(m_memInfo.size);
     // 5.分配内存
     m_vkDevMem = vkLogicalDevice.allocateMemory(memoryAllocateInfo).value;
-    XINFO("Allocated VK Device Memory.");
+    XDEBUG("Allocated VK Device Memory.");
 
     // 6.绑定内存
     //  memoryOffset通常是 0（表示从这块内存的开头开始用）
     (void)vkLogicalDevice.bindBufferMemory(m_vkBuffer, m_vkDevMem, 0);
-    XINFO("Binded Memory to VKBuffer.");
+    XDEBUG("Binded Memory to VKBuffer.");
 
     // 4. 持久化映射 (Persistent Mapping)
     // 只要是 HOST_VISIBLE 的内存，我们在创建时就一直 Map 着，直到析构才 Unmap。
     // 这对于每帧都要更新的 Vertex/Index/Uniform 缓冲区性能提升极大。
     if ( desireProperty & vk::MemoryPropertyFlagBits::eHostVisible ) {
-        m_mappedData = m_vkLogicalDevice.mapMemory(m_vkDevMem, 0, m_bufSize).value;
-        XINFO("VKMemBuffer Host memory persistently mapped.");
+        m_mappedData =
+            m_vkLogicalDevice.mapMemory(m_vkDevMem, 0, m_bufSize).value;
+        XDEBUG("VKMemBuffer Host memory persistently mapped.");
     }
 }
 
@@ -101,11 +102,11 @@ VKMemBuffer::~VKMemBuffer()
 
     // 销毁内存
     m_vkLogicalDevice.freeMemory(m_vkDevMem);
-    XINFO("Freed VK Device Memory.");
+    XDEBUG("Freed VK Device Memory.");
 
     // 销毁缓冲区
     m_vkLogicalDevice.destroyBuffer(m_vkBuffer);
-    XINFO("Destroyd VK Memory Buffer.");
+    XDEBUG("Destroyd VK Memory Buffer.");
 }
 /**
  * @brief 方式一：直接内存拷贝上传 (适用于 HOST_VISIBLE 类型)
