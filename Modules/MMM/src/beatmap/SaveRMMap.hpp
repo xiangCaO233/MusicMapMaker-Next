@@ -91,6 +91,13 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
+    /// @brief 排序条目：独立物件为单条记录，折线为连续的子物件块
+    struct RMEntry {
+        double                    first_timestamp;
+        std::vector<RMNoteRecord> records;
+    };
+    std::vector<RMEntry> entries;
+
     for ( const auto& note_ref : beatMap.m_allNotes ) {
         const Note& n = note_ref.get();
         if ( subnote_ptrs.find(&n) != subnote_ptrs.end() ) {
@@ -98,10 +105,12 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
                        // Polyline 循环中被按顺序处理）
         }
         if ( n.m_type == NoteType::POLYLINE ) {
-            // 是折线，将其子物件扁平化
+            // 是折线，将其子物件扁平化为连续块
             const Polyline& poly = static_cast<const Polyline&>(n);
             if ( poly.m_subNotes.empty() ) continue;
 
+            RMEntry entry;
+            entry.first_timestamp = poly.m_subNotes.front().get().m_timestamp;
             for ( size_t i = 0; i < poly.m_subNotes.size(); ++i ) {
                 uint8_t complex = 0;
                 if ( i == 0 )
@@ -111,23 +120,33 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
                 else
                     complex = 0x20;
 
-                rm_records.push_back(
+                entry.records.push_back(
                     make_record(poly.m_subNotes[i].get(), complex));
             }
+            entries.push_back(std::move(entry));
         } else {
             // 独立物件
-            rm_records.push_back(make_record(n, 0x00));
+            RMEntry entry;
+            entry.first_timestamp = n.m_timestamp;
+            entry.records.push_back(make_record(n, 0x00));
+            entries.push_back(std::move(entry));
         }
     }
 
-    // 按照时间戳排序 (RM 格式要求物件必须严格按时间戳升序排列)
-    std::stable_sort(rm_records.begin(), rm_records.end(), [](const RMNoteRecord& a, const RMNoteRecord& b) {
-        if ( a.note_timestamp != b.note_timestamp ) {
-            return a.note_timestamp < b.note_timestamp;
+    // 按首个时间戳排序条目块
+    // stable_sort 确保相同时间戳的条目保持插入顺序
+    std::stable_sort(
+        entries.begin(), entries.end(), [](const RMEntry& a, const RMEntry& b) {
+            return a.first_timestamp < b.first_timestamp;
+        });
+
+    // 展平为最终记录列表（折线子物件保持连续且顺序不变）
+    rm_records.clear();
+    for ( const auto& entry : entries ) {
+        for ( const auto& rec : entry.records ) {
+            rm_records.push_back(rec);
         }
-        // 同一时间，保持轨道顺序
-        return a.note_track < b.note_track;
-    });
+    }
 
     table_rows = static_cast<int32_t>(rm_records.size());
     write_value(table_rows);
@@ -143,7 +162,8 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 
     auto pathToStr = [](const std::filesystem::path& p) {
         auto u8 = p.u8string();
-        return std::string(reinterpret_cast<const char*>(u8.c_str()), u8.size());
+        return std::string(reinterpret_cast<const char*>(u8.c_str()),
+                           u8.size());
     };
     XINFO("Successfully saved RM map to {}", pathToStr(path));
     return true;

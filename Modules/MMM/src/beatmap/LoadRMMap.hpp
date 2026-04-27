@@ -95,18 +95,24 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     // 文件名第一个下划线的位置 (Title_nk_Version.imd)
     auto first_pos = fnamestr.find('_');
     // 文件名第二个下划线的位置
-    auto second_pos = fnamestr.find('_', (first_pos == std::string::npos) ? 0 : first_pos + 1);
+    auto second_pos = fnamestr.find(
+        '_', (first_pos == std::string::npos) ? 0 : first_pos + 1);
 
     // 读取文件名中的轨道数 (nk)
     if ( first_pos != std::string::npos ) {
         // 尝试寻找 'k'，因为格式是 nk (如 4k, 10k)
         auto k_pos = fnamestr.find('k', first_pos + 1);
         // 如果有 k 且在第二个下划线之前（或没有第二个下划线）
-        size_t end_of_num = (k_pos != std::string::npos && (second_pos == std::string::npos || k_pos < second_pos)) ? k_pos : second_pos;
+        size_t end_of_num =
+            (k_pos != std::string::npos &&
+             (second_pos == std::string::npos || k_pos < second_pos))
+                ? k_pos
+                : second_pos;
 
         if ( end_of_num != std::string::npos ) {
             try {
-                std::string track_str = fnamestr.substr(first_pos + 1, end_of_num - first_pos - 1);
+                std::string track_str =
+                    fnamestr.substr(first_pos + 1, end_of_num - first_pos - 1);
                 basemeta.track_count = std::stoi(track_str);
             } catch ( std::exception& e ) {
                 XWARN("读取文件名轨道数失败: {}", e.what());
@@ -392,6 +398,7 @@ inline BeatMap loadRMMap(std::filesystem::path path)
         // 如果遇到了折线尾，说明本条折线结束，可以打包塞进去了
         if ( note_complex_info == 0xa0 && is_building_polyline ) {
             beatMap.m_noteData.polylines.push_back(current_polyline);
+            beatMap.m_allNotes.push_back(beatMap.m_noteData.polylines.back());
 
             // 清空 current_polyline，准备迎接下一个组合键
             current_polyline.m_subFlicks.clear();
