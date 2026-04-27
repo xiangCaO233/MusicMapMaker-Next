@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ui/ITextureLoader.h"
+#include <atomic>
 #include <fftw3.h>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace ice
@@ -47,11 +49,20 @@ private:
     /// @brief 同步 EQ 参数到预览 EQ
     void syncEQ();
 
-    /// @brief 准备 FFTW 计划
+    /// @brief 准备 FFTW 计划 (线程安全: 仅在主线程调用 plan 创建)
     void prepareFFT(int fftSize);
 
-    /// @brief 全局预计算所有频谱数据 (冷加载)
-    void fullRecalculate();
+    /// @brief 启动异步全局预计算 (非阻塞)
+    void startAsyncRecalculate();
+
+    /// @brief 后台线程执行体：多核并行 FFT 计算
+    struct EQSettings {
+        bool                enabled{ false };
+        std::vector<double> freqs;
+        std::vector<double> gains;
+        std::vector<double> qs;
+    };
+    void backgroundRecalculate(const EQSettings& eq);
 
     /// @brief 构建 "Hot" 色图查找表 (256 级)
     void buildColormapLUT();
@@ -60,7 +71,7 @@ private:
     std::unique_ptr<ice::AudioBuffer>      m_processBuffer;
     std::unique_ptr<ice::AudioBuffer>      m_rawBuffer;
 
-    // FFTW 资源
+    // FFTW 资源 (仅主线程或已完成的后台线程使用)
     fftw_plan           m_fftPlan{ nullptr };
     double*             m_fftIn{ nullptr };
     fftw_complex*       m_fftOut{ nullptr };
@@ -82,7 +93,19 @@ private:
     /// @brief 频率 bin 数 (行) — 高精度，映射到 20Hz~20kHz 对数空间
     int m_numFrequencyBins{ 256 };
 
-    bool m_isCalculating{ false };
+    // --- 异步计算状态 ---
+
+    /// @brief 后台计算线程
+    std::unique_ptr<std::jthread> m_calcThread;
+
+    /// @brief 是否正在后台计算
+    std::atomic<bool> m_isCalculating{ false };
+
+    /// @brief 计算进度 [0.0, 1.0]
+    std::atomic<float> m_calcProgress{ 0.0f };
+
+    /// @brief 后台计算是否已完成 (主线程读取后重置)
+    std::atomic<bool> m_calcFinished{ false };
 
     // --- 像素缓冲与纹理 ---
 
@@ -92,10 +115,10 @@ private:
     /// @brief CPU 侧 RGBA 像素缓冲 (R 通道)
     std::vector<unsigned char> m_pixelBufferR;
 
-    /// @brief 当前纹理宽度 (像素)，对应可视窗口的时间跨度
+    /// @brief 当前纹理宽度 (像素)
     int m_texW{ 0 };
 
-    /// @brief 当前纹理高度 (像素)，对应频率 bin 数
+    /// @brief 当前纹理高度 (像素)
     int m_texH{ 0 };
 
     /// @brief L 通道的 GPU 纹理
@@ -106,6 +129,9 @@ private:
 
     /// @brief 纹理是否需要重新上传 GPU
     bool m_textureDirty{ false };
+
+    /// @brief 需要等待 GPU 空闲后再销毁旧纹理
+    bool m_pendingTextureDestroy{ false };
 
     // --- 色图查找表 ---
     /// @brief 256 级预计算颜色表 (RGBA u8 × 4)

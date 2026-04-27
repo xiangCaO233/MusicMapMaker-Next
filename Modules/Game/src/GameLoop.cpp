@@ -11,9 +11,9 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
-#include "logic/BeatmapSession.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/DebugWindowUI.h"
@@ -74,9 +74,8 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         std::make_unique<UI::SettingsView>(TR("title.settings_manager")));
 
     // 注册新建谱面向导
-    m_uiManager.registerView(
-        "NewBeatmapWizard",
-        std::make_unique<UI::NewBeatmapWizard>());
+    m_uiManager.registerView("NewBeatmapWizard",
+                             std::make_unique<UI::NewBeatmapWizard>());
 
     // 初始化时默认激活第一个 Tab（文件管理器）
     sidebar_manager->toggleSubView(TR("title.file_manager"));
@@ -183,8 +182,8 @@ int GameLoop::start(Graphic::NativeWindow& window)
                     auto& ctx = session->getContext();
                     if ( ctx.currentBeatmap ) {
                         double time = ctx.currentTime;
-                        double bpm =
-                            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+                        double bpm  = ctx.currentBeatmap->m_baseMapMetadata
+                                          .preference_bpm;
 
                         // 查找当前时间点的 BPM
                         for ( const auto& t : ctx.currentBeatmap->m_timings ) {
@@ -228,6 +227,7 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // 2. 主动清理 UI 管理器里存的所有视图
         // 这样 VKOffScreenRenderer 的析构就会在这里发生，
         // 此时 VKContext 还健在，m_device 也是有效的！
+        (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
         return EXIT_NORMAL;
     } else {

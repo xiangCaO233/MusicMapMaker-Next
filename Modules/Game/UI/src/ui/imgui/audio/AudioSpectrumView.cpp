@@ -1,6 +1,7 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
 #include "config/skin/translation/Translation.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "implot.h"
@@ -13,6 +14,8 @@
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <mutex>
+#include <thread>
 
 #ifndef M_PI
 #    define M_PI 3.14159265358979323846
@@ -41,9 +44,6 @@ private:
     const ice::AudioBuffer* m_buffer{ nullptr };
 };
 
-static std::shared_ptr<BufferSourceNodeProxy> g_spectrumBufferSource =
-    std::make_shared<BufferSourceNodeProxy>();
-
 AudioSpectrumView::AudioSpectrumView(const std::string& name)
     : IUIView(name), ITextureLoader(name)
 {
@@ -54,6 +54,19 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
 
 AudioSpectrumView::~AudioSpectrumView()
 {
+    // 等待后台线程完成
+    if ( m_calcThread && m_calcThread->joinable() ) {
+        m_calcThread->request_stop();
+        m_calcThread->join();
+    }
+    m_calcThread.reset();
+
+    // 关键修复：确保 GPU 已完成对纹理的使用，避免验证层报错
+    auto context = Graphic::VKContext::get();
+    if ( context ) {
+        (void)context->get().getLogicalDevice().waitIdle();
+    }
+
     if ( m_fftPlan ) fftw_destroy_plan(m_fftPlan);
     if ( m_fftIn ) fftw_free(m_fftIn);
     if ( m_fftOut ) fftw_free(m_fftOut);
@@ -62,7 +75,6 @@ AudioSpectrumView::~AudioSpectrumView()
 void AudioSpectrumView::buildColormapLUT()
 {
     // 预构建 Hot 色图的 256 级查找表 (从 ImPlot)
-    // 必须在 ImPlot context 有效时调用
     ImPlot::PushColormap(ImPlotColormap_Hot);
     for ( int i = 0; i < 256; ++i ) {
         float  t         = static_cast<float>(i) / 255.0f;
@@ -110,17 +122,34 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         return;
     }
 
-    if ( m_isCalculating ) {
-        ImGui::OpenPopup("ProcessingSpectrum");
-        if ( ImGui::BeginPopupModal("ProcessingSpectrum",
-                                    nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize |
-                                        ImGuiWindowFlags_NoTitleBar) ) {
-            ImGui::Text(
-                "Generating Spectrum Heatmap... This may take a few seconds.");
-            ImGui::EndPopup();
+    // --- 后台计算进度模态窗口 ---
+    if ( m_isCalculating.load() ) {
+        ImGui::OpenPopup("###SpectrumCalcModal");
+    }
+
+    if ( ImGui::BeginPopupModal(
+             "Calculating Spectrum###SpectrumCalcModal",
+             nullptr,
+             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove) ) {
+        float progress = m_calcProgress.load();
+        ImGui::Text("Generating high-resolution spectrum heatmap...");
+        ImGui::Spacing();
+        ImGui::ProgressBar(progress, ImVec2(400, 0));
+        ImGui::Text("%.0f%%", progress * 100.0f);
+
+        // 后台线程已完成 → 关闭弹窗
+        if ( m_calcFinished.load() ) {
+            m_calcFinished.store(false);
+            m_isCalculating.store(false);
+            // 强制重新光栅化
+            m_lastViewStart = -1e9;
+            m_lastViewEnd   = -1e9;
+            ImGui::CloseCurrentPopup();
         }
-        return;
+        ImGui::EndPopup();
+
+        // 计算进行中，不渲染下面的内容
+        if ( m_isCalculating.load() ) return;
     }
 
     double currentTime = audioManager.getCurrentTime();
@@ -131,7 +160,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         TR("ui.waveform.zoom").data(), &m_zoom, 0.1f, 5.0f, "%.1fs");
     ImGui::SameLine();
     if ( ImGui::Button("Sync Effects") ) {
-        fullRecalculate();
+        startAsyncRecalculate();
     }
 
     syncEQ();
@@ -181,7 +210,13 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 {
     if ( !m_textureDirty || m_texW <= 0 || m_texH <= 0 ) return;
 
-    // 销毁旧纹理
+    // 关键修复：等待 GPU 空闲，确保所有使用旧纹理描述符集的
+    // CommandBuffer 已执行完毕，避免 vkFreeDescriptorSets 验证错误
+    if ( m_textureL || m_textureR ) {
+        (void)logicalDevice.waitIdle();
+    }
+
+    // 销毁旧纹理 (现在安全了)
     m_textureL.reset();
     m_textureR.reset();
 
@@ -223,7 +258,7 @@ void AudioSpectrumView::syncEQ()
             freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
         }
         m_previewEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
-        m_previewEQ->set_inputnode(g_spectrumBufferSource);
+        m_previewEQ->set_inputnode(std::make_shared<BufferSourceNodeProxy>());
     }
 
     for ( size_t i = 0; i < m_previewEQ->get_band_count(); ++i ) {
@@ -233,55 +268,135 @@ void AudioSpectrumView::syncEQ()
     }
 }
 
-void AudioSpectrumView::fullRecalculate()
+void AudioSpectrumView::startAsyncRecalculate()
+{
+    // 如果已有线程在运行，忽略
+    if ( m_isCalculating.load() ) return;
+
+    // 等待上一次线程结束
+    if ( m_calcThread && m_calcThread->joinable() ) {
+        m_calcThread->join();
+    }
+
+    auto&      audioManager = Audio::AudioManager::instance();
+    EQSettings eq;
+    eq.enabled = audioManager.isMainTrackEQEnabled();
+    if ( eq.enabled ) {
+        size_t count = audioManager.getMainTrackEQBandCount();
+        for ( size_t i = 0; i < count; ++i ) {
+            eq.freqs.push_back(audioManager.getMainTrackEQBandFrequency(i));
+            eq.gains.push_back(audioManager.getMainTrackEQBandGain(i));
+            eq.qs.push_back(audioManager.getMainTrackEQBandQ(i));
+        }
+    }
+
+    m_isCalculating.store(true);
+    m_calcProgress.store(0.0f);
+    m_calcFinished.store(false);
+
+    m_calcThread = std::make_unique<std::jthread>(
+        [this, eq = std::move(eq)]() { backgroundRecalculate(eq); });
+}
+
+void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq)
 {
     auto& audioManager = Audio::AudioManager::instance();
     auto  track        = audioManager.getBGMTrack();
-    if ( !track ) return;
+    if ( !track ) {
+        m_isCalculating.store(false);
+        return;
+    }
 
-    m_isCalculating   = true;
     double totalTime  = audioManager.getTotalTime();
     double sampleRate = ice::ICEConfig::internal_format.samplerate;
-    m_cachedNumTotalSegments =
+    int    numTotalSegments =
         static_cast<int>(totalTime * m_cacheSegmentsPerSecond) + 1;
+    uint16_t numChannels = ice::ICEConfig::internal_format.channels;
 
-    m_cachedHeatmapL.assign(m_numFrequencyBins * m_cachedNumTotalSegments,
-                            -100.0);
-    m_cachedHeatmapR.assign(m_numFrequencyBins * m_cachedNumTotalSegments,
-                            -100.0);
-
-    const int fftSize = 2048;
-    prepareFFT(fftSize);
-    syncEQ();
-
+    const int    fftSize = 2048;
     const size_t hopSize =
         static_cast<size_t>(sampleRate / m_cacheSegmentsPerSecond);
-    m_rawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-    m_processBuffer->resize(ice::ICEConfig::internal_format, fftSize);
 
-    auto processHeatmap = [&](int chIdx, std::vector<double>& heatmap) {
-        for ( int t = 0; t < m_cachedNumTotalSegments; ++t ) {
-            size_t startFrame = t * hopSize;
+    // 计算可用线程数 (全核 x 80%，至少 1)
+    unsigned int hwThreads = std::thread::hardware_concurrency();
+    unsigned int numWorkers =
+        std::max(1u, static_cast<unsigned int>(hwThreads * 0.8));
+
+    XINFO("Spectrum async recalculate: {} workers, {} segments, {} bins",
+          numWorkers,
+          numTotalSegments,
+          m_numFrequencyBins);
+
+    // Hann 窗（共享，只读）
+    std::vector<double> window(fftSize);
+    for ( int i = 0; i < fftSize; ++i ) {
+        window[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (fftSize - 1)));
+    }
+
+    // 分配输出缓冲
+    std::vector<double> heatmapL(
+        static_cast<size_t>(m_numFrequencyBins) * numTotalSegments, -100.0);
+    std::vector<double> heatmapR(
+        static_cast<size_t>(m_numFrequencyBins) * numTotalSegments, -100.0);
+
+    // 进度追踪
+    std::atomic<int> completedSegments{ 0 };
+    int              totalWork = numTotalSegments * (numChannels > 1 ? 2 : 1);
+
+    // 互斥锁保护 FFTW plan 创建 (fftw_plan_* 不是线程安全的)
+    static std::mutex s_fftwPlanMutex;
+
+    // 处理单通道的函数 (由多线程调用)
+    auto processChannel = [&](int                  chIdx,
+                              std::vector<double>& heatmap,
+                              int                  startSeg,
+                              int                  endSeg) {
+        // 每个线程拥有自己的 FFTW plan 和缓冲
+        double*       localIn  = (double*)fftw_malloc(sizeof(double) * fftSize);
+        fftw_complex* localOut = (fftw_complex*)fftw_malloc(
+            sizeof(fftw_complex) * (fftSize / 2 + 1));
+
+        fftw_plan localPlan;
+        {
+            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+            localPlan =
+                fftw_plan_dft_r2c_1d(fftSize, localIn, localOut, FFTW_MEASURE);
+        }
+
+        // 每个线程拥有自己的音频处理链
+        auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
+        auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
+        localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+        localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+
+        auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
+        std::shared_ptr<ice::GraphicEqualizer> localEQ;
+        if ( eq.enabled ) {
+            localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
+            localEQ->set_inputnode(localBufferSource);
+            for ( size_t i = 0; i < eq.gains.size(); ++i ) {
+                localEQ->set_band_gain_db(i, eq.gains[i]);
+                localEQ->set_band_q_factor(i, eq.qs[i]);
+            }
+        }
+
+        for ( int t = startSeg; t < endSeg; ++t ) {
+            size_t startFrame = static_cast<size_t>(t) * hopSize;
             if ( startFrame + fftSize > track->num_frames() ) break;
 
-            track->read(*m_rawBuffer, startFrame, fftSize);
-            if ( m_previewEQ ) {
-                g_spectrumBufferSource->setBuffer(m_rawBuffer.get());
-                m_processBuffer->resize(ice::ICEConfig::internal_format,
-                                        fftSize);
-                m_previewEQ->process(*m_processBuffer);
-            } else {
-                for ( uint16_t ch = 0; ch < m_rawBuffer->num_channels(); ++ch )
-                    std::memcpy(m_processBuffer->raw_ptrs()[ch],
-                                m_rawBuffer->raw_ptrs()[ch],
-                                fftSize * sizeof(float));
+            track->read(*localRawBuffer, startFrame, fftSize);
+
+            float* chanData = localRawBuffer->raw_ptrs()[chIdx];
+            if ( localEQ ) {
+                localBufferSource->setBuffer(localRawBuffer.get());
+                localEQ->process(*localProcBuffer);
+                chanData = localProcBuffer->raw_ptrs()[chIdx];
             }
 
-            float* chanData = m_processBuffer->raw_ptrs()[chIdx];
             for ( int i = 0; i < fftSize; ++i )
-                m_fftIn[i] = chanData[i] * m_window[i];
+                localIn[i] = chanData[i] * window[i];
 
-            fftw_execute(m_fftPlan);
+            fftw_execute(localPlan);
 
             for ( int b = 0; b < m_numFrequencyBins; ++b ) {
                 double freqStart =
@@ -296,33 +411,70 @@ void AudioSpectrumView::fullRecalculate()
 
                 double maxMag = 0;
                 for ( int i = bStart; i <= bEnd; ++i ) {
-                    double magSq = m_fftOut[i][0] * m_fftOut[i][0] +
-                                   m_fftOut[i][1] * m_fftOut[i][1];
+                    double magSq = localOut[i][0] * localOut[i][0] +
+                                   localOut[i][1] * localOut[i][1];
                     if ( magSq > maxMag ) maxMag = magSq;
                 }
                 double db = (maxMag > 1e-9)
                                 ? 20.0 * std::log10(std::sqrt(maxMag) / fftSize)
                                 : -100.0;
-                heatmap[b * m_cachedNumTotalSegments + t] =
+                heatmap[static_cast<size_t>(b) * numTotalSegments + t] =
                     std::clamp(db, -100.0, 0.0);
             }
+
+            completedSegments.fetch_add(1, std::memory_order_relaxed);
+            m_calcProgress.store(static_cast<float>(completedSegments.load(
+                                     std::memory_order_relaxed)) /
+                                     totalWork,
+                                 std::memory_order_relaxed);
         }
+
+        {
+            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+            fftw_destroy_plan(localPlan);
+        }
+        fftw_free(localIn);
+        fftw_free(localOut);
     };
 
-    processHeatmap(0, m_cachedHeatmapL);
-    if ( m_processBuffer->num_channels() > 1 )
-        processHeatmap(1, m_cachedHeatmapR);
-    else
-        m_cachedHeatmapR = m_cachedHeatmapL;
+    // 为每个通道启动 worker 线程
+    auto runChannel = [&](int chIdx, std::vector<double>& heatmap) {
+        std::vector<std::thread> workers;
+        int segsPerWorker = (numTotalSegments + numWorkers - 1) / numWorkers;
 
-    // 强制重新光栅化
-    m_lastViewStart = -1e9;
-    m_lastViewEnd   = -1e9;
+        for ( unsigned int w = 0; w < numWorkers; ++w ) {
+            int startSeg = w * segsPerWorker;
+            int endSeg   = std::min(startSeg + segsPerWorker, numTotalSegments);
+            if ( startSeg >= numTotalSegments ) break;
 
-    m_isCalculating = false;
+            workers.emplace_back(
+                processChannel, chIdx, std::ref(heatmap), startSeg, endSeg);
+        }
+
+        for ( auto& t : workers ) t.join();
+    };
+
+    // L 通道
+    runChannel(0, heatmapL);
+
+    // R 通道
+    if ( numChannels > 1 ) {
+        runChannel(1, heatmapR);
+    } else {
+        heatmapR = heatmapL;
+    }
+
+    // 将结果写入成员 (主线程在 m_isCalculating == true 时不会读取)
+    m_cachedHeatmapL         = std::move(heatmapL);
+    m_cachedHeatmapR         = std::move(heatmapR);
+    m_cachedNumTotalSegments = numTotalSegments;
+
+    m_calcProgress.store(1.0f);
+    m_calcFinished.store(true);
+
     XINFO("Spectrum heatmap recalculated: {} bins x {} segments @ {}seg/s",
           m_numFrequencyBins,
-          m_cachedNumTotalSegments,
+          numTotalSegments,
           m_cacheSegmentsPerSecond);
 }
 
@@ -348,7 +500,6 @@ void AudioSpectrumView::updateSpectrum(double currentTime, double totalTime)
     m_pixelBufferR.resize(pixelCount);
 
     // 光栅化：将缓存数据映射到像素
-    // 纹理坐标：行 0 = 最高频率 (顶部)，行 texH-1 = 最低频率 (底部)
     const double scaleMin = -80.0;
     const double scaleMax = -10.0;
     const double range    = scaleMax - scaleMin;

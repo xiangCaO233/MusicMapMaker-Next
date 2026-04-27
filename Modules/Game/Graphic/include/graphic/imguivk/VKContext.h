@@ -72,6 +72,12 @@ public:
     inline VKRenderer& getRenderer() { return *m_vkRenderer; }
 
     /**
+     * @brief 获取逻辑设备句柄
+     * @return vk::Device& 逻辑设备引用
+     */
+    inline vk::Device& getLogicalDevice() { return m_vkLogicalDevice; }
+
+    /**
      * @brief 切换垂直同步
      */
     void setVSync(bool enabled);
