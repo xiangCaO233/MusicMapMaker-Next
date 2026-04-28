@@ -468,10 +468,30 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
             auto sortNotes = [](json arr) {
                 std::sort(
                     arr.begin(), arr.end(), [](const json& a, const json& b) {
-                        auto ab = a.value("beat", json::array());
-                        auto bb = b.value("beat", json::array());
-                        if ( ab != bb ) return ab < bb;
-                        return a.value("column", 0) < b.value("column", 0);
+                        auto getBeatVal = [](const json& beatArr) {
+                            if ( beatArr.is_array() && beatArr.size() == 3 ) {
+                                return beatArr[0].get<double>() +
+                                       beatArr[1].get<double>() /
+                                           beatArr[2].get<double>();
+                            }
+                            return 0.0;
+                        };
+                        double av = getBeatVal(a.value("beat", json::array()));
+                        double bv = getBeatVal(b.value("beat", json::array()));
+                        if ( std::abs(av - bv) > 1e-5 ) return av < bv;
+
+                        int colA = a.value(
+                            "column",
+                            a.contains("x")
+                                ? (int)std::round(a["x"].get<int>() / 43.0)
+                                : 0);
+                        int colB = b.value(
+                            "column",
+                            b.contains("x")
+                                ? (int)std::round(b["x"].get<int>() / 43.0)
+                                : 0);
+
+                        return colA < colB;
                     });
                 return arr;
             };
@@ -480,22 +500,50 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
             if ( oArr.size() == eArr.size() ) {
                 ok = true;
                 for ( size_t i = 0; i < oArr.size(); ++i ) {
-                    const auto& o = oArr[i];
-                    const auto& e = eArr[i];
-                    if ( o.value("beat", json::array()) !=
-                             e.value("beat", json::array()) ||
-                         o.value("column", 0) != e.value("column", 0) ||
-                         o.value("endbeat", json::array()) !=
-                             e.value("endbeat", json::array()) ) {
+                    const auto& o          = oArr[i];
+                    const auto& e          = eArr[i];
+                    auto        getBeatVal = [](const json& b) {
+                        if ( b.is_array() && b.size() == 3 ) {
+                            return b[0].get<double>() +
+                                   b[1].get<double>() / b[2].get<double>();
+                        }
+                        return 0.0;
+                    };
+                    if ( std::abs(getBeatVal(o.value("beat", json::array())) -
+                                  getBeatVal(e.value("beat", json::array()))) >
+                             1e-3 ||
+                         std::abs(
+                             getBeatVal(o.value("endbeat", json::array())) -
+                             getBeatVal(e.value("endbeat", json::array()))) >
+                             1e-3 ) {
+                        XERROR("Mismatch at index {}: beat diff > 1e-3", i);
+                        XERROR("O: {}", o.dump());
+                        XERROR("E: {}", e.dump());
+                        ok = false;
+                        break;
+                    }
+                    if ( o.contains("column") && e.contains("column") &&
+                         o.value("column", 0) != e.value("column", 0) ) {
+                        XERROR("Mismatch at index {}: column mismatch", i);
+                        XERROR("O: {}", o.dump());
+                        XERROR("E: {}", e.dump());
                         ok = false;
                         break;
                     }
                     if ( o.contains("seg") && e.contains("seg") ) {
                         if ( o["seg"].size() != e["seg"].size() ) {
+                            XERROR("Mismatch at index {}: seg size mismatch",
+                                   i);
+                            XERROR("O: {}", o.dump());
+                            XERROR("E: {}", e.dump());
                             ok = false;
                             break;
                         }
                     } else if ( o.contains("seg") != e.contains("seg") ) {
+                        XERROR("Mismatch at index {}: seg presence mismatch",
+                               i);
+                        XERROR("O: {}", o.dump());
+                        XERROR("E: {}", e.dump());
                         ok = false;
                         break;
                     }

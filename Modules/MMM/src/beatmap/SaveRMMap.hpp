@@ -69,6 +69,12 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
             param =
                 static_cast<int32_t>(static_cast<const Flick&>(note).m_dtrack);
         } else {
+            if ( note.m_metadata.note_properties.contains(NoteMetadataType::RM) ) {
+                const auto& rm_props = note.m_metadata.note_properties.at(NoteMetadataType::RM);
+                if ( rm_props.contains("Parameter") ) {
+                    param = std::stoi(rm_props.at("Parameter"));
+                }
+            }
             base_type = 0;
         }
 

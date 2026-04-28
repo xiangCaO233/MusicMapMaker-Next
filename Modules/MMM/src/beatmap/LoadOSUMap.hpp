@@ -312,7 +312,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         osureader.get_value("Metadata", "Source", std::string(""));
     // ***Tags	空格分隔的 String（字符串）数组	易于搜索的标签
     osumeta_props["Metadata::Tags"] =
-        osureader.get_value("Editor", "Tags", std::string(""));
+        osureader.get_value("Metadata", "Tags", std::string(""));
     osumeta_props["Metadata::BeatmapID"] =
         osureader.get_value("Metadata", "BeatmapID", std::string("-1"));
     osumeta_props["Metadata::BeatmapSetID"] =

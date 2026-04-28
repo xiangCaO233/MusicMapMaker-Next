@@ -10,6 +10,7 @@
 #include "SaveRMMap.hpp"
 
 #include "log/colorful-log.h"
+#include <fstream>
 #include <filesystem>
 
 namespace MMM
@@ -26,7 +27,14 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
         return {};
     }
     if ( !mapFilePath.has_extension() ) {
-        XWARN("Load Map Failed: Unknown File extension.");
+        std::ifstream ifs(mapFilePath);
+        std::string firstLine;
+        if ( std::getline(ifs, firstLine) ) {
+            if ( firstLine.find("osu file format") != std::string::npos ) {
+                return loadOSUMap(mapFilePath);
+            }
+        }
+        XWARN("Load Map Failed: Unknown File extension and content check failed.");
         return {};
     }
     std::string mapFileExtention = mapFilePath.extension().generic_string();

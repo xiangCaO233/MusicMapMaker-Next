@@ -113,6 +113,7 @@ struct BaseMapMeta {
 enum class NoteMetadataType {
     OSU,
     MALODY,
+    RM,
 };
 
 class NoteMetadata
@@ -152,6 +153,7 @@ public:
 
 enum class TimingMetadataType {
     OSU,
+    RM,
     MALODY,
 };
 

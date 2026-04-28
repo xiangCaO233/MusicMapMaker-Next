@@ -61,6 +61,16 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                                 : 120.0;
         double lastTime   = 0;
         double lastBeat   = 0;
+
+        // Find the first BPM timing point to use as origin
+        for ( const auto& t : beatMap.m_timings ) {
+            if ( t.m_timingEffect == TimingEffect::BPM ) {
+                lastTime   = t.m_timestamp;
+                currentBpm = t.m_bpm;
+                break;
+            }
+        }
+
         for ( const auto& t : beatMap.m_timings ) {
             if ( t.m_timingEffect != TimingEffect::BPM ) continue;
             if ( t.m_timestamp > time + 0.5 ) break;
@@ -130,15 +140,43 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         } else if ( note.m_type == NoteType::POLYLINE ) {
             const auto& p = static_cast<const Polyline&>(note);
             nj["seg"]     = json::array();
-            for ( const auto& subNoteRef : p.m_subNotes ) {
-                const auto& sn = subNoteRef.get();
-                json        sj;
-                double      rootBeatVal =
-                    timeToBeat(p.m_timestamp)[0].get<double>() +
-                    (timeToBeat(p.m_timestamp)[1].get<double>() / 1920.0);
+
+            double rootBeatVal =
+                timeToBeat(p.m_timestamp)[0].get<double>() +
+                (timeToBeat(p.m_timestamp)[1].get<double>() / 1920.0);
+
+            std::vector<std::pair<double, uint32_t>> targets;
+            for ( size_t i = 0; i < p.m_subNotes.size(); ++i ) {
+                const auto& sn = p.m_subNotes[i].get();
+                if ( sn.m_type == NoteType::HOLD ) {
+                    const auto& h             = static_cast<const Hold&>(sn);
+                    double      current_time  = h.m_timestamp + h.m_duration;
+                    uint32_t    current_track = h.m_track;
+
+                    // Look ahead for instant Flick
+                    if ( i + 1 < p.m_subNotes.size() ) {
+                        const auto& next_sn = p.m_subNotes[i + 1].get();
+                        if ( next_sn.m_type == NoteType::FLICK &&
+                             std::abs(next_sn.m_timestamp - current_time) <
+                                 1e-5 ) {
+                            const auto& f = static_cast<const Flick&>(next_sn);
+                            current_track = f.m_track + f.m_dtrack;
+                            i++;  // Skip the flick
+                        }
+                    }
+                    targets.push_back({ current_time, current_track });
+                } else if ( sn.m_type == NoteType::FLICK ) {
+                    const auto& f = static_cast<const Flick&>(sn);
+                    targets.push_back(
+                        { f.m_timestamp, f.m_track + f.m_dtrack });
+                }
+            }
+
+            for ( const auto& target : targets ) {
+                json   sj;
                 double subBeatVal =
-                    timeToBeat(sn.m_timestamp)[0].get<double>() +
-                    (timeToBeat(sn.m_timestamp)[1].get<double>() / 1920.0);
+                    timeToBeat(target.first)[0].get<double>() +
+                    (timeToBeat(target.first)[1].get<double>() / 1920.0);
                 double relBeat = subBeatVal - rootBeatVal;
                 int intRelBeat = static_cast<int>(std::floor(relBeat + 1e-6));
                 double relFrac = relBeat - intRelBeat;
@@ -146,8 +184,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     json::array({ intRelBeat,
                                   static_cast<int>(std::round(relFrac * 1920)),
                                   1920 });
-                if ( sn.m_type == NoteType::HOLD ) sj["type"] = 1;
-                // 注意：这里不再导出 type 0，让加载器默认处理
+                int x_offset = (int(target.second) - int(p.m_track)) *
+                               43;  // Assume bestW=43
+                if ( x_offset != 0 ) {
+                    sj["x"] = x_offset;
+                }
                 nj["seg"].push_back(sj);
             }
         }
@@ -170,7 +211,27 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     auto& noteArr = fileData["note"];
     noteArr       = json::array();
-    auto process  = [&](auto& deque) {
+
+    // 插入音频节点
+    json audioNode;
+    audioNode["beat"] = json::array({ 0, 0, 1 });
+    audioNode["sound"] =
+        beatMap.m_baseMapMetadata.main_audio_path.filename().string();
+    audioNode["type"] = 1;
+
+    double firstTimingTime = 0.0;
+    for ( const auto& t : beatMap.m_timings ) {
+        if ( t.m_timingEffect == TimingEffect::BPM ) {
+            firstTimingTime = t.m_timestamp;
+            break;
+        }
+    }
+    audioNode["offset"] = static_cast<int>(std::round(-firstTimingTime));
+
+    audioNode["vol"] = 100;
+    noteArr.push_back(audioNode);
+
+    auto process = [&](auto& deque) {
         for ( const auto& n : deque ) {
             if ( !isSubNote(n) ) noteArr.push_back(serializeToMalody(n));
         }

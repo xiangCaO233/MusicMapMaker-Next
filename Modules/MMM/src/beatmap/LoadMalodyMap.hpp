@@ -291,7 +291,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 malody_timing_props[it.key()] = it.value().dump();
             }
         }
-        if ( beatMap.m_baseMapMetadata.preference_bpm <= 0.0 && timing.m_timingEffect == TimingEffect::BPM ) {
+        if ( beatMap.m_baseMapMetadata.preference_bpm <= 0.0 &&
+             timing.m_timingEffect == TimingEffect::BPM ) {
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
         }
         beatMap.m_timings.push_back(timing);
@@ -305,7 +306,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         t.m_timingEffect          = TimingEffect::BPM;
         t.m_timingEffectParameter = currentBpm;
         beatMap.m_timings.push_back(t);
-        
+
         if ( basemeta.preference_bpm <= 0.0 ) {
             basemeta.preference_bpm = currentBpm;
         }
@@ -355,6 +356,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                (uint32_t)std::max(0, basemeta.track_count - 1));
 
                 // 2. 模式 7 优化：如果是单段垂直 Hold 或单段 Flick
+                /*
                 if ( segs.size() == 1 ) {
                     if ( firstTime > startTime && xOffset == 0 &&
                          firstSegTrack == track ) {
@@ -375,6 +377,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         notePtr       = &f;
                     }
                 }
+                */
 
                 // 3. 构造 Polyline (针对多段或滑动 Hold)
                 if ( !notePtr ) {
@@ -415,8 +418,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                             // 如果不是最后一段，或者当前发生了轨道变化，则需要添加
                             // Flick 节点
-                            if ( i < segs.size() - 1 ||
-                                 stepTrack != runningTrack ) {
+                            if ( stepTrack != runningTrack ) {
                                 Flick& f =
                                     beatMap.m_noteData.flicks.emplace_back();
                                 f.m_type      = NoteType::FLICK;

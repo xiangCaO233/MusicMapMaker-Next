@@ -354,6 +354,7 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
         // 更新本物件共同属性
         temp_note_ptr->m_timestamp = note_timestamp;
+        temp_note_ptr->m_metadata.note_properties[NoteMetadataType::RM]["Parameter"] = std::to_string(note_parameter);
         temp_note_ptr->m_track     = note_track;
         // 同时加入到全局引用表中
         beatMap.m_allNotes.push_back(*temp_note_ptr);
