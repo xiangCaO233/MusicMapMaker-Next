@@ -100,7 +100,7 @@ struct VisualConfig {
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
 
     /// @brief 视觉偏移量 (秒)，用于补偿渲染与音频的延迟
-    float visualOffset{ 0.0f };
+    float visualOffset{ -0.040f };
 
     /// @brief 时间线缩放倍率 (1.0 代表原始比例)
     float timelineZoom{ 1.0f };

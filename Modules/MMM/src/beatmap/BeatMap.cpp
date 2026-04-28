@@ -5,6 +5,7 @@
 #include "LoadOSUMap.hpp"
 #include "LoadRMMap.hpp"
 #include "SaveMMMMap.hpp"
+#include "SaveMalodyMap.hpp"
 #include "SaveOSUMap.hpp"
 #include "SaveRMMap.hpp"
 
@@ -51,6 +52,9 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
     if ( mapFileExtention == ".osu" ) {
         return saveOSUMap(*this, mapFilePath);
     }
+    if ( mapFileExtention == ".mc" ) {
+        return saveMalodyMap(*this, mapFilePath);
+    }
     if ( mapFileExtention == ".imd" ) {
         return saveRMMap(*this, mapFilePath);
     }
@@ -59,6 +63,35 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
     }
     XWARN("Unsupport save map file type: {}", mapFileExtention);
     return false;
+}
+
+void BeatMap::sync()
+{
+    m_allNotes.clear();
+    // 添加所有普通物件
+    for ( auto& note : m_noteData.notes ) {
+        m_allNotes.push_back(std::ref(note));
+    }
+    // 添加所有长条物件
+    for ( auto& hold : m_noteData.holds ) {
+        m_allNotes.push_back(std::ref(hold));
+    }
+    // 添加所有滑键物件
+    for ( auto& flick : m_noteData.flicks ) {
+        m_allNotes.push_back(std::ref(flick));
+    }
+    // 添加所有折线物件
+    for ( auto& poly : m_noteData.polylines ) {
+        m_allNotes.push_back(std::ref(poly));
+    }
+
+    // 按时间戳排序
+    std::stable_sort(m_allNotes.begin(),
+                     m_allNotes.end(),
+                     [](const std::reference_wrapper<Note>& a,
+                        const std::reference_wrapper<Note>& b) {
+                         return a.get().m_timestamp < b.get().m_timestamp;
+                     });
 }
 
 BeatMap::BeatMap() {}

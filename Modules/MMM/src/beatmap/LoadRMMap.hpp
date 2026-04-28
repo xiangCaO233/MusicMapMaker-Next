@@ -2,6 +2,7 @@
 
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/SafeParse.h"
 #include "mmm/note/Polyline.h"
 #include <cstring>
 #include <filesystem>
@@ -113,7 +114,7 @@ inline BeatMap loadRMMap(std::filesystem::path path)
             try {
                 std::string track_str =
                     fnamestr.substr(first_pos + 1, end_of_num - first_pos - 1);
-                basemeta.track_count = std::stoi(track_str);
+                basemeta.track_count = MMM::Internal::safeStoi(track_str);
             } catch ( std::exception& e ) {
                 XWARN("读取文件名轨道数失败: {}", e.what());
             }

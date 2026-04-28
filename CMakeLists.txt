@@ -15,6 +15,8 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/toolchain")
 
 include("project-configure")
 
+enable_testing()
+
 # 从源码编译依赖 默认开启
 option(SOURCES_BUILD "Build Deps from sources." ON)
 

@@ -2,6 +2,7 @@
 
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/SafeParse.h"
 #include "mmm/note/Hold.h"
 #include <algorithm>
 #include <cmath>
@@ -360,7 +361,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         // 是视频
         basemeta.cover_type = CoverType::VIDEO;
     }
-    basemeta.video_starttime = std::stoi(background_paras.at(1));
+    basemeta.video_starttime = static_cast<int32_t>(std::stod(background_paras.at(1)));
     auto cover_path          = background_paras.at(2);
     trim(cover_path);
     // 去引号
@@ -374,8 +375,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     basemeta.main_cover_path = std::filesystem::path(
         reinterpret_cast<const char8_t*>(cover_path.c_str()));
     if ( background_paras.size() >= 5 ) {
-        basemeta.bgxoffset = std::stoi(background_paras.at(3));
-        basemeta.bgyoffset = std::stoi(background_paras.at(4));
+        basemeta.bgxoffset = MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 3));
+        basemeta.bgyoffset = MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 4));
     } else {
         basemeta.bgxoffset = 0;
         basemeta.bgyoffset = 0;
@@ -406,7 +407,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         }
 
         // 创建物件
-        if ( std::stoi(note_paras.at(3)) == 128 ) {
+        if ( static_cast<int32_t>(MMM::Internal::safeStod(note_paras.at(3))) == 128 ) {
             Hold hold;
             hold.from_osu_description(note_paras, basemeta.track_count);
             // 更新谱面时长

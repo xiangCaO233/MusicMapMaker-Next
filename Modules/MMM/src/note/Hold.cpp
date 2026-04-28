@@ -1,4 +1,5 @@
 #include "mmm/note/Hold.h"
+#include "mmm/SafeParse.h"
 #include <cmath>
 #include <ranges>
 
@@ -12,41 +13,25 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
     auto& osunote_prop = m_metadata.note_properties[OSU];
 
     m_type = NoteType::HOLD;
-    /*
-     *长键（仅 osu!mania）
-     *长键语法： x,y,开始时间,物件类型,长键音效,结束时间,长键音效组
-     *
-     *结束时间（整型）： 长键的结束时间，以谱面音频开始为原点，单位是毫秒。
-     *x 与长键所在的键位有关。算法为：floor(x * 键位总数 / 512)，并限制在 0 和
-     *键位总数 - 1 之间。 *y 不影响长键。默认值为 192，即游戏区域的水平中轴。
-     */
     for ( int i = 0; i < description.size(); ++i ) {
         switch ( i ) {
         case 0: {
             // 位置
-            m_track =
-                std::floor(std::stoi(description.at(0)) * orbit_count / 512);
-            break;
-        }
-        case 1: {
-            // 没卵用-om固定192
-            // int y = std::stoi(description.at(1));
+            m_track = std::floor(
+                MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0)) *
+                orbit_count / 512);
             break;
         }
         case 2: {
             // 时间戳
-            m_timestamp = std::stoi(description.at(2));
-            break;
-        }
-        case 3: {
+            m_timestamp =
+                MMM::Internal::safeStod(MMM::Internal::safeAt(description, 2));
             break;
         }
         case 4: {
             // 音效
-            osunote_prop["sample"] = std::stoi(description.at(4));
-            break;
-        }
-        case 5: {
+            osunote_prop["sample"] = std::to_string(
+                MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 4)));
             break;
         }
         default: break;
@@ -55,7 +40,6 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
 
     // 长条结束时间
     // 结束时间和音效组参数粘一起了
-    // hold_time = std::stoi(description.at(5)) - timestamp;
     std::string        token;
     std::istringstream noteiss(description.at(5));
 
@@ -65,40 +49,11 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
         last_paras.push_back(token);
     }
 
-    // NoteSampleGroup sample_group;
-    // for ( int i = 0; i < last_paras.size(); ++i ) {
-    //     switch ( i ) {
-    //     case 0: {
-    //         sample_group.normalSet =
-    //             static_cast<SampleSet>(std::stoi(last_paras.at(0)));
-    //         break;
-    //     }
-    //     case 1: {
-    //         sample_group.additionalSet =
-    //             static_cast<NoteSample>(std::stoi(last_paras.at(1)));
-    //         break;
-    //     }
-    //     case 2: {
-    //         sample_group.sampleSetParameter = std::stoi(last_paras.at(2));
-    //         break;
-    //     }
-    //     case 3: {
-    //         sample_group.volume = std::stoi(last_paras.at(3));
-    //         break;
-    //     }
-    //     case 4: {
-    //         // 有指定key音文件
-    //         sample_group.sampleFile = last_paras.at(4);
-    //         break;
-    //     }
-    //     default: break;
-    //     }
-    // }
-    // set_note_samplegroup(sample_group);
-
     osunote_prop["samplegroup"] = description.at(5);
 
-    m_duration = std::stoi(last_paras.at(0)) - m_timestamp;
+    m_duration =
+        static_cast<int32_t>(MMM::Internal::safeStod(last_paras.at(0))) -
+        m_timestamp;
 }
 
 /// @brief 转换为osu描述
@@ -148,12 +103,16 @@ std::string Hold::to_osu_description(int32_t orbit_count)
         std::string notegroup = it->second;
         if ( auto it_pos = std::ranges::find(notegroup, ':');
              it_pos != notegroup.end() ) {
-            // 从头删除到冒号的下一个位置
-            notegroup.erase(notegroup.begin(), std::next(it_pos));
+            // 只取第一个冒号之后的部分作为 hitSample
+            std::string samplepart =
+                notegroup.substr(std::distance(notegroup.begin(), it_pos) + 1);
+            oss << samplepart;
+        } else {
+            // 如果没有冒号，则可能是旧格式或异常，尝试直接补齐
+            oss << "0:0:0:0:";
         }
-        oss << notegroup << ",";
     } else {
-        oss << "0:0:0:" << ",";
+        oss << "0:0:0:0:";
     }
 
     return oss.str();

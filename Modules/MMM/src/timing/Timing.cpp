@@ -1,4 +1,5 @@
 #include "mmm/timing/Timing.h"
+#include "mmm/SafeParse.h"
 #include <algorithm>
 #include <cmath>
 #include <iomanip>
@@ -37,13 +38,13 @@ void Timing::from_osu_description(std::vector<std::string>& description)
      *是否为非继承时间点（红线）（布尔值）： 字面意思。
      *效果（整型）： 一位影响时间点特殊效果的参数。参见：效果部分。
      */
-    m_timestamp = std::stoi(description.at(0));
+    m_timestamp = MMM::Internal::safeStod(description.at(0));
 
     // 上一个基准bpm
-    static double last_base_bpm;
+    double last_base_bpm = 0.0;
 
     // 先判断是否继承时间点
-    auto is_inherit_timing = std::stoi(description.at(6)) == 0;
+    auto is_inherit_timing = MMM::Internal::safeStod(description.at(6)) == 0;
 
     // beat_length
     m_beat_length = std::stod(description.at(1));
@@ -72,15 +73,16 @@ void Timing::from_osu_description(std::vector<std::string>& description)
     }
 
     // beats
-    osutiming_prop["beat"] = std::stoi(description.at(2));
-    // 音效组
-    osutiming_prop["sampleset"] = std::stoi(description.at(3));
-    // 音效参数
-    osutiming_prop["sampleparameter"] = std::stoi(description.at(4));
-    // 音量
-    osutiming_prop["volume"] = std::stoi(description.at(5));
-    // 效果
-    osutiming_prop["effect"] = (int8_t)std::stoi(description.at(7));
+    osutiming_prop["beat"] = std::to_string(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 2)));
+    osutiming_prop["sampleset"] = std::to_string(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 3)));
+    osutiming_prop["sampleparameter"] = std::to_string(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 4)));
+    osutiming_prop["volume"] = std::to_string(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 5)));
+    osutiming_prop["effect"] = std::to_string(static_cast<int8_t>(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 7))));
 }
 
 /// @brief 转换为osu的字符串

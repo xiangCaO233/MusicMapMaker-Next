@@ -1,4 +1,5 @@
 #include "mmm/note/Note.h"
+#include "mmm/SafeParse.h"
 #include <algorithm>
 #include <cmath>
 
@@ -16,30 +17,21 @@ void Note::from_osu_description(const std::vector<std::string>& description,
     auto& osunote_prop = m_metadata.note_properties[OSU];
     m_type             = NoteType::NOTE;
 
-    /*
-     *长键（仅 osu!mania）
-     *长键语法： x,y,开始时间,物件类型,长键音效,结束时间,长键音效组
-     *
-     *结束时间（整型）： 长键的结束时间，以谱面音频开始为原点，单位是毫秒。
-     *x 与长键所在的键位有关。算法为：floor(x * 键位总数 / 512)，并限制在 0 和
-     *键位总数 - 1 之间。 *y 不影响长键。默认值为 192，即游戏区域的水平中轴。
-     */
-
     // 位置
-    m_track = uint32_t(
-        std::floor(std::stod(description.at(0)) * double(orbit_count) / 512.));
-
-    // 没卵用-om固定192
-    // int y = std::stoi(description.at(1));
+    m_track = uint32_t(std::floor(
+        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0)) *
+        double(orbit_count) / 512.));
 
     // 时间戳
-    m_timestamp = std::stoi(description.at(2));
+    m_timestamp =
+        MMM::Internal::safeStod(MMM::Internal::safeAt(description, 2));
 
     // 音效
-    osunote_prop["sample"] = std::stoi(description.at(4));
+    osunote_prop["sample"] = std::to_string(
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 4)));
 
     // 音效组
-    osunote_prop["samplegroup"] = description.at(5);
+    osunote_prop["samplegroup"] = MMM::Internal::safeAt(description, 5);
 }
 
 /// @brief 转换为osu描述
@@ -80,21 +72,13 @@ std::string Note::to_osu_description(int32_t orbit_count)
         oss << "0" << ",";
     }
 
-    // 结束时间 (单键等于开始时间)
-    oss << m_timestamp << ":";
-
     // 音效组参数
     if ( auto it = osunote_prop.find("samplegroup");
          it != osunote_prop.end() ) {
         std::string notegroup = it->second;
-        if ( auto it_pos = std::ranges::find(notegroup, ':');
-             it_pos != notegroup.end() ) {
-            // 从头删除到冒号的下一个位置
-            notegroup.erase(notegroup.begin(), std::next(it_pos));
-        }
-        oss << notegroup << ",";
+        oss << notegroup;
     } else {
-        oss << "0:0:0:" << ",";
+        oss << "0:0:0:0:";
     }
 
     return oss.str();

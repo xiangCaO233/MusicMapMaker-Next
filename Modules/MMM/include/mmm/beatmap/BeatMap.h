@@ -51,6 +51,9 @@ public:
      */
     bool saveToFile(std::filesystem::path mapFilePath) const;
 
+    /// @brief 同步物件引用表 (m_allNotes)
+    void sync();
+
     /// @brief 所有物件引用
     std::vector<std::reference_wrapper<Note>> m_allNotes;
 
