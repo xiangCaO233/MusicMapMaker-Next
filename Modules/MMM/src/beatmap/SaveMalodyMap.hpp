@@ -48,9 +48,15 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 } catch ( ... ) {
                     meta["mode_ext"] = val;
                 }
+            } else if ( key == "id" || key == "preview" || key == "mode" ) {
+                // 这些字段在 Malody 中必须是数字
+                try {
+                    meta[key] = std::stoll(val);
+                } catch ( ... ) {
+                    meta[key] = val;
+                }
             } else {
                 try {
-                    // 尝试解析为数字或对象，如果失败则存为字符串
                     meta[key] = json::parse(val);
                 } catch ( ... ) {
                     meta[key] = val;
@@ -111,24 +117,94 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return json::array({ integerBeat, n / gcd, 1920 / gcd });
     };
 
+    // 获取 audioOffset 和 initialDelay
+    double audioOffset = 0.0;
+    double initialDelay = 0.0;
+    if ( !beatMap.m_timings.empty() ) {
+        // 在 MMM 中，timestamp = malody_time + initialDelay - audioOffset
+        // 我们假设第一个 timing point 的 timestamp 对应 beat 0
+        // 所以 first_timestamp = initialDelay - audioOffset
+        // 我们从音频节点中获取 audioOffset（或者保留加载时的值）
+        // 简单起见，我们取第一个 timing 的 timestamp 绝对值作为潜在的 offset/delay
+        // 但更好的做法是寻找加载时存下的 offset
+        // 实际上在 serializeToMalody 下方插入音频节点时会重新计算 offset
+    }
+
     // Time & Effect
     auto& timeArr = fileData["time"];
     timeArr       = json::array();
     for ( const auto& t : beatMap.m_timings ) {
         if ( t.m_timingEffect == TimingEffect::BPM ) {
             json tj;
-            tj["beat"] = timeToBeat(t.m_timestamp);
+            
+            bool hasBeat = false;
+            if ( auto it = t.m_metadata.timing_properties.find(TimingMetadataType::MALODY);
+                 it != t.m_metadata.timing_properties.end() ) {
+                if ( it->second.contains("beat") ) {
+                    try {
+                        tj["beat"] = json::parse(it->second.at("beat"));
+                        hasBeat = true;
+                    } catch ( ... ) {}
+                }
+            }
+            if (!hasBeat) {
+                tj["beat"] = timeToBeat(t.m_timestamp);
+            }
+            
             tj["bpm"]  = t.m_bpm;
+            
+            // 恢复 Malody 特有字段
+            if ( auto it = t.m_metadata.timing_properties.find(TimingMetadataType::MALODY);
+                 it != t.m_metadata.timing_properties.end() ) {
+                for ( const auto& [key, val] : it->second ) {
+                    if ( key != "bpm" ) { // 已经有 bpm 了，排除
+                        try {
+                            tj[key] = json::parse(val);
+                        } catch ( ... ) {
+                            tj[key] = val;
+                        }
+                    }
+                }
+            }
             timeArr.push_back(tj);
         }
     }
+
     auto& effectArr = fileData["effect"];
     effectArr       = json::array();
     for ( const auto& t : beatMap.m_timings ) {
         if ( t.m_timingEffect == TimingEffect::SCROLL ) {
             json ej;
-            ej["beat"]   = timeToBeat(t.m_timestamp);
+            
+            bool hasBeat = false;
+            if ( auto it = t.m_metadata.timing_properties.find(TimingMetadataType::MALODY);
+                 it != t.m_metadata.timing_properties.end() ) {
+                if ( it->second.contains("beat") ) {
+                    try {
+                        ej["beat"] = json::parse(it->second.at("beat"));
+                        hasBeat = true;
+                    } catch ( ... ) {}
+                }
+            }
+            if (!hasBeat) {
+                ej["beat"] = timeToBeat(t.m_timestamp);
+            }
+            
             ej["scroll"] = t.m_timingEffectParameter;
+
+            // 恢复 Malody 特有字段
+            if ( auto it = t.m_metadata.timing_properties.find(TimingMetadataType::MALODY);
+                 it != t.m_metadata.timing_properties.end() ) {
+                for ( const auto& [key, val] : it->second ) {
+                    if ( key != "scroll" ) {
+                        try {
+                            ej[key] = json::parse(val);
+                        } catch ( ... ) {
+                            ej[key] = val;
+                        }
+                    }
+                }
+            }
             effectArr.push_back(ej);
         }
     }
@@ -147,7 +223,22 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     auto serializeToMalody = [&](const Note& note) {
         json nj;
-        nj["beat"]   = timeToBeat(note.m_timestamp);
+        
+        bool hasBeat = false;
+        if ( auto it = note.m_metadata.note_properties.find(NoteMetadataType::MALODY);
+             it != note.m_metadata.note_properties.end() ) {
+            if ( it->second.contains("beat") ) {
+                try {
+                    nj["beat"] = json::parse(it->second.at("beat"));
+                    hasBeat = true;
+                } catch ( ... ) {}
+            }
+        }
+        
+        if ( !hasBeat ) {
+            nj["beat"] = timeToBeat(note.m_timestamp);
+        }
+        
         nj["column"] = (int)note.m_track;
         if ( note.m_type == NoteType::HOLD ) {
             const auto& h = static_cast<const Hold&>(note);
@@ -161,74 +252,97 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                                  (rootBeatArr[1].get<double>() /
                                   rootBeatArr[2].get<double>());
 
-            std::vector<std::pair<double, uint32_t>> targets;
             for ( size_t i = 0; i < p.m_subNotes.size(); ++i ) {
                 const auto& sn = p.m_subNotes[i].get();
+                
+                // ... (existing track target logic) ...
+                double current_time = sn.m_timestamp;
+                uint32_t current_track = sn.m_track;
                 if ( sn.m_type == NoteType::HOLD ) {
-                    const auto& h             = static_cast<const Hold&>(sn);
-                    double      current_time  = h.m_timestamp + h.m_duration;
-                    uint32_t    current_track = h.m_track;
-
-                    // Look ahead for instant Flick
-                    if ( i + 1 < p.m_subNotes.size() ) {
-                        const auto& next_sn = p.m_subNotes[i + 1].get();
-                        if ( next_sn.m_type == NoteType::FLICK &&
-                             std::abs(next_sn.m_timestamp - current_time) <
-                                 1e-5 ) {
-                            const auto& f = static_cast<const Flick&>(next_sn);
-                            current_track = f.m_track + f.m_dtrack;
-                            i++;  // Skip the flick
-                        }
-                    }
-                    targets.push_back({ current_time, current_track });
+                    current_time += static_cast<const Hold&>(sn).m_duration;
                 } else if ( sn.m_type == NoteType::FLICK ) {
-                    const auto& f = static_cast<const Flick&>(sn);
-                    targets.push_back(
-                        { f.m_timestamp, f.m_track + f.m_dtrack });
+                    current_track += static_cast<const Flick&>(sn).m_dtrack;
                 }
-            }
-
-            for ( const auto& target : targets ) {
-                auto   relBeatArr = timeToBeat(target.first);
-                double relBeatVal = relBeatArr[0].get<double>() +
-                                    (relBeatArr[1].get<double>() /
-                                     relBeatArr[2].get<double>()) -
-                                    rootBeatVal;
-
-                int    intRelBeat = static_cast<int>(std::floor(relBeatVal + 1e-6));
-                double relFrac    = relBeatVal - intRelBeat;
-
+                
+                // Look ahead for instant Flick to merge
+                if ( i + 1 < p.m_subNotes.size() ) {
+                    const auto& next_sn = p.m_subNotes[i + 1].get();
+                    if ( next_sn.m_type == NoteType::FLICK &&
+                         std::abs(next_sn.m_timestamp - current_time) < 1e-5 ) {
+                        current_track = next_sn.m_track + static_cast<const Flick&>(next_sn).m_dtrack;
+                        i++;
+                    }
+                }
+                
                 json sj;
-                if ( relFrac < 1e-6 ) {
-                    sj["beat"] = json::array({ intRelBeat, 0, 1 });
-                } else {
-                    bool fitted = false;
-                    for ( int den : { 1,  2,  3,  4,  6,  8,  12,   16,
-                                      24, 32, 48, 64, 96, 192, 1920 } ) {
-                        double num     = relFrac * den;
-                        double rounded = std::round(num);
-                        if ( std::abs(num - rounded) < 1e-4 ) {
-                            int n   = static_cast<int>(rounded);
-                            int gcd = std::gcd(n, den);
+                bool hasBeat = false;
+                if ( auto it = sn.m_metadata.note_properties.find(NoteMetadataType::MALODY);
+                     it != sn.m_metadata.note_properties.end() ) {
+                    if ( it->second.contains("beat") ) {
+                        try {
+                            sj["beat"] = json::parse(it->second.at("beat"));
+                            hasBeat = true;
+                        } catch ( ... ) {}
+                    }
+                }
+
+                if ( !hasBeat ) {
+                    auto   relBeatArr = timeToBeat(current_time);
+                    double relBeatVal = relBeatArr[0].get<double>() +
+                                        (relBeatArr[1].get<double>() /
+                                         relBeatArr[2].get<double>()) -
+                                        rootBeatVal;
+
+                    int    intRelBeat = static_cast<int>(std::floor(relBeatVal + 1e-6));
+                    double relFrac    = relBeatVal - intRelBeat;
+
+                    if ( relFrac < 1e-6 ) {
+                        sj["beat"] = json::array({ intRelBeat, 0, 1 });
+                    } else {
+                        bool fitted = false;
+                        for ( int den : { 1,  2,  3,  4,  6,  8,  12,   16,
+                                          24, 32, 48, 64, 96, 192, 1920 } ) {
+                            double num     = relFrac * den;
+                            double rounded = std::round(num);
+                            if ( std::abs(num - rounded) < 1e-4 ) {
+                                int n   = static_cast<int>(rounded);
+                                int gcd = std::gcd(n, den);
+                                sj["beat"] =
+                                    json::array({ intRelBeat, n / gcd, den / gcd });
+                                fitted = true;
+                                break;
+                            }
+                        }
+                        if ( !fitted ) {
+                            int n   = static_cast<int>(std::round(relFrac * 1920));
+                            int gcd = std::gcd(n, 1920);
                             sj["beat"] =
-                                json::array({ intRelBeat, n / gcd, den / gcd });
-                            fitted = true;
-                            break;
+                                json::array({ intRelBeat, n / gcd, 1920 / gcd });
                         }
                     }
-                    if ( !fitted ) {
-                        int n   = static_cast<int>(std::round(relFrac * 1920));
-                        int gcd = std::gcd(n, 1920);
-                        sj["beat"] =
-                            json::array({ intRelBeat, n / gcd, 1920 / gcd });
-                    }
                 }
+
                 float w = 256.0f / beatMap.m_baseMapMetadata.track_count;
                 int x_offset = static_cast<int>(
-                    std::round((int(target.second) - int(p.m_track)) * w));
+                    std::round((int(current_track) - int(p.m_track)) * w));
                 if ( x_offset != 0 ) {
                     sj["x"] = x_offset;
                 }
+                
+                // Restore other segment properties from metadata
+                if ( auto it = sn.m_metadata.note_properties.find(NoteMetadataType::MALODY);
+                     it != sn.m_metadata.note_properties.end() ) {
+                    for ( const auto& [key, val] : it->second ) {
+                        if ( key != "beat" && key != "x" ) {
+                            try {
+                                sj[key] = json::parse(val);
+                            } catch ( ... ) {
+                                sj[key] = val;
+                            }
+                        }
+                    }
+                }
+
                 nj["seg"].push_back(sj);
             }
         }
@@ -266,7 +380,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             break;
         }
     }
-    audioNode["offset"] = static_cast<int>(std::round(-firstTimingTime));
+    audioNode["offset"] = -firstTimingTime; // 保持 double 精度
 
     audioNode["vol"] = 100;
     noteArr.push_back(audioNode);

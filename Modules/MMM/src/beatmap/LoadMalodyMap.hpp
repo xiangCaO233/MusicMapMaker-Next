@@ -42,10 +42,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     json fileData;
+    std::string fileContent((std::istreambuf_iterator<char>(fs)),
+                           std::istreambuf_iterator<char>());
     try {
-        fs >> fileData;
-    } catch ( const std::exception& e ) {
-        XERROR("解析 malody 谱面 JSON 失败: {}", e.what());
+        fileData = json::parse(fileContent, nullptr, true, true);
+    } catch ( ... ) {
+        // Fallback to non-throwing parser if UTF-8 is invalid
+        fileData = json::parse(fileContent, nullptr, false, true);
+    }
+
+    if ( fileData.is_discarded() ) {
+        XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}", pathToStr(path));
         return {};
     }
 
@@ -215,11 +222,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     auto getAbsTime = [&](double beat) {
         double curBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
+        
         double lastB = 0.0;
-        double lastT = initialDelay;
-        if ( !rawEvents.empty() && rawEvents[0].isBpm &&
-             rawEvents[0].beat <= 0.0001 ) {
-            curBpm = rawEvents[0].bpm;
+        double lastT = initialDelay; // 默认 initialDelay 对应 beat 0
+        
+        if ( !rawEvents.empty() ) {
+            // Malody 的 delay 实际上是第一个 timing 点的时间戳
+            lastB = rawEvents[0].beat;
+            lastT = initialDelay;
+            if ( rawEvents[0].isBpm ) {
+                curBpm = rawEvents[0].bpm;
+            }
         }
 
         for ( const auto& ev : rawEvents ) {
@@ -258,8 +271,15 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm =
         basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
+    
     double lastProcessedBeat = 0.0;
     double lastProcessedTime = initialDelay;
+
+    if ( !rawEvents.empty() ) {
+        lastProcessedBeat = rawEvents[0].beat;
+        lastProcessedTime = initialDelay;
+        if ( rawEvents[0].isBpm ) currentBpm = rawEvents[0].bpm;
+    }
 
     for ( auto& ev : rawEvents ) {
         double duration =
@@ -286,8 +306,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         auto& malody_timing_props =
             timing.m_metadata.timing_properties[TimingMetadataType::MALODY];
         for ( auto it = ev.raw.begin(); it != ev.raw.end(); ++it ) {
-            if ( it.key() != "beat" && it.key() != "bpm" &&
-                 it.key() != "scroll" && it.key() != "delay" ) {
+            if ( it.key() != "bpm" && it.key() != "scroll" ) {
                 malody_timing_props[it.key()] = it.value().dump();
             }
         }
@@ -406,18 +425,15 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                         if ( stepTime > runningTime + 1e-7 ) {
                             // Hold segment
-                            Hold& h  = beatMap.m_noteData.holds.emplace_back();
+                            Hold& h = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
                             h.m_timestamp = runningTime;
                             h.m_track     = runningTrack;
-                            h.m_duration =
-                                std::max(0.0, stepTime - runningTime);
+                            h.m_duration = std::max(0.0, stepTime - runningTime);
+                            
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
-                            beatMap.m_allNotes.push_back(h);
 
-                            // 如果不是最后一段，或者当前发生了轨道变化，则需要添加
-                            // Flick 节点
                             if ( stepTrack != runningTrack ) {
                                 Flick& f =
                                     beatMap.m_noteData.flicks.emplace_back();
@@ -428,7 +444,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                     (int32_t)stepTrack - (int32_t)runningTrack;
                                 poly.m_subNotes.push_back(f);
                                 poly.m_subFlicks.push_back(f);
-                                beatMap.m_allNotes.push_back(f);
                             }
                         } else {
                             // Instant Flick
@@ -440,7 +455,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                 (int32_t)stepTrack - (int32_t)runningTrack;
                             poly.m_subNotes.push_back(f);
                             poly.m_subFlicks.push_back(f);
-                            beatMap.m_allNotes.push_back(f);
                         }
                         runningTime  = stepTime;
                         runningTrack = stepTrack;
@@ -487,12 +501,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                     notePtr->m_metadata
                         .note_properties[NoteMetadataType::MALODY];
                 for ( auto it = n.begin(); it != n.end(); ++it ) {
-                    if ( it.key() != "beat" && it.key() != "endbeat" &&
+                    if ( it.key() != "endbeat" &&
                          it.key() != "column" && it.key() != "seg" ) {
                         malody_note_props[it.key()] = it.value().dump();
                     }
                 }
-                beatMap.m_allNotes.push_back(*notePtr);
+                // beatMap.m_allNotes.push_back(*notePtr); // 统一由 sync() 处理
 
                 // 更新谱面最大长度
                 double noteEnd = notePtr->m_timestamp;
@@ -522,11 +536,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                             basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
+    // 最终同步引用
+    beatMap.sync();
+
     XINFO("Successfully loaded Malody map with {} notes and {} timings.",
           beatMap.m_allNotes.size(),
           beatMap.m_timings.size());
-
-    XINFO("MC Map track count:{}", basemeta.track_count);
 
     return beatMap;
 }
