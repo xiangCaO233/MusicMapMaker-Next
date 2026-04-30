@@ -1,1 +1,19 @@
-pacman -Syu && pacman -S --noconfirm base-devel mingw-w64-clang-x86_64-autotools mingw-w64-clang-x86_64-cmake mingw-w64-clang-x86_64-gcc mingw-w64-clang-x86_64-make mingw-w64-clang-x86_64-meson mingw-w64-clang-x86_64-nasm mingw-w64-clang-x86_64-ninja mingw-w64-clang-x86_64-pkgconf mingw-w64-clang-x86_64-shaderc mingw-w64-clang-x86_64-vulkan-headers mingw-w64-clang-x86_64-vulkan-loader mingw-w64-clang-x86_64-vulkan-memory-allocator mingw-w64-clang-x86_64-vulkan-utility-libraries mingw-w64-clang-x86_64-vulkan-validation-layers 
+pacman -Syu && pacman -S --noconfirm base-devel \
+          mingw-w64-clang-x86_64-autotools \
+          mingw-w64-clang-x86_64-cmake \
+          mingw-w64-clang-x86_64-gcc \
+          mingw-w64-clang-x86_64-make \
+          mingw-w64-clang-x86_64-meson \
+          mingw-w64-clang-x86_64-nasm \
+          mingw-w64-clang-x86_64-ninja \
+          mingw-w64-clang-x86_64-pkgconf \
+          mingw-w64-clang-x86_64-shaderc \
+          mingw-w64-clang-x86_64-vulkan-headers \
+          mingw-w64-clang-x86_64-vulkan-loader \
+          mingw-w64-clang-x86_64-vulkan-memory-allocator \
+          mingw-w64-clang-x86_64-vulkan-utility-libraries \
+          mingw-w64-clang-x86_64-vulkan-validation-layers \
+          mingw-w64-clang-x86_64-fftw \
+          mingw-w64-clang-x86_64-libsamplerate \
+          mingw-w64-clang-x86_64-speexdsp \
+          mingw-w64-clang-x86_64-sleef
