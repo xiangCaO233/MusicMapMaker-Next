@@ -117,8 +117,11 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
         size_t frameCount = seq ? seq->frames.size() : 0;
 
         if ( active.isLooping ) {
-            // 对于 Hold，如果当前时间超过了 Hold 结束时间，则结束
-            if ( visualTime > (active.startTime + active.duration) ) {
+            // 对于 Hold，如果当前时间超过了 Hold 结束时间，且至少播放完一个完整的普通动画周期，则结束
+            // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
+            double animDuration = static_cast<double>(frameCount) / baseFps;
+            if ( visualTime > (active.startTime + active.duration) &&
+                 visualTime >= (active.startTime + animDuration) ) {
                 it = m_trackActiveEffects.erase(it);
                 continue;
             }
