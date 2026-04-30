@@ -374,29 +374,26 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                0u,
                                (uint32_t)std::max(0, basemeta.track_count - 1));
 
-                // 2. 模式 7 优化：如果是单段垂直 Hold 或单段 Flick
-                /*
-                if ( segs.size() == 1 ) {
-                    if ( firstTime > startTime && xOffset == 0 &&
-                         firstSegTrack == track ) {
-                        // 绝对垂直的长条 -> Hold
+                // 2. 优化：针对单段垂直物件或单段位移物件，直接转换为对应类型，避免生成冗余的 Polyline
+                if ( !notePtr && segs.size() == 1 ) {
+                    if ( firstSegTrack == track ) {
+                        // 垂直物件 -> 直接转为 Hold (时长可以为 0，符合用户对于“0长度Hold”的预期)
                         Hold& h       = beatMap.m_noteData.holds.emplace_back();
                         h.m_type      = NoteType::HOLD;
                         h.m_timestamp = startTime;
                         h.m_track     = track;
-                        h.m_duration  = firstTime - startTime;
+                        h.m_duration  = std::max(0.0, firstTime - startTime);
                         notePtr       = &h;
                     } else if ( firstTime == startTime ) {
-                        // 瞬发跳变 -> Flick
-                        Flick& f = beatMap.m_noteData.flicks.emplace_back();
-                        f.m_type = NoteType::FLICK;
+                        // 瞬发跳变 -> 直接转为 Flick
+                        Flick& f      = beatMap.m_noteData.flicks.emplace_back();
+                        f.m_type      = NoteType::FLICK;
                         f.m_timestamp = startTime;
                         f.m_track     = track;
                         f.m_dtrack    = (int32_t)firstSegTrack - (int32_t)track;
                         notePtr       = &f;
                     }
                 }
-                */
 
                 // 3. 构造 Polyline (针对多段或滑动 Hold)
                 if ( !notePtr ) {
@@ -445,8 +442,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                 poly.m_subNotes.push_back(f);
                                 poly.m_subFlicks.push_back(f);
                             }
-                        } else {
-                            // Instant Flick
+                        } else if ( stepTrack != runningTrack ) {
+                            // Instant Flick (仅在轨道发生变化时创建)
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
                             f.m_timestamp = runningTime;

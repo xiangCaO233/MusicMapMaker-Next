@@ -44,7 +44,40 @@ void VKRenderer::render(NativeWindow&                  window,
     }
 
     // 恢复fence
-    (void)m_vkLogicalDevice.resetFences(m_cmdAvailableFences[m_currentFrameIndex]);
+    (void)m_vkLogicalDevice.resetFences(
+        m_cmdAvailableFences[m_currentFrameIndex]);
+
+    // --- [优化] 在准备新帧之前获取图像 ---
+    // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
+    // 在 FIFO (VSync) 模式下，这里是主要的阻塞点，会等待垂直同步
+    vk::ResultValue<uint32_t> imageResult =
+        m_vkLogicalDevice.acquireNextImageKHR(
+            m_vkSwapChain.m_swapchain,
+            std::numeric_limits<uint64_t>::max(),
+            m_imageAvailableSems[m_currentFrameIndex]);
+
+    if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
+        triggerRecreate(window);
+        return;
+    } else if ( imageResult.result != vk::Result::eSuccess &&
+                imageResult.result != vk::Result::eSuboptimalKHR ) {
+        XWARN("acquire ImageKHR failed: {}",
+              static_cast<int>(imageResult.result));
+        return;
+    }
+
+    // 获取到实际查询到的可绘制的图像下标
+    uint32_t imageIndex = imageResult.value;
+
+    // 安全检查：防止越界
+    if ( imageIndex >= m_vkSwapChain.m_vkImageBuffers.size() ) {
+        XERROR("Invalid image index acquired: {}", imageIndex);
+        return;
+    }
+
+    // --- [关键优化] 在 VSync 阻塞解除后立即处理输入 ---
+    // 这样能保证本帧使用的输入数据是最新鲜的
+    window.pollEvents();
 
     // --- 1. ImGui 准备新帧 ---
     ImGui_ImplVulkan_NewFrame();
@@ -71,7 +104,6 @@ void VKRenderer::render(NativeWindow&                  window,
                                             m_LogicDeviceGraphicsQueue);
     }
 
-
     // 录制所有ui
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onUpdateUI();
@@ -84,35 +116,6 @@ void VKRenderer::render(NativeWindow&                  window,
     }
 
     ImGui::Render();  // 生成imgui绘制顶点数据
-
-    // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
-    vk::ResultValue<uint32_t> imageResult =
-        m_vkLogicalDevice.acquireNextImageKHR(
-            m_vkSwapChain.m_swapchain,
-            std::numeric_limits<uint64_t>::max(),
-            m_imageAvailableSems[m_currentFrameIndex]);
-
-    if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
-        ImGui::EndFrame();
-        triggerRecreate(window);
-        return;
-    } else if ( imageResult.result != vk::Result::eSuccess &&
-                imageResult.result != vk::Result::eSuboptimalKHR ) {
-        XWARN("acquire ImageKHR failed: {}",
-              static_cast<int>(imageResult.result));
-        ImGui::EndFrame();
-        return;
-    }
-
-    // 获取到实际查询到的可绘制的图像下标
-    uint32_t imageIndex = imageResult.value;
-
-    // 安全检查：防止越界
-    if ( imageIndex >= m_vkSwapChain.m_vkImageBuffers.size() ) {
-        XERROR("Invalid image index acquired: {}", imageIndex);
-        ImGui::EndFrame();
-        return;
-    }
 
     // 重置命令缓冲
     auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
@@ -142,7 +145,8 @@ void VKRenderer::render(NativeWindow&                  window,
 
     // 录制所有离屏渲染命令
     for ( auto& graphicUserHook : graphicUserHooks ) {
-        graphicUserHook->onRecordOffscreen(currentCmdBuffer, (uint32_t)m_currentFrameIndex);
+        graphicUserHook->onRecordOffscreen(currentCmdBuffer,
+                                           (uint32_t)m_currentFrameIndex);
     }
 
     {

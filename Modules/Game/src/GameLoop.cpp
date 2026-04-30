@@ -170,7 +170,7 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // 进入主循环
         while ( !window.shouldClose() ) {
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
-            window.pollEvents();
+            // 已移至渲染循环内以降低 VSync 延迟 window.pollEvents();
 
             // 3.1.5 处理光标 BPM 同步逻辑
             float cursorSmokeLifeOverride = -1.0f;

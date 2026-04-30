@@ -81,9 +81,14 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
     vk::SurfaceCapabilitiesKHR caps = capsResult.value;
 
     // 确定图像数量
-    // 推荐做法：min + 1。如果没有上限限制，就用这个值。
-    // 如果有上限限制，取 (min+1) 和 max 之间的较小值。
-    uint32_t imageCount = caps.minImageCount + 1;
+    // 推荐做法：min + 1。
+    // [优化] 如果是 FIFO (垂直同步) 模式，使用 minImageCount (通常是 2)
+    // 以开启双重缓冲，减少 1 帧延迟。 如果是 Mailbox 或其他模式，使用
+    // minImageCount + 1 (通常是 3) 以保证平滑。
+    uint32_t imageCount = (s_globalPresentMode == vk::PresentModeKHR::eFifo)
+                              ? caps.minImageCount
+                              : caps.minImageCount + 1;
+
     if ( caps.maxImageCount > 0 && imageCount > caps.maxImageCount ) {
         imageCount = caps.maxImageCount;
     }
