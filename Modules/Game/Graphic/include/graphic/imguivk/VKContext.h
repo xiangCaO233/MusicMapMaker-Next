@@ -87,6 +87,16 @@ public:
      */
     void ToggleFullscreen();
 
+    /**
+     * @brief 设置 ImGui 字体 (供初始化和重载使用)
+     */
+    void setupFonts();
+
+    /**
+     * @brief 热重载 ImGui 字体并重建纹理
+     */
+    void rebuildFonts();
+
 private:
     /**
      * @brief 仅更新全局呈现模式参数，不触发重建

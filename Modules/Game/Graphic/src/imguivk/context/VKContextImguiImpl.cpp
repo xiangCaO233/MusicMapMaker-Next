@@ -116,24 +116,29 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
     // IM_ASSERT(font != nullptr);
 
-    auto& skinMgr = Config::SkinManager::instance();
+    // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
+    glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
+
+    setupFonts();
+
+    XDEBUG("ImGui Vulkan backend initialized.");
+}
+
+void VKContext::setupFonts()
+{
+    ImGuiIO& io      = ImGui::GetIO();
+    float    native_scale = Config::AppConfig::instance().getNativeContentScale();
+    float    ui_scale     = Config::AppConfig::instance().getUIScale();
+    auto&    skinMgr      = Config::SkinManager::instance();
 
     // --- 字体范围定义 ---
-    // ASCII 范围：基本拉丁文 + 拉丁文补充
     static const ImWchar ascii_ranges[] = { 0x0020, 0x00FF, 0 };
-    // CJK 范围：排除 ASCII，包含常用标点、符号、简繁汉字、全角字符
-    static const ImWchar cjk_ranges[] = {
-        0x2000, 0x206F, // 常用标点
-        0x3000, 0x30FF, // CJK 符号、平假名、片假名
-        0x3105, 0x312D, // 注音符号
-        0x4E00, 0x9FFF, // CJK 统一汉字 (常用)
-        0xFF00, 0xFFEF, // 全角形式
-        0
+    static const ImWchar cjk_ranges[]   = {
+        0x2000, 0x206F, 0x3000, 0x30FF, 0x3105, 0x312D,
+        0x4E00, 0x9FFF, 0xFF00, 0xFFEF, 0
     };
-    // NerdFont 图标范围：私有使用区 (PUA)
     static const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
 
-    // 辅助 Lambda: 加载并合并 CJK 字体
     auto loadFontWithSize = [&](const std::string& key, float size) {
         auto& settings      = Config::AppConfig::instance().getEditorSettings();
         auto  asciiFontPath = skinMgr.getFontPath("ascii");
@@ -143,9 +148,17 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
         if ( !settings.preferredAsciiFont.empty() &&
              settings.preferredAsciiFont != "Default" ) {
             const auto& asciiFonts = skinMgr.getAsciiFonts();
-            if ( auto it = asciiFonts.find(settings.preferredAsciiFont);
-                 it != asciiFonts.end() ) {
+            auto        it = std::find_if(asciiFonts.begin(),
+                               asciiFonts.end(),
+                               [&](const auto& pair) {
+                                   return pair.first ==
+                                          settings.preferredAsciiFont;
+                               });
+            if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
+            } else if ( std::filesystem::exists(settings.preferredAsciiFont) ) {
+                // 如果是绝对路径，说明是外部/系统字体
+                asciiFontPath = settings.preferredAsciiFont;
             }
         }
 
@@ -153,9 +166,17 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
         if ( !settings.preferredCjkFont.empty() &&
              settings.preferredCjkFont != "Default" ) {
             const auto& cjkFonts = skinMgr.getCjkFonts();
-            if ( auto it = cjkFonts.find(settings.preferredCjkFont);
-                 it != cjkFonts.end() ) {
+            auto        it       = std::find_if(cjkFonts.begin(),
+                                  cjkFonts.end(),
+                                  [&](const auto& pair) {
+                                      return pair.first ==
+                                             settings.preferredCjkFont;
+                                  });
+            if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
+            } else if ( std::filesystem::exists(settings.preferredCjkFont) ) {
+                // 如果是绝对路径，说明是外部/系统字体
+                cjkFontPath = settings.preferredCjkFont;
             }
         }
 
@@ -190,10 +211,16 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
             iconConfig.MergeMode            = true;
             iconConfig.PixelSnapH           = true;
             iconConfig.FontDataOwnedByAtlas = false;  // 数据在静态区，不要释放
+            iconConfig.OversampleH          = 1;
+            iconConfig.OversampleV          = 1;
+
+            // 向上稍微偏移 (-0.05x)，并设置缩放为 0.9x
+            // 缩小尺寸后，图标会靠近基准线（显得偏下），因此需要负向偏移来使其在按钮/行内视觉居中
+            iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
-                                           atlasSize,
+                                           atlasSize * 0.9f,
                                            &iconConfig,
                                            nerd_ranges);
 
@@ -211,25 +238,38 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
         return val.empty() ? defaultSize : std::stof(val);
     };
 
-    // 1. 加载默认字体 (也是 content 字体)
-    float contentSize = getFontSize("content", 14.0f);
-    loadFontWithSize("content", contentSize);
-
-    // 2. 加载其他范围的字体
-    float titleFontSize = getFontSize("title", 20.0f);
-    XDEBUG("Loading title font with size: {}", titleFontSize);
-    loadFontWithSize("title", titleFontSize);
-
+    // 加载各个场景的字体
+    loadFontWithSize("content", getFontSize("content", 14.0f));
+    loadFontWithSize("title", getFontSize("title", 20.0f));
     loadFontWithSize("menu", getFontSize("menu", 16.0f));
     loadFontWithSize("filemanager", getFontSize("filemanager", 14.0f));
     loadFontWithSize("side_bar", getFontSize("side_bar", 16.0f));
     loadFontWithSize("setting_internal",
                      getFontSize("setting_internal", 14.0f));
+}
 
-    // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
-    glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
+void VKContext::rebuildFonts()
+{
+    XINFO("Hot-reloading ImGui fonts...");
+    // 确保设备空闲
+    if ( m_vkLogicalDevice.waitIdle() != vk::Result::eSuccess ) {
+        XERROR("Failed to wait for device idle during font reload.");
+        return;
+    }
 
-    XDEBUG("ImGui Vulkan backend initialized.");
+    ImGuiIO& io = ImGui::GetIO();
+
+    // 清除旧字体
+    io.Fonts->Clear();
+
+    // 重新运行字体加载
+    setupFonts();
+
+    // 构建新 Atlas
+    // Backend will detect texture update automatically if RendererHasTextures is enabled
+    io.Fonts->Build();
+
+    XINFO("Fonts rebuilt.");
 }
 
 // --- Added applyTheme definition earlier

@@ -90,6 +90,8 @@ local Skin = {
 	ascii_fonts = {
 		["Comic Sans (Regular)"] = f_ascii_reg,
 		["Comic Sans (Bold)"] = f_ascii_bold,
+		["Noto Sans CJK (Regular)"] = f_cjk_reg,
+		["Noto Sans CJK (Bold)"] = f_cjk_bold,
 	},
 
 	-- 可选 CJK 字体列表

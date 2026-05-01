@@ -93,10 +93,28 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     m_data.asciiFonts.clear();
     if ( asciiFontsTableOpt ) {
         sol::table asciiFontsTable = asciiFontsTableOpt.value();
-        for ( const auto& kv : asciiFontsTable ) {
-            std::string name       = kv.first.as<std::string>();
-            std::string rpath      = kv.second.as<std::string>();
-            m_data.asciiFonts[name] = m_data.skinPath / "resources" / rpath;
+        // 检查是否为数组格式 (ordered)
+        if ( asciiFontsTable[1].valid() ) {
+            for ( size_t i = 1; i <= asciiFontsTable.size(); ++i ) {
+                sol::object entry = asciiFontsTable[i];
+                if ( entry.is<sol::table>() ) {
+                    sol::table t = entry.as<sol::table>();
+                    if ( t[1].valid() && t[2].valid() ) {
+                        m_data.asciiFonts.emplace_back(
+                            t[1].get<std::string>(),
+                            m_data.skinPath / "resources" /
+                                t[2].get<std::string>());
+                    }
+                }
+            }
+        } else {
+            // 回退到字典格式 (unordered)
+            for ( const auto& kv : asciiFontsTable ) {
+                std::string name   = kv.first.as<std::string>();
+                std::string rpath  = kv.second.as<std::string>();
+                m_data.asciiFonts.emplace_back(
+                    name, m_data.skinPath / "resources" / rpath);
+            }
         }
     }
 
@@ -105,10 +123,26 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     m_data.cjkFonts.clear();
     if ( cjkFontsTableOpt ) {
         sol::table cjkFontsTable = cjkFontsTableOpt.value();
-        for ( const auto& kv : cjkFontsTable ) {
-            std::string name       = kv.first.as<std::string>();
-            std::string rpath      = kv.second.as<std::string>();
-            m_data.cjkFonts[name] = m_data.skinPath / "resources" / rpath;
+        if ( cjkFontsTable[1].valid() ) {
+            for ( size_t i = 1; i <= cjkFontsTable.size(); ++i ) {
+                sol::object entry = cjkFontsTable[i];
+                if ( entry.is<sol::table>() ) {
+                    sol::table t = entry.as<sol::table>();
+                    if ( t[1].valid() && t[2].valid() ) {
+                        m_data.cjkFonts.emplace_back(
+                            t[1].get<std::string>(),
+                            m_data.skinPath / "resources" /
+                                t[2].get<std::string>());
+                    }
+                }
+            }
+        } else {
+            for ( const auto& kv : cjkFontsTable ) {
+                std::string name  = kv.first.as<std::string>();
+                std::string rpath = kv.second.as<std::string>();
+                m_data.cjkFonts.emplace_back(
+                    name, m_data.skinPath / "resources" / rpath);
+            }
         }
     }
 

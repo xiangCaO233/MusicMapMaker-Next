@@ -38,6 +38,7 @@ return {
 	["ui.settings.software.theme.auto"] = "Auto (Follow Skin)",
 	["ui.settings.software.font.ascii"] = "ASCII Font",
 	["ui.settings.software.font.cjk"] = "CJK Font",
+	["ui.settings.software.font.browse"] = "Browse System Font",
 	["ui.settings.software.font.restart"] = "Font changed, requires restart to apply",
 	["ui.settings.software.picker_style"] = "Picker Style",
 	["ui.settings.software.picker_native"] = "Native File Picker",

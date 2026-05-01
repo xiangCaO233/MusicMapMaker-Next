@@ -10,6 +10,9 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "graphic/imguivk/VKContext.h"
+#include <ImGuiFileDialog.h>
+#include <filesystem>
 
 namespace MMM::UI
 {
@@ -95,9 +98,7 @@ void SettingsView::drawSoftwareSettings()
 
     // ASCII 字体
     if ( currentAscii == "Default" && !asciiFonts.empty() ) {
-        currentAscii = asciiFonts.begin()->first;
-        // 注意：这里不直接写入 settings，除非用户手动点击，
-        // 或者在加载配置时就已经处理好。
+        currentAscii = asciiFonts.front().first;
     }
 
     ImGui::Text("%s", TR_CACHE("ui.settings.software.font.ascii").data());
@@ -113,10 +114,20 @@ void SettingsView::drawSoftwareSettings()
         }
         ImGui::EndCombo();
     }
+    ImGui::SameLine();
+    if ( ImGui::Button("...##BrowseAscii") ) {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "AsciiFontPicker",
+            TR_CACHE("ui.settings.software.font.browse").data(),
+            ".ttf,.otf",
+            config);
+    }
 
     // CJK 字体
     if ( currentCjk == "Default" && !cjkFonts.empty() ) {
-        currentCjk = cjkFonts.begin()->first;
+        currentCjk = cjkFonts.front().first;
     }
 
     ImGui::Text("%s", TR_CACHE("ui.settings.software.font.cjk").data());
@@ -132,13 +143,44 @@ void SettingsView::drawSoftwareSettings()
         }
         ImGui::EndCombo();
     }
+    ImGui::SameLine();
+    if ( ImGui::Button("...##BrowseCjk") ) {
+        IGFD::FileDialogConfig config;
+        config.path = ".";
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "CjkFontPicker",
+            TR_CACHE("ui.settings.software.font.browse").data(),
+            ".ttf,.otf",
+            config);
+    }
+
+    // 处理文件选择器结果
+    if ( ImGuiFileDialog::Instance()->Display(
+             "AsciiFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            settings.preferredAsciiFont =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            fontChanged = true;
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+
+    if ( ImGuiFileDialog::Instance()->Display(
+             "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            settings.preferredCjkFont =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            fontChanged = true;
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
 
     if ( fontChanged ) {
         changed = true;
-        ImGui::SameLine();
-        ImGui::TextColored(Utils::UIThemeUtils::getWarningColor(),
-                           "%s",
-                           TR_CACHE("ui.settings.software.font.restart").data());
+        // 执行热重载
+        if ( auto ctx = Graphic::VKContext::get() ) {
+            ctx->get().rebuildFonts();
+        }
     }
 
     // 2. 光标样式

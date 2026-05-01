@@ -42,8 +42,8 @@ struct SkinData {
     std::unordered_map<std::string, std::filesystem::path> fontPaths;
 
     // 字体套装 (用于在 AppConfig 中切换)
-    std::unordered_map<std::string, std::filesystem::path> asciiFonts;
-    std::unordered_map<std::string, std::filesystem::path> cjkFonts;
+    std::vector<std::pair<std::string, std::filesystem::path>> asciiFonts;
+    std::vector<std::pair<std::string, std::filesystem::path>> cjkFonts;
 
     // 运行时字体对象表 (Key: 字体配置ID, Value: ImFont*)
     std::unordered_map<std::string, ImFont*> runtimeFonts;
@@ -146,15 +146,15 @@ public:
     ImFont* getFont(const std::string& key);
 
     ///@brief 获取所有可用的 ASCII 字体
-    const std::unordered_map<std::string, std::filesystem::path>& getAsciiFonts()
-        const
+    const std::vector<std::pair<std::string, std::filesystem::path>>&
+    getAsciiFonts() const
     {
         return m_data.asciiFonts;
     }
 
     ///@brief 获取所有可用的 CJK 字体
-    const std::unordered_map<std::string, std::filesystem::path>& getCjkFonts()
-        const
+    const std::vector<std::pair<std::string, std::filesystem::path>>&
+    getCjkFonts() const
     {
         return m_data.cjkFonts;
     }
