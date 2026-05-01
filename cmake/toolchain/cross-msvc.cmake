@@ -19,7 +19,7 @@ set(MSVC_TARGET_TRIPLE x86_64-pc-windows-msvc)
 # -fms-compatibility-version=19: 模拟 MSVC 2015+
 # -fms-compatibility: 开启更多 MSVC 兼容特性
 # -D__FMA__: 解决 Clang builtin 与 MSVC <complex> 的冲突
-set(FLAGS "--target=${MSVC_TARGET_TRIPLE} -Xclang -fms-compatibility-version=19 -fms-compatibility /EHsc -fexceptions -D__FMA__")
+set(FLAGS "--target=${MSVC_TARGET_TRIPLE} -Xclang -fms-compatibility-version=19.41 -fms-compatibility /EHsc -D__FMA__ -D_CRT_DECLARE_NON_CONSTEXPR_FMA_INTRINSICS")
 
 # 统一 Windows 版本定义 (Windows 10)
 # _WIN32_WINNT=0x0A00
@@ -50,6 +50,7 @@ set(MSVC_LIB_PATHS
     "/libpath:\"${MSVC_BASE}/atlmfc/lib/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/ucrt/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/um/x64\""
+    "/libpath:\"/home/xiang/Documents/coding/c_cpp/MusicMapMaker-Next/lib_proxy\""
 )
 
 string(REPLACE ";" " " MSVC_INCLUDE_STR "${MSVC_INCLUDE}")
@@ -69,3 +70,4 @@ set(CMAKE_C_LINK_EXECUTABLE "<CMAKE_LINKER> <FLAGS> <CMAKE_C_LINK_FLAGS> <LINK_F
 set(CMAKE_CXX_LINK_EXECUTABLE "<CMAKE_LINKER> <FLAGS> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
 
 set(VCPKG_ROOT "/mnt/windows_c/msys64/home/xiang/projects/vcpkg" CACHE STRING "" FORCE)
+list(APPEND CMAKE_PREFIX_PATH "${VCPKG_ROOT}/installed/x64-windows-static")

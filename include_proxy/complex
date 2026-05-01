@@ -1,0 +1,5 @@
+#pragma once
+#include <intrin.h>
+#define _mm_fmsub_sd _mm_fmsub_sd_CONFLICT
+#include_next <complex>
+#undef _mm_fmsub_sd
