@@ -1,14 +1,15 @@
 #include "log/colorful-log.h"
-#include "logic/session/ActionController.h"
-#include "logic/session/context/SessionContext.h"
-#include "logic/session/SessionUtils.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
+#include "logic/session/context/SessionContext.h"
+#include <unordered_set>
 
 namespace MMM::Logic
 {
@@ -68,10 +69,36 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( entries.empty() && m_ctx.hoveredEntity != entt::null ) {
         if ( m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
              m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) ) {
-            entries.push_back({ m_ctx.hoveredEntity,
-                                m_ctx.noteRegistry.get<NoteComponent>(
-                                    m_ctx.hoveredEntity),
-                                std::nullopt });
+            entries.push_back(
+                { m_ctx.hoveredEntity,
+                  m_ctx.noteRegistry.get<NoteComponent>(m_ctx.hoveredEntity),
+                  std::nullopt });
+        }
+    }
+
+    // 收集所有被删除实体的 ID（用于后续查找子物件）
+    std::unordered_set<entt::entity> deletedEntities;
+    for ( const auto& entry : entries ) {
+        deletedEntities.insert(entry.entity);
+    }
+
+    // 同时删除被删除折线下所有子物件实体，防止孤儿子实体残留
+    for ( entt::entity parentEntity : deletedEntities ) {
+        if ( m_ctx.noteRegistry.valid(parentEntity) &&
+             m_ctx.noteRegistry.all_of<NoteComponent>(parentEntity) ) {
+            const auto& nc =
+                m_ctx.noteRegistry.get<NoteComponent>(parentEntity);
+            if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                 !nc.m_subNotes.empty() ) {
+                for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
+                    const auto& subNC =
+                        m_ctx.noteRegistry.get<NoteComponent>(subEnt);
+                    if ( subNC.m_isSubNote &&
+                         subNC.m_parentPolyline == parentEntity ) {
+                        entries.push_back({ subEnt, subNC, std::nullopt });
+                    }
+                }
+            }
         }
     }
 
@@ -102,6 +129,20 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             if ( m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
                 auto oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
                 entries.push_back({ entity, oldNote, std::nullopt });
+
+                // 同时删除 Polyline 的子物件实体
+                if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
+                     !oldNote.m_subNotes.empty() ) {
+                    for ( auto subEnt :
+                          m_ctx.noteRegistry.view<NoteComponent>() ) {
+                        const auto& subNC =
+                            m_ctx.noteRegistry.get<NoteComponent>(subEnt);
+                        if ( subNC.m_isSubNote &&
+                             subNC.m_parentPolyline == entity ) {
+                            entries.push_back({ subEnt, subNC, std::nullopt });
+                        }
+                    }
+                }
             }
         }
     }
@@ -112,9 +153,19 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     // 尝试获取鼠标悬停处的时间作为基准 (如果有)
     // 注意：这里为了简化直接使用视觉时间。如果需要鼠标对齐，需要 UI 传入坐标。
 
+    double timeOffset = pasteTime - minTime;
+
     for ( const auto& item : m_ctx.clipboard ) {
         auto newNote        = item.note;
-        newNote.m_timestamp = pasteTime + (item.note.m_timestamp - minTime);
+        newNote.m_timestamp = item.note.m_timestamp + timeOffset;
+
+        // 折线物件：同步偏移所有子物件的时间戳
+        if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( auto& sub : newNote.m_subNotes ) {
+                sub.timestamp += timeOffset;
+            }
+        }
+
         entries.push_back({ entt::null, std::nullopt, newNote });
     }
 

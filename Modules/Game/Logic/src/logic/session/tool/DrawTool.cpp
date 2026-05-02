@@ -1,11 +1,11 @@
 #include "logic/session/tool/DrawTool.h"
-#include "logic/session/NoteAction.h"
-#include "logic/session/SessionUtils.h"
-#include "logic/session/context/SessionContext.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include <algorithm>
 #include <unordered_set>
 
@@ -415,7 +415,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
         }
 
         if ( targetIsSelected ) {
-            // 场景 A: 擦除的目标中包含选中物件 -> 删除所有选中的物件 + 擦除的目标物件
+            // 场景 A: 擦除的目标中包含选中物件 -> 删除所有选中的物件 +
+            // 擦除的目标物件
             std::unordered_set<entt::entity> toDelete;
 
             // 添加所有选中的
@@ -447,15 +448,43 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
             for ( auto entity : ctx.eraserState.targetEntities ) {
                 if ( ctx.noteRegistry.valid(entity) &&
                      ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
-                    entries.push_back({ entity,
-                                        ctx.noteRegistry.get<NoteComponent>(
-                                            entity),
-                                        std::nullopt });
+                    entries.push_back(
+                        { entity,
+                          ctx.noteRegistry.get<NoteComponent>(entity),
+                          std::nullopt });
                 }
             }
         }
 
         if ( !entries.empty() ) {
+            // 同时删除被擦除折线下所有子物件实体，防止孤儿子实体残留
+            std::unordered_set<entt::entity> erasedEntities;
+            for ( const auto& entry : entries ) {
+                if ( entry.entity != entt::null &&
+                     ctx.noteRegistry.valid(entry.entity) ) {
+                    erasedEntities.insert(entry.entity);
+                }
+            }
+            for ( entt::entity parentEntity : erasedEntities ) {
+                if ( ctx.noteRegistry.all_of<NoteComponent>(parentEntity) ) {
+                    const auto& nc =
+                        ctx.noteRegistry.get<NoteComponent>(parentEntity);
+                    if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                         !nc.m_subNotes.empty() ) {
+                        for ( auto subEnt :
+                              ctx.noteRegistry.view<NoteComponent>() ) {
+                            const auto& subNC =
+                                ctx.noteRegistry.get<NoteComponent>(subEnt);
+                            if ( subNC.m_isSubNote &&
+                                 subNC.m_parentPolyline == parentEntity ) {
+                                entries.push_back(
+                                    { subEnt, subNC, std::nullopt });
+                            }
+                        }
+                    }
+                }
+            }
+
             auto action = std::make_unique<BatchNoteAction>(std::move(entries));
             ctx.actionStack.pushAndExecute(std::move(action), ctx);
         }
