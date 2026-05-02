@@ -293,6 +293,36 @@ float AudioManager::getGlobalVolume() const
     return m_globalVolume;
 }
 
+void AudioManager::setMainMixerLeftMute(bool muted)
+{
+    if ( m_mainMixer ) {
+        m_mainMixer->set_mute_left(muted);
+    }
+}
+
+bool AudioManager::isMainMixerLeftMuted() const
+{
+    if ( m_mainMixer ) {
+        return m_mainMixer->is_mute_left();
+    }
+    return false;
+}
+
+void AudioManager::setMainMixerRightMute(bool muted)
+{
+    if ( m_mainMixer ) {
+        m_mainMixer->set_mute_right(muted);
+    }
+}
+
+bool AudioManager::isMainMixerRightMuted() const
+{
+    if ( m_mainMixer ) {
+        return m_mainMixer->is_mute_right();
+    }
+    return false;
+}
+
 void AudioManager::setPlaybackSpeed(double speed)
 {
     m_speed = std::clamp(speed, 0.1, 4.0);
@@ -328,6 +358,43 @@ double AudioManager::getPlaybackPitch() const
         return m_stretcher->get_pitch_semitones();
     }
     return 0.0;
+}
+
+void AudioManager::setPlaybackQuality(StretchQuality quality)
+{
+    if ( m_stretcher ) {
+        ice::TimeStretchQuality iceQuality;
+        switch ( quality ) {
+        case StretchQuality::Fast:
+            iceQuality = ice::TimeStretchQuality::Fast;
+            break;
+        case StretchQuality::Balanced:
+            iceQuality = ice::TimeStretchQuality::Balanced;
+            break;
+        case StretchQuality::Finer:
+            iceQuality = ice::TimeStretchQuality::Finer;
+            break;
+        case StretchQuality::Best:
+            iceQuality = ice::TimeStretchQuality::Best;
+            break;
+        default: iceQuality = ice::TimeStretchQuality::Finer; break;
+        }
+        m_stretcher->set_quality(iceQuality);
+    }
+}
+
+AudioManager::StretchQuality AudioManager::getPlaybackQuality() const
+{
+    if ( m_stretcher ) {
+        auto iceQuality = m_stretcher->get_quality();
+        switch ( iceQuality ) {
+        case ice::TimeStretchQuality::Fast: return StretchQuality::Fast;
+        case ice::TimeStretchQuality::Balanced: return StretchQuality::Balanced;
+        case ice::TimeStretchQuality::Finer: return StretchQuality::Finer;
+        case ice::TimeStretchQuality::Best: return StretchQuality::Best;
+        }
+    }
+    return StretchQuality::Finer;
 }
 
 void AudioManager::setSFXPoolVolume(const std::string& key, float volume,

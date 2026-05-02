@@ -98,6 +98,16 @@ public:
     /// @brief 获取全局音量
     float getGlobalVolume() const;
 
+    /// @brief 设置主混音器左声道静音
+    void setMainMixerLeftMute(bool muted);
+    /// @brief 获取主混音器左声道是否静音
+    bool isMainMixerLeftMuted() const;
+
+    /// @brief 设置主混音器右声道静音
+    void setMainMixerRightMute(bool muted);
+    /// @brief 获取主混音器右声道是否静音
+    bool isMainMixerRightMuted() const;
+
     /// @brief 设置播放倍率 (0.5 ~ 2.0)
     void setPlaybackSpeed(double speed);
 
@@ -112,6 +122,11 @@ public:
 
     /// @brief 获取主音轨音高偏移
     double getPlaybackPitch() const;
+
+    /// @brief 设置主音轨拉伸质量
+    enum class StretchQuality { Fast, Balanced, Finer, Best };
+    void           setPlaybackQuality(StretchQuality quality);
+    StretchQuality getPlaybackQuality() const;
 
     // --- EQ 相关接口 ---
 

@@ -54,12 +54,51 @@ void AudioTrackControllerUI::renderVolumeSection(float& volume, bool& muted,
     ImGui::AlignTextToFramePadding();
 
     // --- 2. 音量拉条 ---
-    ImGui::SetNextItemWidth(-50);
+    float sliderWidth = (m_type == TrackType::Main) ? -100.0f : -50.0f;
+    ImGui::SetNextItemWidth(sliderWidth);
     if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
         changed = true;
         // 如果拉动了进度条，自动解除静音（可选，但通常用户期望这样）
         if ( muted && volume > 0.0f ) {
             muted = false;
+        }
+    }
+
+    // --- 3. L/R 静音按钮 (仅限主音轨) ---
+    if ( m_type == TrackType::Main ) {
+        auto& audio = Audio::AudioManager::instance();
+        bool  muteL = audio.isMainMixerLeftMuted();
+        bool  muteR = audio.isMainMixerRightMuted();
+
+        ImGui::SameLine();
+        if ( muteL ) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  Utils::UIThemeUtils::getDangerColor());
+        }
+        if ( ImGui::Button("L", ImVec2(22, 0)) ) {
+            audio.setMainMixerLeftMute(!muteL);
+        }
+        if ( muteL ) {
+            ImGui::PopStyleColor();
+        }
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s", TR("ui.audio_manager.mute_l").data());
+        }
+
+        ImGui::SameLine(0, 2);
+
+        if ( muteR ) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  Utils::UIThemeUtils::getDangerColor());
+        }
+        if ( ImGui::Button("R", ImVec2(22, 0)) ) {
+            audio.setMainMixerRightMute(!muteR);
+        }
+        if ( muteR ) {
+            ImGui::PopStyleColor();
+        }
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetTooltip("%s", TR("ui.audio_manager.mute_r").data());
         }
     }
 }
@@ -100,6 +139,26 @@ void AudioTrackControllerUI::renderSpeedAndPitchSection(float& speed,
 
     // 滑块
     if ( ImGui::SliderFloat("##SpeedSlider", &speed, 0.25f, 2.0f, "%.4fx") ) {
+        changed = true;
+    }
+
+    // 拉伸质量选择
+    ImGui::Text("%s", TR("ui.audio_manager.stretch_quality").data());
+    const char* qualityNames[] = {
+        TR("ui.audio_manager.quality_fast").data(),
+        TR("ui.audio_manager.quality_balanced").data(),
+        TR("ui.audio_manager.quality_finer").data(),
+        TR("ui.audio_manager.quality_best").data()
+    };
+
+    int currentQuality = static_cast<int>(audio.getPlaybackQuality());
+    ImGui::SetNextItemWidth(-1);
+    if ( ImGui::Combo("##StretchQuality",
+                      &currentQuality,
+                      qualityNames,
+                      IM_ARRAYSIZE(qualityNames)) ) {
+        audio.setPlaybackQuality(
+            static_cast<Audio::AudioManager::StretchQuality>(currentQuality));
         changed = true;
     }
 
