@@ -26,7 +26,6 @@ public:
     void update(UIManager* sourceManager) override;
 
     const std::string& getTrackId() const { return m_trackId; }
-    bool               isOpen() const { return m_isOpen; }
 
 private:
     void renderVolumeSection(float& volume, bool& muted, bool& changed);
@@ -38,7 +37,6 @@ private:
     std::string m_trackId;
     std::string m_trackName;
     TrackType   m_type;
-    bool        m_isOpen{ true };
 
     Audio::EQPreset m_currentPreset{ Audio::EQPreset::None };
 };

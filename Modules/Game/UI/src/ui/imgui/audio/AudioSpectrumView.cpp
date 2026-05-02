@@ -112,8 +112,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioSpectrumViewGlobal";
-    LayoutContext layoutContext(
-        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None);
+    LayoutContext layoutContext(m_layoutCtx, windowTitle, true,
+                                ImGuiWindowFlags_None, &m_isOpen);
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
@@ -125,7 +125,9 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     }
 
     if ( ImGui::BeginPopupModal(
-             (std::string(TR("ui.spectrum.calc_modal.title").data()) + "###SpectrumCalcModal").c_str(),
+             (std::string(TR("ui.spectrum.calc_modal.title").data()) +
+              "###SpectrumCalcModal")
+                 .c_str(),
              nullptr,
              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove) ) {
         float progress = m_calcProgress.load();

@@ -71,14 +71,11 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// @brief 更新ui
 void UIManager::onUpdateUI()
 {
-    // 清理已关闭的 IUIView (特别是 AudioTrackControllerUI)
+    // 清理已关闭的 IUIView
     std::vector<std::string> toRemove;
     for ( auto& [name, view] : m_uiviews ) {
-        if ( auto* controller =
-                 dynamic_cast<AudioTrackControllerUI*>(view.get()) ) {
-            if ( !controller->isOpen() ) {
-                toRemove.push_back(name);
-            }
+        if ( !view->isOpen() ) {
+            toRemove.push_back(name);
         }
     }
 

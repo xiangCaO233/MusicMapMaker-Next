@@ -15,6 +15,7 @@ class IUIView
 public:
     /// @brief ui名称
     std::string m_name;
+    bool        m_isOpen{ true };
 
     IUIView(const std::string& name) : m_name(name)
     {
@@ -28,6 +29,12 @@ public:
 
     /// @brief 更新ui
     virtual void update(UIManager* sourceManager) = 0;
+
+    /// @brief 获取窗口是否打开
+    virtual bool isOpen() const { return m_isOpen; }
+
+    /// @brief 设置窗口是否打开
+    virtual void setOpen(bool open) { m_isOpen = open; }
 
     /// @brief 是否可渲染
     /// @return 默认不可再渲染
@@ -45,7 +52,8 @@ public:
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
                   const std::string&              iwindow_name,
                   bool                            custom_window_flags = false,
-                  ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar)
+                  ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
+                  bool*                           p_open              = nullptr)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
 
@@ -58,9 +66,9 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if ( custom_window_flags ) {
-            ImGui::Begin(iwindow_name.c_str(), nullptr, windowFlags);
+            ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);
         } else {
-            ImGui::Begin(iwindow_name.c_str());
+            ImGui::Begin(iwindow_name.c_str(), p_open);
         }
 
         // 核心修复：Begin 后立即弹出标题字体，使内容使用默认（content）字体
