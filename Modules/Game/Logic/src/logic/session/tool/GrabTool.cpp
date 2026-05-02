@@ -22,160 +22,180 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         ctx.draggedPart     = static_cast<HoverPart>(ctx.hoveredPart);
         ctx.draggedSubIndex = ctx.hoveredSubIndex;
 
-        if ( !ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
-            ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
-        }
-        ctx.noteRegistry.get<InteractionComponent>(cmd.entity).isDragging =
-            true;
+        m_initialStates.clear();
+        auto& reg = ctx.noteRegistry;
 
-        if ( auto* note =
-                 ctx.noteRegistry.try_get<NoteComponent>(cmd.entity) ) {
-            ctx.dragInitialNote = *note;
+        // 检查 Primary 是否被选中
+        bool isPrimarySelected = false;
+        if ( reg.all_of<InteractionComponent>(cmd.entity) ) {
+            isPrimarySelected = reg.get<InteractionComponent>(cmd.entity).isSelected;
+        }
+
+        if ( isPrimarySelected ) {
+            // 模式 A: 拖动整个选中组
+            auto view = reg.view<InteractionComponent, NoteComponent>();
+            for ( auto entity : view ) {
+                if ( view.get<InteractionComponent>(entity).isSelected ) {
+                    m_initialStates[entity] = { view.get<NoteComponent>(entity) };
+                    reg.get<InteractionComponent>(entity).isDragging = true;
+                }
+            }
+        } else {
+            // 模式 B: 只拖动当前物件
+            if ( auto* note = reg.try_get<NoteComponent>(cmd.entity) ) {
+                m_initialStates[cmd.entity] = { *note };
+                if ( !reg.all_of<InteractionComponent>(cmd.entity) ) {
+                    reg.emplace<InteractionComponent>(cmd.entity);
+                }
+                reg.get<InteractionComponent>(cmd.entity).isDragging = true;
+            }
+        }
+
+        // 兼容旧代码 (保留主拖拽物件的初始备份)
+        if ( m_initialStates.count(cmd.entity) ) {
+            ctx.dragInitialNote = m_initialStates[cmd.entity].note;
         }
     }
 }
 
 void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
-    if ( ctx.draggedEntity != entt::null &&
-         ctx.noteRegistry.valid(ctx.draggedEntity) ) {
-        auto it = ctx.cameras.find(cmd.cameraId);
-        if ( it != ctx.cameras.end() ) {
-            float judgmentLineY =
-                it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    if ( ctx.draggedEntity == entt::null || m_initialStates.empty() ) return;
+    if ( m_initialStates.find(ctx.draggedEntity) == m_initialStates.end() )
+        return;
 
-            float renderScaleY = 1.0f;
-            if ( cmd.cameraId == "Preview" ) {
-                auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-                float mainViewportHeight = itMain != ctx.cameras.end()
-                                               ? itMain->second.viewportHeight
-                                               : it->second.viewportHeight;
+    auto it = ctx.cameras.find(cmd.cameraId);
+    if ( it == ctx.cameras.end() ) return;
 
-                float mainEffectiveH =
-                    (ctx.lastConfig.visual.trackLayout.bottom -
-                     ctx.lastConfig.visual.trackLayout.top) *
-                    mainViewportHeight;
-                float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-                float by = it->second.viewportHeight -
-                           ctx.lastConfig.visual.previewConfig.margin.bottom;
-                float previewDrawH = by - ty;
+    // --- 1. 计算鼠标指向的目标位置 (Time, Track) ---
+    float judgmentLineY =
+        it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    float renderScaleY = 1.0f;
+    if ( cmd.cameraId == "Preview" ) {
+        auto  itMain             = ctx.cameras.find("Basic2DCanvas");
+        float mainViewportHeight = itMain != ctx.cameras.end()
+                                       ? itMain->second.viewportHeight
+                                       : it->second.viewportHeight;
+        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
+        float ty           = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float previewDrawH = by - ty;
+        renderScaleY       = previewDrawH /
+                       (mainEffectiveH *
+                        ctx.lastConfig.visual.previewConfig.areaRatio);
+    }
 
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                ctx.lastConfig.visual.previewConfig.areaRatio);
-            } else {
-                renderScaleY = 1.0f;
+    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( !cache ) return;
+
+    double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double targetAbsY =
+        currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
+    double targetTime = cache->getTime(targetAbsY);
+
+    // 磁吸处理
+    std::vector<const TimelineComponent*> bpmEvents;
+    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tl = tlView.get<const TimelineComponent>(entity);
+        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) bpmEvents.push_back(&tl);
+    }
+    std::stable_sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const auto* a, const auto* b) { return a->m_timestamp < b->m_timestamp; });
+
+    auto snap = SessionUtils::getSnapResult(targetTime,
+                                            cmd.mouseY,
+                                            it->second,
+                                            ctx.lastConfig,
+                                            bpmEvents,
+                                            ctx.timelineRegistry,
+                                            ctx.visualTime,
+                                            ctx.cameras);
+    if ( snap.isSnapped && !cmd.isCtrlDown ) {
+        targetTime = snap.snappedTime;
+    }
+
+    float leftX =
+        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
+    float rightX =
+        it->second.viewportWidth * ctx.lastConfig.visual.trackLayout.right;
+    float trackAreaW   = rightX - leftX;
+    float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
+    int   targetTrack  = static_cast<int>(
+        std::floor((cmd.mouseX - leftX) / singleTrackW));
+    targetTrack = std::clamp(targetTrack, 0, ctx.trackCount - 1);
+
+    // --- 2. 计算 Primary 物件的增量 ---
+    const auto& primaryInitial = m_initialStates[ctx.draggedEntity].note;
+    double      deltaT         = targetTime - primaryInitial.m_timestamp;
+    int         deltaTrack     = targetTrack - primaryInitial.m_trackIndex;
+
+    // --- 3. 限制增量，确保所有物件合法 ---
+    // 注意：如果是拖拽特殊部位 (HoldEnd, FlickArrow)，不执行多选拖拽
+    bool isMultiDrag = (ctx.draggedPart == HoverPart::None ||
+                        ctx.draggedPart == HoverPart::Head ||
+                        ctx.draggedPart == HoverPart::HoldBody);
+
+    if ( isMultiDrag && m_initialStates.size() > 1 ) {
+        for ( const auto& [entity, state] : m_initialStates ) {
+            const auto& n = state.note;
+            // 时间限制 (timestamp >= 0)
+            if ( n.m_timestamp + deltaT < 0.0 ) {
+                deltaT = -n.m_timestamp;
             }
+            // 轨道限制 (考虑 Flick 的范围)
+            int trackL = n.m_trackIndex;
+            int trackR = n.m_trackIndex;
+            if ( n.m_type == ::MMM::NoteType::FLICK ) {
+                if ( n.m_dtrack > 0 )
+                    trackR += n.m_dtrack;
+                else
+                    trackL += n.m_dtrack;
+            }
+            if ( trackL + deltaTrack < 0 ) {
+                deltaTrack = -trackL;
+            }
+            if ( trackR + deltaTrack >= ctx.trackCount ) {
+                deltaTrack = ctx.trackCount - 1 - trackR;
+            }
+        }
+    }
 
-            auto* cache =
-                ctx.timelineRegistry.ctx().find<System::ScrollCache>();
-            if ( cache ) {
-                double currentAbsY = cache->getAbsY(ctx.visualTime);
-                double targetAbsY =
-                    currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
-                double targetTime = cache->getTime(targetAbsY);
+    // --- 4. 应用变更 ---
+    if ( isMultiDrag ) {
+        for ( auto& [entity, state] : m_initialStates ) {
+            if ( auto* note = ctx.noteRegistry.try_get<NoteComponent>(entity) ) {
+                note->m_timestamp  = state.note.m_timestamp + deltaT;
+                note->m_trackIndex = state.note.m_trackIndex + deltaTrack;
 
-                std::vector<const TimelineComponent*> bpmEvents;
-                auto                                  tlView =
-                    ctx.timelineRegistry.view<const TimelineComponent>();
-                for ( auto entity : tlView ) {
-                    const auto& tl =
-                        tlView.get<const TimelineComponent>(entity);
-                    if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-                        bpmEvents.push_back(&tl);
-                    }
+                // 同步 Transform (简易同步)
+                if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(entity) ) {
+                    trans->m_pos.x = leftX + note->m_trackIndex * singleTrackW;
                 }
-                std::stable_sort(bpmEvents.begin(),
-                                 bpmEvents.end(),
-                                 [](const auto* a, const auto* b) {
-                                     return a->m_timestamp < b->m_timestamp;
-                                 });
-
-                auto snap = SessionUtils::getSnapResult(targetTime,
-                                                        cmd.mouseY,
-                                                        it->second,
-                                                        ctx.lastConfig,
-                                                        bpmEvents,
-                                                        ctx.timelineRegistry,
-                                                        ctx.visualTime,
-                                                        ctx.cameras);
-                if ( snap.isSnapped && !cmd.isCtrlDown ) {
-                    targetTime = snap.snappedTime;
+            }
+        }
+    } else {
+        // 单个物件特殊部位拖拽 (维持原逻辑)
+        if ( auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity) ) {
+            if ( note->m_type == ::MMM::NoteType::HOLD &&
+                 ctx.draggedPart == HoverPart::HoldEnd ) {
+                note->m_duration = std::max(0.0, targetTime - note->m_timestamp);
+            } else if ( note->m_type == ::MMM::NoteType::FLICK &&
+                        ctx.draggedPart == HoverPart::FlickArrow ) {
+                note->m_dtrack = targetTrack - note->m_trackIndex;
+                if ( note->m_dtrack == 0 ) {
+                    note->m_dtrack = (cmd.mouseX > leftX + note->m_trackIndex * singleTrackW +
+                                                       singleTrackW / 2.0f)
+                                         ? 1
+                                         : -1;
                 }
-
-                if ( auto* note = ctx.noteRegistry.try_get<NoteComponent>(
-                         ctx.draggedEntity) ) {
-                    if ( note->m_type == ::MMM::NoteType::HOLD &&
-                         ctx.draggedPart == HoverPart::HoldEnd ) {
-                        // 1. 拖拽 Hold 尾部：调整持续时间 (Duration)
-                        double newDuration = targetTime - note->m_timestamp;
-                        note->m_duration   = std::max(0.0, newDuration);
-                    } else if ( note->m_type == ::MMM::NoteType::FLICK &&
-                                ctx.draggedPart == HoverPart::FlickArrow ) {
-                        // 2. 拖拽 Flick 箭头：调整偏移轨道数 (dtrack)
-                        float leftX  = it->second.viewportWidth *
-                                       ctx.lastConfig.visual.trackLayout.left;
-                        float rightX = it->second.viewportWidth *
-                                       ctx.lastConfig.visual.trackLayout.right;
-                        float trackAreaW = rightX - leftX;
-                        float noteW      = trackAreaW / ctx.trackCount;
-
-                        int targetTrack = static_cast<int>(std::round(
-                            (cmd.mouseX - leftX - noteW / 2.0f) / noteW));
-                        targetTrack =
-                            std::clamp(targetTrack, 0, ctx.trackCount - 1);
-
-                        note->m_dtrack = targetTrack - note->m_trackIndex;
-                        if ( note->m_dtrack == 0 ) {
-                            float centerX = leftX + note->m_trackIndex * noteW +
-                                            noteW / 2.0f;
-                            if ( cmd.mouseX > centerX ) {
-                                note->m_dtrack = 1;
-                            } else {
-                                note->m_dtrack = -1;
-                            }
-                            // 确保不越界
-                            if ( note->m_trackIndex + note->m_dtrack >=
-                                 ctx.trackCount ) {
-                                note->m_dtrack = -1;
-                            } else if ( note->m_trackIndex + note->m_dtrack <
-                                        0 ) {
-                                note->m_dtrack = 1;
-                            }
-                        }
-                    } else {
-                        // 3. 拖拽音符头部或身体（或非 Hold/Flick
-                        // 特殊部位）：移动整个音符
-                        note->m_timestamp = std::max(0.0, targetTime);
-
-                        float leftX  = it->second.viewportWidth *
-                                       ctx.lastConfig.visual.trackLayout.left;
-                        float rightX = it->second.viewportWidth *
-                                       ctx.lastConfig.visual.trackLayout.right;
-                        float trackAreaW = rightX - leftX;
-                        float noteW      = trackAreaW / ctx.trackCount;
-                        int   track      = static_cast<int>(std::round(
-                            (cmd.mouseX - leftX - noteW / 2.0f) / noteW));
-                        track = std::clamp(track, 0, ctx.trackCount - 1);
-
-                        if ( note->m_type == ::MMM::NoteType::FLICK ) {
-                            int targetEndTrack = track + note->m_dtrack;
-                            if ( targetEndTrack < 0 ) {
-                                track = -note->m_dtrack;
-                            } else if ( targetEndTrack >= ctx.trackCount ) {
-                                track = ctx.trackCount - 1 - note->m_dtrack;
-                            }
-                        }
-
-                        note->m_trackIndex = track;
-
-                        if ( auto* trans =
-                                 ctx.noteRegistry.try_get<TransformComponent>(
-                                     ctx.draggedEntity) ) {
-                            trans->m_pos.x = leftX + track * noteW;
-                        }
-                    }
-                }
+                note->m_dtrack = std::clamp(note->m_dtrack, -note->m_trackIndex,
+                                            ctx.trackCount - 1 - note->m_trackIndex);
             }
         }
     }
@@ -183,32 +203,35 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
 void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
-    if ( ctx.draggedEntity != entt::null &&
-         ctx.noteRegistry.valid(ctx.draggedEntity) ) {
-        if ( ctx.noteRegistry.all_of<InteractionComponent>(
-                 ctx.draggedEntity) ) {
-            ctx.noteRegistry.get<InteractionComponent>(ctx.draggedEntity)
-                .isDragging = false;
-        }
+    if ( ctx.draggedEntity == entt::null ) return;
 
-        // 提交撤销操作
-        if ( ctx.dragInitialNote.has_value() ) {
-            auto* currentNote =
-                ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+    std::vector<BatchNoteAction::Entry> entries;
+
+    for ( auto& [entity, state] : m_initialStates ) {
+        if ( ctx.noteRegistry.valid(entity) ) {
+            if ( ctx.noteRegistry.all_of<InteractionComponent>(entity) ) {
+                ctx.noteRegistry.get<InteractionComponent>(entity).isDragging =
+                    false;
+            }
+
+            auto* currentNote = ctx.noteRegistry.try_get<NoteComponent>(entity);
             if ( currentNote ) {
-                auto action =
-                    std::make_unique<NoteAction>(NoteAction::Type::Update,
-                                                 ctx.draggedEntity,
-                                                 *ctx.dragInitialNote,
-                                                 *currentNote);
-                ctx.actionStack.pushAndExecute(std::move(action), ctx);
+                // 提交变更
+                entries.push_back({ entity, state.note, *currentNote });
             }
         }
-
-        SessionUtils::rebuildHitEvents(ctx);
     }
+
+    if ( !entries.empty() ) {
+        auto action = std::make_unique<BatchNoteAction>(std::move(entries));
+        ctx.actionStack.pushAndExecute(std::move(action), ctx);
+    }
+
+    SessionUtils::rebuildHitEvents(ctx);
+
     ctx.draggedEntity   = entt::null;
     ctx.dragInitialNote = std::nullopt;
+    m_initialStates.clear();
 }
 
 }  // namespace MMM::Logic
