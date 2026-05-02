@@ -222,10 +222,9 @@ return {
 	["ui.sidebar.settings"] = "Settings",
 
 	-- Toolbar tooltips
-	["ui.toolbar.move"] = "Grab Tool (V/E)",
-	["ui.toolbar.marquee"] = "Marquee Tool (M/Q)",
-	["ui.toolbar.draw"] = "Draw Tool (P/W)",
-	["ui.toolbar.cut"] = "Cut Tool (C/R)",
+	["ui.toolbar.move"] = "Grab Tool (1)",
+	["ui.toolbar.marquee"] = "Marquee Tool (2)",
+	["ui.toolbar.draw"] = "Draw Tool (3)",
 	["ui.toolbar.reverse_scroll"] = "Reverse Scroll Direction",
 	["ui.toolbar.scroll_snap"] = "Scroll Snap (Snap to beat lines when scrolling)",
 	["ui.toolbar.scroll_timing_mapping"] = "Toggle SCROLLTIMING Visual Mapping",

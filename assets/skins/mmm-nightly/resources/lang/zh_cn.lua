@@ -222,10 +222,9 @@ return {
 	["ui.sidebar.settings"] = "设置",
 
 	-- 工具栏 tooltips
-	["ui.toolbar.move"] = "抓取工具 (V/E)",
-	["ui.toolbar.marquee"] = "选取工具 (M/Q)",
-	["ui.toolbar.draw"] = "绘制工具 (P/W)",
-	["ui.toolbar.cut"] = "裁剪工具 (C/R)",
+	["ui.toolbar.move"] = "抓取工具 (1)",
+	["ui.toolbar.marquee"] = "选取工具 (2)",
+	["ui.toolbar.draw"] = "绘制工具 (3)",
 	["ui.toolbar.reverse_scroll"] = "反转滚动方向",
 	["ui.toolbar.scroll_snap"] = "滚动磁吸 (开启后滚动滚轮将吸附至分拍线)",
 	["ui.toolbar.scroll_timing_mapping"] = "开启/关闭 SCROLLTIMING 视觉映射",
