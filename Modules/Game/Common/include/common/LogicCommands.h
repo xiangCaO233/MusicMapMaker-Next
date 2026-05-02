@@ -255,6 +255,12 @@ struct CmdCut {
 };
 
 /**
+ * @brief 删除选中物件指令
+ */
+struct CmdDeleteSelected {
+};
+
+/**
  * @brief 保存谱面指令
  */
 struct CmdSaveBeatmap {
@@ -330,7 +336,7 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap,
+    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap,
     CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
     CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
     CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,

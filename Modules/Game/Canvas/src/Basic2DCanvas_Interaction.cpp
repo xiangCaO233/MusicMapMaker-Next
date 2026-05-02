@@ -150,6 +150,11 @@ void Basic2DCanvasInteraction::handleHotkeys(
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdRedo{}));
         }
+    } else {
+        if ( ImGui::IsKeyPressed(ImGuiKey_Delete, false) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
+        }
     }
 }
 

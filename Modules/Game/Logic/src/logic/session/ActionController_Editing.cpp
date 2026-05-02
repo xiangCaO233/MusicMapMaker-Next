@@ -51,6 +51,37 @@ void ActionController::handleCommand(const CmdCut& cmd)
     }
 }
 
+void ActionController::handleCommand(const CmdDeleteSelected& cmd)
+{
+    std::vector<BatchNoteAction::Entry> entries;
+
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( ic.isSelected ) {
+            entries.push_back(
+                { entity, view.get<NoteComponent>(entity), std::nullopt });
+        }
+    }
+
+    // 如果没有任何选中的，但有悬停的，也删除悬停的 (符合习惯)
+    if ( entries.empty() && m_ctx.hoveredEntity != entt::null ) {
+        if ( m_ctx.noteRegistry.valid(m_ctx.hoveredEntity) &&
+             m_ctx.noteRegistry.all_of<NoteComponent>(m_ctx.hoveredEntity) ) {
+            entries.push_back({ m_ctx.hoveredEntity,
+                                m_ctx.noteRegistry.get<NoteComponent>(
+                                    m_ctx.hoveredEntity),
+                                std::nullopt });
+        }
+    }
+
+    if ( !entries.empty() ) {
+        auto action = std::make_unique<BatchNoteAction>(std::move(entries));
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        XINFO("Deleted {} selected/hovered items", entries.size());
+    }
+}
+
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
     if ( m_ctx.clipboard.empty() ) return;

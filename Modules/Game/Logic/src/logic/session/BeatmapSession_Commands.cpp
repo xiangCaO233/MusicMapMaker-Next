@@ -67,8 +67,8 @@ void BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdPaste> ||
                                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                                    std::is_same_v<T,
-                                                   CmdCreateTimelineEvent> ) {
+                                    std::is_same_v<T, CmdDeleteSelected> ||
+                                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
                 }
             },

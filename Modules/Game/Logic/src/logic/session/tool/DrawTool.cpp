@@ -2,7 +2,12 @@
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "log/colorful-log.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include <algorithm>
+#include <unordered_set>
 
 namespace MMM::Logic
 {
@@ -393,15 +398,66 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
 {
     if ( !ctx.eraserState.isActive ) return;
 
-    // 松开时只删除此刻仍被标记的物件（即鼠标正下方那个）
     if ( !ctx.eraserState.targetEntities.empty() ) {
+        std::vector<BatchNoteAction::Entry> entries;
+        bool                                targetIsSelected = false;
+
+        // 1. 检查擦除目标中是否有物件处于选中状态
         for ( auto entity : ctx.eraserState.targetEntities ) {
-            if ( ctx.noteRegistry.valid(entity) ) {
-                auto before = ctx.noteRegistry.get<NoteComponent>(entity);
-                auto action = std::make_unique<NoteAction>(
-                    NoteAction::Type::Delete, entity, before, std::nullopt);
-                ctx.actionStack.pushAndExecute(std::move(action), ctx);
+            if ( ctx.noteRegistry.valid(entity) &&
+                 ctx.noteRegistry.all_of<InteractionComponent>(entity) ) {
+                if ( ctx.noteRegistry.get<InteractionComponent>(entity)
+                         .isSelected ) {
+                    targetIsSelected = true;
+                    break;
+                }
             }
+        }
+
+        if ( targetIsSelected ) {
+            // 场景 A: 擦除的目标中包含选中物件 -> 删除所有选中的物件 + 擦除的目标物件
+            std::unordered_set<entt::entity> toDelete;
+
+            // 添加所有选中的
+            auto view =
+                ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+            for ( auto entity : view ) {
+                if ( view.get<InteractionComponent>(entity).isSelected ) {
+                    toDelete.insert(entity);
+                }
+            }
+
+            // 添加所有本次擦除目标的（包括未选中的）
+            for ( auto entity : ctx.eraserState.targetEntities ) {
+                if ( ctx.noteRegistry.valid(entity) &&
+                     ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                    toDelete.insert(entity);
+                }
+            }
+
+            for ( auto entity : toDelete ) {
+                entries.push_back({ entity,
+                                    ctx.noteRegistry.get<NoteComponent>(entity),
+                                    std::nullopt });
+            }
+            XINFO("Eraser: Deleting all {} items (selected + targets)",
+                  entries.size());
+        } else {
+            // 场景 B: 擦除的目标全都是未选中物件 -> 只删除这些目标物件
+            for ( auto entity : ctx.eraserState.targetEntities ) {
+                if ( ctx.noteRegistry.valid(entity) &&
+                     ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                    entries.push_back({ entity,
+                                        ctx.noteRegistry.get<NoteComponent>(
+                                            entity),
+                                        std::nullopt });
+                }
+            }
+        }
+
+        if ( !entries.empty() ) {
+            auto action = std::make_unique<BatchNoteAction>(std::move(entries));
+            ctx.actionStack.pushAndExecute(std::move(action), ctx);
         }
     }
 
