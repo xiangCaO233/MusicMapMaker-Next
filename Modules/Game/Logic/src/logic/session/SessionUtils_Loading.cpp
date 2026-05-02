@@ -182,6 +182,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 auto& subComp = ctx.noteRegistry.get<NoteComponent>(it->second);
                 subComp.m_isSubNote      = true;
                 subComp.m_parentPolyline = entity;
+                subComp.m_subIndex       = static_cast<int>(comp.m_subNotes.size());
             }
 
             NoteComponent::SubNote sn;

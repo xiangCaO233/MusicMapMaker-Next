@@ -32,6 +32,9 @@ struct NoteComponent {
     /// @brief 如果是子物件，指向所属的 Polyline 父实体
     entt::entity m_parentPolyline{ entt::null };
 
+    /// @brief 如果是子物件，记录其在父物件中的索引
+    int m_subIndex{ -1 };
+
     /// @brief 原始元数据备份 (用于导出时保持结构一致性)
     ::MMM::NoteMetadata m_metadata;
 
