@@ -29,6 +29,20 @@ struct RTTILogger {
     {
 #ifdef _WIN32
         SetConsoleOutputCP(CP_UTF8);  // 强制当前控制台输出为 UTF-8
+
+        // 开启虚拟终端处理以支持 ANSI 转义序列 (颜色)
+        auto enableVT = [](DWORD stdHandle) {
+            HANDLE hOut = GetStdHandle(stdHandle);
+            if ( hOut != INVALID_HANDLE_VALUE ) {
+                DWORD dwMode = 0;
+                if ( GetConsoleMode(hOut, &dwMode) ) {
+                    dwMode |= 0x0004;  // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+                    SetConsoleMode(hOut, dwMode);
+                }
+            }
+        };
+        enableVT(STD_OUTPUT_HANDLE);
+        enableVT(STD_ERROR_HANDLE);
 #endif
         std::setlocale(LC_ALL, ".UTF-8");
         // 2. 核心逻辑：设置工作目录为可执行程序所在目录
