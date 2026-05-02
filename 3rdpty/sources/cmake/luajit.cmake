@@ -54,7 +54,7 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
    "${LJ_ORIGINAL_DIR}"
    "${LJ_BUILD_ROOT}"
    # MSVC 下需要在 src 目录运行 bat
-  COMMAND cmd /c "${BUILD_CMD}"
+  COMMAND ${BUILD_CMD}
   WORKING_DIRECTORY "${LJ_BUILD_SRC}"
   COMMENT "Building LuaJIT Statically (MSVC)..."
   VERBATIM
