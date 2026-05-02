@@ -22,6 +22,7 @@ return {
 	["ui.edit.paste"] = "粘贴",
 	["ui.edit.play_pause"] = "播放/暂停",
 	["ui.edit.beatmap_settings"] = "谱面设置",
+	["ui.edit.select_all"] = "全选",
 
 	["canvas.editor"] = "编辑器",
 	["canvas.preview"] = "预览",

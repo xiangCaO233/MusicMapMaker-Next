@@ -83,6 +83,21 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
     }
 }
 
+void InteractionController::handleCommand(const CmdSelectAll& cmd)
+{
+    auto view = m_ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+
+        if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) ) {
+            m_ctx.noteRegistry.emplace<InteractionComponent>(entity);
+        }
+        m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = true;
+    }
+    m_ctx.hasMarqueeSelection = false;
+}
+
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
     if ( m_tools.count(m_ctx.currentTool) ) {

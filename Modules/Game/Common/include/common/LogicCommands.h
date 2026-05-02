@@ -261,6 +261,12 @@ struct CmdDeleteSelected {
 };
 
 /**
+ * @brief 全选指令
+ */
+struct CmdSelectAll {
+};
+
+/**
  * @brief 保存谱面指令
  */
 struct CmdSaveBeatmap {
@@ -336,10 +342,11 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap,
-    CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
-    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
-    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata>;
+    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdSelectAll, CmdSaveBeatmap,
+    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
+    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
+    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
+    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata>;
 
 }  // namespace MMM::Logic

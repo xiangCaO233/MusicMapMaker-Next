@@ -22,6 +22,7 @@ return {
 	["ui.edit.paste"] = "Paste",
 	["ui.edit.play_pause"] = "Play/Pause",
 	["ui.edit.beatmap_settings"] = "Beatmap Settings",
+	["ui.edit.select_all"] = "Select All",
 
 	["canvas.editor"] = "Editor",
 	["canvas.preview"] = "Preview",

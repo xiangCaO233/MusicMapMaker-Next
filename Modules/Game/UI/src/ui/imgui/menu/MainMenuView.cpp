@@ -85,6 +85,9 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( ImGui::IsKeyPressed(ImGuiKey_X) ) {
             dispatchCommand(Logic::CmdCut{});
         }
+        if ( ImGui::IsKeyPressed(ImGuiKey_A) ) {
+            dispatchCommand(Logic::CmdSelectAll{});
+        }
     } else if ( io.KeyAlt ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_F) ) {
             if ( ImGui::IsPopupOpen(TR("ui.file")) ) {
@@ -164,7 +167,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     auto& config = Config::AppConfig::instance().getEditorSettings();
 
     std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
-    auto        session     = Logic::EditorEngine::instance().getActiveSession();
+    auto        session = Logic::EditorEngine::instance().getActiveSession();
     if ( session && session->getContext().currentBeatmap ) {
         auto& meta = session->getContext().currentBeatmap->m_baseMapMetadata;
         if ( ext == ".imd" ) {
@@ -227,7 +230,7 @@ void MainMenuView::update(UIManager* sourceManager)
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
 
-    float                dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
@@ -354,6 +357,11 @@ void MainMenuView::update(UIManager* sourceManager)
         }
         if ( MenuItemWithFontIcon(nullptr, TR("ui.edit.paste"), "Ctrl+V") ) {
             dispatchCommand(Logic::CmdPaste{});
+        }
+        ImGui::Separator();
+        if ( MenuItemWithFontIcon(
+                 nullptr, TR("ui.edit.select_all"), "Ctrl+A") ) {
+            dispatchCommand(Logic::CmdSelectAll{});
         }
         ImGui::Separator();
         bool playing      = Logic::EditorEngine::instance().isPlaybackPlaying();

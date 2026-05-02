@@ -23,6 +23,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdSelectEntity& cmd);
 
+    /// @brief 处理全选命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdSelectAll& cmd);
+
     /// @brief 处理开始拖拽的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdStartDrag& cmd);

@@ -56,7 +56,8 @@ void BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdEndBrush> ||
                                     std::is_same_v<T, CmdStartErase> ||
                                     std::is_same_v<T, CmdUpdateErase> ||
-                                    std::is_same_v<T, CmdEndErase> ) {
+                                    std::is_same_v<T, CmdEndErase> ||
+                                    std::is_same_v<T, CmdSelectAll> ) {
                     m_interaction->handleCommand(arg);
                 }
                 // --- Action 处理的命令 ---
@@ -68,7 +69,8 @@ void BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteSelected> ||
-                                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
+                                    std::is_same_v<T,
+                                                   CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
                 }
             },
