@@ -4,13 +4,13 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
-#include "graphic/imguivk/VKContext.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 
@@ -83,16 +83,16 @@ void SettingsView::drawSoftwareSettings()
     }
 
     // 1.7 字体选择
-    auto& skinMgr = Config::SkinManager::instance();
+    auto& skinMgr    = Config::SkinManager::instance();
     auto& asciiFonts = skinMgr.getAsciiFonts();
     auto& cjkFonts   = skinMgr.getCjkFonts();
 
     std::string currentAscii = settings.preferredAsciiFont.empty()
                                    ? "Default"
                                    : settings.preferredAsciiFont;
-    std::string currentCjk = settings.preferredCjkFont.empty()
-                                 ? "Default"
-                                 : settings.preferredCjkFont;
+    std::string currentCjk   = settings.preferredCjkFont.empty()
+                                   ? "Default"
+                                   : settings.preferredCjkFont;
 
     bool fontChanged = false;
 
@@ -106,8 +106,9 @@ void SettingsView::drawSoftwareSettings()
     ImGui::SetNextItemWidth(200.0f);
     if ( ImGui::BeginCombo("##AsciiFontCombo", currentAscii.c_str()) ) {
         for ( const auto& [name, path] : asciiFonts ) {
-            bool isSelected = (currentAscii == name);
-            if ( ImGui::Selectable(name.c_str(), isSelected) ) {
+            bool        isSelected = (currentAscii == name);
+            std::string label      = name + "##" + path.string();
+            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                 settings.preferredAsciiFont = name;
                 fontChanged                 = true;
             }
@@ -135,8 +136,9 @@ void SettingsView::drawSoftwareSettings()
     ImGui::SetNextItemWidth(200.0f);
     if ( ImGui::BeginCombo("##CjkFontCombo", currentCjk.c_str()) ) {
         for ( const auto& [name, path] : cjkFonts ) {
-            bool isSelected = (currentCjk == name);
-            if ( ImGui::Selectable(name.c_str(), isSelected) ) {
+            bool        isSelected = (currentCjk == name);
+            std::string label      = name + "##" + path.string();
+            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                 settings.preferredCjkFont = name;
                 fontChanged               = true;
             }
@@ -655,8 +657,9 @@ void SettingsView::drawBeatmapSettings()
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
-                bool isSelected = (currentAudioPath == res.m_path);
-                if ( ImGui::Selectable(res.m_id.c_str(), isSelected) ) {
+                bool        isSelected = (currentAudioPath == res.m_path);
+                std::string label      = res.m_id + "##" + res.m_path;
+                if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                     meta.main_audio_path = res.m_path;
                     changed              = true;
                 }
@@ -731,8 +734,9 @@ void SettingsView::drawBeatmapSettings()
             }
 
             for ( const auto& imgPath : images ) {
-                bool isSelected = (currentCoverPath == imgPath);
-                if ( ImGui::Selectable(imgPath.c_str(), isSelected) ) {
+                bool        isSelected = (currentCoverPath == imgPath);
+                std::string label      = imgPath + "##" + imgPath;
+                if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                     meta.main_cover_path = imgPath;
                     changed              = true;
                 }

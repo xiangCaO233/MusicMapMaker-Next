@@ -34,12 +34,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto renderAudioItem = [&](const AudioResource& audio,
                                bool                 isPermanentEffect = false) {
         listVBox.addElement(
-            "Audio_" + audio.m_id,
+            "Audio_" + audio.m_id + "_" + audio.m_path,
             Sizing::Grow(),
             Sizing::Fixed(28),
             [&, audio](Clay_BoundingBox r, bool isHovered) {
                 ImGui::Indent();
-                if ( ImGui::Selectable(audio.m_id.c_str()) ) {
+                std::string label = audio.m_id + "##" + audio.m_path;
+                if ( ImGui::Selectable(label.c_str()) ) {
                     // 点击弹出控制器
                     std::string viewName = "TrackController_" + audio.m_id;
                     if ( !sourceManager->getView<AudioTrackControllerUI>(

@@ -71,12 +71,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
     for ( const auto& beatmap : project->m_beatmaps ) {
         listVBox.addElement(
-            "Beatmap_" + beatmap.m_name,
+            "Beatmap_" + beatmap.m_filePath,
             Sizing::Grow(),
             Sizing::Fixed(28),
             [&beatmap, &engine, project](Clay_BoundingBox r, bool isHovered) {
                 ImGui::Indent();
-                if ( ImGui::Selectable(beatmap.m_name.c_str()) ) {
+                std::string label = beatmap.m_name + "##" + beatmap.m_filePath;
+                if ( ImGui::Selectable(label.c_str()) ) {
                     XINFO("Request to load beatmap: {}", beatmap.m_name);
                     auto fullPath =
                         project->m_projectRoot /

@@ -38,13 +38,27 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         };
 
         ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
-        DrawInput(TR("ui.settings.beatmap.name").data(), m_nameBuf, sizeof(m_nameBuf));
-        DrawInput(TR("ui.settings.beatmap.title").data(), m_titleBuf, sizeof(m_titleBuf));
-        DrawInput(TR("ui.settings.beatmap.title_unicode").data(), m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf));
-        DrawInput(TR("ui.settings.beatmap.artist").data(), m_artistBuf, sizeof(m_artistBuf));
-        DrawInput(TR("ui.settings.beatmap.artist_unicode").data(), m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf));
-        DrawInput(TR("ui.settings.beatmap.mapper").data(), m_authorBuf, sizeof(m_authorBuf));
-        DrawInput(TR("ui.settings.beatmap.version").data(), m_versionBuf, sizeof(m_versionBuf));
+        DrawInput(TR("ui.settings.beatmap.name").data(),
+                  m_nameBuf,
+                  sizeof(m_nameBuf));
+        DrawInput(TR("ui.settings.beatmap.title").data(),
+                  m_titleBuf,
+                  sizeof(m_titleBuf));
+        DrawInput(TR("ui.settings.beatmap.title_unicode").data(),
+                  m_titleUnicodeBuf,
+                  sizeof(m_titleUnicodeBuf));
+        DrawInput(TR("ui.settings.beatmap.artist").data(),
+                  m_artistBuf,
+                  sizeof(m_artistBuf));
+        DrawInput(TR("ui.settings.beatmap.artist_unicode").data(),
+                  m_artistUnicodeBuf,
+                  sizeof(m_artistUnicodeBuf));
+        DrawInput(TR("ui.settings.beatmap.mapper").data(),
+                  m_authorBuf,
+                  sizeof(m_authorBuf));
+        DrawInput(TR("ui.settings.beatmap.version").data(),
+                  m_versionBuf,
+                  sizeof(m_versionBuf));
 
         ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
         float bpm = (float)m_bpm;
@@ -74,17 +88,19 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         }
 
         // 音频选择
-        std::string audioPreview = m_selectedAudioPath.empty()
-                                       ? TR("ui.wizard.new_beatmap.select_audio").data()
-                                       : m_selectedAudioPath.generic_string();
+        std::string audioPreview =
+            m_selectedAudioPath.empty()
+                ? TR("ui.wizard.new_beatmap.select_audio").data()
+                : m_selectedAudioPath.generic_string();
 
         if ( ImGui::BeginCombo(TR("ui.wizard.new_beatmap.select_audio").data(),
                                audioPreview.c_str()) ) {
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
-                bool isSelected = (m_selectedAudioPath == res.m_path);
-                if ( ImGui::Selectable(res.m_id.c_str(), isSelected) ) {
+                bool        isSelected = (m_selectedAudioPath == res.m_path);
+                std::string label      = res.m_id + "##" + res.m_path;
+                if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                     onAudioSelected(res.m_path);
                 }
                 if ( isSelected ) ImGui::SetItemDefaultFocus();
@@ -95,16 +111,18 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         }
 
         // 背景选择
-        std::string coverPreview = m_selectedCoverPath.empty()
-                                       ? TR("ui.wizard.new_beatmap.select_cover").data()
-                                       : m_selectedCoverPath.generic_string();
+        std::string coverPreview =
+            m_selectedCoverPath.empty()
+                ? TR("ui.wizard.new_beatmap.select_cover").data()
+                : m_selectedCoverPath.generic_string();
 
         if ( ImGui::BeginCombo(TR("ui.wizard.new_beatmap.select_cover").data(),
                                coverPreview.c_str()) ) {
             // 扫描项目中的图片/视频文件
             std::vector<std::string> resources;
             try {
-                for ( const auto& entry : std::filesystem::recursive_directory_iterator(
+                for ( const auto& entry :
+                      std::filesystem::recursive_directory_iterator(
                           project->m_projectRoot) ) {
                     if ( entry.is_regular_file() ) {
                         auto ext = entry.path().extension().string();
@@ -118,7 +136,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                         }
                     }
                 }
-            } catch (...) {}
+            } catch ( ... ) {
+            }
 
             for ( const auto& resPath : resources ) {
                 bool isSelected = (m_selectedCoverPath == resPath);
