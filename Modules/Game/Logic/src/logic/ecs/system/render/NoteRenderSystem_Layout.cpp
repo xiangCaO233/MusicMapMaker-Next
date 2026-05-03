@@ -164,9 +164,9 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
     } else {
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(leftX,
-                         judgmentLineY + config.visual.judgelineWidth * 0.5f,
+                         judgmentLineY + 2.0f * 0.5f,
                          trackAreaW,
-                         config.visual.judgelineWidth,
+                         2.0f,
                          { 1.0f, 1.0f, 1.0f, 1.0f });
     }
 }

@@ -369,18 +369,18 @@ void NoteRenderSystem::generateSnapshot(
             // 在鼠标位置绘制临时的判定线预览
             batcher.pushQuad(
                 leftX,
-                snapshot->previewHoverY + config.visual.judgelineWidth * 0.5f,
+                snapshot->previewHoverY + 2.0f * 0.5f,
                 trackAreaW,
-                config.visual.judgelineWidth,
+                2.0f,
                 { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
         }
 
         // 3. 绘制预览区判定红线 (最上层静态)
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(leftX,
-                         judgmentLineY + config.visual.judgelineWidth * 0.5f,
+                         judgmentLineY + 2.0f * 0.5f,
                          trackAreaW,
-                         config.visual.judgelineWidth,
+                         2.0f,
                          { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
     }
 

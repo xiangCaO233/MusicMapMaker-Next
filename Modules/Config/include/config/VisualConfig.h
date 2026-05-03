@@ -82,8 +82,6 @@ struct VisualConfig {
     float trackBoxLineWidth{ 1.5f };
     /// @brief 判定线位置 (0.0 - 1.0)
     float judgeline_pos{ .85f };
-    /// @brief 判定线线宽
-    float judgelineWidth{ 2.0f };
     /// @brief 音符 X 轴缩放
     float noteScaleX{ 1.0f };
     /// @brief 音符 Y 轴缩放
@@ -111,7 +109,6 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
                         { "previewConfig", c.previewConfig },
                         { "trackBoxLineWidth", c.trackBoxLineWidth },
                         { "judgeline_pos", c.judgeline_pos },
-                        { "judgelineWidth", c.judgelineWidth },
                         { "noteScaleX", c.noteScaleX },
                         { "noteScaleY", c.noteScaleY },
                         { "noteFillMode", c.noteFillMode },
@@ -131,7 +128,6 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
     c.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
     c.judgeline_pos     = j.value("judgeline_pos", 0.85f);
-    c.judgelineWidth    = j.value("judgelineWidth", 2.0f);
     c.noteScaleX        = j.value("noteScaleX", 1.0f);
     c.noteScaleY        = j.value("noteScaleY", 1.0f);
     c.noteFillMode      = j.value("noteFillMode", BackgroundFillMode::Stretch);

@@ -432,11 +432,6 @@ void SettingsView::drawVisualSettings()
             &visual.judgeline_pos,
             0.0f,
             1.0f);
-        changed |= ImGui::SliderFloat(
-            TR_CACHE("ui.settings.visual.judgeline_width").data(),
-            &visual.judgelineWidth,
-            1.0f,
-            10.0f);
     }
 
     if ( ImGui::CollapsingHeader(
