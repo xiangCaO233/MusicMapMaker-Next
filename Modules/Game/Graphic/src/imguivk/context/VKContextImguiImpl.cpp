@@ -1,6 +1,6 @@
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
 #include "config/fonticon/NerdFontData.h"
+#include "config/skin/SkinConfig.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
@@ -126,18 +126,17 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
 void VKContext::setupFonts()
 {
-    ImGuiIO& io      = ImGui::GetIO();
-    float    native_scale = Config::AppConfig::instance().getNativeContentScale();
-    float    ui_scale     = Config::AppConfig::instance().getUIScale();
-    auto&    skinMgr      = Config::SkinManager::instance();
+    ImGuiIO& io        = ImGui::GetIO();
+    float native_scale = Config::AppConfig::instance().getNativeContentScale();
+    float ui_scale     = Config::AppConfig::instance().getUIScale();
+    auto& skinMgr      = Config::SkinManager::instance();
 
     // --- 字体范围定义 ---
     static const ImWchar ascii_ranges[] = { 0x0020, 0x00FF, 0 };
-    static const ImWchar cjk_ranges[]   = {
-        0x2000, 0x206F, 0x3000, 0x30FF, 0x3105, 0x312D,
-        0x4E00, 0x9FFF, 0xFF00, 0xFFEF, 0
-    };
-    static const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
+    static const ImWchar cjk_ranges[]   = { 0x2000, 0x206F, 0x3000, 0x30FF,
+                                            0x3105, 0x312D, 0x4E00, 0x9FFF,
+                                            0xFF00, 0xFFEF, 0 };
+    static const ImWchar nerd_ranges[]  = { 0xE000, 0xF8FF, 0 };
 
     auto loadFontWithSize = [&](const std::string& key, float size) {
         auto& settings      = Config::AppConfig::instance().getEditorSettings();
@@ -148,12 +147,10 @@ void VKContext::setupFonts()
         if ( !settings.preferredAsciiFont.empty() &&
              settings.preferredAsciiFont != "Default" ) {
             const auto& asciiFonts = skinMgr.getAsciiFonts();
-            auto        it = std::find_if(asciiFonts.begin(),
-                               asciiFonts.end(),
-                               [&](const auto& pair) {
-                                   return pair.first ==
-                                          settings.preferredAsciiFont;
-                               });
+            auto        it         = std::find_if(
+                asciiFonts.begin(), asciiFonts.end(), [&](const auto& pair) {
+                    return pair.first == settings.preferredAsciiFont;
+                });
             if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
             } else if ( std::filesystem::exists(settings.preferredAsciiFont) ) {
@@ -166,12 +163,10 @@ void VKContext::setupFonts()
         if ( !settings.preferredCjkFont.empty() &&
              settings.preferredCjkFont != "Default" ) {
             const auto& cjkFonts = skinMgr.getCjkFonts();
-            auto        it       = std::find_if(cjkFonts.begin(),
-                                  cjkFonts.end(),
-                                  [&](const auto& pair) {
-                                      return pair.first ==
-                                             settings.preferredCjkFont;
-                                  });
+            auto        it       = std::find_if(
+                cjkFonts.begin(), cjkFonts.end(), [&](const auto& pair) {
+                    return pair.first == settings.preferredCjkFont;
+                });
             if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
             } else if ( std::filesystem::exists(settings.preferredCjkFont) ) {
@@ -189,11 +184,11 @@ void VKContext::setupFonts()
         float atlasSize = size * native_scale;
 
         // 1. 加载基础 ASCII 字体 (严格限制范围)
-        ImFont* font = io.Fonts->AddFontFromFileTTF(
-            asciiFontPath.generic_string().c_str(),
-            atlasSize,
-            &config,
-            ascii_ranges);
+        ImFont* font =
+            io.Fonts->AddFontFromFileTTF(asciiFontPath.generic_string().c_str(),
+                                         atlasSize,
+                                         &config,
+                                         ascii_ranges);
 
         if ( font ) {
             // 2. 配置合并参数加载 CJK 字体 (严格限制范围)
@@ -214,18 +209,25 @@ void VKContext::setupFonts()
             iconConfig.OversampleH          = 1;
             iconConfig.OversampleV          = 1;
 
+            // 补偿 font->Scale 的影响，使图标视觉大小不随文字倍率增大
+            // 确保图标大小仅受 ui_scale 和 native_scale 影响 (即仅随 UI
+            // 全局缩放而缩放)
+            float iconMultiplier = 1.0f / settings.fontSizeMultiplier;
+
             // 向上稍微偏移 (-0.05x)，并设置缩放为 0.9x
             // 缩小尺寸后，图标会靠近基准线（显得偏下），因此需要负向偏移来使其在按钮/行内视觉居中
-            iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
+            iconConfig.GlyphOffset.y =
+                -(size * 0.05f) * native_scale * iconMultiplier;
 
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
-                                           atlasSize * 0.9f,
+                                           atlasSize * 0.9f * iconMultiplier,
                                            &iconConfig,
                                            nerd_ranges);
 
             // 设置缩放以匹配 UI 布局
-            font->Scale = ui_scale / native_scale;
+            font->Scale =
+                (ui_scale / native_scale) * settings.fontSizeMultiplier;
 
             skinMgr.setFont(key, font);
         }
@@ -246,6 +248,30 @@ void VKContext::setupFonts()
     loadFontWithSize("side_bar", getFontSize("side_bar", 16.0f));
     loadFontWithSize("setting_internal",
                      getFontSize("setting_internal", 14.0f));
+
+    // 4. 加载独立的纯图标字体
+    // (不合并，专门用于侧边栏、工具栏等不需要随文字缩放的地方)
+    {
+        ImFontConfig iconConfig;
+        iconConfig.PixelSnapH           = true;
+        iconConfig.FontDataOwnedByAtlas = false;
+        iconConfig.OversampleH          = 1;
+        iconConfig.OversampleV          = 1;
+
+        // 这里的 size 使用 side_bar 的默认大小，确保视觉一致
+        float size               = 16.0f;
+        float atlasSize          = size * native_scale;
+        iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
+
+        const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
+        ImFont*       iconFont =
+            io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
+                                           Config::g_nerdfont_data_size,
+                                           atlasSize * 0.9f,
+                                           &iconConfig,
+                                           nerd_ranges);
+        skinMgr.setFont("pure_icons", iconFont);
+    }
 }
 
 void VKContext::rebuildFonts()
@@ -266,18 +292,53 @@ void VKContext::rebuildFonts()
     setupFonts();
 
     // 构建新 Atlas
-    // Backend will detect texture update automatically if RendererHasTextures is enabled
+    // Backend will detect texture update automatically if RendererHasTextures
+    // is enabled
     io.Fonts->Build();
 
     XINFO("Fonts rebuilt.");
+}
+
+void VKContext::updateFontScales()
+{
+    auto& settings     = Config::AppConfig::instance().getEditorSettings();
+    float native_scale = Config::AppConfig::instance().getNativeContentScale();
+    float ui_scale     = Config::AppConfig::instance().getUIScale();
+    float baseScale    = (ui_scale / native_scale) * settings.uiScaleMultiplier;
+    float targetScale  = baseScale * settings.fontSizeMultiplier;
+
+    auto& skinMgr = Config::SkinManager::instance();
+    for ( auto& [key, font] : skinMgr.getData().runtimeFonts ) {
+        if ( font ) {
+            if ( key == "pure_icons" ) {
+                font->Scale = baseScale;  // 图标不随文字倍率缩放
+            } else {
+                font->Scale = targetScale;
+            }
+        }
+    }
+}
+
+void VKContext::requestFontRebuild()
+{
+    m_fontRebuildRequested.store(true);
+}
+
+void VKContext::checkAndRebuildFonts()
+{
+    if ( m_fontRebuildRequested.load() ) {
+        rebuildFonts();
+        m_fontRebuildRequested.store(false);
+    }
 }
 
 // --- Added applyTheme definition earlier
 
 void VKContext::applyTheme()
 {
-    auto& settings     = Config::AppConfig::instance().getEditorSettings();
-    auto  appliedTheme = settings.theme;
+    auto& settings    = Config::AppConfig::instance().getEditorSettings();
+    ImGui::GetStyle() = ImGuiStyle();
+    auto appliedTheme = settings.theme;
     if ( appliedTheme == Config::UITheme::Auto ) {
         std::string skinTheme =
             Config::SkinManager::instance().getDefaultTheme();
@@ -371,6 +432,10 @@ void VKContext::applyTheme()
     case Config::UITheme::KazamCherry: setKazamCherryStyle(); break;
     default: setDeepDarkStyle(); break;
     }
+
+    // 应用全局缩放 (注意：ScaleAllSizes 是增量修改，但由于各 setStyle
+    // 函数都会重置 style，所以这里直接应用是安全的)
+    ImGui::GetStyle().ScaleAllSizes(settings.uiScaleMultiplier);
 }
 
 /**

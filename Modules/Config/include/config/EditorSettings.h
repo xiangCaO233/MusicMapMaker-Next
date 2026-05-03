@@ -112,14 +112,14 @@ struct SoftwareCursorConfig {
 };
 
 enum class UITheme {
-    Auto,       ///< 自动跟随皮肤配置 (skin.lua 中的 theme)
-    DeepDark,   ///< DeepDark 风格暗色主题
-    Dark,       ///< ImGui 默认的 Dark 主题
-    Light,      ///< ImGui 默认的 Light 主题
-    Classic,    ///< ImGui 默认的 Classic 主题
-    Microsoft,  ///< Microsoft 风格
-    Darcula,    ///< Darcula 风格
-    Photoshop,  ///< Photoshop 风格
+    Auto,
+    DeepDark,
+    Dark,
+    Light,
+    Classic,
+    Microsoft,
+    Darcula,
+    Photoshop,
     Unreal,
     Gold,
     RoundedVisualStudio,
@@ -232,6 +232,12 @@ struct EditorSettings {
     /// @brief 是否开启垂直同步
     bool vsync{ false };
 
+    /// @brief 界面字体大小倍率 (1.0 代表原始大小)
+    float fontSizeMultiplier{ 1.0f };
+
+    /// @brief 界面全局缩放倍率 (1.0 代表原始大小)
+    float uiScaleMultiplier{ 1.0f };
+
     /// @brief 滚动操作时的步长加速倍率 (用于非 Snap 滚动、缩放等)
     float scrollSpeedMultiplier{ 4.0f };
 
@@ -264,14 +270,67 @@ struct EditorSettings {
 
     /// @brief 偏好的 CJK 字体名称
     std::string preferredCjkFont{ "Default" };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(
-        EditorSettings, syncConfig, sfxConfig, filePickerStyle, cursorStyle,
-        theme, beatDivisor, reverseScroll, scrollSnap, recentProjectsLimit,
-        language, vsync, scrollSpeedMultiplier, globalVolume, selectionMode,
-        marqueeThickness, marqueeRounding, saveFormatPreference,
-        lastFilePickerPath, disableScrollAccelerationWhileDrawing,
-        softwareCursorConfig, preferredAsciiFont, preferredCjkFont)
 };
+
+inline void to_json(nlohmann::json& j, const EditorSettings& c)
+{
+    j = nlohmann::json{ { "syncConfig", c.syncConfig },
+                        { "sfxConfig", c.sfxConfig },
+                        { "filePickerStyle", c.filePickerStyle },
+                        { "cursorStyle", c.cursorStyle },
+                        { "theme", c.theme },
+                        { "beatDivisor", c.beatDivisor },
+                        { "reverseScroll", c.reverseScroll },
+                        { "scrollSnap", c.scrollSnap },
+                        { "recentProjectsLimit", c.recentProjectsLimit },
+                        { "language", c.language },
+                        { "vsync", c.vsync },
+                        { "fontSizeMultiplier", c.fontSizeMultiplier },
+                        { "uiScaleMultiplier", c.uiScaleMultiplier },
+                        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
+                        { "globalVolume", c.globalVolume },
+                        { "selectionMode", c.selectionMode },
+                        { "marqueeThickness", c.marqueeThickness },
+                        { "marqueeRounding", c.marqueeRounding },
+                        { "saveFormatPreference", c.saveFormatPreference },
+                        { "lastFilePickerPath", c.lastFilePickerPath },
+                        { "disableScrollAccelerationWhileDrawing",
+                          c.disableScrollAccelerationWhileDrawing },
+                        { "softwareCursorConfig", c.softwareCursorConfig },
+                        { "preferredAsciiFont", c.preferredAsciiFont },
+                        { "preferredCjkFont", c.preferredCjkFont } };
+}
+
+inline void from_json(const nlohmann::json& j, EditorSettings& c)
+{
+    c.syncConfig      = j.value("syncConfig", SyncConfig());
+    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
+    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Unified);
+    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
+    c.theme           = j.value("theme", UITheme::Auto);
+    c.beatDivisor     = j.value("beatDivisor", 4);
+    c.reverseScroll   = j.value("reverseScroll", false);
+    c.scrollSnap      = j.value("scrollSnap", false);
+    c.recentProjectsLimit   = j.value("recentProjectsLimit", 10);
+    c.language              = j.value("language", std::string("zh_cn"));
+    c.vsync                 = j.value("vsync", false);
+    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.0f);
+    c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
+    c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
+    c.globalVolume          = j.value("globalVolume", 0.25f);
+    c.selectionMode    = j.value("selectionMode", SelectionMode::Intersection);
+    c.marqueeThickness = j.value("marqueeThickness", 2.0f);
+    c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
+    c.saveFormatPreference =
+        j.value("saveFormatPreference", SaveFormatPreference::Original);
+    c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
+    c.disableScrollAccelerationWhileDrawing =
+        j.value("disableScrollAccelerationWhileDrawing", true);
+    c.softwareCursorConfig =
+        j.value("softwareCursorConfig", SoftwareCursorConfig());
+    c.preferredAsciiFont =
+        j.value("preferredAsciiFont", std::string("Default"));
+    c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
+}
 
 }  // namespace MMM::Config

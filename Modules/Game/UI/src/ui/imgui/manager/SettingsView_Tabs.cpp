@@ -160,6 +160,35 @@ void SettingsView::drawSoftwareSettings()
                 config);
         }
 
+        // 界面全局缩放倍率
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
+                 &settings.uiScaleMultiplier,
+                 0.5f,
+                 2.0f,
+                 "%.2f") ) {
+            changed = true;
+            if ( auto ctx = Graphic::VKContext::get() ) {
+                ctx->get().applyTheme();
+                ctx->get().updateFontScales();
+                ctx->get().requestFontRebuild(); // 立即请求重建以保证图标比例正确
+            }
+        }
+
+        // 界面字体大小倍率
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.software.font.multiplier").data(),
+                 &settings.fontSizeMultiplier,
+                 0.5f,
+                 2.0f,
+                 "%.2f") ) {
+            changed = true;
+            if ( auto ctx = Graphic::VKContext::get() ) {
+                ctx->get().updateFontScales();
+                ctx->get().requestFontRebuild(); // 立即请求重建以保证图标比例正确
+            }
+        }
+
         // 处理文件选择器结果
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
                                                   ImGuiWindowFlags_NoCollapse,
@@ -186,7 +215,7 @@ void SettingsView::drawSoftwareSettings()
             changed = true;
             // 执行热重载
             if ( auto ctx = Graphic::VKContext::get() ) {
-                ctx->get().rebuildFonts();
+                ctx->get().requestFontRebuild();
             }
         }
 

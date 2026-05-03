@@ -58,16 +58,22 @@ public:
     /// @brief 设置窗口缩放比例
     void setNativeContentScale(float scale) { m_nativeContentScale = scale; }
 
-    /// @brief 获取 UI 布局缩放比例 (已减去系统自动缩放部分)
-    float getUIScale() const { return m_uiScale; }
+    /// @brief 获取 UI 布局缩放比例 (已减去系统自动缩放部分，并包含用户自定义倍率)
+    float getUIScale() const
+    {
+        return m_uiScale * m_editorConfig.settings.uiScaleMultiplier;
+    }
 
-    /// @brief 设置 UI 布局缩放比例
+    /// @brief 设置 UI 布局缩放比例 (仅设置系统部分)
     void setUIScale(float scale) { m_uiScale = scale; }
 
-    /// @brief 获取窗口缩放比例 (保持旧接口兼容，返回 UI 缩放)
-    float getWindowContentScale() const { return m_uiScale; }
+    /// @brief 获取窗口缩放比例 (包含用户自定义倍率)
+    float getWindowContentScale() const
+    {
+        return m_uiScale * m_editorConfig.settings.uiScaleMultiplier;
+    }
 
-    /// @brief 设置窗口缩放比例 (保持旧接口兼容)
+    /// @brief 设置窗口缩放比例 (仅设置系统部分)
     void setWindowContentScale(float scale) { m_uiScale = scale; }
 
 private:

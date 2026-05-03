@@ -39,12 +39,13 @@ void SideBarUI::update(UIManager* sourceManager)
 {
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float                dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    float sidebarWidth = std::floor(std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
+    float sidebarWidth = std::floor(
+        std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
 
-    float       extraPaddingY     = std::floor(4.0f * dpiScale);
-    ImGuiStyle& style             = ImGui::GetStyle();
+    float       extraPaddingY = std::floor(4.0f * dpiScale);
+    ImGuiStyle& style         = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
 
@@ -76,76 +77,77 @@ void SideBarUI::update(UIManager* sourceManager)
     // --- 样式锁定：全局无圆角、无边框 ---
 
     // lambda：绘制互斥按钮
-    auto DrawSidebarButton =
-        [&](const char* iconStr, SideBarTab tab, Clay_BoundingBox rect) {
-            bool isActive = (m_activeTab == tab);
+    auto DrawSidebarButton = [&](const char*      iconStr,
+                                 SideBarTab       tab,
+                                 Clay_BoundingBox rect) {
+        bool isActive = (m_activeTab == tab);
 
-            // --- 样式处理 ---
-            if ( isActive ) {
-                ImVec4 activeCol = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
-                ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, activeCol);
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeCol);
-            } else {
-                Utils::UIThemeUtils::pushTransparentButtonStyles();
+        // --- 样式处理 ---
+        if ( isActive ) {
+            ImVec4 activeCol = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+            ImGui::PushStyleColor(ImGuiCol_Button, activeCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, activeCol);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeCol);
+        } else {
+            Utils::UIThemeUtils::pushTransparentButtonStyles();
+        }
+
+        // 使用不同的文字颜色（未激活时稍显透明）
+        ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        if ( !isActive ) {
+            iconVec4.w *= 0.7f;  // 非激活状态稍微透明点
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
+
+        // 应用侧边栏专用字体大小 (改用独立的 pure_icons 以免随文字倍率缩放)
+        ImFont* sideBarFont = skinCfg.getFont("pure_icons");
+        if ( sideBarFont ) ImGui::PushFont(sideBarFont);
+
+        // 绘制按钮
+        std::string btnId =
+            std::string(iconStr) + "##tab_" + std::to_string((int)tab);
+        if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
+            m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
+            // 2. 发布事件通知 FloatingManagerUI
+            using namespace MMM::Event;
+
+            UISubViewToggleEvent evt;
+            // 填充基类 UIEvent 信息
+            evt.sourceUiName = m_name;
+            evt.uiManager    = sourceManager;
+
+            // 填充切换信息
+            // 与注册 FloatingManagerUI
+            // 时使用的名字一致
+            evt.targetFloatManagerName = "SideBarManager";
+            evt.subViewId              = TabToSubViewId(tab);
+
+            if ( m_activeTab != SideBarTab::None ) {
+                evt.showSubView = true;
             }
 
-            // 使用不同的文字颜色（未激活时稍显透明）
-            ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-            if ( !isActive ) {
-                iconVec4.w *= 0.7f;  // 非激活状态稍微透明点
-            }
-            ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
+            // 核心：发布到总线
+            EventBus::instance().publish(evt);
 
-            // 应用侧边栏专用字体大小
-            ImFont* sideBarFont = skinCfg.getFont("side_bar");
-            if ( sideBarFont ) ImGui::PushFont(sideBarFont);
+            XINFO("SideBarUI: Published ToggleEvent for {}", evt.subViewId);
+        }
 
-            // 绘制按钮
-            std::string btnId =
-                std::string(iconStr) + "##tab_" + std::to_string((int)tab);
-            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
-                m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
-                // 2. 发布事件通知 FloatingManagerUI
-                using namespace MMM::Event;
+        // --- 悬停提示 ---
+        // 推入内容字体以保持 Tooltip 文字尺寸一致
+        ImFont* contentFont = skinCfg.getFont("content");
+        if ( contentFont ) ImGui::PushFont(contentFont);
+        ImGui::SetItemTooltip("%s", TabToTooltip(tab).c_str());
+        if ( contentFont ) ImGui::PopFont();
 
-                UISubViewToggleEvent evt;
-                // 填充基类 UIEvent 信息
-                evt.sourceUiName = m_name;
-                evt.uiManager    = sourceManager;
-
-                // 填充切换信息
-                // 与注册 FloatingManagerUI
-                // 时使用的名字一致
-                evt.targetFloatManagerName = "SideBarManager";
-                evt.subViewId              = TabToSubViewId(tab);
-
-                if ( m_activeTab != SideBarTab::None ) {
-                    evt.showSubView = true;
-                }
-
-                // 核心：发布到总线
-                EventBus::instance().publish(evt);
-
-                XINFO("SideBarUI: Published ToggleEvent for {}", evt.subViewId);
-            }
-
-            // --- 悬停提示 ---
-            // 推入内容字体以保持 Tooltip 文字尺寸一致
-            ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
-            ImGui::SetItemTooltip("%s", TabToTooltip(tab).c_str());
-            if ( contentFont ) ImGui::PopFont();
-
-            // --- 清理状态栈 ---
-            if ( sideBarFont ) ImGui::PopFont();
-            ImGui::PopStyleColor(1);
-            if ( isActive ) {
-                ImGui::PopStyleColor(3);
-            } else {
-                Utils::UIThemeUtils::popTransparentButtonStyles();
-            }  // 弹出 Button, Hovered, Active, Text
-        };
+        // --- 清理状态栈 ---
+        if ( sideBarFont ) ImGui::PopFont();
+        ImGui::PopStyleColor(1);
+        if ( isActive ) {
+            ImGui::PopStyleColor(3);
+        } else {
+            Utils::UIThemeUtils::popTransparentButtonStyles();
+        }  // 弹出 Button, Hovered, Active, Text
+    };
 
     CLayVBox vbox;
     vbox.setPadding(0, 0, 0, 0)

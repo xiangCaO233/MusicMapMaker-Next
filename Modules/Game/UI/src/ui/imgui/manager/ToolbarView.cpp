@@ -79,7 +79,7 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGui::GetWindowDrawList()->AddLine(
             p1, p2, col, std::floor(2.0f * dpiScale));
 
-        if ( toolFont ) ImGui::PushFont(toolFont);
+        if ( auto f = skinCfg.getFont("pure_icons") ) ImGui::PushFont(f);
 
         // 使用当前窗口的实际宽度作为按钮宽度，确保完全一致
         float drawW = ImGui::GetWindowWidth();

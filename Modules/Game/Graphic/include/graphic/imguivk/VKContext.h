@@ -97,6 +97,30 @@ public:
      */
     void rebuildFonts();
 
+    /**
+     * @brief 仅更新现有字体的 Scale，不触发重建 (用于实时倍率调节)
+     */
+    void updateFontScales();
+
+    /**
+     * @brief 请求在下一帧开始前进行字体重建 (线程安全)
+     */
+    void requestFontRebuild();
+
+    /**
+     * @brief 检查并执行字体重建 (由主循环在 NewFrame 前调用)
+     */
+    void checkAndRebuildFonts();
+
+    /**
+     * @brief 应用当前主题配置
+     */
+    void applyTheme();
+
+private:
+    /// @brief 字体重建请求标志
+    std::atomic<bool> m_fontRebuildRequested{ false };
+
 private:
     /**
      * @brief 仅更新全局呈现模式参数，不触发重建
@@ -250,11 +274,6 @@ private:
      * @brief 初始化 imgui Vulkan
      */
     void imguiVulkanInit(GLFWwindow* iwindow_handle);
-
-    /**
-     * @brief 应用当前主题配置
-     */
-    void applyTheme();
 
     /**
      * @brief 设置DeepDark样式

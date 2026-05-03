@@ -39,6 +39,8 @@ return {
 	["ui.settings.software.theme.auto"] = "自动 (跟随皮肤)",
 	["ui.settings.software.font.ascii"] = "ASCII 字体",
 	["ui.settings.software.font.cjk"] = "CJK 字体",
+	["ui.settings.software.font.multiplier"] = "界面字体大小倍率",
+	["ui.settings.software.ui_scale.multiplier"] = "界面全局缩放倍率",
 	["ui.settings.software.font.browse"] = "选择系统字体文件",
 	["ui.settings.software.font.restart"] = "字体已更改，需重启生效",
 	["ui.settings.software.picker_style"] = "选择器样式",

@@ -207,6 +207,7 @@ int GameLoop::start(Graphic::NativeWindow& window)
                 cursorSmokeLifeOverride);
 
             // 3.2 执行渲染
+            context.checkAndRebuildFonts();
             context.getRenderer().render(
                 window,
                 std::vector<Graphic::IGraphicUserHook*>{ &m_uiManager });
