@@ -239,6 +239,7 @@ return {
 	["ui.toolbar.scroll_timing_mapping"] = "Toggle SCROLLTIMING Visual Mapping",
 	["ui.toolbar.beat_divisor"] = "Beat Divisor Settings",
 	["ui.toolbar.draw_beat_lines"] = "Show/Hide Beat Lines",
+	["ui.toolbar.stop_on_scroll"] = "Stop playback on scroll",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "Time",

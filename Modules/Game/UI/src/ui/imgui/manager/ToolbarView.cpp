@@ -185,6 +185,25 @@ void ToolbarView::update(UIManager* sourceManager)
         }
         ImGui::PopStyleColor(3);
 
+        // --- 播放时滚动则停止播放开关 ---
+        bool isStopOnScroll = editorCfg.settings.stopPlaybackOnScroll;
+        pushBtnStyle(isStopOnScroll);
+
+        ImGui::SetCursorPosX(0);
+        if ( ImGui::Button(ICON_MMM_STOP, ImVec2(drawW, drawW)) ) {
+            auto newConfig                        = editorCfg;
+            newConfig.settings.stopPlaybackOnScroll = !isStopOnScroll;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.toolbar.stop_on_scroll").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
+        ImGui::PopStyleColor(3);
+
         ImGui::Separator();
 
         if ( toolFont ) ImGui::PopFont();

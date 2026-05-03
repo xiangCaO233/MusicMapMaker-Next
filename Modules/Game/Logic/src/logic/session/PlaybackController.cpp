@@ -64,6 +64,13 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         wheel = -wheel;
     }
 
+    if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
+        m_ctx.isPlaying = false;
+        Audio::AudioManager::instance().pause();
+        m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
+        // 如果停止了播放，需要同步一下渲染状态 (虽然 seek 也会做，但这里明确一下更好)
+    }
+
     bool isShiftAccelerated = cmd.isShiftDown;
     if ( isShiftAccelerated && m_ctx.brushState.isActive &&
          m_ctx.lastConfig.settings.disableScrollAccelerationWhileDrawing ) {

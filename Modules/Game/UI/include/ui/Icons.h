@@ -34,8 +34,10 @@ constexpr const char* ICON_MMM_FILE_ADD =
 // --- Playback Icons ---
 constexpr const char* ICON_MMM_PLAY  = "\xef\x81\x8b";  ///< \uf04b play
 constexpr const char* ICON_MMM_PAUSE = "\xef\x81\x8c";  ///< \uf04c pause
+constexpr const char* ICON_MMM_STOP  = "\xef\x81\x8d";  ///< \uf04d stop
 
 // --- Edit Tool Icons ---
+constexpr const char* ICON_MMM_MOUSE = "\xef\xa3\x8c";  ///< \uf8cc mouse
 constexpr const char* ICON_MMM_MOUSE_POINTER =
     "\xef\x89\x85";  ///< \uf245 mouse-pointer (Move Tool)
 constexpr const char* ICON_MMM_MOVE_ARROWS =

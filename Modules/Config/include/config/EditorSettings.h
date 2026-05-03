@@ -270,6 +270,9 @@ struct EditorSettings {
 
     /// @brief 偏好的 CJK 字体名称
     std::string preferredCjkFont{ "Default" };
+
+    /// @brief 在播放时滚动滚轮则停止播放
+    bool stopPlaybackOnScroll{ false };
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
@@ -298,7 +301,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                           c.disableScrollAccelerationWhileDrawing },
                         { "softwareCursorConfig", c.softwareCursorConfig },
                         { "preferredAsciiFont", c.preferredAsciiFont },
-                        { "preferredCjkFont", c.preferredCjkFont } };
+                        { "preferredCjkFont", c.preferredCjkFont },
+                        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll } };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -331,6 +335,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredAsciiFont =
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
+    c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
 }
 
 }  // namespace MMM::Config
