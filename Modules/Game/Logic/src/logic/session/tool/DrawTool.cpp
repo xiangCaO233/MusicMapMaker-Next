@@ -208,7 +208,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         if ( ctx.brushState.polylineSegments.empty() ) {
             // [Phase 1] 决定初始物件 (HOLD or FLICK)
             float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
-            if ( diffY <= threshold ) {
+            bool timeChanged = std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
+
+            // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
+            if ( !timeChanged && diffY <= 5.0f ) {
                 int dtrack = currentTrack - ctx.brushState.startTrack;
                 if ( dtrack != 0 && (ctx.brushState.startTrack + dtrack >= 0) &&
                      (ctx.brushState.startTrack + dtrack < ctx.trackCount) ) {
@@ -245,7 +248,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                 ctx.brushState.segmentStartMouseY = cmd.mouseY;
                 ctx.brushState.type               = ::MMM::NoteType::POLYLINE;
             } else if ( ctx.brushState.type == ::MMM::NoteType::FLICK &&
-                        diffY > threshold ) {
+                        (timeChanged || diffY > 5.0f) ) {
                 // FLICK 垂直位移 -> 开始 Polyline: [FLICK, HOLD]
                 NoteComponent::SubNote s1{ ::MMM::NoteType::FLICK,
                                            ctx.brushState.holdStartTime,
@@ -324,7 +327,9 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                     // 轨道稳定：检查垂直移动
                     float diffYLocal = std::abs(
                         cmd.mouseY - ctx.brushState.segmentStartMouseY);
-                    if ( diffYLocal > threshold ) {
+                    bool timeChangedLocal = std::abs(currentPosTime - last.timestamp) > 1e-5;
+
+                    if ( timeChangedLocal || diffYLocal > 5.0f ) {
                         // 开启新的 Hold
                         ctx.brushState.polylineSegments.push_back(
                             { ::MMM::NoteType::HOLD,
