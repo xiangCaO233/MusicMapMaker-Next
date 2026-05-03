@@ -273,6 +273,9 @@ struct EditorSettings {
 
     /// @brief 在播放时滚动滚轮则停止播放
     bool stopPlaybackOnScroll{ false };
+
+    /// @brief 吸附向下取整 (总是吸附到早于鼠标位置的分拍线)
+    bool snapFloor{ false };
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
@@ -302,7 +305,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "softwareCursorConfig", c.softwareCursorConfig },
                         { "preferredAsciiFont", c.preferredAsciiFont },
                         { "preferredCjkFont", c.preferredCjkFont },
-                        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll } };
+                        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
+                        { "snapFloor", c.snapFloor } };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -336,6 +340,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
+    c.snapFloor = j.value("snapFloor", false);
 }
 
 }  // namespace MMM::Config

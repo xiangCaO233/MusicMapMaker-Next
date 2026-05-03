@@ -78,7 +78,12 @@ SnapResult getSnapResult(
         double stepDuration = beatDuration / beatDivisor;
 
         double relativeTime    = rawTime - bpmTime;
-        double stepCount       = std::round(relativeTime / stepDuration);
+        double stepCount;
+        if ( config.settings.snapFloor ) {
+            stepCount = std::floor(relativeTime / stepDuration + 1e-6);
+        } else {
+            stepCount = std::round(relativeTime / stepDuration);
+        }
         double nearestStepTime = bpmTime + stepCount * stepDuration;
 
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
@@ -87,7 +92,7 @@ SnapResult getSnapResult(
         float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
-        if ( std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
+        if ( config.settings.scrollSnap || std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
             result.isSnapped   = true;
             result.snappedTime = nearestStepTime;
 

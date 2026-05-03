@@ -143,6 +143,25 @@ void ToolbarView::update(UIManager* sourceManager)
         }
         ImGui::PopStyleColor(3);
 
+        // --- 吸附向下取整开关 ---
+        bool isSnapFloor = editorCfg.settings.snapFloor;
+        pushBtnStyle(isSnapFloor);
+
+        ImGui::SetCursorPosX(0);
+        if ( ImGui::Button(ICON_MMM_ARROW_DOWN, ImVec2(drawW, drawW)) ) {
+            auto newConfig                 = editorCfg;
+            newConfig.settings.snapFloor = !isSnapFloor;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.toolbar.snap_floor").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
+        ImGui::PopStyleColor(3);
+
         // --- 线性滚轮映射开关 (SCROLLTIMING) ---
         // 选中: 使用SCROLLTIMING映射 (enableLinearScrollMapping = false)
         // 未选中: 纯线性映射 (enableLinearScrollMapping = true)

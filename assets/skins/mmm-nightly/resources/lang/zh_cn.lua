@@ -235,6 +235,7 @@ return {
 	["ui.toolbar.draw"] = "绘制工具 (3)",
 	["ui.toolbar.reverse_scroll"] = "反转滚动方向",
 	["ui.toolbar.scroll_snap"] = "滚动磁吸 (开启后滚动滚轮将吸附至分拍线)",
+	["ui.toolbar.snap_floor"] = "吸附向下取整 (开启后总是吸附到早于鼠标位置的分拍线)",
 	["ui.toolbar.scroll_timing_mapping"] = "开启/关闭 SCROLLTIMING 视觉映射",
 	["ui.toolbar.beat_divisor"] = "分拍数量设置",
 	["ui.toolbar.draw_beat_lines"] = "显示/隐藏分拍线",

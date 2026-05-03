@@ -236,6 +236,7 @@ return {
 	["ui.toolbar.draw"] = "Draw Tool (3)",
 	["ui.toolbar.reverse_scroll"] = "Reverse Scroll Direction",
 	["ui.toolbar.scroll_snap"] = "Scroll Snap (Snap to beat lines when scrolling)",
+	["ui.toolbar.snap_floor"] = "Snap Floor (Always snap to the beat line before mouse position)",
 	["ui.toolbar.scroll_timing_mapping"] = "Toggle SCROLLTIMING Visual Mapping",
 	["ui.toolbar.beat_divisor"] = "Beat Divisor Settings",
 	["ui.toolbar.draw_beat_lines"] = "Show/Hide Beat Lines",
