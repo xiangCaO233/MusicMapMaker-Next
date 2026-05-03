@@ -110,6 +110,10 @@ struct Batcher {
     void pushUVQuad(float x, float y, float w, float h, glm::vec2 uvMin,
                     glm::vec2 uvMax, glm::vec4 color)
     {
+        if ( currentCmd.indexCount == 0 ) {
+            currentCmd.indexOffset =
+                static_cast<uint32_t>(snapshot->indices.size());
+        }
         uint32_t baseIndex = static_cast<uint32_t>(snapshot->vertices.size());
 
         Graphic::Vertex::VKBasicVertex v1, v2, v3, v4;
@@ -212,6 +216,10 @@ struct Batcher {
     void pushFreeQuad(glm::vec2 p1, glm::vec2 p2, glm::vec2 p3, glm::vec2 p4,
                       glm::vec4 color)
     {
+        if ( currentCmd.indexCount == 0 ) {
+            currentCmd.indexOffset =
+                static_cast<uint32_t>(snapshot->indices.size());
+        }
         uint32_t baseIndex = static_cast<uint32_t>(snapshot->vertices.size());
 
         Graphic::Vertex::VKBasicVertex v1, v2, v3, v4;
@@ -309,6 +317,10 @@ struct Batcher {
                     snapshot->vertices.push_back(v);
 
                     if ( i > 0 ) {
+                        if ( currentCmd.indexCount == 0 ) {
+                            currentCmd.indexOffset =
+                                static_cast<uint32_t>(snapshot->indices.size());
+                        }
                         uint32_t cur  = centerIdx + i + 1;
                         uint32_t prev = cur - 1;
                         snapshot->indices.push_back(centerIdx);
