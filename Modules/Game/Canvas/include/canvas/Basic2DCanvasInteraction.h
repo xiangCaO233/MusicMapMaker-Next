@@ -44,6 +44,9 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
+
+    float m_speedTooltipTimer{ 0.0f };
+    float m_speedTooltipValue{ 1.0f };
 };
 
 }  // namespace MMM::Canvas

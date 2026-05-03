@@ -13,6 +13,8 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
+#include "audio/AudioManager.h"
+#include "config/skin/SkinConfig.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -45,6 +47,33 @@ void Basic2DCanvasInteraction::update(
     if ( currentSnapshot ) {
         handleHotkeys(currentSnapshot);
         handleInteractions(currentSnapshot, targetWidth, targetHeight);
+    }
+
+    if ( m_speedTooltipTimer > 0.0f ) {
+        m_speedTooltipTimer -= ImGui::GetIO().DeltaTime;
+
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(
+            ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.8f),
+            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowBgAlpha(0.7f);
+
+        ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 10));
+        if ( ImGui::Begin("##SpeedTooltip", nullptr, flags) ) {
+            ImFont* font = Config::SkinManager::instance().getFont("content");
+            if ( font ) ImGui::PushFont(font);
+            ImGui::Text("Playback Speed: %.2fx", m_speedTooltipValue);
+            if ( font ) ImGui::PopFont();
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
     }
 }
 
@@ -394,7 +423,34 @@ void Basic2DCanvasInteraction::handleInteractions(
         bool isAltPressed   = ImGui::GetIO().KeyAlt;
         bool isShiftPressed = ImGui::GetIO().KeyShift;
 
-        if ( isCtrlPressed ) {
+        if ( isCtrlPressed && isAltPressed ) {
+            const std::vector<double> presets = { 0.25, 0.50, 0.75, 1.0 };
+            double currentSpeed = Audio::AudioManager::instance().getPlaybackSpeed();
+
+            size_t bestIdx = 0;
+            double minDiff = std::abs(currentSpeed - presets[0]);
+            for ( size_t i = 1; i < presets.size(); ++i ) {
+                double diff = std::abs(currentSpeed - presets[i]);
+                if ( diff < minDiff ) {
+                    minDiff = diff;
+                    bestIdx = i;
+                }
+            }
+
+            if ( wheel > 0.01f ) {
+                if ( bestIdx < presets.size() - 1 ) bestIdx++;
+            } else if ( wheel < -0.01f ) {
+                if ( bestIdx > 0 ) bestIdx--;
+            }
+
+            double newSpeed = presets[bestIdx];
+            if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSetPlaybackSpeed{ newSpeed }));
+                m_speedTooltipValue = static_cast<float>(newSpeed);
+                m_speedTooltipTimer = 2.0f;
+            }
+        } else if ( isCtrlPressed ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
             float adjustedWheel = wheel * direction;
