@@ -114,12 +114,15 @@ struct VisualConfig {
     /// @brief 分拍线透明度 (0.0~1.0)
     float beatLineAlpha{ 1.0f };
 
+    /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
+    bool drawBeatLines{ true };
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(VisualConfig, trackLayout, background,
                                    previewConfig, trackBoxLineWidth,
                                    judgeline_pos, judgelineWidth, noteScaleX,
                                    noteScaleY, noteFillMode, visualOffset,
                                    timelineZoom, enableLinearScrollMapping,
-                                   snapThreshold, beatLineAlpha)
+                                   snapThreshold, beatLineAlpha, drawBeatLines)
 };
 
 }  // namespace MMM::Config

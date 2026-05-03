@@ -221,12 +221,13 @@ void NoteRenderSystem::generateSnapshot(
 
     if ( cameraId != "Timeline" ) {
         // 先绘制拍线，使其在物件下方
-        bool shouldDrawBeatLines = true;
-        bool shouldDrawTimingLines =
-            false;  // 默认主画布不绘制 Timing 线，或者看需求
+        bool shouldDrawBeatLines   = config.visual.drawBeatLines;
+        bool shouldDrawTimingLines = false;
 
         if ( cameraId == "Preview" ) {
-            shouldDrawBeatLines   = config.visual.previewConfig.drawBeatLines;
+            // 预览区逻辑：若全局开启，则由预览区具体开关决定；若全局关闭，则强制关闭
+            shouldDrawBeatLines   = config.visual.drawBeatLines &&
+                                    config.visual.previewConfig.drawBeatLines;
             shouldDrawTimingLines = config.visual.previewConfig.drawTimingLines;
         }
 

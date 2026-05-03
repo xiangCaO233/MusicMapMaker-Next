@@ -230,6 +230,7 @@ return {
 	["ui.toolbar.scroll_snap"] = "滚动磁吸 (开启后滚动滚轮将吸附至分拍线)",
 	["ui.toolbar.scroll_timing_mapping"] = "开启/关闭 SCROLLTIMING 视觉映射",
 	["ui.toolbar.beat_divisor"] = "分拍数量设置",
+	["ui.toolbar.draw_beat_lines"] = "显示/隐藏分拍线",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "时间",

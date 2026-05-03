@@ -230,6 +230,7 @@ return {
 	["ui.toolbar.scroll_snap"] = "Scroll Snap (Snap to beat lines when scrolling)",
 	["ui.toolbar.scroll_timing_mapping"] = "Toggle SCROLLTIMING Visual Mapping",
 	["ui.toolbar.beat_divisor"] = "Beat Divisor Settings",
+	["ui.toolbar.draw_beat_lines"] = "Show/Hide Beat Lines",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "Time",
