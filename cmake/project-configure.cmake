@@ -1,3 +1,6 @@
+# 全局关闭 C++20 模块依赖扫描，以加快构建速度
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 if(MSVC)
 else()
 	if(WIN32)
@@ -19,6 +22,14 @@ else()
 		message(STATUS
 			"Compiler is Clang. Enabling global ThinLTO for Release builds."
 		)
+
+		if(WIN32)
+			# 为 Clang 开启 PDB 支持 (CodeView 格式)
+			add_compile_options("-gcodeview")
+			add_link_options("-fuse-ld=lld")
+			add_link_options("-Wl,/debug")
+			message(STATUS "Windows Clang detected. Enabling PDB generation via lld-link.")
+		endif()
 
 		# 同时，也为链接器添加 LTO 标志
 		# 仅在 Release 或 RelWithDebInfo 模式下添加编译选项
