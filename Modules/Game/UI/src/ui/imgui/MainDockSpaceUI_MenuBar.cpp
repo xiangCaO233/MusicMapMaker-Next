@@ -109,12 +109,15 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         ImFont* menuFont = skinCfg.getFont("menu");
         if ( menuFont ) ImGui::PushFont(menuFont);
-        m_mainMenuview.update(sourceManager);
+        m_mainMenuview.renderMenus(sourceManager);
+
+        float dragStartX = ImGui::GetCursorPosX();
+
+        m_mainMenuview.renderInfoText();
         if ( menuFont ) ImGui::PopFont();
 
         ImGui::PopStyleVar(1);
 
-        float dragStartX      = ImGui::GetCursorPosX();
         float numberOfButtons = 3;
         float dragEndX =
             ImGui::GetWindowWidth() - (buttonSize * numberOfButtons);

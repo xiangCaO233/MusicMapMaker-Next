@@ -226,6 +226,12 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
 
 void MainMenuView::update(UIManager* sourceManager)
 {
+    renderMenus(sourceManager);
+    renderInfoText();
+}
+
+void MainMenuView::renderMenus(UIManager* sourceManager)
+{
     handleHotkeys(sourceManager);
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
@@ -385,14 +391,17 @@ void MainMenuView::update(UIManager* sourceManager)
         ImGui::EndMenu();
     }
 
-    ImGuiIO& io = ImGui::GetIO();
-
-    ImGui::Text("MusicMapMaker(Gamma)");
-    ImGui::Text(
-        "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
+}
+
+void MainMenuView::renderInfoText()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::Text("MusicMapMaker(Gamma)");
+    ImGui::SameLine();
+    ImGui::Text(
+        "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
 }
 
 }  // namespace MMM::UI
