@@ -75,12 +75,13 @@ private:
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
-    std::string  m_editType; // "BPM" or "Scroll"
+    std::string  m_editType;  // "BPM" or "Scroll"
 
     // 创建弹窗状态
     bool   m_isCreatePopupOpen{ false };
     double m_createTimeRaw{ 0.0 };
     double m_createTimeSnapped{ 0.0 };
+    double m_createTimeManual{ 0.0 };
     double m_createValue{ 120.0 };
     int    m_createType{ 0 };     // 0: BPM, 1: Scroll
     int    m_createPosType{ 0 };  // 0: Click, 1: Current

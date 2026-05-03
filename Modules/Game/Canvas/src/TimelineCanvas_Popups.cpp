@@ -19,8 +19,8 @@ void TimelineCanvas::renderEventEditorPopup()
             (m_editType == "BPM") ? TR("ui.timeline.event_type.bpm").data()
                                   : TR("ui.timeline.event_type.scroll").data();
 
-        ImGui::Text("%s",
-            TR_FMT("ui.timeline.event_editor.title", typeTitle).c_str());
+        ImGui::Text(
+            "%s", TR_FMT("ui.timeline.event_editor.title", typeTitle).c_str());
         ImGui::Separator();
         ImGui::Spacing();
 
@@ -84,29 +84,34 @@ void TimelineCanvas::renderEventCreationPopup()
     ImGui::SetNextWindowSize(ImVec2(350, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
 
-    if ( ImGui::BeginPopupModal("TimelineCreateEvent",
-                                &m_isCreatePopupOpen,
-                                ImGuiWindowFlags_NoResize |
-                                    ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(
+             "TimelineCreateEvent",
+             &m_isCreatePopupOpen,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::Separator();
         ImGui::Spacing();
 
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.pos_type").data());
-        ImGui::RadioButton(
-            m_isTimeSnapped
-                ? TR("ui.timeline.event_creator.pos_click_snapped").data()
-                : TR("ui.timeline.event_creator.pos_click").data(),
-            &m_createPosType,
-            0);
-        ImGui::RadioButton(TR("ui.timeline.event_creator.pos_current").data(),
-                           &m_createPosType,
-                           1);
+        if ( ImGui::RadioButton(
+                 m_isTimeSnapped
+                     ? TR("ui.timeline.event_creator.pos_click_snapped").data()
+                     : TR("ui.timeline.event_creator.pos_click").data(),
+                 &m_createPosType,
+                 0) ) {
+            m_createTimeManual =
+                m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
+        }
+        if ( ImGui::RadioButton(
+                 TR("ui.timeline.event_creator.pos_current").data(),
+                 &m_createPosType,
+                 1) ) {
+            m_createTimeManual = m_currentSnapshot->currentTime;
+        }
 
-        double targetTime = (m_createPosType == 0)
-                                ? m_createTimeSnapped
-                                : m_currentSnapshot->currentTime;
-        ImGui::Text("Time: %.3f s", targetTime);
+        ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
+        ImGui::InputDouble(
+            "##CreateTime", &m_createTimeManual, 0.001, 0.01, "%.3f");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -128,7 +133,8 @@ void TimelineCanvas::renderEventCreationPopup()
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
-            ImGui::InputDouble("##ScrollValue", &m_createValue, 0.01, 0.1, "%.3f");
+            ImGui::InputDouble(
+                "##ScrollValue", &m_createValue, 0.01, 0.1, "%.3f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -139,18 +145,19 @@ void TimelineCanvas::renderEventCreationPopup()
 
         if ( ImGui::Button(TR("ui.timeline.event_creator.create").data(),
                            ImVec2(100, 0)) ) {
-            ::MMM::TimingEffect type = (m_createType == 0)
-                                           ? ::MMM::TimingEffect::BPM
-                                           : ::MMM::TimingEffect::SCROLL;
-            double finalValue = m_createValue;
+            ::MMM::TimingEffect type       = (m_createType == 0)
+                                                 ? ::MMM::TimingEffect::BPM
+                                                 : ::MMM::TimingEffect::SCROLL;
+            double              finalValue = m_createValue;
             if ( type == ::MMM::TimingEffect::SCROLL ) {
                 if ( m_createValue > 1e-6 ) {
                     finalValue = -100.0 / m_createValue;
                 }
             }
 
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ targetTime, type, finalValue }));
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    m_createTimeManual, type, finalValue }));
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }
@@ -167,4 +174,4 @@ void TimelineCanvas::renderEventCreationPopup()
     ImGui::PopStyleVar();
 }
 
-} // namespace MMM::Canvas
+}  // namespace MMM::Canvas
