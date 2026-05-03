@@ -74,55 +74,73 @@ struct PreviewAreaConfig {
 
 /// @brief 视觉与渲染相关的整体配置
 struct VisualConfig {
-    /// @brief 轨道布局比例
-    TrackLayout trackLayout;
-
-    /// @brief 背景渲染配置
-    BackgroundConfig background;
-
-    /// @brief 预览区视口配置
+    TrackLayout       trackLayout;
+    BackgroundConfig  background;
     PreviewAreaConfig previewConfig;
 
-    /// @brief 轨道布局包围框线宽(px)
-    float trackBoxLineWidth{ 2.0f };
-
-    /// @brief 判定线y方向比例位置 (0.0~1.0)
+    /// @brief 轨道线线宽
+    float trackBoxLineWidth{ 1.5f };
+    /// @brief 判定线位置 (0.0 - 1.0)
     float judgeline_pos{ .85f };
-
-    /// @brief 判定线线宽(px)
-    float judgelineWidth{ 4.0f };
-
-    /// @brief 物件在X/Y方向的渲染缩放倍率
-    float noteScaleX{ 1.25f };
-    float noteScaleY{ 1.25f };
-
-    /// @brief 物件（如长条）内部纹理的填充模式
+    /// @brief 判定线线宽
+    float judgelineWidth{ 2.0f };
+    /// @brief 音符 X 轴缩放
+    float noteScaleX{ 1.0f };
+    /// @brief 音符 Y 轴缩放
+    float noteScaleY{ 1.0f };
+    /// @brief 音符填充模式
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
-
-    /// @brief 视觉偏移量 (秒)，用于补偿渲染与音频的延迟
-    float visualOffset{ -0.040f };
-
-    /// @brief 时间线缩放倍率 (1.0 代表原始比例)
+    /// @brief 视觉偏移
+    float visualOffset{ 0.0f };
+    /// @brief 时间轴缩放
     float timelineZoom{ 1.0f };
-
-    /// @brief 是否启用线性流速映射 (忽略变速事件，以匀速显示)
+    /// @brief 是否启用线性滚动映射 (通常用于预览)
     bool enableLinearScrollMapping{ false };
-
-    /// @brief 磁吸阈值 (px)，鼠标距离拍线在此范围内触发磁吸提示
-    float snapThreshold{ 32.0f };
-
-    /// @brief 分拍线透明度 (0.0~1.0)
+    /// @brief 鼠标吸附阈值
+    float snapThreshold{ 16.0f };
+    /// @brief 分拍线不透明度
     float beatLineAlpha{ 1.0f };
-
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
     bool drawBeatLines{ true };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(VisualConfig, trackLayout, background,
-                                   previewConfig, trackBoxLineWidth,
-                                   judgeline_pos, judgelineWidth, noteScaleX,
-                                   noteScaleY, noteFillMode, visualOffset,
-                                   timelineZoom, enableLinearScrollMapping,
-                                   snapThreshold, beatLineAlpha, drawBeatLines)
 };
+
+inline void to_json(nlohmann::json& j, const VisualConfig& c)
+{
+    j = nlohmann::json{ { "trackLayout", c.trackLayout },
+                        { "background", c.background },
+                        { "previewConfig", c.previewConfig },
+                        { "trackBoxLineWidth", c.trackBoxLineWidth },
+                        { "judgeline_pos", c.judgeline_pos },
+                        { "judgelineWidth", c.judgelineWidth },
+                        { "noteScaleX", c.noteScaleX },
+                        { "noteScaleY", c.noteScaleY },
+                        { "noteFillMode", c.noteFillMode },
+                        { "visualOffset", c.visualOffset },
+                        { "timelineZoom", c.timelineZoom },
+                        { "enableLinearScrollMapping",
+                          c.enableLinearScrollMapping },
+                        { "snapThreshold", c.snapThreshold },
+                        { "beatLineAlpha", c.beatLineAlpha },
+                        { "drawBeatLines", c.drawBeatLines } };
+}
+
+inline void from_json(const nlohmann::json& j, VisualConfig& c)
+{
+    c.trackLayout       = j.value("trackLayout", TrackLayout());
+    c.background        = j.value("background", BackgroundConfig());
+    c.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
+    c.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
+    c.judgeline_pos     = j.value("judgeline_pos", 0.85f);
+    c.judgelineWidth    = j.value("judgelineWidth", 2.0f);
+    c.noteScaleX        = j.value("noteScaleX", 1.0f);
+    c.noteScaleY        = j.value("noteScaleY", 1.0f);
+    c.noteFillMode      = j.value("noteFillMode", BackgroundFillMode::Stretch);
+    c.visualOffset      = j.value("visualOffset", 0.0f);
+    c.timelineZoom      = j.value("timelineZoom", 1.0f);
+    c.enableLinearScrollMapping = j.value("enableLinearScrollMapping", false);
+    c.snapThreshold             = j.value("snapThreshold", 16.0f);
+    c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
+    c.drawBeatLines             = j.value("drawBeatLines", true);
+}
 
 }  // namespace MMM::Config
