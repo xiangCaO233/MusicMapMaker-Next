@@ -21,13 +21,26 @@ void NoteRenderSystem::renderTrackLayout(
     const ScrollCache* cache, float& leftX, float& rightX, float& topY,
     float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
 {
-    // 1. 基础布局计算
-    leftX        = viewportWidth * config.visual.trackLayout.left;
-    rightX       = viewportWidth * config.visual.trackLayout.right;
-    topY         = viewportHeight * config.visual.trackLayout.top;
-    bottomY      = viewportHeight * config.visual.trackLayout.bottom;
+    // 1. 基础布局计算 (确保范围有效，防止后续计算出现无限循环)
+    float l = config.visual.trackLayout.left;
+    float r = config.visual.trackLayout.right;
+    float t = config.visual.trackLayout.top;
+    float b = config.visual.trackLayout.bottom;
+
+    // 强制保证 Left < Right, Top < Bottom
+    if ( l >= r ) {
+        r = l + 0.01f;
+    }
+    if ( t >= b ) {
+        b = t + 0.01f;
+    }
+
+    leftX        = viewportWidth * l;
+    rightX       = viewportWidth * r;
+    topY         = viewportHeight * t;
+    bottomY      = viewportHeight * b;
     trackAreaW   = rightX - leftX;
-    singleTrackW = trackAreaW / static_cast<float>(trackCount);
+    singleTrackW = trackAreaW / std::max(1.0f, static_cast<float>(trackCount));
 
     // 2. 绘制轨道底板
     NoteRenderSystem::drawTrackBackground(
@@ -56,6 +69,8 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
                                            float leftX, float topY,
                                            float bottomY, float singleTrackW)
 {
+    if ( trackCount <= 0 || singleTrackW <= 0.001f ) return;
+
     batcher.setTexture(TextureID::Track);
     auto uvIt =
         batcher.snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Track));
@@ -68,6 +83,9 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
 
     float texAspect = texW_px / texH_px;
     float drawH     = singleTrackW / texAspect;
+
+    // 严防无限循环：若平铺高度过小，则跳过绘制
+    if ( drawH <= 1.0f ) return;
 
     const float halfPixelU = 0.5f / 2048.0f;
     const float halfPixelV = 0.5f / 2048.0f;

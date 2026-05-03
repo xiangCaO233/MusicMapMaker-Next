@@ -339,26 +339,38 @@ void SettingsView::drawVisualSettings()
     bool  changed = false;
 
     ImGui::SeparatorText(TR_CACHE("ui.settings.visual.layout").data());
-    changed |=
-        ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_left").data(),
-                           &visual.trackLayout.left,
-                           0.0f,
-                           1.0f);
-    changed |=
-        ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_top").data(),
-                           &visual.trackLayout.top,
-                           0.0f,
-                           1.0f);
-    changed |=
-        ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_right").data(),
-                           &visual.trackLayout.right,
-                           0.0f,
-                           1.0f);
-    changed |=
-        ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_bottom").data(),
-                           &visual.trackLayout.bottom,
-                           0.0f,
-                           1.0f);
+    if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_left").data(),
+                            &visual.trackLayout.left,
+                            0.0f,
+                            1.0f) ) {
+        visual.trackLayout.left =
+            std::min(visual.trackLayout.left, visual.trackLayout.right - 0.01f);
+        changed = true;
+    }
+    if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_top").data(),
+                            &visual.trackLayout.top,
+                            0.0f,
+                            1.0f) ) {
+        visual.trackLayout.top =
+            std::min(visual.trackLayout.top, visual.trackLayout.bottom - 0.01f);
+        changed = true;
+    }
+    if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_right").data(),
+                            &visual.trackLayout.right,
+                            0.0f,
+                            1.0f) ) {
+        visual.trackLayout.right =
+            std::max(visual.trackLayout.right, visual.trackLayout.left + 0.01f);
+        changed = true;
+    }
+    if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_bottom").data(),
+                            &visual.trackLayout.bottom,
+                            0.0f,
+                            1.0f) ) {
+        visual.trackLayout.bottom =
+            std::max(visual.trackLayout.bottom, visual.trackLayout.top + 0.01f);
+        changed = true;
+    }
     changed |= ImGui::SliderFloat(
         TR_CACHE("ui.settings.visual.layout_box_width").data(),
         &visual.trackBoxLineWidth,
