@@ -14,13 +14,28 @@ namespace MMM::Logic
 
 void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 {
+    auto itCamera = ctx.cameras.find(cmd.cameraId);
+    if ( itCamera == ctx.cameras.end() ) return;
+
+    // 计算轨道边界
+    float leftX =
+        itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
+    float rightX = itCamera->second.viewportWidth *
+                   ctx.lastConfig.visual.trackLayout.right;
+    if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
+        leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
+        rightX = itCamera->second.viewportWidth -
+                 ctx.lastConfig.visual.previewConfig.margin.right;
+    }
+
+    // 在轨道外点击，忽略并防止进入绘制状态
+    if ( cmd.mouseX < leftX || cmd.mouseX > rightX ) {
+        return;
+    }
+
     ctx.brushState.isActive = true;
     ctx.brushState.duration = 0.0;
     ctx.brushState.dtrack   = 0;
-
-    // 计算初始吸附位置
-    auto itCamera = ctx.cameras.find(cmd.cameraId);
-    if ( itCamera == ctx.cameras.end() ) return;
 
     // 获取 BPM 事件供磁吸使用
     std::vector<const TimelineComponent*> bpmEvents;
@@ -40,7 +55,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     // 计算逻辑时间
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
-    if ( !cache ) return;
+    if ( !cache ) {
+        ctx.brushState.isActive = false;
+        return;
+    }
 
     float judgmentLineY =
         itCamera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
@@ -79,17 +97,6 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                             ctx.cameras);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
-
-    // 计算轨道
-    float leftX =
-        itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
-    float rightX = itCamera->second.viewportWidth *
-                   ctx.lastConfig.visual.trackLayout.right;
-    if ( cmd.cameraId == "Preview" ) {
-        leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
-        rightX = itCamera->second.viewportWidth -
-                 ctx.lastConfig.visual.previewConfig.margin.right;
-    }
     float trackAreaW   = rightX - leftX;
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   track =

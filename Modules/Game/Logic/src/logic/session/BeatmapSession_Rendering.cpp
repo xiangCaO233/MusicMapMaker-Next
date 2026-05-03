@@ -156,6 +156,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     camera.viewportWidth * config.visual.trackLayout.left;
                 float rightX =
                     camera.viewportWidth * config.visual.trackLayout.right;
+
+                if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
+                    leftX  = config.visual.previewConfig.margin.left;
+                    rightX = camera.viewportWidth -
+                             config.visual.previewConfig.margin.right;
+                }
                 float trackAreaW = rightX - leftX;
                 float singleTrackW =
                     trackAreaW / static_cast<float>(m_ctx->trackCount);
@@ -174,11 +180,18 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                                         m_ctx->timelineRegistry,
                                                         m_ctx->visualTime,
                                                         m_ctx->cameras);
+                
+                // 判断是否在轨道框内
+                bool isInsideTrack = (m_ctx->lastMousePos.x >= leftX &&
+                                      m_ctx->lastMousePos.x <= rightX);
+
                 if ( snap.isSnapped ) {
-                    snapshot->isSnapped          = true;
-                    snapshot->snappedTime        = snap.snappedTime;
-                    snapshot->snappedNumerator   = snap.numerator;
-                    snapshot->snappedDenominator = snap.denominator;
+                    if ( cameraId == "Timeline" || isInsideTrack ) {
+                        snapshot->isSnapped          = true;
+                        snapshot->snappedTime        = snap.snappedTime;
+                        snapshot->snappedNumerator   = snap.numerator;
+                        snapshot->snappedDenominator = snap.denominator;
+                    }
                 }
                 snapshot->currentBeatDivisor = config.settings.beatDivisor;
 
