@@ -31,11 +31,16 @@ struct Batcher {
 
     void setScissor(float x, float y, float w, float h)
     {
+        int32_t ix = static_cast<int32_t>(std::max(0.0f, std::floor(x)));
+        int32_t iy = static_cast<int32_t>(std::max(0.0f, std::floor(y)));
+        int32_t ir = static_cast<int32_t>(std::max(0.0f, std::ceil(x + w)));
+        int32_t ib = static_cast<int32_t>(std::max(0.0f, std::ceil(y + h)));
+
         vk::Rect2D nextScissor;
-        nextScissor.offset.x      = static_cast<int32_t>(std::max(0.0f, x));
-        nextScissor.offset.y      = static_cast<int32_t>(std::max(0.0f, y));
-        nextScissor.extent.width  = static_cast<uint32_t>(std::max(0.0f, w));
-        nextScissor.extent.height = static_cast<uint32_t>(std::max(0.0f, h));
+        nextScissor.offset.x      = ix;
+        nextScissor.offset.y      = iy;
+        nextScissor.extent.width  = static_cast<uint32_t>(std::max(0, ir - ix));
+        nextScissor.extent.height = static_cast<uint32_t>(std::max(0, ib - iy));
 
         if ( currentCmd.indexCount > 0 && currentCmd.scissor != nextScissor ) {
             targetCmds->push_back(currentCmd);
@@ -90,13 +95,15 @@ struct Batcher {
     void pushStrokeRect(float left, float top, float right, float bottom,
                         float thickness, glm::vec4 color)
     {
+        // 采样边界情况：保证最小线宽为 1.5f
+        float t = std::max(thickness, 1.5f);
         float w = right - left;
         float h = bottom - top;
         // 注意：由于 pushQuad 是底边坐标向上画，这里传入 y+h
-        pushQuad(left, top + thickness, w, thickness, color);
-        pushQuad(left, bottom, w, thickness, color);
-        pushQuad(left, bottom, thickness, h, color);
-        pushQuad(right - thickness, bottom, thickness, h, color);
+        pushQuad(left, top + t, w, t, color);
+        pushQuad(left, bottom, w, t, color);
+        pushQuad(left, bottom, t, h, color);
+        pushQuad(right - t, bottom, t, h, color);
     }
 
     /// @brief 推送一个矩形，带自定义 UV (y 为底边坐标，向上绘制)
@@ -323,17 +330,18 @@ struct Batcher {
     void pushRoundedStrokeRect(float x, float y, float w, float h, float r,
                                float thickness, glm::vec4 color)
     {
+        float t = std::max(thickness, 1.5f);
         if ( r <= 0.05f ) {
-            pushStrokeRect(x, y - h, x + w, y, thickness, color);
+            pushStrokeRect(x, y - h, x + w, y, t, color);
             return;
         }
         r = std::min({ r, std::abs(w) * 0.5f, std::abs(h) * 0.5f });
 
         // 4 Straight edges
-        pushQuad(x + r, y, w - 2 * r, thickness, color);
-        pushQuad(x + r, y - h + thickness, w - 2 * r, thickness, color);
-        pushQuad(x, y - r, thickness, h - 2 * r, color);
-        pushQuad(x + w - thickness, y - r, thickness, h - 2 * r, color);
+        pushQuad(x + r, y, w - 2 * r, t, color);
+        pushQuad(x + r, y - h + t, w - 2 * r, t, color);
+        pushQuad(x, y - r, t, h - 2 * r, color);
+        pushQuad(x + w - t, y - r, t, h - 2 * r, color);
 
         // 4 Rounded corners (Arc strokes)
         auto pushArc = [&](float cx, float cy, float startAng, float endAng) {
@@ -343,12 +351,12 @@ struct Batcher {
                 float a2 =
                     startAng + (endAng - startAng) * (float)(i + 1) / segments;
 
-                glm::vec2 p1(cx + (r - thickness) * std::cos(a1),
-                             cy + (r - thickness) * std::sin(a1));
+                glm::vec2 p1(cx + (r - t) * std::cos(a1),
+                             cy + (r - t) * std::sin(a1));
                 glm::vec2 p2(cx + r * std::cos(a1), cy + r * std::sin(a1));
                 glm::vec2 p3(cx + r * std::cos(a2), cy + r * std::sin(a2));
-                glm::vec2 p4(cx + (r - thickness) * std::cos(a2),
-                             cy + (r - thickness) * std::sin(a2));
+                glm::vec2 p4(cx + (r - t) * std::cos(a2),
+                             cy + (r - t) * std::sin(a2));
 
                 pushFreeQuad(p1, p2, p3, p4, color);
             }
