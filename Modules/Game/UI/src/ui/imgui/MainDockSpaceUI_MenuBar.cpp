@@ -30,7 +30,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
     ImGuiWindowFlags menu_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground;
+        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoDocking;
 
     ImGuiStyle& style             = ImGui::GetStyle();
     float       extraPaddingBaseY = 4.0f;
