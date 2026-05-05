@@ -44,10 +44,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     meta["version"] = beatMap.m_baseMapMetadata.version;
     meta["background"] =
         beatMap.m_baseMapMetadata.main_cover_path.filename().string();
-    meta["cover"]  = "";
-    meta["id"]     = 0;
-    meta["aimode"] = "";
-    meta["mode"]   = 7;  // 默认使用坐标模式，与 Malody 编辑器一致
+    meta["id"]   = 0;
+    meta["mode"] = 7;  // 默认使用坐标模式，与 Malody 编辑器一致
 
     auto& song        = meta["song"];
     song["title"]     = beatMap.m_baseMapMetadata.title;
@@ -58,11 +56,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         beatMap.m_baseMapMetadata.main_audio_path.filename().string();
     song["bpm"] = beatMap.m_baseMapMetadata.preference_bpm;
 
-    auto& mode_ext        = meta["mode_ext"];
-    mode_ext["bar_begin"] = 0;
-    if ( trackCount > 0 ) {
-        mode_ext["column"] = trackCount;
-    }
+    auto& mode_ext = meta["mode_ext"] = json::object();
 
     if ( auto it =
              beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
@@ -219,10 +213,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
                 }
             }
-
-            if ( !tj.contains("delay") ) {
-                tj["delay"] = t.m_timestamp;
-            }
             timeArr.push_back(tj);
         }
     }
@@ -308,7 +298,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 ) {
             nj["x"] = columnToX((int)note.m_track);
-            nj["w"] = defaultW;
         } else {
             nj["column"] = (int)note.m_track;
         }
@@ -527,9 +516,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         audioOffset = initialDelay - firstTimingTime;
     }
 
-    audioNode["offset"] = audioOffset;
+    audioNode["offset"] = static_cast<int64_t>(std::round(audioOffset));
 
-    audioNode["vol"] = 100;
     noteArr.push_back(audioNode);
 
     auto process = [&](auto& deque) {
@@ -542,8 +530,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     process(beatMap.m_noteData.flicks);
     for ( const auto& poly : beatMap.m_noteData.polylines )
         noteArr.push_back(serializeToMalody(poly));
-
-    fileData["extra"] = json::object();
 
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) return false;
