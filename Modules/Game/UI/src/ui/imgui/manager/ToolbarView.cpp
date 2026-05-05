@@ -224,6 +224,44 @@ void ToolbarView::update(UIManager* sourceManager)
         }
         ImGui::PopStyleColor(3);
 
+        // --- 打击音效开关 ---
+        bool isHitSfx = editorCfg.settings.sfxConfig.enableHitSfx;
+        pushBtnStyle(isHitSfx);
+
+        ImGui::SetCursorPosX(0);
+        if ( ImGui::Button(ICON_MMM_HIT_SFX, ImVec2(drawW, drawW)) ) {
+            auto newConfig                            = editorCfg;
+            newConfig.settings.sfxConfig.enableHitSfx = !isHitSfx;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.toolbar.hit_sfx").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
+        ImGui::PopStyleColor(3);
+
+        // --- 打击特效开关 ---
+        bool isHitEffects = editorCfg.visual.enableHitEffects;
+        pushBtnStyle(isHitEffects);
+
+        ImGui::SetCursorPosX(0);
+        if ( ImGui::Button(ICON_MMM_VISUAL_EFFECTS, ImVec2(drawW, drawW)) ) {
+            auto newConfig                    = editorCfg;
+            newConfig.visual.enableHitEffects = !isHitEffects;
+            Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        }
+
+        if ( ImGui::IsItemHovered() ) {
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.toolbar.hit_effects").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
+        ImGui::PopStyleColor(3);
+
         ImGui::Separator();
 
         if ( toolFont ) ImGui::PopFont();

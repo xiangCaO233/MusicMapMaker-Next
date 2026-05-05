@@ -100,6 +100,8 @@ struct VisualConfig {
     float beatLineAlpha{ 1.0f };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
     bool drawBeatLines{ true };
+    /// @brief 是否启用打击特效动画
+    bool enableHitEffects{ true };
 };
 
 inline void to_json(nlohmann::json& j, const VisualConfig& c)
@@ -118,7 +120,8 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
                           c.enableLinearScrollMapping },
                         { "snapThreshold", c.snapThreshold },
                         { "beatLineAlpha", c.beatLineAlpha },
-                        { "drawBeatLines", c.drawBeatLines } };
+                        { "drawBeatLines", c.drawBeatLines },
+                        { "enableHitEffects", c.enableHitEffects } };
 }
 
 inline void from_json(const nlohmann::json& j, VisualConfig& c)
@@ -137,6 +140,7 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
     c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
     c.drawBeatLines             = j.value("drawBeatLines", true);
+    c.enableHitEffects          = j.value("enableHitEffects", true);
 }
 
 }  // namespace MMM::Config

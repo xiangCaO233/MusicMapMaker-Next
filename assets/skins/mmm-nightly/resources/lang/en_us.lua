@@ -241,6 +241,8 @@ return {
 	["ui.toolbar.beat_divisor"] = "Beat Divisor Settings",
 	["ui.toolbar.draw_beat_lines"] = "Show/Hide Beat Lines",
 	["ui.toolbar.stop_on_scroll"] = "Stop playback on scroll",
+	["ui.toolbar.hit_sfx"] = "Enable/Disable hit sound effects",
+	["ui.toolbar.hit_effects"] = "Enable/Disable hit visual effects",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "Time",

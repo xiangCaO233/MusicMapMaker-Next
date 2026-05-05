@@ -63,11 +63,14 @@ struct SfxConfig {
     /// @brief 皮肤全局打击音效的播放速率是否跟随主音轨
     bool hitSfxSyncSpeed{ true };
 
+    /// @brief 是否启用打击音效
+    bool enableHitSfx{ true };
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(SfxConfig, polylineStrategy,
                                    enableFlickWidthVolumeScaling,
                                    flickWidthVolumeMultiplier,
                                    permanentSfxVolumes, permanentSfxMutes,
-                                   hitSfxSyncSpeed)
+                                   hitSfxSyncSpeed, enableHitSfx)
 };
 
 enum class FilePickerStyle {
@@ -340,7 +343,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
-    c.snapFloor = j.value("snapFloor", false);
+    c.snapFloor            = j.value("snapFloor", false);
 }
 
 }  // namespace MMM::Config

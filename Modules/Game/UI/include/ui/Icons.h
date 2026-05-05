@@ -58,7 +58,8 @@ constexpr const char* ICON_MMM_ARROWS_UP_DOWN =
     "\xef\x81\xbd";  ///< \uf07d arrows-up-down
 
 constexpr const char* ICON_MMM_MAGNET = "\xef\x81\xb6";  ///< \uf076 magnet
-constexpr const char* ICON_MMM_ARROW_DOWN = "\xef\x81\xa3";  ///< \uf063 arrow-down
+constexpr const char* ICON_MMM_ARROW_DOWN =
+    "\xef\x81\xa3";  ///< \uf063 arrow-down
 constexpr const char* ICON_MMM_BARS =
     "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
 
@@ -71,6 +72,11 @@ constexpr const char* ICON_MMM_VOLUME_OFF =
     "\xef\x80\xa6";  ///< \uf026 volume-off
 constexpr const char* ICON_MMM_VOLUME_MUTE =
     "\xef\x80\xa6";  ///< \uf026 volume-off (Mute Fallback)
+
+constexpr const char* ICON_MMM_HIT_SFX =
+    "\xef\x80\xa8";  ///< \uf028 volume-high
+constexpr const char* ICON_MMM_VISUAL_EFFECTS =
+    "\xef\x83\xa7";  ///< \uf0e7 bolt
 
 // --- Window Control Icons ---
 constexpr const char* ICON_MMM_MINIMIZE =
