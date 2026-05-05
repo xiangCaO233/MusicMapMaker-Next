@@ -76,27 +76,27 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( ImGui::IsKeyPressed(ImGuiKey_Y) ) {
             dispatchCommand(Logic::CmdRedo{});
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_C) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
             dispatchCommand(Logic::CmdCopy{});
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_V) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
             dispatchCommand(Logic::CmdPaste{});
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_X) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
             dispatchCommand(Logic::CmdCut{});
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_A) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
             dispatchCommand(Logic::CmdSelectAll{});
         }
     } else if ( io.KeyAlt ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_F) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.file")) ) {
                 m_closeFileMenuNextFrame = true;
             } else {
                 m_openFileMenuNextFrame = true;
             }
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_E) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_E, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.edit")) ) {
                 m_closeEditMenuNextFrame = true;
             } else {
@@ -104,7 +104,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
             }
         }
     } else if ( !io.KeySuper && !io.KeyShift ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_Space) ) {
+        if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
             bool playing = Logic::EditorEngine::instance().isPlaybackPlaying();
             dispatchCommand(Logic::CmdSetPlayState{ !playing });
         }

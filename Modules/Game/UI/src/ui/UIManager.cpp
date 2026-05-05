@@ -87,10 +87,11 @@ void UIManager::onUpdateUI()
         std::erase(m_textureLoaderSequence, name);
     }
 
+    // 派发 ImGui 事件 (每帧仅 1 次)
+    DispatchGlobalUIEvents();
+
     // 按注册顺序更新ui
     for ( const auto& name : m_uiSequence ) {
-        // 派发 ImGui 事件
-        DispatchGlobalUIEvents();
         // 内部触发 ImGui 渲染和画笔收集
         m_uiviews[name]->update(this);
     }
