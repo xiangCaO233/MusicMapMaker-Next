@@ -1,6 +1,12 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include <atomic>
+
+namespace MMM::Network
+{
+class UpdateChecker;
+}
 
 namespace MMM::UI
 {
@@ -26,11 +32,24 @@ private:
     void openPackFilePicker();
     void openExportFilePicker(const std::string& ext);
     void dispatchCommand(const Logic::LogicCommand& cmd);
+    void renderHelpMenu(UIManager* sourceManager);
+    void renderAboutPopup();
+    void renderUpdatePopup();
+    void renderUpdateCheckingPopup();
+    void startUpdateCheck();
 
     bool m_openFileMenuNextFrame  = false;
     bool m_openEditMenuNextFrame  = false;
+    bool m_openHelpMenuNextFrame  = false;
     bool m_closeFileMenuNextFrame = false;
     bool m_closeEditMenuNextFrame = false;
+    bool m_closeHelpMenuNextFrame = false;
+
+    bool m_showAboutPopup    = false;
+    bool m_showUpdatePopup   = false;
+    bool m_showCheckingPopup = false;
+
+    std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;
 };
 
 }  // namespace MMM::UI

@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
@@ -25,8 +26,14 @@ namespace MMM::UI
 MainMenuView::MainMenuView()
     : m_openFileMenuNextFrame(false)
     , m_openEditMenuNextFrame(false)
+    , m_openHelpMenuNextFrame(false)
     , m_closeFileMenuNextFrame(false)
     , m_closeEditMenuNextFrame(false)
+    , m_closeHelpMenuNextFrame(false)
+    , m_showAboutPopup(false)
+    , m_showUpdatePopup(false)
+    , m_showCheckingPopup(false)
+    , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
 {
 }
 
@@ -101,6 +108,13 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 m_closeEditMenuNextFrame = true;
             } else {
                 m_openEditMenuNextFrame = true;
+            }
+        }
+        if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
+            if ( ImGui::IsPopupOpen(TR("ui.help")) ) {
+                m_closeHelpMenuNextFrame = true;
+            } else {
+                m_openHelpMenuNextFrame = true;
             }
         }
     } else if ( !io.KeySuper && !io.KeyShift ) {
@@ -229,6 +243,291 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     }
 }
 
+void MainMenuView::startUpdateCheck()
+{
+    m_showCheckingPopup = true;
+    m_updateChecker->checkAsync();
+}
+
+void MainMenuView::renderHelpMenu(UIManager* sourceManager)
+{
+    auto MenuItemWithFontIcon = [](const char* icon,
+                                   const char* label,
+                                   const char* shortcut = nullptr,
+                                   bool        enabled  = true) -> bool {
+        ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
+
+        float gap = ImGui::CalcTextSize(" ").x * 0.5f;
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap, 0));
+
+        const char* iconPtr = icon ? icon : "  ";
+
+        bool clicked =
+            ImGui::MenuItemEx(label, iconPtr, shortcut, false, enabled);
+
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        return clicked;
+    };
+
+    if ( m_openHelpMenuNextFrame ) {
+        ImGui::OpenPopup(TR("ui.help"));
+        m_openHelpMenuNextFrame = false;
+    }
+    if ( ImGui::BeginMenu(TR("ui.help")) ) {
+        if ( m_closeHelpMenuNextFrame ) {
+            ImGui::CloseCurrentPopup();
+            m_closeHelpMenuNextFrame = false;
+        }
+
+        if ( MenuItemWithFontIcon(ICON_MMM_DOWNLOAD,
+                                  TR("ui.help.check_update")) ) {
+            startUpdateCheck();
+        }
+        if ( MenuItemWithFontIcon(ICON_MMM_INFO_CIRCLE, TR("ui.help.about")) ) {
+            m_showAboutPopup = true;
+        }
+        ImGui::EndMenu();
+    }
+}
+
+void MainMenuView::renderAboutPopup()
+{
+    if ( m_showAboutPopup ) {
+        ImGui::OpenPopup(TR("ui.help.about_title"));
+        m_showAboutPopup = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(420, 280), ImGuiCond_Appearing);
+
+    if ( ImGui::BeginPopupModal(
+             TR("ui.help.about_title"),
+             nullptr,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
+
+        // 标题
+        ImFont* contentFont =
+            Config::SkinManager::instance().getFont("content");
+        if ( contentFont ) ImGui::PushFont(contentFont);
+
+        ImGui::TextUnformatted(TR("ui.help.app_name").data());
+
+        if ( contentFont ) ImGui::PopFont();
+
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
+
+        ImVec4 dimColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+
+        // 版本号
+        ImGui::TextUnformatted(TR("ui.help.current_version").data());
+        ImGui::SameLine();
+        ImGui::TextColored(dimColor, APP_VERSION);
+
+        // 构建配置
+        ImGui::TextUnformatted(TR("ui.help.build_type").data());
+        ImGui::SameLine();
+#if BUILD_TYPE_DEBUG
+        ImGui::TextColored(dimColor, "Debug");
+#else
+        ImGui::TextColored(dimColor, "Release");
+#endif
+
+        // 运行平台
+        ImGui::TextUnformatted(TR("ui.help.platform").data());
+        ImGui::SameLine();
+        ImGui::TextColored(dimColor, APP_PLATFORM);
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
+
+        ImGui::TextColored(dimColor,
+                           "Copyright (C) 2025 xiang233. All rights reserved.");
+
+        ImGui::Spacing();
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
+                             ImGui::CalcTextSize(TR("ui.help.ok").data()).x *
+                                 0.5f);
+
+        if ( ImGui::Button(TR("ui.help.ok").data(),
+                           ImVec2(100 * dpiScale, 0)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+void MainMenuView::renderUpdateCheckingPopup()
+{
+    if ( m_showCheckingPopup ) {
+        ImGui::OpenPopup(TR("ui.help.check_update"));
+        m_showCheckingPopup = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    bool open = true;
+    if ( ImGui::BeginPopupModal(
+             TR("ui.help.check_update"),
+             &open,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        auto  info     = m_updateChecker->getInfo();
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+
+        ImGui::Spacing();
+
+        if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
+            ImGui::SetCursorPosX(
+                ImGui::GetWindowWidth() * 0.5f -
+                ImGui::CalcTextSize(TR("ui.help.checking").data()).x * 0.5f);
+            ImGui::TextUnformatted(TR("ui.help.checking").data());
+
+            ImGui::Spacing();
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
+                                 40.0f * dpiScale);
+            ImGui::SetNextItemWidth(80.0f * dpiScale);
+            float fraction = -1.0f * (float)ImGui::GetTime();
+            ImGui::ProgressBar(fraction, ImVec2(80.0f * dpiScale, 0.0f));
+        } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
+            ImVec2 textSize =
+                ImGui::CalcTextSize(TR("ui.help.up_to_date").data());
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
+                                 textSize.x * 0.5f);
+            ImGui::TextUnformatted(TR("ui.help.up_to_date").data());
+
+            ImGui::Spacing();
+            ImGui::SetCursorPosX(
+                ImGui::GetWindowWidth() * 0.5f -
+                ImGui::CalcTextSize(TR("ui.help.ok").data()).x * 0.5f);
+            if ( ImGui::Button(TR("ui.help.ok").data(),
+                               ImVec2(100 * dpiScale, 0)) ) {
+                ImGui::CloseCurrentPopup();
+            }
+        } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+            ImGui::CloseCurrentPopup();
+            m_showUpdatePopup = true;
+        } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
+            ImVec4 errColor(1.0f, 0.3f, 0.3f, 1.0f);
+            ImVec2 textSize =
+                ImGui::CalcTextSize(TR("ui.help.update_error").data());
+            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
+                                 textSize.x * 0.5f);
+            ImGui::TextColored(
+                errColor, "%s", TR("ui.help.update_error").data());
+
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", info.errorMessage.c_str());
+
+            ImGui::Spacing();
+            ImGui::SetCursorPosX(
+                ImGui::GetWindowWidth() * 0.5f -
+                ImGui::CalcTextSize(TR("ui.help.ok").data()).x * 0.5f);
+            if ( ImGui::Button(TR("ui.help.ok").data(),
+                               ImVec2(100 * dpiScale, 0)) ) {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // 如果 update is found, open the update popup next frame
+    if ( m_showUpdatePopup ) {
+        m_showCheckingPopup = false;
+    }
+}
+
+void MainMenuView::renderUpdatePopup()
+{
+    if ( m_showUpdatePopup ) {
+        ImGui::OpenPopup(TR("ui.help.update_found"));
+        m_showUpdatePopup = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if ( ImGui::BeginPopupModal(
+             TR("ui.help.update_found"),
+             nullptr,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        auto  info     = m_updateChecker->getInfo();
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+
+        ImGui::Spacing();
+
+        // 版本比较
+        ImGui::TextUnformatted(TR("ui.help.current_version").data());
+        ImGui::SameLine();
+        ImGui::TextUnformatted(info.currentVersion.c_str());
+
+        ImVec4 newColor(0.3f, 1.0f, 0.3f, 1.0f);
+        ImGui::TextUnformatted(TR("ui.help.latest_version").data());
+        ImGui::SameLine();
+        ImGui::TextColored(newColor, "%s", info.latestVersion.c_str());
+
+        if ( !info.releaseDate.empty() ) {
+            ImGui::TextUnformatted(TR("ui.help.release_date").data());
+            ImGui::SameLine();
+            ImGui::TextUnformatted(info.releaseDate.c_str());
+        }
+
+        // 更新内容
+        if ( !info.changelog.empty() ) {
+            ImGui::Spacing();
+            ImGui::TextUnformatted(TR("ui.help.changelog").data());
+            ImGui::Spacing();
+
+            ImVec2 regionAvail = ImGui::GetContentRegionAvail();
+            float  textHeight  = std::min(150.0f * dpiScale, regionAvail.y);
+            ImGui::BeginChild(
+                "ChangelogScroll",
+                ImVec2(ImGui::GetContentRegionAvail().x, textHeight),
+                ImGuiChildFlags_Borders);
+            ImGui::TextWrapped("%s", info.changelog.c_str());
+            ImGui::EndChild();
+        }
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        float buttonWidth  = 120 * dpiScale;
+        float totalButtons = info.downloadUrl.empty() ? 1 : 2;
+        float offsetX =
+            (ImGui::GetWindowWidth() -
+             (totalButtons * buttonWidth +
+              (totalButtons - 1) * ImGui::GetStyle().ItemSpacing.x)) *
+            0.5f;
+        ImGui::SetCursorPosX(offsetX);
+
+        if ( !info.downloadUrl.empty() ) {
+            if ( ImGui::Button(TR("ui.help.download").data(),
+                               ImVec2(buttonWidth, 0)) ) {
+                MMM::Network::UpdateChecker::openUrlInBrowser(info.downloadUrl);
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+        }
+
+        if ( ImGui::Button(TR("ui.help.cancel").data(),
+                           ImVec2(buttonWidth, 0)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
 void MainMenuView::update(UIManager* sourceManager)
 {
     renderMenus(sourceManager);
@@ -272,6 +571,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     ImFont* menuFont = skinCfg.getFont("menu");
     if ( menuFont ) ImGui::PushFont(menuFont);
 
+    // ========== File Menu ==========
     if ( m_openFileMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.file"));
         m_openFileMenuNextFrame = false;
@@ -294,7 +594,6 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             if ( wizard ) wizard->open();
         }
         ImGui::Separator();
-
 
         if ( MenuItemWithFontIcon(
                  ICON_MMM_FOLDER_OPEN, TR("ui.file.open_pro"), "Ctrl+O") ) {
@@ -340,6 +639,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::EndMenu();
     }
 
+    // ========== Edit Menu ==========
     if ( m_openEditMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.edit"));
         m_openEditMenuNextFrame = false;
@@ -395,6 +695,14 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         }
         ImGui::EndMenu();
     }
+
+    // ========== Help Menu ==========
+    renderHelpMenu(sourceManager);
+
+    // ========== Popups ==========
+    renderAboutPopup();
+    renderUpdateCheckingPopup();
+    renderUpdatePopup();
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding

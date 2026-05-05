@@ -88,4 +88,10 @@ constexpr const char* ICON_MMM_RESTORE =
 constexpr const char* ICON_MMM_CLOSE =
     "\xef\x80\x8d";  ///< \uf00d xmark / close
 
+// --- Help & Update Icons ---
+constexpr const char* ICON_MMM_DOWNLOAD =
+    "\xef\x8C\x81";  ///< \uf381 cloud-arrow-down
+constexpr const char* ICON_MMM_INFO_CIRCLE =
+    "\xef\x81\x9a";  ///< \uf05a circle-info
+
 }  // namespace MMM::UI

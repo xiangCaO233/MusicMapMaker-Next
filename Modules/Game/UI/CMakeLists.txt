@@ -53,4 +53,5 @@ target_link_libraries(UI
     3rd_lunasvg
     3rd_concurrentqueue
     3rd_entt
+    Network
 )

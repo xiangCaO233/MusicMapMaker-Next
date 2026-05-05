@@ -86,6 +86,11 @@ add_definitions(-DBUILD_TYPE_DEBUG=$<CONFIG:Debug>)
 add_definitions(-DVULKAN_HPP_NO_EXCEPTIONS)
 add_definitions(-DVULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS)
 
+# 应用版本与平台信息
+add_definitions(-DAPP_VERSION="gammav0.2")
+add_definitions(-DAPP_NAME="MusicMapMaker")
+add_definitions(-DAPP_PLATFORM="$<IF:$<PLATFORM_ID:Windows>,windows,$<IF:$<PLATFORM_ID:Darwin>,macos,linux>>")
+
 # 强制 编译器 以 UTF-8 处理输入和执行字符集
 if(MSVC)
 	add_compile_options(/utf-8)
