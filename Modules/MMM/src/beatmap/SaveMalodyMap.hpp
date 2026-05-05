@@ -298,6 +298,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 ) {
             nj["x"] = columnToX((int)note.m_track);
+            nj["w"] = defaultW;
         } else {
             nj["column"] = (int)note.m_track;
         }
