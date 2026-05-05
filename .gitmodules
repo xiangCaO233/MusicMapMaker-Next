@@ -62,3 +62,6 @@
 	path = 3rdpty/sources/ImGuiFileDialog
 	url = https://github.com/aiekick/ImGuiFileDialog.git
 	branch = master
+[submodule "3rdpty/sources/curl"]
+	path = 3rdpty/sources/curl
+	url = https://github.com/curl/curl.git
