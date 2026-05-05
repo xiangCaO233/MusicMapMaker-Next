@@ -19,10 +19,14 @@ target_link_libraries(Game
 		Graphic
 		Logic
 		Audio
-		3rd_entt
-		3rd_glm
-		MMM
+	MMM
+	3rd_entt
+	3rd_glm
 )
+
+if ( WIN32 )
+    target_link_libraries(Game PUBLIC dbghelp)
+endif ()
 
 target_include_directories(Game
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

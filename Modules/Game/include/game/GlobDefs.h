@@ -9,6 +9,7 @@
 #endif
 
 #include "log/colorful-log.h"
+#include "game/CrashHandler.h"
 
 namespace MMM
 {
@@ -43,6 +44,9 @@ struct RTTILogger {
         };
         enableVT(STD_OUTPUT_HANDLE);
         enableVT(STD_ERROR_HANDLE);
+        
+        // 注册崩溃处理器
+        register_crash_handler();
 #endif
         std::setlocale(LC_ALL, ".UTF-8");
         // 2. 核心逻辑：设置工作目录为可执行程序所在目录
