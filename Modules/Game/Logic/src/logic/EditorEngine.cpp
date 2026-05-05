@@ -84,22 +84,32 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                            u8.size());
     };
 
-    if ( !std::filesystem::exists(projectPath) ||
-         !std::filesystem::is_directory(projectPath) ) {
+    std::filesystem::path actualProjectPath = projectPath;
+    std::filesystem::path targetBeatmapPath = "";
+
+    // 如果传入的是文件，则将其父目录作为项目目录，并记录该文件为目标加载谱面
+    if ( std::filesystem::exists(projectPath) &&
+         std::filesystem::is_regular_file(projectPath) ) {
+        actualProjectPath = projectPath.parent_path();
+        targetBeatmapPath = projectPath;
+    }
+
+    if ( !std::filesystem::exists(actualProjectPath) ||
+         !std::filesystem::is_directory(actualProjectPath) ) {
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
-            pathToStr(projectPath));
+            pathToStr(actualProjectPath));
         return;
     }
 
-    XINFO("Opening project at: {}", pathToStr(projectPath));
+    XINFO("Opening project at: {}", pathToStr(actualProjectPath));
 
 
     auto newProject           = std::make_unique<Project>();
-    newProject->m_projectRoot = projectPath;
+    newProject->m_projectRoot = actualProjectPath;
     newProject->m_metadata.m_title =
-        pathToStr(projectPath.filename());  // 默认标题为目录名（UTF-8）
+        pathToStr(actualProjectPath.filename());  // 默认标题为目录名（UTF-8）
 
     // 扫描文件系统
     try {
@@ -107,7 +117,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
         std::vector<std::filesystem::path> audioFiles;
 
         for ( const auto& entry :
-              std::filesystem::recursive_directory_iterator(projectPath) ) {
+              std::filesystem::recursive_directory_iterator(actualProjectPath) ) {
             if ( !entry.is_regular_file() ) continue;
 
             auto ext = pathToStr(entry.path().extension());
@@ -125,7 +135,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
         // 1. 处理谱面并识别主音轨
         for ( const auto& mapPath : mapFiles ) {
             auto relMapPath =
-                pathToStr(std::filesystem::relative(mapPath, projectPath));
+                pathToStr(std::filesystem::relative(mapPath, actualProjectPath));
             auto filename = pathToStr(mapPath.filename());
 
             Project::BeatmapEntry mapEntry;
@@ -141,7 +151,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                         mapPath.parent_path() /
                         tempMap.m_baseMapMetadata.main_audio_path;
                     auto relAudioPath = pathToStr(
-                        std::filesystem::relative(absAudioPath, projectPath));
+                        std::filesystem::relative(absAudioPath, actualProjectPath));
 
                     mapEntry.m_audioTrackId =
                         pathToStr(absAudioPath.filename());
@@ -158,7 +168,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
         // 2. 处理所有音频资源
         for ( const auto& audioPath : audioFiles ) {
             auto relAudioPath =
-                pathToStr(std::filesystem::relative(audioPath, projectPath));
+                pathToStr(std::filesystem::relative(audioPath, actualProjectPath));
             auto filename = pathToStr(audioPath.filename());
 
             AudioResource res;
@@ -199,7 +209,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     }
 
     // 检查是否有项目描述文件
-    std::filesystem::path projectFile = projectPath / "mmm_project.json";
+    std::filesystem::path projectFile = actualProjectPath / "mmm_project.json";
     if ( std::filesystem::exists(projectFile) ) {
         try {
             std::ifstream  file(projectFile);
@@ -243,7 +253,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 预加载所有项目内的音效资源
     for ( const auto& res : newProject->m_audioResources ) {
         if ( res.m_type == AudioTrackType::Effect ) {
-            auto absPath = projectPath / res.m_path;
+            auto absPath = actualProjectPath / res.m_path;
             if ( std::filesystem::exists(absPath) ) {
                 Audio::AudioManager::instance().preloadSoundEffect(
                     res.m_id, pathToStr(absPath), res.m_config.volume);
@@ -260,7 +270,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 发布加载成功事件
     Event::ProjectLoadedEvent loadedEv;
     loadedEv.m_projectTitle = m_currentProject->m_metadata.m_title;
-    loadedEv.m_projectPath  = pathToStr(projectPath);
+    loadedEv.m_projectPath  = pathToStr(actualProjectPath);
     loadedEv.m_beatmapCount = m_currentProject->m_beatmaps.size();
     Event::EventBus::instance().publish(loadedEv);
 
@@ -284,7 +294,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     // 记录到最近打开列表
     Config::AppConfig::instance().addRecentProject(
-        pathToStr(projectPath));  // UTF-8 编码路径
+        pathToStr(actualProjectPath));  // UTF-8 编码路径
 
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
@@ -294,8 +304,22 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 设置初始配置
     pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
 
-    // 新加载项目时，清空当前 Session 的所有谱面数据
-    pushCommand(CmdLoadBeatmap{ nullptr });
+    // 如果指定了谱面路径，则加载它；否则清空
+    if ( !targetBeatmapPath.empty() ) {
+        XINFO("Auto loading beatmap: {}", pathToStr(targetBeatmapPath));
+        try {
+            auto map = std::make_shared<BeatMap>(
+                BeatMap::loadFromFile(targetBeatmapPath));
+            pushCommand(CmdLoadBeatmap{ map });
+        } catch ( const std::exception& e ) {
+            XERROR("Failed to auto load beatmap {}: {}",
+                   pathToStr(targetBeatmapPath),
+                   e.what());
+            pushCommand(CmdLoadBeatmap{ nullptr });
+        }
+    } else {
+        pushCommand(CmdLoadBeatmap{ nullptr });
+    }
 }
 
 void EditorEngine::start()

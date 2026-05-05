@@ -125,7 +125,7 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                             Event::EventBus::instance().publish(evt);
                         };
 
-                        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm" ) {
                             publishToggleEvent(SideBarTab::BeatMapExplorer);
                             for ( const auto& bm : project->m_beatmaps ) {
                                 if ( bm.m_filePath == relPath ) {

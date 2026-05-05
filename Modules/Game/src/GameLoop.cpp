@@ -11,6 +11,8 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
+#include "event/core/EventBus.h"
+#include "event/ui/menu/OpenProjectEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -120,7 +122,7 @@ GameLoop::~GameLoop() {}
  * @param window 窗口上下文
  * @return int 退出代码 (0 表示正常退出)
  */
-int GameLoop::start(Graphic::NativeWindow& window)
+int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 {
     // 初始化窗口
     // VKContext 表面资源后续初始化
@@ -129,22 +131,33 @@ int GameLoop::start(Graphic::NativeWindow& window)
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
         context.initVKWindowRess(&window, fbWidth, fbHeight);
-
+ 
         // 初始化音频引擎
         Audio::AudioManager::instance().init();
-
+ 
         // 初始化原生对话框引擎
         NFD_Init();
-
+ 
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
             Audio::AudioManager::instance().preloadSoundEffect(key,
                                                                path.string());
         }
-
+ 
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
         Logic::EditorEngine::instance().start();
+
+        // 处理命令行参数：如果有文件路径输入，触发打开项目/谱面事件
+        if ( argc > 1 ) {
+            std::filesystem::path inputPath(argv[1]);
+            if ( std::filesystem::exists(inputPath) ) {
+                Event::OpenProjectEvent openEv;
+                openEv.m_projectPath = inputPath;
+                Event::EventBus::instance().publish(openEv);
+                XINFO("Handling command line argument: {}", inputPath.string());
+            }
+        }
 
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)

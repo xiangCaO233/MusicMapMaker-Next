@@ -55,7 +55,7 @@ int main(int argc, char* argv[])
 
     Graphic::NativeWindow nativeWindow(1280, 720, "MusicMapMaker(Gamma)");
 
-    const auto ret = gameLoop.start(nativeWindow);
+    const auto ret = gameLoop.start(nativeWindow, argc, argv);
 
     return ret;
 }
