@@ -180,7 +180,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
 
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         nfdu8char_t*      outPath = nullptr;
-        nfdu8filteritem_t filters[3];
+        nfdu8filteritem_t filters[4];
         int               filterCount = 0;
 
         if ( ext == ".mmm" || ext == "" ) {
@@ -191,6 +191,9 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
         }
         if ( ext == ".imd" || ext == "" ) {
             filters[filterCount++] = { "IvoryMusicData", "imd" };
+        }
+        if ( ext == ".mc" || ext == "" ) {
+            filters[filterCount++] = { "Malody Chart", "mc" };
         }
 
         nfdresult_t result = NFD_SaveDialogU8(
@@ -214,8 +217,10 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
             filterStr = ".osu";
         else if ( ext == ".imd" )
             filterStr = ".imd";
+        else if ( ext == ".mc" )
+            filterStr = ".mc";
         else
-            filterStr = ".mmm,.osu,.imd";
+            filterStr = ".mmm,.osu,.imd,.mc";
 
         ImGuiFileDialog::Instance()->OpenDialog("SaveAsFilePicker",
                                                 TR("ui.file.save_as"),
