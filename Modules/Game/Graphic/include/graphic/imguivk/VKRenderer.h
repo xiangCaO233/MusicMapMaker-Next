@@ -58,14 +58,24 @@ public:
                 std::vector<IGraphicUserHook*> uiManagers);
 
     void triggerRecreate(NativeWindow& window);
-    
+
+    /**
+     * @brief 当交换链重建后调用，用于同步内部缓存的图像数量并重建相关同步对象
+     */
+    void onSwapchainChanged();
     /// @brief 设置软件光标烟雾寿命覆盖值
-    inline void setCursorSmokeLifeOverride(float life) { m_cursorSmokeLifeOverride = life; }
+    inline void setCursorSmokeLifeOverride(float life)
+    {
+        m_cursorSmokeLifeOverride = life;
+    }
 
     /**
      * @brief 获取描述符池
      */
-    inline vk::DescriptorPool getDescriptorPool() const { return m_vkDescriptorPool; }
+    inline vk::DescriptorPool getDescriptorPool() const
+    {
+        return m_vkDescriptorPool;
+    }
 
     /**
      * @brief 获取画笔纹理专用的共享描述符集布局
@@ -137,9 +147,9 @@ private:
     std::vector<vk::Semaphore> m_imageAvailableSems;
 
     /**
-     * @brief 渲染完成信号量列表 (大小为 Swapchain Image Count)
+     * @brief 渲染完成信号量列表 (大小为 MAX_FRAMES_IN_FLIGHT)
      * 用于同步 Submit 和 Present (Display 等待 Render Finished)
-     * 注意：这里使用的是 Swapchain Image 索引
+     * 注意：这里使用的是 并发帧 索引 (m_currentFrameIndex)
      */
     std::vector<vk::Semaphore> m_renderFinishedSems;
 

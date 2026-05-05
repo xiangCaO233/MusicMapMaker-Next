@@ -16,6 +16,16 @@ void Basic2DCanvas::updateBackgroundTexture()
     if ( m_currentSnapshot &&
          m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
         m_loadedBgPath = m_currentSnapshot->backgroundPath;
+
+        // 关键修复：替换背景纹理前，必须等待所有在途帧完成渲染。
+        // 旧纹理的 DescriptorSet 可能仍被上一帧的 CommandBuffer 引用，
+        // 立即 Free 会触发 Vulkan Validation 错误
+        // (VUID-vkFreeDescriptorSets-pDescriptorSets-00309)。
+        // 该操作仅在切换项目时触发，GPU 停顿代价可接受。
+        if ( m_logicalDevice && m_bgTexture ) {
+            (void)m_logicalDevice.waitIdle();
+        }
+
         if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue &&
              !m_loadedBgPath.empty() &&
              std::filesystem::exists(m_loadedBgPath) ) {

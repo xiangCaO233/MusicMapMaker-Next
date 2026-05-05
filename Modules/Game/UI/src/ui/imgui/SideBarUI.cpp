@@ -61,7 +61,8 @@ void SideBarUI::update(UIManager* sourceManager)
     ImGuiWindowFlags sidebar_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoDocking;
 
     // --- 核心：进入窗口后，立即强制锁定所有“圆角”变量为 0 ---
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);   // 按钮圆角 -> 0

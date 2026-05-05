@@ -1,6 +1,8 @@
+#include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -13,8 +15,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
-#include "audio/AudioManager.h"
-#include "config/skin/SkinConfig.h"
 #include <algorithm>
 #include <filesystem>
 
@@ -55,13 +55,15 @@ void Basic2DCanvasInteraction::update(
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(
             ImVec2(viewport->Size.x * 0.5f, viewport->Size.y * 0.8f),
-            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGuiCond_Always,
+            ImVec2(0.5f, 0.5f));
         ImGui::SetNextWindowBgAlpha(0.7f);
 
         ImGuiWindowFlags flags =
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
-            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
@@ -138,13 +140,9 @@ void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
     auto& io = ImGui::GetIO();
-    if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) && !io.KeyCtrl &&
-         !io.KeyShift && !io.KeyAlt && !io.KeySuper ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdSetPlayState{ !currentSnapshot->isPlaying }));
-    }
 
     // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw) ---
+    // 这些是画布特有的，保留在这里
     if ( ImGui::IsKeyPressed(ImGuiKey_1, false) ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
             Logic::CmdChangeTool{ Logic::EditTool::Move }));
@@ -156,35 +154,17 @@ void Basic2DCanvasInteraction::handleHotkeys(
             Logic::CmdChangeTool{ Logic::EditTool::Draw }));
     }
 
-    // --- 快捷键：编辑操作 (Ctrl+C/X/V, Ctrl+Z/Y) ---
-    if ( ImGui::GetIO().KeyCtrl ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdCopy{}));
-        } else if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdCut{}));
-        } else if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdPaste{}));
-        } else if ( ImGui::IsKeyPressed(ImGuiKey_Z, false) ) {
-            if ( ImGui::GetIO().KeyShift ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdRedo{}));
-            } else {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdUndo{}));
-            }
-        } else if ( ImGui::IsKeyPressed(ImGuiKey_Y, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdRedo{}));
-        }
-    } else {
+    // --- 快捷键：删除操作 ---
+    // 目前菜单栏没有 Delete，保留在这里
+    if ( !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_Delete, false) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
         }
     }
+
+    // 注意：Ctrl+C/V/X/Z/Y 和 Space (播放/暂停) 已由全局 MainMenuView 处理，
+    // 在此处移除以防止重复触发。
 }
 
 void Basic2DCanvasInteraction::handleInteractions(
@@ -425,7 +405,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         if ( isCtrlPressed && isAltPressed ) {
             const std::vector<double> presets = { 0.25, 0.50, 0.75, 1.0 };
-            double currentSpeed = Audio::AudioManager::instance().getPlaybackSpeed();
+            double                    currentSpeed =
+                Audio::AudioManager::instance().getPlaybackSpeed();
 
             size_t bestIdx = 0;
             double minDiff = std::abs(currentSpeed - presets[0]);

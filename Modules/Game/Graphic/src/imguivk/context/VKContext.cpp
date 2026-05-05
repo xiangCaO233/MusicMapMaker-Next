@@ -288,7 +288,7 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
 
     // 6. 【通知渲染器更新】
     // 后续如果渲染器内部存了 imageCount 之类的缓存，更新它
-    // m_vkRenderer->onSwapchainChanged();
+    m_vkRenderer->onSwapchainChanged();
 
     XDEBUG("Swapchain recreation finished.");
 }

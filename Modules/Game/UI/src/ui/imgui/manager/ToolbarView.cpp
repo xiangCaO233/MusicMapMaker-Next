@@ -44,7 +44,8 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGuiWindowFlags flags =
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove;
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDocking;
 
     // 样式锁定：将 WindowPadding 设为 0，让按钮无缝填满窗口宽度
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -149,7 +150,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImGui::SetCursorPosX(0);
         if ( ImGui::Button(ICON_MMM_ARROW_DOWN, ImVec2(drawW, drawW)) ) {
-            auto newConfig                 = editorCfg;
+            auto newConfig               = editorCfg;
             newConfig.settings.snapFloor = !isSnapFloor;
             Logic::EditorEngine::instance().setEditorConfig(newConfig);
         }
@@ -210,7 +211,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImGui::SetCursorPosX(0);
         if ( ImGui::Button(ICON_MMM_STOP, ImVec2(drawW, drawW)) ) {
-            auto newConfig                        = editorCfg;
+            auto newConfig                          = editorCfg;
             newConfig.settings.stopPlaybackOnScroll = !isStopOnScroll;
             Logic::EditorEngine::instance().setEditorConfig(newConfig);
         }

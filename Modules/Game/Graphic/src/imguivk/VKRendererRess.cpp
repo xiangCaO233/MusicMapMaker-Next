@@ -41,13 +41,13 @@ void VKRenderer::createCommandPool()
  */
 void VKRenderer::allocateCommandBuffers()
 {
-    // 为每一个图像缓冲分配一个命令缓冲区
+    // 为每一帧分配一个命令缓冲区
     vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
     commandBufferAllocateInfo
         // 要从哪个命令池分配
         .setCommandPool(m_vkCommandPool)
-        // 分配图像缓冲个数个缓冲区
-        .setCommandBufferCount(m_avalableImageBufferCount)
+        // 分配并发帧数个缓冲区
+        .setCommandBufferCount(MAX_FRAMES_IN_FLIGHT)
         // 主要: 可直接上gpu执行
         // 次要: 需要在主要的CommandBuffer上执行
         // 这里分配主要的
@@ -65,26 +65,32 @@ void VKRenderer::allocateCommandBuffers()
 void VKRenderer::createSemsWithFences()
 {
     // 创建信号量和同步栅
-    m_imageAvailableSems.resize(m_avalableImageBufferCount);
+    m_imageAvailableSems.resize(MAX_FRAMES_IN_FLIGHT);
     m_renderFinishedSems.resize(m_avalableImageBufferCount);
-    m_cmdAvailableFences.resize(m_avalableImageBufferCount);
+    m_cmdAvailableFences.resize(MAX_FRAMES_IN_FLIGHT);
 
-    for ( size_t i{ 0 }; i < m_avalableImageBufferCount; ++i ) {
-        // 创建信号量
-        vk::SemaphoreCreateInfo semaphoreCreateInfo;
+    vk::SemaphoreCreateInfo semaphoreCreateInfo;
+
+    for ( size_t i{ 0 }; i < MAX_FRAMES_IN_FLIGHT; ++i ) {
+        // 创建图像可用信号量 (按并发帧数)
         m_imageAvailableSems[i] =
             m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
-        m_renderFinishedSems[i] =
-            m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
-        XDEBUG("Created image Semaphores For ImageBuffer{}.", i);
+        XDEBUG("Created Image Available Semaphore For FrameInFlight {}.", i);
 
-        // 创建同步栅
+        // 创建同步栅 (按并发帧数)
         vk::FenceCreateInfo fenceCreateInfo;
         // 初始化为 Signaled，让第一帧可以直接通过 wait
         fenceCreateInfo.setFlags(vk::FenceCreateFlagBits::eSignaled);
         m_cmdAvailableFences[i] =
             m_vkLogicalDevice.createFence(fenceCreateInfo).value;
-        XDEBUG("Created cmd Sync Fence For ImageBuffer{}.", i);
+        XDEBUG("Created cmd Sync Fence For FrameInFlight {}.", i);
+    }
+
+    for ( size_t i{ 0 }; i < m_avalableImageBufferCount; ++i ) {
+        // 创建渲染完成信号量 (按交换链图像数)
+        m_renderFinishedSems[i] =
+            m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
+        XDEBUG("Created Render Finished Semaphore For Swapchain Image {}.", i);
     }
 }
 
