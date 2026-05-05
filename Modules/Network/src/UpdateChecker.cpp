@@ -7,6 +7,11 @@
 #include <regex>
 #include <thread>
 
+#if defined(_WIN32)
+#    include <shellapi.h>
+#    include <windows.h>
+#endif
+
 using json = nlohmann::json;
 
 namespace MMM::Network
