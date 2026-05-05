@@ -198,7 +198,7 @@ void VKRenderer::render(NativeWindow&                  window,
         // 设置等待的阶段掩码
         .setWaitDstStageMask(waitStages)
         // 发出信号量
-        .setSignalSemaphores(m_renderFinishedSems[m_currentFrameIndex]);
+        .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
     (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
 
@@ -210,7 +210,7 @@ void VKRenderer::render(NativeWindow&                  window,
         // 设置交换链
         .setSwapchains(m_vkSwapChain.m_swapchain)
         // 等待信号量
-        .setWaitSemaphores(m_renderFinishedSems[m_currentFrameIndex]);
+        .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
 
     vk::Result presentResult =
         m_LogicDevicePresentQueue.presentKHR(presentInfo);

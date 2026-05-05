@@ -58,14 +58,24 @@ public:
                 std::vector<IGraphicUserHook*> uiManagers);
 
     void triggerRecreate(NativeWindow& window);
-    
+
+    /**
+     * @brief 当交换链重建后调用，用于同步内部缓存的图像数量并重建相关同步对象
+     */
+    void onSwapchainChanged();
     /// @brief 设置软件光标烟雾寿命覆盖值
-    inline void setCursorSmokeLifeOverride(float life) { m_cursorSmokeLifeOverride = life; }
+    inline void setCursorSmokeLifeOverride(float life)
+    {
+        m_cursorSmokeLifeOverride = life;
+    }
 
     /**
      * @brief 获取描述符池
      */
-    inline vk::DescriptorPool getDescriptorPool() const { return m_vkDescriptorPool; }
+    inline vk::DescriptorPool getDescriptorPool() const
+    {
+        return m_vkDescriptorPool;
+    }
 
     /**
      * @brief 获取画笔纹理专用的共享描述符集布局

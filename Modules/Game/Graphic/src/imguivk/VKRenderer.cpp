@@ -100,9 +100,31 @@ void VKRenderer::triggerRecreate(NativeWindow& window)
     int w, h;
     window.getFramebufferSize(w, h);
     // 这里需要调用 context 的 recreateSwapchain
-    // 你可以通过回调或者单例模式来调用
     MMM::Graphic::VKContext::get().value().get().recreateSwapchain(
         window.getWindowHandle(), w, h);
+}
+
+void VKRenderer::onSwapchainChanged()
+{
+    // 更新图像数量缓存
+    m_avalableImageBufferCount = m_vkSwapChain.m_vkImageBuffers.size();
+    XDEBUG("Swapchain changed, new image count: {}",
+           m_avalableImageBufferCount);
+
+    // 重新创建渲染完成信号量
+    for ( auto& sem : m_renderFinishedSems ) {
+        m_vkLogicalDevice.destroySemaphore(sem);
+    }
+    m_renderFinishedSems.clear();
+    m_renderFinishedSems.resize(m_avalableImageBufferCount);
+
+    vk::SemaphoreCreateInfo semaphoreCreateInfo;
+    for ( size_t i = 0; i < m_avalableImageBufferCount; ++i ) {
+        m_renderFinishedSems[i] =
+            m_vkLogicalDevice.createSemaphore(semaphoreCreateInfo).value;
+    }
+    XDEBUG("Recreated {} Render Finished Semaphores.",
+           m_avalableImageBufferCount);
 }
 
 }  // namespace MMM::Graphic
