@@ -251,6 +251,14 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
         sharedLayout);
 
     if ( m_vkShaders.count(getShaderName("effect")) ) {
+        // 判断效果着色器是否与主着色器相同
+        // (如 TimelineCanvas 的 getShaderSources 会为所有模块返回主着色器)
+        // 若不同，说明是真正的全屏效果着色器，不需要顶点输入
+        auto mainSources   = getShaderSources("main");
+        auto effectSources = getShaderSources("effect");
+        bool effectIsFullscreen =
+            !effectSources.empty() && (effectSources != mainSources);
+
         m_blurRenderPipeline = std::make_unique<VKRenderPipeline>(
             logicalDevice,
             *m_vkShaders[getShaderName("effect")],
@@ -260,7 +268,10 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
             0,
             0,
             false,
-            false);  // Blur pass: additiveBlend=false, blendEnable=false
+            false,                               // Blur: blendEnable=false
+            effectIsFullscreen ? VK_NULL_HANDLE  // 全屏效果自建布局
+                               : sharedLayout,
+            !effectIsFullscreen);  // 全屏效果不需要顶点输入
 
         m_compositeRenderPipeline = std::make_unique<VKRenderPipeline>(
             logicalDevice,
@@ -271,7 +282,9 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
             0,
             0,
             true,
-            true);  // Composite pass: additive blend = true
+            true,  // Composite: additive blend
+            effectIsFullscreen ? VK_NULL_HANDLE : sharedLayout,
+            !effectIsFullscreen);  // 全屏效果不需要顶点输入
     }
 
     // 再重建

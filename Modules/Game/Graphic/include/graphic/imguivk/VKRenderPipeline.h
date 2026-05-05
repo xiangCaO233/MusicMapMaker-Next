@@ -29,7 +29,8 @@ public:
                      VKRenderPass& renderPass, VKSwapchain& swapchain,
                      bool is2DCanvas, int w = 0, int h = 0,
                      bool additiveBlend = false, bool blendEnable = true,
-                     vk::DescriptorSetLayout sharedLayout = VK_NULL_HANDLE);
+                     vk::DescriptorSetLayout sharedLayout   = VK_NULL_HANDLE,
+                     bool                    useVertexInput = true);
 
     // 禁用拷贝和移动
     VKRenderPipeline(VKRenderPipeline&&) = delete;

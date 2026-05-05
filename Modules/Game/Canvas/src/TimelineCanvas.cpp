@@ -2,16 +2,16 @@
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "ui/Icons.h"
-#include "graphic/imguivk/VKContext.h"
-#include <filesystem>
-#include <cmath>
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <filesystem>
 
 namespace MMM::Canvas
 {
@@ -56,7 +56,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 if ( dt > 0.0 && dt < 0.1 ) {
                     double      scrollSpeed  = 500.0;
                     double      snapshotTime = m_currentSnapshot->currentTime;
-                    const auto& segs         = m_currentSnapshot->scrollSegments;
+                    const auto& segs = m_currentSnapshot->scrollSegments;
                     if ( !segs.empty() ) {
                         auto it = std::upper_bound(
                             segs.begin(),
@@ -78,22 +78,25 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             // 应用顶点级 Y 偏移 (仅修改动态顶点: 标尺刻度、事件线等)
             uint32_t startVtx = m_currentSnapshot->staticVertexCount;
-            auto&    vertices  = m_currentSnapshot->vertices;
-            uint32_t endVtx   = m_currentSnapshot->dynamicVertexCount > 0
-                                    ? (startVtx + m_currentSnapshot->dynamicVertexCount)
-                                    : static_cast<uint32_t>(vertices.size());
+            auto&    vertices = m_currentSnapshot->vertices;
+            uint32_t endVtx =
+                m_currentSnapshot->dynamicVertexCount > 0
+                    ? (startVtx + m_currentSnapshot->dynamicVertexCount)
+                    : static_cast<uint32_t>(vertices.size());
 
             // 如果是同一个快照被复用，先撤销上一帧的偏移
             if ( m_lastOffsetSnapshot == m_currentSnapshot &&
                  std::abs(m_lastAppliedYOffset) > 0.0001f ) {
-                for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
+                for ( size_t i = startVtx; i < endVtx && i < vertices.size();
+                      ++i ) {
                     vertices[i].pos.y -= m_lastAppliedYOffset;
                 }
             }
 
             // 应用新偏移
             if ( std::abs(newYOffset) > 0.0001f ) {
-                for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
+                for ( size_t i = startVtx; i < endVtx && i < vertices.size();
+                      ++i ) {
                     vertices[i].pos.y += newYOffset;
                 }
             }
@@ -128,7 +131,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
 
             // 2. 扣除 slider 空间后剩下的空间绘制画布
-            size = ImGui::GetContentRegionAvail();
+            size   = ImGui::GetContentRegionAvail();
             size.x = std::floor(size.x);
             size.y = std::floor(size.y);
 
@@ -176,7 +179,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     float localMouseY = mousePos.y - canvasPos.y;
                     float mappedY     = el.y;
-                    bool  isNear      = std::abs(localMouseY - mappedY) < proximity;
+                    bool  isNear = std::abs(localMouseY - mappedY) < proximity;
 
                     if ( isNear && isFocused ) {
                         // BPM 齿轮 (左侧)
@@ -293,6 +296,9 @@ std::vector<std::string> TimelineCanvas::getShaderSources(
     if ( m_shaderSourceCache.count(shader_name) )
         return m_shaderSourceCache[shader_name];
 
+    // Timeline 仅使用主着色器，不支持效果着色器（无模糊/发光后处理）
+    if ( shader_name != "main" ) return {};
+
     auto canvas_config =
         Config::SkinManager::instance().getCanvasConfig("Basic2DCanvas");
     auto it = canvas_config.canvas_shader_modules.find("main");
@@ -361,4 +367,4 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     }
 }
 
-} // namespace MMM::Canvas
+}  // namespace MMM::Canvas

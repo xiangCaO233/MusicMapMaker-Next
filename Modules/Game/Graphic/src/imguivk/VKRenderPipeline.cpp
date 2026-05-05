@@ -18,12 +18,10 @@ namespace MMM::Graphic
  * @param w 视口宽度
  * @param h 视口高度
  */
-VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
-                                   VKRenderPass& renderPass,
-                                   VKSwapchain& swapchain, bool is2DCanvas,
-                                   int w, int h, bool additiveBlend,
-                                   bool                    blendEnable,
-                                   vk::DescriptorSetLayout sharedLayout)
+VKRenderPipeline::VKRenderPipeline(
+    vk::Device& logicalDevice, VKShader& shader, VKRenderPass& renderPass,
+    VKSwapchain& swapchain, bool is2DCanvas, int w, int h, bool additiveBlend,
+    bool blendEnable, vk::DescriptorSetLayout sharedLayout, bool useVertexInput)
     : m_logicalDevice(logicalDevice)
 {
     if ( sharedLayout != VK_NULL_HANDLE ) {
@@ -70,10 +68,13 @@ VKRenderPipeline::VKRenderPipeline(vk::Device& logicalDevice, VKShader& shader,
 
     // 4.1:顶点输入状态创建信息
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
-    // 设置顶点输入属性描述信息
-    pipelineVertexInputStateCreateInfo
-        .setVertexBindingDescriptions(Graphic::Vertex::VKVERTEX_BIND_DESC)
-        .setVertexAttributeDescriptions(Graphic::Vertex::VKVERTEX_ATTR_DESC);
+    // 仅在需要顶点输入时绑定属性描述（效果着色器自行生成顶点）
+    if ( useVertexInput ) {
+        pipelineVertexInputStateCreateInfo
+            .setVertexBindingDescriptions(Graphic::Vertex::VKVERTEX_BIND_DESC)
+            .setVertexAttributeDescriptions(
+                Graphic::Vertex::VKVERTEX_ATTR_DESC);
+    }
     graphicsPipelineCreateInfo.setPVertexInputState(
         &pipelineVertexInputStateCreateInfo);
 
