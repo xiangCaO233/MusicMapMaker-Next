@@ -9,6 +9,7 @@ namespace MMM::UI
 
 void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                                          float      menuBarHeight,
+                                         float      statusBarHeight,
                                          float sidebarWidth, float toolbarWidth)
 {
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
@@ -18,7 +19,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                                    viewport->WorkPos.y + menuBarHeight));
     ImGui::SetNextWindowSize(
         ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
-               viewport->WorkSize.y - menuBarHeight));
+               viewport->WorkSize.y - menuBarHeight - statusBarHeight));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags dock_flags =
@@ -56,7 +57,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGui::DockBuilderSetNodeSize(
             dockspace_id,
             ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
-                   viewport->WorkSize.y - menuBarHeight));
+                   viewport->WorkSize.y - menuBarHeight - statusBarHeight));
 
         ImGuiID dock_id_left;
         ImGuiID dock_id_right;

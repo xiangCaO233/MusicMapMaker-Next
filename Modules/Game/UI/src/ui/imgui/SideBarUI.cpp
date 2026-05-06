@@ -48,14 +48,15 @@ void SideBarUI::update(UIManager* sourceManager)
     ImGuiStyle& style         = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
+    float statusBarHeight = menuBarHeight;
 
     // ================== C. 左侧侧边栏窗口 ==================
     // 位置：X=0, Y=菜单高度 (使用 WorkPos 确保在多视口/缩放环境下坐标正确)
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + menuBarHeight));
-    // 尺寸：宽=sidebarWidth, 高=总高 - 菜单高度
+    // 尺寸：宽=sidebarWidth, 高=总高 - 菜单高度 - 状态栏高度
     ImGui::SetNextWindowSize(
-        ImVec2(sidebarWidth, viewport->WorkSize.y - menuBarHeight));
+        ImVec2(sidebarWidth, viewport->WorkSize.y - menuBarHeight - statusBarHeight));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags sidebar_flags =

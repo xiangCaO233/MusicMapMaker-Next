@@ -34,6 +34,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     ImGuiStyle& style             = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
+    float statusBarHeight = menuBarHeight;
 
     // --- 1. 顶部菜单栏 ---
     renderMenuBar(
@@ -41,15 +42,18 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 2. 停靠空间 ---
     renderDockingSpace(
-        sourceManager, menuBarHeight, sidebarWidth, toolbarWidth);
+        sourceManager, menuBarHeight, statusBarHeight, sidebarWidth, toolbarWidth);
 
-    // --- 3. 右侧工具栏 (保持原样调用的简易块) ---
+    // --- 3. 底部状态栏 ---
+    renderStatusBar(sourceManager, statusBarHeight, dpiScale);
+
+    // --- 4. 右侧工具栏 (保持原样调用的简易块) ---
     {
         ImGui::SetNextWindowPos(
             ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth,
                    viewport->WorkPos.y + menuBarHeight));
         ImGui::SetNextWindowSize(
-            ImVec2(toolbarWidth, viewport->WorkSize.y - menuBarHeight));
+            ImVec2(toolbarWidth, viewport->WorkSize.y - menuBarHeight - statusBarHeight));
         ImGui::SetNextWindowViewport(viewport->ID);
         m_toolbarView.update(sourceManager);
     }

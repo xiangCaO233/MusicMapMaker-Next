@@ -45,7 +45,10 @@ public:
     void renderMenuBar(UIManager* sourceManager, float menuBarHeight,
                        float sidebarWidth, float toolbarWidth, float dpiScale);
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
-                            float sidebarWidth, float toolbarWidth);
+                            float statusBarHeight, float sidebarWidth,
+                            float toolbarWidth);
+    void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
+                         float dpiScale);
 
     ///@brief 是否需要重载
     bool m_needReload{ true };
