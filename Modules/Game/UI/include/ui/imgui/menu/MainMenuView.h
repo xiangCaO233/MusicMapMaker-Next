@@ -36,6 +36,7 @@ private:
     void renderAboutPopup();
     void renderUpdatePopup();
     void renderUpdateCheckingPopup();
+    void renderUpdateSuccessPopup();
     void startUpdateCheck();
 
     bool m_openFileMenuNextFrame  = false;
@@ -45,9 +46,10 @@ private:
     bool m_closeEditMenuNextFrame = false;
     bool m_closeHelpMenuNextFrame = false;
 
-    bool m_showAboutPopup    = false;
-    bool m_showUpdatePopup   = false;
-    bool m_showCheckingPopup = false;
+    bool m_showAboutPopup         = false;
+    bool m_showUpdatePopup        = false;
+    bool m_showCheckingPopup      = false;
+    bool m_showUpdateSuccessPopup = false;
 
     bool m_hasCheckedOnStartup = false;  ///< 是否已完成启动时的自动更新检查
 

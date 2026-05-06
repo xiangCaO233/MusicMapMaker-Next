@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -181,6 +182,17 @@ int main(int argc, char* argv[])
                                  std::filesystem::perm_options::add,
                                  ec);
 #endif
+
+    // 2.5. 写入更新成功标记文件
+    {
+        std::filesystem::path markerPath =
+            std::filesystem::path(targetExe).parent_path() /
+            ".mm_update_success";
+        std::ofstream marker(markerPath);
+        if ( marker.is_open() ) {
+            marker << targetExe;
+        }
+    }
 
     // 3. 启动新版本
     if ( !launchTarget(targetExe) ) {

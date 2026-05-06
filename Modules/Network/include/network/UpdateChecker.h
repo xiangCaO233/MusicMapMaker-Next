@@ -69,7 +69,10 @@ public:
     /// @param downloadedFilePath 已下载的更新文件路径
     static void applyUpdateAndRestart(const std::string& downloadedFilePath);
 
-private:
+    /// @brief 检查启动时的更新成功标记（更新后首次启动）
+    /// @return 如果存在标记则返回 true，并将标记删除；否则返回 false
+    static bool checkStartupUpdateMarker();
+
     /// @brief 解析语义化版本字符串（如 "v0.2.0"）
     static bool parseVersion(const std::string& verStr, int& major, int& minor,
                              int& patch);
@@ -77,6 +80,7 @@ private:
     /// @brief 比较两个版本号（返回 true 表示 remote > local）
     static bool isNewer(const std::string& remote, const std::string& local);
 
+private:
     UpdateInfo m_info;
 };
 

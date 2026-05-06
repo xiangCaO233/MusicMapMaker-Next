@@ -42,6 +42,8 @@ return {
 	["ui.help.downloading"] = "Downloading...",
 	["ui.help.download_complete"] = "Download Complete!",
 	["ui.help.restart_to_update"] = "Restart to Update",
+	["ui.help.update_success"] = "Update Successful",
+	["ui.help.update_success_msg"] = "Update installed successfully!",
 	["ui.help.file_size"] = "File Size",
 	["ui.help.cancel"] = "Later",
 	["ui.help.ok"] = "OK",

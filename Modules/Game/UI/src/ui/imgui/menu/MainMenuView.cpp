@@ -618,13 +618,60 @@ void MainMenuView::renderUpdatePopup()
     }
 }
 
+void MainMenuView::renderUpdateSuccessPopup()
+{
+    if ( m_showUpdateSuccessPopup ) {
+        ImGui::OpenPopup(TR("ui.help.update_success"));
+        m_showUpdateSuccessPopup = false;
+    }
+
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if ( ImGui::BeginPopupModal(
+             TR("ui.help.update_success"),
+             nullptr,
+             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+
+        ImGui::Spacing();
+
+        ImVec4 greenColor(0.3f, 1.0f, 0.3f, 1.0f);
+        ImGui::TextColored(
+            greenColor, "%s", TR("ui.help.update_success_msg").data());
+
+        ImGui::Spacing();
+
+        ImGui::TextUnformatted(TR("ui.help.current_version").data());
+        ImGui::SameLine();
+        ImGui::TextColored(greenColor, MMM_VERSION_STRING);
+
+        ImGui::Spacing();
+        ImGui::Spacing();
+
+        float buttonWidth = 100 * dpiScale;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) * 0.5f);
+        if ( ImGui::Button(TR("ui.help.ok").data(), ImVec2(buttonWidth, 0)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
 void MainMenuView::update(UIManager* sourceManager)
 {
     // 启动时自动检查更新
     if ( !m_hasCheckedOnStartup ) {
         m_hasCheckedOnStartup = true;
-        m_showCheckingPopup   = true;
-        m_updateChecker->checkAsync();
+
+        // 先检查是否刚完成更新
+        if ( MMM::Network::UpdateChecker::checkStartupUpdateMarker() ) {
+            m_showUpdateSuccessPopup = true;
+        } else {
+            m_showCheckingPopup = true;
+            m_updateChecker->checkAsync();
+        }
     }
 
     renderMenus(sourceManager);
@@ -800,6 +847,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderAboutPopup();
     renderUpdateCheckingPopup();
     renderUpdatePopup();
+    renderUpdateSuccessPopup();
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding

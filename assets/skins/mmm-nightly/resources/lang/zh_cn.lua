@@ -42,6 +42,8 @@ return {
 	["ui.help.downloading"] = "正在下载...",
 	["ui.help.download_complete"] = "下载完成！",
 	["ui.help.restart_to_update"] = "重启更新",
+	["ui.help.update_success"] = "更新成功",
+	["ui.help.update_success_msg"] = "更新已成功安装！",
 	["ui.help.file_size"] = "文件大小",
 	["ui.help.cancel"] = "稍后再说",
 	["ui.help.ok"] = "确定",

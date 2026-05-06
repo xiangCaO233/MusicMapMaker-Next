@@ -192,6 +192,20 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
     std::exit(0);
 }
 
+bool UpdateChecker::checkStartupUpdateMarker()
+{
+    std::string exePath = currentExecutablePath();
+    if ( exePath.empty() ) return false;
+
+    std::filesystem::path markerPath =
+        std::filesystem::path(exePath).parent_path() / ".mm_update_success";
+
+    if ( !std::filesystem::exists(markerPath) ) return false;
+
+    std::filesystem::remove(markerPath);
+    return true;
+}
+
 void UpdateChecker::checkAsync()
 {
     m_info.status         = UpdateStatus::kChecking;
