@@ -126,7 +126,11 @@ int main(int argc, char* argv[])
     long        parentPid      = std::atol(argv[3]);
 
     // 1. 等待父进程退出
-    waitForParent(static_cast<decltype(::getpid())>(parentPid));
+#if defined(_WIN32)
+    waitForParent(static_cast<DWORD>(parentPid));
+#else
+    waitForParent(static_cast<pid_t>(parentPid));
+#endif
 
     // 再额外等半秒确保文件句柄释放
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
