@@ -175,11 +175,17 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     for ( const auto& snJson : nJson["sub_notes"] ) {
                         std::string stype = snJson.value("type", "note");
                         if ( stype == "hold" ) {
+                            double duration = snJson.value("duration", 0.0);
+                            if ( duration < 1e-4 ) {
+                                XWARN("Skipping 0-duration hold subnote in Polyline at timestamp {}",
+                                      snJson.value("timestamp", 0.0));
+                                continue;
+                            }
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
                             h.m_timestamp = snJson.value("timestamp", 0.0);
                             h.m_track     = snJson.value("track", 0);
-                            h.m_duration  = snJson.value("duration", 0.0);
+                            h.m_duration  = duration;
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
                             beatMap.m_allNotes.push_back(h);
