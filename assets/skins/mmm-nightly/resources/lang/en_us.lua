@@ -13,6 +13,9 @@ return {
 	["ui.file.save_as"] = "Save As...",
 	["ui.file.pack"] = "Pack",
 	["ui.file.exit"] = "Exit",
+	["ui.exit.confirm_title"] = "Confirm Exit",
+	["ui.exit.confirm_msg_fmt"] = "Beatmap '%s' has unsaved changes.\nDo you want to save before exiting?",
+	["ui.exit.dont_save"] = "Don't Save",
 
 	["ui.edit"] = "&Edit",
 	["ui.edit.undo"] = "Undo",

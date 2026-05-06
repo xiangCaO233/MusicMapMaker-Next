@@ -119,6 +119,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         }
 
         m_ctx->currentBeatmap->saveToFile(savePath);
+        m_ctx->actionStack.markSaved();
     }
 }
 
@@ -127,6 +128,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
     if ( m_ctx->currentBeatmap ) {
         SessionUtils::syncBeatmap(*m_ctx);
         m_ctx->currentBeatmap->saveToFile(cmd.path);
+        m_ctx->actionStack.markSaved();
     }
 }
 

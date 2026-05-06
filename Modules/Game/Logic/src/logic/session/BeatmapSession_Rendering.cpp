@@ -78,6 +78,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
             snapshot->backgroundPath = bgPath.string();
             snapshot->bgSize         = m_ctx->bgSize;
+            snapshot->beatmapName    = m_ctx->currentBeatmap->m_baseMapMetadata.name;
+            snapshot->isDirty        = m_ctx->actionStack.isDirty();
         }
 
         // 计算可见时间范围 (基于平滑视觉时间)

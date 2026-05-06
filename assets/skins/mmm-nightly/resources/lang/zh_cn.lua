@@ -12,8 +12,10 @@ return {
 	["ui.file.save"] = "保存",
 	["ui.file.save_as"] = "另存为...",
 	["ui.file.pack"] = "打包",
-
 	["ui.file.exit"] = "退出",
+	["ui.exit.confirm_title"] = "确认退出",
+	["ui.exit.confirm_msg_fmt"] = "谱面 '%s' 尚有未保存的修改。\n您想在退出前保存吗？",
+	["ui.exit.dont_save"] = "不保存",
 	["ui.edit"] = "编辑(&E)",
 	["ui.edit.undo"] = "撤销",
 	["ui.edit.redo"] = "重做",

@@ -39,6 +39,17 @@ void EditorActionStack::clear()
 {
     m_undoStack.clear();
     m_redoStack.clear();
+    m_saveIndex = 0;
+}
+
+bool EditorActionStack::isDirty() const
+{
+    return m_undoStack.size() != m_saveIndex;
+}
+
+void EditorActionStack::markSaved()
+{
+    m_saveIndex = m_undoStack.size();
 }
 
 }  // namespace MMM::Logic

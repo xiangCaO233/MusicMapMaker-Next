@@ -464,6 +464,15 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     }
 }
 
+bool EditorEngine::hasUnsavedChanges() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( m_activeSession ) {
+        return m_activeSession->getContext().actionStack.isDirty();
+    }
+    return false;
+}
+
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {

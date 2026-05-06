@@ -165,7 +165,9 @@ struct RenderSnapshot {
     std::unordered_set<entt::entity> erasingEntities;
 
     // 是否已加载谱面
-    bool hasBeatmap{ false };
+    bool        hasBeatmap{ false };
+    std::string beatmapName;
+    bool        isDirty{ false };
 
     /// @brief 静态布局绘制指令数量 (轨道底板 + 轨道边框 + 判定区)
     /// 这些指令对应的几何体不随时间变化，亚帧补偿不应偏移它们
@@ -221,6 +223,8 @@ struct RenderSnapshot {
         brush.isActive         = false;
         erasingEntities.clear();
         hasBeatmap        = false;
+        beatmapName.clear();
+        isDirty           = false;
         staticCmdCount    = 0;
         staticVertexCount = 0;
         dynamicVertexCount = 0;
