@@ -506,16 +506,26 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     noteArr.push_back(audioNode);
 
-    auto process = [&](auto& deque) {
-        for ( const auto& n : deque ) {
-            if ( !isSubNote(n) ) noteArr.push_back(serializeToMalody(n));
-        }
-    };
-    process(beatMap.m_noteData.notes);
-    process(beatMap.m_noteData.holds);
-    process(beatMap.m_noteData.flicks);
+    std::vector<const Note*> sortedNotes;
+    for ( const auto& n : beatMap.m_noteData.notes )
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
+    for ( const auto& n : beatMap.m_noteData.holds )
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
+    for ( const auto& n : beatMap.m_noteData.flicks )
+        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
     for ( const auto& poly : beatMap.m_noteData.polylines )
-        noteArr.push_back(serializeToMalody(poly));
+        if ( !isSubNote(poly) ) sortedNotes.push_back(&poly);
+
+    std::sort(sortedNotes.begin(), sortedNotes.end(),
+              [](const Note* a, const Note* b) {
+                  if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-6 )
+                      return a->m_timestamp < b->m_timestamp;
+                  return a->m_track < b->m_track;
+              });
+
+    for ( const auto* n : sortedNotes ) {
+        noteArr.push_back(serializeToMalody(*n));
+    }
 
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) return false;
