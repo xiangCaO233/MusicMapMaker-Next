@@ -23,8 +23,8 @@
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
-#    include <shellapi.h>
 #    include <windows.h>
+#    include <shellapi.h>
 #else
 #    include <signal.h>
 #    include <sys/types.h>
@@ -68,7 +68,8 @@ void waitForParent(DWORD pid)
 /// @brief 启动目标可执行文件
 bool launchTarget(const std::string& targetPath)
 {
-    std::string dir = std::filesystem::path(targetPath).parent_path().string();
+    std::string dir =
+        std::filesystem::path(targetPath).parent_path().generic_string();
     return reinterpret_cast<INT_PTR>(ShellExecuteA(nullptr,
                                                    "open",
                                                    targetPath.c_str(),

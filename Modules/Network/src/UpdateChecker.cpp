@@ -52,7 +52,7 @@ bool UpdateChecker::parseVersion(const std::string& verStr, int& major,
     // 尝试匹配 "v<major>.<minor>" 或 "v<major>.<minor>.<patch>" 格式
     // 允许前缀（如 "gamma"）
     std::regex  versionRegex(R"(v(\d+)\.(\d+)(?:\.(\d+))?)",
-                             std::regex::ECMAScript);
+                            std::regex::ECMAScript);
     std::smatch match;
     if ( std::regex_search(verStr, match, versionRegex) && match.size() >= 3 ) {
         major = std::stoi(match[1].str());
@@ -152,9 +152,9 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
           pid);
 
 #if defined(_WIN32)
-    std::string  cmdLine = "\"" + updater + "\" \"" + downloadedFilePath +
-                           "\" \"" + exePath + "\" " + std::to_string(pid);
-    STARTUPINFOA si{ sizeof(si) };
+    std::string cmdLine = "\"" + updater + "\" \"" + downloadedFilePath +
+                          "\" \"" + exePath + "\" " + std::to_string(pid);
+    STARTUPINFOA        si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessA(nullptr,
                         cmdLine.data(),
@@ -327,7 +327,7 @@ void UpdateChecker::downloadAsync()
         std::filesystem::path tempPath =
             std::filesystem::temp_directory_path() / "MusicMapMaker_update";
 
-        FILE* file = fopen(tempPath.c_str(), "wb");
+        FILE* file = fopen(tempPath.generic_string().c_str(), "wb");
         if ( !file ) {
             m_info.status       = UpdateStatus::kError;
             m_info.errorMessage = "Failed to create temp file";
