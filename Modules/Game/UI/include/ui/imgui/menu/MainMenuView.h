@@ -49,6 +49,8 @@ private:
     bool m_showUpdatePopup   = false;
     bool m_showCheckingPopup = false;
 
+    bool m_hasCheckedOnStartup = false;  ///< 是否已完成启动时的自动更新检查
+
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;
 };
 

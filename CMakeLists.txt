@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.31)
 
-project(MusicMapMaker-Next)
+project(MusicMapMaker-Next VERSION 0.2.0 LANGUAGES CXX)
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT

@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmmversion.h"
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -329,7 +330,7 @@ void MainMenuView::renderAboutPopup()
         // 版本号
         ImGui::TextUnformatted(TR("ui.help.current_version").data());
         ImGui::SameLine();
-        ImGui::TextColored(dimColor, APP_VERSION);
+        ImGui::TextColored(dimColor, MMM_VERSION_STRING);
 
         // 构建配置
         ImGui::TextUnformatted(TR("ui.help.build_type").data());
@@ -343,7 +344,7 @@ void MainMenuView::renderAboutPopup()
         // 运行平台
         ImGui::TextUnformatted(TR("ui.help.platform").data());
         ImGui::SameLine();
-        ImGui::TextColored(dimColor, APP_PLATFORM);
+        ImGui::TextColored(dimColor, MMM_PLATFORM);
 
         ImGui::Spacing();
         ImGui::Spacing();
@@ -449,79 +450,168 @@ void MainMenuView::renderUpdateCheckingPopup()
 
 void MainMenuView::renderUpdatePopup()
 {
+    auto info = m_updateChecker->getInfo();
+
     if ( m_showUpdatePopup ) {
         ImGui::OpenPopup(TR("ui.help.update_found"));
         m_showUpdatePopup = false;
+    } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+        ImGui::OpenPopup(TR("ui.help.update_found"));
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
+    bool popupOpen = true;
+    if ( info.status == MMM::Network::UpdateStatus::kDownloading ||
+         info.status == MMM::Network::UpdateStatus::kDownloaded ) {
+        popupOpen = true;  // 下载中/已完成不允许关闭
+    }
+
     if ( ImGui::BeginPopupModal(
              TR("ui.help.update_found"),
-             nullptr,
+             info.status == MMM::Network::UpdateStatus::kDownloading ||
+                     info.status == MMM::Network::UpdateStatus::kDownloaded
+                 ? &popupOpen
+                 : nullptr,
              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
-        auto  info     = m_updateChecker->getInfo();
+        info           = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
         ImGui::Spacing();
 
-        // 版本比较
-        ImGui::TextUnformatted(TR("ui.help.current_version").data());
-        ImGui::SameLine();
-        ImGui::TextUnformatted(info.currentVersion.c_str());
-
-        ImVec4 newColor(0.3f, 1.0f, 0.3f, 1.0f);
-        ImGui::TextUnformatted(TR("ui.help.latest_version").data());
-        ImGui::SameLine();
-        ImGui::TextColored(newColor, "%s", info.latestVersion.c_str());
-
-        if ( !info.releaseDate.empty() ) {
-            ImGui::TextUnformatted(TR("ui.help.release_date").data());
+        if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+            // 版本比较
+            ImGui::TextUnformatted(TR("ui.help.current_version").data());
             ImGui::SameLine();
-            ImGui::TextUnformatted(info.releaseDate.c_str());
-        }
+            ImGui::TextUnformatted(info.currentVersion.c_str());
 
-        // 更新内容
-        if ( !info.changelog.empty() ) {
+            ImVec4 newColor(0.3f, 1.0f, 0.3f, 1.0f);
+            ImGui::TextUnformatted(TR("ui.help.latest_version").data());
+            ImGui::SameLine();
+            ImGui::TextColored(newColor, "%s", info.latestVersion.c_str());
+
+            if ( !info.releaseDate.empty() ) {
+                ImGui::TextUnformatted(TR("ui.help.release_date").data());
+                ImGui::SameLine();
+                ImGui::TextUnformatted(info.releaseDate.c_str());
+            }
+
+            if ( info.downloadSize > 0 ) {
+                ImGui::TextUnformatted(TR("ui.help.file_size").data());
+                ImGui::SameLine();
+                char sizeBuf[64];
+                if ( info.downloadSize >= 1024 * 1024 )
+                    snprintf(sizeBuf,
+                             sizeof(sizeBuf),
+                             "%.1f MB",
+                             info.downloadSize / (1024.0 * 1024.0));
+                else if ( info.downloadSize >= 1024 )
+                    snprintf(sizeBuf,
+                             sizeof(sizeBuf),
+                             "%.0f KB",
+                             info.downloadSize / 1024.0);
+                else
+                    snprintf(sizeBuf,
+                             sizeof(sizeBuf),
+                             "%lld B",
+                             (long long)info.downloadSize);
+                ImGui::TextUnformatted(sizeBuf);
+            }
+
+            // 更新内容
+            if ( !info.changelog.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextUnformatted(TR("ui.help.changelog").data());
+                ImGui::Spacing();
+
+                ImVec2 regionAvail = ImGui::GetContentRegionAvail();
+                float  textHeight  = std::min(150.0f * dpiScale, regionAvail.y);
+                ImGui::BeginChild(
+                    "ChangelogScroll",
+                    ImVec2(ImGui::GetContentRegionAvail().x, textHeight),
+                    ImGuiChildFlags_Borders);
+                ImGui::TextWrapped("%s", info.changelog.c_str());
+                ImGui::EndChild();
+            }
+
             ImGui::Spacing();
-            ImGui::TextUnformatted(TR("ui.help.changelog").data());
             ImGui::Spacing();
 
-            ImVec2 regionAvail = ImGui::GetContentRegionAvail();
-            float  textHeight  = std::min(150.0f * dpiScale, regionAvail.y);
-            ImGui::BeginChild(
-                "ChangelogScroll",
-                ImVec2(ImGui::GetContentRegionAvail().x, textHeight),
-                ImGuiChildFlags_Borders);
-            ImGui::TextWrapped("%s", info.changelog.c_str());
-            ImGui::EndChild();
-        }
+            float buttonWidth  = 120 * dpiScale;
+            float totalButtons = info.downloadUrl.empty() ? 1.0f : 2.0f;
+            float offsetX =
+                (ImGui::GetWindowWidth() -
+                 (totalButtons * buttonWidth +
+                  (totalButtons - 1) * ImGui::GetStyle().ItemSpacing.x)) *
+                0.5f;
+            ImGui::SetCursorPosX(offsetX);
 
-        ImGui::Spacing();
-        ImGui::Spacing();
+            if ( !info.downloadUrl.empty() ) {
+                if ( ImGui::Button(TR("ui.help.download_and_install").data(),
+                                   ImVec2(buttonWidth, 0)) ) {
+                    m_updateChecker->downloadAsync();
+                }
+                ImGui::SameLine();
+            }
 
-        float buttonWidth  = 120 * dpiScale;
-        float totalButtons = info.downloadUrl.empty() ? 1 : 2;
-        float offsetX =
-            (ImGui::GetWindowWidth() -
-             (totalButtons * buttonWidth +
-              (totalButtons - 1) * ImGui::GetStyle().ItemSpacing.x)) *
-            0.5f;
-        ImGui::SetCursorPosX(offsetX);
-
-        if ( !info.downloadUrl.empty() ) {
-            if ( ImGui::Button(TR("ui.help.download").data(),
+            if ( ImGui::Button(TR("ui.help.cancel").data(),
                                ImVec2(buttonWidth, 0)) ) {
-                MMM::Network::UpdateChecker::openUrlInBrowser(info.downloadUrl);
                 ImGui::CloseCurrentPopup();
             }
-            ImGui::SameLine();
-        }
+        } else if ( info.status == MMM::Network::UpdateStatus::kDownloading ) {
+            ImGui::TextUnformatted(TR("ui.help.downloading").data());
+            ImGui::Spacing();
 
-        if ( ImGui::Button(TR("ui.help.cancel").data(),
-                           ImVec2(buttonWidth, 0)) ) {
-            ImGui::CloseCurrentPopup();
+            float progress = static_cast<float>(info.downloadProgress);
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            ImGui::ProgressBar(progress, ImVec2(0.0f, 20.0f * dpiScale));
+
+            ImGui::Spacing();
+
+            char progressText[128];
+            if ( info.downloadSize > 0 ) {
+                snprintf(progressText,
+                         sizeof(progressText),
+                         "%lld / %lld MB",
+                         (long long)(info.downloadedBytes / (1024 * 1024)),
+                         (long long)(info.downloadSize / (1024 * 1024)));
+            } else {
+                snprintf(progressText,
+                         sizeof(progressText),
+                         "%.0f%%",
+                         info.downloadProgress * 100.0);
+            }
+            ImGui::TextUnformatted(progressText);
+        } else if ( info.status == MMM::Network::UpdateStatus::kDownloaded ) {
+            ImGui::TextUnformatted(TR("ui.help.download_complete").data());
+            ImGui::Spacing();
+            ImGui::Spacing();
+
+            float buttonWidth = 120 * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) *
+                                 0.5f);
+
+            if ( ImGui::Button(TR("ui.help.restart_to_update").data(),
+                               ImVec2(buttonWidth, 0)) ) {
+                MMM::Network::UpdateChecker::applyUpdateAndRestart(
+                    info.downloadedFilePath);
+            }
+        } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
+            ImVec4 errColor(1.0f, 0.3f, 0.3f, 1.0f);
+            ImGui::TextColored(
+                errColor, "%s", TR("ui.help.update_error").data());
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", info.errorMessage.c_str());
+
+            ImGui::Spacing();
+            float buttonWidth = 100 * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) *
+                                 0.5f);
+            if ( ImGui::Button(TR("ui.help.ok").data(),
+                               ImVec2(buttonWidth, 0)) ) {
+                ImGui::CloseCurrentPopup();
+            }
         }
 
         ImGui::EndPopup();
@@ -530,6 +620,13 @@ void MainMenuView::renderUpdatePopup()
 
 void MainMenuView::update(UIManager* sourceManager)
 {
+    // 启动时自动检查更新
+    if ( !m_hasCheckedOnStartup ) {
+        m_hasCheckedOnStartup = true;
+        m_showCheckingPopup   = true;
+        m_updateChecker->checkAsync();
+    }
+
     renderMenus(sourceManager);
     renderInfoText();
 }
