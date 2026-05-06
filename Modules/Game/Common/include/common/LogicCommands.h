@@ -97,8 +97,11 @@ struct CmdSetMousePosition {
     std::string cameraId;
     float       mouseX;
     float       mouseY;
+    float       viewportWidth{ 0.0f };   ///< 视口宽度 (用于边缘滚动计算)
+    float       viewportHeight{ 0.0f };  ///< 视口高度 (用于边缘滚动计算)
     bool        isHovering;
     bool        isDragging{ false };
+    double      hoverTime{ -1.0 };  ///< 可选：直接指定悬停时间 (如果 >= 0)
 };
 
 /**

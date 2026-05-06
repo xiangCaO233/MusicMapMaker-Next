@@ -121,12 +121,14 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     bool   isHovered     = ImGui::IsWindowHovered();
     bool   isDragging    = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetMousePosition{ m_cameraId,
-                                                             localMousePos.x,
-                                                             localMousePos.y,
-                                                             isHovered,
-                                                             isDragging }));
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSetMousePosition{
+        .cameraId       = m_cameraId,
+        .mouseX         = localMousePos.x,
+        .mouseY         = localMousePos.y,
+        .viewportWidth  = ImGui::GetWindowWidth(),
+        .viewportHeight = ImGui::GetWindowHeight(),
+        .isHovering     = isHovered,
+        .isDragging     = isDragging }));
 
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&

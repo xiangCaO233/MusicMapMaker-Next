@@ -143,8 +143,10 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
-    int32_t trackCount{ 4 };  ///< 谱面轨道数量
-    float   renderScaleY{ 1.0f };  ///< 垂直缩放倍率 (用于亚帧补偿计算)
+    int32_t trackCount{ 4 };        ///< 谱面轨道数量
+    float   renderScaleY{ 1.0f };   ///< 垂直缩放倍率 (用于亚帧补偿计算)
+    double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
+    double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
 
     // 笔刷预览状态
     struct BrushSnapshot {
@@ -222,6 +224,8 @@ struct RenderSnapshot {
         staticCmdCount    = 0;
         staticVertexCount = 0;
         dynamicVertexCount = 0;
+        visibleTimeStart   = 0.0;
+        visibleTimeEnd     = 0.0;
     }
 };
 
@@ -257,6 +261,12 @@ public:
      * 最新的快照指针。如果队列为空，返回上一帧使用的缓存快照以防画面闪烁。
      */
     RenderSnapshot* pullLatestSnapshot();
+
+    /**
+     * @brief [UI 线程] 获取当前正在展示的快照指针（非消耗性，仅供读取状态）
+     * @return 当前读指针指向的快照
+     */
+    RenderSnapshot* getReadingSnapshot() const { return m_reading; }
 
     /**
      * @brief [逻辑线程] 重置缓冲区，清空所有待读快照

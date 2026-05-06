@@ -80,6 +80,23 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             snapshot->bgSize         = m_ctx->bgSize;
         }
 
+        // 计算可见时间范围 (基于平滑视觉时间)
+        auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
+        if ( cache ) {
+            float  judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
+            double currentAbsY   = cache->getAbsY(m_ctx->visualTime);
+            double scale         = snapshot->renderScaleY;
+            if ( cameraId == "Basic2DCanvas" ) {
+                scale = config.visual.timelineZoom;
+            }
+            if ( std::abs(scale) < 1e-6 ) scale = 1.0;
+
+            snapshot->visibleTimeStart =
+                cache->getTime(currentAbsY - (camera.viewportHeight - judgmentLineY) / scale);
+            snapshot->visibleTimeEnd =
+                cache->getTime(currentAbsY + judgmentLineY / scale);
+        }
+
         // --- 注入交互状态 ---
         snapshot->currentTool = m_ctx->currentTool;
         snapshot->isHoveringCanvas =
@@ -88,8 +105,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
         snapshot->isPreviewDragging =
-            m_ctx->isDragging && (m_ctx->dragCameraId == "Preview" ||
-                                  m_ctx->mouseCameraId == "Preview");
+            m_ctx->isDragging && (m_ctx->dragCameraId == "Preview" || m_ctx->mouseCameraId == "Preview" ||
+                                  m_ctx->dragCameraId == "AudioWaveform" || m_ctx->dragCameraId == "AudioSpectrum");
         snapshot->previewHoverTime = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---

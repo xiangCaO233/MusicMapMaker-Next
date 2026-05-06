@@ -179,12 +179,14 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetMousePosition{ m_cameraId,
-                                                             localMousePos.x,
-                                                             localMousePos.y,
-                                                             isHovered,
-                                                             isDragging }));
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSetMousePosition{
+        .cameraId       = m_cameraId,
+        .mouseX         = localMousePos.x,
+        .mouseY         = localMousePos.y,
+        .viewportWidth  = targetWidth,
+        .viewportHeight = targetHeight,
+        .isHovering     = isHovered,
+        .isDragging     = isDragging }));
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&

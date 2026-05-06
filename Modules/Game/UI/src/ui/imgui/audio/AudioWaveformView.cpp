@@ -5,6 +5,10 @@
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
+#include "ui/UIManager.h"
+#include "logic/EditorEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <ice/config/config.hpp>
@@ -62,8 +66,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
     ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioWaveformViewGlobal";
-    LayoutContext layoutContext(m_layoutCtx, windowTitle, true,
-                                ImGuiWindowFlags_None, &m_isOpen);
+    LayoutContext layoutContext(
+        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
@@ -85,6 +89,21 @@ void AudioWaveformView::update(UIManager* sourceManager)
     double currentTime = audioManager.getCurrentTime();
     double totalTime   = audioManager.getTotalTime();
     double speed       = audioManager.getPlaybackSpeed();
+
+    // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    auto snapshot =
+        Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+    if ( snapshot ) {
+        currentTime = snapshot->currentTime;
+        // 亚帧平滑补偿 (同步视觉偏移)
+        if ( !snapshot->isPreviewDragging && snapshot->isPlaying && snapshot->snapshotSysTime > 0.0 ) {
+            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            double dt = now - snapshot->snapshotSysTime;
+            if ( dt > 0.0 && dt < 0.1 ) {
+                currentTime += dt * snapshot->playbackSpeed;
+            }
+        }
+    }
 
     ImGui::SetNextItemWidth(100);
     ImGui::SliderFloat(
@@ -108,13 +127,19 @@ void AudioWaveformView::update(UIManager* sourceManager)
                              const double* minEnv,
                              const double* maxEnv,
                              const char*   label) {
+        
+        double viewStart = currentTime - m_zoom;
+        double viewEnd   = currentTime + m_zoom;
+
+        // 使用静态变量存储上一帧的交互状态，以便在本帧 BeginPlot 中使用
+        static bool s_lastActive[2] = { false, false };
+        int chanIdx = (std::string(id) == "##WaveL") ? 0 : 1;
+
         if ( ImPlot::BeginPlot(
                  id,
                  ImVec2(-1, channelH),
-                 ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect) ) {
-            double viewStart = currentTime - m_zoom;
-            double viewEnd   = currentTime + m_zoom;
-
+                 ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText) ) {
+            
             ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_None);
             ImPlot::SetupAxis(
                 ImAxis_Y1,
@@ -146,7 +171,85 @@ void AudioWaveformView::update(UIManager* sourceManager)
                                         ImVec4(1, 0, 0, 1),
                                         ImPlotProp_LineWeight,
                                         2.0f));
+
+            // --- 装饰物绘制 (必须在 EndPlot 之前) ---
+            ImPlot::PushPlotClipRect();
+
+            // 1. 绘制主画布可见范围包围框
+            auto session = Logic::EditorEngine::instance().getActiveSession();
+            if ( session ) {
+                auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                if ( snapshot && snapshot->hasBeatmap ) {
+                    double boxX[2] = { snapshot->visibleTimeStart, snapshot->visibleTimeEnd };
+                    double boxY[2] = { 1.0, 1.0 };
+                    ImVec4 boxCol = ImVec4(0.5f, 0.0f, 1.0f, 0.15f);
+                    ImPlot::PlotShaded("##MainViewBox", &boxX[0], &boxY[0], 2, -1.0, ImPlotSpec(ImPlotProp_FillColor, boxCol));
+                    double edgeL[2] = { snapshot->visibleTimeStart, snapshot->visibleTimeStart };
+                    double edgeR[2] = { snapshot->visibleTimeEnd, snapshot->visibleTimeEnd };
+                    double edgeY[2] = { -1.0, 1.0 };
+                    ImPlot::PlotLine("##BoxEdgeL", edgeL, edgeY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
+                    ImPlot::PlotLine("##BoxEdgeR", edgeR, edgeY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
+                }
+            }
+
+            // 2. 绘制悬停绿色竖线和预览框
+            if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
+                ImVec2 plotMin = ImPlot::GetPlotPos();
+                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x, plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 mousePos = ImGui::GetMousePos();
+                float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
+                double hoverTime = viewStart + relX * (viewEnd - viewStart);
+                hoverTime = std::clamp(hoverTime, 0.0, totalTime);
+
+                double hLineX[2] = { hoverTime, hoverTime };
+                double hLineY[2] = { -1.1, 1.1 };
+                ImPlot::PlotLine("##HoverLine", hLineX, hLineY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0, 1, 0, 0.6f)));
+
+                if ( s_lastActive[chanIdx] ) {
+                    auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                    if ( snapshot && snapshot->hasBeatmap ) {
+                        double offsetStart = snapshot->visibleTimeStart - snapshot->currentTime;
+                        double offsetEnd   = snapshot->visibleTimeEnd - snapshot->currentTime;
+                        double preBoxX[2] = { hoverTime + offsetStart, hoverTime + offsetEnd };
+                        double preBoxY[2] = { 1.0, 1.0 };
+                        ImPlot::PlotShaded("##PreviewViewBox", &preBoxX[0], &preBoxY[0], 2, -1.0, ImPlotSpec(ImPlotProp_FillColor, ImVec4(0.5f, 0.0f, 1.0f, 0.35f)));
+                    }
+                }
+            }
+
+            ImPlot::PopPlotClipRect();
             ImPlot::EndPlot();
+
+            // 3. 交互逻辑 (获取本帧状态供下一帧绘制使用)
+            ImVec2 plotMin = ImGui::GetItemRectMin();
+            ImVec2 plotMax = ImGui::GetItemRectMax();
+            s_lastActive[chanIdx] = ImGui::IsItemActive();
+
+            if ( ImGui::IsItemHovered() || ImGui::IsItemActive() ) {
+                ImVec2 mousePos = ImGui::GetMousePos();
+                float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
+                double hoverTime = viewStart + relX * (viewEnd - viewStart);
+                hoverTime = std::clamp(hoverTime, 0.0, totalTime);
+
+                ImGui::SetTooltip("%.3fs", hoverTime);
+
+                if ( ImGui::IsItemActive() ) {
+
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x, plotMax.y - plotMin.y,
+                                                    true, true, hoverTime }));
+                }
+
+                if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
+                    audioManager.seek(hoverTime);
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverTime }));
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x, plotMax.y - plotMin.y,
+                                                    false, false, -1.0 }));
+                }
+            }
         }
     };
 

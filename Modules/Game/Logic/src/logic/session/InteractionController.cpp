@@ -137,29 +137,48 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
     if ( canUpdate ) {
         m_ctx.lastMousePos = { cmd.mouseX, cmd.mouseY };
 
-        // 如果是从预览区发起的，或者正在预览区拖动，更新全局拖拽状态
-        if ( cmd.cameraId == "Preview" ) {
+        // 如果命令携带了直接的时间戳，优先使用它（用于音频视图等非空间映射视口）
+        if ( cmd.hoverTime >= 0.0 ) {
+            m_ctx.previewHoverTime = cmd.hoverTime;
+            m_ctx.isDragging       = cmd.isDragging;
+            m_ctx.dragCameraId     = cmd.cameraId;
+        } else if ( cmd.cameraId == "AudioWaveform" || cmd.cameraId == "AudioSpectrum" ) {
+            // 处理音频视图的释放操作
             m_ctx.isDragging = cmd.isDragging;
+        } else if ( cmd.cameraId == "Preview" ) {
+            // 传统的预览区交互
+            m_ctx.isDragging = cmd.isDragging;
+            if ( m_ctx.isDragging ) m_ctx.dragCameraId = cmd.cameraId;
         }
 
-        // 预览区边缘滚动
-        if ( cmd.cameraId == "Preview" && cmd.isDragging ) {
-            auto it = m_ctx.cameras.find(cmd.cameraId);
-            if ( it != m_ctx.cameras.end() ) {
-                float margin = 20.0f;
-                float dist   = 0.0f;
+        // 边缘滚动逻辑
+        m_ctx.previewEdgeScrollVelocity = 0.0;
+
+        if ( cmd.isDragging && cmd.viewportWidth > 0 && cmd.viewportHeight > 0 ) {
+            float margin = 20.0f;
+            float dist   = 0.0f;
+
+            if ( cmd.cameraId == "Preview" ) {
+                // 纵向边缘滚动 (Preview)
                 if ( cmd.mouseY < margin )
                     dist = margin - cmd.mouseY;
-                else if ( cmd.mouseY > it->second.viewportHeight - margin )
-                    dist = (it->second.viewportHeight - margin) - cmd.mouseY;
+                else if ( cmd.mouseY > cmd.viewportHeight - margin )
+                    dist = (cmd.viewportHeight - margin) - cmd.mouseY;
+            } else if ( cmd.cameraId == "AudioWaveform" ||
+                        cmd.cameraId == "AudioSpectrum" ) {
+                // 横向边缘滚动 (Audio Views)
+                if ( cmd.mouseX < margin )
+                    dist = cmd.mouseX - margin;
+                else if ( cmd.mouseX > cmd.viewportWidth - margin )
+                    dist = cmd.mouseX - (cmd.viewportWidth - margin);
+            }
 
+            if ( std::abs(dist) > 0.001f ) {
                 float sensitivity =
                     m_ctx.lastConfig.visual.previewConfig.edgeScrollSensitivity;
                 m_ctx.previewEdgeScrollVelocity =
                     static_cast<double>(dist) * sensitivity;
             }
-        } else if ( cmd.cameraId == "Preview" ) {
-            m_ctx.previewEdgeScrollVelocity = 0.0;
         }
     } else {
         m_ctx.previewEdgeScrollVelocity = 0.0;
