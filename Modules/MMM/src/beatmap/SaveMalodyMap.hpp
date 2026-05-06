@@ -371,28 +371,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         } else if ( note.m_type == NoteType::FLICK ) {
             const auto& f = static_cast<const Flick&>(note);
 
-            std::string structure = "dir";
-            if ( auto it = note.m_metadata.note_properties.find(
-                     NoteMetadataType::MALODY);
-                 it != note.m_metadata.note_properties.end() ) {
-                if ( it->second.contains("original_structure") ) {
-                    structure = it->second.at("original_structure");
-                } else if ( it->second.contains("original_structure_flick") ) {
-                    structure = it->second.at("original_structure_flick");
-                }
-            }
-
-            if ( structure == "seg" ) {
-                nj["seg"] = json::array();
-                json sj;
-                sj["beat"] = json::array({ 0, 0, 1 });
-                sj["x"] = static_cast<int>(std::round(f.m_dtrack * defaultW));
-                nj["seg"].push_back(sj);
-            } else {
-                nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-                int wVal  = defaultW + std::abs(f.m_dtrack);
-                nj["w"]   = wVal;
-            }
+            // 单 Flick 导出严格使用 dir 模式，忽略原始可能存在的 seg 模式
+            // 模式 7 下：2 为右，8 为左（根据当前逻辑保留）
+            nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
+            int wVal  = defaultW + std::abs(f.m_dtrack);
+            nj["w"]   = wVal;
         } else if ( note.m_type == NoteType::POLYLINE ) {
             const auto& p = static_cast<const Polyline&>(note);
             nj["seg"]     = json::array();
@@ -467,8 +450,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  note.m_metadata.note_properties.find(NoteMetadataType::MALODY);
              it != note.m_metadata.note_properties.end() ) {
             for ( const auto& [key, val] : it->second ) {
+                // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
                 if ( key != "beat" && key != "column" && key != "endbeat" &&
-                     key != "seg" ) {
+                     key != "seg" && key != "dir" &&
+                     (note.m_type != NoteType::FLICK || key != "w") ) {
                     try {
                         nj[key] = json::parse(val);
                     } catch ( ... ) {
