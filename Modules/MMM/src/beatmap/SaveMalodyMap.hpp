@@ -379,15 +379,74 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         } else if ( note.m_type == NoteType::POLYLINE ) {
             const auto& p = static_cast<const Polyline&>(note);
 
+            // 1. 预处理清洗：过滤 0 长度 Hold，合并同向 Flick
+            struct CleanSeg {
+                NoteType type;
+                double   timestamp;
+                double   duration;
+                int      track;
+                int      dtrack;
+                const Note* original_sn;
+            };
+            std::vector<CleanSeg> cleanSubs;
+            for ( const auto& subNoteRef : p.m_subNotes ) {
+                const Note& sn = subNoteRef.get();
+                if ( sn.m_type == NoteType::HOLD ) {
+                    double dur = static_cast<const Hold&>(sn).m_duration;
+                    if ( dur < 1e-4 ) continue;
+                    cleanSubs.push_back({ NoteType::HOLD, sn.m_timestamp, dur, (int)sn.m_track, 0, &sn });
+                } else if ( sn.m_type == NoteType::FLICK ) {
+                    cleanSubs.push_back({ NoteType::FLICK, sn.m_timestamp, 0.0, (int)sn.m_track, static_cast<const Flick&>(sn).m_dtrack, &sn });
+                }
+            }
+
+            // 迭代清洗与合并
+            bool changed = true;
+            while ( changed ) {
+                changed = false;
+
+                // 1. 过滤零值
+                auto it = std::remove_if(cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
+                    if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
+                    if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
+                    return false;
+                });
+                if ( it != cleanSubs.end() ) {
+                    cleanSubs.erase(it, cleanSubs.end());
+                    changed = true;
+                }
+
+                // 2. 合并同类
+                if ( cleanSubs.size() > 1 ) {
+                    for ( size_t i = 0; i < cleanSubs.size() - 1; ) {
+                        auto& curr = cleanSubs[i];
+                        auto& next = cleanSubs[i + 1];
+                        if ( curr.type == next.type ) {
+                            if ( curr.type == NoteType::HOLD ) {
+                                curr.duration += next.duration;
+                                cleanSubs.erase(cleanSubs.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            } else if ( curr.type == NoteType::FLICK ) {
+                                curr.dtrack += next.dtrack;
+                                cleanSubs.erase(cleanSubs.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            }
+                        }
+                        i++;
+                    }
+                }
+            }
+
             // 智能退化检查：如果折线物件实际上只有一个瞬时的滑键段，则导出为标准的 dir 模式
             bool exportedAsDir = false;
-            if ( p.m_subNotes.size() == 1 ) {
-                const auto& sn = p.m_subNotes[0].get();
-                if ( sn.m_type == NoteType::FLICK &&
-                     std::abs(sn.m_timestamp - p.m_timestamp) < 1e-5 ) {
-                    const auto& f = static_cast<const Flick&>(sn);
-                    nj["dir"]     = (f.m_dtrack < 0) ? 8 : 2;
-                    nj["w"]       = defaultW + std::abs(f.m_dtrack);
+            if ( cleanSubs.size() == 1 ) {
+                const auto& s = cleanSubs[0];
+                if ( s.type == NoteType::FLICK &&
+                     std::abs(s.timestamp - p.m_timestamp) < 1e-5 ) {
+                    nj["dir"]     = (s.dtrack < 0) ? 8 : 2;
+                    nj["w"]       = defaultW + std::abs(s.dtrack);
                     exportedAsDir = true;
                 }
             }
@@ -395,40 +454,29 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( !exportedAsDir ) {
                 nj["seg"] = json::array();
 
-                for ( size_t i = 0; i < p.m_subNotes.size(); ++i ) {
-                    const auto& sn = p.m_subNotes[i].get();
+                for ( size_t i = 0; i < cleanSubs.size(); ++i ) {
+                    const auto& s = cleanSubs[i];
 
-                    double   current_time  = sn.m_timestamp;
-                    uint32_t current_track = sn.m_track;
-                    if ( sn.m_type == NoteType::HOLD ) {
-                        current_time += static_cast<const Hold&>(sn).m_duration;
-                    } else if ( sn.m_type == NoteType::FLICK ) {
-                        current_track += static_cast<const Flick&>(sn).m_dtrack;
-                    }
-
-                    // Look ahead for instant Flick to merge
-                    if ( i + 1 < p.m_subNotes.size() ) {
-                        const auto& next_sn = p.m_subNotes[i + 1].get();
-                        if ( next_sn.m_type == NoteType::FLICK &&
-                             std::abs(next_sn.m_timestamp - current_time) <
-                                 1e-5 ) {
-                            current_track =
-                                next_sn.m_track +
-                                static_cast<const Flick&>(next_sn).m_dtrack;
-                            i++;
-                        }
+                    double   current_time  = s.timestamp;
+                    uint32_t current_track = s.track;
+                    if ( s.type == NoteType::HOLD ) {
+                        current_time += s.duration;
+                    } else if ( s.type == NoteType::FLICK ) {
+                        current_track += s.dtrack;
                     }
 
                     json sj;
                     bool hasBeatMetadata = false;
-                    if ( auto it = sn.m_metadata.note_properties.find(
-                             NoteMetadataType::MALODY);
-                         it != sn.m_metadata.note_properties.end() ) {
-                        if ( it->second.contains("beat") ) {
-                            try {
-                                sj["beat"] = json::parse(it->second.at("beat"));
-                                hasBeatMetadata = true;
-                            } catch ( ... ) {
+                    if ( s.original_sn ) {
+                        if ( auto it = s.original_sn->m_metadata.note_properties.find(
+                                 NoteMetadataType::MALODY);
+                             it != s.original_sn->m_metadata.note_properties.end() ) {
+                            if ( it->second.contains("beat") ) {
+                                try {
+                                    sj["beat"] = json::parse(it->second.at("beat"));
+                                    hasBeatMetadata = true;
+                                } catch ( ... ) {
+                                }
                             }
                         }
                     }
@@ -445,15 +493,17 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
 
                     // Restore other segment properties from metadata
-                    if ( auto it = sn.m_metadata.note_properties.find(
-                             NoteMetadataType::MALODY);
-                         it != sn.m_metadata.note_properties.end() ) {
-                        for ( const auto& [key, val] : it->second ) {
-                            if ( key != "beat" && key != "x" ) {
-                                try {
-                                    sj[key] = json::parse(val);
-                                } catch ( ... ) {
-                                    sj[key] = val;
+                    if ( s.original_sn ) {
+                        if ( auto it = s.original_sn->m_metadata.note_properties.find(
+                                 NoteMetadataType::MALODY);
+                             it != s.original_sn->m_metadata.note_properties.end() ) {
+                            for ( const auto& [key, val] : it->second ) {
+                                if ( key != "beat" && key != "x" ) {
+                                    try {
+                                        sj[key] = json::parse(val);
+                                    } catch ( ... ) {
+                                        sj[key] = val;
+                                    }
                                 }
                             }
                         }

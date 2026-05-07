@@ -171,37 +171,145 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
 
                 loadNoteMetadata(poly, nJson);
 
+                struct TempSub {
+                    NoteType type;
+                    double   timestamp;
+                    double   duration;
+                    int      track;
+                    int      dtrack;
+                };
+                std::vector<TempSub> tempSubs;
+
                 if ( nJson.contains("sub_notes") ) {
                     for ( const auto& snJson : nJson["sub_notes"] ) {
                         std::string stype = snJson.value("type", "note");
+                        TempSub     sn;
+                        sn.timestamp = snJson.value("timestamp", 0.0);
+                        sn.track     = snJson.value("track", 0);
+                        sn.duration  = 0.0;
+                        sn.dtrack    = 0;
+
                         if ( stype == "hold" ) {
-                            double duration = snJson.value("duration", 0.0);
-                            if ( duration < 1e-4 ) {
-                                XWARN("Skipping 0-duration hold subnote in Polyline at timestamp {}",
-                                      snJson.value("timestamp", 0.0));
-                                continue;
-                            }
-                            Hold& h  = beatMap.m_noteData.holds.emplace_back();
-                            h.m_type = NoteType::HOLD;
-                            h.m_timestamp = snJson.value("timestamp", 0.0);
-                            h.m_track     = snJson.value("track", 0);
-                            h.m_duration  = duration;
-                            poly.m_subNotes.push_back(h);
-                            poly.m_subHolds.push_back(h);
-                            beatMap.m_allNotes.push_back(h);
+                            sn.duration = snJson.value("duration", 0.0);
+                            if ( sn.duration < 1e-4 ) continue;
+                            sn.type = NoteType::HOLD;
                         } else if ( stype == "flick" ) {
-                            Flick& f = beatMap.m_noteData.flicks.emplace_back();
-                            f.m_type = NoteType::FLICK;
-                            f.m_timestamp = snJson.value("timestamp", 0.0);
-                            f.m_track     = snJson.value("track", 0);
-                            f.m_dtrack    = snJson.value("dtrack", 0);
-                            poly.m_subNotes.push_back(f);
-                            poly.m_subFlicks.push_back(f);
-                            beatMap.m_allNotes.push_back(f);
+                            sn.type   = NoteType::FLICK;
+                            sn.dtrack = snJson.value("dtrack", 0);
+                        } else {
+                            sn.type = NoteType::NOTE;
+                        }
+                        tempSubs.push_back(sn);
+                    }
+
+                    // 迭代清洗逻辑
+                    bool changed = true;
+                    while ( changed ) {
+                        changed = false;
+
+                        // 1. 过滤零值
+                        auto it = std::remove_if(tempSubs.begin(), tempSubs.end(), [](const auto& s) {
+                            if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
+                            if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
+                            return false;
+                        });
+                        if ( it != tempSubs.end() ) {
+                            tempSubs.erase(it, tempSubs.end());
+                            changed = true;
+                        }
+
+                        // 2. 合并同类
+                        if ( tempSubs.size() > 1 ) {
+                            for ( size_t i = 0; i < tempSubs.size() - 1; ) {
+                                auto& curr = tempSubs[i];
+                                auto& next = tempSubs[i + 1];
+                                if ( curr.type == next.type ) {
+                                    if ( curr.type == NoteType::HOLD ) {
+                                        curr.duration += next.duration;
+                                        tempSubs.erase(tempSubs.begin() + i + 1);
+                                        changed = true;
+                                        continue;
+                                    } else if ( curr.type == NoteType::FLICK ) {
+                                        curr.dtrack += next.dtrack;
+                                        tempSubs.erase(tempSubs.begin() + i + 1);
+                                        changed = true;
+                                        continue;
+                                    }
+                                }
+                                i++;
+                            }
                         }
                     }
                 }
-                beatMap.m_allNotes.push_back(poly);
+
+                // 根据清洗后的结果决定最终去向
+                if ( tempSubs.empty() ) {
+                    // 彻底退化为普通 Note
+                    Note& n       = beatMap.m_noteData.notes.emplace_back();
+                    n.m_type      = NoteType::NOTE;
+                    n.m_timestamp = poly.m_timestamp;
+                    n.m_track     = poly.m_track;
+                    n.m_metadata  = poly.m_metadata;
+                    beatMap.m_allNotes.push_back(n);
+                    beatMap.m_noteData.polylines.pop_back();  // 移除预先创建的空壳
+                } else if ( tempSubs.size() == 1 ) {
+                    // 退化为单一物件
+                    const auto& s = tempSubs[0];
+                    if ( s.type == NoteType::HOLD ) {
+                        Hold& h       = beatMap.m_noteData.holds.emplace_back();
+                        h.m_type      = NoteType::HOLD;
+                        h.m_timestamp = s.timestamp;
+                        h.m_track     = s.track;
+                        h.m_duration  = s.duration;
+                        h.m_metadata  = poly.m_metadata;
+                        beatMap.m_allNotes.push_back(h);
+                    } else if ( s.type == NoteType::FLICK ) {
+                        Flick& f       = beatMap.m_noteData.flicks.emplace_back();
+                        f.m_type       = NoteType::FLICK;
+                        f.m_timestamp  = s.timestamp;
+                        f.m_track      = s.track;
+                        f.m_dtrack     = s.dtrack;
+                        f.m_metadata   = poly.m_metadata;
+                        beatMap.m_allNotes.push_back(f);
+                    } else {
+                        Note& n       = beatMap.m_noteData.notes.emplace_back();
+                        n.m_type      = NoteType::NOTE;
+                        n.m_timestamp = s.timestamp;
+                        n.m_track     = s.track;
+                        n.m_metadata  = poly.m_metadata;
+                        beatMap.m_allNotes.push_back(n);
+                    }
+                    beatMap.m_noteData.polylines.pop_back();  // 移除预先创建的空壳
+                } else {
+                    // 依然是有效的 Polyline，填充子物件
+                    for ( const auto& s : tempSubs ) {
+                        if ( s.type == NoteType::HOLD ) {
+                            Hold& h       = beatMap.m_noteData.holds.emplace_back();
+                            h.m_type      = NoteType::HOLD;
+                            h.m_timestamp = s.timestamp;
+                            h.m_track     = s.track;
+                            h.m_duration  = s.duration;
+                            h.m_isSubNote = true;
+                            poly.m_subNotes.push_back(h);
+                            poly.m_subHolds.push_back(h);
+                        } else if ( s.type == NoteType::FLICK ) {
+                            Flick& f       = beatMap.m_noteData.flicks.emplace_back();
+                            f.m_type       = NoteType::FLICK;
+                            f.m_timestamp  = s.timestamp;
+                            f.m_track      = s.track;
+                            f.m_dtrack     = s.dtrack;
+                            f.m_isSubNote  = true;
+                            poly.m_subNotes.push_back(f);
+                            poly.m_subFlicks.push_back(f);
+                        }
+                    }
+                    // 更新 Polyline 的锚点信息为第一个子物件
+                    if ( !tempSubs.empty() ) {
+                        poly.m_timestamp = tempSubs.front().timestamp;
+                        poly.m_track     = tempSubs.front().track;
+                    }
+                    beatMap.m_allNotes.push_back(poly);
+                }
             } else if ( type == "hold" ) {
                 // 跳过属于折线子物件的独立条目（防御旧版本残留的重复数据）
                 if ( subNoteKeys.count({ nJson.value("timestamp", 0.0),

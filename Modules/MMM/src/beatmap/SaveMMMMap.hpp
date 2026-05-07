@@ -119,24 +119,101 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
             break;
         }
         case NoteType::POLYLINE: {
-            n["type"]          = "polyline";
-            auto& poly         = static_cast<const Polyline&>(note);
-            json  subNotesJson = json::array();
+            const auto& poly = static_cast<const Polyline&>(note);
+
+            // 1. 预处理清洗：过滤 0 长度 Hold，合并同向 Flick
+            struct CleanSeg {
+                NoteType type;
+                double   timestamp;
+                double   duration;
+                int      track;
+                int      dtrack;
+            };
+            std::vector<CleanSeg> cleanSubs;
             for ( const auto& subNoteRef : poly.m_subNotes ) {
-                const Note& subNote = subNoteRef.get();
-                json        sn;
-                sn["timestamp"] = subNote.m_timestamp;
-                sn["track"]     = subNote.m_track;
-                if ( subNote.m_type == NoteType::HOLD ) {
-                    sn["type"]     = "hold";
-                    sn["duration"] = static_cast<const Hold&>(subNote).m_duration;
-                } else if ( subNote.m_type == NoteType::FLICK ) {
-                    sn["type"]   = "flick";
-                    sn["dtrack"] = static_cast<const Flick&>(subNote).m_dtrack;
+                const Note& sn = subNoteRef.get();
+                if ( sn.m_type == NoteType::HOLD ) {
+                    double dur = static_cast<const Hold&>(sn).m_duration;
+                    if ( dur < 1e-4 ) continue;
+                    cleanSubs.push_back({ NoteType::HOLD, sn.m_timestamp, dur, (int)sn.m_track, 0 });
+                } else if ( sn.m_type == NoteType::FLICK ) {
+                    cleanSubs.push_back({ NoteType::FLICK, sn.m_timestamp, 0.0, (int)sn.m_track, static_cast<const Flick&>(sn).m_dtrack });
                 }
-                subNotesJson.push_back(sn);
             }
-            n["sub_notes"] = subNotesJson;
+
+            // 迭代合并与清洗
+            bool changed = true;
+            while ( changed ) {
+                changed = false;
+
+                // 1. 过滤零值
+                auto it = std::remove_if(cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
+                    if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
+                    if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
+                    return false;
+                });
+                if ( it != cleanSubs.end() ) {
+                    cleanSubs.erase(it, cleanSubs.end());
+                    changed = true;
+                }
+
+                // 2. 合并同类
+                if ( cleanSubs.size() > 1 ) {
+                    for ( size_t i = 0; i < cleanSubs.size() - 1; ) {
+                        auto& curr = cleanSubs[i];
+                        auto& next = cleanSubs[i + 1];
+                        if ( curr.type == next.type ) {
+                            if ( curr.type == NoteType::HOLD ) {
+                                curr.duration += next.duration;
+                                cleanSubs.erase(cleanSubs.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            } else if ( curr.type == NoteType::FLICK ) {
+                                curr.dtrack += next.dtrack;
+                                cleanSubs.erase(cleanSubs.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            }
+                        }
+                        i++;
+                    }
+                }
+            }
+
+            // 2. 根据清洗后的结果进行写出
+            if ( cleanSubs.empty() ) {
+                n["type"] = "note";
+            } else if ( cleanSubs.size() == 1 ) {
+                const auto& s = cleanSubs[0];
+                if ( s.type == NoteType::HOLD ) {
+                    n["type"]     = "hold";
+                    n["duration"] = s.duration;
+                } else if ( s.type == NoteType::FLICK ) {
+                    n["type"]   = "flick";
+                    n["dtrack"] = s.dtrack;
+                } else {
+                    n["type"] = "note";
+                }
+                n["timestamp"] = s.timestamp;
+                n["track"]     = s.track;
+            } else {
+                n["type"]          = "polyline";
+                json  subNotesJson = json::array();
+                for ( const auto& s : cleanSubs ) {
+                    json snj;
+                    snj["timestamp"] = s.timestamp;
+                    snj["track"]     = s.track;
+                    if ( s.type == NoteType::HOLD ) {
+                        snj["type"]     = "hold";
+                        snj["duration"] = s.duration;
+                    } else if ( s.type == NoteType::FLICK ) {
+                        snj["type"]   = "flick";
+                        snj["dtrack"] = s.dtrack;
+                    }
+                    subNotesJson.push_back(snj);
+                }
+                n["sub_notes"] = subNotesJson;
+            }
             break;
         }
         }

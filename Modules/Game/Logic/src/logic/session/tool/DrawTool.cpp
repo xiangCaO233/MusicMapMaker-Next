@@ -373,15 +373,51 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_type       = ctx.brushState.type;
 
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-        // [智能降级与清洗]
+        // [深度清洗与递归简化]
         auto& segments = ctx.brushState.polylineSegments;
-        
-        // 1. 过滤掉所有非法的零长度 Hold 段
-        segments.erase(std::remove_if(segments.begin(), segments.end(), [](const auto& s) {
-            return s.type == ::MMM::NoteType::HOLD && s.duration < 1e-5;
-        }), segments.end());
 
-        // 2. 根据剩余段的数量进行退化
+        bool changed = true;
+        while ( changed ) {
+            changed = false;
+
+            // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
+            auto it = std::remove_if(segments.begin(), segments.end(), [](const auto& s) {
+                if ( s.type == ::MMM::NoteType::HOLD ) return s.duration < 1e-5;
+                if ( s.type == ::MMM::NoteType::FLICK ) return s.dtrack == 0;
+                return false;
+            });
+            if ( it != segments.end() ) {
+                segments.erase(it, segments.end());
+                changed = true;
+            }
+
+            // 2. 合并连续的同类型物件
+            if ( segments.size() > 1 ) {
+                for ( size_t i = 0; i < segments.size() - 1; ) {
+                    auto& curr = segments[i];
+                    auto& next = segments[i + 1];
+
+                    if ( curr.type == next.type ) {
+                        if ( curr.type == ::MMM::NoteType::HOLD ) {
+                            // 合并长条持续时间
+                            curr.duration += next.duration;
+                            segments.erase(segments.begin() + i + 1);
+                            changed = true;
+                            continue; // 继续检查合并后的段
+                        } else if ( curr.type == ::MMM::NoteType::FLICK ) {
+                            // 合并滑键位移量
+                            curr.dtrack += next.dtrack;
+                            segments.erase(segments.begin() + i + 1);
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    i++;
+                }
+            }
+        }
+
+        // 3. 根据最终清洗结果进行降级
         if ( segments.empty() ) {
             note.m_type = ::MMM::NoteType::NOTE;
             note.m_duration = 0.0;
@@ -393,7 +429,6 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             note.m_duration   = s.duration;
             note.m_trackIndex = s.trackIndex;
             note.m_dtrack     = s.dtrack;
-            // 此时不再是 Polyline
         } else {
             note.m_subNotes = segments;
             if ( !note.m_subNotes.empty() ) {
