@@ -44,8 +44,21 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     meta["version"] = beatMap.m_baseMapMetadata.version;
     meta["background"] =
         beatMap.m_baseMapMetadata.main_cover_path.filename().string();
-    meta["id"]   = 0;
-    meta["mode"] = 7;  // 默认使用坐标模式，与 Malody 编辑器一致
+    meta["id"] = 0;
+
+    /// @brief 获取原始模式，优先从元数据恢复
+    int mode = 7;
+    if ( auto it =
+             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
+         it != beatMap.m_metadata.map_properties.end() ) {
+        if ( it->second.contains("mode") ) {
+            try {
+                mode = std::stoi(it->second.at("mode"));
+            } catch ( ... ) {
+            }
+        }
+    }
+    meta["mode"] = mode;
 
     auto& song        = meta["song"];
     song["title"]     = beatMap.m_baseMapMetadata.title;
@@ -74,6 +87,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 } catch ( ... ) {
                     meta[key] = val;
                 }
+            } else if ( key == "extra" ) {
+                try {
+                    fileData["extra"] = json::parse(val);
+                } catch ( ... ) {
+                    fileData["extra"] = val;
+                }
             } else {
                 try {
                     meta[key] = json::parse(val);
@@ -83,8 +102,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
         }
     }
-
-    int mode = meta.value("mode", 7);
 
     auto timeToBeat = [&](double time) {
         double currentBpm = beatMap.m_baseMapMetadata.preference_bpm > 0
@@ -351,11 +368,14 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
             std::string structure =
                 (mode == 7 || mode == 4) ? "seg" : "endbeat";
-            if ( auto it = note.m_metadata.note_properties.find(
-                     NoteMetadataType::MALODY);
-                 it != note.m_metadata.note_properties.end() ) {
-                if ( it->second.contains("original_structure") ) {
-                    structure = it->second.at("original_structure");
+            // 仅在 Slide/Live 模式下允许从元数据恢复原始 structure
+            if ( mode == 7 || mode == 4 ) {
+                if ( auto it = note.m_metadata.note_properties.find(
+                         NoteMetadataType::MALODY);
+                     it != note.m_metadata.note_properties.end() ) {
+                    if ( it->second.contains("original_structure") ) {
+                        structure = it->second.at("original_structure");
+                    }
                 }
             }
 
@@ -371,21 +391,23 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         } else if ( note.m_type == NoteType::FLICK ) {
             const auto& f = static_cast<const Flick&>(note);
 
-            // 单 Flick 导出严格使用 dir 模式，忽略原始可能存在的 seg 模式
-            // 模式 7 下：2 为右，8 为左（根据当前逻辑保留）
-            nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-            int wVal  = defaultW + std::abs(f.m_dtrack);
-            nj["w"]   = wVal;
+            if ( mode == 7 ) {
+                // Slide 模式：Flick 导出为 dir + w
+                nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
+                int wVal  = defaultW + std::abs(f.m_dtrack);
+                nj["w"]   = wVal;
+            }
+            // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
         } else if ( note.m_type == NoteType::POLYLINE ) {
             const auto& p = static_cast<const Polyline&>(note);
 
             // 1. 预处理清洗：过滤 0 长度 Hold，合并同向 Flick
             struct CleanSeg {
-                NoteType type;
-                double   timestamp;
-                double   duration;
-                int      track;
-                int      dtrack;
+                NoteType    type;
+                double      timestamp;
+                double      duration;
+                int         track;
+                int         dtrack;
                 const Note* original_sn;
             };
             std::vector<CleanSeg> cleanSubs;
@@ -394,9 +416,20 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 if ( sn.m_type == NoteType::HOLD ) {
                     double dur = static_cast<const Hold&>(sn).m_duration;
                     if ( dur < 1e-4 ) continue;
-                    cleanSubs.push_back({ NoteType::HOLD, sn.m_timestamp, dur, (int)sn.m_track, 0, &sn });
+                    cleanSubs.push_back({ NoteType::HOLD,
+                                          sn.m_timestamp,
+                                          dur,
+                                          (int)sn.m_track,
+                                          0,
+                                          &sn });
                 } else if ( sn.m_type == NoteType::FLICK ) {
-                    cleanSubs.push_back({ NoteType::FLICK, sn.m_timestamp, 0.0, (int)sn.m_track, static_cast<const Flick&>(sn).m_dtrack, &sn });
+                    cleanSubs.push_back(
+                        { NoteType::FLICK,
+                          sn.m_timestamp,
+                          0.0,
+                          (int)sn.m_track,
+                          static_cast<const Flick&>(sn).m_dtrack,
+                          &sn });
                 }
             }
 
@@ -406,22 +439,26 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 changed = false;
 
                 // 1. 过滤零值
-                auto it = std::remove_if(cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
-                    if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
-                    if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
-                    return false;
-                });
+                auto it = std::remove_if(
+                    cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
+                        if ( s.type == NoteType::HOLD )
+                            return s.duration < 1e-4;
+                        if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
+                        return false;
+                    });
                 if ( it != cleanSubs.end() ) {
                     cleanSubs.erase(it, cleanSubs.end());
                     changed = true;
                 }
 
-                // 2. 合并同类
+                // 2. 合并同类（仅限相同时刻）
                 if ( cleanSubs.size() > 1 ) {
                     for ( size_t i = 0; i < cleanSubs.size() - 1; ) {
                         auto& curr = cleanSubs[i];
                         auto& next = cleanSubs[i + 1];
-                        if ( curr.type == next.type ) {
+                        if ( curr.type == next.type &&
+                             std::abs(curr.timestamp + curr.duration -
+                                      next.timestamp) < 1e-5 ) {
                             if ( curr.type == NoteType::HOLD ) {
                                 curr.duration += next.duration;
                                 cleanSubs.erase(cleanSubs.begin() + i + 1);
@@ -437,9 +474,27 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                         i++;
                     }
                 }
+
+                // 3. 移除冗余 Hold（其后紧跟同时间的 Flick，Hold 偏移为零）
+                if ( cleanSubs.size() > 1 ) {
+                    for ( size_t i = 0; i < cleanSubs.size() - 1; ) {
+                        auto& curr = cleanSubs[i];
+                        auto& next = cleanSubs[i + 1];
+                        if ( curr.type == NoteType::HOLD &&
+                             next.type == NoteType::FLICK &&
+                             std::abs((curr.timestamp + curr.duration) -
+                                      next.timestamp) < 1e-5 ) {
+                            cleanSubs.erase(cleanSubs.begin() + i);
+                            changed = true;
+                            continue;
+                        }
+                        i++;
+                    }
+                }
             }
 
-            // 智能退化检查：如果折线物件实际上只有一个瞬时的滑键段，则导出为标准的 dir 模式
+            // 智能退化检查：如果折线物件实际上只有一个瞬时的滑键段，则导出为标准的
+            // dir 模式
             bool exportedAsDir = false;
             if ( cleanSubs.size() == 1 ) {
                 const auto& s = cleanSubs[0];
@@ -451,7 +506,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
 
-            if ( !exportedAsDir ) {
+            if ( !exportedAsDir && cleanSubs.empty() ) {
+                // 所有子物件被清理后无剩余段，降级为普通点物件
+                nj.erase("seg");
+            } else if ( !exportedAsDir ) {
                 nj["seg"] = json::array();
 
                 for ( size_t i = 0; i < cleanSubs.size(); ++i ) {
@@ -468,12 +526,15 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     json sj;
                     bool hasBeatMetadata = false;
                     if ( s.original_sn ) {
-                        if ( auto it = s.original_sn->m_metadata.note_properties.find(
-                                 NoteMetadataType::MALODY);
-                             it != s.original_sn->m_metadata.note_properties.end() ) {
+                        if ( auto it =
+                                 s.original_sn->m_metadata.note_properties.find(
+                                     NoteMetadataType::MALODY);
+                             it !=
+                             s.original_sn->m_metadata.note_properties.end() ) {
                             if ( it->second.contains("beat") ) {
                                 try {
-                                    sj["beat"] = json::parse(it->second.at("beat"));
+                                    sj["beat"] =
+                                        json::parse(it->second.at("beat"));
                                     hasBeatMetadata = true;
                                 } catch ( ... ) {
                                 }
@@ -494,11 +555,15 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
                     // Restore other segment properties from metadata
                     if ( s.original_sn ) {
-                        if ( auto it = s.original_sn->m_metadata.note_properties.find(
-                                 NoteMetadataType::MALODY);
-                             it != s.original_sn->m_metadata.note_properties.end() ) {
+                        if ( auto it =
+                                 s.original_sn->m_metadata.note_properties.find(
+                                     NoteMetadataType::MALODY);
+                             it !=
+                             s.original_sn->m_metadata.note_properties.end() ) {
                             for ( const auto& [key, val] : it->second ) {
-                                if ( key != "beat" && key != "x" ) {
+                                if ( key != "beat" && key != "x" &&
+                                     key != "original_structure" &&
+                                     key != "original_structure_flick" ) {
                                     try {
                                         sj[key] = json::parse(val);
                                     } catch ( ... ) {
@@ -520,6 +585,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
                 if ( key != "beat" && key != "column" && key != "endbeat" &&
                      key != "seg" && key != "dir" &&
+                     key != "original_structure" &&
+                     key != "original_structure_flick" &&
                      (note.m_type != NoteType::FLICK || key != "w") ) {
                     try {
                         nj[key] = json::parse(val);
@@ -540,7 +607,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     audioNode["beat"] = json::array({ 0, 0, 1 });
     audioNode["sound"] =
         beatMap.m_baseMapMetadata.main_audio_path.filename().string();
-    audioNode["type"] = 1;
+    audioNode["type"] = "SOUND";
 
     double firstTimingTime = 0.0;
     for ( const auto& t : beatMap.m_timings ) {
@@ -583,7 +650,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     for ( const auto& poly : beatMap.m_noteData.polylines )
         if ( !isSubNote(poly) ) sortedNotes.push_back(&poly);
 
-    std::sort(sortedNotes.begin(), sortedNotes.end(),
+    std::sort(sortedNotes.begin(),
+              sortedNotes.end(),
               [](const Note* a, const Note* b) {
                   if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-6 )
                       return a->m_timestamp < b->m_timestamp;

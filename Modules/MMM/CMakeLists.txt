@@ -58,6 +58,14 @@ add_test(NAME Test_Malody_Consistency_Collision
     "${TEST_OUTPUT_DIR}/Collision_export.mc"
 )
 
+# 5. Malody Edge Case Test (程序化构造边缘情况)
+add_executable(MalodyEdgeCaseTest tests/MalodyEdgeCaseTest.cpp)
+target_link_libraries(MalodyEdgeCaseTest PRIVATE MMM Log)
+target_include_directories(MalodyEdgeCaseTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+add_test(NAME Test_Malody_Edge_Case
+    COMMAND MalodyEdgeCaseTest
+)
+
 # 4. MMM Native Format Test
 add_executable(MapConsistencyTest tests/MapConsistencyTest.cpp)
 target_link_libraries(MapConsistencyTest PRIVATE MMM Log)
