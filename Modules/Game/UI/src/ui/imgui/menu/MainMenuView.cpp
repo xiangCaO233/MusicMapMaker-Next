@@ -2,6 +2,7 @@
 #include "ui/imgui/menu/MainMenuView.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -751,12 +752,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                 ImGui::MenuItem(TR("ui.file.no_recent"), nullptr, false, false);
             } else {
                 for ( const auto& path : recent ) {
-                    std::filesystem::path p(
-                        reinterpret_cast<const char8_t*>(path.c_str()));
-                    auto        u8name = p.filename().u8string();
-                    std::string name(
-                        reinterpret_cast<const char*>(u8name.c_str()),
-                        u8name.size());
+                    std::filesystem::path p = Config::utf8ToPath(path);
+                    std::string name        = Config::pathToUtf8(p.filename());
                     if ( ImGui::MenuItem(name.c_str(), path.c_str()) ) {
                         Event::OpenProjectEvent ev;
                         ev.m_projectPath = p;

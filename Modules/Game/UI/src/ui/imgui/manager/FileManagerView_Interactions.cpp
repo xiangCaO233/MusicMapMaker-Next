@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/UISubViewToggleEvent.h"
@@ -32,14 +33,14 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
                     std::filesystem::is_directory(p) ? p : p.parent_path();
 
                 XINFO("File dropped on FileManager: {}, opening project: {}",
-                      p.string(),
-                      projectPath.string());
+                      Config::pathToUtf8(p),
+                      Config::pathToUtf8(projectPath));
 
                 Event::OpenProjectEvent ev;
                 ev.m_projectPath = projectPath;
                 Event::EventBus::instance().publish(ev);
 
-                auto       ext       = p.extension().string();
+                auto       ext       = Config::pathToUtf8(p.extension());
                 SideBarTab targetTab = SideBarTab::FileExplorer;
                 if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
                     targetTab = SideBarTab::BeatMapExplorer;
@@ -117,12 +118,8 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                 Sizing::Grow(),
                 Sizing::Fixed(20),
                 [path, &skinCfg](Clay_BoundingBox r, bool isHovered) {
-                    std::filesystem::path p(
-                        reinterpret_cast<const char8_t*>(path.c_str()));
-                    auto        u8name = p.filename().u8string();
-                    std::string name(
-                        reinterpret_cast<const char*>(u8name.c_str()),
-                        u8name.size());
+                    std::filesystem::path p = Config::utf8ToPath(path);
+                    std::string name        = Config::pathToUtf8(p.filename());
                     if ( name.empty() ) name = path;
                     ImVec4 col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
                     if ( isHovered )

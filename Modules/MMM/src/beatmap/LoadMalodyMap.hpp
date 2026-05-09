@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -26,18 +27,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     if ( basemeta.map_path.is_relative() ) {
         basemeta.map_path = std::filesystem::absolute(basemeta.map_path);
     }
-    // 将 path 转为 UTF-8 std::string 供日志使用
-    auto pathToStr = [](const std::filesystem::path& p) {
-        auto u8 = p.u8string();
-        return std::string(reinterpret_cast<const char*>(u8.c_str()),
-                           u8.size());
-    };
 
-    XINFO("加载malody谱面路径:{}", pathToStr(basemeta.map_path));
+    XINFO("加载malody谱面路径:{}", Config::pathToUtf8(basemeta.map_path));
 
     std::ifstream fs{ path };
     if ( !fs.is_open() ) {
-        XERROR("无法打开 malody 谱面文件: {}", pathToStr(path));
+        XERROR("无法打开 malody 谱面文件: {}", Config::pathToUtf8(path));
         return {};
     }
 
@@ -53,31 +48,27 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     if ( fileData.is_discarded() ) {
         XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}",
-               pathToStr(path));
+               Config::pathToUtf8(path));
         return {};
     }
 
-    // 辅助函数：将 UTF-8 字符串转为 std::filesystem::path
-    auto strToPath = [](const std::string& s) {
-        return std::filesystem::path(
-            reinterpret_cast<const char8_t*>(s.c_str()));
-    };
-
     // 1. 解析基础元数据 (Meta)
     if ( fileData.contains("meta") ) {
-        const auto& meta         = fileData["meta"];
-        basemeta.author          = meta.value("creator", "");
-        basemeta.version         = meta.value("version", "");
-        basemeta.main_cover_path = strToPath(meta.value("background", ""));
+        const auto& meta = fileData["meta"];
+        basemeta.author  = meta.value("creator", "");
+        basemeta.version = meta.value("version", "");
+        basemeta.main_cover_path =
+            Config::utf8ToPath(meta.value("background", ""));
 
         if ( meta.contains("song") ) {
-            const auto& song         = meta["song"];
-            basemeta.title           = song.value("title", "");
-            basemeta.title_unicode   = song.value("titleorg", "");
-            basemeta.artist          = song.value("artist", "");
-            basemeta.artist_unicode  = song.value("artistorg", "");
-            basemeta.main_audio_path = strToPath(song.value("file", ""));
-            basemeta.preference_bpm  = song.value("bpm", 0.0);
+            const auto& song        = meta["song"];
+            basemeta.title          = song.value("title", "");
+            basemeta.title_unicode  = song.value("titleorg", "");
+            basemeta.artist         = song.value("artist", "");
+            basemeta.artist_unicode = song.value("artistorg", "");
+            basemeta.main_audio_path =
+                Config::utf8ToPath(song.value("file", ""));
+            basemeta.preference_bpm = song.value("bpm", 0.0);
         }
 
         if ( meta.contains("mode_ext") ) {
@@ -293,9 +284,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             if ( isSoundNote(n) ) {
                 std::string soundFile = n.value("sound", "");
                 if ( basemeta.main_audio_path.empty() ) {
-                    basemeta.main_audio_path = strToPath(soundFile);
+                    basemeta.main_audio_path = Config::utf8ToPath(soundFile);
                 }
-                if ( strToPath(soundFile) == basemeta.main_audio_path ||
+                if ( Config::utf8ToPath(soundFile) ==
+                         basemeta.main_audio_path ||
                      soundFile.empty() ) {
                     audioOffset = n.value("offset", 0.0);
                     beatMap.m_metadata.map_properties[MapMetadataType::MALODY]
@@ -303,7 +295,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         std::to_string(audioOffset);
                     XINFO("找到 Malody 音频偏移: {} ms, 音频文件: {}",
                           audioOffset,
-                          pathToStr(basemeta.main_audio_path));
+                          Config::pathToUtf8(basemeta.main_audio_path));
                     break;
                 }
             }

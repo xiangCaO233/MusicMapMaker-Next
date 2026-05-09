@@ -5,14 +5,15 @@
 #include "canvas/TimelineCanvas.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/ui/menu/OpenProjectEvent.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
-#include "event/core/EventBus.h"
-#include "event/ui/menu/OpenProjectEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -131,20 +132,20 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
         context.initVKWindowRess(&window, fbWidth, fbHeight);
- 
+
         // 初始化音频引擎
         Audio::AudioManager::instance().init();
- 
+
         // 初始化原生对话框引擎
         NFD_Init();
- 
+
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
-            Audio::AudioManager::instance().preloadSoundEffect(key,
-                                                               path.string());
+            Audio::AudioManager::instance().preloadSoundEffect(
+                key, Config::pathToUtf8(path));
         }
- 
+
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
         Logic::EditorEngine::instance().start();
 
@@ -155,7 +156,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
                 Event::OpenProjectEvent openEv;
                 openEv.m_projectPath = inputPath;
                 Event::EventBus::instance().publish(openEv);
-                XINFO("Handling command line argument: {}", inputPath.string());
+                XINFO("Handling command line argument: {}",
+                      Config::pathToUtf8(inputPath));
             }
         }
 

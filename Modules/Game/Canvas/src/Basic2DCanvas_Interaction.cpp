@@ -2,6 +2,7 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
@@ -93,11 +94,11 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 std::filesystem::path p(drop.paths[0]);
                 std::filesystem::path projectPath =
                     std::filesystem::is_directory(p) ? p : p.parent_path();
-                auto ext = p.extension().string();
+                auto ext = Config::pathToUtf8(p.extension());
 
                 XINFO("File dropped on Canvas: {}, opening project: {}",
-                      p.string(),
-                      projectPath.string());
+                      Config::pathToUtf8(p),
+                      Config::pathToUtf8(projectPath));
 
                 // 1. 打开项目
                 Event::OpenProjectEvent ev;
@@ -117,10 +118,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 // 3. 如果是谱面文件，直接加载
                 if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
                      ext == ".mmm" ) {
-                    auto        u8 = p.filename().u8string();
-                    std::string u8_filename(
-                        reinterpret_cast<const char*>(u8.c_str()), u8.size());
-                    XINFO("Auto-loading beatmap from drop: {}", u8_filename);
+                    XINFO("Auto-loading beatmap from drop: {}",
+                          Config::pathToUtf8(p.filename()));
                     try {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(p));
@@ -179,14 +178,14 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSetMousePosition{
-        .cameraId       = m_cameraId,
-        .mouseX         = localMousePos.x,
-        .mouseY         = localMousePos.y,
-        .viewportWidth  = targetWidth,
-        .viewportHeight = targetHeight,
-        .isHovering     = isHovered,
-        .isDragging     = isDragging }));
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                    .mouseX         = localMousePos.x,
+                                    .mouseY         = localMousePos.y,
+                                    .viewportWidth  = targetWidth,
+                                    .viewportHeight = targetHeight,
+                                    .isHovering     = isHovered,
+                                    .isDragging     = isDragging }));
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&

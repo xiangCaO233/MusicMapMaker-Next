@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <fstream>
@@ -32,7 +33,7 @@ bool AppConfig::load(const std::filesystem::path& path)
 
     if ( !std::filesystem::exists(finalPath) ) {
         XINFO("Config file not found: {}. Using default values.",
-              finalPath.string());
+              pathToUtf8(finalPath));
         return false;
     }
 
@@ -40,7 +41,7 @@ bool AppConfig::load(const std::filesystem::path& path)
         std::ifstream file(finalPath);
         if ( !file.is_open() ) {
             XERROR("Failed to open config file for reading: {}",
-                   finalPath.string());
+                   pathToUtf8(finalPath));
             return false;
         }
 
@@ -50,11 +51,11 @@ bool AppConfig::load(const std::filesystem::path& path)
         std::lock_guard<std::mutex> lock(m_mutex);
         m_editorConfig = j.get<EditorConfig>();
 
-        XINFO("Config loaded successfully from: {}", finalPath.string());
+        XINFO("Config loaded successfully from: {}", pathToUtf8(finalPath));
         return true;
     } catch ( const std::exception& e ) {
         XERROR("Failed to parse config file: {}. Error: {}",
-               finalPath.string(),
+               pathToUtf8(finalPath),
                e.what());
         return false;
     }
@@ -74,7 +75,7 @@ bool AppConfig::save(const std::filesystem::path& path) const
         std::ofstream file(finalPath);
         if ( !file.is_open() ) {
             XERROR("Failed to open config file for writing: {}",
-                   finalPath.string());
+                   pathToUtf8(finalPath));
             return false;
         }
 
@@ -89,7 +90,7 @@ bool AppConfig::save(const std::filesystem::path& path) const
         return true;
     } catch ( const std::exception& e ) {
         XERROR("Failed to save config file: {}. Error: {}",
-               finalPath.string(),
+               pathToUtf8(finalPath),
                e.what());
         return false;
     }

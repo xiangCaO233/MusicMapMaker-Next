@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -27,7 +28,7 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     fs::path path(luaFilePath);
     fs::path absPath    = fs::absolute(path);
     m_data.skinPath     = absPath.parent_path();
-    std::string skinDir = m_data.skinPath.generic_string();
+    std::string skinDir = pathToUtf8(m_data.skinPath);
     // 规范路径字符串
     std::replace(skinDir.begin(), skinDir.end(), '\\', '/');
     if ( !skinDir.empty() && skinDir.back() != '/' ) skinDir += '/';
@@ -64,14 +65,15 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     // 解析 langs
     sol::table langsTable = skinTable["langs"];
     for ( const auto& kv : langsTable ) {
-        std::string key          = kv.first.as<std::string>();
-        std::string rpath        = kv.second.as<std::string>();
-        m_data.langLuaPaths[key] = (m_data.skinPath / "resources" / rpath).lexically_normal();
+        std::string key   = kv.first.as<std::string>();
+        std::string rpath = kv.second.as<std::string>();
+        m_data.langLuaPaths[key] =
+            (m_data.skinPath / "resources" / rpath).lexically_normal();
     }
 
     // 载入所有语言
     for ( auto& [langName, langLuaPath] : m_data.langLuaPaths ) {
-        m_translator.loadLanguage(langLuaPath.generic_string());
+        m_translator.loadLanguage(pathToUtf8(langLuaPath));
     }
 
     // 从 AppConfig 获取保存的语言设置，如果未设置则回退
@@ -83,9 +85,10 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     // 解析 Fonts
     sol::table fontsTable = skinTable["fonts"];
     for ( const auto& kv : fontsTable ) {
-        std::string key       = kv.first.as<std::string>();
-        std::string rpath     = kv.second.as<std::string>();
-        m_data.fontPaths[key] = (m_data.skinPath / "resources" / rpath).lexically_normal();
+        std::string key   = kv.first.as<std::string>();
+        std::string rpath = kv.second.as<std::string>();
+        m_data.fontPaths[key] =
+            (m_data.skinPath / "resources" / rpath).lexically_normal();
     }
 
     // 解析 AsciiFonts
@@ -111,10 +114,11 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         } else {
             // 回退到字典格式 (unordered)
             for ( const auto& kv : asciiFontsTable ) {
-                std::string name   = kv.first.as<std::string>();
-                std::string rpath  = kv.second.as<std::string>();
+                std::string name  = kv.first.as<std::string>();
+                std::string rpath = kv.second.as<std::string>();
                 m_data.asciiFonts.emplace_back(
-                    name, (m_data.skinPath / "resources" / rpath).lexically_normal());
+                    name,
+                    (m_data.skinPath / "resources" / rpath).lexically_normal());
             }
         }
     }
@@ -143,7 +147,8 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
                 std::string name  = kv.first.as<std::string>();
                 std::string rpath = kv.second.as<std::string>();
                 m_data.cjkFonts.emplace_back(
-                    name, (m_data.skinPath / "resources" / rpath).lexically_normal());
+                    name,
+                    (m_data.skinPath / "resources" / rpath).lexically_normal());
             }
         }
     }
@@ -222,7 +227,8 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
                     std::string rpath = modKv.second.as<std::string>();
                     // 拼接绝对路径
                     config.canvas_shader_modules[modKey] =
-                        (m_data.skinPath / "resources" / rpath).lexically_normal();
+                        (m_data.skinPath / "resources" / rpath)
+                            .lexically_normal();
                 }
             }
 
@@ -266,8 +272,9 @@ void SkinManager::parseAudiosRecursive(const sol::table&  currentTable,
         std::string fullKey = prefix.empty() ? key : prefix + "." + key;
 
         if ( value.is<std::string>() ) {
-            std::string rpath          = value.as<std::string>();
-            m_data.audioPaths[fullKey] = (m_data.skinPath / "resources" / rpath).lexically_normal();
+            std::string rpath = value.as<std::string>();
+            m_data.audioPaths[fullKey] =
+                (m_data.skinPath / "resources" / rpath).lexically_normal();
         } else if ( value.is<sol::table>() ) {
             parseAudiosRecursive(value.as<sol::table>(), fullKey);
         }
@@ -310,9 +317,9 @@ void SkinManager::parseAssetsRecursive(const sol::table&  currentTable,
                 while ( true ) {
                     std::string framePath =
                         prefix + std::to_string(current) + suffix;
-                    seq.frames.push_back((m_data.skinPath / "resources" /
-                                          framePath)
-                                             .lexically_normal());
+                    seq.frames.push_back(
+                        (m_data.skinPath / "resources" / framePath)
+                            .lexically_normal());
                     if ( current == end ) break;
                     current += step;
                 }

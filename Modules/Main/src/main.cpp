@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "game/GameLoop.h"
@@ -33,7 +34,7 @@ int main(int argc, char* argv[])
 
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
-        (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
+        Config::pathToUtf8(assetPath / "skins" / "mmm-nightly" / "skin.lua"));
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]", r, g, b, a);
 

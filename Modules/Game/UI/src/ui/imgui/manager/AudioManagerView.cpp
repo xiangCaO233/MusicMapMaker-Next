@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -148,7 +149,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         for ( const auto& [key, path] : skinData.audioPaths ) {
             AudioResource res;
             res.m_id            = key;
-            res.m_path          = path.string();
+            res.m_path          = Config::pathToUtf8(path);
             res.m_type          = AudioTrackType::Effect;
             res.m_config.volume = audioManager.getSFXPoolVolume(key);
             res.m_config.muted  = audioManager.getSFXPoolMute(key);
