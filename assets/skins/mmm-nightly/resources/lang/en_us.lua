@@ -190,6 +190,8 @@ return {
 	["ui.audio_manager.permanent_sfx"] = "Permanent SFX",
 	["ui.audio_manager.global_settings"] = "Global Audio Settings",
 	["ui.audio_manager.global_volume"] = "Global Volume",
+	["ui.audio_manager.bgm_gain"] = "All Main Track Gain",
+	["ui.audio_manager.sfx_gain"] = "All Effect Track Gain",
 	["ui.audio_manager.main_track_volume"] = "Main Track Volume",
 	["ui.audio_manager.volume"] = "Volume",
 	["ui.audio_manager.play_preview"] = "Play Preview",

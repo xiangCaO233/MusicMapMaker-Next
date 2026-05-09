@@ -98,6 +98,38 @@ public:
     /// @brief 获取全局音量
     float getGlobalVolume() const;
 
+    /// @brief 设置全局静音状态
+    void setGlobalMute(bool muted);
+
+    /// @brief 获取全局是否静音
+    bool isGlobalMuted() const;
+
+    /// @brief 获取输出电平 (左声道 0.0 ~ 1.0)
+    float getOutputLevelL() const;
+
+    /// @brief 获取输出电平 (右声道 0.0 ~ 1.0)
+    float getOutputLevelR() const;
+
+    /// @brief 获取 BGM 增益静音状态
+    bool isBGMGainMuted() const;
+    /// @brief 设置 BGM 增益静音
+    void setBGMGainMute(bool muted);
+
+    /// @brief 获取 SFX 增益静音状态
+    bool isSFXGainMuted() const;
+    /// @brief 设置 SFX 增益静音
+    void setSFXGainMute(bool muted);
+
+    /// @brief 获取主音轨 (BGM) 的实时电平 (L)
+    float getMainTrackLevelL() const;
+    /// @brief 获取主音轨 (BGM) 的实时电平 (R)
+    float getMainTrackLevelR() const;
+
+    /// @brief 获取特定音效池的实时电平 (L)
+    float getSFXPoolLevelL(const std::string& key) const;
+    /// @brief 获取特定音效池的实时电平 (R)
+    float getSFXPoolLevelR(const std::string& key) const;
+
     /// @brief 设置主混音器左声道静音
     void setMainMixerLeftMute(bool muted);
     /// @brief 获取主混音器左声道是否静音
@@ -127,6 +159,16 @@ public:
     enum class StretchQuality { Fast, Balanced, Finer, Best };
     void           setPlaybackQuality(StretchQuality quality);
     StretchQuality getPlaybackQuality() const;
+
+    /// @brief 设置 BGM 全局增益 (0.0 ~ 1.0)
+    void setBGMGain(float gain);
+    /// @brief 获取 BGM 全局增益
+    float getBGMGain() const;
+
+    /// @brief 设置 SFX 全局增益 (0.0 ~ 1.0)
+    void setSFXGain(float gain);
+    /// @brief 获取 SFX 全局增益
+    float getSFXGain() const;
 
     // --- EQ 相关接口 ---
 
@@ -247,6 +289,11 @@ private:
     float          m_mainTrackVolume{ 0.5f };
     bool           m_mainTrackMuted{ false };
     float          m_globalVolume{ 1.0f };
+    bool           m_globalMuted{ false };
+    float          m_bgmGain{ 1.0f };
+    bool           m_bgmGainMuted{ false };
+    float          m_sfxGain{ 1.0f };
+    bool           m_sfxGainMuted{ false };
     double         m_speed{ 1.0 };
 
     std::unordered_map<std::string, bool> m_sfxMutes;
