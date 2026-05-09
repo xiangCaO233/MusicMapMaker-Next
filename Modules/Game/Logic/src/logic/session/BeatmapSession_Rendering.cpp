@@ -69,7 +69,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 .count();
         snapshot->playbackSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
-        snapshot->hasBeatmap = (m_ctx->currentBeatmap != nullptr);
+        snapshot->hasBeatmap        = (m_ctx->currentBeatmap != nullptr);
+        snapshot->lastActionMessage = m_ctx->lastActionMessage;
 
         if ( m_ctx->currentBeatmap ) {
             auto bgPath =

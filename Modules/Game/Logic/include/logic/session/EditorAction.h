@@ -25,6 +25,9 @@ public:
     /// @brief 重做操作
     /// @param ctx 会话上下文引用
     virtual void redo(SessionContext& ctx) = 0;
+
+    /// @brief 获取操作描述名称
+    virtual std::string getName() const = 0;
 };
 
 /// @brief 操作栈管理器，维护撤销栈和重做栈。

@@ -8,6 +8,8 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include <stb_image.h>
 
 namespace MMM::Logic
@@ -20,6 +22,67 @@ void BeatmapSession::processCommands()
         std::visit(
             [this](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
+
+                // --- 自动更新操作状态描述 ---
+                if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
+                    std::string toolName = std::string(TR("ui.status.ready"));
+                    switch ( arg.tool ) {
+                    case EditTool::Move:
+                        toolName = std::string(TR("ui.status.tool.select_move"));
+                        break;
+                    case EditTool::Marquee:
+                        toolName = std::string(TR("ui.status.tool.marquee"));
+                        break;
+                    case EditTool::Draw:
+                        toolName = std::string(TR("ui.status.tool.draw_brush"));
+                        break;
+                    }
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}", TR("ui.status.category.tool"), toolName);
+                } else if constexpr ( std::is_same_v<T, CmdLoadBeatmap> ) {
+                    if ( arg.beatmap ) {
+                        m_ctx->lastActionMessage = fmt::format(
+                            "{} {}: {} [{}]",
+                            TR("ui.status.category.beatmap"),
+                            TR("ui.status.beatmap.loaded"),
+                            arg.beatmap->m_baseMapMetadata.name,
+                            arg.beatmap->m_baseMapMetadata.version);
+                    } else {
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {}",
+                                        TR("ui.status.category.beatmap"),
+                                        TR("ui.status.beatmap.no_load"));
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ||
+                                      std::is_same_v<T, CmdSaveBeatmapAs> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.beatmap"),
+                                    TR("ui.status.beatmap.saved"));
+                } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {:.3f}s",
+                                    TR("ui.status.category.playback"),
+                                    TR("ui.status.playback.seek"),
+                                    arg.time);
+                } else if constexpr ( std::is_same_v<T, CmdSetPlaybackSpeed> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}: {:.2f}x",
+                                    TR("ui.status.category.playback"),
+                                    TR("ui.status.playback.speed"),
+                                    arg.speed);
+                } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {}",
+                                    TR("ui.status.category.project"),
+                                    TR("ui.status.project.track_count"),
+                                    arg.trackCount);
+                } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.selection"),
+                                    TR("ui.status.selection.all_selected"));
+                }
 
                 // --- Session 自己处理的命令 ---
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ||

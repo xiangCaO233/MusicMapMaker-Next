@@ -9,6 +9,8 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include <unordered_set>
 
 namespace MMM::Logic
@@ -38,6 +40,12 @@ void ActionController::handleCommand(const CmdCopy& cmd)
         }
     }
     XINFO("Copied {} items to clipboard", m_ctx.clipboard.size());
+    m_ctx.lastActionMessage =
+        fmt::format("{} {} {} {}",
+                    TR("ui.status.category.clipboard"),
+                    TR("ui.status.clipboard.copied"),
+                    m_ctx.clipboard.size(),
+                    TR("ui.status.info.items"));
 }
 
 void ActionController::handleCommand(const CmdCut& cmd)
@@ -50,6 +58,12 @@ void ActionController::handleCommand(const CmdCut& cmd)
             ic.isCut = true;
         }
     }
+    m_ctx.lastActionMessage =
+        fmt::format("{} {} {} {}",
+                    TR("ui.status.category.clipboard"),
+                    TR("ui.status.clipboard.cut"),
+                    m_ctx.clipboard.size(),
+                    TR("ui.status.info.items"));
 }
 
 void ActionController::handleCommand(const CmdDeleteSelected& cmd)
@@ -103,7 +117,8 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 
     if ( !entries.empty() ) {
-        auto action = std::make_unique<BatchNoteAction>(std::move(entries));
+        auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                        "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", entries.size());
     }
@@ -169,7 +184,8 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         entries.push_back({ entt::null, std::nullopt, newNote });
     }
 
-    auto action = std::make_unique<BatchNoteAction>(std::move(entries));
+    auto action =
+        std::make_unique<BatchNoteAction>(std::move(entries), "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 
     // 清除剪切状态

@@ -30,6 +30,7 @@ public:
     void execute(SessionContext& ctx) override;
     void undo(SessionContext& ctx) override;
     void redo(SessionContext& ctx) override;
+    std::string getName() const override;
 
 private:
     Type                             m_type;    ///< 操作类型

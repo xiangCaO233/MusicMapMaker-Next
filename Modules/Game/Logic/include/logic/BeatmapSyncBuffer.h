@@ -168,6 +168,7 @@ struct RenderSnapshot {
     bool        hasBeatmap{ false };
     std::string beatmapName;
     bool        isDirty{ false };
+    std::string lastActionMessage;
 
     /// @brief 静态布局绘制指令数量 (轨道底板 + 轨道边框 + 判定区)
     /// 这些指令对应的几何体不随时间变化，亚帧补偿不应偏移它们
@@ -225,6 +226,7 @@ struct RenderSnapshot {
         hasBeatmap        = false;
         beatmapName.clear();
         isDirty           = false;
+        lastActionMessage.clear();
         staticCmdCount    = 0;
         staticVertexCount = 0;
         dynamicVertexCount = 0;

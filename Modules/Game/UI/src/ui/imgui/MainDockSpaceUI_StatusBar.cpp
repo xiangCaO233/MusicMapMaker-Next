@@ -91,6 +91,19 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                                 TR("ui.status.mouse_time").data(),
                                 formatTime(snapshot->hoveredTime).c_str());
                 }
+
+                // 在状态栏最右侧显示最后一次操作信息
+                if ( !snapshot->lastActionMessage.empty() ) {
+                    float textWidth =
+                        ImGui::CalcTextSize(snapshot->lastActionMessage.c_str())
+                            .x;
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - textWidth -
+                                         8.0f * dpiScale);
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::TextDisabled("%s",
+                                        snapshot->lastActionMessage.c_str());
+                }
             }
         }
 

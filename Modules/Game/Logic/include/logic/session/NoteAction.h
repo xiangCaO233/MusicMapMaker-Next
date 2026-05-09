@@ -30,6 +30,7 @@ public:
     void execute(SessionContext& ctx) override;
     void undo(SessionContext& ctx) override;
     void redo(SessionContext& ctx) override;
+    std::string getName() const override;
 
 private:
     Type                         m_type;    ///< 操作类型
@@ -51,16 +52,20 @@ public:
 
     /// @brief 构造函数
     /// @param entries 批量操作条目列表
-    BatchNoteAction(std::vector<Entry> entries) : m_entries(std::move(entries))
+    /// @param name 操作描述名称
+    BatchNoteAction(std::vector<Entry> entries, std::string name = "Batch Note Action")
+        : m_entries(std::move(entries)), m_name(std::move(name))
     {
     }
 
     void execute(SessionContext& ctx) override;
     void undo(SessionContext& ctx) override;
     void redo(SessionContext& ctx) override;
+    std::string getName() const override;
 
 private:
     std::vector<Entry> m_entries;  ///< 条目列表
+    std::string        m_name;     ///< 操作名称
 };
 
 }  // namespace MMM::Logic
