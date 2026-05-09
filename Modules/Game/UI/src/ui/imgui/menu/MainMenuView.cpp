@@ -303,7 +303,6 @@ void MainMenuView::renderAboutPopup()
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(420, 280), ImGuiCond_Appearing);
 
     if ( ImGui::BeginPopupModal(
              TR("ui.help.about_title"),
@@ -311,59 +310,87 @@ void MainMenuView::renderAboutPopup()
              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(8.0f * dpiScale, 12.0f * dpiScale));
+
+        // --- Logo & Title ---
+        ImFont* titleFont = Config::SkinManager::instance().getFont("menu");
+        if ( titleFont ) ImGui::PushFont(titleFont, 0.0f);
+
+        std::string appLabel =
+            std::string(ICON_MMM_MUSIC) + "  " + TR("ui.help.app_name").data();
+        float titleWidth = ImGui::CalcTextSize(appLabel.c_str()).x;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - titleWidth) * 0.5f);
+        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s", appLabel.c_str());
+
+        if ( titleFont ) ImGui::PopFont();
+
         ImGui::Spacing();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
-
-        // 标题
-        ImFont* contentFont =
-            Config::SkinManager::instance().getFont("content");
-        if ( contentFont ) ImGui::PushFont(contentFont);
-
-        ImGui::TextUnformatted(TR("ui.help.app_name").data());
-
-        if ( contentFont ) ImGui::PopFont();
-
+        ImGui::Separator();
         ImGui::Spacing();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
 
-        ImVec4 dimColor = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        // --- Info Table ---
+        if ( ImGui::BeginTable("AboutTable",
+                               2,
+                               ImGuiTableFlags_SizingFixedFit |
+                                   ImGuiTableFlags_NoSavedSettings) ) {
+            ImGui::TableSetupColumn(
+                "L", ImGuiTableColumnFlags_WidthFixed, 140.0f * dpiScale);
+            ImGui::TableSetupColumn("R", ImGuiTableColumnFlags_WidthStretch);
 
-        // 版本号
-        ImGui::TextUnformatted(TR("ui.help.current_version").data());
-        ImGui::SameLine();
-        ImGui::TextColored(dimColor, MMM_VERSION_STRING);
+            auto AddRow = [&](const char* label, const char* value) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(label);
+                ImGui::TableNextColumn();
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text,
+                    ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted(value);
+                ImGui::PopStyleColor();
+            };
 
-        // 构建配置
-        ImGui::TextUnformatted(TR("ui.help.build_type").data());
-        ImGui::SameLine();
+            AddRow(TR("ui.help.current_version").data(), MMM_VERSION_STRING);
+
 #if BUILD_TYPE_DEBUG
-        ImGui::TextColored(dimColor, "Debug");
+            AddRow(TR("ui.help.build_type").data(), "Debug");
 #else
-        ImGui::TextColored(dimColor, "Release");
+            AddRow(TR("ui.help.build_type").data(), "Release");
 #endif
+            AddRow(TR("ui.help.platform").data(), MMM_PLATFORM);
 
-        // 运行平台
-        ImGui::TextUnformatted(TR("ui.help.platform").data());
-        ImGui::SameLine();
-        ImGui::TextColored(dimColor, MMM_PLATFORM);
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 16 * dpiScale);
-
-        ImGui::TextColored(dimColor,
-                           "Copyright (C) 2025 xiang233. All rights reserved.");
+            ImGui::EndTable();
+        }
 
         ImGui::Spacing();
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
-                             ImGui::CalcTextSize(TR("ui.help.ok").data()).x *
-                                 0.5f);
+        ImGui::Separator();
+        ImGui::Spacing();
 
+        // --- Copyright ---
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        const char* copyright =
+            "Copyright (C) 2025 xiang233. All rights reserved.";
+        float cpWidth = ImGui::CalcTextSize(copyright).x;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - cpWidth) * 0.5f);
+        ImGui::TextUnformatted(copyright);
+        ImGui::PopStyleColor();
+
+        ImGui::Spacing();
+
+        // --- Button ---
+        float btnWidth = 140.0f * dpiScale;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
         if ( ImGui::Button(TR("ui.help.ok").data(),
-                           ImVec2(100 * dpiScale, 0)) ) {
+                           ImVec2(btnWidth, 36.0f * dpiScale)) ) {
             ImGui::CloseCurrentPopup();
         }
 
+        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 }
@@ -383,67 +410,66 @@ void MainMenuView::renderUpdateCheckingPopup()
              TR("ui.help.check_update"),
              &open,
              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        if ( !open ) ImGui::CloseCurrentPopup();
         auto  info     = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
-        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
 
         if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
-            ImGui::SetCursorPosX(
-                ImGui::GetWindowWidth() * 0.5f -
-                ImGui::CalcTextSize(TR("ui.help.checking").data()).x * 0.5f);
+            float textWidth =
+                ImGui::CalcTextSize(TR("ui.help.checking").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextUnformatted(TR("ui.help.checking").data());
 
-            ImGui::Spacing();
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
-                                 40.0f * dpiScale);
-            ImGui::SetNextItemWidth(80.0f * dpiScale);
+            float barWidth = 240.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - barWidth) * 0.5f);
             float fraction = -1.0f * (float)ImGui::GetTime();
-            ImGui::ProgressBar(fraction, ImVec2(80.0f * dpiScale, 0.0f));
+            ImGui::ProgressBar(
+                fraction, ImVec2(barWidth, 12.0f * dpiScale), "");
         } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
-            ImVec2 textSize =
-                ImGui::CalcTextSize(TR("ui.help.up_to_date").data());
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
-                                 textSize.x * 0.5f);
+            float textWidth =
+                ImGui::CalcTextSize(TR("ui.help.up_to_date").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextUnformatted(TR("ui.help.up_to_date").data());
 
-            ImGui::Spacing();
-            ImGui::SetCursorPosX(
-                ImGui::GetWindowWidth() * 0.5f -
-                ImGui::CalcTextSize(TR("ui.help.ok").data()).x * 0.5f);
+            float btnWidth = 120.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
             if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(100 * dpiScale, 0)) ) {
+                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
             ImGui::CloseCurrentPopup();
             m_showUpdatePopup = true;
         } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
-            ImVec4 errColor(1.0f, 0.3f, 0.3f, 1.0f);
-            ImVec2 textSize =
-                ImGui::CalcTextSize(TR("ui.help.update_error").data());
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() * 0.5f -
-                                 textSize.x * 0.5f);
+            ImVec4 errColor(1.0f, 0.4f, 0.4f, 1.0f);
+            float  textWidth =
+                ImGui::CalcTextSize(TR("ui.help.update_error").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextColored(
                 errColor, "%s", TR("ui.help.update_error").data());
 
-            ImGui::Spacing();
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
             ImGui::TextWrapped("%s", info.errorMessage.c_str());
+            ImGui::PopStyleColor();
 
-            ImGui::Spacing();
-            ImGui::SetCursorPosX(
-                ImGui::GetWindowWidth() * 0.5f -
-                ImGui::CalcTextSize(TR("ui.help.ok").data()).x * 0.5f);
+            float btnWidth = 120.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
             if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(100 * dpiScale, 0)) ) {
+                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         }
 
+        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 
-    // 如果 update is found, open the update popup next frame
     if ( m_showUpdatePopup ) {
         m_showCheckingPopup = false;
     }
@@ -457,118 +483,139 @@ void MainMenuView::renderUpdatePopup()
         ImGui::OpenPopup(TR("ui.help.update_found"));
         m_showUpdatePopup = false;
     } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
-        ImGui::OpenPopup(TR("ui.help.update_found"));
+        if ( !ImGui::IsPopupOpen(TR("ui.help.update_found")) )
+            ImGui::OpenPopup(TR("ui.help.update_found"));
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-    bool popupOpen = true;
-    if ( info.status == MMM::Network::UpdateStatus::kDownloading ||
-         info.status == MMM::Network::UpdateStatus::kDownloaded ) {
-        popupOpen = true;  // 下载中/已完成不允许关闭
-    }
-
+    bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
+                      info.status == MMM::Network::UpdateStatus::kDownloaded);
+    bool open = true;
     if ( ImGui::BeginPopupModal(
              TR("ui.help.update_found"),
-             info.status == MMM::Network::UpdateStatus::kDownloading ||
-                     info.status == MMM::Network::UpdateStatus::kDownloaded
-                 ? &popupOpen
-                 : nullptr,
+             isWorking ? nullptr : &open,
              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+        if ( !open ) ImGui::CloseCurrentPopup();
         info           = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
-        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
 
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
-            // 版本比较
-            ImGui::TextUnformatted(TR("ui.help.current_version").data());
-            ImGui::SameLine();
-            ImGui::TextUnformatted(info.currentVersion.c_str());
+            // --- Info Table ---
+            if ( ImGui::BeginTable("UpdateInfoTable",
+                                   2,
+                                   ImGuiTableFlags_SizingFixedFit |
+                                       ImGuiTableFlags_NoSavedSettings) ) {
+                ImGui::TableSetupColumn(
+                    "L", ImGuiTableColumnFlags_WidthFixed, 140.0f * dpiScale);
+                ImGui::TableSetupColumn("R", ImGuiTableColumnFlags_WidthStretch);
 
-            ImVec4 newColor(0.3f, 1.0f, 0.3f, 1.0f);
-            ImGui::TextUnformatted(TR("ui.help.latest_version").data());
-            ImGui::SameLine();
-            ImGui::TextColored(newColor, "%s", info.latestVersion.c_str());
+                auto AddRow = [&](const char*  label,
+                                  const char*  value,
+                                  const ImVec4* color = nullptr) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(label);
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    if ( color )
+                        ImGui::TextColored(*color, "%s", value);
+                    else
+                        ImGui::TextDisabled("%s", value);
+                };
 
-            if ( !info.releaseDate.empty() ) {
-                ImGui::TextUnformatted(TR("ui.help.release_date").data());
-                ImGui::SameLine();
-                ImGui::TextUnformatted(info.releaseDate.c_str());
+                AddRow(TR("ui.help.current_version").data(),
+                       info.currentVersion.c_str());
+                ImVec4 green(0.3f, 1.0f, 0.3f, 1.0f);
+                AddRow(TR("ui.help.latest_version").data(),
+                       info.latestVersion.c_str(),
+                       &green);
+
+                if ( !info.releaseDate.empty() )
+                    AddRow(TR("ui.help.release_date").data(),
+                           info.releaseDate.c_str());
+
+                if ( info.downloadSize > 0 ) {
+                    char sizeBuf[64];
+                    if ( info.downloadSize >= 1024 * 1024 )
+                        snprintf(sizeBuf,
+                                 sizeof(sizeBuf),
+                                 "%.1f MB",
+                                 info.downloadSize / (1024.0 * 1024.0));
+                    else if ( info.downloadSize >= 1024 )
+                        snprintf(sizeBuf,
+                                 sizeof(sizeBuf),
+                                 "%.0f KB",
+                                 info.downloadSize / 1024.0);
+                    else
+                        snprintf(sizeBuf,
+                                 sizeof(sizeBuf),
+                                 "%lld B",
+                                 (long long)info.downloadSize);
+                    AddRow(TR("ui.help.file_size").data(), sizeBuf);
+                }
+                ImGui::EndTable();
             }
 
-            if ( info.downloadSize > 0 ) {
-                ImGui::TextUnformatted(TR("ui.help.file_size").data());
-                ImGui::SameLine();
-                char sizeBuf[64];
-                if ( info.downloadSize >= 1024 * 1024 )
-                    snprintf(sizeBuf,
-                             sizeof(sizeBuf),
-                             "%.1f MB",
-                             info.downloadSize / (1024.0 * 1024.0));
-                else if ( info.downloadSize >= 1024 )
-                    snprintf(sizeBuf,
-                             sizeof(sizeBuf),
-                             "%.0f KB",
-                             info.downloadSize / 1024.0);
-                else
-                    snprintf(sizeBuf,
-                             sizeof(sizeBuf),
-                             "%lld B",
-                             (long long)info.downloadSize);
-                ImGui::TextUnformatted(sizeBuf);
-            }
-
-            // 更新内容
+            // --- Changelog ---
             if ( !info.changelog.empty() ) {
                 ImGui::Spacing();
-                ImGui::TextUnformatted(TR("ui.help.changelog").data());
+                ImGui::Separator();
                 ImGui::Spacing();
+                ImGui::TextUnformatted(TR("ui.help.changelog").data());
 
-                ImVec2 regionAvail = ImGui::GetContentRegionAvail();
-                float  textHeight  = std::min(150.0f * dpiScale, regionAvail.y);
                 ImGui::BeginChild(
                     "ChangelogScroll",
-                    ImVec2(ImGui::GetContentRegionAvail().x, textHeight),
+                    ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
                     ImGuiChildFlags_Borders);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
                 ImGui::TextWrapped("%s", info.changelog.c_str());
+                ImGui::PopStyleVar();
                 ImGui::EndChild();
             }
 
             ImGui::Spacing();
+            ImGui::Separator();
             ImGui::Spacing();
 
-            float buttonWidth  = 120 * dpiScale;
+            // --- Buttons ---
+            float buttonWidth  = 140.0f * dpiScale;
             float totalButtons = info.downloadUrl.empty() ? 1.0f : 2.0f;
-            float offsetX =
-                (ImGui::GetWindowWidth() -
-                 (totalButtons * buttonWidth +
-                  (totalButtons - 1) * ImGui::GetStyle().ItemSpacing.x)) *
-                0.5f;
-            ImGui::SetCursorPosX(offsetX);
+            float spacing      = ImGui::GetStyle().ItemSpacing.x;
+            float totalWidth =
+                totalButtons * buttonWidth + (totalButtons - 1) * spacing;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - totalWidth) * 0.5f);
 
             if ( !info.downloadUrl.empty() ) {
                 if ( ImGui::Button(TR("ui.help.download_and_install").data(),
-                                   ImVec2(buttonWidth, 0)) ) {
+                                   ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
                     m_updateChecker->downloadAsync();
                 }
                 ImGui::SameLine();
             }
 
             if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(buttonWidth, 0)) ) {
+                               ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kDownloading ) {
+            float textWidth =
+                ImGui::CalcTextSize(TR("ui.help.downloading").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextUnformatted(TR("ui.help.downloading").data());
-            ImGui::Spacing();
 
-            float progress = static_cast<float>(info.downloadProgress);
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-            ImGui::ProgressBar(progress, ImVec2(0.0f, 20.0f * dpiScale));
-
-            ImGui::Spacing();
+            float barWidth = 360.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - barWidth) * 0.5f);
+            ImGui::ProgressBar(static_cast<float>(info.downloadProgress),
+                               ImVec2(barWidth, 20.0f * dpiScale));
 
             char progressText[128];
             if ( info.downloadSize > 0 ) {
@@ -583,38 +630,44 @@ void MainMenuView::renderUpdatePopup()
                          "%.0f%%",
                          info.downloadProgress * 100.0);
             }
-            ImGui::TextUnformatted(progressText);
+            float pWidth = ImGui::CalcTextSize(progressText).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - pWidth) * 0.5f);
+            ImGui::TextDisabled("%s", progressText);
         } else if ( info.status == MMM::Network::UpdateStatus::kDownloaded ) {
+            float textWidth =
+                ImGui::CalcTextSize(TR("ui.help.download_complete").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextUnformatted(TR("ui.help.download_complete").data());
-            ImGui::Spacing();
-            ImGui::Spacing();
 
-            float buttonWidth = 120 * dpiScale;
-            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) *
-                                 0.5f);
-
+            float btnWidth = 200.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
             if ( ImGui::Button(TR("ui.help.restart_to_update").data(),
-                               ImVec2(buttonWidth, 0)) ) {
+                               ImVec2(btnWidth, 40.0f * dpiScale)) ) {
                 MMM::Network::UpdateChecker::applyUpdateAndRestart(
                     info.downloadedFilePath);
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
-            ImVec4 errColor(1.0f, 0.3f, 0.3f, 1.0f);
+            ImVec4 errColor(1.0f, 0.4f, 0.4f, 1.0f);
+            float  textWidth =
+                ImGui::CalcTextSize(TR("ui.help.update_error").data()).x;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextColored(
                 errColor, "%s", TR("ui.help.update_error").data());
-            ImGui::Spacing();
-            ImGui::TextWrapped("%s", info.errorMessage.c_str());
 
-            ImGui::Spacing();
-            float buttonWidth = 100 * dpiScale;
-            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) *
-                                 0.5f);
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("%s", info.errorMessage.c_str());
+            ImGui::PopStyleColor();
+
+            float btnWidth = 120.0f * dpiScale;
+            ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
             if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(buttonWidth, 0)) ) {
+                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         }
 
+        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 }
@@ -635,27 +688,48 @@ void MainMenuView::renderUpdateSuccessPopup()
              ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
-        ImGui::Spacing();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
 
         ImVec4 greenColor(0.3f, 1.0f, 0.3f, 1.0f);
+        float  textWidth =
+            ImGui::CalcTextSize(TR("ui.help.update_success_msg").data()).x;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
         ImGui::TextColored(
             greenColor, "%s", TR("ui.help.update_success_msg").data());
 
+        // --- Info Table ---
+        if ( ImGui::BeginTable("SuccessInfoTable",
+                               2,
+                               ImGuiTableFlags_SizingFixedFit |
+                                   ImGuiTableFlags_NoSavedSettings) ) {
+            ImGui::TableSetupColumn(
+                "L", ImGuiTableColumnFlags_WidthFixed, 140.0f * dpiScale);
+            ImGui::TableSetupColumn("R", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(TR("ui.help.current_version").data());
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(greenColor, MMM_VERSION_STRING);
+
+            ImGui::EndTable();
+        }
+
         ImGui::Spacing();
 
-        ImGui::TextUnformatted(TR("ui.help.current_version").data());
-        ImGui::SameLine();
-        ImGui::TextColored(greenColor, MMM_VERSION_STRING);
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-
-        float buttonWidth = 100 * dpiScale;
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - buttonWidth) * 0.5f);
-        if ( ImGui::Button(TR("ui.help.ok").data(), ImVec2(buttonWidth, 0)) ) {
+        float btnWidth = 120.0f * dpiScale;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
+        if ( ImGui::Button(TR("ui.help.ok").data(),
+                           ImVec2(btnWidth, 32.0f * dpiScale)) ) {
             ImGui::CloseCurrentPopup();
         }
 
+        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 }
