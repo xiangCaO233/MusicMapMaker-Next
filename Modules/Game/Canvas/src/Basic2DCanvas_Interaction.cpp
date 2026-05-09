@@ -318,7 +318,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Move ) {
-                if ( hoveredEntity != entt::null ) {
+                if ( !currentSnapshot->isPlaying && hoveredEntity != entt::null ) {
                     // 抓取工具不再负责选中，只负责发起拖拽
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
@@ -330,12 +330,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdStartBrush{ m_cameraId,
-                                          localMousePos.x,
-                                          localMousePos.y,
-                                          ImGui::GetIO().KeyShift,
-                                          ImGui::GetIO().KeyCtrl }));
+                if ( !currentSnapshot->isPlaying ) {
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdStartBrush{ m_cameraId,
+                                              localMousePos.x,
+                                              localMousePos.y,
+                                              ImGui::GetIO().KeyShift,
+                                              ImGui::GetIO().KeyCtrl }));
+                }
             }
         }
     }
@@ -344,19 +346,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( !currentSnapshot->isPlaying && currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateBrush{ m_cameraId,
                                        localMousePos.x,
                                        localMousePos.y,
                                        ImGui::GetIO().KeyShift,
                                        ImGui::GetIO().KeyCtrl }));
-        } else {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateDrag{ m_cameraId,
-                                      localMousePos.x,
-                                      localMousePos.y,
-                                      ImGui::GetIO().KeyCtrl }));
+        } else if ( !currentSnapshot->isPlaying ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpdateDrag{ m_cameraId,
+                                                               localMousePos.x,
+                                                               localMousePos.y,
+                                                               ImGui::GetIO().KeyCtrl }));
         }
     }
 
@@ -374,7 +376,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
-    if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+    if ( currentSnapshot->currentTool == Logic::EditTool::Draw && !currentSnapshot->isPlaying ) {
         if ( ImGui::IsMouseClicked(1) && isHovered ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdStartErase{ m_cameraId }));
