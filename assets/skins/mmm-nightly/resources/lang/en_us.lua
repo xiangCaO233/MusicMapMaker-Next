@@ -315,4 +315,8 @@ return {
 	["ui.timeline.event_creator.type"] = "Event Type",
 	["ui.timeline.event_creator.value"] = "Specific Value",
 	["ui.timeline.event_creator.create"] = "Create",
+
+	-- Status Bar
+	["ui.status.ready"] = "Ready",
+	["ui.status.mouse_time"] = "Mouse",
 }

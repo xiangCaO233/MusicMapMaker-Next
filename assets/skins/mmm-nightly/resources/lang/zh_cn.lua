@@ -313,4 +313,8 @@ return {
 	["ui.timeline.event_creator.type"] = "时间点类型",
 	["ui.timeline.event_creator.value"] = "具体数值",
 	["ui.timeline.event_creator.create"] = "创建",
+
+	-- 状态栏
+	["ui.status.ready"] = "就绪",
+	["ui.status.mouse_time"] = "鼠标",
 }

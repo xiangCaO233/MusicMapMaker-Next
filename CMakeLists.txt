@@ -4,7 +4,7 @@ project(MusicMapMaker-Next VERSION 0.2.0 LANGUAGES CXX)
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
-	set(VCPKG_ROOT "C:/msys64/home/odoko/vcpkg")
+	set(VCPKG_ROOT "C:/coding/vcpkg")
 	# 强制 MSVC 使用静态运行时 (/MT)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
