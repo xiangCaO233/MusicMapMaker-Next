@@ -5,6 +5,7 @@
 #include "game/GameLoop.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
+#include "common/MessageBox.h"
 #include <filesystem>
 
 int main(int argc, char* argv[])
@@ -21,7 +22,11 @@ int main(int argc, char* argv[])
     }
 
     if ( !std::filesystem::exists(rootDir / "assets") ) {
-        XERROR("Fatal: Could not find assets directory!");
+        std::string msg = "Could not find assets directory!\n"
+                          "Please download the resource package (assets.zip) from the website "
+                          "and extract it to the executable directory.";
+        XERROR("Fatal: {}", msg);
+        UI::showFatalError("MusicMapMaker - Assets Missing", msg);
         return -1;
     }
 
