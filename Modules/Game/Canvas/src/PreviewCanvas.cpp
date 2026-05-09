@@ -152,7 +152,8 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
         // --- 交互：滚轮调整预览区倍率 ---
         float wheel = ImGui::GetIO().MouseWheel;
-        if ( std::abs(wheel) > 0.01f ) {
+        if ( std::abs(wheel) > 0.01f && !ImGui::GetIO().KeyCtrl &&
+             !ImGui::GetIO().KeyAlt ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             float step      = 0.5f;
             if ( ImGui::GetIO().KeyShift ) step *= 2.0f;

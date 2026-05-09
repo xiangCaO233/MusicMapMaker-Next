@@ -497,7 +497,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     std::clamp(editorCfg.settings.beatDivisor, 1, 64);
                 Logic::EditorEngine::instance().setEditorConfig(editorCfg);
             }
-        } else {
+        } else if ( !isCtrlPressed && !isAltPressed ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
         }

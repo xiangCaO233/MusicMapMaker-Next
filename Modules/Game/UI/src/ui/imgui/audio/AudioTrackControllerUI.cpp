@@ -136,7 +136,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             if ( m_type == TrackType::Main ) {
                 audio.setMainTrackVolume(volume);
                 audio.setMainTrackMute(muted);
-                audio.setPlaybackSpeed(speed);
+                engine.pushCommand(Logic::CmdSetPlaybackSpeed{ static_cast<double>(speed) });
                 audio.setPlaybackPitch(pitch);
             } else {
                 bool  isPermanent = true;

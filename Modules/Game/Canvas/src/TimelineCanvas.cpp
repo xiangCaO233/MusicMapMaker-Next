@@ -148,7 +148,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                 bool  isHovered = ImGui::IsItemHovered();
                 float wheel     = ImGui::GetIO().MouseWheel;
-                if ( isHovered && std::abs(wheel) > 0.01f ) {
+                if ( isHovered && std::abs(wheel) > 0.01f &&
+                     !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt ) {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdScroll{
                             m_name, -wheel, ImGui::GetIO().KeyShift }));
