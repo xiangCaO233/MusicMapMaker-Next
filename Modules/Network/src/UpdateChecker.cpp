@@ -51,9 +51,9 @@ bool UpdateChecker::parseVersion(const std::string& verStr, int& major,
 
     // 尝试匹配 "v<major>.<minor>" 或 "v<major>.<minor>.<patch>" 格式
     // 允许前缀（如 "gamma"）
-    std::regex  versionRegex(R"(v(\d+)\.(\d+)(?:\.(\d+))?)",
-                            std::regex::ECMAScript);
-    std::smatch match;
+    static const std::regex versionRegex(R"(v(\d+)\.(\d+)(?:\.(\d+))?)",
+                                         std::regex::ECMAScript);
+    std::smatch             match;
     if ( std::regex_search(verStr, match, versionRegex) && match.size() >= 3 ) {
         major = std::stoi(match[1].str());
         minor = std::stoi(match[2].str());
@@ -70,10 +70,12 @@ bool UpdateChecker::isNewer(const std::string& remote, const std::string& local)
     int rMajor, rMinor, rPatch;
     int lMajor, lMinor, lPatch;
 
-    if ( !parseVersion(remote, rMajor, rMinor, rPatch) ||
-         !parseVersion(local, lMajor, lMinor, lPatch) ) {
-        // 如果解析失败，回退到字符串比较
-        return remote != local;
+    bool rOk = parseVersion(remote, rMajor, rMinor, rPatch);
+    bool lOk = parseVersion(local, lMajor, lMinor, lPatch);
+
+    if ( !rOk || !lOk ) {
+        // 任一方解析失败则无法判定大小关系，保守返回 false
+        return false;
     }
 
     if ( rMajor != lMajor ) return rMajor > lMajor;
@@ -152,9 +154,9 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
           pid);
 
 #if defined(_WIN32)
-    std::string cmdLine = "\"" + updater + "\" \"" + downloadedFilePath +
-                          "\" \"" + exePath + "\" " + std::to_string(pid);
-    STARTUPINFOA        si{ sizeof(si) };
+    std::string  cmdLine = "\"" + updater + "\" \"" + downloadedFilePath +
+                           "\" \"" + exePath + "\" " + std::to_string(pid);
+    STARTUPINFOA si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessA(nullptr,
                         cmdLine.data(),
