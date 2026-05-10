@@ -45,7 +45,10 @@ public:
     void renderMenuBar(UIManager* sourceManager, float menuBarHeight,
                        float sidebarWidth, float toolbarWidth, float dpiScale);
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
-                            float sidebarWidth, float toolbarWidth);
+                            float statusBarHeight, float sidebarWidth,
+                            float toolbarWidth);
+    void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
+                         float dpiScale);
 
     ///@brief 是否需要重载
     bool m_needReload{ true };
@@ -64,6 +67,9 @@ public:
 
     /// @brief 是否已初始化窗口状态
     bool m_initializedWindow{ false };
+
+    /// @brief 是否显示退出确认弹窗
+    bool m_showExitConfirmation{ false };
 };
 
 }  // namespace MMM::UI

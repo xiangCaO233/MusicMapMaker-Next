@@ -23,7 +23,33 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
     };
 
     // 0~4字节:int32 谱面时长
-    write_value(static_cast<int32_t>(beatMap.m_baseMapMetadata.map_length));
+    // 鲁棒性改进：在导出时重新扫描所有物件，计算最晚结束时间，防止元数据同步滞后导致的时长错误
+    double calculated_map_length = beatMap.m_baseMapMetadata.map_length;
+    for ( const auto& note_ref : beatMap.m_allNotes ) {
+        const auto& note = note_ref.get();
+        double      end  = note.m_timestamp;
+        if ( note.m_type == NoteType::HOLD ) {
+            end += static_cast<const Hold&>(note).m_duration;
+        } else if ( note.m_type == NoteType::POLYLINE ) {
+            const auto& poly = static_cast<const Polyline&>(note);
+            for ( const auto& sn_ref : poly.m_subNotes ) {
+                const auto& sn    = sn_ref.get();
+                double      snEnd = sn.m_timestamp;
+                if ( sn.m_type == NoteType::HOLD ) {
+                    snEnd += static_cast<const Hold&>(sn).m_duration;
+                }
+                if ( snEnd > calculated_map_length ) calculated_map_length = snEnd;
+            }
+        }
+        if ( end > calculated_map_length ) calculated_map_length = end;
+    }
+    // 同时也检查 Timing 点，确保谱面时长至少覆盖到最后一个 BPM/Scroll 变化
+    for ( const auto& timing : beatMap.m_timings ) {
+        if ( timing.m_timestamp > calculated_map_length )
+            calculated_map_length = timing.m_timestamp;
+    }
+
+    write_value(static_cast<int32_t>(calculated_map_length));
 
     // 5~8字节:int32 图时间点数
     int32_t timing_count = static_cast<int32_t>(beatMap.m_timings.size());

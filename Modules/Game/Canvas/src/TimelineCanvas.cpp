@@ -1,5 +1,6 @@
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
@@ -147,7 +148,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                 bool  isHovered = ImGui::IsItemHovered();
                 float wheel     = ImGui::GetIO().MouseWheel;
-                if ( isHovered && std::abs(wheel) > 0.01f ) {
+                if ( isHovered && std::abs(wheel) > 0.01f &&
+                     !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt ) {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdScroll{
                             m_name, -wheel, ImGui::GetIO().KeyShift }));
@@ -304,10 +306,10 @@ std::vector<std::string> TimelineCanvas::getShaderSources(
     auto it = canvas_config.canvas_shader_modules.find("main");
     if ( it != canvas_config.canvas_shader_modules.end() ) {
         auto        path = it->second;
-        std::string vert =
-            Graphic::VKShader::readFile((path / "VertexShader.spv").string());
-        std::string frag =
-            Graphic::VKShader::readFile((path / "FragmentShader.spv").string());
+        std::string vert = Graphic::VKShader::readFile(
+            Config::pathToUtf8(path / "VertexShader.spv"));
+        std::string frag = Graphic::VKShader::readFile(
+            Config::pathToUtf8(path / "FragmentShader.spv"));
         m_shaderSourceCache[shader_name] = { vert, frag };
         return m_shaderSourceCache[shader_name];
     }

@@ -36,8 +36,15 @@ Basic2DCanvas::~Basic2DCanvas() {}
 
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
-    std::string windowName =
-        fmt::format("{}###{}", TR("canvas.editor"), m_canvasName);
+    std::string title = TR("canvas.editor");
+    if ( m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
+         !m_currentSnapshot->beatmapName.empty() ) {
+        title = m_currentSnapshot->beatmapName;
+        if ( m_currentSnapshot->isDirty ) {
+            title += " *";
+        }
+    }
+    std::string windowName = fmt::format("{}###{}", title, m_canvasName);
     UI::LayoutContext lctx(m_layoutCtx, windowName);
     RenderContext     rctx(
         this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);

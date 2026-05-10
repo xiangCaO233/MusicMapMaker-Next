@@ -60,8 +60,19 @@ public:
      */
     void pushCommand(LogicCommand&& cmd);
 
+    /**
+     * @brief 检查当前是否有未保存的修改
+     */
+    bool hasUnsavedChanges() const;
+
     /// @brief 处理新建谱面指令 (向导/项目管理)
     void handleCreateBeatmap(const CmdCreateBeatmap& cmd);
+
+    /**
+     * @brief 同步文件系统变更到当前项目 (如另存为后刷新列表)
+     * @param mapPath 新保存的谱面文件路径
+     */
+    void syncProjectWithFile(const std::filesystem::path& mapPath);
 
     /**
      * @brief 获取当前激活的谱面会话

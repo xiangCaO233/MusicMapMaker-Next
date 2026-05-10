@@ -52,13 +52,18 @@ constexpr const char* ICON_MMM_UNDO = "\xef\x8b\xaa";  ///< \uf2ea rotate-left
 constexpr const char* ICON_MMM_REDO = "\xef\x8b\xb9";  ///< \uf2f9 rotate-right
 constexpr const char* ICON_MMM_COPY = "\xef\x83\x85";  ///< \uf0c5 copy
 constexpr const char* ICON_MMM_PASTE =
-    "\xef\x8c\xa8";  ///< \uf328 clipboard / paste
+    "\xef\x83\xaa";  ///< \uf0ea paste
+constexpr const char* ICON_MMM_MIRROR =
+    "\xef\x81\xbe";  ///< \uf07e arrows-h
+constexpr const char* ICON_MMM_SELECT_ALL =
+    "\xef\x89\x87";  ///< \uf247 object-group
 
 constexpr const char* ICON_MMM_ARROWS_UP_DOWN =
     "\xef\x81\xbd";  ///< \uf07d arrows-up-down
 
 constexpr const char* ICON_MMM_MAGNET = "\xef\x81\xb6";  ///< \uf076 magnet
-constexpr const char* ICON_MMM_ARROW_DOWN = "\xef\x81\xa3";  ///< \uf063 arrow-down
+constexpr const char* ICON_MMM_ARROW_DOWN =
+    "\xef\x81\xa3";  ///< \uf063 arrow-down
 constexpr const char* ICON_MMM_BARS =
     "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
 
@@ -72,6 +77,11 @@ constexpr const char* ICON_MMM_VOLUME_OFF =
 constexpr const char* ICON_MMM_VOLUME_MUTE =
     "\xef\x80\xa6";  ///< \uf026 volume-off (Mute Fallback)
 
+constexpr const char* ICON_MMM_HIT_SFX =
+    "\xef\x80\xa8";  ///< \uf028 volume-high
+constexpr const char* ICON_MMM_VISUAL_EFFECTS =
+    "\xef\x83\xa7";  ///< \uf0e7 bolt
+
 // --- Window Control Icons ---
 constexpr const char* ICON_MMM_MINIMIZE =
     "\xef\x8b\x91";  ///< \uf2d1 window-minimize
@@ -81,5 +91,11 @@ constexpr const char* ICON_MMM_RESTORE =
     "\xef\x8b\x92";  ///< \uf2d2 window-restore
 constexpr const char* ICON_MMM_CLOSE =
     "\xef\x80\x8d";  ///< \uf00d xmark / close
+
+// --- Help & Update Icons ---
+constexpr const char* ICON_MMM_DOWNLOAD =
+    "\xef\x8C\x81";  ///< \uf381 cloud-arrow-down
+constexpr const char* ICON_MMM_INFO_CIRCLE =
+    "\xef\x81\x9a";  ///< \uf05a circle-info
 
 }  // namespace MMM::UI

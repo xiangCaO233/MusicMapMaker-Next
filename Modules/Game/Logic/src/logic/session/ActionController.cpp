@@ -7,6 +7,8 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/TimelineAction.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 
 namespace MMM::Logic
 {
@@ -65,6 +67,27 @@ void TimelineAction::redo(SessionContext& ctx)
 {
     XINFO("[Redo] TimelineAction");
     execute(ctx);
+}
+
+std::string TimelineAction::getName() const
+{
+    std::string typeStr;
+    switch ( m_type ) {
+    case Type::Create: typeStr = std::string(TR("ui.status.action.create_event")); break;
+    case Type::Delete: typeStr = std::string(TR("ui.status.action.delete_event")); break;
+    case Type::Update: typeStr = std::string(TR("ui.status.action.update_event")); break;
+    }
+    if ( m_after )
+        return fmt::format("{} ({}: {:.3f})",
+                           typeStr,
+                           TR("ui.status.info.time"),
+                           m_after->m_timestamp);
+    if ( m_before )
+        return fmt::format("{} ({}: {:.3f})",
+                           typeStr,
+                           TR("ui.status.info.time"),
+                           m_before->m_timestamp);
+    return typeStr;
 }
 
 // --- NoteAction Implementation ---
@@ -130,6 +153,31 @@ void NoteAction::redo(SessionContext& ctx)
     execute(ctx);
 }
 
+std::string NoteAction::getName() const
+{
+    std::string typeStr;
+    switch ( m_type ) {
+    case Type::Create: typeStr = std::string(TR("ui.status.action.create_note")); break;
+    case Type::Delete: typeStr = std::string(TR("ui.status.action.delete_note")); break;
+    case Type::Update: typeStr = std::string(TR("ui.status.action.update_note")); break;
+    }
+    if ( m_after )
+        return fmt::format("{} ({}: {:.3f}, {}: {})",
+                           typeStr,
+                           TR("ui.status.info.time"),
+                           m_after->m_timestamp,
+                           TR("ui.status.info.track"),
+                           m_after->m_trackIndex);
+    if ( m_before )
+        return fmt::format("{} ({}: {:.3f}, {}: {})",
+                           typeStr,
+                           TR("ui.status.info.time"),
+                           m_before->m_timestamp,
+                           TR("ui.status.info.track"),
+                           m_before->m_trackIndex);
+    return typeStr;
+}
+
 // --- BatchNoteAction Implementation ---
 
 void BatchNoteAction::execute(SessionContext& ctx)
@@ -170,6 +218,18 @@ void BatchNoteAction::redo(SessionContext& ctx)
 {
     XINFO("[Redo] BatchNoteAction");
     execute(ctx);
+}
+
+std::string BatchNoteAction::getName() const
+{
+    const char* nameKey = "ui.status.action.batch_note";
+    if ( m_name == "Delete Selected" ) nameKey = "ui.status.action.delete_selected";
+    else if ( m_name == "Paste" ) nameKey = "ui.status.action.paste";
+
+    return fmt::format("{}: {} {}",
+                       TR(nameKey),
+                       m_entries.size(),
+                       TR("ui.status.info.entries"));
 }
 
 }  // namespace MMM::Logic

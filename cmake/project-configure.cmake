@@ -86,6 +86,30 @@ add_definitions(-DBUILD_TYPE_DEBUG=$<CONFIG:Debug>)
 add_definitions(-DVULKAN_HPP_NO_EXCEPTIONS)
 add_definitions(-DVULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS)
 
+# 应用版本与平台信息
+# 版本号由 CMake project(VERSION ...) 提供，通过 configure_file() 生成 version.h
+# BUILD_TYPE_DEBUG 保留为 generator expression 以适应多配置生成器
+
+set(MMM_PROJECT_NAME "MusicMapMaker")
+set(MMM_VERSION_SUFFIX "" CACHE STRING "可选版本后缀 (如 -alpha.1)")
+
+if(WIN32)
+    set(MMM_PLATFORM "windows")
+elseif(APPLE)
+    set(MMM_PLATFORM "macos")
+else()
+    set(MMM_PLATFORM "linux")
+endif()
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/mmmversion.h.in"
+    "${CMAKE_BINARY_DIR}/generated/mmmversion.h"
+    @ONLY
+)
+
+# 让所有编译目标都能找到生成的头文件
+include_directories("${CMAKE_BINARY_DIR}/generated")
+
 # 强制 编译器 以 UTF-8 处理输入和执行字符集
 if(MSVC)
 	add_compile_options(/utf-8)

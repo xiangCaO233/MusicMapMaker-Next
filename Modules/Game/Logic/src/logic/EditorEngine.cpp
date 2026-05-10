@@ -1,6 +1,7 @@
 #include "logic/EditorEngine.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/EditorConfigChangedEvent.h"
@@ -76,42 +77,45 @@ EditorEngine::~EditorEngine()
 
 void EditorEngine::openProject(const std::filesystem::path& projectPath)
 {
-    // 将 path 转为 UTF-8 std::string 供日志使用（Windows 下 string() 为
-    // ANSI，会乱码）
-    auto pathToStr = [](const std::filesystem::path& p) {
-        auto u8 = p.u8string();
-        return std::string(reinterpret_cast<const char*>(u8.c_str()),
-                           u8.size());
-    };
+    std::filesystem::path actualProjectPath = projectPath;
+    std::filesystem::path targetBeatmapPath = "";
 
-    if ( !std::filesystem::exists(projectPath) ||
-         !std::filesystem::is_directory(projectPath) ) {
+    // 如果传入的是文件，则将其父目录作为项目目录，并记录该文件为目标加载谱面
+    if ( std::filesystem::exists(projectPath) &&
+         std::filesystem::is_regular_file(projectPath) ) {
+        actualProjectPath = projectPath.parent_path();
+        targetBeatmapPath = projectPath;
+    }
+
+    if ( !std::filesystem::exists(actualProjectPath) ||
+         !std::filesystem::is_directory(actualProjectPath) ) {
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
-            pathToStr(projectPath));
+            Config::pathToUtf8(actualProjectPath));
         return;
     }
 
-    XINFO("Opening project at: {}", pathToStr(projectPath));
+    XINFO("Opening project at: {}", Config::pathToUtf8(actualProjectPath));
 
 
-    auto newProject           = std::make_unique<Project>();
-    newProject->m_projectRoot = projectPath;
-    newProject->m_metadata.m_title =
-        pathToStr(projectPath.filename());  // 默认标题为目录名（UTF-8）
+    auto newProject                = std::make_unique<Project>();
+    newProject->m_projectRoot      = actualProjectPath;
+    newProject->m_metadata.m_title = Config::pathToUtf8(
+        actualProjectPath.filename());  // 默认标题为目录名（UTF-8）
 
     // 扫描文件系统
     try {
         std::vector<std::filesystem::path> mapFiles;
         std::vector<std::filesystem::path> audioFiles;
 
-        for ( const auto& entry :
-              std::filesystem::recursive_directory_iterator(projectPath) ) {
+        for ( const auto& entry : std::filesystem::recursive_directory_iterator(
+                  actualProjectPath) ) {
             if ( !entry.is_regular_file() ) continue;
 
-            auto ext = pathToStr(entry.path().extension());
-            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm" ) {
+            auto ext = Config::pathToUtf8(entry.path().extension());
+            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
+                 ext == ".mmm" ) {
                 mapFiles.push_back(entry.path());
             } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
                         ext == ".flac" ) {
@@ -124,9 +128,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
         // 1. 处理谱面并识别主音轨
         for ( const auto& mapPath : mapFiles ) {
-            auto relMapPath =
-                pathToStr(std::filesystem::relative(mapPath, projectPath));
-            auto filename = pathToStr(mapPath.filename());
+            auto relMapPath = Config::pathToUtf8(
+                std::filesystem::relative(mapPath, actualProjectPath));
+            auto filename = Config::pathToUtf8(mapPath.filename());
 
             Project::BeatmapEntry mapEntry;
             mapEntry.m_name     = filename;
@@ -140,11 +144,12 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                     auto absAudioPath =
                         mapPath.parent_path() /
                         tempMap.m_baseMapMetadata.main_audio_path;
-                    auto relAudioPath = pathToStr(
-                        std::filesystem::relative(absAudioPath, projectPath));
+                    auto relAudioPath =
+                        Config::pathToUtf8(std::filesystem::relative(
+                            absAudioPath, actualProjectPath));
 
                     mapEntry.m_audioTrackId =
-                        pathToStr(absAudioPath.filename());
+                        Config::pathToUtf8(absAudioPath.filename());
                     mainAudioPaths.insert(relAudioPath);
                 }
             } catch ( ... ) {
@@ -157,9 +162,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
         // 2. 处理所有音频资源
         for ( const auto& audioPath : audioFiles ) {
-            auto relAudioPath =
-                pathToStr(std::filesystem::relative(audioPath, projectPath));
-            auto filename = pathToStr(audioPath.filename());
+            auto relAudioPath = Config::pathToUtf8(
+                std::filesystem::relative(audioPath, actualProjectPath));
+            auto filename = Config::pathToUtf8(audioPath.filename());
 
             AudioResource res;
             res.m_id   = filename;
@@ -199,7 +204,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     }
 
     // 检查是否有项目描述文件
-    std::filesystem::path projectFile = projectPath / "mmm_project.json";
+    std::filesystem::path projectFile = actualProjectPath / "mmm_project.json";
     if ( std::filesystem::exists(projectFile) ) {
         try {
             std::ifstream  file(projectFile);
@@ -243,10 +248,10 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 预加载所有项目内的音效资源
     for ( const auto& res : newProject->m_audioResources ) {
         if ( res.m_type == AudioTrackType::Effect ) {
-            auto absPath = projectPath / res.m_path;
+            auto absPath = actualProjectPath / res.m_path;
             if ( std::filesystem::exists(absPath) ) {
                 Audio::AudioManager::instance().preloadSoundEffect(
-                    res.m_id, pathToStr(absPath), res.m_config.volume);
+                    res.m_id, Config::pathToUtf8(absPath), res.m_config.volume);
             }
         }
     }
@@ -260,7 +265,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 发布加载成功事件
     Event::ProjectLoadedEvent loadedEv;
     loadedEv.m_projectTitle = m_currentProject->m_metadata.m_title;
-    loadedEv.m_projectPath  = pathToStr(projectPath);
+    loadedEv.m_projectPath  = Config::pathToUtf8(actualProjectPath);
     loadedEv.m_beatmapCount = m_currentProject->m_beatmaps.size();
     Event::EventBus::instance().publish(loadedEv);
 
@@ -284,7 +289,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     // 记录到最近打开列表
     Config::AppConfig::instance().addRecentProject(
-        pathToStr(projectPath));  // UTF-8 编码路径
+        Config::pathToUtf8(actualProjectPath));  // UTF-8 编码路径
 
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
@@ -294,8 +299,23 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 设置初始配置
     pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
 
-    // 新加载项目时，清空当前 Session 的所有谱面数据
-    pushCommand(CmdLoadBeatmap{ nullptr });
+    // 如果指定了谱面路径，则加载它；否则清空
+    if ( !targetBeatmapPath.empty() ) {
+        XINFO("Auto loading beatmap: {}",
+              Config::pathToUtf8(targetBeatmapPath));
+        try {
+            auto map = std::make_shared<BeatMap>(
+                BeatMap::loadFromFile(targetBeatmapPath));
+            pushCommand(CmdLoadBeatmap{ map });
+        } catch ( const std::exception& e ) {
+            XERROR("Failed to auto load beatmap {}: {}",
+                   Config::pathToUtf8(targetBeatmapPath),
+                   e.what());
+            pushCommand(CmdLoadBeatmap{ nullptr });
+        }
+    } else {
+        pushCommand(CmdLoadBeatmap{ nullptr });
+    }
 }
 
 void EditorEngine::start()
@@ -380,7 +400,7 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     // 3. 保存文件
     try {
         newBeatmap->saveToFile(mapPath);
-        XINFO("Beatmap saved to: {}", mapPath.string());
+        XINFO("Beatmap saved to: {}", Config::pathToUtf8(mapPath));
     } catch ( const std::exception& e ) {
         XERROR("Failed to save new beatmap: {}", e.what());
         return;
@@ -388,11 +408,10 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 
     // 4. 更新项目列表
     Project::BeatmapEntry entry;
-    entry.m_name = meta.name;
-    entry.m_filePath =
-        std::filesystem::relative(mapPath, m_currentProject->m_projectRoot)
-            .generic_string();
-    entry.m_audioTrackId = meta.main_audio_path.filename().string();
+    entry.m_name     = meta.name;
+    entry.m_filePath = Config::pathToUtf8(
+        std::filesystem::relative(mapPath, m_currentProject->m_projectRoot));
+    entry.m_audioTrackId = Config::pathToUtf8(meta.main_audio_path.filename());
     m_currentProject->m_beatmaps.push_back(entry);
 
     // 5. 如果音频资源不在列表中，添加进去
@@ -419,6 +438,59 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     pushCommand(CmdLoadBeatmap{ newBeatmap });
 }
 
+void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    // 检查路径是否在项目根目录下
+    auto absMapPath = std::filesystem::absolute(mapPath);
+    auto absRoot    = std::filesystem::absolute(m_currentProject->m_projectRoot);
+
+    auto [rootIt, pathIt] = std::mismatch(absRoot.begin(), absRoot.end(),
+                                          absMapPath.begin(), absMapPath.end());
+
+    if ( rootIt != absRoot.end() ) {
+        // 不在项目根目录下，忽略
+        return;
+    }
+
+    // 检查是否已经存在
+    for ( const auto& entry : m_currentProject->m_beatmaps ) {
+        auto entryPath = absRoot / Config::utf8ToPath(entry.m_filePath);
+        if ( std::filesystem::exists(entryPath) &&
+             std::filesystem::equivalent(entryPath, absMapPath) ) {
+            return;  // 已存在
+        }
+    }
+
+    // 添加到项目列表
+    try {
+        auto map = BeatMap::loadFromFile(absMapPath);
+
+        Project::BeatmapEntry entry;
+        entry.m_name     = map.m_baseMapMetadata.version;
+        if ( entry.m_name.empty() ) entry.m_name = absMapPath.filename().string();
+        
+        entry.m_filePath = Config::pathToUtf8(
+            std::filesystem::relative(absMapPath, absRoot));
+        
+        if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
+            entry.m_audioTrackId =
+                Config::pathToUtf8(map.m_baseMapMetadata.main_audio_path.filename());
+        }
+
+        m_currentProject->m_beatmaps.push_back(entry);
+        XINFO("EditorEngine: Discovered new beatmap for project: {}", entry.m_name);
+
+        saveProject();
+    } catch ( const std::exception& e ) {
+        XWARN("EditorEngine: Failed to sync new beatmap {}: {}",
+              Config::pathToUtf8(absMapPath),
+              e.what());
+    }
+}
+
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
     // 拦截创建谱面等引擎级别的指令
@@ -438,6 +510,15 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     if ( m_activeSession ) {
         m_activeSession->pushCommand(std::move(cmd));
     }
+}
+
+bool EditorEngine::hasUnsavedChanges() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( m_activeSession ) {
+        return m_activeSession->getContext().actionStack.isDirty();
+    }
+    return false;
 }
 
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(

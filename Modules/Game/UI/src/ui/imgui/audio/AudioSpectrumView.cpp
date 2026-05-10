@@ -7,6 +7,10 @@
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
+#include "ui/UIManager.h"
+#include "logic/EditorEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -112,8 +116,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
 
     std::string   windowTitle = m_name + "###AudioSpectrumViewGlobal";
-    LayoutContext layoutContext(m_layoutCtx, windowTitle, true,
-                                ImGuiWindowFlags_None, &m_isOpen);
+    LayoutContext layoutContext(
+        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( !track ) {
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
@@ -150,6 +154,21 @@ void AudioSpectrumView::update(UIManager* sourceManager)
 
     double currentTime = audioManager.getCurrentTime();
     double totalTime   = audioManager.getTotalTime();
+
+    // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    auto snapshot =
+        Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+    if ( snapshot ) {
+        currentTime = snapshot->currentTime;
+        // 亚帧平滑补偿 (同步视觉偏移)
+        if ( !snapshot->isPreviewDragging && snapshot->isPlaying && snapshot->snapshotSysTime > 0.0 ) {
+            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+            double dt = now - snapshot->snapshotSysTime;
+            if ( dt > 0.0 && dt < 0.1 ) {
+                currentTime += dt * snapshot->playbackSpeed;
+            }
+        }
+    }
 
     ImGui::SliderFloat(
         TR("ui.waveform.zoom").data(), &m_zoom, 0.1f, 10.0f, "%.1fs");
@@ -253,6 +272,110 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             }
 
             ImGui::EndGroup();
+
+            // 交互层：使用 InvisibleButton 捕获鼠标，防止拖动时移动窗口
+            ImVec2 groupMin = ImGui::GetItemRectMin();
+            ImVec2 groupMax = ImGui::GetItemRectMax();
+            ImGui::SetCursorScreenPos(groupMin);
+            std::string btnId = std::string(textures == m_texturesL ? "##SeekL" : "##SeekR");
+            ImGui::InvisibleButton(btnId.c_str(), ImVec2(groupMax.x - groupMin.x, groupMax.y - groupMin.y));
+
+            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+                ImVec2 mousePos  = ImGui::GetMousePos();
+                float  relX      = std::clamp((mousePos.x - groupMin.x) / (groupMax.x - groupMin.x), 0.0f, 1.0f);
+                double hoverTime = viewStart + relX * (viewEnd - viewStart);
+                hoverTime        = std::clamp(hoverTime, 0.0, totalTime);
+
+                ImGui::SetTooltip("%.3fs", hoverTime);
+
+                // 绘制悬停绿色竖线
+                float hoverLineX = groupMin.x + relX * (groupMax.x - groupMin.x);
+                ImGui::GetWindowDrawList()->AddLine(
+                    ImVec2(hoverLineX, groupMin.y), ImVec2(hoverLineX, groupMax.y),
+                    IM_COL32(0, 255, 0, 150), 1.0f);
+
+                if ( ImGui::IsItemActive() ) {
+
+
+                    // 发送预览同步指令给逻辑线程
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
+                                                    groupMax.x - groupMin.x, groupMax.y - groupMin.y,
+                                                    true, true, hoverTime }));
+
+                    // 绘制预览包围框 (拖拽时跟随鼠标的预测框)
+                    auto session = Logic::EditorEngine::instance().getActiveSession();
+                    if ( session ) {
+                        auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                        if ( snapshot && snapshot->hasBeatmap ) {
+                            double offsetStart = snapshot->visibleTimeStart - snapshot->currentTime;
+                            double offsetEnd   = snapshot->visibleTimeEnd - snapshot->currentTime;
+                            float  viewRange   = static_cast<float>(viewEnd - viewStart);
+
+                            if ( viewRange > 0.001f ) {
+                                float preX1 = groupMin.x + (static_cast<float>(hoverTime + offsetStart - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+                                float preX2 = groupMin.x + (static_cast<float>(hoverTime + offsetEnd - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+
+                                // 裁剪并绘制
+                                float drawPreX1 = std::clamp(preX1, groupMin.x, groupMax.x);
+                                float drawPreX2 = std::clamp(preX2, groupMin.x, groupMax.x);
+
+                                if ( drawPreX2 > drawPreX1 ) {
+                                    ImGui::GetWindowDrawList()->AddRectFilled(
+                                        ImVec2(drawPreX1, groupMin.y), ImVec2(drawPreX2, groupMax.y),
+                                        IM_COL32(128, 0, 255, 80)); // 较明显的预览紫色
+                                    ImGui::GetWindowDrawList()->AddRect(
+                                        ImVec2(drawPreX1, groupMin.y), ImVec2(drawPreX2, groupMax.y),
+                                        IM_COL32(128, 0, 255, 230), 0.0f, 0, 1.5f);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 绘制主画布可见范围包围框
+            auto session = Logic::EditorEngine::instance().getActiveSession();
+            if ( session ) {
+                auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                if ( snapshot && snapshot->hasBeatmap ) {
+                    float viewRange = static_cast<float>(viewEnd - viewStart);
+                    if ( viewRange > 0.001f ) {
+                        float xStart = groupMin.x + (static_cast<float>(snapshot->visibleTimeStart - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+                        float xEnd   = groupMin.x + (static_cast<float>(snapshot->visibleTimeEnd - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+                        
+                        // 裁剪到组范围内显示
+                        float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
+                        float drawX2 = std::clamp(xEnd, groupMin.x, groupMax.x);
+
+                        if ( drawX2 > drawX1 ) {
+                            ImGui::GetWindowDrawList()->AddRectFilled(
+                                ImVec2(drawX1, groupMin.y), ImVec2(drawX2, groupMax.y),
+                                IM_COL32(128, 0, 255, 40)); // 半透明紫色
+                            ImGui::GetWindowDrawList()->AddRect(
+                                ImVec2(drawX1, groupMin.y), ImVec2(drawX2, groupMax.y),
+                                IM_COL32(128, 0, 255, 180), 0.0f, 0, 1.5f);
+                        }
+                    }
+                }
+            }
+
+            if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
+                ImVec2 mousePos  = ImGui::GetMousePos();
+                float  relX      = std::clamp((mousePos.x - groupMin.x) / (groupMax.x - groupMin.x), 0.0f, 1.0f);
+                double hoverTime = viewStart + relX * (viewEnd - viewStart);
+                hoverTime        = std::clamp(hoverTime, 0.0, totalTime);
+
+                audioManager.seek(hoverTime);
+                // 核心修复：同步逻辑层时间
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverTime }));
+
+                // 停止预览状态
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
+                                                groupMax.x - groupMin.x, groupMax.y - groupMin.y,
+                                                false, false, -1.0 }));
+            }
         };
 
     ImGui::Text("%s", TR("ui.spectrum.channel_l").data());

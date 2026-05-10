@@ -431,7 +431,13 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
                 }
             }
         } else {
-            ok = (!hasOrig && !hasExpo);
+            // 允许一方没有 key 而另一方为空数组，视为等价
+            auto getEffectSize = [](const json& j) -> size_t {
+                if ( j.contains("effect") && j["effect"].is_array() )
+                    return j["effect"].size();
+                return 0;
+            };
+            ok = (getEffectSize(orig) == 0 && getEffectSize(expo) == 0);
         }
         if ( ok ) {
             size_t cnt = orig.contains("effect") ? orig["effect"].size() : 0;
@@ -455,11 +461,22 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
         bool hasExpo = expo.contains("note");
         bool ok      = false;
         if ( hasOrig && hasExpo ) {
-            // 过滤掉 type=1 的声音物件（加载器会跳过它们）
-            auto filterNotes = [](const json& arr) -> json {
+            /// @brief 判断 note 是否为音效采样（兼容 string "SOUND" 和旧版 int
+            /// 1）
+            auto isSound = [](const json& n) -> bool {
+                if ( n.contains("type") ) {
+                    if ( n["type"].is_string() )
+                        return n["type"].get<std::string>() == "SOUND";
+                    if ( n["type"].is_number_integer() )
+                        return n["type"].get<int>() == 1;
+                }
+                return false;
+            };
+            // 过滤掉声音物件
+            auto filterNotes = [&](const json& arr) -> json {
                 json filtered = json::array();
                 for ( const auto& n : arr ) {
-                    if ( n.value("type", 0) != 1 ) {
+                    if ( !isSound(n) ) {
                         filtered.push_back(n);
                     }
                 }
@@ -555,7 +572,14 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
             size_t type1Cnt = 0;
             if ( orig.contains("note") ) {
                 for ( const auto& n : orig["note"] ) {
-                    if ( n.value("type", 0) == 1 ) ++type1Cnt;
+                    bool isSound = false;
+                    if ( n.contains("type") ) {
+                        if ( n["type"].is_string() )
+                            isSound = n["type"].get<std::string>() == "SOUND";
+                        else if ( n["type"].is_number_integer() )
+                            isSound = n["type"].get<int>() == 1;
+                    }
+                    if ( isSound ) ++type1Cnt;
                 }
             }
             XINFO(

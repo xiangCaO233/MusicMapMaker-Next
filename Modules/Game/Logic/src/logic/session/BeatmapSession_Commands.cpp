@@ -1,4 +1,7 @@
 #include "audio/AudioManager.h"
+#include "config/Utf8Path.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -20,6 +23,73 @@ void BeatmapSession::processCommands()
         std::visit(
             [this](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
+
+                // --- 自动更新操作状态描述 ---
+                if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
+                    std::string toolName = std::string(TR("ui.status.ready"));
+                    switch ( arg.tool ) {
+                    case EditTool::Move:
+                        toolName =
+                            std::string(TR("ui.status.tool.select_move"));
+                        break;
+                    case EditTool::Marquee:
+                        toolName = std::string(TR("ui.status.tool.marquee"));
+                        break;
+                    case EditTool::Draw:
+                        toolName = std::string(TR("ui.status.tool.draw_brush"));
+                        break;
+                    }
+                    m_ctx->lastActionMessage = fmt::format(
+                        "{} {}", TR("ui.status.category.tool"), toolName);
+                } else if constexpr ( std::is_same_v<T, CmdLoadBeatmap> ) {
+                    if ( arg.beatmap ) {
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {}: {} [{}]",
+                                        TR("ui.status.category.beatmap"),
+                                        TR("ui.status.beatmap.loaded"),
+                                        arg.beatmap->m_baseMapMetadata.name,
+                                        arg.beatmap->m_baseMapMetadata.version);
+                    } else {
+                        m_ctx->lastActionMessage =
+                            fmt::format("{} {}",
+                                        TR("ui.status.category.beatmap"),
+                                        TR("ui.status.beatmap.no_load"));
+                    }
+                } else if constexpr ( std::is_same_v<T, CmdSaveBeatmap> ||
+                                      std::is_same_v<T, CmdSaveBeatmapAs> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.beatmap"),
+                                    TR("ui.status.beatmap.saved"));
+                } else if constexpr ( std::is_same_v<T, CmdMirrorSelected> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.action"),
+                                    TR("ui.edit.mirror"));
+                } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {:.3f}s",
+                                    TR("ui.status.category.playback"),
+                                    TR("ui.status.playback.seek"),
+                                    arg.time);
+                } else if constexpr ( std::is_same_v<T, CmdSetPlaybackSpeed> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}: {:.2f}x",
+                                    TR("ui.status.category.playback"),
+                                    TR("ui.status.playback.speed"),
+                                    arg.speed);
+                } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {}",
+                                    TR("ui.status.category.project"),
+                                    TR("ui.status.project.track_count"),
+                                    arg.trackCount);
+                } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.selection"),
+                                    TR("ui.status.selection.all_selected"));
+                }
 
                 // --- Session 自己处理的命令 ---
                 if constexpr ( std::is_same_v<T, CmdUpdateEditorConfig> ||
@@ -69,6 +139,7 @@ void BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteSelected> ||
+                                    std::is_same_v<T, CmdMirrorSelected> ||
                                     std::is_same_v<T,
                                                    CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
@@ -119,6 +190,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         }
 
         m_ctx->currentBeatmap->saveToFile(savePath);
+        m_ctx->actionStack.markSaved();
+        EditorEngine::instance().syncProjectWithFile(savePath);
     }
 }
 
@@ -127,6 +200,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
     if ( m_ctx->currentBeatmap ) {
         SessionUtils::syncBeatmap(*m_ctx);
         m_ctx->currentBeatmap->saveToFile(cmd.path);
+        m_ctx->actionStack.markSaved();
+        EditorEngine::instance().syncProjectWithFile(cmd.path);
     }
 }
 
@@ -176,15 +251,10 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 AudioTrackConfig config;
                 auto* project = EditorEngine::instance().getCurrentProject();
                 if ( project ) {
-                    auto u8 =
-                        cmd.baseMeta.main_audio_path.filename().u8string();
-                    std::string fileName(
-                        reinterpret_cast<const char*>(u8.c_str()), u8.size());
-
-                    auto u8Full = cmd.baseMeta.main_audio_path.u8string();
-                    std::string fullPathStr(
-                        reinterpret_cast<const char*>(u8Full.c_str()),
-                        u8Full.size());
+                    auto fileName = Config::pathToUtf8(
+                        cmd.baseMeta.main_audio_path.filename());
+                    auto fullPathStr =
+                        Config::pathToUtf8(cmd.baseMeta.main_audio_path);
 
                     for ( const auto& res : project->m_audioResources ) {
                         if ( res.m_id == fileName ||
@@ -194,11 +264,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                         }
                     }
                 }
-                auto        u8Audio = audioPath.u8string();
-                std::string audioPathStr(
-                    reinterpret_cast<const char*>(u8Audio.c_str()),
-                    u8Audio.size());
-                Audio::AudioManager::instance().loadBGM(audioPathStr, config);
+                Audio::AudioManager::instance().loadBGM(
+                    Config::pathToUtf8(audioPath), config);
             }
         }
 
@@ -208,11 +275,9 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                               .parent_path() /
                           cmd.baseMeta.main_cover_path;
             if ( std::filesystem::exists(bgPath) ) {
-                int         w = 0, h = 0, comp = 0;
-                auto        u8Bg = bgPath.u8string();
-                std::string bgPathStr(
-                    reinterpret_cast<const char*>(u8Bg.c_str()), u8Bg.size());
-                if ( stbi_info(bgPathStr.c_str(), &w, &h, &comp) ) {
+                int w = 0, h = 0, comp = 0;
+                if ( stbi_info(
+                         Config::pathToUtf8(bgPath).c_str(), &w, &h, &comp) ) {
                     m_ctx->bgSize =
                         glm::vec2(static_cast<float>(w), static_cast<float>(h));
                 }
@@ -225,10 +290,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         auto* project = EditorEngine::instance().getCurrentProject();
         if ( project ) {
             for ( auto& entry : project->m_beatmaps ) {
-                auto fullEntryPath =
-                    project->m_projectRoot /
-                    std::filesystem::path(reinterpret_cast<const char8_t*>(
-                        entry.m_filePath.c_str()));
+                auto fullEntryPath = project->m_projectRoot /
+                                     Config::utf8ToPath(entry.m_filePath);
 
                 if ( std::filesystem::exists(fullEntryPath) &&
                      std::filesystem::equivalent(fullEntryPath,

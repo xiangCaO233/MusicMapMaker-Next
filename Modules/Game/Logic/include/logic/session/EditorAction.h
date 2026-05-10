@@ -25,6 +25,9 @@ public:
     /// @brief 重做操作
     /// @param ctx 会话上下文引用
     virtual void redo(SessionContext& ctx) = 0;
+
+    /// @brief 获取操作描述名称
+    virtual std::string getName() const = 0;
 };
 
 /// @brief 操作栈管理器，维护撤销栈和重做栈。
@@ -48,9 +51,16 @@ public:
     /// @brief 清空所有栈
     void clear();
 
+    /// @brief 是否有未保存的修改
+    bool isDirty() const;
+
+    /// @brief 标记当前状态为已保存
+    void markSaved();
+
 private:
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
+    size_t                                      m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
 };
 
 }  // namespace MMM::Logic

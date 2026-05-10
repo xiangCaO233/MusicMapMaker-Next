@@ -1,5 +1,6 @@
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
+#include "common/MessageBox.h"
 
 namespace MMM::Graphic
 {
@@ -68,8 +69,15 @@ void VKContext::enableVKValidateLayer()
         }
     }
 
-    // 3.层检查不通过及时释放已初始化的资源并抛出异常
+    // 3.层检查不通过及时释放已初始化的资源并弹出提示
     if ( !allLayersAvailable ) {
+        std::string msg = "Vulkan validation layers are missing.\n"
+                          "Since you are running a Debug build, these layers are required.\n"
+                          "Please download and install the Vulkan SDK to enable debugging "
+                          "features.";
+        XERROR("Fatal: {}", msg);
+        UI::showFatalError("MusicMapMaker - Vulkan SDK Missing", msg);
+
         releaseGLFW();
         // !此处可能退出
         throw std::runtime_error(

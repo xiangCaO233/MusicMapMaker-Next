@@ -232,18 +232,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             // 检查是否需要转化为 Polyline (状态转换点)
             if ( ctx.brushState.type == ::MMM::NoteType::HOLD &&
                  currentTrack != ctx.brushState.startTrack ) {
-                // HOLD 偏离轨道 -> 开始 Polyline: [HOLD, FLICK]
-                NoteComponent::SubNote s1{ ::MMM::NoteType::HOLD,
-                                           ctx.brushState.holdStartTime,
-                                           ctx.brushState.duration,
-                                           ctx.brushState.startTrack,
-                                           0 };
-                NoteComponent::SubNote s2{ ::MMM::NoteType::FLICK,
-                                           s1.timestamp + s1.duration,
-                                           0.0,
-                                           s1.trackIndex,
-                                           currentTrack - s1.trackIndex };
-                ctx.brushState.polylineSegments.push_back(s1);
+                // HOLD 偏离轨道 -> 开始 Polyline
+                if ( ctx.brushState.duration > 1e-5 ) {
+                    // 只有长度大于 0 才添加 Hold 段
+                    NoteComponent::SubNote s1{ ::MMM::NoteType::HOLD,
+                                               ctx.brushState.holdStartTime,
+                                               ctx.brushState.duration,
+                                               ctx.brushState.startTrack,
+                                               0 };
+                    ctx.brushState.polylineSegments.push_back(s1);
+                }
+
+                NoteComponent::SubNote s2{
+                    ::MMM::NoteType::FLICK,
+                    ctx.brushState.holdStartTime + ctx.brushState.duration,
+                    0.0,
+                    ctx.brushState.startTrack,
+                    currentTrack - ctx.brushState.startTrack
+                };
                 ctx.brushState.polylineSegments.push_back(s2);
                 ctx.brushState.segmentStartMouseY = cmd.mouseY;
                 ctx.brushState.type               = ::MMM::NoteType::POLYLINE;
@@ -367,10 +373,68 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_type       = ctx.brushState.type;
 
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-        note.m_subNotes = ctx.brushState.polylineSegments;
-        if ( !note.m_subNotes.empty() ) {
-            note.m_timestamp  = note.m_subNotes.front().timestamp;
-            note.m_trackIndex = note.m_subNotes.front().trackIndex;
+        // [深度清洗与递归简化]
+        auto& segments = ctx.brushState.polylineSegments;
+
+        bool changed = true;
+        while ( changed ) {
+            changed = false;
+
+            // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
+            auto it = std::remove_if(segments.begin(), segments.end(), [](const auto& s) {
+                if ( s.type == ::MMM::NoteType::HOLD ) return s.duration < 1e-5;
+                if ( s.type == ::MMM::NoteType::FLICK ) return s.dtrack == 0;
+                return false;
+            });
+            if ( it != segments.end() ) {
+                segments.erase(it, segments.end());
+                changed = true;
+            }
+
+            // 2. 合并连续的同类型物件
+            if ( segments.size() > 1 ) {
+                for ( size_t i = 0; i < segments.size() - 1; ) {
+                    auto& curr = segments[i];
+                    auto& next = segments[i + 1];
+
+                    if ( curr.type == next.type ) {
+                        if ( curr.type == ::MMM::NoteType::HOLD ) {
+                            // 合并长条持续时间
+                            curr.duration += next.duration;
+                            segments.erase(segments.begin() + i + 1);
+                            changed = true;
+                            continue; // 继续检查合并后的段
+                        } else if ( curr.type == ::MMM::NoteType::FLICK ) {
+                            // 合并滑键位移量
+                            curr.dtrack += next.dtrack;
+                            segments.erase(segments.begin() + i + 1);
+                            changed = true;
+                            continue;
+                        }
+                    }
+                    i++;
+                }
+            }
+        }
+
+        // 3. 根据最终清洗结果进行降级
+        if ( segments.empty() ) {
+            note.m_type = ::MMM::NoteType::NOTE;
+            note.m_duration = 0.0;
+            note.m_dtrack = 0;
+        } else if ( segments.size() == 1 ) {
+            auto s = segments[0];
+            note.m_type       = s.type;
+            note.m_timestamp  = s.timestamp;
+            note.m_duration   = s.duration;
+            note.m_trackIndex = s.trackIndex;
+            note.m_dtrack     = s.dtrack;
+        } else {
+            note.m_subNotes = segments;
+            if ( !note.m_subNotes.empty() ) {
+                note.m_timestamp  = note.m_subNotes.front().timestamp;
+                note.m_trackIndex = note.m_subNotes.front().trackIndex;
+            }
         }
     }
 

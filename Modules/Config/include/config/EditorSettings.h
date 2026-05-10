@@ -63,11 +63,14 @@ struct SfxConfig {
     /// @brief 皮肤全局打击音效的播放速率是否跟随主音轨
     bool hitSfxSyncSpeed{ true };
 
+    /// @brief 是否启用打击音效
+    bool enableHitSfx{ true };
+
     NLOHMANN_DEFINE_TYPE_INTRUSIVE(SfxConfig, polylineStrategy,
                                    enableFlickWidthVolumeScaling,
                                    flickWidthVolumeMultiplier,
                                    permanentSfxVolumes, permanentSfxMutes,
-                                   hitSfxSyncSpeed)
+                                   hitSfxSyncSpeed, enableHitSfx)
 };
 
 enum class FilePickerStyle {
@@ -244,6 +247,21 @@ struct EditorSettings {
     /// @brief 全局主音量 (0.0 ~ 1.0)
     float globalVolume{ 0.25f };
 
+    /// @brief 全局静音
+    bool globalMuted{ false };
+
+    /// @brief BGM 全局增益 (0.0 ~ 2.0)
+    float bgmGain{ 1.0f };
+
+    /// @brief BGM 全局静音
+    bool bgmGainMuted{ false };
+
+    /// @brief SFX 全局增益 (0.0 ~ 2.0)
+    float sfxGain{ 1.0f };
+
+    /// @brief SFX 全局静音
+    bool sfxGainMuted{ false };
+
     /// @brief 框选模式
     SelectionMode selectionMode{ SelectionMode::Intersection };
 
@@ -295,6 +313,11 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "uiScaleMultiplier", c.uiScaleMultiplier },
                         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
                         { "globalVolume", c.globalVolume },
+                        { "globalMuted", c.globalMuted },
+                        { "bgmGain", c.bgmGain },
+                        { "bgmGainMuted", c.bgmGainMuted },
+                        { "sfxGain", c.sfxGain },
+                        { "sfxGainMuted", c.sfxGainMuted },
                         { "selectionMode", c.selectionMode },
                         { "marqueeThickness", c.marqueeThickness },
                         { "marqueeRounding", c.marqueeRounding },
@@ -326,6 +349,11 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
     c.globalVolume          = j.value("globalVolume", 0.25f);
+    c.globalMuted           = j.value("globalMuted", false);
+    c.bgmGain               = j.value("bgmGain", 1.0f);
+    c.bgmGainMuted          = j.value("bgmGainMuted", false);
+    c.sfxGain               = j.value("sfxGain", 1.0f);
+    c.sfxGainMuted          = j.value("sfxGainMuted", false);
     c.selectionMode    = j.value("selectionMode", SelectionMode::Intersection);
     c.marqueeThickness = j.value("marqueeThickness", 2.0f);
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
@@ -340,7 +368,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
-    c.snapFloor = j.value("snapFloor", false);
+    c.snapFloor            = j.value("snapFloor", false);
 }
 
 }  // namespace MMM::Config

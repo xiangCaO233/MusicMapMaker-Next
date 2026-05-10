@@ -5,8 +5,11 @@
 #include "canvas/TimelineCanvas.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/ui/menu/OpenProjectEvent.h"
 #include "game/GlobDefs.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
@@ -120,7 +123,7 @@ GameLoop::~GameLoop() {}
  * @param window 窗口上下文
  * @return int 退出代码 (0 表示正常退出)
  */
-int GameLoop::start(Graphic::NativeWindow& window)
+int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 {
     // 初始化窗口
     // VKContext 表面资源后续初始化
@@ -139,12 +142,24 @@ int GameLoop::start(Graphic::NativeWindow& window)
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
-            Audio::AudioManager::instance().preloadSoundEffect(key,
-                                                               path.string());
+            Audio::AudioManager::instance().preloadSoundEffect(
+                key, Config::pathToUtf8(path));
         }
 
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
         Logic::EditorEngine::instance().start();
+
+        // 处理命令行参数：如果有文件路径输入，触发打开项目/谱面事件
+        if ( argc > 1 ) {
+            std::filesystem::path inputPath(argv[1]);
+            if ( std::filesystem::exists(inputPath) ) {
+                Event::OpenProjectEvent openEv;
+                openEv.m_projectPath = inputPath;
+                Event::EventBus::instance().publish(openEv);
+                XINFO("Handling command line argument: {}",
+                      Config::pathToUtf8(inputPath));
+            }
+        }
 
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
         // (ECS)

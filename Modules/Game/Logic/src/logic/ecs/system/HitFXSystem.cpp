@@ -19,6 +19,8 @@ bool HitFXSystem::ActiveEffect::isFinished(double currentTime, float baseFps,
 void HitFXSystem::triggerAudio(const HitEvent&             ev,
                                const Config::EditorConfig& config)
 {
+    if ( !config.settings.sfxConfig.enableHitSfx ) return;
+
     auto& audioManager = Audio::AudioManager::instance();
 
     // 1. 根据策略确定最终播放类型
@@ -61,6 +63,8 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
 void HitFXSystem::triggerVisual(const HitEvent&             ev,
                                 const Config::EditorConfig& config)
 {
+    if ( !config.visual.enableHitEffects ) return;
+
     ::MMM::NoteType effectiveType = ev.type;
     std::string     effectKey     = "note";
 
@@ -117,7 +121,8 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
         size_t frameCount = seq ? seq->frames.size() : 0;
 
         if ( active.isLooping ) {
-            // 对于 Hold，如果当前时间超过了 Hold 结束时间，且至少播放完一个完整的普通动画周期，则结束
+            // 对于 Hold，如果当前时间超过了 Hold
+            // 结束时间，且至少播放完一个完整的普通动画周期，则结束
             // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
             double animDuration = static_cast<double>(frameCount) / baseFps;
             if ( visualTime > (active.startTime + active.duration) &&
@@ -141,7 +146,8 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double visualTime,
                                    int32_t trackCount, float judgmentLineY,
                                    float leftX, float singleTrackW)
 {
-    if ( m_trackActiveEffects.empty() ) return;
+    if ( !config.visual.enableHitEffects || m_trackActiveEffects.empty() )
+        return;
 
     RenderSnapshot* snapshot    = batcher.snapshot;
     auto&           skinManager = Config::SkinManager::instance();

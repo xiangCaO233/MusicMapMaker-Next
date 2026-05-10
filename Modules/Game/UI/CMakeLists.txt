@@ -4,6 +4,7 @@ add_library(UI STATIC
     src/ui/imgui/MainDockSpaceUI.cpp
     src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
     src/ui/imgui/MainDockSpaceUI_Docking.cpp
+    src/ui/imgui/MainDockSpaceUI_StatusBar.cpp
     src/ui/imgui/FloatingManagerUI.cpp
     src/ui/imgui/SideBarUI.cpp
     src/ui/imgui/menu/MainMenuView.cpp
@@ -53,4 +54,5 @@ target_link_libraries(UI
     3rd_lunasvg
     3rd_concurrentqueue
     3rd_entt
+    Network
 )

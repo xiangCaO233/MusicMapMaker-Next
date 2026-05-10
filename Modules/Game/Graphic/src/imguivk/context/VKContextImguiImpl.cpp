@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
 #include "graphic/glfw/window/NativeWindow.h"
@@ -43,9 +44,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     // Enable Multi-Viewport / Platform
     // Windows
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    // io.ConfigViewportsNoAutoMerge = true;
-    // io.ConfigViewportsNoTaskBarIcon = true;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    io.ConfigViewportsNoAutoMerge   = false;
+    io.ConfigViewportsNoTaskBarIcon = true;
 
     // Setup Dear ImGui style
     // ImGui::StyleColorsDark();
@@ -184,11 +185,11 @@ void VKContext::setupFonts()
         float atlasSize = size * native_scale;
 
         // 1. 加载基础 ASCII 字体 (严格限制范围)
-        ImFont* font =
-            io.Fonts->AddFontFromFileTTF(asciiFontPath.generic_string().c_str(),
-                                         atlasSize,
-                                         &config,
-                                         ascii_ranges);
+        ImFont* font = io.Fonts->AddFontFromFileTTF(
+            Config::pathToUtf8(asciiFontPath).c_str(),
+            atlasSize,
+            &config,
+            ascii_ranges);
 
         if ( font ) {
             // 2. 配置合并参数加载 CJK 字体 (严格限制范围)
@@ -196,10 +197,11 @@ void VKContext::setupFonts()
             mergeConfig.MergeMode  = true;
             mergeConfig.PixelSnapH = true;
 
-            io.Fonts->AddFontFromFileTTF(cjkFontPath.generic_string().c_str(),
-                                         atlasSize,
-                                         &mergeConfig,
-                                         cjk_ranges);
+            io.Fonts->AddFontFromFileTTF(
+                Config::pathToUtf8(cjkFontPath).c_str(),
+                atlasSize,
+                &mergeConfig,
+                cjk_ranges);
 
             // 3. 合并嵌入的 NerdFont 图标
             ImFontConfig iconConfig;

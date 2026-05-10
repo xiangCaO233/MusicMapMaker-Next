@@ -19,9 +19,10 @@ target_link_libraries(Game
 		Graphic
 		Logic
 		Audio
-	MMM
-	3rd_entt
-	3rd_glm
+		3rd_entt
+		3rd_glm
+		MMM
+		Network
 )
 
 if ( WIN32 )

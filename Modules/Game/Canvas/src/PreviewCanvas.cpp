@@ -1,9 +1,11 @@
 #include "canvas/PreviewCanvas.h"
 #include "common/LogicCommands.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
@@ -13,12 +15,11 @@
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
-#include "graphic/imguivk/VKContext.h"
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <utility>
-#include <chrono>
-#include <algorithm>
 
 namespace MMM::Canvas
 {
@@ -86,22 +87,25 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
         // 应用顶点级 Y 偏移 (仅修改动态顶点: 标尺刻度、事件线等)
         uint32_t startVtx = m_currentSnapshot->staticVertexCount;
-        auto&    vertices  = m_currentSnapshot->vertices;
-        uint32_t endVtx   = m_currentSnapshot->dynamicVertexCount > 0
-                                ? (startVtx + m_currentSnapshot->dynamicVertexCount)
-                                : static_cast<uint32_t>(vertices.size());
+        auto&    vertices = m_currentSnapshot->vertices;
+        uint32_t endVtx =
+            m_currentSnapshot->dynamicVertexCount > 0
+                ? (startVtx + m_currentSnapshot->dynamicVertexCount)
+                : static_cast<uint32_t>(vertices.size());
 
         // 如果是同一个快照被复用，先撤销上一帧的偏移
         if ( m_lastOffsetSnapshot == m_currentSnapshot &&
              std::abs(m_lastAppliedYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
+            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
+                  ++i ) {
                 vertices[i].pos.y -= m_lastAppliedYOffset;
             }
         }
 
         // 应用新偏移
         if ( std::abs(newYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
+            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
+                  ++i ) {
                 vertices[i].pos.y += newYOffset;
             }
         }
@@ -121,12 +125,14 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     bool   isHovered     = ImGui::IsWindowHovered();
     bool   isDragging    = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetMousePosition{ m_cameraId,
-                                                             localMousePos.x,
-                                                             localMousePos.y,
-                                                             isHovered,
-                                                             isDragging }));
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                    .mouseX         = localMousePos.x,
+                                    .mouseY         = localMousePos.y,
+                                    .viewportWidth  = ImGui::GetWindowWidth(),
+                                    .viewportHeight = ImGui::GetWindowHeight(),
+                                    .isHovering     = isHovered,
+                                    .isDragging     = isDragging }));
 
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&
@@ -146,7 +152,8 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
         // --- 交互：滚轮调整预览区倍率 ---
         float wheel = ImGui::GetIO().MouseWheel;
-        if ( std::abs(wheel) > 0.01f ) {
+        if ( std::abs(wheel) > 0.01f && !ImGui::GetIO().KeyCtrl &&
+             !ImGui::GetIO().KeyAlt ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             float step      = 0.5f;
             if ( ImGui::GetIO().KeyShift ) step *= 2.0f;
@@ -201,15 +208,15 @@ std::vector<std::string> PreviewCanvas::getShaderSources(
         if ( !std::filesystem::exists(path) ) return {};
 
         std::string vs = Graphic::VKShader::readFile(
-            (path / "VertexShader.spv").generic_string());
+            Config::pathToUtf8(path / "VertexShader.spv"));
         std::string fs = Graphic::VKShader::readFile(
-            (path / "FragmentShader.spv").generic_string());
+            Config::pathToUtf8(path / "FragmentShader.spv"));
 
         std::vector<std::string> result;
         auto                     gsPath = path / "GeometryShader.spv";
         if ( std::filesystem::exists(gsPath) ) {
             result = { vs,
-                       Graphic::VKShader::readFile(gsPath.generic_string()),
+                       Graphic::VKShader::readFile(Config::pathToUtf8(gsPath)),
                        fs };
         } else {
             result = { vs, fs };
@@ -259,7 +266,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
         auto p = skin.getAssetPath(key);
         if ( !p.empty() )
             m_textureAtlas->addTexture(static_cast<uint32_t>(id),
-                                       p.generic_string());
+                                       Config::pathToUtf8(p));
     };
 
     addTex(Logic::TextureID::Note, "note.note");
@@ -277,7 +284,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         uint32_t currentId = seq.startId;
         for ( const auto& frame : seq.frames ) {
-            m_textureAtlas->addTexture(currentId++, frame.generic_string());
+            m_textureAtlas->addTexture(currentId++, Config::pathToUtf8(frame));
         }
     }
 
@@ -337,7 +344,8 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 
     vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
     if ( m_textureAtlas ) {
-        atlasDescriptor = m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
 
     vk::DescriptorSet lastBound = VK_NULL_HANDLE;

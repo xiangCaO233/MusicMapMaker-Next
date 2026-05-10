@@ -1,3 +1,4 @@
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
@@ -28,18 +29,13 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
         Sizing::Grow(),
         Sizing::Fixed(ImGui::GetFrameHeight()),
         [project](Clay_BoundingBox r, bool isHovered) {
-            ImVec4 highlightCol = Utils::UIThemeUtils::getHighlightColor();
-            auto        u8Name = project->m_projectRoot.filename().u8string();
-            std::string rootName(reinterpret_cast<const char*>(u8Name.c_str()),
-                                 u8Name.size());
-            ImGui::TextColored(highlightCol,
-                               "Root: %s",
-                               rootName.c_str());
+            ImVec4      highlightCol = Utils::UIThemeUtils::getHighlightColor();
+            std::string rootName =
+                Config::pathToUtf8(project->m_projectRoot.filename());
+            ImGui::TextColored(highlightCol, "Root: %s", rootName.c_str());
             if ( ImGui::IsItemHovered() ) {
-                auto        u8Full = project->m_projectRoot.u8string();
-                std::string fullPath(
-                    reinterpret_cast<const char*>(u8Full.c_str()),
-                    u8Full.size());
+                std::string fullPath =
+                    Config::pathToUtf8(project->m_projectRoot);
                 ImGui::SetTooltip("%s", fullPath.c_str());
             }
         });
@@ -82,10 +78,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
 {
     try {
         for ( const auto& entry : std::filesystem::directory_iterator(path) ) {
-            const auto& p  = entry.path();
-            auto        u8 = p.filename().u8string();
-            std::string filename(reinterpret_cast<const char*>(u8.c_str()),
-                                 u8.size());
+            const auto& p        = entry.path();
+            std::string filename = Config::pathToUtf8(p.filename());
             if ( filename.size() > 1 && filename[0] == '.' ) continue;
 
             if ( entry.is_directory() ) {
@@ -106,14 +100,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                     if ( project ) {
                         auto relP = std::filesystem::relative(
                             p, project->m_projectRoot);
-                        auto        relU8 = relP.generic_u8string();
-                        std::string relPath(
-                            reinterpret_cast<const char*>(relU8.c_str()),
-                            relU8.size());
-                        auto        extU8 = p.extension().u8string();
-                        std::string ext(
-                            reinterpret_cast<const char*>(extU8.c_str()),
-                            extU8.size());
+                        std::string relPath = Config::pathToUtf8(relP);
+                        std::string ext     = Config::pathToUtf8(p.extension());
 
                         auto publishToggleEvent = [&](SideBarTab tab) {
                             Event::UISubViewToggleEvent evt;
@@ -125,7 +113,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                             Event::EventBus::instance().publish(evt);
                         };
 
-                        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+                        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
+                             ext == ".mmm" ) {
                             publishToggleEvent(SideBarTab::BeatMapExplorer);
                             for ( const auto& bm : project->m_beatmaps ) {
                                 if ( bm.m_filePath == relPath ) {

@@ -97,8 +97,11 @@ struct CmdSetMousePosition {
     std::string cameraId;
     float       mouseX;
     float       mouseY;
+    float       viewportWidth{ 0.0f };   ///< 视口宽度 (用于边缘滚动计算)
+    float       viewportHeight{ 0.0f };  ///< 视口高度 (用于边缘滚动计算)
     bool        isHovering;
     bool        isDragging{ false };
+    double      hoverTime{ -1.0 };  ///< 可选：直接指定悬停时间 (如果 >= 0)
 };
 
 /**
@@ -261,6 +264,12 @@ struct CmdDeleteSelected {
 };
 
 /**
+ * @brief 镜像选中物件指令
+ */
+struct CmdMirrorSelected {
+};
+
+/**
  * @brief 全选指令
  */
 struct CmdSelectAll {
@@ -342,7 +351,7 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdSelectAll, CmdSaveBeatmap,
+    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected, CmdSelectAll, CmdSaveBeatmap,
     CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
     CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
     CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,

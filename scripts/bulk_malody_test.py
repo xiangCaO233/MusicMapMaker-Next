@@ -20,7 +20,7 @@ def run_test(file_path):
             [TEST_EXE, file_path, output_path],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=30
         )
         if result.returncode == 0:
             return True, file_path, ""

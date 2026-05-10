@@ -1,4 +1,5 @@
 #include "canvas/Basic2DCanvas.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
@@ -207,9 +208,9 @@ std::vector<std::string> Basic2DCanvas::getShaderSources(
         }
 
         std::string vertexShaderSource = Graphic::VKShader::readFile(
-            (shader_spv_path / "VertexShader.spv").generic_string());
+            Config::pathToUtf8(shader_spv_path / "VertexShader.spv"));
         std::string fragmentShaderSource = Graphic::VKShader::readFile(
-            (shader_spv_path / "FragmentShader.spv").generic_string());
+            Config::pathToUtf8(shader_spv_path / "FragmentShader.spv"));
 
         std::vector<std::string> result;
 
@@ -217,7 +218,7 @@ std::vector<std::string> Basic2DCanvas::getShaderSources(
              std::filesystem::exists(geometryShaderPath) ) {
             result = { vertexShaderSource,
                        Graphic::VKShader::readFile(
-                           geometryShaderPath.generic_string()),
+                           Config::pathToUtf8(geometryShaderPath)),
                        fragmentShaderSource };
         } else {
             result = { vertexShaderSource, fragmentShaderSource };
@@ -260,39 +261,41 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::None), white, 4, 4);
 
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Note),
-                               skin.getAssetPath("note.note").generic_string());
-    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Node),
-                               skin.getAssetPath("note.node").generic_string());
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::Note),
+        Config::pathToUtf8(skin.getAssetPath("note.note")));
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::Node),
+        Config::pathToUtf8(skin.getAssetPath("note.node")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::HoldEnd),
-        skin.getAssetPath("note.holdend").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("note.holdend")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::HoldBodyVertical),
-        skin.getAssetPath("note.holdbodyvertical").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("note.holdbodyvertical")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::HoldBodyHorizontal),
-        skin.getAssetPath("note.holdbodyhorizontal").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("note.holdbodyhorizontal")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::FlickArrowLeft),
-        skin.getAssetPath("note.arrowleft").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("note.arrowleft")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::FlickArrowRight),
-        skin.getAssetPath("note.arrowright").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("note.arrowright")));
 
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::Track),
-        skin.getAssetPath("panel.track.background").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("panel.track.background")));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::JudgeArea),
-        skin.getAssetPath("panel.track.judgearea").generic_string());
+        Config::pathToUtf8(skin.getAssetPath("panel.track.judgearea")));
     m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
-                               skin.getAssetPath("logo").generic_string());
+                               Config::pathToUtf8(skin.getAssetPath("logo")));
 
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         uint32_t currentId = seq.startId;
         for ( const auto& frame : seq.frames ) {
-            m_textureAtlas->addTexture(currentId++, frame.generic_string());
+            m_textureAtlas->addTexture(currentId++, Config::pathToUtf8(frame));
         }
     }
 

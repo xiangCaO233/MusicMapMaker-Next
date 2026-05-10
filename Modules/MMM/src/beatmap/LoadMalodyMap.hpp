@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -26,24 +27,18 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     if ( basemeta.map_path.is_relative() ) {
         basemeta.map_path = std::filesystem::absolute(basemeta.map_path);
     }
-    // 将 path 转为 UTF-8 std::string 供日志使用
-    auto pathToStr = [](const std::filesystem::path& p) {
-        auto u8 = p.u8string();
-        return std::string(reinterpret_cast<const char*>(u8.c_str()),
-                           u8.size());
-    };
 
-    XINFO("加载malody谱面路径:{}", pathToStr(basemeta.map_path));
+    XINFO("加载malody谱面路径:{}", Config::pathToUtf8(basemeta.map_path));
 
     std::ifstream fs{ path };
     if ( !fs.is_open() ) {
-        XERROR("无法打开 malody 谱面文件: {}", pathToStr(path));
+        XERROR("无法打开 malody 谱面文件: {}", Config::pathToUtf8(path));
         return {};
     }
 
-    json fileData;
+    json        fileData;
     std::string fileContent((std::istreambuf_iterator<char>(fs)),
-                           std::istreambuf_iterator<char>());
+                            std::istreambuf_iterator<char>());
     try {
         fileData = json::parse(fileContent, nullptr, true, true);
     } catch ( ... ) {
@@ -52,31 +47,28 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     if ( fileData.is_discarded() ) {
-        XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}", pathToStr(path));
+        XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}",
+               Config::pathToUtf8(path));
         return {};
     }
 
-    // 辅助函数：将 UTF-8 字符串转为 std::filesystem::path
-    auto strToPath = [](const std::string& s) {
-        return std::filesystem::path(
-            reinterpret_cast<const char8_t*>(s.c_str()));
-    };
-
     // 1. 解析基础元数据 (Meta)
     if ( fileData.contains("meta") ) {
-        const auto& meta         = fileData["meta"];
-        basemeta.author          = meta.value("creator", "");
-        basemeta.version         = meta.value("version", "");
-        basemeta.main_cover_path = strToPath(meta.value("background", ""));
+        const auto& meta = fileData["meta"];
+        basemeta.author  = meta.value("creator", "");
+        basemeta.version = meta.value("version", "");
+        basemeta.main_cover_path =
+            Config::utf8ToPath(meta.value("background", ""));
 
         if ( meta.contains("song") ) {
-            const auto& song         = meta["song"];
-            basemeta.title           = song.value("title", "");
-            basemeta.title_unicode   = song.value("titleorg", "");
-            basemeta.artist          = song.value("artist", "");
-            basemeta.artist_unicode  = song.value("artistorg", "");
-            basemeta.main_audio_path = strToPath(song.value("file", ""));
-            basemeta.preference_bpm  = song.value("bpm", 0.0);
+            const auto& song        = meta["song"];
+            basemeta.title          = song.value("title", "");
+            basemeta.title_unicode  = song.value("titleorg", "");
+            basemeta.artist         = song.value("artist", "");
+            basemeta.artist_unicode = song.value("artistorg", "");
+            basemeta.main_audio_path =
+                Config::utf8ToPath(song.value("file", ""));
+            basemeta.preference_bpm = song.value("bpm", 0.0);
         }
 
         if ( meta.contains("mode_ext") ) {
@@ -89,12 +81,21 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         malody_props["id"]      = std::to_string(meta.value("id", 0));
         malody_props["preview"] = std::to_string(meta.value("preview", 0));
         malody_props["mode"]    = std::to_string(meta.value("mode", 0));
+        if ( meta.contains("$ver") ) {
+            malody_props["$ver"] = std::to_string(meta["$ver"].get<int>());
+        }
         if ( meta.contains("aimode") ) {
             malody_props["aimode"] = meta["aimode"].get<std::string>();
         }
         if ( meta.contains("mode_ext") ) {
             malody_props["mode_ext"] = meta["mode_ext"].dump();
         }
+    }
+
+    // 存储 extra 顶层扩展数据
+    if ( fileData.contains("extra") ) {
+        beatMap.m_metadata.map_properties[MapMetadataType::MALODY]["extra"] =
+            fileData["extra"].dump();
     }
 
     // 辅助函数：将 Malody 的 beat [beat_index, numerator, denominator]
@@ -127,8 +128,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             ev.raw   = t;
             if ( t.contains("delay") ) {
                 initialDelay = t["delay"];
-                beatMap.m_metadata.map_properties[MapMetadataType::MALODY]
-                                                 ["initialDelay"] =
+                beatMap.m_metadata
+                    .map_properties[MapMetadataType::MALODY]["initialDelay"] =
                     std::to_string(initialDelay);
             }
             rawEvents.push_back(ev);
@@ -172,11 +173,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
 
     // 默认轨道数取 column 字段最大值
-    int   finalK = std::max(0, maxColumnField + 1);
+    int finalK = std::max(0, maxColumnField + 1);
 
     // 如果没有通过 column 识别出轨道数，则回退到元数据中的配置
     if ( finalK <= 0 ) {
-        if ( fileData.contains("meta") && fileData["meta"].contains("mode_ext") ) {
+        if ( fileData.contains("meta") &&
+             fileData["meta"].contains("mode_ext") ) {
             finalK = fileData["meta"]["mode_ext"].value("column", 4);
         } else {
             finalK = 4;
@@ -238,10 +240,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     auto getAbsTime = [&](double beat) {
         double curBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
-        
+
         double lastB = 0.0;
-        double lastT = initialDelay; // 默认 initialDelay 对应 beat 0
-        
+        double lastT = initialDelay;  // 默认 initialDelay 对应 beat 0
+
         if ( !rawEvents.empty() ) {
             // Malody 的 delay 实际上是第一个 timing 点的时间戳
             lastB = rawEvents[0].beat;
@@ -263,16 +265,29 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         return lastT;
     };
 
+    /// @brief 判断 note 条目是否为音效采样
+    /// type 字段为字符串 ("SOUND") 或旧版整数 (1)
+    auto isSoundNote = [](const json& n) -> bool {
+        if ( n.contains("type") ) {
+            if ( n["type"].is_string() )
+                return n["type"].get<std::string>() == "SOUND";
+            if ( n["type"].is_number_integer() )
+                return n["type"].get<int>() == 1;
+        }
+        return false;
+    };
+
     // 4. 处理音频偏移
     double audioOffset = 0.0;
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
-            if ( n.value("type", 0) == 1 ) {
+            if ( isSoundNote(n) ) {
                 std::string soundFile = n.value("sound", "");
                 if ( basemeta.main_audio_path.empty() ) {
-                    basemeta.main_audio_path = strToPath(soundFile);
+                    basemeta.main_audio_path = Config::utf8ToPath(soundFile);
                 }
-                if ( strToPath(soundFile) == basemeta.main_audio_path ||
+                if ( Config::utf8ToPath(soundFile) ==
+                         basemeta.main_audio_path ||
                      soundFile.empty() ) {
                     audioOffset = n.value("offset", 0.0);
                     beatMap.m_metadata.map_properties[MapMetadataType::MALODY]
@@ -280,7 +295,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         std::to_string(audioOffset);
                     XINFO("找到 Malody 音频偏移: {} ms, 音频文件: {}",
                           audioOffset,
-                          pathToStr(basemeta.main_audio_path));
+                          Config::pathToUtf8(basemeta.main_audio_path));
                     break;
                 }
             }
@@ -290,7 +305,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm =
         basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
-    
+
     double lastProcessedBeat = 0.0;
     double lastProcessedTime = initialDelay;
 
@@ -363,7 +378,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
             if ( !n.contains("beat") ) continue;
-            if ( n.value("type", 0) == 1 ) continue;
+            if ( isSoundNote(n) ) continue;
 
             double   startBeat = beatToDouble(n["beat"]);
             double   startTime = getAbsTime(startBeat) - audioOffset;
@@ -375,15 +390,19 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             Note* notePtr = nullptr;
 
             if ( n.contains("seg") ) {
-                auto segs = n["seg"];
-                double rootBeatRaw = beatToDouble(n["beat"]);
-                double firstSegBeat = rootBeatRaw + beatToDouble(segs[0].value("beat", json::array()));
+                auto   segs         = n["seg"];
+                double rootBeatRaw  = beatToDouble(n["beat"]);
+                double firstSegBeat = rootBeatRaw + beatToDouble(segs[0].value(
+                                                        "beat", json::array()));
                 double firstTime    = getAbsTime(firstSegBeat) - audioOffset;
 
                 int      rootX   = n.value("x", 0);
                 int      xOffset = segs[0].value("x", 0);
                 int      firstX  = rootX + xOffset;
-                uint32_t firstSegTrack = std::clamp(getTrackIndexFromX(firstX), 0u, (uint32_t)std::max(0, basemeta.track_count - 1));
+                uint32_t firstSegTrack =
+                    std::clamp(getTrackIndexFromX(firstX),
+                               0u,
+                               (uint32_t)std::max(0, basemeta.track_count - 1));
 
                 if ( segs.size() == 1 ) {
                     if ( firstSegTrack == track ) {
@@ -394,8 +413,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         h.m_duration  = std::max(0.0, firstTime - startTime);
                         notePtr       = &h;
                     } else if ( firstTime == startTime ) {
-                        Flick& f      = beatMap.m_noteData.flicks.emplace_back();
-                        f.m_type      = NoteType::FLICK;
+                        Flick& f = beatMap.m_noteData.flicks.emplace_back();
+                        f.m_type = NoteType::FLICK;
                         f.m_timestamp = startTime;
                         f.m_track     = track;
                         f.m_dtrack    = (int32_t)firstSegTrack - (int32_t)track;
@@ -404,7 +423,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 }
 
                 if ( !notePtr ) {
-                    Polyline& poly = beatMap.m_noteData.polylines.emplace_back();
+                    Polyline& poly =
+                        beatMap.m_noteData.polylines.emplace_back();
                     poly.m_type      = NoteType::POLYLINE;
                     poly.m_timestamp = startTime;
                     poly.m_track     = track;
@@ -428,13 +448,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                         if ( stepTime > runningTime + 1e-7 ) {
                             // Hold segment
-                            Hold& h = beatMap.m_noteData.holds.emplace_back();
+                            Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
                             h.m_timestamp = runningTime;
                             h.m_track     = runningTrack;
-                            h.m_duration = std::max(0.0, stepTime - runningTime);
+                            h.m_duration =
+                                std::max(0.0, stepTime - runningTime);
                             h.m_isSubNote = true;
-                            
+
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
 
@@ -503,14 +524,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
             // 物件元数据存储
             if ( notePtr ) {
-                auto& props = notePtr->m_metadata.note_properties[NoteMetadataType::MALODY];
-                if ( n.contains("endbeat") ) props["original_structure"] = "endbeat";
-                if ( n.contains("seg") )     props["original_structure"] = "seg";
-                if ( n.contains("dir") )     props["original_structure_flick"] = "dir";
+                auto& props = notePtr->m_metadata
+                                  .note_properties[NoteMetadataType::MALODY];
+                if ( n.contains("endbeat") )
+                    props["original_structure"] = "endbeat";
+                if ( n.contains("seg") ) props["original_structure"] = "seg";
+                if ( n.contains("dir") )
+                    props["original_structure_flick"] = "dir";
 
                 for ( auto it = n.begin(); it != n.end(); ++it ) {
-                    if ( it.key() != "endbeat" &&
-                         it.key() != "column" && it.key() != "seg" ) {
+                    if ( it.key() != "endbeat" && it.key() != "column" &&
+                         it.key() != "seg" ) {
                         props[it.key()] = it.value().dump();
                     }
                 }

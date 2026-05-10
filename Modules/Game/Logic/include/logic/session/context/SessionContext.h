@@ -130,8 +130,9 @@ struct SessionContext {
     } eraserState;
 
     // --- 编辑操作栈 ---
-    EditorActionStack          actionStack;  ///< 撤销/重做操作栈
-    std::vector<ClipboardItem> clipboard;    ///< 编辑器剪贴板
+    EditorActionStack          actionStack;        ///< 撤销/重做操作栈
+    std::vector<ClipboardItem> clipboard;          ///< 编辑器剪贴板
+    std::string                lastActionMessage;  ///< 最近一次操作的详细描述
 };
 
 }  // namespace MMM::Logic

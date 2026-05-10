@@ -32,17 +32,25 @@ void AudioTrackControllerUI::renderVolumeSection(float& volume, bool& muted,
         ImGui::PushStyleColor(ImGuiCol_Text, dangerCol);
         pushedTextColor = true;
     }
+
+    ImVec2 pos       = ImGui::GetCursorScreenPos();
+    float  btnWidth  = 30.0f;
+    float  btnHeight = ImGui::GetFrameHeight();
+
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-    if ( ImGui::Button(icon, ImVec2(30, 0)) ) {
+    if ( ImGui::Button(icon, ImVec2(btnWidth, 0)) ) {
         muted   = !muted;
         changed = true;
     }
     ImGui::PopStyleVar();    // Pop ImGuiStyleVar_FramePadding
     ImGui::PopStyleColor();  // Pop ImGuiCol_Button
+
     if ( pushedTextColor ) {
         ImGui::PopStyleColor();  // Pop ImGuiCol_Text
     }
+
+
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("%s",
                           muted ? TR("ui.audio_manager.unmute").data()

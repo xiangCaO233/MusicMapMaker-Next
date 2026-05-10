@@ -46,9 +46,11 @@ public:
      * 该函数会阻塞直到窗口关闭。
      *
      * @param window 窗口上下文
+     * @param argc 命令行参数数量
+     * @param argv 命令行参数数组
      * @return int 退出代码 (0 表示正常退出)
      */
-    int start(Graphic::NativeWindow& window);
+    int start(Graphic::NativeWindow& window, int argc = 0, char* argv[] = nullptr);
 
 private:
     GameLoop();

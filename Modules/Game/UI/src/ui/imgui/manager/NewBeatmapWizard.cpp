@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "audio/AudioManager.h"
 #include "common/AudioInfoUtils.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -91,17 +92,18 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         std::string audioPreview =
             m_selectedAudioPath.empty()
                 ? TR("ui.wizard.new_beatmap.select_audio").data()
-                : m_selectedAudioPath.generic_string();
+                : Config::pathToUtf8(m_selectedAudioPath);
 
         if ( ImGui::BeginCombo(TR("ui.wizard.new_beatmap.select_audio").data(),
                                audioPreview.c_str()) ) {
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
-                bool        isSelected = (m_selectedAudioPath == res.m_path);
-                std::string label      = res.m_id + "##" + res.m_path;
+                bool isSelected =
+                    (Config::pathToUtf8(m_selectedAudioPath) == res.m_path);
+                std::string label = res.m_id + "##" + res.m_path;
                 if ( ImGui::Selectable(label.c_str(), isSelected) ) {
-                    onAudioSelected(res.m_path);
+                    onAudioSelected(Config::utf8ToPath(res.m_path));
                 }
                 if ( isSelected ) ImGui::SetItemDefaultFocus();
                 ImGui::SameLine();
@@ -114,7 +116,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         std::string coverPreview =
             m_selectedCoverPath.empty()
                 ? TR("ui.wizard.new_beatmap.select_cover").data()
-                : m_selectedCoverPath.generic_string();
+                : Config::pathToUtf8(m_selectedCoverPath);
 
         if ( ImGui::BeginCombo(TR("ui.wizard.new_beatmap.select_cover").data(),
                                coverPreview.c_str()) ) {
@@ -125,14 +127,14 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                       std::filesystem::recursive_directory_iterator(
                           project->m_projectRoot) ) {
                     if ( entry.is_regular_file() ) {
-                        auto ext = entry.path().extension().string();
+                        auto ext = Config::pathToUtf8(entry.path().extension());
                         std::transform(
                             ext.begin(), ext.end(), ext.begin(), ::tolower);
                         if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
                              ext == ".bmp" || ext == ".mp4" || ext == ".avi" ) {
                             auto rel = std::filesystem::relative(
                                 entry.path(), project->m_projectRoot);
-                            resources.push_back(rel.generic_string());
+                            resources.push_back(Config::pathToUtf8(rel));
                         }
                     }
                 }

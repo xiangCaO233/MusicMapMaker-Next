@@ -58,6 +58,11 @@ AudioManager::AudioManager()
     // 从配置初始化音量
     auto& settings    = Config::AppConfig::instance().getEditorSettings();
     m_globalVolume    = settings.globalVolume;
+    m_globalMuted     = settings.globalMuted;
+    m_bgmGain         = settings.bgmGain;
+    m_bgmGainMuted    = settings.bgmGainMuted;
+    m_sfxGain         = settings.sfxGain;
+    m_sfxGainMuted    = settings.sfxGainMuted;
     m_mainTrackVolume = 0.5f;  // 默认主音轨音量
 
     // 初始化常驻音效静音状态
@@ -140,10 +145,13 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     m_mainTrackVolume = config.volume;
     m_mainTrackMuted  = config.muted;
 
-    m_bgmTrack  = track;
-    m_bgmSource = std::make_shared<ice::SourceNode>(track);
-    m_bgmSource->setvolume(
-        m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
+    m_bgmTrack     = track;
+    m_bgmSource    = std::make_shared<ice::SourceNode>(track);
+    float finalVol = (m_globalMuted || m_bgmGainMuted)
+                         ? 0.0f
+                         : m_mainTrackVolume * m_globalVolume * m_bgmGain;
+    if ( m_mainTrackMuted ) finalVol = 0.0f;
+    m_bgmSource->setvolume(finalVol);
     m_bgmSource->add_playcallback(g_callback);
 
     m_stretcher = std::make_shared<ice::TimeStretcher>();
@@ -243,8 +251,11 @@ void AudioManager::setMainTrackVolume(float volume)
 {
     m_mainTrackVolume = std::clamp(volume, 0.0f, 1.0f);
     if ( m_bgmSource ) {
-        m_bgmSource->setvolume(
-            m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
+        float finalVol = (m_globalMuted || m_bgmGainMuted)
+                             ? 0.0f
+                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
+        if ( m_mainTrackMuted ) finalVol = 0.0f;
+        m_bgmSource->setvolume(finalVol);
     }
 }
 
@@ -257,8 +268,11 @@ void AudioManager::setMainTrackMute(bool muted)
 {
     m_mainTrackMuted = muted;
     if ( m_bgmSource ) {
-        m_bgmSource->setvolume(
-            m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
+        float finalVol = (m_globalMuted || m_bgmGainMuted)
+                             ? 0.0f
+                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
+        if ( m_mainTrackMuted ) finalVol = 0.0f;
+        m_bgmSource->setvolume(finalVol);
     }
 }
 
@@ -278,14 +292,83 @@ void AudioManager::setGlobalVolume(float volume)
 
     // 重新应用全局音量到主音轨
     if ( m_bgmSource ) {
-        m_bgmSource->setvolume(
-            m_mainTrackMuted ? 0.0f : m_mainTrackVolume * m_globalVolume);
+        float finalVol = (m_globalMuted || m_bgmGainMuted)
+                             ? 0.0f
+                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
+        if ( m_mainTrackMuted ) finalVol = 0.0f;
+        m_bgmSource->setvolume(finalVol);
     }
 
     // 重新应用全局音量到所有音效池
     for ( auto& [key, pool] : m_sfxPools ) {
-        pool->updateEffectiveVolume(m_globalVolume, getSFXPoolMute(key));
+        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
+                                ? 0.0f
+                                : m_globalVolume * m_sfxGain;
+        pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
     }
+}
+
+void AudioManager::setGlobalMute(bool muted)
+{
+    m_globalMuted = muted;
+
+    // 同步到配置
+    auto& settings       = Config::AppConfig::instance().getEditorSettings();
+    settings.globalMuted = m_globalMuted;
+    Config::AppConfig::instance().save();
+
+    setGlobalVolume(m_globalVolume);  // 重新应用所有音量
+}
+
+bool AudioManager::isGlobalMuted() const
+{
+    return m_globalMuted;
+}
+
+float AudioManager::getOutputLevelL() const
+{
+    if ( m_mainMixer ) return m_mainMixer->get_left_level();
+    return 0.0f;
+}
+
+float AudioManager::getOutputLevelR() const
+{
+    if ( m_mainMixer ) return m_mainMixer->get_right_level();
+    return 0.0f;
+}
+
+float AudioManager::getMainTrackLevelL() const
+{
+    if ( m_bgmSource ) return m_bgmSource->get_left_level();
+    return 0.0f;
+}
+
+float AudioManager::getMainTrackLevelR() const
+{
+    if ( m_bgmSource ) return m_bgmSource->get_right_level();
+    return 0.0f;
+}
+
+float AudioManager::getSFXPoolLevelL(const std::string& key) const
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        if ( auto mixer = it->second->getMixer() ) {
+            return mixer->get_left_level();
+        }
+    }
+    return 0.0f;
+}
+
+float AudioManager::getSFXPoolLevelR(const std::string& key) const
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        if ( auto mixer = it->second->getMixer() ) {
+            return mixer->get_right_level();
+        }
+    }
+    return 0.0f;
 }
 
 float AudioManager::getGlobalVolume() const
@@ -431,8 +514,75 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
 
     auto it = m_sfxPools.find(key);
     if ( it != m_sfxPools.end() ) {
-        it->second->updateEffectiveVolume(m_globalVolume, muted);
+        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
+                                ? 0.0f
+                                : m_globalVolume * m_sfxGain;
+        it->second->updateEffectiveVolume(sfxFinalVol, muted);
     }
+}
+
+void AudioManager::setBGMGain(float gain)
+{
+    m_bgmGain = std::clamp(gain, 0.0f, 1.0f);
+
+    auto& settings   = Config::AppConfig::instance().getEditorSettings();
+    settings.bgmGain = m_bgmGain;
+    Config::AppConfig::instance().save();
+
+    setMainTrackVolume(m_mainTrackVolume);  // 重新应用
+}
+
+float AudioManager::getBGMGain() const
+{
+    return m_bgmGain;
+}
+
+void AudioManager::setBGMGainMute(bool muted)
+{
+    m_bgmGainMuted = muted;
+
+    auto& settings        = Config::AppConfig::instance().getEditorSettings();
+    settings.bgmGainMuted = m_bgmGainMuted;
+    Config::AppConfig::instance().save();
+
+    setMainTrackVolume(m_mainTrackVolume);
+}
+
+bool AudioManager::isBGMGainMuted() const
+{
+    return m_bgmGainMuted;
+}
+
+void AudioManager::setSFXGain(float gain)
+{
+    m_sfxGain = std::clamp(gain, 0.0f, 1.0f);
+
+    auto& settings   = Config::AppConfig::instance().getEditorSettings();
+    settings.sfxGain = m_sfxGain;
+    Config::AppConfig::instance().save();
+
+    setGlobalVolume(m_globalVolume);  // 重新应用 SFX 部分
+}
+
+float AudioManager::getSFXGain() const
+{
+    return m_sfxGain;
+}
+
+void AudioManager::setSFXGainMute(bool muted)
+{
+    m_sfxGainMuted = muted;
+
+    auto& settings        = Config::AppConfig::instance().getEditorSettings();
+    settings.sfxGainMuted = m_sfxGainMuted;
+    Config::AppConfig::instance().save();
+
+    setGlobalVolume(m_globalVolume);
+}
+
+bool AudioManager::isSFXGainMuted() const
+{
+    return m_sfxGainMuted;
 }
 
 void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
@@ -515,7 +665,9 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
     auto pool = std::make_shared<SoundEffectPool>(track);
     pool->init(8);  // 预分配 8 个并发节点
     pool->setVolume(activeVolume);
-    pool->updateEffectiveVolume(m_globalVolume, getSFXPoolMute(key));
+    float sfxFinalVol =
+        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
+    pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
 
     // 根据配置决定连接到哪个 Mixer
     if ( sfxCfg.hitSfxSyncSpeed ) {
@@ -535,7 +687,9 @@ void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
     auto it = m_sfxPools.find(key);
     if ( it == m_sfxPools.end() ) return;
 
-    it->second->play(m_globalVolume * it->second->getVolume() * volumeFactor);
+    float sfxFinalVol =
+        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
+    it->second->play(sfxFinalVol * it->second->getVolume() * volumeFactor);
 }
 
 void AudioManager::playSoundEffectScheduled(const std::string& key,
@@ -559,8 +713,10 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
         return 0;
     };
 
+    float sfxFinalVol =
+        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
     it->second->playScheduled(
-        m_globalVolume * it->second->getVolume() * volumeFactor,
+        sfxFinalVol * it->second->getVolume() * volumeFactor,
         targetFrame,
         bgmRef);
 }

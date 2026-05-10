@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -111,7 +112,7 @@ void SettingsView::drawSoftwareSettings()
         if ( ImGui::BeginCombo("##AsciiFontCombo", currentAscii.c_str()) ) {
             for ( const auto& [name, path] : asciiFonts ) {
                 bool        isSelected = (currentAscii == name);
-                std::string label      = name + "##" + path.string();
+                std::string label      = name + "##" + Config::pathToUtf8(path);
                 if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                     settings.preferredAsciiFont = name;
                     fontChanged                 = true;
@@ -141,7 +142,7 @@ void SettingsView::drawSoftwareSettings()
         if ( ImGui::BeginCombo("##CjkFontCombo", currentCjk.c_str()) ) {
             for ( const auto& [name, path] : cjkFonts ) {
                 bool        isSelected = (currentCjk == name);
-                std::string label      = name + "##" + path.string();
+                std::string label      = name + "##" + Config::pathToUtf8(path);
                 if ( ImGui::Selectable(label.c_str(), isSelected) ) {
                     settings.preferredCjkFont = name;
                     fontChanged               = true;
@@ -171,7 +172,8 @@ void SettingsView::drawSoftwareSettings()
             if ( auto ctx = Graphic::VKContext::get() ) {
                 ctx->get().applyTheme();
                 ctx->get().updateFontScales();
-                ctx->get().requestFontRebuild(); // 立即请求重建以保证图标比例正确
+                ctx->get()
+                    .requestFontRebuild();  // 立即请求重建以保证图标比例正确
             }
         }
 
@@ -185,7 +187,8 @@ void SettingsView::drawSoftwareSettings()
             changed = true;
             if ( auto ctx = Graphic::VKContext::get() ) {
                 ctx->get().updateFontScales();
-                ctx->get().requestFontRebuild(); // 立即请求重建以保证图标比例正确
+                ctx->get()
+                    .requestFontRebuild();  // 立即请求重建以保证图标比例正确
             }
         }
 
@@ -385,36 +388,40 @@ void SettingsView::drawVisualSettings()
 
     if ( ImGui::CollapsingHeader(TR_CACHE("ui.settings.visual.layout").data(),
                                  ImGuiTreeNodeFlags_DefaultOpen) ) {
-        if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_left").data(),
-                                &visual.trackLayout.left,
-                                0.0f,
-                                1.0f) ) {
-            visual.trackLayout.left =
-                std::min(visual.trackLayout.left, visual.trackLayout.right - 0.01f);
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.visual.layout_left").data(),
+                 &visual.trackLayout.left,
+                 0.0f,
+                 1.0f) ) {
+            visual.trackLayout.left = std::min(
+                visual.trackLayout.left, visual.trackLayout.right - 0.01f);
             changed = true;
         }
-        if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_top").data(),
-                                &visual.trackLayout.top,
-                                0.0f,
-                                1.0f) ) {
-            visual.trackLayout.top =
-                std::min(visual.trackLayout.top, visual.trackLayout.bottom - 0.01f);
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.visual.layout_top").data(),
+                 &visual.trackLayout.top,
+                 0.0f,
+                 1.0f) ) {
+            visual.trackLayout.top = std::min(
+                visual.trackLayout.top, visual.trackLayout.bottom - 0.01f);
             changed = true;
         }
-        if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_right").data(),
-                                &visual.trackLayout.right,
-                                0.0f,
-                                1.0f) ) {
-            visual.trackLayout.right =
-                std::max(visual.trackLayout.right, visual.trackLayout.left + 0.01f);
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.visual.layout_right").data(),
+                 &visual.trackLayout.right,
+                 0.0f,
+                 1.0f) ) {
+            visual.trackLayout.right = std::max(
+                visual.trackLayout.right, visual.trackLayout.left + 0.01f);
             changed = true;
         }
-        if ( ImGui::SliderFloat(TR_CACHE("ui.settings.visual.layout_bottom").data(),
-                                &visual.trackLayout.bottom,
-                                0.0f,
-                                1.0f) ) {
-            visual.trackLayout.bottom =
-                std::max(visual.trackLayout.bottom, visual.trackLayout.top + 0.01f);
+        if ( ImGui::SliderFloat(
+                 TR_CACHE("ui.settings.visual.layout_bottom").data(),
+                 &visual.trackLayout.bottom,
+                 0.0f,
+                 1.0f) ) {
+            visual.trackLayout.bottom = std::max(
+                visual.trackLayout.bottom, visual.trackLayout.top + 0.01f);
             changed = true;
         }
         changed |= ImGui::SliderFloat(
@@ -591,9 +598,7 @@ void SettingsView::drawProjectSettings()
 
     if ( ImGui::CollapsingHeader(TR_CACHE("ui.settings.project.info").data(),
                                  ImGuiTreeNodeFlags_DefaultOpen) ) {
-        auto        u8 = project->m_projectRoot.u8string();
-        std::string projPath(reinterpret_cast<const char*>(u8.c_str()),
-                             u8.size());
+        std::string projPath = Config::pathToUtf8(project->m_projectRoot);
         ImGui::Text("%s: %s",
                     TR_CACHE("ui.settings.project.path").data(),
                     projPath.c_str());
@@ -708,17 +713,13 @@ void SettingsView::drawBeatmapSettings()
              TR_CACHE("ui.settings.beatmap.resource").data(),
              ImGuiTreeNodeFlags_DefaultOpen) ) {
 
-        auto        audioU8 = meta.main_audio_path.u8string();
-        std::string currentAudioPath(
-            reinterpret_cast<const char*>(audioU8.c_str()), audioU8.size());
-        std::string audioPreview = currentAudioPath;
+        std::string currentAudioPath = Config::pathToUtf8(meta.main_audio_path);
+        std::string audioPreview     = currentAudioPath;
         if ( project && !audioPreview.empty() ) {
-            std::filesystem::path p(audioU8);
-            if ( p.is_absolute() ) {
+            if ( meta.main_audio_path.is_absolute() ) {
                 try {
-                    audioPreview =
-                        std::filesystem::relative(p, project->m_projectRoot)
-                            .generic_string();
+                    audioPreview = Config::pathToUtf8(std::filesystem::relative(
+                        meta.main_audio_path, project->m_projectRoot));
                 } catch ( ... ) {
                 }
             }
@@ -766,17 +767,13 @@ void SettingsView::drawBeatmapSettings()
         }
         if ( audioPushed ) ImGui::PopStyleColor();
 
-        auto        coverU8 = meta.main_cover_path.u8string();
-        std::string currentCoverPath(
-            reinterpret_cast<const char*>(coverU8.c_str()), coverU8.size());
-        std::string coverPreview = currentCoverPath;
+        std::string currentCoverPath = Config::pathToUtf8(meta.main_cover_path);
+        std::string coverPreview     = currentCoverPath;
         if ( project && !coverPreview.empty() ) {
-            std::filesystem::path p(coverU8);
-            if ( p.is_absolute() ) {
+            if ( meta.main_cover_path.is_absolute() ) {
                 try {
-                    coverPreview =
-                        std::filesystem::relative(p, project->m_projectRoot)
-                            .generic_string();
+                    coverPreview = Config::pathToUtf8(std::filesystem::relative(
+                        meta.main_cover_path, project->m_projectRoot));
                 } catch ( ... ) {
                 }
             }
@@ -810,7 +807,8 @@ void SettingsView::drawBeatmapSettings()
                           std::filesystem::recursive_directory_iterator(
                               project->m_projectRoot) ) {
                         if ( entry.is_regular_file() ) {
-                            auto ext = entry.path().extension().string();
+                            auto ext =
+                                Config::pathToUtf8(entry.path().extension());
                             std::transform(
                                 ext.begin(), ext.end(), ext.begin(), ::tolower);
                             if ( ext == ".png" || ext == ".jpg" ||
@@ -818,7 +816,7 @@ void SettingsView::drawBeatmapSettings()
                                  ext == ".mp4" || ext == ".avi" ) {
                                 auto rel = std::filesystem::relative(
                                     entry.path(), project->m_projectRoot);
-                                images.push_back(rel.generic_string());
+                                images.push_back(Config::pathToUtf8(rel));
                             }
                         }
                     }

@@ -2,6 +2,7 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
@@ -93,11 +94,11 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 std::filesystem::path p(drop.paths[0]);
                 std::filesystem::path projectPath =
                     std::filesystem::is_directory(p) ? p : p.parent_path();
-                auto ext = p.extension().string();
+                auto ext = Config::pathToUtf8(p.extension());
 
                 XINFO("File dropped on Canvas: {}, opening project: {}",
-                      p.string(),
-                      projectPath.string());
+                      Config::pathToUtf8(p),
+                      Config::pathToUtf8(projectPath));
 
                 // 1. 打开项目
                 Event::OpenProjectEvent ev;
@@ -117,10 +118,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 // 3. 如果是谱面文件，直接加载
                 if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
                      ext == ".mmm" ) {
-                    auto        u8 = p.filename().u8string();
-                    std::string u8_filename(
-                        reinterpret_cast<const char*>(u8.c_str()), u8.size());
-                    XINFO("Auto-loading beatmap from drop: {}", u8_filename);
+                    XINFO("Auto-loading beatmap from drop: {}",
+                          Config::pathToUtf8(p.filename()));
                     try {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(p));
@@ -179,12 +178,14 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetMousePosition{ m_cameraId,
-                                                             localMousePos.x,
-                                                             localMousePos.y,
-                                                             isHovered,
-                                                             isDragging }));
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                    .mouseX         = localMousePos.x,
+                                    .mouseY         = localMousePos.y,
+                                    .viewportWidth  = targetWidth,
+                                    .viewportHeight = targetHeight,
+                                    .isHovering     = isHovered,
+                                    .isDragging     = isDragging }));
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&
@@ -317,7 +318,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Move ) {
-                if ( hoveredEntity != entt::null ) {
+                if ( !currentSnapshot->isPlaying && hoveredEntity != entt::null ) {
                     // 抓取工具不再负责选中，只负责发起拖拽
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
@@ -329,12 +330,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdStartBrush{ m_cameraId,
-                                          localMousePos.x,
-                                          localMousePos.y,
-                                          ImGui::GetIO().KeyShift,
-                                          ImGui::GetIO().KeyCtrl }));
+                if ( !currentSnapshot->isPlaying ) {
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdStartBrush{ m_cameraId,
+                                              localMousePos.x,
+                                              localMousePos.y,
+                                              ImGui::GetIO().KeyShift,
+                                              ImGui::GetIO().KeyCtrl }));
+                }
             }
         }
     }
@@ -343,19 +346,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( !currentSnapshot->isPlaying && currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateBrush{ m_cameraId,
                                        localMousePos.x,
                                        localMousePos.y,
                                        ImGui::GetIO().KeyShift,
                                        ImGui::GetIO().KeyCtrl }));
-        } else {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateDrag{ m_cameraId,
-                                      localMousePos.x,
-                                      localMousePos.y,
-                                      ImGui::GetIO().KeyCtrl }));
+        } else if ( !currentSnapshot->isPlaying ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdUpdateDrag{ m_cameraId,
+                                                               localMousePos.x,
+                                                               localMousePos.y,
+                                                               ImGui::GetIO().KeyCtrl }));
         }
     }
 
@@ -373,7 +376,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
-    if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+    if ( currentSnapshot->currentTool == Logic::EditTool::Draw && !currentSnapshot->isPlaying ) {
         if ( ImGui::IsMouseClicked(1) && isHovered ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdStartErase{ m_cameraId }));
@@ -496,7 +499,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     std::clamp(editorCfg.settings.beatDivisor, 1, 64);
                 Logic::EditorEngine::instance().setEditorConfig(editorCfg);
             }
-        } else {
+        } else if ( !isCtrlPressed && !isAltPressed ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
         }
