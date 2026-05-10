@@ -134,6 +134,7 @@ void BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                     std::is_same_v<T, CmdDeleteSelected> ||
+                                    std::is_same_v<T, CmdMirrorSelected> ||
                                     std::is_same_v<T,
                                                    CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
@@ -185,6 +186,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 
         m_ctx->currentBeatmap->saveToFile(savePath);
         m_ctx->actionStack.markSaved();
+        EditorEngine::instance().syncProjectWithFile(savePath);
     }
 }
 
@@ -194,6 +196,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         SessionUtils::syncBeatmap(*m_ctx);
         m_ctx->currentBeatmap->saveToFile(cmd.path);
         m_ctx->actionStack.markSaved();
+        EditorEngine::instance().syncProjectWithFile(cmd.path);
     }
 }
 

@@ -69,6 +69,12 @@ public:
     void handleCreateBeatmap(const CmdCreateBeatmap& cmd);
 
     /**
+     * @brief 同步文件系统变更到当前项目 (如另存为后刷新列表)
+     * @param mapPath 新保存的谱面文件路径
+     */
+    void syncProjectWithFile(const std::filesystem::path& mapPath);
+
+    /**
      * @brief 获取当前激活的谱面会话
      */
     std::shared_ptr<BeatmapSession> getActiveSession()

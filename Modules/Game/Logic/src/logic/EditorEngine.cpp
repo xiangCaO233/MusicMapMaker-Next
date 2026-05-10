@@ -438,6 +438,59 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     pushCommand(CmdLoadBeatmap{ newBeatmap });
 }
 
+void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    // 检查路径是否在项目根目录下
+    auto absMapPath = std::filesystem::absolute(mapPath);
+    auto absRoot    = std::filesystem::absolute(m_currentProject->m_projectRoot);
+
+    auto [rootIt, pathIt] = std::mismatch(absRoot.begin(), absRoot.end(),
+                                          absMapPath.begin(), absMapPath.end());
+
+    if ( rootIt != absRoot.end() ) {
+        // 不在项目根目录下，忽略
+        return;
+    }
+
+    // 检查是否已经存在
+    for ( const auto& entry : m_currentProject->m_beatmaps ) {
+        auto entryPath = absRoot / Config::utf8ToPath(entry.m_filePath);
+        if ( std::filesystem::exists(entryPath) &&
+             std::filesystem::equivalent(entryPath, absMapPath) ) {
+            return;  // 已存在
+        }
+    }
+
+    // 添加到项目列表
+    try {
+        auto map = BeatMap::loadFromFile(absMapPath);
+
+        Project::BeatmapEntry entry;
+        entry.m_name     = map.m_baseMapMetadata.version;
+        if ( entry.m_name.empty() ) entry.m_name = absMapPath.filename().string();
+        
+        entry.m_filePath = Config::pathToUtf8(
+            std::filesystem::relative(absMapPath, absRoot));
+        
+        if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
+            entry.m_audioTrackId =
+                Config::pathToUtf8(map.m_baseMapMetadata.main_audio_path.filename());
+        }
+
+        m_currentProject->m_beatmaps.push_back(entry);
+        XINFO("EditorEngine: Discovered new beatmap for project: {}", entry.m_name);
+
+        saveProject();
+    } catch ( const std::exception& e ) {
+        XWARN("EditorEngine: Failed to sync new beatmap {}: {}",
+              Config::pathToUtf8(absMapPath),
+              e.what());
+    }
+}
+
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
     // 拦截创建谱面等引擎级别的指令
