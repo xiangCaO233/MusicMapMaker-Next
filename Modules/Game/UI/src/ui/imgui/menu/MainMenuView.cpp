@@ -847,7 +847,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             dispatchCommand(Logic::CmdSaveBeatmap{});
         }
         if ( MenuItemWithFontIcon(
-                 nullptr, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
+                 ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
             openExportFilePicker("");
         }
 
@@ -880,19 +880,19 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                  ICON_MMM_SCISSORS, TR("ui.edit.cut"), "Ctrl+X") ) {
             dispatchCommand(Logic::CmdCut{});
         }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_COPY, TR("ui.edit.copy"), "Ctrl+C") ) {
+        if ( MenuItemWithFontIcon(ICON_MMM_COPY, TR("ui.edit.copy"), "Ctrl+C") ) {
             dispatchCommand(Logic::CmdCopy{});
         }
-        if ( MenuItemWithFontIcon(nullptr, TR("ui.edit.paste"), "Ctrl+V") ) {
+        if ( MenuItemWithFontIcon(ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
             dispatchCommand(Logic::CmdPaste{});
         }
-        if ( MenuItemWithFontIcon(nullptr, TR("ui.edit.mirror"), "Ctrl+M") ) {
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_MIRROR, TR("ui.edit.mirror"), "Ctrl+M") ) {
             dispatchCommand(Logic::CmdMirrorSelected{});
         }
         ImGui::Separator();
         if ( MenuItemWithFontIcon(
-                 nullptr, TR("ui.edit.select_all"), "Ctrl+A") ) {
+                 ICON_MMM_SELECT_ALL, TR("ui.edit.select_all"), "Ctrl+A") ) {
             dispatchCommand(Logic::CmdSelectAll{});
         }
         ImGui::Separator();
