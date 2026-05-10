@@ -61,6 +61,11 @@ void BeatmapSession::processCommands()
                         fmt::format("{} {}",
                                     TR("ui.status.category.beatmap"),
                                     TR("ui.status.beatmap.saved"));
+                } else if constexpr ( std::is_same_v<T, CmdMirrorSelected> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.action"),
+                                    TR("ui.edit.mirror"));
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {} {:.3f}s",
