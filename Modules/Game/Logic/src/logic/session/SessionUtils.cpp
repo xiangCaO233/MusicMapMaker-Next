@@ -197,8 +197,9 @@ void rebuildHitEvents(SessionContext& ctx)
     syncHitIndex(ctx);
 
     if ( ctx.currentBeatmap ) {
-        if ( maxEndTime > ctx.currentBeatmap->m_baseMapMetadata.map_length ) {
-            ctx.currentBeatmap->m_baseMapMetadata.map_length = maxEndTime;
+        double maxEndTimeMs = maxEndTime * 1000.0;
+        if ( maxEndTimeMs > ctx.currentBeatmap->m_baseMapMetadata.map_length ) {
+            ctx.currentBeatmap->m_baseMapMetadata.map_length = maxEndTimeMs;
         }
     }
 }
