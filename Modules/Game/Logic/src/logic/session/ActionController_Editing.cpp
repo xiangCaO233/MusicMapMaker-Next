@@ -117,10 +117,11 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 
     if ( !entries.empty() ) {
-        auto action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+        size_t count = entries.size();
+        auto   action =
+            std::make_unique<BatchNoteAction>(std::move(entries), "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
-        XINFO("Deleted {} selected/hovered items", entries.size());
+        XINFO("Deleted {} selected/hovered items", count);
     }
 }
 
@@ -183,16 +184,17 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     }
 
     if ( !entries.empty() ) {
-        auto action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+        size_t count = entries.size();
+        auto   action =
+            std::make_unique<BatchNoteAction>(std::move(entries), "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
-        XINFO("Mirrored {} items (including sub-notes)", entries.size());
+        XINFO("Mirrored {} items (including sub-notes)", count);
 
         m_ctx.lastActionMessage =
             fmt::format("{} {} {} {}",
                         TR("ui.status.category.action"),
                         TR("ui.edit.mirror"),
-                        entries.size(),
+                        count,
                         TR("ui.status.info.items"));
     }
 }
