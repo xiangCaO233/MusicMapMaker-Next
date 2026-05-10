@@ -185,7 +185,8 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
     pid_t child = fork();
     if ( child == 0 ) {
         // 子进程: 执行更新器
-        std::string pidStr = std::to_string(pid);
+        std::string updater = Config::pathToUtf8(updaterPath);
+        std::string pidStr  = std::to_string(pid);
         execl(updater.c_str(),
               updater.c_str(),
               downloadedFilePath.c_str(),
