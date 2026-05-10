@@ -33,6 +33,10 @@ public:
     /// @brief 处理删除选中实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteSelected& cmd);
+    
+    /// @brief 处理镜像选中实体的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdMirrorSelected& cmd);
 
     /// @brief 处理粘贴实体的命令
     /// @param cmd 命令数据

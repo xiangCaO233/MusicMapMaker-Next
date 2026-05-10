@@ -124,6 +124,79 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 }
 
+void ActionController::handleCommand(const CmdMirrorSelected& cmd)
+{
+    if ( !m_ctx.currentBeatmap ) return;
+    int trackCount = m_ctx.currentBeatmap->m_baseMapMetadata.track_count;
+
+    std::vector<BatchNoteAction::Entry> entries;
+    std::unordered_set<entt::entity>    toMirror;
+
+    // 1. 收集所有选中的物件
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( ic.isSelected ) {
+            toMirror.insert(entity);
+
+            // 如果是 Polyline，收集其所有子物件实体
+            const auto& nc = view.get<NoteComponent>(entity);
+            if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
+                for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
+                    const auto& subNC =
+                        m_ctx.noteRegistry.get<NoteComponent>(subEnt);
+                    if ( subNC.m_isSubNote &&
+                         subNC.m_parentPolyline == entity ) {
+                        toMirror.insert(subEnt);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 执行镜像逻辑
+    for ( auto entity : toMirror ) {
+        if ( !m_ctx.noteRegistry.valid(entity) ||
+             !m_ctx.noteRegistry.all_of<NoteComponent>(entity) )
+            continue;
+
+        const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
+        auto        newNote = oldNote;
+
+        // 镜像主轨道索引
+        newNote.m_trackIndex = (trackCount - 1) - oldNote.m_trackIndex;
+        if ( oldNote.m_type == ::MMM::NoteType::FLICK ) {
+            newNote.m_dtrack = -oldNote.m_dtrack;
+        }
+
+        // 如果是 Polyline，还需要镜像其内部缓存的 subNotes 列表
+        if ( oldNote.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( auto& sub : newNote.m_subNotes ) {
+                sub.trackIndex = (trackCount - 1) - sub.trackIndex;
+                if ( sub.type == ::MMM::NoteType::FLICK ) {
+                    sub.dtrack = -sub.dtrack;
+                }
+            }
+        }
+
+        entries.push_back({ entity, oldNote, newNote });
+    }
+
+    if ( !entries.empty() ) {
+        auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                        "Mirror Selected");
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        XINFO("Mirrored {} items (including sub-notes)", entries.size());
+
+        m_ctx.lastActionMessage =
+            fmt::format("{} {} {} {}",
+                        TR("ui.status.category.action"),
+                        TR("ui.edit.mirror"),
+                        entries.size(),
+                        TR("ui.status.info.items"));
+    }
+}
+
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
     if ( m_ctx.clipboard.empty() ) return;

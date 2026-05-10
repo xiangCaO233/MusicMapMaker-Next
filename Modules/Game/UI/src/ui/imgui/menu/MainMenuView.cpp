@@ -97,6 +97,9 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
             dispatchCommand(Logic::CmdSelectAll{});
         }
+        if ( ImGui::IsKeyPressed(ImGuiKey_M, false) ) {
+            dispatchCommand(Logic::CmdMirrorSelected{});
+        }
     } else if ( io.KeyAlt ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.file")) ) {
@@ -883,6 +886,9 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         }
         if ( MenuItemWithFontIcon(nullptr, TR("ui.edit.paste"), "Ctrl+V") ) {
             dispatchCommand(Logic::CmdPaste{});
+        }
+        if ( MenuItemWithFontIcon(nullptr, TR("ui.edit.mirror"), "Ctrl+M") ) {
+            dispatchCommand(Logic::CmdMirrorSelected{});
         }
         ImGui::Separator();
         if ( MenuItemWithFontIcon(

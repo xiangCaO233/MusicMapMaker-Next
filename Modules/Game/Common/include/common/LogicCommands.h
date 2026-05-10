@@ -264,6 +264,12 @@ struct CmdDeleteSelected {
 };
 
 /**
+ * @brief 镜像选中物件指令
+ */
+struct CmdMirrorSelected {
+};
+
+/**
  * @brief 全选指令
  */
 struct CmdSelectAll {
@@ -345,7 +351,7 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdSelectAll, CmdSaveBeatmap,
+    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected, CmdSelectAll, CmdSaveBeatmap,
     CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
     CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
     CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,

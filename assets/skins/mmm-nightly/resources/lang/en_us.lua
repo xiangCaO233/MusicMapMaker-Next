@@ -23,6 +23,7 @@ return {
 	["ui.edit.cut"] = "Cut",
 	["ui.edit.copy"] = "Copy",
 	["ui.edit.paste"] = "Paste",
+	["ui.edit.mirror"] = "Mirror",
 	["ui.edit.play_pause"] = "Play/Pause",
 	["ui.edit.beatmap_settings"] = "Beatmap Settings",
 	["ui.edit.select_all"] = "Select All",
