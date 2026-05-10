@@ -32,6 +32,10 @@
 #include <chrono>
 #include <nfd.h>
 
+#ifdef _WIN32
+#    include <shellapi.h>
+#endif
+
 namespace MMM
 {
 
