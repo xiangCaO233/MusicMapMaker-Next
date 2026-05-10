@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <regex>
 #include <vector>
 
@@ -25,7 +26,7 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
 
     namespace fs = std::filesystem;
     // --- 路径注入 ---
-    fs::path path(luaFilePath);
+    fs::path path       = Config::utf8ToPath(luaFilePath);
     fs::path absPath    = fs::absolute(path);
     m_data.skinPath     = absPath.parent_path();
     std::string skinDir = pathToUtf8(m_data.skinPath);
@@ -36,8 +37,16 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     lua["__SKINLUA_DIR__"] = skinDir;
     XINFO("LuaJIT Loading skin from: " + skinDir);
 
-    // 加载 Lua 文件
-    sol::protected_function_result result = lua.script_file(luaFilePath);
+    // 加载 Lua 文件 (使用 ifstream+path 避免 Windows fopen 的 ANSI 编码问题)
+    std::ifstream skinFile(path, std::ios::in | std::ios::binary);
+    if ( !skinFile ) {
+        XERROR("Failed to open skin lua file: " + luaFilePath);
+        return false;
+    }
+    std::string scriptContent((std::istreambuf_iterator<char>(skinFile)),
+                              std::istreambuf_iterator<char>());
+    sol::protected_function_result result =
+        lua.script(scriptContent, luaFilePath);
     if ( !result.valid() ) {
         sol::error err = result;
         XERROR("Failed to load skin lua: " + std::string(err.what()));

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <filesystem>
@@ -18,7 +19,8 @@ using json = nlohmann::json;
  * @param path 保存路径
  * @return 是否保存成功
  */
-inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path)
+inline bool saveMMMMap(const BeatMap&               beatMap,
+                       const std::filesystem::path& path)
 {
     json root;
 
@@ -26,19 +28,21 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
     auto& metadata = root["metadata"];
 
     // Base metadata
-    auto& base            = metadata["base"];
-    base["name"]          = beatMap.m_baseMapMetadata.name;
-    base["title"]         = beatMap.m_baseMapMetadata.title;
-    base["title_unicode"] = beatMap.m_baseMapMetadata.title_unicode;
+    auto& base             = metadata["base"];
+    base["name"]           = beatMap.m_baseMapMetadata.name;
+    base["title"]          = beatMap.m_baseMapMetadata.title;
+    base["title_unicode"]  = beatMap.m_baseMapMetadata.title_unicode;
     base["artist"]         = beatMap.m_baseMapMetadata.artist;
     base["artist_unicode"] = beatMap.m_baseMapMetadata.artist_unicode;
     base["version"]        = beatMap.m_baseMapMetadata.version;
     base["author"]         = beatMap.m_baseMapMetadata.author;
-    base["audio"]          = beatMap.m_baseMapMetadata.main_audio_path.string();
-    base["cover"]          = beatMap.m_baseMapMetadata.main_cover_path.string();
-    base["track_count"]    = beatMap.m_baseMapMetadata.track_count;
-    base["bpm"]            = beatMap.m_baseMapMetadata.preference_bpm;
-    base["duration"]       = beatMap.m_baseMapMetadata.map_length;
+    base["audio"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
+    base["cover"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
+    base["track_count"] = beatMap.m_baseMapMetadata.track_count;
+    base["bpm"]         = beatMap.m_baseMapMetadata.preference_bpm;
+    base["duration"]    = beatMap.m_baseMapMetadata.map_length;
 
     // Extra metadata
     auto& extra = metadata["extra"];
@@ -71,12 +75,14 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
         t["timestamp"]   = timing.m_timestamp;
         t["bpm"]         = timing.m_bpm;
         t["beat_length"] = timing.m_beat_length;
-        t["effect"] = timing.m_timingEffect == TimingEffect::BPM ? "bpm" : "scroll";
-        t["param"]  = timing.m_timingEffectParameter;
+        t["effect"] =
+            timing.m_timingEffect == TimingEffect::BPM ? "bpm" : "scroll";
+        t["param"] = timing.m_timingEffectParameter;
 
         auto& tExtra = t["extra"];
         tExtra       = json::array();
-        for ( const auto& [type, props] : timing.m_metadata.timing_properties ) {
+        for ( const auto& [type, props] :
+              timing.m_metadata.timing_properties ) {
             json        sourceObj;
             std::string sourceName;
             if ( type == TimingMetadataType::OSU )
@@ -135,9 +141,18 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
                 if ( sn.m_type == NoteType::HOLD ) {
                     double dur = static_cast<const Hold&>(sn).m_duration;
                     if ( dur < 1e-4 ) continue;
-                    cleanSubs.push_back({ NoteType::HOLD, sn.m_timestamp, dur, (int)sn.m_track, 0 });
+                    cleanSubs.push_back({ NoteType::HOLD,
+                                          sn.m_timestamp,
+                                          dur,
+                                          (int)sn.m_track,
+                                          0 });
                 } else if ( sn.m_type == NoteType::FLICK ) {
-                    cleanSubs.push_back({ NoteType::FLICK, sn.m_timestamp, 0.0, (int)sn.m_track, static_cast<const Flick&>(sn).m_dtrack });
+                    cleanSubs.push_back(
+                        { NoteType::FLICK,
+                          sn.m_timestamp,
+                          0.0,
+                          (int)sn.m_track,
+                          static_cast<const Flick&>(sn).m_dtrack });
                 }
             }
 
@@ -147,11 +162,13 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
                 changed = false;
 
                 // 1. 过滤零值
-                auto it = std::remove_if(cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
-                    if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
-                    if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
-                    return false;
-                });
+                auto it = std::remove_if(
+                    cleanSubs.begin(), cleanSubs.end(), [](const auto& s) {
+                        if ( s.type == NoteType::HOLD )
+                            return s.duration < 1e-4;
+                        if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
+                        return false;
+                    });
                 if ( it != cleanSubs.end() ) {
                     cleanSubs.erase(it, cleanSubs.end());
                     changed = true;
@@ -197,8 +214,8 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
                 n["timestamp"] = s.timestamp;
                 n["track"]     = s.track;
             } else {
-                n["type"]          = "polyline";
-                json  subNotesJson = json::array();
+                n["type"]         = "polyline";
+                json subNotesJson = json::array();
                 for ( const auto& s : cleanSubs ) {
                     json snj;
                     snj["timestamp"] = s.timestamp;
@@ -267,9 +284,11 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
     }
 
     // Sort by timestamp
-    std::sort(serializedNotes.begin(), serializedNotes.end(),
+    std::sort(serializedNotes.begin(),
+              serializedNotes.end(),
               [](const json& a, const json& b) {
-                  return a["timestamp"].get<double>() < b["timestamp"].get<double>();
+                  return a["timestamp"].get<double>() <
+                         b["timestamp"].get<double>();
               });
 
     for ( auto& n : serializedNotes ) {
@@ -278,7 +297,8 @@ inline bool saveMMMMap(const BeatMap& beatMap, const std::filesystem::path& path
 
     std::ofstream file(path);
     if ( !file.is_open() ) {
-        XERROR("Failed to open file for saving mmm map: {}", path.string());
+        XERROR("Failed to open file for saving mmm map: {}",
+               Config::pathToUtf8(path));
         return false;
     }
 

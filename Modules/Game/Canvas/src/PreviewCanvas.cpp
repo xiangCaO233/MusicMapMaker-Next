@@ -265,8 +265,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     auto  addTex = [&](Logic::TextureID id, const std::string& key) {
         auto p = skin.getAssetPath(key);
         if ( !p.empty() )
-            m_textureAtlas->addTexture(static_cast<uint32_t>(id),
-                                       Config::pathToUtf8(p));
+            m_textureAtlas->addTexture(static_cast<uint32_t>(id), p);
     };
 
     addTex(Logic::TextureID::Note, "note.note");
@@ -284,7 +283,7 @@ void PreviewCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         uint32_t currentId = seq.startId;
         for ( const auto& frame : seq.frames ) {
-            m_textureAtlas->addTexture(currentId++, Config::pathToUtf8(frame));
+            m_textureAtlas->addTexture(currentId++, frame);
         }
     }
 

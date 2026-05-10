@@ -1,4 +1,5 @@
 #include "common/AudioInfoUtils.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <array>
 #include <cstdio>
@@ -19,13 +20,14 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
     const std::filesystem::path& filePath)
 {
     if ( !std::filesystem::exists(filePath) ) {
-        XERROR("AudioInfoUtils: File not found: {}", filePath.string());
+        XERROR("AudioInfoUtils: File not found: {}",
+               Config::pathToUtf8(filePath));
         return std::nullopt;
     }
 
     std::string command =
         "ffprobe -v quiet -print_format json -show_format -show_streams \"" +
-        filePath.string() + "\"";
+        Config::pathToUtf8(filePath) + "\"";
 
     std::array<char, 128>                    buffer;
     std::string                              result;
@@ -48,13 +50,11 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
         if ( j.contains("format") ) {
             auto& format = j["format"];
 
-            // 获取时长
             if ( format.contains("duration") ) {
                 info.duration =
                     std::stod(format["duration"].get<std::string>());
             }
 
-            // 获取元数据
             if ( format.contains("tags") ) {
                 auto& tags = format["tags"];
                 if ( tags.contains("title") ) {
@@ -66,15 +66,14 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
             }
         }
 
-        // 如果没有 Title，使用文件名
         if ( info.title.empty() ) {
-            info.title = filePath.stem().string();
+            info.title = Config::pathToUtf8(filePath.stem());
         }
 
         XINFO(
             "AudioInfoUtils: Probed info for {}: Title={}, Artist={}, "
             "Duration={:.2f}s",
-            filePath.filename().string(),
+            Config::pathToUtf8(filePath.filename()),
             info.title,
             info.artist,
             info.duration);
@@ -82,7 +81,7 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
         return info;
     } catch ( const std::exception& e ) {
         XERROR("AudioInfoUtils: Failed to parse ffprobe output for {}: {}",
-               filePath.string(),
+               Config::pathToUtf8(filePath),
                e.what());
         return std::nullopt;
     }

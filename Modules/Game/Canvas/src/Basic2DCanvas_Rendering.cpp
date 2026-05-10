@@ -261,41 +261,37 @@ void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::None), white, 4, 4);
 
-    m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::Note),
-        Config::pathToUtf8(skin.getAssetPath("note.note")));
-    m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::Node),
-        Config::pathToUtf8(skin.getAssetPath("note.node")));
-    m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::HoldEnd),
-        Config::pathToUtf8(skin.getAssetPath("note.holdend")));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Note),
+                               skin.getAssetPath("note.note"));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Node),
+                               skin.getAssetPath("note.node"));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::HoldEnd),
+                               skin.getAssetPath("note.holdend"));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::HoldBodyVertical),
-        Config::pathToUtf8(skin.getAssetPath("note.holdbodyvertical")));
+        skin.getAssetPath("note.holdbodyvertical"));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::HoldBodyHorizontal),
-        Config::pathToUtf8(skin.getAssetPath("note.holdbodyhorizontal")));
+        skin.getAssetPath("note.holdbodyhorizontal"));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::FlickArrowLeft),
-        Config::pathToUtf8(skin.getAssetPath("note.arrowleft")));
+        skin.getAssetPath("note.arrowleft"));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::FlickArrowRight),
-        Config::pathToUtf8(skin.getAssetPath("note.arrowright")));
+        skin.getAssetPath("note.arrowright"));
 
-    m_textureAtlas->addTexture(
-        static_cast<uint32_t>(Logic::TextureID::Track),
-        Config::pathToUtf8(skin.getAssetPath("panel.track.background")));
+    m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Track),
+                               skin.getAssetPath("panel.track.background"));
     m_textureAtlas->addTexture(
         static_cast<uint32_t>(Logic::TextureID::JudgeArea),
-        Config::pathToUtf8(skin.getAssetPath("panel.track.judgearea")));
+        skin.getAssetPath("panel.track.judgearea"));
     m_textureAtlas->addTexture(static_cast<uint32_t>(Logic::TextureID::Logo),
-                               Config::pathToUtf8(skin.getAssetPath("logo")));
+                               skin.getAssetPath("logo"));
 
     for ( const auto& [key, seq] : skin.getData().effectSequences ) {
         uint32_t currentId = seq.startId;
         for ( const auto& frame : seq.frames ) {
-            m_textureAtlas->addTexture(currentId++, Config::pathToUtf8(frame));
+            m_textureAtlas->addTexture(currentId++, frame);
         }
     }
 

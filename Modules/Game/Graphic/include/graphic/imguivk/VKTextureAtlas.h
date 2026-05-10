@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graphic/imguivk/VKTexture.h"
+#include <filesystem>
 #include <glm/glm.hpp>
 #include <map>
 #include <memory>
@@ -26,7 +27,7 @@ public:
      * @param id 自定义ID (对应 Logic::TextureID)
      * @param filePath 纹理文件路径
      */
-    void addTexture(uint32_t id, const std::string& filePath);
+    void addTexture(uint32_t id, const std::filesystem::path& filePath);
 
     /**
      * @brief 添加一个内存中的像素数据到图集

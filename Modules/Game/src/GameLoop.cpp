@@ -151,6 +151,21 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 
         // 处理命令行参数：如果有文件路径输入，触发打开项目/谱面事件
         if ( argc > 1 ) {
+#ifdef _WIN32
+            int     argcW;
+            LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argcW);
+            if ( argcW > 1 ) {
+                std::filesystem::path inputPath(argvW[1]);
+                if ( std::filesystem::exists(inputPath) ) {
+                    Event::OpenProjectEvent openEv;
+                    openEv.m_projectPath = inputPath;
+                    Event::EventBus::instance().publish(openEv);
+                    XINFO("Handling command line argument: {}",
+                          Config::pathToUtf8(inputPath));
+                }
+            }
+            LocalFree(argvW);
+#else
             std::filesystem::path inputPath(argv[1]);
             if ( std::filesystem::exists(inputPath) ) {
                 Event::OpenProjectEvent openEv;
@@ -159,6 +174,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
                 XINFO("Handling command line argument: {}",
                       Config::pathToUtf8(inputPath));
             }
+#endif
         }
 
         // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel

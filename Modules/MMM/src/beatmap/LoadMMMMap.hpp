@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <filesystem>
@@ -23,7 +24,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
     BeatMap       beatMap;
     std::ifstream file(path);
     if ( !file.is_open() ) {
-        XERROR("Failed to open mmm map file: {}", path.string());
+        XERROR("Failed to open mmm map file: {}", Config::pathToUtf8(path));
         return beatMap;
     }
 
@@ -208,11 +209,16 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         changed = false;
 
                         // 1. 过滤零值
-                        auto it = std::remove_if(tempSubs.begin(), tempSubs.end(), [](const auto& s) {
-                            if ( s.type == NoteType::HOLD ) return s.duration < 1e-4;
-                            if ( s.type == NoteType::FLICK ) return s.dtrack == 0;
-                            return false;
-                        });
+                        auto it =
+                            std::remove_if(tempSubs.begin(),
+                                           tempSubs.end(),
+                                           [](const auto& s) {
+                                               if ( s.type == NoteType::HOLD )
+                                                   return s.duration < 1e-4;
+                                               if ( s.type == NoteType::FLICK )
+                                                   return s.dtrack == 0;
+                                               return false;
+                                           });
                         if ( it != tempSubs.end() ) {
                             tempSubs.erase(it, tempSubs.end());
                             changed = true;
@@ -226,12 +232,14 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                                 if ( curr.type == next.type ) {
                                     if ( curr.type == NoteType::HOLD ) {
                                         curr.duration += next.duration;
-                                        tempSubs.erase(tempSubs.begin() + i + 1);
+                                        tempSubs.erase(tempSubs.begin() + i +
+                                                       1);
                                         changed = true;
                                         continue;
                                     } else if ( curr.type == NoteType::FLICK ) {
                                         curr.dtrack += next.dtrack;
-                                        tempSubs.erase(tempSubs.begin() + i + 1);
+                                        tempSubs.erase(tempSubs.begin() + i +
+                                                       1);
                                         changed = true;
                                         continue;
                                     }
@@ -251,7 +259,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                     n.m_track     = poly.m_track;
                     n.m_metadata  = poly.m_metadata;
                     beatMap.m_allNotes.push_back(n);
-                    beatMap.m_noteData.polylines.pop_back();  // 移除预先创建的空壳
+                    beatMap.m_noteData.polylines
+                        .pop_back();  // 移除预先创建的空壳
                 } else if ( tempSubs.size() == 1 ) {
                     // 退化为单一物件
                     const auto& s = tempSubs[0];
@@ -264,12 +273,12 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         h.m_metadata  = poly.m_metadata;
                         beatMap.m_allNotes.push_back(h);
                     } else if ( s.type == NoteType::FLICK ) {
-                        Flick& f       = beatMap.m_noteData.flicks.emplace_back();
-                        f.m_type       = NoteType::FLICK;
-                        f.m_timestamp  = s.timestamp;
-                        f.m_track      = s.track;
-                        f.m_dtrack     = s.dtrack;
-                        f.m_metadata   = poly.m_metadata;
+                        Flick& f = beatMap.m_noteData.flicks.emplace_back();
+                        f.m_type = NoteType::FLICK;
+                        f.m_timestamp = s.timestamp;
+                        f.m_track     = s.track;
+                        f.m_dtrack    = s.dtrack;
+                        f.m_metadata  = poly.m_metadata;
                         beatMap.m_allNotes.push_back(f);
                     } else {
                         Note& n       = beatMap.m_noteData.notes.emplace_back();
@@ -279,13 +288,14 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         n.m_metadata  = poly.m_metadata;
                         beatMap.m_allNotes.push_back(n);
                     }
-                    beatMap.m_noteData.polylines.pop_back();  // 移除预先创建的空壳
+                    beatMap.m_noteData.polylines
+                        .pop_back();  // 移除预先创建的空壳
                 } else {
                     // 依然是有效的 Polyline，填充子物件
                     for ( const auto& s : tempSubs ) {
                         if ( s.type == NoteType::HOLD ) {
-                            Hold& h       = beatMap.m_noteData.holds.emplace_back();
-                            h.m_type      = NoteType::HOLD;
+                            Hold& h  = beatMap.m_noteData.holds.emplace_back();
+                            h.m_type = NoteType::HOLD;
                             h.m_timestamp = s.timestamp;
                             h.m_track     = s.track;
                             h.m_duration  = s.duration;
@@ -293,12 +303,12 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                             poly.m_subNotes.push_back(h);
                             poly.m_subHolds.push_back(h);
                         } else if ( s.type == NoteType::FLICK ) {
-                            Flick& f       = beatMap.m_noteData.flicks.emplace_back();
-                            f.m_type       = NoteType::FLICK;
-                            f.m_timestamp  = s.timestamp;
-                            f.m_track      = s.track;
-                            f.m_dtrack     = s.dtrack;
-                            f.m_isSubNote  = true;
+                            Flick& f = beatMap.m_noteData.flicks.emplace_back();
+                            f.m_type = NoteType::FLICK;
+                            f.m_timestamp = s.timestamp;
+                            f.m_track     = s.track;
+                            f.m_dtrack    = s.dtrack;
+                            f.m_isSubNote = true;
                             poly.m_subNotes.push_back(f);
                             poly.m_subFlicks.push_back(f);
                         }

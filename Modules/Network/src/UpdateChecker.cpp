@@ -1,4 +1,5 @@
 #include "network/UpdateChecker.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
 #include <algorithm>
@@ -6,6 +7,7 @@
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <thread>
@@ -99,9 +101,12 @@ void UpdateChecker::openUrlInBrowser(const std::string& url)
 std::string UpdateChecker::currentExecutablePath()
 {
 #if defined(_WIN32)
-    char  buf[MAX_PATH];
-    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if ( len > 0 && len < MAX_PATH ) return std::string(buf, len);
+    wchar_t bufW[MAX_PATH];
+    DWORD   len = GetModuleFileNameW(nullptr, bufW, MAX_PATH);
+    if ( len > 0 && len < MAX_PATH ) {
+        std::filesystem::path p(bufW);
+        return Config::pathToUtf8(p);
+    }
     return "";
 #elif defined(__APPLE__)
     char     buf[PATH_MAX];
@@ -124,8 +129,8 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
         return;
     }
 
-    std::filesystem::path updaterPath =
-        std::filesystem::path(exePath).parent_path();
+    std::filesystem::path exePathFs   = Config::utf8ToPath(exePath);
+    std::filesystem::path updaterPath = exePathFs.parent_path();
 
 #if defined(_WIN32)
     updaterPath /= "MusicMapMaker-Updater.exe";
@@ -133,10 +138,9 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
     updaterPath /= "MusicMapMaker-Updater";
 #endif
 
-    std::string updater = updaterPath.string();
-
-    if ( !std::filesystem::exists(updater) ) {
-        XERROR("UpdateChecker: Updater not found at {}", updater);
+    if ( !std::filesystem::exists(updaterPath) ) {
+        XERROR("UpdateChecker: Updater not found at {}",
+               Config::pathToUtf8(updaterPath));
         return;
     }
 
@@ -148,17 +152,19 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
 #endif
 
     XINFO("UpdateChecker: Launching updater: {} {} {} {}",
-          updater,
+          Config::pathToUtf8(updaterPath),
           downloadedFilePath,
           exePath,
           pid);
 
 #if defined(_WIN32)
-    std::string  cmdLine = "\"" + updater + "\" \"" + downloadedFilePath +
-                           "\" \"" + exePath + "\" " + std::to_string(pid);
-    STARTUPINFOA si{ sizeof(si) };
+    std::filesystem::path dlPath = Config::utf8ToPath(downloadedFilePath);
+    std::wstring cmdLine = L"\"" + updaterPath.wstring() + L"\" \"" +
+                           dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
+                           L"\" " + std::to_wstring(pid);
+    STARTUPINFOW si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
-    if ( CreateProcessA(nullptr,
+    if ( CreateProcessW(nullptr,
                         cmdLine.data(),
                         nullptr,
                         nullptr,
@@ -200,7 +206,7 @@ bool UpdateChecker::checkStartupUpdateMarker()
     if ( exePath.empty() ) return false;
 
     std::filesystem::path markerPath =
-        std::filesystem::path(exePath).parent_path() / ".mm_update_success";
+        Config::utf8ToPath(exePath).parent_path() / ".mm_update_success";
 
     if ( !std::filesystem::exists(markerPath) ) return false;
 
@@ -329,7 +335,11 @@ void UpdateChecker::downloadAsync()
         std::filesystem::path tempPath =
             std::filesystem::temp_directory_path() / "MusicMapMaker_update";
 
-        FILE* file = fopen(tempPath.generic_string().c_str(), "wb");
+#ifdef _WIN32
+        FILE* file = _wfopen(tempPath.wstring().c_str(), L"wb");
+#else
+        FILE* file = fopen(tempPath.c_str(), "wb");
+#endif
         if ( !file ) {
             m_info.status       = UpdateStatus::kError;
             m_info.errorMessage = "Failed to create temp file";
@@ -390,8 +400,9 @@ void UpdateChecker::downloadAsync()
 
         m_info.status             = UpdateStatus::kDownloaded;
         m_info.downloadProgress   = 1.0;
-        m_info.downloadedFilePath = tempPath.string();
-        XINFO("UpdateChecker: Download complete -> {}", tempPath.string());
+        m_info.downloadedFilePath = Config::pathToUtf8(tempPath);
+        XINFO("UpdateChecker: Download complete -> {}",
+              Config::pathToUtf8(tempPath));
     }).detach();
 }
 

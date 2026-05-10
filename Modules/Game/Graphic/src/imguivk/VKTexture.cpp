@@ -1,6 +1,7 @@
 #include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
 
+#define STBI_WINDOWS_UTF8
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -8,17 +9,21 @@ namespace MMM::Graphic
 {
 
 // 构造函数 A：从文件
-VKTexture::VKTexture(const std::string&  filePath,
+VKTexture::VKTexture(const std::filesystem::path& filePath,
                      vk::PhysicalDevice& physicalDevice, vk::Device& device,
                      vk::CommandPool commandPool, vk::Queue queue)
     : m_device(device)
 {
+    auto        u8Path = filePath.u8string();
+    std::string utf8Path(reinterpret_cast<const char*>(u8Path.c_str()),
+                         u8Path.size());
+
     int      texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(
-        filePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        utf8Path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 
     if ( !pixels ) {
-        XCRITICAL("Failed to load texture file: {}", filePath);
+        XCRITICAL("Failed to load texture file: {}", utf8Path);
         throw std::runtime_error("failed to load texture image!");
     }
 
@@ -31,7 +36,7 @@ VKTexture::VKTexture(const std::string&  filePath,
                    queue);
 
     stbi_image_free(pixels);
-    XDEBUG("Texture loaded from file: {}", filePath);
+    XDEBUG("Texture loaded from file: {}", utf8Path);
 }
 
 // 构造函数 B：从内存数据

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "imgui_impl_vulkan.h"
+#include <filesystem>
 #include <imgui.h>
 #include <string>
 #include <unordered_map>
@@ -13,8 +14,9 @@ class VKTexture
 {
 public:
     // 构造方式 A：从文件加载
-    VKTexture(const std::string& filePath, vk::PhysicalDevice& physicalDevice,
-              vk::Device& device, vk::CommandPool commandPool, vk::Queue queue);
+    VKTexture(const std::filesystem::path& filePath,
+              vk::PhysicalDevice& physicalDevice, vk::Device& device,
+              vk::CommandPool commandPool, vk::Queue queue);
 
     // 构造方式 B：直接从内存像素加载 (用于纯色或动态生成纹理)
     VKTexture(const unsigned char* pixels, uint32_t width, uint32_t height,
@@ -83,9 +85,7 @@ private:
 
     // 原生管线用的描述符集映射 (Layout -> DescriptorSet)
     std::unordered_map<VkDescriptorSetLayout, vk::DescriptorSet> m_nativeSets;
-    vk::DescriptorPool                                           m_nativePool{
-        nullptr
-    };
+    vk::DescriptorPool m_nativePool{ nullptr };
 
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };

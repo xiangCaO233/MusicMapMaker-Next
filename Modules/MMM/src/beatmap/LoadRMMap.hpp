@@ -1,8 +1,8 @@
 #pragma once
 
 #include "log/colorful-log.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "mmm/SafeParse.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Polyline.h"
 #include <cstring>
 #include <filesystem>
@@ -181,7 +181,7 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     std::ifstream file(basemeta.map_path, std::ios::binary);
 
     if ( !file ) {
-        XWARN("无法打开imd文件" + basemeta.map_path.generic_string());
+        XWARN("无法打开imd文件" + pathToStr(basemeta.map_path));
         return {};
     }
 
@@ -354,8 +354,10 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
         // 更新本物件共同属性
         temp_note_ptr->m_timestamp = note_timestamp;
-        temp_note_ptr->m_metadata.note_properties[NoteMetadataType::RM]["Parameter"] = std::to_string(note_parameter);
-        temp_note_ptr->m_track     = note_track;
+        temp_note_ptr->m_metadata
+            .note_properties[NoteMetadataType::RM]["Parameter"] =
+            std::to_string(note_parameter);
+        temp_note_ptr->m_track = note_track;
         // 同时加入到全局引用表中
         beatMap.m_allNotes.push_back(*temp_note_ptr);
 
