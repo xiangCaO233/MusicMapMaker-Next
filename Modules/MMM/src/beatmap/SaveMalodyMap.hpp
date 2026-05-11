@@ -26,12 +26,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    static const std::map<int, int> baseWMap = { { 4, 60 },
-                                                 { 5, 50 },
-                                                 { 6, 40 } };
-    int defaultW = baseWMap.contains(trackCount)
-                       ? baseWMap.at(trackCount)
-                       : static_cast<int>(std::round(256.0 / trackCount));
+    static const std::map<int, int> baseWMap = { { 4, 64 },
+                                                 { 5, 51 },
+                                                 { 6, 43 } };
+    int                             defaultW = baseWMap.contains(trackCount)
+                                                   ? baseWMap.at(trackCount)
+                                                   : static_cast<int>(std::round(256.0 / trackCount));
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {

@@ -499,16 +499,16 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 hold.m_duration  = endTime - startTime;
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
-                static std::map<int, int> basewmap = { { 4, 60 },
-                                                       { 5, 50 },
-                                                       { 6, 40 } };
+                static std::map<int, int> basewmap = { { 4, 64 },
+                                                       { 5, 51 },
+                                                       { 6, 43 } };
                 // 处理滑键 Flick (dtrack = w - basew，方向由 dir 决定)
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();
                 flick.m_type      = NoteType::FLICK;
                 flick.m_timestamp = startTime;
                 flick.m_track     = track;
-                int distance  = n.value("w", basewmap[basemeta.track_count]) -
-                                basewmap[basemeta.track_count];
+                int distance = n.value("w", basewmap[basemeta.track_count]) -
+                               basewmap[basemeta.track_count];
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)
                 flick.m_dtrack = (direction == 8) ? -distance : distance;
@@ -563,9 +563,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                            basemeta.title,
-                                            basemeta.track_count,
-                                            basemeta.version);
+                                basemeta.title,
+                                basemeta.track_count,
+                                basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用
