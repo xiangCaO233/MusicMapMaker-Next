@@ -326,7 +326,8 @@ void MainMenuView::renderAboutPopup()
             std::string(ICON_MMM_MUSIC) + "  " + TR("ui.help.app_name").data();
         float titleWidth = ImGui::CalcTextSize(appLabel.c_str()).x;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - titleWidth) * 0.5f);
-        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s", appLabel.c_str());
+        ImGui::TextColored(
+            ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "%s", appLabel.c_str());
 
         if ( titleFont ) ImGui::PopFont();
 
@@ -495,7 +496,7 @@ void MainMenuView::renderUpdatePopup()
 
     bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
                       info.status == MMM::Network::UpdateStatus::kDownloaded);
-    bool open = true;
+    bool open      = true;
     if ( ImGui::BeginPopupModal(
              TR("ui.help.update_found"),
              isWorking ? nullptr : &open,
@@ -517,10 +518,11 @@ void MainMenuView::renderUpdatePopup()
                                        ImGuiTableFlags_NoSavedSettings) ) {
                 ImGui::TableSetupColumn(
                     "L", ImGuiTableColumnFlags_WidthFixed, 140.0f * dpiScale);
-                ImGui::TableSetupColumn("R", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("R",
+                                        ImGuiTableColumnFlags_WidthStretch);
 
-                auto AddRow = [&](const char*  label,
-                                  const char*  value,
+                auto AddRow = [&](const char*   label,
+                                  const char*   value,
                                   const ImVec4* color = nullptr) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -574,10 +576,9 @@ void MainMenuView::renderUpdatePopup()
                 ImGui::Spacing();
                 ImGui::TextUnformatted(TR("ui.help.changelog").data());
 
-                ImGui::BeginChild(
-                    "ChangelogScroll",
-                    ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
-                    ImGuiChildFlags_Borders);
+                ImGui::BeginChild("ChangelogScroll",
+                                  ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
+                                  ImGuiChildFlags_Borders);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                                     ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
                 ImGui::TextWrapped("%s", info.changelog.c_str());
@@ -647,7 +648,7 @@ void MainMenuView::renderUpdatePopup()
             if ( ImGui::Button(TR("ui.help.restart_to_update").data(),
                                ImVec2(btnWidth, 40.0f * dpiScale)) ) {
                 MMM::Network::UpdateChecker::applyUpdateAndRestart(
-                    info.downloadedFilePath);
+                    info.downloadedFilePath, info.updaterFilePath);
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
             ImVec4 errColor(1.0f, 0.4f, 0.4f, 1.0f);
@@ -880,10 +881,12 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                  ICON_MMM_SCISSORS, TR("ui.edit.cut"), "Ctrl+X") ) {
             dispatchCommand(Logic::CmdCut{});
         }
-        if ( MenuItemWithFontIcon(ICON_MMM_COPY, TR("ui.edit.copy"), "Ctrl+C") ) {
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_COPY, TR("ui.edit.copy"), "Ctrl+C") ) {
             dispatchCommand(Logic::CmdCopy{});
         }
-        if ( MenuItemWithFontIcon(ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
             dispatchCommand(Logic::CmdPaste{});
         }
         if ( MenuItemWithFontIcon(

@@ -121,7 +121,8 @@ std::string UpdateChecker::currentExecutablePath()
 #endif
 }
 
-void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
+void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
+                                          const std::string& updaterFilePath)
 {
     std::string exePath = currentExecutablePath();
     if ( exePath.empty() ) {
@@ -129,14 +130,19 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
         return;
     }
 
-    std::filesystem::path exePathFs   = Config::utf8ToPath(exePath);
-    std::filesystem::path updaterPath = exePathFs.parent_path();
-
+    // 优先使用下载的更新器，不存在时回退到同目录查找
+    std::filesystem::path updaterPath;
+    if ( !updaterFilePath.empty() ) {
+        updaterPath = Config::utf8ToPath(updaterFilePath);
+    } else {
+        std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
+        updaterPath                     = exePathFs.parent_path();
 #if defined(_WIN32)
-    updaterPath /= "MusicMapMaker-Updater.exe";
+        updaterPath /= "MusicMapMaker-Updater.exe";
 #else
-    updaterPath /= "MusicMapMaker-Updater";
+        updaterPath /= "MusicMapMaker-Updater";
 #endif
+    }
 
     if ( !std::filesystem::exists(updaterPath) ) {
         XERROR("UpdateChecker: Updater not found at {}",
@@ -158,7 +164,8 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath)
           pid);
 
 #if defined(_WIN32)
-    std::filesystem::path dlPath = Config::utf8ToPath(downloadedFilePath);
+    std::filesystem::path dlPath    = Config::utf8ToPath(downloadedFilePath);
+    std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
     std::wstring cmdLine = L"\"" + updaterPath.wstring() + L"\" \"" +
                            dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
                            L"\" " + std::to_wstring(pid);
@@ -290,6 +297,16 @@ void UpdateChecker::checkAsync()
                     result.downloadUrl =
                         "https://mmm.xiang233.top" + result.downloadUrl;
                 }
+
+                // 解析更新器地址
+                if ( plat.contains("updater") ) {
+                    result.updaterUrl = plat["updater"].value("url", "");
+                    if ( !result.updaterUrl.empty() &&
+                         result.updaterUrl[0] == '/' ) {
+                        result.updaterUrl =
+                            "https://mmm.xiang233.top" + result.updaterUrl;
+                    }
+                }
             }
 
             if ( result.latestVersion.empty() ) {
@@ -332,36 +349,95 @@ void UpdateChecker::downloadAsync()
         result.downloadProgress = 0.0;
         m_info                  = result;  // 立即通知 UI 进入下载状态
 
-        // 构造临时文件路径
-        std::filesystem::path tempPath =
+        // Phase 1: 下载更新器（有 updaterUrl 时）
+        if ( !result.updaterUrl.empty() ) {
+            std::filesystem::path updaterTempPath =
+                std::filesystem::temp_directory_path() /
+                "MusicMapMaker_updater";
+
+#ifdef _WIN32
+            FILE* uFile = _wfopen(updaterTempPath.wstring().c_str(), L"wb");
+#else
+            FILE* uFile = fopen(updaterTempPath.c_str(), "wb");
+#endif
+            if ( !uFile ) {
+                m_info.status       = UpdateStatus::kError;
+                m_info.errorMessage = "Failed to create updater temp file";
+                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                return;
+            }
+
+            CURL* uCurl = curl_easy_init();
+            if ( !uCurl ) {
+                fclose(uFile);
+                m_info.status = UpdateStatus::kError;
+                m_info.errorMessage =
+                    "Failed to initialize libcurl for updater";
+                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                return;
+            }
+
+            curl_easy_setopt(uCurl, CURLOPT_URL, result.updaterUrl.c_str());
+            curl_easy_setopt(uCurl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
+            curl_easy_setopt(uCurl, CURLOPT_WRITEDATA, uFile);
+            curl_easy_setopt(uCurl, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(uCurl, CURLOPT_FAILONERROR, 1L);
+            curl_easy_setopt(
+                uCurl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
+            curl_easy_setopt(uCurl, CURLOPT_CONNECTTIMEOUT, 30L);
+            curl_easy_setopt(uCurl, CURLOPT_TIMEOUT, 60L);
+
+            CURLcode uRes = curl_easy_perform(uCurl);
+
+            fclose(uFile);
+            curl_easy_cleanup(uCurl);
+
+            if ( uRes != CURLE_OK ) {
+                m_info.status       = UpdateStatus::kError;
+                m_info.errorMessage = fmt::format("Updater download error: {}",
+                                                  curl_easy_strerror(uRes));
+                std::filesystem::remove(updaterTempPath);
+                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                return;
+            }
+
+            result.updaterFilePath = Config::pathToUtf8(updaterTempPath);
+            m_info.updaterFilePath = result.updaterFilePath;
+            XINFO("UpdateChecker: Updater downloaded -> {}",
+                  result.updaterFilePath);
+        }
+
+        // Phase 2: 下载主程序更新
+        std::filesystem::path mainTempPath =
             std::filesystem::temp_directory_path() / "MusicMapMaker_update";
 
 #ifdef _WIN32
-        FILE* file = _wfopen(tempPath.wstring().c_str(), L"wb");
+        FILE* mFile = _wfopen(mainTempPath.wstring().c_str(), L"wb");
 #else
-        FILE* file = fopen(tempPath.c_str(), "wb");
+        FILE* mFile = fopen(mainTempPath.c_str(), "wb");
 #endif
-        if ( !file ) {
+        if ( !mFile ) {
             m_info.status       = UpdateStatus::kError;
-            m_info.errorMessage = "Failed to create temp file";
+            m_info.errorMessage = "Failed to create main temp file";
             XERROR("UpdateChecker: {}", m_info.errorMessage);
             return;
         }
 
-        CURL* curl = curl_easy_init();
-        if ( !curl ) {
-            fclose(file);
-            m_info.status       = UpdateStatus::kError;
-            m_info.errorMessage = "Failed to initialize libcurl";
+        CURL* mCurl = curl_easy_init();
+        if ( !mCurl ) {
+            fclose(mFile);
+            m_info.status = UpdateStatus::kError;
+            m_info.errorMessage =
+                "Failed to initialize libcurl for main program";
             XERROR("UpdateChecker: {}", m_info.errorMessage);
             return;
         }
 
-        curl_easy_setopt(curl, CURLOPT_URL, result.downloadUrl.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, file);
+        curl_easy_setopt(mCurl, CURLOPT_URL, result.downloadUrl.c_str());
+        curl_easy_setopt(mCurl, CURLOPT_WRITEFUNCTION, fileWriteCallback);
+        curl_easy_setopt(mCurl, CURLOPT_WRITEDATA, mFile);
         curl_easy_setopt(
-            curl,
+            mCurl,
             CURLOPT_XFERINFOFUNCTION,
             +[](void*      clientp,
                 curl_off_t dltotal,
@@ -376,34 +452,34 @@ void UpdateChecker::downloadAsync()
                 }
                 return 0;
             });
-        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
-        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+        curl_easy_setopt(mCurl, CURLOPT_XFERINFODATA, this);
+        curl_easy_setopt(mCurl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(mCurl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(mCurl, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(
-            curl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 30L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3600L);
+            mCurl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
+        curl_easy_setopt(mCurl, CURLOPT_CONNECTTIMEOUT, 30L);
+        curl_easy_setopt(mCurl, CURLOPT_TIMEOUT, 3600L);
 
-        CURLcode res = curl_easy_perform(curl);
+        CURLcode mRes = curl_easy_perform(mCurl);
 
-        fclose(file);
-        curl_easy_cleanup(curl);
+        fclose(mFile);
+        curl_easy_cleanup(mCurl);
 
-        if ( res != CURLE_OK ) {
+        if ( mRes != CURLE_OK ) {
             m_info.status = UpdateStatus::kError;
             m_info.errorMessage =
-                fmt::format("Download error: {}", curl_easy_strerror(res));
-            std::filesystem::remove(tempPath);
+                fmt::format("Download error: {}", curl_easy_strerror(mRes));
+            std::filesystem::remove(mainTempPath);
             XERROR("UpdateChecker: {}", m_info.errorMessage);
             return;
         }
 
         m_info.status             = UpdateStatus::kDownloaded;
         m_info.downloadProgress   = 1.0;
-        m_info.downloadedFilePath = Config::pathToUtf8(tempPath);
+        m_info.downloadedFilePath = Config::pathToUtf8(mainTempPath);
         XINFO("UpdateChecker: Download complete -> {}",
-              Config::pathToUtf8(tempPath));
+              Config::pathToUtf8(mainTempPath));
     }).detach();
 }
 
