@@ -323,8 +323,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 || mode == 4 ) {
             nj["x"] = columnToX((int)note.m_track);
-            // Polyline 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度 (60/50/40)
-            nj["w"] = (note.m_type == NoteType::POLYLINE) ? defaultXW : defaultWW;
+            // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度 (60/50/40)
+            nj["w"] = (note.m_type == NoteType::POLYLINE || note.m_type == NoteType::HOLD) ? defaultXW : defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
         }
