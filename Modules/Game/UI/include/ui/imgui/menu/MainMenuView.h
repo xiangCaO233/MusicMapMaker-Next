@@ -27,6 +27,12 @@ public:
     void renderInfoText();
     void handleHotkeys(UIManager* sourceManager);
 
+    /// @brief 获取状态信息 (用于状态栏显示)
+    std::string getStatusMessage() const
+    {
+        return m_statusMessageTimer > 0.0f ? m_statusMessage : "";
+    }
+
 private:
     void openFolderPicker();
     void openPackFilePicker();
@@ -53,8 +59,11 @@ private:
     bool m_showUpdateSuccessPopup = false;
 
     bool m_hasCheckedOnStartup = false;  ///< 是否已完成启动时的自动更新检查
+    bool m_isSilentCheck       = false;  ///< 是否为静默检查 (启动时)
 
-    float m_saveTooltipTimer = 0.0f;
+    float       m_saveTooltipTimer   = 0.0f;
+    float       m_statusMessageTimer = 0.0f;
+    std::string m_statusMessage;
 
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;
 };

@@ -251,6 +251,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
 
 void MainMenuView::startUpdateCheck()
 {
+    m_isSilentCheck     = false;
     m_showCheckingPopup = true;
     m_updateChecker->checkAsync();
 }
@@ -785,6 +786,9 @@ void MainMenuView::renderSaveTooltip()
 
 void MainMenuView::update(UIManager* sourceManager)
 {
+    if ( m_statusMessageTimer > 0.0f )
+        m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
+
     // 启动时自动检查更新
     if ( !m_hasCheckedOnStartup ) {
         m_hasCheckedOnStartup = true;
@@ -793,8 +797,23 @@ void MainMenuView::update(UIManager* sourceManager)
         if ( MMM::Network::UpdateChecker::checkStartupUpdateMarker() ) {
             m_showUpdateSuccessPopup = true;
         } else {
-            m_showCheckingPopup = true;
+            m_isSilentCheck = true;  // 静默检查
             m_updateChecker->checkAsync();
+        }
+    }
+
+    // 如果是静默检查，监测状态
+    if ( m_isSilentCheck ) {
+        auto info = m_updateChecker->getInfo();
+        if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+            m_showUpdatePopup = true;
+            m_isSilentCheck   = false;
+        } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
+            m_statusMessage      = TR("ui.help.up_to_date").data();
+            m_statusMessageTimer = 5.0f;
+            m_isSilentCheck      = false;
+        } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
+            m_isSilentCheck = false;
         }
     }
 

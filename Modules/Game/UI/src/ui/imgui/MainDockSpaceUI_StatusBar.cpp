@@ -53,7 +53,12 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGui::SetCursorPosY(offsetY);
 
         // 渲染状态栏内容
-        ImGui::Text("%s", TR("ui.status.ready").data());
+        std::string menuStatus = m_mainMenuview.getStatusMessage();
+        if ( !menuStatus.empty() ) {
+            ImGui::Text("%s", menuStatus.c_str());
+        } else {
+            ImGui::Text("%s", TR("ui.status.ready").data());
+        }
 
         ImGui::SameLine();
         ImGui::SetCursorPosY(offsetY);
