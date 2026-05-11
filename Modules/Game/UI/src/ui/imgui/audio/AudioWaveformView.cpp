@@ -86,21 +86,25 @@ void AudioWaveformView::update(UIManager* sourceManager)
         return;
     }
 
-    double currentTime = audioManager.getCurrentTime();
-    double totalTime   = audioManager.getTotalTime();
+    float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
+    double audioTime = audioManager.getCurrentTime();
+    double visualTime = audioTime + visualOffset;
+    double totalTime  = audioManager.getTotalTime();
     double speed       = audioManager.getPlaybackSpeed();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     auto snapshot =
         Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
     if ( snapshot ) {
-        currentTime = snapshot->currentTime;
+        visualTime = snapshot->currentTime;
+        audioTime = visualTime - visualOffset;
         // 亚帧平滑补偿 (同步视觉偏移)
         if ( !snapshot->isPreviewDragging && snapshot->isPlaying && snapshot->snapshotSysTime > 0.0 ) {
             double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
             double dt = now - snapshot->snapshotSysTime;
             if ( dt > 0.0 && dt < 0.1 ) {
-                currentTime += dt * snapshot->playbackSpeed;
+                visualTime += dt * snapshot->playbackSpeed;
+                audioTime += dt * snapshot->playbackSpeed;
             }
         }
     }
@@ -117,7 +121,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
     }
 
     syncEQ();
-    updateEnvelopes(currentTime, totalTime, speed);
+    updateEnvelopes(visualTime, totalTime, speed, visualOffset);
 
     // 计算平分高度
     float totalAvailH = ImGui::GetContentRegionAvail().y;
@@ -128,8 +132,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
                              const double* maxEnv,
                              const char*   label) {
         
-        double viewStart = currentTime - m_zoom;
-        double viewEnd   = currentTime + m_zoom;
+        double viewStart = visualTime - m_zoom;
+        double viewEnd   = visualTime + m_zoom;
 
         // 使用静态变量存储上一帧的交互状态，以便在本帧 BeginPlot 中使用
         static bool s_lastActive[2] = { false, false };
@@ -156,12 +160,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
                                m_samplePoints,
                                ImPlotSpec(ImPlotProp_FillAlpha, 0.5f));
 
-            // 获取视觉偏移并绘制游标
-            float visualOffset =
-                Config::AppConfig::instance().getVisualConfig().visualOffset;
-            double adjustedTime = currentTime + visualOffset;
-
-            double playheadX[2] = { adjustedTime, adjustedTime };
+            double playheadX[2] = { visualTime, visualTime };
             double playheadY[2] = { -1.1, 1.1 };
             ImPlot::PlotLine("##Playhead",
                              playheadX,
@@ -198,19 +197,21 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x, plotMin.y + ImPlot::GetPlotSize().y };
                 ImVec2 mousePos = ImGui::GetMousePos();
                 float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
-                double hoverTime = viewStart + relX * (viewEnd - viewStart);
-                hoverTime = std::clamp(hoverTime, 0.0, totalTime);
+                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
+                double hoverAudioTime  = hoverVisualTime - visualOffset;
+                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
+                hoverVisualTime = hoverAudioTime + visualOffset;
 
-                double hLineX[2] = { hoverTime, hoverTime };
+                double hLineX[2] = { hoverVisualTime, hoverVisualTime };
                 double hLineY[2] = { -1.1, 1.1 };
                 ImPlot::PlotLine("##HoverLine", hLineX, hLineY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0, 1, 0, 0.6f)));
 
                 if ( s_lastActive[chanIdx] ) {
                     auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
                     if ( snapshot && snapshot->hasBeatmap ) {
-                        double offsetStart = snapshot->visibleTimeStart - snapshot->currentTime;
-                        double offsetEnd   = snapshot->visibleTimeEnd - snapshot->currentTime;
-                        double preBoxX[2] = { hoverTime + offsetStart, hoverTime + offsetEnd };
+                        double offsetStart = snapshot->visibleTimeStart - visualTime;
+                        double offsetEnd   = snapshot->visibleTimeEnd - visualTime;
+                        double preBoxX[2] = { hoverVisualTime + offsetStart, hoverVisualTime + offsetEnd };
                         double preBoxY[2] = { 1.0, 1.0 };
                         ImPlot::PlotShaded("##PreviewViewBox", &preBoxX[0], &preBoxY[0], 2, -1.0, ImPlotSpec(ImPlotProp_FillColor, ImVec4(0.5f, 0.0f, 1.0f, 0.35f)));
                     }
@@ -228,22 +229,24 @@ void AudioWaveformView::update(UIManager* sourceManager)
             if ( ImGui::IsItemHovered() || ImGui::IsItemActive() ) {
                 ImVec2 mousePos = ImGui::GetMousePos();
                 float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
-                double hoverTime = viewStart + relX * (viewEnd - viewStart);
-                hoverTime = std::clamp(hoverTime, 0.0, totalTime);
+                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
+                double hoverAudioTime  = hoverVisualTime - visualOffset;
+                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
+                hoverVisualTime = hoverAudioTime + visualOffset;
 
-                ImGui::SetTooltip("%.3fs", hoverTime);
+                ImGui::SetTooltip("%.3fs", hoverAudioTime);
 
                 if ( ImGui::IsItemActive() ) {
 
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(
                         Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
                                                     plotMax.x - plotMin.x, plotMax.y - plotMin.y,
-                                                    true, true, hoverTime }));
+                                                    true, true, hoverVisualTime }));
                 }
 
                 if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-                    audioManager.seek(hoverTime);
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverTime }));
+                    audioManager.seek(hoverAudioTime);
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(
                         Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
                                                     plotMax.x - plotMin.x, plotMax.y - plotMin.y,
@@ -357,31 +360,35 @@ void AudioWaveformView::fullRecalculate()
     m_isCalculating = false;
 }
 
-void AudioWaveformView::updateEnvelopes(double currentTime, double totalTime,
-                                        double speed)
+void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
+                                        double speed, float visualOffset)
 {
     if ( m_cachedMinL.empty() ) return;
 
-    double viewStart = currentTime - m_zoom;
-    double viewEnd   = currentTime + m_zoom;
+    double viewStart = visualTime - m_zoom;
+    double viewEnd   = visualTime + m_zoom;
 
     for ( int i = 0; i < m_samplePoints; ++i ) {
         double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
                                      (viewEnd - viewStart);
         m_times[i] = t;
 
-        if ( t < 0 || t >= totalTime ) {
+        double audioT = t - visualOffset;
+
+        if ( audioT < 0 || audioT >= totalTime ) {
             m_viewMinL[i] = m_maxEnvelopeL[i] = m_viewMinR[i] =
                 m_maxEnvelopeR[i]             = 0;
             continue;
         }
 
-        size_t p = static_cast<size_t>(t * m_cachePointsPerSecond);
+        size_t p = static_cast<size_t>(audioT * m_cachePointsPerSecond);
         if ( p < m_cachedMinL.size() ) {
             m_viewMinL[i]     = m_cachedMinL[p];
             m_maxEnvelopeL[i] = m_cachedMaxL[p];
             m_viewMinR[i]     = m_cachedMinR[p];
             m_maxEnvelopeR[i] = m_cachedMaxR[p];
+        } else {
+            m_viewMinL[i] = m_maxEnvelopeL[i] = m_viewMinR[i] = m_maxEnvelopeR[i] = 0;
         }
     }
 }
