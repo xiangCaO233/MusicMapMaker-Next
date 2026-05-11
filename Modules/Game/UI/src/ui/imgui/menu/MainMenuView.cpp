@@ -305,7 +305,7 @@ void MainMenuView::renderAboutPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
              TR("ui.help.about_title"),
@@ -407,7 +407,7 @@ void MainMenuView::renderUpdateCheckingPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     bool open = true;
     if ( ImGui::BeginPopupModal(
@@ -492,7 +492,7 @@ void MainMenuView::renderUpdatePopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
                       info.status == MMM::Network::UpdateStatus::kDownloaded);
@@ -684,7 +684,7 @@ void MainMenuView::renderUpdateSuccessPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
              TR("ui.help.update_success"),
