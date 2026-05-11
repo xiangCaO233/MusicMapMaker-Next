@@ -22,7 +22,7 @@ public:
     void update(UIManager* sourceManager) override;
 
 private:
-    void updateEnvelopes(double currentTime, double duration, double speed);
+    void updateEnvelopes(double visualTime, double duration, double speed, float visualOffset);
     void syncEQ();
     void fullRecalculate(); // 新增：全局重计算
 
