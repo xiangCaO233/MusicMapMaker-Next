@@ -196,9 +196,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     } else if ( finalK == 5 ) {
         bestW = 51.0f;
         bestS = 25.0f;
-    } else if ( finalK >= 6 ) {
+    } else if ( finalK == 6 ) {
         bestW = 43.0f;
         bestS = 21.0f;
+    } else {
+        bestW = 256.0f / (float)finalK;
+        bestS = bestW / 2.0f;
     }
 
     // 如果存在 x 坐标，通过统计学拟合寻找最匹配的网格系统
@@ -215,9 +218,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             } else if ( k == 5 ) {
                 w = 51.0f;
                 s = 25.0f;
-            } else if ( k >= 6 ) {
+            } else if ( k == 6 ) {
                 w = 43.0f;
                 s = 21.0f;
+            } else {
+                w = 256.0f / k;
+                s = w / 2.0f;
             }
 
             double error = 0;
@@ -521,14 +527,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 hold.m_duration  = endTime - startTime;
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
-                static std::map<int, int> x_width_map = { { 4, 64 }, { 5, 51 }, { 6, 43 } };
-                static std::map<int, int> w_width_map = { { 4, 60 }, { 5, 50 }, { 6, 40 } };
-
-                int trackCount = basemeta.track_count;
-                int x_w = x_width_map.contains(trackCount) ? x_width_map[trackCount]
-                                                           : (256 / trackCount);
-                int w_w = w_width_map.contains(trackCount) ? w_width_map[trackCount]
-                                                           : x_w;
+                int x_w = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
+                int w_w = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
 
                 // 处理滑键 Flick (dtrack = (w - w_w) / x_w，方向由 dir 决定)
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();

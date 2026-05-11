@@ -26,20 +26,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    static const std::map<int, int> x_width_map = { { 4, 64 },
-                                                    { 5, 51 },
-                                                    { 6, 43 } };
-    static const std::map<int, int> w_width_map = { { 4, 60 },
-                                                    { 5, 50 },
-                                                    { 6, 40 } };
-
-    int defaultXW = x_width_map.contains(trackCount)
-                        ? x_width_map.at(trackCount)
-                        : static_cast<int>(std::round(256.0 / trackCount));
-
-    int defaultWW = w_width_map.contains(trackCount)
-                        ? w_width_map.at(trackCount)
-                        : defaultXW;
+    int defaultXW = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
+    int defaultWW = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : defaultXW));
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {
@@ -49,7 +37,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             center = 31;
         else if ( trackCount == 5 )
             center = 25;
-        else if ( trackCount >= 6 )
+        else if ( trackCount == 6 )
             center = 21;
         else
             center = x_w / 2;
@@ -336,9 +324,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         if ( mode == 7 || mode == 4 ) {
             nj["x"] = columnToX((int)note.m_track);
             if ( note.m_type != NoteType::NOTE ) {
-                // Flick 使用指定的 w_width (如 60/50/40)
-                // Hold 和 Polyline 使用网格宽度 (如 64/51/43) 以匹配官方编辑器
-                nj["w"] = (note.m_type == NoteType::FLICK) ? defaultWW : defaultXW;
+                // 根据用户要求，Hold、Flick 和 Polyline 的基础宽度 w 均使用 60/50/40
+                nj["w"] = defaultWW;
             }
         } else {
             nj["column"] = (int)note.m_track;
