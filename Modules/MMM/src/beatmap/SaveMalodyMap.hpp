@@ -26,17 +26,31 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    static const std::map<int, int> baseWMap = { { 4, 64 },
-                                                 { 5, 51 },
-                                                 { 6, 43 } };
-    int                             defaultW = baseWMap.contains(trackCount)
-                                                   ? baseWMap.at(trackCount)
-                                                   : static_cast<int>(std::round(256.0 / trackCount));
+    static const std::map<int, int> x_width_map = { { 4, 64 },
+                                                     { 5, 51 },
+                                                     { 6, 43 } };
+    static const std::map<int, int> w_width_map = { { 4, 60 },
+                                                     { 5, 50 },
+                                                     { 6, 40 } };
+
+    int defaultXW = x_width_map.contains(trackCount)
+                        ? x_width_map.at(trackCount)
+                        : static_cast<int>(std::round(256.0 / trackCount));
+
+    int defaultWW = w_width_map.contains(trackCount)
+                        ? w_width_map.at(trackCount)
+                        : defaultXW;
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {
-        return static_cast<int>(
-            std::round((2 * column + 1) * 128.0 / trackCount));
+        int x_w = defaultXW;
+        int center = 0;
+        if ( trackCount == 4 ) center = 31;
+        else if ( trackCount == 5 ) center = 25;
+        else if ( trackCount >= 6 ) center = 21;
+        else center = x_w / 2;
+
+        return column * x_w + center;
     };
 
     // Meta
@@ -316,7 +330,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 ) {
             nj["x"] = columnToX((int)note.m_track);
-            nj["w"] = defaultW;
+            nj["w"] = defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
         }
@@ -395,7 +409,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( mode == 7 ) {
                 // Slide 模式：Flick 导出为 dir + w
                 nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-                int wVal  = defaultW + std::abs(f.m_dtrack);
+                int wVal  = defaultWW + std::abs(f.m_dtrack) * defaultXW;
                 nj["w"]   = wVal;
             }
             // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
@@ -501,8 +515,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 const auto& s = cleanSubs[0];
                 if ( s.type == NoteType::FLICK &&
                      std::abs(s.timestamp - p.m_timestamp) < 1e-5 ) {
-                    nj["dir"]     = (s.dtrack < 0) ? 8 : 2;
-                    nj["w"]       = defaultW + std::abs(s.dtrack);
+                    nj["dir"] = (s.dtrack < 0) ? 8 : 2;
+                    nj["w"]   = defaultWW + std::abs(s.dtrack) * defaultXW;
                     exportedAsDir = true;
                 }
             }
@@ -547,9 +561,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                         sj["beat"] = getRelBeat(current_time, nj["beat"]);
                     }
 
-                    float w        = 256.0f / trackCount;
-                    int   x_offset = static_cast<int>(
-                        std::round((int(current_track) - int(p.m_track)) * w));
+                    int x_offset = static_cast<int>(
+                        std::round((int(current_track) - int(p.m_track)) * (float)defaultXW));
                     if ( x_offset != 0 ) {
                         sj["x"] = x_offset;
                     }

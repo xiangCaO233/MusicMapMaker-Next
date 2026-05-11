@@ -189,15 +189,37 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     float bestW = 256.0f / (float)finalK;
     float bestS = bestW / 2.0f;
 
+    // 根据用户指定的规则调整 4k/5k/其他 的间距和中心点
+    if ( finalK == 4 ) {
+        bestW = 64.0f;
+        bestS = 31.0f;
+    } else if ( finalK == 5 ) {
+        bestW = 51.0f;
+        bestS = 25.0f;
+    } else if ( finalK >= 6 ) {
+        bestW = 43.0f;
+        bestS = 21.0f;
+    }
+
     // 如果存在 x 坐标，通过统计学拟合寻找最匹配的网格系统
     if ( hasX ) {
         double minTotalError = 1e18;
         bool   foundBetter   = false;
 
-        // 尝试常见轨道数 (4k-9k)
         for ( int k : { 4, 5, 6, 7, 8, 9 } ) {
             float  w     = 256.0f / k;
             float  s     = w / 2.0f;
+            if ( k == 4 ) {
+                w = 64.0f;
+                s = 31.0f;
+            } else if ( k == 5 ) {
+                w = 51.0f;
+                s = 25.0f;
+            } else if ( k >= 6 ) {
+                w = 43.0f;
+                s = 21.0f;
+            }
+
             double error = 0;
             for ( auto const& [x, freq] : xFreq ) {
                 float target = std::round((x - s) / w) * w + s;
@@ -499,16 +521,26 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 hold.m_duration  = endTime - startTime;
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
-                static std::map<int, int> basewmap = { { 4, 64 },
-                                                       { 5, 51 },
-                                                       { 6, 43 } };
-                // 处理滑键 Flick (dtrack = w - basew，方向由 dir 决定)
+                static std::map<int, int> x_width_map = { { 4, 64 }, { 5, 51 }, { 6, 43 } };
+                static std::map<int, int> w_width_map = { { 4, 60 }, { 5, 50 }, { 6, 40 } };
+
+                int trackCount = basemeta.track_count;
+                int x_w = x_width_map.contains(trackCount) ? x_width_map[trackCount]
+                                                           : (256 / trackCount);
+                int w_w = w_width_map.contains(trackCount) ? w_width_map[trackCount]
+                                                           : x_w;
+
+                // 处理滑键 Flick (dtrack = (w - w_w) / x_w，方向由 dir 决定)
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();
                 flick.m_type      = NoteType::FLICK;
                 flick.m_timestamp = startTime;
                 flick.m_track     = track;
-                int distance = n.value("w", basewmap[basemeta.track_count]) -
-                               basewmap[basemeta.track_count];
+
+                int wVal            = n.value("w", w_w);
+                int distance_pixels = wVal - w_w;
+                int distance =
+                    std::round((float)distance_pixels / (float)x_w);
+
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)
                 flick.m_dtrack = (direction == 8) ? -distance : distance;
