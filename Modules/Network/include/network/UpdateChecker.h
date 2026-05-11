@@ -23,15 +23,19 @@ struct UpdateInfo {
     std::string  currentVersion;     ///< 当前应用版本号
     std::string  changelog;          ///< 更新日志
     std::string  releaseDate;        ///< 发布日期
-    std::string  downloadUrl;        ///< 下载地址（平台相关）
+    std::string  downloadUrl;        ///< 下载地址（主程序，平台相关）
     int64_t      downloadSize{ 0 };  ///< 下载文件总大小（字节）
     std::string  checksum;           ///< SHA256 校验和
     std::string  errorMessage;       ///< 错误信息
 
+    // 更新器（独立下载，负责替换主程序）
+    std::string updaterUrl;       ///< 更新器下载地址
+    std::string updaterFilePath;  ///< 更新器下载后的临时文件路径
+
     // 下载进度
     int64_t     downloadedBytes{ 0 };     ///< 已下载字节数
     double      downloadProgress{ 0.0 };  ///< 下载进度 0.0~1.0
-    std::string downloadedFilePath;       ///< 下载完成后的临时文件路径
+    std::string downloadedFilePath;  ///< 下载完成后的临时文件路径（主程序）
 };
 
 /// @brief 应用更新检查器，面向 xiand233.top 的更新 API
@@ -66,8 +70,10 @@ public:
     static std::string currentExecutablePath();
 
     /// @brief 应用更新并重启（启动 Updater 后立即退出当前进程）
-    /// @param downloadedFilePath 已下载的更新文件路径
-    static void applyUpdateAndRestart(const std::string& downloadedFilePath);
+    /// @param downloadedFilePath 已下载的更新文件路径（主程序）
+    /// @param updaterFilePath 更新器文件路径（负责替换主程序）
+    static void applyUpdateAndRestart(const std::string& downloadedFilePath,
+                                      const std::string& updaterFilePath);
 
     /// @brief 检查启动时的更新成功标记（更新后首次启动）
     /// @return 如果存在标记则返回 true，并将标记删除；否则返回 false
