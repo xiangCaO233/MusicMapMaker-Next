@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 3.31)
 
-project(MusicMapMaker-Next VERSION 0.3.0 LANGUAGES CXX)
+project(MusicMapMaker-Next VERSION 0.3.1 LANGUAGES CXX)
 
 if(MSVC)
-	# 设置msvc需要的 VCPKG_ROOT
-	set(VCPKG_ROOT "C:/coding/vcpkg")
-	# 强制 MSVC 使用静态运行时 (/MT)
-	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    # 设置msvc需要的 VCPKG_ROOT
+    set(VCPKG_ROOT "C:/coding/vcpkg")
+    # 强制 MSVC 使用静态运行时 (/MT)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
