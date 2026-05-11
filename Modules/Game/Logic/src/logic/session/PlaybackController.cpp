@@ -36,7 +36,8 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
     double totalTime       = Audio::AudioManager::instance().getTotalTime();
-    m_ctx.currentTime      = std::clamp(cmd.time, 0.0, totalTime);
+    double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+    m_ctx.currentTime      = std::clamp(cmd.time, minTime, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
     m_ctx.hasInitialAudioOffset = false;
@@ -186,7 +187,8 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     }
 
     double totalTime       = Audio::AudioManager::instance().getTotalTime();
-    m_ctx.currentTime      = std::clamp(targetTime, 0.0, totalTime);
+    double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+    m_ctx.currentTime      = std::clamp(targetTime, minTime, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
     m_ctx.hasInitialAudioOffset = false;

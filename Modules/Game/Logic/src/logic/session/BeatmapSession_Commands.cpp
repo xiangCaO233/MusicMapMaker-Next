@@ -154,7 +154,9 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
     m_ctx->lastConfig = cmd.config;
     auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
-    if ( cache ) { cache->isDirty = true; }
+    if ( cache ) {
+        cache->isDirty = true;
+    }
 }
 
 void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
@@ -186,7 +188,12 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             m_ctx->currentBeatmap->m_baseMapMetadata.map_path = savePath;
         }
 
-        m_ctx->currentBeatmap->saveToFile(savePath);
+        bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
+        if ( !ok ) {
+            XERROR("SaveBeatmap: failed to save to {}",
+                   Config::pathToUtf8(savePath));
+            return;
+        }
         m_ctx->actionStack.markSaved();
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
@@ -196,9 +203,15 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
         SessionUtils::syncBeatmap(*m_ctx);
-        m_ctx->currentBeatmap->saveToFile(cmd.path);
+        auto savePath = Config::utf8ToPath(cmd.path);
+        bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);
+        if ( !ok ) {
+            XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
+            return;
+        }
+        m_ctx->currentBeatmap->m_baseMapMetadata.map_path = savePath;
         m_ctx->actionStack.markSaved();
-        EditorEngine::instance().syncProjectWithFile(cmd.path);
+        EditorEngine::instance().syncProjectWithFile(savePath);
     }
 }
 
@@ -232,7 +245,9 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 "ScrollCache...");
             auto* cache =
                 m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
-            if ( cache ) { cache->isDirty = true; }
+            if ( cache ) {
+                cache->isDirty = true;
+            }
         }
 
         // 如果音频路径发生变化，重新加载音频

@@ -26,17 +26,23 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    static const std::map<int, int> baseWMap = { { 4, 60 },
-                                                 { 5, 50 },
-                                                 { 6, 40 } };
-    int defaultW = baseWMap.contains(trackCount)
-                       ? baseWMap.at(trackCount)
-                       : static_cast<int>(std::round(256.0 / trackCount));
+    int defaultXW = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
+    int defaultWW = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : defaultXW));
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {
-        return static_cast<int>(
-            std::round((2 * column + 1) * 128.0 / trackCount));
+        int x_w    = defaultXW;
+        int center = 0;
+        if ( trackCount == 4 )
+            center = 31;
+        else if ( trackCount == 5 )
+            center = 25;
+        else if ( trackCount == 6 )
+            center = 21;
+        else
+            center = x_w / 2;
+
+        return column * x_w + center;
     };
 
     // Meta
@@ -147,6 +153,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             currentBpm = t.m_bpm;
         }
         lastBeat += (time - lastTime) / (60000.0 / currentBpm);
+        lastBeat = std::max(0.0, lastBeat);
 
         int    integerBeat = static_cast<int>(std::floor(lastBeat + 1e-6));
         double fraction    = lastBeat - integerBeat;
@@ -314,9 +321,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             nj["beat"] = timeToBeat(note.m_timestamp);
         }
 
-        if ( mode == 7 ) {
+        if ( mode == 7 || mode == 4 ) {
             nj["x"] = columnToX((int)note.m_track);
-            nj["w"] = defaultW;
+            // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度 (60/50/40)
+            nj["w"] = (note.m_type == NoteType::POLYLINE || note.m_type == NoteType::HOLD) ? defaultXW : defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
         }
@@ -367,24 +375,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         if ( note.m_type == NoteType::HOLD ) {
             const auto& h = static_cast<const Hold&>(note);
 
-            std::string structure =
-                (mode == 7 || mode == 4) ? "seg" : "endbeat";
-            // 仅在 Slide/Live 模式下允许从元数据恢复原始 structure
             if ( mode == 7 || mode == 4 ) {
-                if ( auto it = note.m_metadata.note_properties.find(
-                         NoteMetadataType::MALODY);
-                     it != note.m_metadata.note_properties.end() ) {
-                    if ( it->second.contains("original_structure") ) {
-                        structure = it->second.at("original_structure");
-                    }
-                }
-            }
-
-            if ( structure == "seg" ) {
+                // 普通 Hold 写成单 seg 模式，且 seg 内不包含 w 和 x
                 nj["seg"] = json::array();
                 json sj;
-                sj["beat"] =
-                    getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
+                sj["beat"] = getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
                 nj["seg"].push_back(sj);
             } else {
                 nj["endbeat"] = timeToBeat(h.m_timestamp + h.m_duration);
@@ -395,7 +390,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( mode == 7 ) {
                 // Slide 模式：Flick 导出为 dir + w
                 nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-                int wVal  = defaultW + std::abs(f.m_dtrack);
+                int wVal  = defaultWW + std::abs(f.m_dtrack);
                 nj["w"]   = wVal;
             }
             // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
@@ -502,7 +497,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 if ( s.type == NoteType::FLICK &&
                      std::abs(s.timestamp - p.m_timestamp) < 1e-5 ) {
                     nj["dir"]     = (s.dtrack < 0) ? 8 : 2;
-                    nj["w"]       = defaultW + std::abs(s.dtrack);
+                    nj["w"]       = defaultWW + std::abs(s.dtrack);
                     exportedAsDir = true;
                 }
             }
@@ -510,6 +505,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( !exportedAsDir && cleanSubs.empty() ) {
                 // 所有子物件被清理后无剩余段，降级为普通点物件
                 nj.erase("seg");
+                nj.erase("w");
             } else if ( !exportedAsDir ) {
                 nj["seg"] = json::array();
 
@@ -547,9 +543,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                         sj["beat"] = getRelBeat(current_time, nj["beat"]);
                     }
 
-                    float w        = 256.0f / trackCount;
-                    int   x_offset = static_cast<int>(
-                        std::round((int(current_track) - int(p.m_track)) * w));
+                    int x_offset = static_cast<int>(
+                        std::round((int(current_track) - int(p.m_track)) *
+                                   (float)defaultXW));
                     if ( x_offset != 0 ) {
                         sj["x"] = x_offset;
                     }
@@ -584,11 +580,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              it != note.m_metadata.note_properties.end() ) {
             for ( const auto& [key, val] : it->second ) {
                 // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
-                if ( key != "beat" && key != "column" && key != "endbeat" &&
+                if ( key != "beat" && key != "column" && key != "x" && key != "endbeat" &&
                      key != "seg" && key != "dir" &&
                      key != "original_structure" &&
                      key != "original_structure_flick" &&
-                     (note.m_type != NoteType::FLICK || key != "w") ) {
+                     ((note.m_type != NoteType::FLICK && note.m_type != NoteType::NOTE) || key != "w") ) {
                     try {
                         nj[key] = json::parse(val);
                     } catch ( ... ) {
@@ -664,8 +660,13 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     }
 
     std::ofstream ofs(path);
-    if ( !ofs.is_open() ) return false;
+    if ( !ofs.is_open() ) {
+        XERROR("无法打开文件 [{}] 进行 Malody 谱面写出",
+               Config::pathToUtf8(path));
+        return false;
+    }
     ofs << fileData.dump(4);
+    XINFO("Successfully saved Malody map to {}", Config::pathToUtf8(path));
     return true;
 }
 

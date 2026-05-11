@@ -73,6 +73,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 openExportFilePicker("");
             } else {
                 dispatchCommand(Logic::CmdSaveBeatmap{});
+                m_saveTooltipTimer = 2.0f;
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
@@ -250,6 +251,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
 
 void MainMenuView::startUpdateCheck()
 {
+    m_isSilentCheck     = false;
     m_showCheckingPopup = true;
     m_updateChecker->checkAsync();
 }
@@ -305,7 +307,7 @@ void MainMenuView::renderAboutPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
              TR("ui.help.about_title"),
@@ -407,7 +409,7 @@ void MainMenuView::renderUpdateCheckingPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     bool open = true;
     if ( ImGui::BeginPopupModal(
@@ -492,7 +494,7 @@ void MainMenuView::renderUpdatePopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
                       info.status == MMM::Network::UpdateStatus::kDownloaded);
@@ -684,7 +686,7 @@ void MainMenuView::renderUpdateSuccessPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
              TR("ui.help.update_success"),
@@ -738,8 +740,55 @@ void MainMenuView::renderUpdateSuccessPopup()
     }
 }
 
+void MainMenuView::renderSaveTooltip()
+{
+    if ( m_saveTooltipTimer <= 0.0f ) return;
+
+    m_saveTooltipTimer -= ImGui::GetIO().DeltaTime;
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2         mousePos = ImGui::GetMousePos();
+
+    // 始终跟随鼠标，并根据屏幕位置自动调整对齐方式（边缘翻转）
+    ImVec2 pivot = ImVec2(0.0f, 0.0f);
+    if ( mousePos.x > viewport->WorkPos.x + viewport->WorkSize.x * 0.7f )
+        pivot.x = 1.0f;
+    if ( mousePos.y > viewport->WorkPos.y + viewport->WorkSize.y * 0.7f )
+        pivot.y = 1.0f;
+
+    float offsetX = (pivot.x == 0.0f) ? 20.0f : -20.0f;
+    float offsetY = (pivot.y == 0.0f) ? 20.0f : -20.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(mousePos.x + offsetX, mousePos.y + offsetY),
+                            ImGuiCond_Always,
+                            pivot);
+
+    ImGui::SetNextWindowBgAlpha(0.8f);
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 10));
+
+    if ( ImGui::Begin("##SaveTooltip", nullptr, flags) ) {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                           "%s  %s",
+                           ICON_MMM_SAVE,
+                           TR("ui.status.beatmap.saved").data());
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 void MainMenuView::update(UIManager* sourceManager)
 {
+    if ( m_statusMessageTimer > 0.0f )
+        m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
+
     // 启动时自动检查更新
     if ( !m_hasCheckedOnStartup ) {
         m_hasCheckedOnStartup = true;
@@ -748,13 +797,27 @@ void MainMenuView::update(UIManager* sourceManager)
         if ( MMM::Network::UpdateChecker::checkStartupUpdateMarker() ) {
             m_showUpdateSuccessPopup = true;
         } else {
-            m_showCheckingPopup = true;
+            m_isSilentCheck = true;  // 静默检查
             m_updateChecker->checkAsync();
         }
     }
 
-    renderMenus(sourceManager);
-    renderInfoText();
+    // 如果是静默检查，监测状态
+    if ( m_isSilentCheck ) {
+        auto info = m_updateChecker->getInfo();
+        if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+            m_showUpdatePopup = true;
+            m_isSilentCheck   = false;
+        } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
+            m_statusMessage      = TR("ui.help.up_to_date").data();
+            m_statusMessageTimer = 5.0f;
+            m_isSilentCheck      = false;
+        } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
+            m_isSilentCheck = false;
+        }
+    }
+
+    renderSaveTooltip();
 }
 
 void MainMenuView::renderMenus(UIManager* sourceManager)
@@ -846,6 +909,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
             dispatchCommand(Logic::CmdSaveBeatmap{});
+            m_saveTooltipTimer = 2.0f;
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {

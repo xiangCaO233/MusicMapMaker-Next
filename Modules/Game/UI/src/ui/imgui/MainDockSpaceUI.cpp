@@ -17,9 +17,11 @@ namespace MMM::UI
 
 void MainDockSpaceUI::update(UIManager* sourceManager)
 {
+    m_mainMenuview.update(sourceManager);
+
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    float                dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
     if ( !m_initializedWindow && viewport->PlatformHandle ) {
         if ( GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle ) {
@@ -28,12 +30,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    float sidebarWidth =
-        std::floor(std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
-    float toolbarWidth     = std::floor(32.0f * dpiScale);
+    float sidebarWidth = std::floor(
+        std::stof(skinCfg.getLayoutConfig("side_bar.width")) * dpiScale);
+    float toolbarWidth = std::floor(32.0f * dpiScale);
 
-    float       extraPaddingY     = std::floor(4.0f * dpiScale);
-    ImGuiStyle& style             = ImGui::GetStyle();
+    float       extraPaddingY = std::floor(4.0f * dpiScale);
+    ImGuiStyle& style         = ImGui::GetStyle();
     float       menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
     float statusBarHeight = menuBarHeight;
@@ -43,8 +45,11 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         sourceManager, menuBarHeight, sidebarWidth, toolbarWidth, dpiScale);
 
     // --- 2. 停靠空间 ---
-    renderDockingSpace(
-        sourceManager, menuBarHeight, statusBarHeight, sidebarWidth, toolbarWidth);
+    renderDockingSpace(sourceManager,
+                       menuBarHeight,
+                       statusBarHeight,
+                       sidebarWidth,
+                       toolbarWidth);
 
     // --- 3. 底部状态栏 ---
     renderStatusBar(sourceManager, statusBarHeight, dpiScale);
@@ -55,7 +60,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth,
                    viewport->WorkPos.y + menuBarHeight));
         ImGui::SetNextWindowSize(
-            ImVec2(toolbarWidth, viewport->WorkSize.y - menuBarHeight - statusBarHeight));
+            ImVec2(toolbarWidth,
+                   viewport->WorkSize.y - menuBarHeight - statusBarHeight));
         ImGui::SetNextWindowViewport(viewport->ID);
         m_toolbarView.update(sourceManager);
     }
@@ -141,15 +147,16 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    if ( ImGui::BeginPopupModal(fmt::format("{}###ExitConfirmation",
-                                            TR("ui.exit.confirm_title"))
-                                    .c_str(),
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(
+             fmt::format("{}###ExitConfirmation", TR("ui.exit.confirm_title"))
+                 .c_str(),
+             nullptr,
+             ImGuiWindowFlags_AlwaysAutoResize) ) {
         auto        session = engine.getActiveSession();
         std::string mapName = "Unknown";
         if ( session && session->getContext().currentBeatmap ) {
-            mapName = session->getContext().currentBeatmap->m_baseMapMetadata.name;
+            mapName =
+                session->getContext().currentBeatmap->m_baseMapMetadata.name;
         }
 
         ImGui::Text(TR("ui.exit.confirm_msg_fmt").data(), mapName.c_str());
@@ -157,7 +164,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         ImGui::Separator();
         ImGui::Spacing();
 
-        if ( ImGui::Button(TR("ui.file.save").data(), ImVec2(120 * dpiScale, 0)) ) {
+        if ( ImGui::Button(TR("ui.file.save").data(),
+                           ImVec2(120 * dpiScale, 0)) ) {
             engine.pushCommand(Logic::CmdSaveBeatmap{});
             // 注意：由于保存是异步的，这里直接设置退出可能会导致保存未完成
             // 但在当前的单线程逻辑模型中，指令会按顺序处理

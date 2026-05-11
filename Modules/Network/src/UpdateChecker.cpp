@@ -228,107 +228,125 @@ void UpdateChecker::checkAsync()
     m_info.currentVersion = MMM_VERSION_STRING;
 
     std::thread([this]() {
-        UpdateInfo result;
-        result.status         = UpdateStatus::kChecking;
-        result.currentVersion = MMM_VERSION_STRING;
+        int maxRetries = 3;
+        int retries    = 0;
 
-        CURL* curl = curl_easy_init();
-        if ( !curl ) {
-            result.status       = UpdateStatus::kError;
-            result.errorMessage = "Failed to initialize libcurl";
-            m_info              = result;
-            XERROR("UpdateChecker: {}", result.errorMessage);
-            return;
-        }
+        while ( retries < maxRetries ) {
+            UpdateInfo result;
+            result.status         = UpdateStatus::kChecking;
+            result.currentVersion = MMM_VERSION_STRING;
 
-        std::string responseBody;
-        const char* checkUrl =
-            "https://mmm.xiang233.top/download/check/check.json";
+            CURL* curl = curl_easy_init();
+            if ( !curl ) {
+                result.status       = UpdateStatus::kError;
+                result.errorMessage = "Failed to initialize libcurl";
+                m_info              = result;
+                XERROR("UpdateChecker: {}", result.errorMessage);
+                return;
+            }
 
-        curl_easy_setopt(curl, CURLOPT_URL, checkUrl);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        curl_easy_setopt(
-            curl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
+            std::string responseBody;
+            const char* checkUrl =
+                "https://mmm.xiang233.top/download/check/check.json";
 
-        CURLcode res = curl_easy_perform(curl);
+            curl_easy_setopt(curl, CURLOPT_URL, checkUrl);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &responseBody);
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+            curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+            curl_easy_setopt(
+                curl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
 
-        long httpCode = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-        curl_easy_cleanup(curl);
+            CURLcode res = curl_easy_perform(curl);
 
-        if ( res != CURLE_OK ) {
-            result.status = UpdateStatus::kError;
-            result.errorMessage =
-                fmt::format("Network error: {}", curl_easy_strerror(res));
-            m_info = result;
-            XERROR("UpdateChecker: {}", result.errorMessage);
-            return;
-        }
+            long httpCode = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+            curl_easy_cleanup(curl);
 
-        if ( httpCode != 200 ) {
-            result.status       = UpdateStatus::kError;
-            result.errorMessage = fmt::format("HTTP error: {}", httpCode);
-            m_info              = result;
-            XERROR("UpdateChecker: {}", result.errorMessage);
-            return;
-        }
-
-        try {
-            json data = json::parse(responseBody);
-
-            result.latestVersion = data.value("version", "");
-            result.changelog     = data.value("changelog", "");
-            result.releaseDate   = data.value("release_date", "");
-
-            const char* platform = MMM_PLATFORM;
-            if ( data.contains("platforms") &&
-                 data["platforms"].contains(platform) ) {
-                auto& plat          = data["platforms"][platform];
-                result.downloadUrl  = plat.value("url", "");
-                result.downloadSize = plat.value("size", 0);
-                result.checksum     = plat.value("checksum", "");
-
-                // 拼接完整 URL
-                if ( !result.downloadUrl.empty() &&
-                     result.downloadUrl[0] == '/' ) {
-                    result.downloadUrl =
-                        "https://mmm.xiang233.top" + result.downloadUrl;
+            if ( res != CURLE_OK || httpCode != 200 ) {
+                retries++;
+                if ( retries < maxRetries ) {
+                    XWARN(
+                        "UpdateChecker: Check failed (res={}, code={}), "
+                        "retrying... ({}/{})",
+                        static_cast<int>(res),
+                        httpCode,
+                        retries,
+                        maxRetries);
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    continue;
+                } else {
+                    result.status = UpdateStatus::kError;
+                    if ( res != CURLE_OK ) {
+                        result.errorMessage = fmt::format(
+                            "Network error: {}", curl_easy_strerror(res));
+                    } else {
+                        result.errorMessage =
+                            fmt::format("HTTP error: {}", httpCode);
+                    }
+                    m_info = result;
+                    XERROR("UpdateChecker: {}", result.errorMessage);
+                    return;
                 }
+            }
 
-                // 解析更新器地址
-                if ( plat.contains("updater") ) {
-                    result.updaterUrl = plat["updater"].value("url", "");
-                    if ( !result.updaterUrl.empty() &&
-                         result.updaterUrl[0] == '/' ) {
-                        result.updaterUrl =
-                            "https://mmm.xiang233.top" + result.updaterUrl;
+            try {
+                json data = json::parse(responseBody);
+
+                result.latestVersion = data.value("version", "");
+                result.changelog     = data.value("changelog", "");
+                result.releaseDate   = data.value("release_date", "");
+
+                const char* platform = MMM_PLATFORM;
+                if ( data.contains("platforms") &&
+                     data["platforms"].contains(platform) ) {
+                    auto& plat          = data["platforms"][platform];
+                    result.downloadUrl  = plat.value("url", "");
+                    result.downloadSize = plat.value("size", 0);
+                    result.checksum     = plat.value("checksum", "");
+
+                    // 拼接完整 URL
+                    if ( !result.downloadUrl.empty() &&
+                         result.downloadUrl[0] == '/' ) {
+                        result.downloadUrl =
+                            "https://mmm.xiang233.top" + result.downloadUrl;
+                    }
+
+                    // 解析更新器地址
+                    if ( plat.contains("updater") ) {
+                        result.updaterUrl = plat["updater"].value("url", "");
+                        if ( !result.updaterUrl.empty() &&
+                             result.updaterUrl[0] == '/' ) {
+                            result.updaterUrl =
+                                "https://mmm.xiang233.top" + result.updaterUrl;
+                        }
                     }
                 }
+
+                if ( result.latestVersion.empty() ) {
+                    result.status       = UpdateStatus::kError;
+                    result.errorMessage = "No version info in response";
+                } else if ( isNewer(result.latestVersion,
+                                    result.currentVersion) ) {
+                    result.status = UpdateStatus::kUpdateFound;
+                    XINFO("UpdateChecker: New version found: {} -> {}",
+                          result.currentVersion,
+                          result.latestVersion);
+                } else {
+                    result.status = UpdateStatus::kUpToDate;
+                    XINFO("UpdateChecker: Already up to date ({})",
+                          result.currentVersion);
+                }
+            } catch ( const std::exception& e ) {
+                result.status = UpdateStatus::kError;
+                result.errorMessage =
+                    fmt::format("JSON parse error: {}", e.what());
+                XERROR("UpdateChecker: {}", result.errorMessage);
             }
 
-            if ( result.latestVersion.empty() ) {
-                result.status       = UpdateStatus::kError;
-                result.errorMessage = "No version info in response";
-            } else if ( isNewer(result.latestVersion, result.currentVersion) ) {
-                result.status = UpdateStatus::kUpdateFound;
-                XINFO("UpdateChecker: New version found: {} -> {}",
-                      result.currentVersion,
-                      result.latestVersion);
-            } else {
-                result.status = UpdateStatus::kUpToDate;
-                XINFO("UpdateChecker: Already up to date ({})",
-                      result.currentVersion);
-            }
-        } catch ( const std::exception& e ) {
-            result.status       = UpdateStatus::kError;
-            result.errorMessage = fmt::format("JSON parse error: {}", e.what());
-            XERROR("UpdateChecker: {}", result.errorMessage);
+            m_info = result;
+            return;
         }
-
-        m_info = result;
     }).detach();
 }
 
