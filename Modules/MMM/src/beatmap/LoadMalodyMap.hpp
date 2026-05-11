@@ -538,8 +538,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                 int wVal            = n.value("w", w_w);
                 int distance_pixels = wVal - w_w;
-                int distance =
-                    std::round((float)distance_pixels / (float)x_w);
+                int distance = distance_pixels;
 
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)

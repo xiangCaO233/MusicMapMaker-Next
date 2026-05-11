@@ -409,7 +409,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( mode == 7 ) {
                 // Slide 模式：Flick 导出为 dir + w
                 nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
-                int wVal  = defaultWW + std::abs(f.m_dtrack) * defaultXW;
+                int wVal  = defaultWW + std::abs(f.m_dtrack);
                 nj["w"]   = wVal;
             }
             // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
@@ -516,7 +516,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 if ( s.type == NoteType::FLICK &&
                      std::abs(s.timestamp - p.m_timestamp) < 1e-5 ) {
                     nj["dir"] = (s.dtrack < 0) ? 8 : 2;
-                    nj["w"]   = defaultWW + std::abs(s.dtrack) * defaultXW;
+                    nj["w"]   = defaultWW + std::abs(s.dtrack);
                     exportedAsDir = true;
                 }
             }
