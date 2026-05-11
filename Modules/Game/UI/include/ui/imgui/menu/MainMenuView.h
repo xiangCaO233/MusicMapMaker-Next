@@ -37,6 +37,7 @@ private:
     void renderUpdatePopup();
     void renderUpdateCheckingPopup();
     void renderUpdateSuccessPopup();
+    void renderSaveTooltip();
     void startUpdateCheck();
 
     bool m_openFileMenuNextFrame  = false;
@@ -52,6 +53,8 @@ private:
     bool m_showUpdateSuccessPopup = false;
 
     bool m_hasCheckedOnStartup = false;  ///< 是否已完成启动时的自动更新检查
+
+    float m_saveTooltipTimer = 0.0f;
 
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;
 };

@@ -73,6 +73,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 openExportFilePicker("");
             } else {
                 dispatchCommand(Logic::CmdSaveBeatmap{});
+                m_saveTooltipTimer = 2.0f;
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
@@ -738,6 +739,50 @@ void MainMenuView::renderUpdateSuccessPopup()
     }
 }
 
+void MainMenuView::renderSaveTooltip()
+{
+    if ( m_saveTooltipTimer <= 0.0f ) return;
+
+    m_saveTooltipTimer -= ImGui::GetIO().DeltaTime;
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2         mousePos = ImGui::GetMousePos();
+
+    // 始终跟随鼠标，并根据屏幕位置自动调整对齐方式（边缘翻转）
+    ImVec2 pivot = ImVec2(0.0f, 0.0f);
+    if ( mousePos.x > viewport->WorkPos.x + viewport->WorkSize.x * 0.7f )
+        pivot.x = 1.0f;
+    if ( mousePos.y > viewport->WorkPos.y + viewport->WorkSize.y * 0.7f )
+        pivot.y = 1.0f;
+
+    float offsetX = (pivot.x == 0.0f) ? 20.0f : -20.0f;
+    float offsetY = (pivot.y == 0.0f) ? 20.0f : -20.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(mousePos.x + offsetX, mousePos.y + offsetY),
+                            ImGuiCond_Always,
+                            pivot);
+
+    ImGui::SetNextWindowBgAlpha(0.8f);
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16, 10));
+
+    if ( ImGui::Begin("##SaveTooltip", nullptr, flags) ) {
+        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f),
+                           "%s  %s",
+                           ICON_MMM_SAVE,
+                           TR("ui.status.beatmap.saved").data());
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 void MainMenuView::update(UIManager* sourceManager)
 {
     // 启动时自动检查更新
@@ -753,8 +798,7 @@ void MainMenuView::update(UIManager* sourceManager)
         }
     }
 
-    renderMenus(sourceManager);
-    renderInfoText();
+    renderSaveTooltip();
 }
 
 void MainMenuView::renderMenus(UIManager* sourceManager)
@@ -846,6 +890,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
             dispatchCommand(Logic::CmdSaveBeatmap{});
+            m_saveTooltipTimer = 2.0f;
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
