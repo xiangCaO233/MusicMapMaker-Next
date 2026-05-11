@@ -119,9 +119,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                          0.0f,
                                          total,
                                          "") ) {
+                    float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
-                            Logic::CmdSeek{ static_cast<double>(time) }));
+                            Logic::CmdSeek{ static_cast<double>(time) - visualOffset }));
                 }
 
                 if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {

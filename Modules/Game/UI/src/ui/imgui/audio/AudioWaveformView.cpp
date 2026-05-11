@@ -191,16 +191,20 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 }
             }
 
+            double currentHoverVisualTime = viewStart;
+            double currentHoverAudioTime  = viewStart - visualOffset;
+            if ( ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) ) {
+                ImPlotPoint mousePlotPos = ImPlot::GetPlotMousePos();
+                currentHoverVisualTime = mousePlotPos.x;
+                currentHoverAudioTime  = currentHoverVisualTime - visualOffset;
+            }
+
             // 2. 绘制悬停绿色竖线和预览框
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
                 ImVec2 plotMin = ImPlot::GetPlotPos();
                 ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x, plotMin.y + ImPlot::GetPlotSize().y };
-                ImVec2 mousePos = ImGui::GetMousePos();
-                float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
-                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-                double hoverAudioTime  = hoverVisualTime - visualOffset;
-                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
-                hoverVisualTime = hoverAudioTime + visualOffset;
+                double hoverVisualTime = currentHoverVisualTime;
+                double hoverAudioTime  = currentHoverAudioTime;
 
                 double hLineX[2] = { hoverVisualTime, hoverVisualTime };
                 double hLineY[2] = { -1.1, 1.1 };
@@ -227,17 +231,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
             s_lastActive[chanIdx] = ImGui::IsItemActive();
 
             if ( ImGui::IsItemHovered() || ImGui::IsItemActive() ) {
-                ImVec2 mousePos = ImGui::GetMousePos();
-                float  relX = std::clamp((mousePos.x - plotMin.x) / (plotMax.x - plotMin.x), 0.0f, 1.0f);
-                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-                double hoverAudioTime  = hoverVisualTime - visualOffset;
-                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
-                hoverVisualTime = hoverAudioTime + visualOffset;
+                double hoverVisualTime = currentHoverVisualTime;
+                double hoverAudioTime  = currentHoverAudioTime;
 
                 ImGui::SetTooltip("%.3fs", hoverAudioTime);
 
                 if ( ImGui::IsItemActive() ) {
-
+                    ImVec2 mousePos = ImGui::GetMousePos();
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(
                         Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
                                                     plotMax.x - plotMin.x, plotMax.y - plotMin.y,
@@ -245,8 +245,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 }
 
                 if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-                    audioManager.seek(hoverAudioTime);
+                    audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
+                    ImVec2 mousePos = ImGui::GetMousePos();
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(
                         Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
                                                     plotMax.x - plotMin.x, plotMax.y - plotMin.y,

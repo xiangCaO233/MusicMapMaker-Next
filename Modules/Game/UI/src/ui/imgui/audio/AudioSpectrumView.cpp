@@ -223,11 +223,19 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             ImVec2 plotStartPos = ImGui::GetCursorScreenPos();
 
             // 计算全局像素坐标范围（使用音频时间）
-            double audioViewStart = viewStart - visualOffset;
-            double audioViewEnd = viewEnd - visualOffset;
+            // 补偿 FFT 窗口造成的中心点偏移 (2048样本 @ 44100Hz = 约 46.4ms，中心点为 23.2ms)
+            double fftOffset = (2048.0 / 2.0) / 44100.0;
+            double audioViewStart = viewStart - visualOffset - fftOffset;
+            double audioViewEnd = viewEnd - visualOffset - fftOffset;
             double pixelStart = audioViewStart * m_cacheSegmentsPerSecond;
             double pixelEnd   = audioViewEnd * m_cacheSegmentsPerSecond;
             double pixelWidth = pixelEnd - pixelStart;
+
+            if ( pixelStart < 0.0 ) {
+                float emptyScreenW = static_cast<float>( (0.0 - pixelStart) / pixelWidth * avail.x );
+                ImGui::Dummy(ImVec2(emptyScreenW, plotH));
+                ImGui::SameLine(0, 0);
+            }
 
             for ( size_t i = 0; i < textures.size(); ++i ) {
                 double texGlobalStart = static_cast<double>(i * MAX_TEXTURE_W);
@@ -281,20 +289,18 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             ImVec2 groupMax = ImGui::GetItemRectMax();
             ImGui::SetCursorScreenPos(groupMin);
             std::string btnId = std::string(textures == m_texturesL ? "##SeekL" : "##SeekR");
-            ImGui::InvisibleButton(btnId.c_str(), ImVec2(groupMax.x - groupMin.x, groupMax.y - groupMin.y));
+            ImGui::InvisibleButton(btnId.c_str(), ImVec2(avail.x, groupMax.y - groupMin.y));
 
             if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
                 ImVec2 mousePos  = ImGui::GetMousePos();
-                float  relX      = std::clamp((mousePos.x - groupMin.x) / (groupMax.x - groupMin.x), 0.0f, 1.0f);
+                float  relX      = std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
                 double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
                 double hoverAudioTime  = hoverVisualTime - visualOffset;
-                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
-                hoverVisualTime = hoverAudioTime + visualOffset;
 
                 ImGui::SetTooltip("%.3fs", hoverAudioTime);
 
                 // 绘制悬停绿色竖线
-                float hoverLineX = groupMin.x + relX * (groupMax.x - groupMin.x);
+                float hoverLineX = groupMin.x + relX * avail.x;
                 ImGui::GetWindowDrawList()->AddLine(
                     ImVec2(hoverLineX, groupMin.y), ImVec2(hoverLineX, groupMax.y),
                     IM_COL32(0, 255, 0, 150), 1.0f);
@@ -305,7 +311,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                     // 发送预览同步指令给逻辑线程
                     Event::EventBus::instance().publish(Event::LogicCommandEvent(
                         Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
-                                                    groupMax.x - groupMin.x, groupMax.y - groupMin.y,
+                                                    avail.x, groupMax.y - groupMin.y,
                                                     true, true, hoverVisualTime }));
 
                     // 绘制预览包围框 (拖拽时跟随鼠标的预测框)
@@ -318,8 +324,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                             float  viewRange   = static_cast<float>(viewEnd - viewStart);
 
                             if ( viewRange > 0.001f ) {
-                                float preX1 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetStart - viewStart) / viewRange) * (groupMax.x - groupMin.x);
-                                float preX2 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetEnd - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+                                float preX1 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetStart - viewStart) / viewRange) * avail.x;
+                                float preX2 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetEnd - viewStart) / viewRange) * avail.x;
 
                                 // 裁剪并绘制
                                 float drawPreX1 = std::clamp(preX1, groupMin.x, groupMax.x);
@@ -346,8 +352,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                 if ( snapshot && snapshot->hasBeatmap ) {
                     float viewRange = static_cast<float>(viewEnd - viewStart);
                     if ( viewRange > 0.001f ) {
-                        float xStart = groupMin.x + (static_cast<float>(snapshot->visibleTimeStart - viewStart) / viewRange) * (groupMax.x - groupMin.x);
-                        float xEnd   = groupMin.x + (static_cast<float>(snapshot->visibleTimeEnd - viewStart) / viewRange) * (groupMax.x - groupMin.x);
+                        float xStart = groupMin.x + (static_cast<float>(snapshot->visibleTimeStart - viewStart) / viewRange) * avail.x;
+                        float xEnd   = groupMin.x + (static_cast<float>(snapshot->visibleTimeEnd - viewStart) / viewRange) * avail.x;
                         
                         // 裁剪到组范围内显示
                         float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
@@ -367,19 +373,18 @@ void AudioSpectrumView::update(UIManager* sourceManager)
 
             if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
                 ImVec2 mousePos  = ImGui::GetMousePos();
-                float  relX      = std::clamp((mousePos.x - groupMin.x) / (groupMax.x - groupMin.x), 0.0f, 1.0f);
+                float  relX      = std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
                 double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
                 double hoverAudioTime  = hoverVisualTime - visualOffset;
-                hoverAudioTime = std::clamp(hoverAudioTime, 0.0, totalTime);
 
-                audioManager.seek(hoverAudioTime);
+                audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
                 // 核心修复：同步逻辑层时间
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
 
                 // 停止预览状态
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
-                                                groupMax.x - groupMin.x, groupMax.y - groupMin.y,
+                                                avail.x, groupMax.y - groupMin.y,
                                                 false, false, -1.0 }));
             }
         };
