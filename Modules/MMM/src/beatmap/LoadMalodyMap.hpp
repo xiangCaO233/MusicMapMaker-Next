@@ -527,6 +527,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 hold.m_duration  = endTime - startTime;
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
+                int trackCount = basemeta.track_count;
                 int x_w = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
                 int w_w = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
 

@@ -323,10 +323,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 || mode == 4 ) {
             nj["x"] = columnToX((int)note.m_track);
-            if ( note.m_type != NoteType::NOTE ) {
-                // 根据用户要求，Hold、Flick 和 Polyline 的基础宽度 w 均使用 60/50/40
-                nj["w"] = defaultWW;
-            }
+            // Polyline 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度 (60/50/40)
+            nj["w"] = (note.m_type == NoteType::POLYLINE) ? defaultXW : defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
         }
@@ -377,24 +375,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         if ( note.m_type == NoteType::HOLD ) {
             const auto& h = static_cast<const Hold&>(note);
 
-            std::string structure =
-                (mode == 7 || mode == 4) ? "seg" : "endbeat";
-            // 仅在 Slide/Live 模式下允许从元数据恢复原始 structure
             if ( mode == 7 || mode == 4 ) {
-                if ( auto it = note.m_metadata.note_properties.find(
-                         NoteMetadataType::MALODY);
-                     it != note.m_metadata.note_properties.end() ) {
-                    if ( it->second.contains("original_structure") ) {
-                        structure = it->second.at("original_structure");
-                    }
-                }
-            }
-
-            if ( structure == "seg" ) {
+                // 普通 Hold 写成单 seg 模式，且 seg 内不包含 w 和 x
                 nj["seg"] = json::array();
                 json sj;
-                sj["beat"] =
-                    getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
+                sj["beat"] = getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
                 nj["seg"].push_back(sj);
             } else {
                 nj["endbeat"] = timeToBeat(h.m_timestamp + h.m_duration);
