@@ -120,10 +120,21 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // --- 交互：发送鼠标位置指令给逻辑线程 ---
     ImVec2 mousePos      = ImGui::GetMousePos();
     ImVec2 windowPos     = ImGui::GetCursorScreenPos();
+    ImVec2 contentSize   = ImGui::GetContentRegionAvail();
     ImVec2 localMousePos = { mousePos.x - windowPos.x,
                              mousePos.y - windowPos.y };
-    bool   isHovered     = ImGui::IsWindowHovered();
-    bool   isDragging    = ImGui::IsMouseDragging(0);
+
+    bool isHoveringContent = mousePos.x >= windowPos.x && mousePos.x <= windowPos.x + contentSize.x &&
+                             mousePos.y >= windowPos.y && mousePos.y <= windowPos.y + contentSize.y;
+
+    bool isHovered = ImGui::IsWindowHovered() && isHoveringContent;
+
+    ImVec2 clickPos = ImGui::GetIO().MouseClickedPos[0];
+    bool clickStartedInContent = clickPos.x >= windowPos.x && clickPos.x <= windowPos.x + contentSize.x &&
+                                 clickPos.y >= windowPos.y && clickPos.y <= windowPos.y + contentSize.y;
+
+    // 仅当点击起源于内容区，并且当前窗口拥有焦点时，才视为拖拽
+    bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent && ImGui::IsWindowFocused();
 
     Event::EventBus::instance().publish(Event::LogicCommandEvent(
         Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
@@ -143,9 +154,9 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     // --- 跳转时间逻辑 ---
     if ( m_currentSnapshot && isHovered ) {
-        // 核心修复：仅在鼠标松开时触发跳转。
-        // 不论是单击还是拖拽，均在松开的一刻根据当时鼠标位置的时间戳进行 Seek。
-        if ( ImGui::IsMouseReleased(0) ) {
+        // 核心修复：仅在鼠标松开时，且初始点击是在当前内容区发生时，才触发跳转。
+        // 这防止了从其他窗口拖拽进入预览区松开时造成的误触跳转。
+        if ( ImGui::IsMouseReleased(0) && clickStartedInContent && ImGui::IsWindowFocused() ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSeek{ m_currentSnapshot->hoveredTime }));
         }
