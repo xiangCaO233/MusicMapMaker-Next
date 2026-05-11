@@ -417,16 +417,16 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     // 5. 如果音频资源不在列表中，添加进去
     bool audioExists = false;
     for ( const auto& res : m_currentProject->m_audioResources ) {
-        if ( res.m_path == meta.main_audio_path.generic_string() ) {
+        if ( res.m_path == Config::pathToUtf8(meta.main_audio_path) ) {
             audioExists = true;
             break;
         }
     }
     if ( !audioExists && !meta.main_audio_path.empty() ) {
         AudioResource res;
-        res.m_id            = meta.main_audio_path.filename().string();
-        res.m_path          = meta.main_audio_path.generic_string();
-        res.m_type          = AudioTrackType::Main;
+        res.m_id   = Config::pathToUtf8(meta.main_audio_path.filename());
+        res.m_path = Config::pathToUtf8(meta.main_audio_path);
+        res.m_type = AudioTrackType::Main;
         res.m_config.volume = 0.5f;
         m_currentProject->m_audioResources.push_back(res);
     }
@@ -445,10 +445,10 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 
     // 检查路径是否在项目根目录下
     auto absMapPath = std::filesystem::absolute(mapPath);
-    auto absRoot    = std::filesystem::absolute(m_currentProject->m_projectRoot);
+    auto absRoot = std::filesystem::absolute(m_currentProject->m_projectRoot);
 
-    auto [rootIt, pathIt] = std::mismatch(absRoot.begin(), absRoot.end(),
-                                          absMapPath.begin(), absMapPath.end());
+    auto [rootIt, pathIt] = std::mismatch(
+        absRoot.begin(), absRoot.end(), absMapPath.begin(), absMapPath.end());
 
     if ( rootIt != absRoot.end() ) {
         // 不在项目根目录下，忽略
@@ -469,19 +469,21 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
         auto map = BeatMap::loadFromFile(absMapPath);
 
         Project::BeatmapEntry entry;
-        entry.m_name     = map.m_baseMapMetadata.version;
-        if ( entry.m_name.empty() ) entry.m_name = absMapPath.filename().string();
-        
-        entry.m_filePath = Config::pathToUtf8(
-            std::filesystem::relative(absMapPath, absRoot));
-        
+        entry.m_name = map.m_baseMapMetadata.version;
+        if ( entry.m_name.empty() )
+            entry.m_name = Config::pathToUtf8(absMapPath.filename());
+
+        entry.m_filePath =
+            Config::pathToUtf8(std::filesystem::relative(absMapPath, absRoot));
+
         if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
-            entry.m_audioTrackId =
-                Config::pathToUtf8(map.m_baseMapMetadata.main_audio_path.filename());
+            entry.m_audioTrackId = Config::pathToUtf8(
+                map.m_baseMapMetadata.main_audio_path.filename());
         }
 
         m_currentProject->m_beatmaps.push_back(entry);
-        XINFO("EditorEngine: Discovered new beatmap for project: {}", entry.m_name);
+        XINFO("EditorEngine: Discovered new beatmap for project: {}",
+              entry.m_name);
 
         saveProject();
     } catch ( const std::exception& e ) {
@@ -575,7 +577,7 @@ void EditorEngine::saveProject()
 
     std::filesystem::path projectFile =
         m_currentProject->m_projectRoot / "mmm_project.json";
-    XINFO("Saving project to {}", projectFile.string());
+    XINFO("Saving project to {}", Config::pathToUtf8(projectFile));
 
     try {
         std::ofstream  file(projectFile);

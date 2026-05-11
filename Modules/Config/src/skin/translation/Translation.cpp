@@ -1,6 +1,8 @@
 #include "config/skin/translation/Translation.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <filesystem>
+#include <fstream>
 #include <sol/sol.hpp>
 
 namespace MMM
@@ -15,15 +17,23 @@ Translator::Translator()
 // 载入语言文件
 void Translator::loadLanguage(const std::string& langLuaFile)
 {
-    std::filesystem::path path(langLuaFile);
-    std::string           langID = path.stem().string();
+    std::filesystem::path path   = Config::utf8ToPath(langLuaFile);
+    std::string           langID = Config::pathToUtf8(path.stem());
 
     XINFO("Loading language: {}", langID);
 
     try {
         sol::state lua;
         lua.open_libraries(sol::lib::base, sol::lib::table);
-        auto result = lua.script_file(langLuaFile);
+
+        std::ifstream file(path, std::ios::in | std::ios::binary);
+        if ( !file ) {
+            XERROR("Failed to open lang file: {}", langLuaFile);
+            return;
+        }
+        std::string script((std::istreambuf_iterator<char>(file)),
+                           std::istreambuf_iterator<char>());
+        auto        result = lua.script(script, langLuaFile);
 
         if ( !result.valid() ) return;
 

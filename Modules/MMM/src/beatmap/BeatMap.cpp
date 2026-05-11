@@ -9,9 +9,10 @@
 #include "SaveOSUMap.hpp"
 #include "SaveRMMap.hpp"
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 
 namespace MMM
 {
@@ -28,16 +29,18 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
     }
     if ( !mapFilePath.has_extension() ) {
         std::ifstream ifs(mapFilePath);
-        std::string firstLine;
+        std::string   firstLine;
         if ( std::getline(ifs, firstLine) ) {
             if ( firstLine.find("osu file format") != std::string::npos ) {
                 return loadOSUMap(mapFilePath);
             }
         }
-        XWARN("Load Map Failed: Unknown File extension and content check failed.");
+        XWARN(
+            "Load Map Failed: Unknown File extension and content check "
+            "failed.");
         return {};
     }
-    std::string mapFileExtention = mapFilePath.extension().generic_string();
+    std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
     if ( mapFileExtention == ".osu" ) {
         return loadOSUMap(mapFilePath);
     }
@@ -56,7 +59,7 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
 
 bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 {
-    std::string mapFileExtention = mapFilePath.extension().generic_string();
+    std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
     if ( mapFileExtention == ".osu" ) {
         return saveOSUMap(*this, mapFilePath);
     }

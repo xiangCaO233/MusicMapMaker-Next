@@ -23,14 +23,19 @@ VKTextureAtlas::VKTextureAtlas(vk::PhysicalDevice& physicalDevice,
 
 VKTextureAtlas::~VKTextureAtlas() {}
 
-void VKTextureAtlas::addTexture(uint32_t id, const std::string& filePath)
+void VKTextureAtlas::addTexture(uint32_t                     id,
+                                const std::filesystem::path& filePath)
 {
+    auto        u8Path = filePath.u8string();
+    std::string utf8Path(reinterpret_cast<const char*>(u8Path.c_str()),
+                         u8Path.size());
+
     int      texWidth, texHeight, texChannels;
     stbi_uc* pixels = stbi_load(
-        filePath.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        utf8Path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
 
     if ( !pixels ) {
-        XERROR("Failed to load texture for atlas: {}", filePath);
+        XERROR("Failed to load texture for atlas: {}", utf8Path);
         return;
     }
 
@@ -44,7 +49,7 @@ void VKTextureAtlas::addTexture(uint32_t id, const std::string& filePath)
     m_pendingTextures.push_back(std::move(data));
 
     XDEBUG("Texture added to atlas pending list: {} ({}x{})",
-           filePath,
+           utf8Path,
            data.w,
            data.h);
 }

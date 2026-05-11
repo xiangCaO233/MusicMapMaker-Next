@@ -43,18 +43,26 @@ protected:
         std::optional<std::array<float, 4>> overrideColor = std::nullopt)
     {
         if ( !std::filesystem::exists(path) ) {
-            XWARN("Texture path not found: {}", path.string());
+            auto u8Path = path.u8string();
+            XWARN("Texture path not found: {}",
+                  std::string(reinterpret_cast<const char*>(u8Path.c_str()),
+                              u8Path.size()));
             return nullptr;
         }
 
-        std::string ext = path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        auto        ext = path.extension().u8string();
+        std::string extStr(reinterpret_cast<const char*>(ext.c_str()),
+                           ext.size());
+        std::transform(extStr.begin(), extStr.end(), extStr.begin(), ::tolower);
 
         // 1. 处理 SVG
-        if ( ext == ".svg" ) {
-            auto doc = lunasvg::Document::loadFromFile(path.string());
+        if ( extStr == ".svg" ) {
+            auto        u8Path = path.u8string();
+            std::string utf8Path(reinterpret_cast<const char*>(u8Path.c_str()),
+                                 u8Path.size());
+            auto        doc = lunasvg::Document::loadFromFile(utf8Path);
             if ( !doc ) {
-                XWARN("lunasvg failed to load: {}", path.string());
+                XWARN("lunasvg failed to load: {}", utf8Path);
                 return nullptr;
             }
 
@@ -90,8 +98,7 @@ protected:
         }
 
         // 2. 处理常规位图
-        return std::make_unique<Graphic::VKTexture>(
-            path.string(), pd, ld, cp, q);
+        return std::make_unique<Graphic::VKTexture>(path, pd, ld, cp, q);
     }
 
 

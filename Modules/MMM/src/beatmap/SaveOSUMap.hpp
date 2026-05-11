@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
@@ -31,7 +32,7 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) {
-        XWARN("打开文件[{}]进行写出失败", path.string());
+        XWARN("打开文件[{}]进行写出失败", Config::pathToUtf8(path));
         return false;
     }
 
@@ -40,8 +41,8 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "osu file format " << format_ver << "\n\n";
 
     ofs << "[General]\n";
-    // Check if basemeta main_audio_path has been changed
-    std::string audio_path = beatMap.m_baseMapMetadata.main_audio_path.string();
+    std::string audio_path =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
     if ( audio_path.empty() )
         audio_path = get_prop("General::AudioFilename", "");
     ofs << "AudioFilename: " << audio_path << "\n";
@@ -143,12 +144,14 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "[Events]\n";
     ofs << "//Background and Video events\n";
     if ( beatMap.m_baseMapMetadata.cover_type == CoverType::IMAGE ) {
-        ofs << "0,0,\"" << beatMap.m_baseMapMetadata.main_cover_path.string()
+        ofs << "0,0,\""
+            << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
             << "\"," << beatMap.m_baseMapMetadata.bgxoffset << ","
             << beatMap.m_baseMapMetadata.bgyoffset << "\n";
     } else {
         ofs << "Video," << beatMap.m_baseMapMetadata.video_starttime << ",\""
-            << beatMap.m_baseMapMetadata.main_cover_path.string() << "\"\n";
+            << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
+            << "\"\n";
     }
 
     ofs << "//Break Periods\n";
@@ -181,17 +184,17 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "[HitObjects]\n";
     auto all_notes = beatMap.m_allNotes;
     std::stable_sort(all_notes.begin(),
-                      all_notes.end(),
-                      [](const std::reference_wrapper<Note>& a_ref,
-                         const std::reference_wrapper<Note>& b_ref) {
-                          const Note& a = a_ref.get();
-                          const Note& b = b_ref.get();
-                          if ( std::abs(a.m_timestamp - b.m_timestamp) > 1e-4 )
-                              return a.m_timestamp < b.m_timestamp;
-                          if ( a.m_track != b.m_track )
-                              return a.m_track < b.m_track;
-                          return a.m_type < b.m_type;
-                      });
+                     all_notes.end(),
+                     [](const std::reference_wrapper<Note>& a_ref,
+                        const std::reference_wrapper<Note>& b_ref) {
+                         const Note& a = a_ref.get();
+                         const Note& b = b_ref.get();
+                         if ( std::abs(a.m_timestamp - b.m_timestamp) > 1e-4 )
+                             return a.m_timestamp < b.m_timestamp;
+                         if ( a.m_track != b.m_track )
+                             return a.m_track < b.m_track;
+                         return a.m_type < b.m_type;
+                     });
 
     for ( const auto& noteRef : all_notes ) {
         Note& note = noteRef.get();
@@ -207,7 +210,7 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
-    XINFO("Successfully saved osu map to {}", path.string());
+    XINFO("Successfully saved osu map to {}", Config::pathToUtf8(path));
     return true;
 }
 

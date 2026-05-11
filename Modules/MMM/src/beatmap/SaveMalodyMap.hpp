@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -39,11 +40,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     };
 
     // Meta
-    auto& meta      = fileData["meta"];
-    meta["creator"] = beatMap.m_baseMapMetadata.author;
-    meta["version"] = beatMap.m_baseMapMetadata.version;
-    meta["background"] =
-        beatMap.m_baseMapMetadata.main_cover_path.filename().string();
+    auto& meta         = fileData["meta"];
+    meta["creator"]    = beatMap.m_baseMapMetadata.author;
+    meta["version"]    = beatMap.m_baseMapMetadata.version;
+    meta["background"] = Config::pathToUtf8(
+        beatMap.m_baseMapMetadata.main_cover_path.filename());
     meta["id"] = 0;
 
     /// @brief 获取原始模式，优先从元数据恢复
@@ -65,8 +66,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     song["titleorg"]  = beatMap.m_baseMapMetadata.title_unicode;
     song["artist"]    = beatMap.m_baseMapMetadata.artist;
     song["artistorg"] = beatMap.m_baseMapMetadata.artist_unicode;
-    song["file"] =
-        beatMap.m_baseMapMetadata.main_audio_path.filename().string();
+    song["file"]      = Config::pathToUtf8(
+        beatMap.m_baseMapMetadata.main_audio_path.filename());
     song["bpm"] = beatMap.m_baseMapMetadata.preference_bpm;
 
     auto& mode_ext = meta["mode_ext"] = json::object();
@@ -604,9 +605,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     // 插入音频节点
     json audioNode;
-    audioNode["beat"] = json::array({ 0, 0, 1 });
-    audioNode["sound"] =
-        beatMap.m_baseMapMetadata.main_audio_path.filename().string();
+    audioNode["beat"]  = json::array({ 0, 0, 1 });
+    audioNode["sound"] = Config::pathToUtf8(
+        beatMap.m_baseMapMetadata.main_audio_path.filename());
     audioNode["type"] = "SOUND";
 
     double firstTimingTime = 0.0;

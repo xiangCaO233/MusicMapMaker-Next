@@ -1,8 +1,9 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "mmm/SafeParse.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
 #include <algorithm>
 #include <cmath>
@@ -162,11 +163,10 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         basemeta.map_path = std::filesystem::absolute(basemeta.map_path);
     }
     auto fname = basemeta.map_path.filename();
-    XINFO("载入osu谱面路径:" + basemeta.map_path.generic_string());
-
+    XINFO("载入osu谱面路径:" + Config::pathToUtf8(basemeta.map_path));
     std::ifstream ifs(basemeta.map_path);
     if ( !ifs.is_open() ) {
-        XWARN("打开文件[{}]失败", basemeta.map_path.string());
+        XWARN("打开文件[{}]失败", Config::pathToUtf8(basemeta.map_path));
         return {};
     }
 
@@ -361,8 +361,9 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         // 是视频
         basemeta.cover_type = CoverType::VIDEO;
     }
-    basemeta.video_starttime = static_cast<int32_t>(std::stod(background_paras.at(1)));
-    auto cover_path          = background_paras.at(2);
+    basemeta.video_starttime =
+        static_cast<int32_t>(std::stod(background_paras.at(1)));
+    auto cover_path = background_paras.at(2);
     trim(cover_path);
     // 去引号
     if ( cover_path.starts_with('\"') ) {
@@ -375,8 +376,10 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     basemeta.main_cover_path = std::filesystem::path(
         reinterpret_cast<const char8_t*>(cover_path.c_str()));
     if ( background_paras.size() >= 5 ) {
-        basemeta.bgxoffset = MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 3));
-        basemeta.bgyoffset = MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 4));
+        basemeta.bgxoffset =
+            MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 3));
+        basemeta.bgyoffset =
+            MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 4));
     } else {
         basemeta.bgxoffset = 0;
         basemeta.bgyoffset = 0;
@@ -407,7 +410,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         }
 
         // 创建物件
-        if ( static_cast<int32_t>(MMM::Internal::safeStod(note_paras.at(3))) == 128 ) {
+        if ( static_cast<int32_t>(MMM::Internal::safeStod(note_paras.at(3))) ==
+             128 ) {
             Hold hold;
             hold.from_osu_description(note_paras, basemeta.track_count);
             // 更新谱面时长

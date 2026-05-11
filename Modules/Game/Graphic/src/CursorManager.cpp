@@ -16,25 +16,22 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
     auto& skin = Config::SkinManager::instance();
 
     // RAII 自动加载、注册 ImGui 描述符、并在析构时自动销毁
-    m_texCursor = std::make_unique<VKTexture>(
-        Config::pathToUtf8(skin.getAssetPath("cursor")),
-        phyDevice,
-        logicalDevice,
-        commandPool,
-        queue);
-    m_texTrail = std::make_unique<VKTexture>(
-        Config::pathToUtf8(skin.getAssetPath("cursortrail")),
-        phyDevice,
-        logicalDevice,
-        commandPool,
-        queue);
+    m_texCursor = std::make_unique<VKTexture>(skin.getAssetPath("cursor"),
+                                              phyDevice,
+                                              logicalDevice,
+                                              commandPool,
+                                              queue);
+    m_texTrail  = std::make_unique<VKTexture>(skin.getAssetPath("cursortrail"),
+                                              phyDevice,
+                                              logicalDevice,
+                                              commandPool,
+                                              queue);
 
-    m_texSmoke = std::make_unique<VKTexture>(
-        Config::pathToUtf8(skin.getAssetPath("cursor_smoke")),
-        phyDevice,
-        logicalDevice,
-        commandPool,
-        queue);
+    m_texSmoke = std::make_unique<VKTexture>(skin.getAssetPath("cursor_smoke"),
+                                             phyDevice,
+                                             logicalDevice,
+                                             commandPool,
+                                             queue);
 
     /// @brief 拖尾存活时间(秒)
     // float m_trailLifeTime = 0.3f;

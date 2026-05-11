@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <filesystem>
@@ -14,7 +15,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     std::ofstream ofs(path, std::ios::binary);
     if ( !ofs ) {
-        XWARN("无法打开文件 [{}] 进行 RM/IMD 写出", path.string());
+        XWARN("无法打开文件 [{}] 进行 RM/IMD 写出", Config::pathToUtf8(path));
         return false;
     }
 
@@ -38,7 +39,8 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
                 if ( sn.m_type == NoteType::HOLD ) {
                     snEnd += static_cast<const Hold&>(sn).m_duration;
                 }
-                if ( snEnd > calculated_map_length ) calculated_map_length = snEnd;
+                if ( snEnd > calculated_map_length )
+                    calculated_map_length = snEnd;
             }
         }
         if ( end > calculated_map_length ) calculated_map_length = end;
@@ -95,8 +97,10 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
             param =
                 static_cast<int32_t>(static_cast<const Flick&>(note).m_dtrack);
         } else {
-            if ( note.m_metadata.note_properties.contains(NoteMetadataType::RM) ) {
-                const auto& rm_props = note.m_metadata.note_properties.at(NoteMetadataType::RM);
+            if ( note.m_metadata.note_properties.contains(
+                     NoteMetadataType::RM) ) {
+                const auto& rm_props =
+                    note.m_metadata.note_properties.at(NoteMetadataType::RM);
                 if ( rm_props.contains("Parameter") ) {
                     param = std::stoi(rm_props.at("Parameter"));
                 }

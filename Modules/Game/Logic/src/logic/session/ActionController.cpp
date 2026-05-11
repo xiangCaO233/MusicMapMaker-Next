@@ -1,14 +1,14 @@
-#include "log/colorful-log.h"
 #include "logic/session/ActionController.h"
-#include "logic/session/context/SessionContext.h"
-#include "logic/session/SessionUtils.h"
-#include "logic/ecs/components/NoteComponent.h"
-#include "logic/ecs/components/TransformComponent.h"
-#include "logic/ecs/components/InteractionComponent.h"
-#include "logic/session/NoteAction.h"
-#include "logic/session/TimelineAction.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "log/colorful-log.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
+#include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
+#include "logic/session/TimelineAction.h"
+#include "logic/session/context/SessionContext.h"
 
 namespace MMM::Logic
 {
@@ -73,9 +73,15 @@ std::string TimelineAction::getName() const
 {
     std::string typeStr;
     switch ( m_type ) {
-    case Type::Create: typeStr = std::string(TR("ui.status.action.create_event")); break;
-    case Type::Delete: typeStr = std::string(TR("ui.status.action.delete_event")); break;
-    case Type::Update: typeStr = std::string(TR("ui.status.action.update_event")); break;
+    case Type::Create:
+        typeStr = TR("ui.status.action.create_event").pStr;
+        break;
+    case Type::Delete:
+        typeStr = TR("ui.status.action.delete_event").pStr;
+        break;
+    case Type::Update:
+        typeStr = TR("ui.status.action.update_event").pStr;
+        break;
     }
     if ( m_after )
         return fmt::format("{} ({}: {:.3f})",
@@ -157,9 +163,9 @@ std::string NoteAction::getName() const
 {
     std::string typeStr;
     switch ( m_type ) {
-    case Type::Create: typeStr = std::string(TR("ui.status.action.create_note")); break;
-    case Type::Delete: typeStr = std::string(TR("ui.status.action.delete_note")); break;
-    case Type::Update: typeStr = std::string(TR("ui.status.action.update_note")); break;
+    case Type::Create: typeStr = TR("ui.status.action.create_note").pStr; break;
+    case Type::Delete: typeStr = TR("ui.status.action.delete_note").pStr; break;
+    case Type::Update: typeStr = TR("ui.status.action.update_note").pStr; break;
     }
     if ( m_after )
         return fmt::format("{} ({}: {:.3f}, {}: {})",
@@ -223,8 +229,10 @@ void BatchNoteAction::redo(SessionContext& ctx)
 std::string BatchNoteAction::getName() const
 {
     const char* nameKey = "ui.status.action.batch_note";
-    if ( m_name == "Delete Selected" ) nameKey = "ui.status.action.delete_selected";
-    else if ( m_name == "Paste" ) nameKey = "ui.status.action.paste";
+    if ( m_name == "Delete Selected" )
+        nameKey = "ui.status.action.delete_selected";
+    else if ( m_name == "Paste" )
+        nameKey = "ui.status.action.paste";
 
     return fmt::format("{}: {} {}",
                        TR(nameKey),

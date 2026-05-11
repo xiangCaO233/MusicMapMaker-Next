@@ -26,17 +26,16 @@ void BeatmapSession::processCommands()
 
                 // --- 自动更新操作状态描述 ---
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
-                    std::string toolName = std::string(TR("ui.status.ready"));
+                    std::string toolName = TR("ui.status.ready").pStr;
                     switch ( arg.tool ) {
                     case EditTool::Move:
-                        toolName =
-                            std::string(TR("ui.status.tool.select_move"));
+                        toolName = TR("ui.status.tool.select_move").pStr;
                         break;
                     case EditTool::Marquee:
-                        toolName = std::string(TR("ui.status.tool.marquee"));
+                        toolName = TR("ui.status.tool.marquee").pStr;
                         break;
                     case EditTool::Draw:
-                        toolName = std::string(TR("ui.status.tool.draw_brush"));
+                        toolName = TR("ui.status.tool.draw_brush").pStr;
                         break;
                     }
                     m_ctx->lastActionMessage = fmt::format(
@@ -155,9 +154,7 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
     m_ctx->lastConfig = cmd.config;
     auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
-    if ( cache ) {
-        cache->isDirty = true;
-    }
+    if ( cache ) { cache->isDirty = true; }
 }
 
 void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
@@ -235,9 +232,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 "ScrollCache...");
             auto* cache =
                 m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
-            if ( cache ) {
-                cache->isDirty = true;
-            }
+            if ( cache ) { cache->isDirty = true; }
         }
 
         // 如果音频路径发生变化，重新加载音频
