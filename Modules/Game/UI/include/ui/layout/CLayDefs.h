@@ -65,4 +65,16 @@ struct Sizing {
     }
 };
 
+// 字体 ID 定义 (对应 Clay_TextElementConfig.fontId)
+enum class FontID : uint16_t {
+    Content = 0,
+    Title,
+    Menu,
+    FileManager,
+    SideBar,
+    SettingInternal,
+    PureIcons,
+    Default = Content
+};
+
 }  // namespace MMM::UI

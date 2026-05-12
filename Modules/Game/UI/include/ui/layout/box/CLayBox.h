@@ -54,6 +54,20 @@ public:
         return *this;
     }
 
+    CLayBox& addText(const std::string& text, FontID fontId, uint16_t fontSize,
+                     Clay_Color color)
+    {
+        m_items.push_back({ .type      = ItemType::Text,
+                            .id        = "",
+                            .w         = Sizing::Fit().axis,
+                            .h         = Sizing::Fit().axis,
+                            .text      = text,
+                            .fontId    = static_cast<uint16_t>(fontId),
+                            .fontSize  = fontSize,
+                            .textColor = color });
+        return *this;
+    }
+
     // 添加子布局 (Zero Allocation: 传入引用) ---
     CLayBox& addLayout(const char* id, CLayBox& nested,
                        Sizing w = Sizing::Grow(), Sizing h = Sizing::Grow())
@@ -99,7 +113,7 @@ public:
 protected:
     CLayBox(Clay_LayoutDirection dir) : m_dir(dir) {}
 
-    enum class ItemType { Element, Spring, Spacer, NestedLayout };
+    enum class ItemType { Element, Text, Spring, Spacer, NestedLayout };
     struct Item {
         ItemType        type;
         std::string     id;
@@ -108,6 +122,12 @@ protected:
         CLayBox*        nestedLayout{ nullptr };  // 原始指针，不负责生命周期
         float           aspectRatio{ 0.0f };
         bool            isHovered{ false };  // 用于暂存 Hover 状态
+
+        // --- Text 专用字段 ---
+        std::string text;
+        uint16_t    fontId;
+        uint16_t    fontSize;
+        Clay_Color  textColor;
     };
 
     // 内部递归函数
