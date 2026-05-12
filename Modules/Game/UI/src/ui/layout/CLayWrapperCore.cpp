@@ -1,5 +1,7 @@
 #define CLAY_IMPLEMENTATION
 #include "ui/layout/CLayWrapperCore.h"
+#include "ui/layout/CLayDefs.h"
+#include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 
@@ -76,11 +78,33 @@ static Clay_Dimensions MeasureTextForImGui(Clay_StringSlice        text,
                                            Clay_TextElementConfig* config,
                                            void*                   userData)
 {
-    // 使用 ImGui 的字体 API 测量
+    using namespace MMM::Config;
+    auto&   skinMgr = SkinManager::instance();
+    ImFont* font    = nullptr;
+
+    // 根据 Clay 的 fontId 映射到项目中的 ImFont
+    switch ( static_cast<FontID>(config->fontId) ) {
+    case FontID::Content: font = skinMgr.getFont("content"); break;
+    case FontID::Title: font = skinMgr.getFont("title"); break;
+    case FontID::Menu: font = skinMgr.getFont("menu"); break;
+    case FontID::FileManager: font = skinMgr.getFont("filemanager"); break;
+    case FontID::SideBar: font = skinMgr.getFont("side_bar"); break;
+    case FontID::SettingInternal:
+        font = skinMgr.getFont("setting_internal");
+        break;
+    case FontID::PureIcons: font = skinMgr.getFont("pure_icons"); break;
+    default: font = ImGui::GetFont(); break;
+    }
+
+    if ( !font ) font = ImGui::GetFont();
+
+    // 使用 ImGui 的字体 API 测量。注意：Clay 传入的 fontSize 是配置值
     std::string s(text.chars, text.length);
-    ImVec2      size = ImGui::GetFont()->CalcTextSizeA(
-        (float)config->fontSize, FLT_MAX, 0.0f, s.c_str());
-    return { size.x, size.y };
+    ImVec2      size = font->CalcTextSizeA((float)config->fontSize, FLT_MAX,
+                                      0.0f, s.c_str());
+
+    // 必须乘以 font->Scale，因为 ImGui 渲染时会应用此缩放，布局必须与之对齐
+    return { size.x * font->Scale, size.y * font->Scale };
 }
 
 void CLayWrapperCore::setupClayTextMeasurement()
