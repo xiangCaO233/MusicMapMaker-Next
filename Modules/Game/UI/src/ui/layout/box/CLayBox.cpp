@@ -1,5 +1,5 @@
-#include "config/skin/SkinConfig.h"
 #include "ui/layout/box/CLayBox.h"
+#include "config/skin/SkinConfig.h"
 
 namespace MMM::UI
 {
@@ -18,8 +18,25 @@ void CLayBox::render(LayoutContext& lctx)
     this->internalExecute(lctx.m_startPos);
 }
 
+ImVec2 CLayBox::renderInCurrent(ImVec2 startPos, ImVec2 avail)
+{
+    Clay_SetLayoutDimensions({ avail.x, avail.y });
+    ImVec2 mousePos = ImGui::GetMousePos();
+    Clay_SetPointerState({ mousePos.x - startPos.x, mousePos.y - startPos.y },
+                         ImGui::IsMouseDown(ImGuiMouseButton_Left));
+
+    Clay_BeginLayout();
+    this->internalGenerate(
+        "CLAY_IN_CURRENT", Sizing::Fixed(avail.x).axis, Sizing::Fit().axis);
+    Clay_EndLayout(ImGui::GetIO().DeltaTime);
+    this->internalExecute(startPos);
+
+    auto data = Clay_GetElementData(Clay_GetElementId(ToCS("CLAY_IN_CURRENT")));
+    return { data.boundingBox.width, data.boundingBox.height };
+}
+
 void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,
-                                Clay_SizingAxis h)
+                               Clay_SizingAxis h)
 {
     // 默认使用非静态分配，除非确定是字面量。这里先用 ToCS 确保安全。
     Clay__OpenElementWithId(Clay_GetElementId(ToCS(currentId)));
@@ -85,11 +102,15 @@ void CLayBox::internalExecute(ImVec2 origin)
             if ( data.found ) {
                 bool   hovered = Clay_PointerOver(itemId);
                 ImVec2 pos     = { origin.x + data.boundingBox.x,
-                               origin.y + data.boundingBox.y };
+                                   origin.y + data.boundingBox.y };
 
                 if ( item.type == ItemType::Element ) {
                     ImGui::SetCursorScreenPos(pos);
-                    item.drawCallback(data.boundingBox, hovered);
+                    // 传入屏幕坐标系的 BoundingBox（加上 origin 偏移）
+                    Clay_BoundingBox screenBox = data.boundingBox;
+                    screenBox.x += origin.x;
+                    screenBox.y += origin.y;
+                    item.drawCallback(screenBox, hovered);
                 } else {
                     // 渲染文字
                     ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -99,13 +120,17 @@ void CLayBox::internalExecute(ImVec2 origin)
                     auto&   skinMgr = SkinManager::instance();
                     ImFont* font    = nullptr;
                     switch ( static_cast<FontID>(item.fontId) ) {
-                    case FontID::Content: font = skinMgr.getFont("content"); break;
+                    case FontID::Content:
+                        font = skinMgr.getFont("content");
+                        break;
                     case FontID::Title: font = skinMgr.getFont("title"); break;
                     case FontID::Menu: font = skinMgr.getFont("menu"); break;
                     case FontID::FileManager:
                         font = skinMgr.getFont("filemanager");
                         break;
-                    case FontID::SideBar: font = skinMgr.getFont("side_bar"); break;
+                    case FontID::SideBar:
+                        font = skinMgr.getFont("side_bar");
+                        break;
                     case FontID::SettingInternal:
                         font = skinMgr.getFont("setting_internal");
                         break;
@@ -118,14 +143,54 @@ void CLayBox::internalExecute(ImVec2 origin)
 
                     // 转换颜色 (Clay 颜色字段通常是 0-255)
                     ImU32 col = ImGui::ColorConvertFloat4ToU32(
-                        { item.textColor.r / 255.0f, item.textColor.g / 255.0f,
-                          item.textColor.b / 255.0f, item.textColor.a / 255.0f });
+                        { item.textColor.r / 255.0f,
+                          item.textColor.g / 255.0f,
+                          item.textColor.b / 255.0f,
+                          item.textColor.a / 255.0f });
 
-                    drawList->AddText(font, (float)item.fontSize * font->Scale,
-                                      pos, col, item.text.c_str());
+                    // 使用字体实际加载尺寸渲染，与测量函数保持一致
+                    drawList->AddText(font,
+                                      font->LegacySize * font->Scale,
+                                      pos,
+                                      col,
+                                      item.text.c_str());
                 }
             }
         } else if ( item.type == ItemType::NestedLayout && item.nestedLayout ) {
+            // 如果子布局启用了装饰，先绘制圆角背景 + 边框
+            if ( item.nestedLayout->m_decorated ) {
+                Clay_ElementId nestedId = Clay_GetElementId(ToCS(item.id));
+                auto           data     = Clay_GetElementData(nestedId);
+                if ( data.found ) {
+                    auto& style    = ImGui::GetStyle();
+                    float rounding = style.ChildRounding;
+
+                    ImVec2 pMin = { origin.x + data.boundingBox.x,
+                                    origin.y + data.boundingBox.y };
+                    ImVec2 pMax = { pMin.x + data.boundingBox.width,
+                                    pMin.y + data.boundingBox.height };
+
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                    // 淡色背景：取 FrameBg 并降低透明度
+                    ImVec4 bgCol = style.Colors[ImGuiCol_FrameBg];
+                    bgCol.w *= 0.35f;
+                    dl->AddRectFilled(pMin,
+                                      pMax,
+                                      ImGui::ColorConvertFloat4ToU32(bgCol),
+                                      rounding);
+
+                    // 边框：取 Border 色
+                    ImVec4 borderCol = style.Colors[ImGuiCol_Border];
+                    borderCol.w *= 0.6f;
+                    dl->AddRect(pMin,
+                                pMax,
+                                ImGui::ColorConvertFloat4ToU32(borderCol),
+                                rounding,
+                                0,
+                                style.ChildBorderSize);
+                }
+            }
             item.nestedLayout->internalExecute(origin);
         }
     }
