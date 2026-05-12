@@ -33,7 +33,7 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   CLayBox::DrawFunc widget)
 {
     auto& row = getRow(rowIndex++);
-    row.setPadding(4, 4, 2, 2).setSpacing(6).setAlignment(Alignment::Center());
+    row.setPadding(4, 4, 0, 0).setSpacing(6).setAlignment(Alignment::Center());
 
     // 标签列（固定宽度 = 最长标签宽度，右对齐文本，垂直居中）
     row.addElement(std::string(label) + "_label",
@@ -62,10 +62,19 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
 
     // 控件列（自适应剩余宽度）
     row.addElement(
-        std::string(label) + "_widget", Sizing::Grow(), Sizing::Grow(), widget);
+        std::string(label) + "_widget",
+        Sizing::Grow(),
+        Sizing::Grow(),
+        [widget](Clay_BoundingBox r, bool h) {
+            // 垂直居中对齐 ImGui 控件
+            float widgetH = ImGui::GetFrameHeight();
+            float offset   = (r.height - widgetH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+            widget(r, h);
+        });
 
-    // 行高 = ImGui 标准帧高（与控件高度一致）
-    float rowH = ImGui::GetFrameHeightWithSpacing();
+    // 行高 = ImGui 标准帧高 + 8px 呼吸空间
+    float rowH = ImGui::GetFrameHeight() + 8.0f;
     parent.addLayout((std::string(label) + "_row").c_str(),
                      row,
                      Sizing::Grow(),
@@ -78,7 +87,7 @@ void SettingsView::drawSoftwareSettings()
     bool  changed  = false;
 
     m_contentVBox.clear();
-    m_contentVBox.setSpacing(4).setPadding(8, 8, 8, 8);
+    m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
@@ -89,7 +98,7 @@ void SettingsView::drawSoftwareSettings()
 
         auto& row = getRow(rowIndex++);
         row.setPadding(0, 0, 0, 0).setSpacing(0);
-        float h = ImGui::GetFrameHeightWithSpacing();
+        float h = ImGui::GetFrameHeight();
         row.addElement(
             std::string(label) + "_header",
             Sizing::Grow(),
@@ -110,7 +119,7 @@ void SettingsView::drawSoftwareSettings()
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 4, 4);
+            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
             m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
@@ -649,7 +658,7 @@ void SettingsView::drawVisualSettings()
     bool  changed = false;
 
     m_contentVBox.clear();
-    m_contentVBox.setSpacing(4).setPadding(8, 8, 8, 8);
+    m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
@@ -660,7 +669,7 @@ void SettingsView::drawVisualSettings()
 
         auto& row = getRow(rowIndex++);
         row.setPadding(0, 0, 0, 0).setSpacing(0);
-        float h = ImGui::GetFrameHeightWithSpacing();
+        float h = ImGui::GetFrameHeight();
         row.addElement(
             std::string(label) + "_header",
             Sizing::Grow(),
@@ -681,7 +690,7 @@ void SettingsView::drawVisualSettings()
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 4, 4);
+            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
             m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
@@ -1352,7 +1361,7 @@ void SettingsView::drawEditorSettings()
     bool  changed  = false;
 
     m_contentVBox.clear();
-    m_contentVBox.setSpacing(4).setPadding(8, 8, 8, 8);
+    m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
@@ -1363,7 +1372,7 @@ void SettingsView::drawEditorSettings()
 
         auto& row = getRow(rowIndex++);
         row.setPadding(0, 0, 0, 0).setSpacing(0);
-        float h = ImGui::GetFrameHeightWithSpacing();
+        float h = ImGui::GetFrameHeight();
         row.addElement(
             std::string(label) + "_header",
             Sizing::Grow(),
@@ -1384,7 +1393,7 @@ void SettingsView::drawEditorSettings()
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 4, 4);
+            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
             m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
