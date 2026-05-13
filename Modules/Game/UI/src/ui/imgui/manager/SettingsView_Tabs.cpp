@@ -714,9 +714,10 @@ void SettingsView::drawSoftwareSettings()
     }
 
     // 统一执行 Clay 布局渲染
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
-    ImGui::Dummy({ 0, sz.y });
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz       = m_contentVBox.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     if ( changed ) {
         Event::EventBus::instance().publish(
@@ -1204,9 +1205,10 @@ void SettingsView::drawVisualSettings()
     }
 
     // 统一执行 Clay 布局渲染
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
-    ImGui::Dummy({ 0, sz.y });
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz       = m_contentVBox.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     if ( changed ) {
         Event::EventBus::instance().publish(
@@ -1315,9 +1317,10 @@ void SettingsView::drawProjectSettings()
                        });
     }
 
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
-    ImGui::Dummy({ 0, sz.y });
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz       = m_contentVBox.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 }
 
 void SettingsView::drawBeatmapSettings()
@@ -1708,9 +1711,10 @@ void SettingsView::drawBeatmapSettings()
             });
     }
 
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
-    ImGui::Dummy({ 0, sz.y });
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz       = m_contentVBox.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     if ( changed ) {
         engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
@@ -1994,9 +1998,10 @@ void SettingsView::drawEditorSettings()
     }
 
     // 统一执行 Clay 布局渲染
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
-    ImGui::Dummy({ 0, sz.y });
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz       = m_contentVBox.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     if ( changed ) {
         Event::EventBus::instance().publish(
