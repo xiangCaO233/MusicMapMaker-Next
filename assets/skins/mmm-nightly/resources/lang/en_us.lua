@@ -244,6 +244,11 @@ return {
 	["ui.audio_manager.pitch_n12"] = "0.5x (-12)",
 	["ui.audio_manager.pitch_n5"] = "0.75x (-5)",
 	["ui.audio_manager.pitch_0"] = "1.0x (0)",
+	["ui.audio_manager.speed_presets"] = "Speed Presets",
+	["ui.audio_manager.speed_value"] = "Playback Speed",
+	["ui.audio_manager.pitch_presets"] = "Pitch Presets",
+	["ui.audio_manager.pitch_value"] = "Pitch Offset",
+	["ui.audio_manager.analysis"] = "Analysis Tools",
 
 	["title.beatmap_manager"] = "Beatmap Manager",
 	["ui.beatmap_manager.initial_hint"] = "No project opened, no beatmap resources",

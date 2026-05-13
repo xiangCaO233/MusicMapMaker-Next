@@ -242,6 +242,11 @@ return {
 	["ui.audio_manager.pitch_n12"] = "0.5x (-12)",
 	["ui.audio_manager.pitch_n5"] = "0.75x (-5)",
 	["ui.audio_manager.pitch_0"] = "1.0x (0)",
+	["ui.audio_manager.speed_presets"] = "倍速预设",
+	["ui.audio_manager.speed_value"] = "播放倍速",
+	["ui.audio_manager.pitch_presets"] = "音高预设",
+	["ui.audio_manager.pitch_value"] = "音高偏移",
+	["ui.audio_manager.analysis"] = "分析工具",
 
 	["title.beatmap_manager"] = "谱面管理",
 	["ui.beatmap_manager.initial_hint"] = "暂未打开项目, 无谱面资源",

@@ -5,8 +5,8 @@
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/audio/AudioSpectrumView.h"
+#include "ui/imgui/audio/AudioWaveformView.h"
 
 namespace MMM::UI
 {
@@ -31,7 +31,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
 
-    ImGui::SetNextWindowSize(ImVec2(350, 450), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
         float volume = 0.5f;
         float speed  = 1.0f;
@@ -60,7 +60,6 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                         : Audio::EQPreset::None;
             }
         } else {
-            // 回退到内存状态
             if ( m_type == TrackType::Main ) {
                 volume = audio.getMainTrackVolume();
                 speed  = (float)audio.getPlaybackSpeed();
@@ -74,40 +73,51 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         bool changed = false;
 
-        renderVolumeSection(volume, muted, changed);
+        // --- Clay 布局构建 ---
+        m_contentVBox.clear();
+        m_contentVBox.setSpacing(4).setPadding(4, 4, 4, 4);
+        size_t rowIndex = 0;
+
+        const char* allLabels[] = {
+            TR_CACHE("ui.audio_manager.volume").data(),
+            TR_CACHE("ui.audio_manager.speed_control").data(),
+            TR_CACHE("ui.audio_manager.speed_presets").data(),
+            TR_CACHE("ui.audio_manager.speed_value").data(),
+            TR_CACHE("ui.audio_manager.stretch_quality").data(),
+            TR_CACHE("ui.audio_manager.pitch_presets").data(),
+            TR_CACHE("ui.audio_manager.pitch_value").data(),
+            TR_CACHE("ui.audio_manager.play_preview").data(),
+        };
+        float maxLabelW = 0;
+        for ( auto* l : allLabels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
+
+        buildVolumeSection(
+            m_contentVBox, rowIndex, maxLabelW, volume, muted, changed);
 
         if ( m_type == TrackType::Main ) {
-            renderSpeedAndPitchSection(speed, pitch, changed);
-            renderEQSection(changed);
-
-            ImGui::Separator();
-            if ( ImGui::Button(TR("ui.audio_manager.open_waveform").data(),
-                               ImVec2(-1, 0)) ) {
-                std::string viewName = "AudioWaveform";
-                if ( !sourceManager->getView<AudioWaveformView>(viewName) ) {
-                    sourceManager->registerView(
-                        viewName,
-                        std::make_unique<AudioWaveformView>(
-                            TR("ui.audio_manager.waveform_title").data()));
-                }
-            }
-            if ( ImGui::Button(TR("ui.audio_manager.open_spectrum").data(),
-                               ImVec2(-1, 0)) ) {
-                std::string viewName = "AudioSpectrum";
-                if ( !sourceManager->getView<AudioSpectrumView>(viewName) ) {
-                    sourceManager->registerView(
-                        viewName,
-                        std::make_unique<AudioSpectrumView>(
-                            TR("ui.audio_manager.spectrum_title").data()));
-                }
-            }
+            buildSpeedAndPitchSection(
+                m_contentVBox, rowIndex, maxLabelW, speed, pitch, changed);
+            buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
         }
 
         if ( m_type == TrackType::Effect ) {
-            renderEffectPreviewSection();
+            buildEffectPreviewSection(m_contentVBox, rowIndex, maxLabelW);
         }
 
-        // --- 5. 应用更改并持久化 ---
+        // --- 执行 Clay 布局渲染 ---
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        ImVec2 sz       = m_contentVBox.renderInCurrent(
+            startPos, { ImGui::GetContentRegionAvail().x, 0 });
+        ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
+
+        // --- EQ 区域使用传统 ImGui 渲染（ImPlot 不适合 Clay） ---
+        if ( m_type == TrackType::Main ) {
+            renderEQSection(changed);
+        }
+
+        // --- 应用更改并持久化 ---
         if ( changed ) {
             if ( config ) {
                 config->volume        = volume;
@@ -136,7 +146,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             if ( m_type == TrackType::Main ) {
                 audio.setMainTrackVolume(volume);
                 audio.setMainTrackMute(muted);
-                engine.pushCommand(Logic::CmdSetPlaybackSpeed{ static_cast<double>(speed) });
+                engine.pushCommand(
+                    Logic::CmdSetPlaybackSpeed{ static_cast<double>(speed) });
                 audio.setPlaybackPitch(pitch);
             } else {
                 bool  isPermanent = true;
