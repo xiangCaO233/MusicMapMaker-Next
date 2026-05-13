@@ -63,9 +63,6 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                    Sizing::Grow(),
                    Sizing::Grow(),
                    [widget](Clay_BoundingBox r, bool h) {
-                       float widgetH = ImGui::GetFrameHeight();
-                       float offset  = (r.height - widgetH) * 0.5f;
-                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
                        widget(r, h);
                    });
 
@@ -87,6 +84,10 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
         [this, &volume, &muted, &changed](Clay_BoundingBox r, bool) {
             auto& audio = Audio::AudioManager::instance();
 
+            float widgetH = ImGui::GetFrameHeight();
+            float offset  = (r.height - widgetH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+
             const char* icon = ICON_MMM_VOLUME_MUTE;
             if ( !muted ) {
                 if ( volume <= 0.33f )
@@ -96,8 +97,6 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                 else
                     icon = ICON_MMM_VOLUME_HIGH;
             }
-
-            ImGui::SetCursorScreenPos({ r.x, r.y });
 
             bool pushedTextColor = false;
             if ( muted ) {
@@ -191,8 +190,12 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         TR_CACHE("ui.audio_manager.speed_control").data(),
         labelWidth,
         [&speed, &audio](Clay_BoundingBox r, bool) {
+            float widgetH = ImGui::GetFrameHeight();
+            float offset  = (r.height - widgetH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+
             float actualSpeed = (float)audio.getActualPlaybackSpeed();
-            ImGui::SetCursorScreenPos({ r.x, r.y });
+            ImGui::AlignTextToFramePadding();
             ImGui::Text(
                 TR("ui.audio_manager.speed_info").data(), speed, actualSpeed);
         });
@@ -203,7 +206,9 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         TR_CACHE("ui.audio_manager.speed_presets").data(),
         labelWidth,
         [&speed, &changed](Clay_BoundingBox r, bool) {
-            ImGui::SetCursorScreenPos({ r.x, r.y });
+            float widgetH = ImGui::GetFrameHeight();
+            float offset  = (r.height - widgetH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
             if ( ImGui::Button(TR("ui.audio_manager.speed_025x").data()) ) {
                 speed   = 0.25f;
                 changed = true;
