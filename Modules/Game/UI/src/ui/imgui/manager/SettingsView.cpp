@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/SettingsView.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -50,19 +51,26 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                             UIManager*     sourceManager)
 {
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
-    float sidebarWidth = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    // 1. 左侧图标侧边栏 (标准 ImGui)
+    float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    float sidebarWidth = std::floor((sidebarBaseW + 12.0f) * dpiScale);
+    float btnSize      = std::floor(sidebarBaseW * dpiScale);
+
+    // 1. 左侧图标侧边栏 (Clay 布局)
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
     ImGui::BeginChild("SettingsCategories", { sidebarWidth, 0 }, false);
     {
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+        float rounding = std::floor(6.0f * dpiScale);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
-        auto DrawCategoryIcon = [&](Event::SettingsTab tab,
-                                    const char*        iconStr,
-                                    const char*        tooltip) {
+        auto DrawCategoryIcon = [&](Event::SettingsTab tab, const char* iconStr,
+                                    const char* tooltip, Clay_BoundingBox rect) {
+            ImGui::SetCursorScreenPos({ rect.x, rect.y });
+
             bool isActive = (m_currentTab == tab);
             if ( isActive ) {
                 ImVec4 activeCol =
@@ -84,16 +92,19 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
             std::string btnId = std::string(iconStr) + "##setting_tab_" +
                                 std::to_string((int)tab);
             if ( ImGui::Button(btnId.c_str(),
-                               { sidebarWidth, sidebarWidth }) ) {
+                               { rect.width, rect.height }) ) {
                 m_currentTab = tab;
             }
 
             if ( settingIconFont ) ImGui::PopFont();
 
             if ( ImGui::IsItemHovered() ) {
+                ImFont* contentFont = skinCfg.getFont("content");
+                if ( contentFont ) ImGui::PushFont(contentFont);
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted(tooltip);
                 ImGui::EndTooltip();
+                if ( contentFont ) ImGui::PopFont();
             }
 
             ImGui::PopStyleColor(1);
@@ -103,25 +114,76 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                 Utils::UIThemeUtils::popTransparentButtonStyles();
         };
 
-        DrawCategoryIcon(Event::SettingsTab::Software,
-                         ICON_MMM_DESKTOP,
-                         TR_CACHE("ui.settings.software").data());
-        DrawCategoryIcon(Event::SettingsTab::Visual,
-                         ICON_MMM_EYE,
-                         TR_CACHE("ui.settings.visual").data());
-        DrawCategoryIcon(Event::SettingsTab::Project,
-                         ICON_MMM_FOLDER,
-                         TR_CACHE("ui.settings.project").data());
-        DrawCategoryIcon(Event::SettingsTab::Beatmap,
-                         ICON_MMM_FILE,
-                         TR_CACHE("ui.settings.beatmap").data());
-        DrawCategoryIcon(Event::SettingsTab::Editor,
-                         ICON_MMM_PEN,
-                         TR_CACHE("ui.settings.editor").data());
+        CLayVBox vbox;
+        vbox.setPadding(std::floor(6.0f * dpiScale),
+                        std::floor(6.0f * dpiScale),
+                        std::floor(8.0f * dpiScale),
+                        std::floor(8.0f * dpiScale))
+            .setSpacing(std::floor(4.0f * dpiScale));
 
-        ImGui::PopStyleVar(4);
+        vbox.addElement("SoftwareTab",
+                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryIcon(
+                                Event::SettingsTab::Software,
+                                ICON_MMM_DESKTOP,
+                                TR_CACHE("ui.settings.software").data(),
+                                rect);
+                        });
+
+        vbox.addElement("VisualTab",
+                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryIcon(
+                                Event::SettingsTab::Visual,
+                                ICON_MMM_EYE,
+                                TR_CACHE("ui.settings.visual").data(),
+                                rect);
+                        });
+
+        vbox.addElement("ProjectTab",
+                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryIcon(
+                                Event::SettingsTab::Project,
+                                ICON_MMM_FOLDER,
+                                TR_CACHE("ui.settings.project").data(),
+                                rect);
+                        });
+
+        vbox.addElement("BeatmapTab",
+                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryIcon(
+                                Event::SettingsTab::Beatmap,
+                                ICON_MMM_FILE,
+                                TR_CACHE("ui.settings.beatmap").data(),
+                                rect);
+                        });
+
+        vbox.addElement("EditorTab",
+                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryIcon(
+                                Event::SettingsTab::Editor,
+                                ICON_MMM_PEN,
+                                TR_CACHE("ui.settings.editor").data(),
+                                rect);
+                        });
+
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        vbox.renderInCurrent(startPos,
+                             { sidebarWidth, ImGui::GetContentRegionAvail().y });
+
+        ImGui::PopStyleVar(3);
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar(2); // WindowPadding, ChildRounding
 
     ImGui::SameLine(0, 0);
 

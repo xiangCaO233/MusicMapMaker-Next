@@ -20,19 +20,34 @@ void CLayBox::render(LayoutContext& lctx)
 
 ImVec2 CLayBox::renderInCurrent(ImVec2 startPos, ImVec2 avail)
 {
-    Clay_SetLayoutDimensions({ avail.x, avail.y });
+    // 当 avail.y > 0 时，使用固定高度（弹簧需要已知的总高度来分配空间）
+    float layoutH = (avail.y > 0.0f) ? avail.y
+                                      : ImGui::GetContentRegionAvail().y;
+    Clay_SetLayoutDimensions({ avail.x, layoutH });
     ImVec2 mousePos = ImGui::GetMousePos();
     Clay_SetPointerState({ mousePos.x - startPos.x, mousePos.y - startPos.y },
                          ImGui::IsMouseDown(ImGuiMouseButton_Left));
 
     Clay_BeginLayout();
+    Clay_SizingAxis hAxis = (avail.y > 0.0f) ? Sizing::Fixed(avail.y).axis
+                                              : Sizing::Fit().axis;
     this->internalGenerate(
-        "CLAY_IN_CURRENT", Sizing::Fixed(avail.x).axis, Sizing::Fit().axis);
+        "CLAY_IN_CURRENT", Sizing::Fixed(avail.x).axis, hAxis);
     Clay_EndLayout(ImGui::GetIO().DeltaTime);
+
+    // 获取布局后的实际总尺寸
+    auto   data = Clay_GetElementData(Clay_GetElementId(ToCS("CLAY_IN_CURRENT")));
+    ImVec2 totalSize = { data.boundingBox.width, data.boundingBox.height };
+
+    // 关键修复：在执行 internalExecute 之前，先提交一个 Dummy 以预留空间
+    // 防止 internalExecute 中的 SetCursorScreenPos 超出当前窗口边界导致断言崩溃
+    ImGui::SetCursorScreenPos(startPos);
+    ImGui::Dummy(totalSize);
+
+    // 空间预留后，安全地执行各元素的绘制回调
     this->internalExecute(startPos);
 
-    auto data = Clay_GetElementData(Clay_GetElementId(ToCS("CLAY_IN_CURRENT")));
-    return { data.boundingBox.width, data.boundingBox.height };
+    return totalSize;
 }
 
 void CLayBox::internalGenerate(const char* currentId, Clay_SizingAxis w,
