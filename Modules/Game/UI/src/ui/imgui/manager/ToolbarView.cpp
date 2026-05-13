@@ -71,6 +71,7 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
+        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         if ( auto f = skinCfg.getFont("pure_icons") ) ImGui::PushFont(f);
 
         CLayVBox vbox;

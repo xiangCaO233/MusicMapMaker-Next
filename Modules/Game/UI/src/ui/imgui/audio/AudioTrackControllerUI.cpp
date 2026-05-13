@@ -33,6 +33,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
+        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         float volume = 0.5f;
         float speed  = 1.0f;
         float pitch  = 0.0f;

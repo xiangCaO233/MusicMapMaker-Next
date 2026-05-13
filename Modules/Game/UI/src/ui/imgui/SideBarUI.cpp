@@ -69,6 +69,7 @@ void SideBarUI::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
     if ( ImGui::Begin("SideBarUI", nullptr, sidebar_flags) ) {
+        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         // --- 核心：进入窗口后，立即强制锁定所有“圆角”变量 ---
         float rounding = std::floor(6.0f * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
