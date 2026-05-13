@@ -14,23 +14,34 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 {
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float floatGap = std::floor(4.0f * dpiScale);
 
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + sidebarWidth,
-                                   viewport->WorkPos.y + menuBarHeight));
-    ImGui::SetNextWindowSize(
-        ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
-               viewport->WorkSize.y - menuBarHeight - statusBarHeight));
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * floatGap,
+               viewport->WorkPos.y + menuBarHeight + floatGap));
+    ImGui::SetNextWindowSize(ImVec2(
+        viewport->WorkSize.x - sidebarWidth - toolbarWidth - 4.0f * floatGap,
+        viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+            2.0f * floatGap));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags dock_flags =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
-        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground;
+        ImGuiWindowFlags_NoDocking;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    float windowRound = std::floor(8.0f * dpiScale);
+    float frameRound  = std::floor(6.0f * dpiScale);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_DockingSeparatorSize, floatGap);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(floatGap, floatGap));
 
     ImFont* titleFont = skinCfg.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont);
@@ -43,7 +54,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
     if ( titleFont ) ImGui::PopFont();
 
-    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     static float lastDpiScale  = -1.0f;
     static bool  is_first_time = true;
     bool shouldResetLayout     = (std::abs(dpiScale - lastDpiScale) > 0.001f);
@@ -56,8 +66,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(
             dockspace_id,
-            ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth,
-                   viewport->WorkSize.y - menuBarHeight - statusBarHeight));
+            ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth -
+                       4.0f * floatGap,
+                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+                       2.0f * floatGap));
 
         ImGuiID dock_id_left;
         ImGuiID dock_id_right;
@@ -95,7 +107,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     }
 
     ImGui::End();
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(7);
 }
 
 }  // namespace MMM::UI

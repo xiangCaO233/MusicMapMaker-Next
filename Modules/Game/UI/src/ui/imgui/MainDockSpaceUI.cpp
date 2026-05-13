@@ -36,7 +36,19 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
     ImGuiStyle& style         = ImGui::GetStyle();
-    float       menuBarHeight =
+
+    // --- 同步全局样式与 DPI 感知的圆角 (Premium Look) ---
+    float windowRound = std::floor(8.0f * dpiScale);
+    float frameRound  = std::floor(6.0f * dpiScale);
+    style.WindowRounding    = windowRound;
+    style.ChildRounding     = windowRound;
+    style.FrameRounding     = frameRound;
+    style.PopupRounding     = frameRound;
+    style.TabRounding       = frameRound;
+    style.WindowBorderSize  = 0.0f;
+    style.FrameBorderSize   = 0.0f;
+
+    float menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
     float statusBarHeight = menuBarHeight;
 
@@ -56,12 +68,14 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 4. 右侧工具栏 (保持原样调用的简易块) ---
     {
+        float floatGap = std::floor(4.0f * dpiScale);
         ImGui::SetNextWindowPos(
-            ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth,
-                   viewport->WorkPos.y + menuBarHeight));
-        ImGui::SetNextWindowSize(
-            ImVec2(toolbarWidth,
-                   viewport->WorkSize.y - menuBarHeight - statusBarHeight));
+            ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth -
+                       floatGap,
+                   viewport->WorkPos.y + menuBarHeight + floatGap));
+        ImGui::SetNextWindowSize(ImVec2(toolbarWidth,
+                                        viewport->WorkSize.y - menuBarHeight -
+                                            statusBarHeight - 2.0f * floatGap));
         ImGui::SetNextWindowViewport(viewport->ID);
         m_toolbarView.update(sourceManager);
     }

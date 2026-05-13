@@ -52,11 +52,15 @@ void SideBarUI::update(UIManager* sourceManager)
     float statusBarHeight = menuBarHeight;
 
     // ================== C. 左侧侧边栏窗口 ==================
+    float floatGap    = std::floor(4.0f * dpiScale);
+    float windowRound = std::floor(8.0f * dpiScale);
+
     ImGui::SetNextWindowPos(
-        ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + menuBarHeight));
-    ImGui::SetNextWindowSize(
-        ImVec2(sidebarWidth,
-               viewport->WorkSize.y - menuBarHeight - statusBarHeight));
+        ImVec2(viewport->WorkPos.x + floatGap,
+               viewport->WorkPos.y + menuBarHeight + floatGap));
+    ImGui::SetNextWindowSize(ImVec2(sidebarWidth,
+                                    viewport->WorkSize.y - menuBarHeight -
+                                        statusBarHeight - 2.0f * floatGap));
     ImGui::SetNextWindowViewport(viewport->ID);
 
     ImGuiWindowFlags sidebar_flags =
@@ -67,7 +71,7 @@ void SideBarUI::update(UIManager* sourceManager)
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     if ( ImGui::Begin("SideBarUI", nullptr, sidebar_flags) ) {
         CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         // --- 核心：进入窗口后，立即强制锁定所有“圆角”变量 ---
@@ -79,7 +83,8 @@ void SideBarUI::update(UIManager* sourceManager)
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
         // lambda：绘制互斥按钮
-        auto DrawSidebarButton = [&](const char* iconStr, SideBarTab tab,
+        auto DrawSidebarButton = [&](const char*      iconStr,
+                                     SideBarTab       tab,
                                      Clay_BoundingBox rect) {
             bool isActive = (m_activeTab == tab);
 
@@ -116,8 +121,8 @@ void SideBarUI::update(UIManager* sourceManager)
                 using namespace MMM::Event;
 
                 UISubViewToggleEvent evt;
-                evt.sourceUiName = m_name;
-                evt.uiManager    = sourceManager;
+                evt.sourceUiName           = m_name;
+                evt.uiManager              = sourceManager;
                 evt.targetFloatManagerName = "SideBarManager";
                 evt.subViewId              = TabToSubViewId(tab);
 
@@ -154,9 +159,8 @@ void SideBarUI::update(UIManager* sourceManager)
                         Sizing::Fixed(btnSize),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
-                            DrawSidebarButton(ICON_MMM_SEARCH,
-                                              SideBarTab::Search,
-                                              rect);
+                            DrawSidebarButton(
+                                ICON_MMM_SEARCH, SideBarTab::Search, rect);
                         })
             .addElement("FileExplorerButton",
                         Sizing::Fixed(btnSize),
@@ -187,13 +191,12 @@ void SideBarUI::update(UIManager* sourceManager)
                         Sizing::Fixed(btnSize),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
-                            DrawSidebarButton(ICON_MMM_COG,
-                                              SideBarTab::Settings,
-                                              rect);
+                            DrawSidebarButton(
+                                ICON_MMM_COG, SideBarTab::Settings, rect);
                         });
 
-        ImVec2 startPos  = ImGui::GetCursorScreenPos();
-        float  availH    = ImGui::GetContentRegionAvail().y;
+        ImVec2 startPos = ImGui::GetCursorScreenPos();
+        float  availH   = ImGui::GetContentRegionAvail().y;
         ImVec2 sz = vbox.renderInCurrent(startPos, { sidebarWidth, availH });
         ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
@@ -201,7 +204,7 @@ void SideBarUI::update(UIManager* sourceManager)
         ImGui::PopStyleVar(5);
     }
     ImGui::End();
-    ImGui::PopStyleVar(3); // WindowPadding, WindowBorderSize, WindowRounding
+    ImGui::PopStyleVar(3);  // WindowPadding, WindowBorderSize, WindowRounding
 }
 
 }  // namespace MMM::UI

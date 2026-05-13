@@ -1,9 +1,11 @@
 #pragma once
 
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include "ui/layout/CLayDefs.h"
 #include "ui/layout/CLayWrapperCore.h"
+#include <cmath>
 #include <imgui.h>
 #include <string>
 
@@ -53,7 +55,7 @@ public:
                   const std::string&              iwindow_name,
                   bool                            custom_window_flags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
-                  bool*                           p_open              = nullptr)
+                  bool*            p_open      = nullptr)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
 
@@ -62,8 +64,11 @@ public:
         ImFont* titleFont = skinMgr.getFont("title");
         if ( titleFont ) ImGui::PushFont(titleFont);
 
-        // 在 Begin 之前，推入样式变量，将窗口内边距设为 0
+        // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        float windowRound = std::floor(8.0f * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
 
         if ( custom_window_flags ) {
             ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);
@@ -94,7 +99,7 @@ public:
 
         ImGui::End();
         // 恢复样式，否则会影响到后面其他的窗口
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(2);
     }
 
     ImVec2 m_startPos;

@@ -46,6 +46,12 @@ public:
             ImGui::SetNextWindowSize(ImVec2((float)m_width, (float)m_height),
                                      ImGuiCond_FirstUseEver);
 
+            // 在 Begin 之前设置圆角
+            float dpiScale =
+                Config::AppConfig::instance().getWindowContentScale();
+            float windowRound = std::floor(8.0f * dpiScale);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+
             // 应用窗口标题字体
             auto&   skinMgr   = Config::SkinManager::instance();
             ImFont* titleFont = skinMgr.getFont("title");
@@ -58,8 +64,7 @@ public:
 
 
             // 1. 获取 ImGui 窗口分配给内容的实际大小
-            ImVec2 size     = ImGui::GetContentRegionAvail();
-            float  dpiScale = Config::AppConfig::instance().getWindowContentScale();
+            ImVec2 size = ImGui::GetContentRegionAvail();
             if ( size.x > 0 && size.y > 0 ) {
                 // 核心修复：通知渲染器目标尺寸及其缩放倍率
                 view->setTargetSize(static_cast<uint32_t>(size.x),
@@ -84,6 +89,7 @@ public:
                 }
             }
             ImGui::End();
+            ImGui::PopStyleVar();
         };
 
     private:
