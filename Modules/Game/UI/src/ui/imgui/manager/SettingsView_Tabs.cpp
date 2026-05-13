@@ -33,52 +33,109 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   CLayBox::DrawFunc widget)
 {
     auto& row = getRow(rowIndex++);
-    row.setPadding(4, 4, 0, 0).setSpacing(6).setAlignment(Alignment::Center());
+    // 统一 Padding 为 8px
+    row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
-    // 标签列（固定宽度 = 最长标签宽度，右对齐文本，垂直居中）
-    row.addElement(std::string(label) + "_label",
+    std::string labelId = "R" + std::to_string(rowIndex) + "_L_" + label;
+    row.addElement(labelId + "_lbl",
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
                    [label](Clay_BoundingBox r, bool) {
-                       auto&   skinMgr = Config::SkinManager::instance();
-                       ImFont* font    = skinMgr.getFont("content");
-                       if ( !font ) font = ImGui::GetFont();
-                       float  fontSize = font->LegacySize * font->Scale;
-                       ImVec2 textSz =
-                           font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
-                       // 右对齐 + 垂直居中
-                       ImVec2 pos = { r.x + r.width - textSz.x,
-                                      r.y + (r.height - textSz.y) * 0.5f };
-                       // 使用 ImGui 主题的 Text 颜色
-                       ImVec4 textCol = ImGui::GetStyle().Colors[ImGuiCol_Text];
-                       textCol.w *= 0.85f;
-                       ImGui::GetWindowDrawList()->AddText(
-                           font,
-                           fontSize,
-                           pos,
-                           ImGui::ColorConvertFloat4ToU32(textCol),
-                           label);
+                       ImGui::SetCursorScreenPos({ r.x, r.y });
+                       ImGui::AlignTextToFramePadding();
+                       ImGui::Text("%s", label);
                    });
 
-    // 控件列（自适应剩余宽度）
-    row.addElement(
-        std::string(label) + "_widget",
-        Sizing::Grow(),
-        Sizing::Grow(),
-        [widget](Clay_BoundingBox r, bool h) {
-            // 垂直居中对齐 ImGui 控件
-            float widgetH = ImGui::GetFrameHeight();
-            float offset   = (r.height - widgetH) * 0.5f;
-            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-            widget(r, h);
-        });
+    row.addElement(labelId + "_wgt",
+                   Sizing::Grow(),
+                   Sizing::Grow(),
+                   [widget](Clay_BoundingBox r, bool h) {
+                       float widgetH = ImGui::GetFrameHeight();
+                       float offset  = (r.height - widgetH) * 0.5f;
+                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                       widget(r, h);
+                   });
 
-    // 行高 = ImGui 标准帧高 + 8px 呼吸空间
     float rowH = ImGui::GetFrameHeight() + 8.0f;
-    parent.addLayout((std::string(label) + "_row").c_str(),
-                     row,
-                     Sizing::Grow(),
-                     Sizing::Fixed(rowH));
+    parent.addLayout(
+        (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));
+}
+
+void SettingsView::addRadioSetting(
+    CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex, const char* label,
+    float labelWidth, const std::vector<std::pair<std::string, int>>& options,
+    int& current, bool& changed)
+{
+    // 获取稳定宽度
+    float totalAvailW  = ImGui::GetWindowContentRegionMax().x -
+                         ImGui::GetWindowContentRegionMin().x;
+    float widgetAvailW = std::max(100.0f, totalAvailW - labelWidth - 32.0f);
+
+    auto& row = getRow(rowIndex++);
+    row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
+
+    std::string labelId = "S" + std::to_string(sectionIndex) + "_R" +
+                          std::to_string(rowIndex) + "_L_" + label;
+    row.addElement(labelId + "_lbl",
+                   Sizing::Fixed(labelWidth),
+                   Sizing::Grow(),
+                   [label](Clay_BoundingBox r, bool) {
+                       ImGui::SetCursorScreenPos({ r.x, r.y });
+                       ImGui::AlignTextToFramePadding();
+                       ImGui::Text("%s", label);
+                   });
+
+    auto& containerVBox = getSection(sectionIndex++);
+    containerVBox.clear();
+    containerVBox.setSpacing(4).setPadding(0, 0, 0, 0);
+
+    float     currentLineW   = 0;
+    CLayHBox* currentLineRow = nullptr;
+    int       lineCount      = 0;
+
+    for ( size_t i = 0; i < options.size(); ++i ) {
+        const auto& [optLabel, optValue] = options[i];
+        float itemW = ImGui::CalcTextSize(optLabel.c_str()).x + 36.0f;
+
+        if ( !currentLineRow || (currentLineW + itemW > widgetAvailW) ) {
+            currentLineRow = &getRow(rowIndex++);
+            currentLineRow->clear();
+            currentLineRow->setPadding(0, 0, 0, 0)
+                .setSpacing(12)
+                .setAlignment(Alignment::Start());
+
+            std::string lineId =
+                labelId + "_line_" + std::to_string(lineCount++);
+            containerVBox.addLayout(
+                lineId.c_str(), *currentLineRow, Sizing::Grow(), Sizing::Fit());
+            currentLineW = 0;
+        }
+
+        std::string optId = labelId + "_opt_" + std::to_string(i);
+        currentLineRow->addElement(
+            optId.c_str(),
+            Sizing::Fixed(itemW),
+            Sizing::Fixed(ImGui::GetFrameHeight()),
+            [optLabel = optLabel, optValue = optValue, &current, &changed](
+                Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::RadioButton(optLabel.c_str(),
+                                        current == optValue) ) {
+                    current = optValue;
+                    changed = true;
+                }
+            });
+
+        currentLineW += itemW + 12.0f;
+    }
+
+    row.addLayout((labelId + "_group").c_str(),
+                  containerVBox,
+                  Sizing::Grow(),
+                  Sizing::Fit());
+
+    parent.addLayout(
+        (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fit());
 }
 
 void SettingsView::drawSoftwareSettings()
@@ -92,35 +149,57 @@ void SettingsView::drawSoftwareSettings()
     size_t sectionIndex = 0;
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
-        ImGuiID id     = ImGui::GetID(label);
-        bool    isOpen =
+        std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
+                                std::to_string(rowIndex) + "_H_" + label;
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+
+        bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(0, 0, 0, 0).setSpacing(0);
+        row.setPadding(8, 8, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
+
         row.addElement(
-            std::string(label) + "_header",
+            (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, defaultOpen](Clay_BoundingBox r, bool) {
+            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::PushStyleColor(
-                    ImGuiCol_Header,
-                    ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-                ImGui::CollapsingHeader(
-                    label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-                ImGui::PopStyleColor();
+                ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
+                bgCol.w *= 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                                      { bgCol.x + 0.05f,
+                                        bgCol.y + 0.05f,
+                                        bgCol.z + 0.05f,
+                                        bgCol.w + 0.1f });
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive,
+                                      { bgCol.x + 0.1f,
+                                        bgCol.y + 0.1f,
+                                        bgCol.z + 0.1f,
+                                        bgCol.w + 0.15f });
+
+                bool nowOpen = ImGui::TreeNodeEx(
+                    (void*)(intptr_t)id,
+                    ImGuiTreeNodeFlags_CollapsingHeader |
+                        (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
+                    "%s",
+                    label);
+
+                ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
+                ImGui::PopStyleColor(3);
             });
-        m_contentVBox.addLayout((std::string(label) + "_hdr").c_str(),
+
+        m_contentVBox.addLayout((baseIdStr + "_layout").c_str(),
                                 row,
                                 Sizing::Grow(),
                                 Sizing::Fixed(h));
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
-            m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
+            sec.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);
+            m_contentVBox.addLayout((baseIdStr + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
                                     Sizing::Fit());
@@ -129,7 +208,8 @@ void SettingsView::drawSoftwareSettings()
         return nullptr;
     };
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.general").data(), true) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.general").data(),
+                               true) ) {
         // 计算本段所有标签的最大宽度
         const char* genLabels[] = {
             TR_CACHE("ui.settings.software.language").data(),
@@ -146,7 +226,8 @@ void SettingsView::drawSoftwareSettings()
         maxLabelW += 8.0f;
 
         // 1. 语言选择
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.software.language").data(),
             maxLabelW,
@@ -177,7 +258,8 @@ void SettingsView::drawSoftwareSettings()
                        });
 
         // 3. UI 主题
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.software.theme").data(),
             maxLabelW,
@@ -230,8 +312,8 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.font.ascii").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                auto& skinMgr    = Config::SkinManager::instance();
-                auto& asciiFonts = skinMgr.getAsciiFonts();
+                auto&       skinMgr      = Config::SkinManager::instance();
+                auto&       asciiFonts   = skinMgr.getAsciiFonts();
                 std::string currentAscii = settings.preferredAsciiFont.empty()
                                                ? "Default"
                                                : settings.preferredAsciiFont;
@@ -247,7 +329,8 @@ void SettingsView::drawSoftwareSettings()
                             name + "##" + Config::pathToUtf8(path);
                         if ( ImGui::Selectable(lbl.c_str(), isSelected) ) {
                             settings.preferredAsciiFont = name;
-                            if (auto ctx = Graphic::VKContext::get()) ctx->get().requestFontRebuild();
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
                             changed = true;
                         }
                     }
@@ -272,8 +355,8 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.font.cjk").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                auto& skinMgr  = Config::SkinManager::instance();
-                auto& cjkFonts = skinMgr.getCjkFonts();
+                auto&       skinMgr    = Config::SkinManager::instance();
+                auto&       cjkFonts   = skinMgr.getCjkFonts();
                 std::string currentCjk = settings.preferredCjkFont.empty()
                                              ? "Default"
                                              : settings.preferredCjkFont;
@@ -288,7 +371,8 @@ void SettingsView::drawSoftwareSettings()
                             name + "##" + Config::pathToUtf8(path);
                         if ( ImGui::Selectable(lbl.c_str(), isSelected) ) {
                             settings.preferredCjkFont = name;
-                            if (auto ctx = Graphic::VKContext::get()) ctx->get().requestFontRebuild();
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
                             changed = true;
                         }
                     }
@@ -307,7 +391,8 @@ void SettingsView::drawSoftwareSettings()
             });
 
         // 6. 界面全局缩放
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
             maxLabelW,
@@ -349,12 +434,13 @@ void SettingsView::drawSoftwareSettings()
 
         // 处理文件选择器结果 (保持在 Clay 之后，因为它们开启新窗口)
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
-                                                   ImGuiWindowFlags_NoCollapse,
-                                                   { 600, 400 }) ) {
+                                                  ImGuiWindowFlags_NoCollapse,
+                                                  { 600, 400 }) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 settings.preferredAsciiFont =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                if (auto ctx = Graphic::VKContext::get()) ctx->get().requestFontRebuild();
+                if ( auto ctx = Graphic::VKContext::get() )
+                    ctx->get().requestFontRebuild();
                 changed = true;
             }
             ImGuiFileDialog::Instance()->Close();
@@ -365,7 +451,8 @@ void SettingsView::drawSoftwareSettings()
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 settings.preferredCjkFont =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                if (auto ctx = Graphic::VKContext::get()) ctx->get().requestFontRebuild();
+                if ( auto ctx = Graphic::VKContext::get() )
+                    ctx->get().requestFontRebuild();
                 changed = true;
             }
             ImGuiFileDialog::Instance()->Close();
@@ -373,8 +460,8 @@ void SettingsView::drawSoftwareSettings()
     }
 
     // 2. 光标样式
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.cursor_params").data(),
-                   true) ) {
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.software.cursor_params").data(), true) ) {
 
         const char* curLabels[] = {
             TR_CACHE("ui.settings.editor.cursor_style").data(),
@@ -390,26 +477,18 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
 
-        addSettingItem(*sec,
+        addRadioSetting(
+            *sec,
             rowIndex,
+            sectionIndex,
             TR_CACHE("ui.settings.editor.cursor_style").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int cursorStyle = (int)settings.cursorStyle;
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.editor.cursor_software").data(),
-                         cursorStyle == (int)Config::CursorStyle::Software) ) {
-                    settings.cursorStyle = Config::CursorStyle::Software;
-                    changed              = true;
-                }
-                ImGui::SameLine();
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.editor.cursor_system").data(),
-                         cursorStyle == (int)Config::CursorStyle::System) ) {
-                    settings.cursorStyle = Config::CursorStyle::System;
-                    changed              = true;
-                }
-            });
+            { { TR_CACHE("ui.settings.editor.cursor_software").data(),
+                (int)Config::CursorStyle::Software },
+              { TR_CACHE("ui.settings.editor.cursor_system").data(),
+                (int)Config::CursorStyle::System } },
+            (int&)settings.cursorStyle,
+            changed);
 
         if ( settings.cursorStyle == Config::CursorStyle::Software ) {
             addSettingItem(*sec,
@@ -464,7 +543,8 @@ void SettingsView::drawSoftwareSettings()
                                    512.0f,
                                    "%.1f px");
                            });
-            addSettingItem(*sec,
+            addSettingItem(
+                *sec,
                 rowIndex,
                 TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
                 maxLabelW,
@@ -473,7 +553,8 @@ void SettingsView::drawSoftwareSettings()
                         "##BpmSync",
                         &settings.softwareCursorConfig.enableBpmSyncSmokeLife);
                 });
-            addSettingItem(*sec,
+            addSettingItem(
+                *sec,
                 rowIndex,
                 TR_CACHE("ui.settings.software.smoke_life").data(),
                 maxLabelW,
@@ -494,7 +575,8 @@ void SettingsView::drawSoftwareSettings()
     }
 
     // 3. 界面偏好 (文件选择器、保存格式等)
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.sync").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.software.sync").data(), true) ) {
 
         const char* syncLabels[] = {
             TR_CACHE("ui.settings.software.picker_style").data(),
@@ -511,56 +593,32 @@ void SettingsView::drawSoftwareSettings()
         maxLabelW += 8.0f;
 
         // 文件选择器样式
-        addSettingItem(*sec,
+        addRadioSetting(
+            *sec,
             rowIndex,
+            sectionIndex,
             TR_CACHE("ui.settings.software.picker_style").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int pickerStyle = (int)settings.filePickerStyle;
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.software.picker_unified").data(),
-                         pickerStyle ==
-                             (int)Config::FilePickerStyle::Unified) ) {
-                    settings.filePickerStyle = Config::FilePickerStyle::Unified;
-                    changed                  = true;
-                }
-                ImGui::SameLine();
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.software.picker_native").data(),
-                         pickerStyle ==
-                             (int)Config::FilePickerStyle::Native) ) {
-                    settings.filePickerStyle = Config::FilePickerStyle::Native;
-                    changed                  = true;
-                }
-            });
+            { { TR_CACHE("ui.settings.software.picker_unified").data(),
+                (int)Config::FilePickerStyle::Unified },
+              { TR_CACHE("ui.settings.software.picker_native").data(),
+                (int)Config::FilePickerStyle::Native } },
+            (int&)settings.filePickerStyle,
+            changed);
 
         // 保存偏好
-        addSettingItem(*sec,
+        addRadioSetting(
+            *sec,
             rowIndex,
+            sectionIndex,
             TR_CACHE("ui.settings.software.save_format").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int savePreference = (int)settings.saveFormatPreference;
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.software.save_format.original")
-                             .data(),
-                         savePreference ==
-                             (int)Config::SaveFormatPreference::Original) ) {
-                    settings.saveFormatPreference =
-                        Config::SaveFormatPreference::Original;
-                    changed = true;
-                }
-                ImGui::SameLine();
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.software.save_format.force_mmm")
-                             .data(),
-                         savePreference ==
-                             (int)Config::SaveFormatPreference::ForceMMM) ) {
-                    settings.saveFormatPreference =
-                        Config::SaveFormatPreference::ForceMMM;
-                    changed = true;
-                }
-            });
+            { { TR_CACHE("ui.settings.software.save_format.original").data(),
+                (int)Config::SaveFormatPreference::Original },
+              { TR_CACHE("ui.settings.software.save_format.force_mmm").data(),
+                (int)Config::SaveFormatPreference::ForceMMM } },
+            (int&)settings.saveFormatPreference,
+            changed);
 
         // 最近项目上限
         addSettingItem(*sec,
@@ -578,7 +636,8 @@ void SettingsView::drawSoftwareSettings()
                        });
 
         // 同步设置
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.software.sync_mode").data(),
             maxLabelW,
@@ -663,35 +722,57 @@ void SettingsView::drawVisualSettings()
     size_t sectionIndex = 0;
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
-        ImGuiID id     = ImGui::GetID(label);
-        bool    isOpen =
+        std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
+                                std::to_string(rowIndex) + "_H_" + label;
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+
+        bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(0, 0, 0, 0).setSpacing(0);
+        row.setPadding(8, 8, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
+
         row.addElement(
-            std::string(label) + "_header",
+            (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, defaultOpen](Clay_BoundingBox r, bool) {
+            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::PushStyleColor(
-                    ImGuiCol_Header,
-                    ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-                ImGui::CollapsingHeader(
-                    label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-                ImGui::PopStyleColor();
+                ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
+                bgCol.w *= 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                                      { bgCol.x + 0.05f,
+                                        bgCol.y + 0.05f,
+                                        bgCol.z + 0.05f,
+                                        bgCol.w + 0.1f });
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive,
+                                      { bgCol.x + 0.1f,
+                                        bgCol.y + 0.1f,
+                                        bgCol.z + 0.1f,
+                                        bgCol.w + 0.15f });
+
+                bool nowOpen = ImGui::TreeNodeEx(
+                    (void*)(intptr_t)id,
+                    ImGuiTreeNodeFlags_CollapsingHeader |
+                        (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
+                    "%s",
+                    label);
+
+                ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
+                ImGui::PopStyleColor(3);
             });
-        m_contentVBox.addLayout((std::string(label) + "_hdr").c_str(),
+
+        m_contentVBox.addLayout((baseIdStr + "_layout").c_str(),
                                 row,
                                 Sizing::Grow(),
                                 Sizing::Fixed(h));
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
-            m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
+            sec.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);
+            m_contentVBox.addLayout((baseIdStr + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
                                     Sizing::Fit());
@@ -700,7 +781,8 @@ void SettingsView::drawVisualSettings()
         return nullptr;
     };
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.layout").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.layout").data(), true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.visual.layout_left").data(),
             TR_CACHE("ui.settings.visual.layout_top").data(),
@@ -729,7 +811,8 @@ void SettingsView::drawVisualSettings()
                                changed = true;
                            }
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.layout_top").data(),
             maxLabelW,
@@ -775,7 +858,8 @@ void SettingsView::drawVisualSettings()
                                changed = true;
                            }
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.layout_box_width").data(),
             maxLabelW,
@@ -786,12 +870,14 @@ void SettingsView::drawVisualSettings()
             });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.judgeline").data(), true) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.judgeline").data(),
+                               true) ) {
         float maxLabelW =
             measureLabelWidth(
                 TR_CACHE("ui.settings.visual.judgeline_pos").data()) +
             8.0f;
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.judgeline_pos").data(),
             maxLabelW,
@@ -802,12 +888,14 @@ void SettingsView::drawVisualSettings()
             });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(), true) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(),
+                               true) ) {
         float maxLabelW =
             measureLabelWidth(
                 TR_CACHE("ui.settings.visual.beat_line_alpha").data()) +
             8.0f;
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
             maxLabelW,
@@ -818,7 +906,8 @@ void SettingsView::drawVisualSettings()
             });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.note").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.note").data(), true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.visual.note_scale_x").data(),
             TR_CACHE("ui.settings.visual.note_scale_y").data(),
@@ -868,7 +957,8 @@ void SettingsView::drawVisualSettings()
                        });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(), true) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(),
+                               true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
             TR_CACHE("ui.settings.visual.bg_opaque").data(),
@@ -898,7 +988,8 @@ void SettingsView::drawVisualSettings()
                                changed = true;
                            }
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.bg_opaque").data(),
             maxLabelW,
@@ -907,7 +998,8 @@ void SettingsView::drawVisualSettings()
                 changed |= ImGui::SliderFloat(
                     "##BgOpaque", &visual.background.opaque_ratio, 0.0f, 1.0f);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.bg_darken").data(),
             maxLabelW,
@@ -918,7 +1010,8 @@ void SettingsView::drawVisualSettings()
             });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.preview").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.preview").data(), true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.visual.preview_ratio").data(),
             TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity")
@@ -950,7 +1043,8 @@ void SettingsView::drawVisualSettings()
                                1.0f,
                                10.0f);
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity")
                 .data(),
@@ -964,7 +1058,8 @@ void SettingsView::drawVisualSettings()
                     5.0f,
                     "%.2f");
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_margin_left").data(),
             maxLabelW,
@@ -975,7 +1070,8 @@ void SettingsView::drawVisualSettings()
                                               0.0f,
                                               20.0f);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_margin_top").data(),
             maxLabelW,
@@ -984,7 +1080,8 @@ void SettingsView::drawVisualSettings()
                 changed |= ImGui::SliderFloat(
                     "##MarginT", &visual.previewConfig.margin.top, 0.0f, 20.0f);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_margin_right").data(),
             maxLabelW,
@@ -996,7 +1093,8 @@ void SettingsView::drawVisualSettings()
                                        0.0f,
                                        20.0f);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_margin_bottom").data(),
             maxLabelW,
@@ -1008,7 +1106,8 @@ void SettingsView::drawVisualSettings()
                                        0.0f,
                                        20.0f);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
             maxLabelW,
@@ -1016,7 +1115,8 @@ void SettingsView::drawVisualSettings()
                 changed |= ImGui::Checkbox("##DrawBeatLines",
                                            &visual.previewConfig.drawBeatLines);
             });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
             maxLabelW,
@@ -1059,7 +1159,8 @@ void SettingsView::drawVisualSettings()
                        });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
         float maxLabelW =
             measureLabelWidth(
                 TR_CACHE("ui.settings.visual.visual_offset").data()) +
@@ -1105,13 +1206,88 @@ void SettingsView::drawProjectSettings()
         return;
     }
 
-    if ( ImGui::CollapsingHeader(TR_CACHE("ui.settings.project.info").data(),
-                                 ImGuiTreeNodeFlags_DefaultOpen) ) {
+    m_contentVBox.clear();
+    m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
+    size_t rowIndex     = 0;
+    size_t sectionIndex = 0;
+
+    auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
+        std::string baseIdStr = "PRJ_S" + std::to_string(sectionIndex) + "_R" +
+                                std::to_string(rowIndex) + "_H_" + label;
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+
+        bool isOpen =
+            ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+
+        auto& row = getRow(rowIndex++);
+        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        float h = ImGui::GetFrameHeight();
+
+        row.addElement(
+            (baseIdStr + "_el").c_str(),
+            Sizing::Grow(),
+            Sizing::Fixed(h),
+            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
+                bgCol.w *= 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                                      { bgCol.x + 0.05f,
+                                        bgCol.y + 0.05f,
+                                        bgCol.z + 0.05f,
+                                        bgCol.w + 0.1f });
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive,
+                                      { bgCol.x + 0.1f,
+                                        bgCol.y + 0.1f,
+                                        bgCol.z + 0.1f,
+                                        bgCol.w + 0.15f });
+
+                bool nowOpen = ImGui::TreeNodeEx(
+                    (void*)(intptr_t)id,
+                    ImGuiTreeNodeFlags_CollapsingHeader |
+                        (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
+                    "%s",
+                    label);
+
+                ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
+                ImGui::PopStyleColor(3);
+            });
+
+        m_contentVBox.addLayout((baseIdStr + "_layout").c_str(),
+                                row,
+                                Sizing::Grow(),
+                                Sizing::Fixed(h));
+
+        if ( isOpen ) {
+            auto& sec = getSection(sectionIndex++);
+            sec.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);
+            m_contentVBox.addLayout((baseIdStr + "_sec").c_str(),
+                                    sec,
+                                    Sizing::Grow(),
+                                    Sizing::Fit());
+            return &sec;
+        }
+        return nullptr;
+    };
+
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.project.info").data(), true) ) {
         std::string projPath = Config::pathToUtf8(project->m_projectRoot);
-        ImGui::Text("%s: %s",
-                    TR_CACHE("ui.settings.project.path").data(),
-                    projPath.c_str());
+        float       labelW =
+            measureLabelWidth(TR_CACHE("ui.settings.project.path").data()) + 8;
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.project.path").data(),
+                       labelW,
+                       [projPath](Clay_BoundingBox r, bool) {
+                           ImGui::Text("%s", projPath.c_str());
+                       });
     }
+
+    ImVec2 sz = m_contentVBox.renderInCurrent(
+        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::Dummy({ 0, sz.y });
 }
 
 void SettingsView::drawBeatmapSettings()
@@ -1131,16 +1307,104 @@ void SettingsView::drawBeatmapSettings()
     auto  meta    = beatmap.m_baseMapMetadata;
     bool  changed = false;
 
-    if ( ImGui::CollapsingHeader(TR_CACHE("ui.settings.beatmap.info").data(),
-                                 ImGuiTreeNodeFlags_DefaultOpen) ) {
+    m_contentVBox.clear();
+    m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
+    size_t rowIndex     = 0;
+    size_t sectionIndex = 0;
+
+    auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
+        std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
+                                std::to_string(rowIndex) + "_H_" + label;
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+
+        bool isOpen =
+            ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+
+        auto& row = getRow(rowIndex++);
+        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        float h = ImGui::GetFrameHeight();
+
+        row.addElement(
+            (baseIdStr + "_el").c_str(),
+            Sizing::Grow(),
+            Sizing::Fixed(h),
+            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
+                bgCol.w *= 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                                      { bgCol.x + 0.05f,
+                                        bgCol.y + 0.05f,
+                                        bgCol.z + 0.05f,
+                                        bgCol.w + 0.1f });
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive,
+                                      { bgCol.x + 0.1f,
+                                        bgCol.y + 0.1f,
+                                        bgCol.z + 0.1f,
+                                        bgCol.w + 0.15f });
+
+                bool nowOpen = ImGui::TreeNodeEx(
+                    (void*)(intptr_t)id,
+                    ImGuiTreeNodeFlags_CollapsingHeader |
+                        (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
+                    "%s",
+                    label);
+
+                ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
+                ImGui::PopStyleColor(3);
+            });
+
+        m_contentVBox.addLayout((baseIdStr + "_layout").c_str(),
+                                row,
+                                Sizing::Grow(),
+                                Sizing::Fixed(h));
+
+        if ( isOpen ) {
+            auto& sec = getSection(sectionIndex++);
+            sec.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);
+            m_contentVBox.addLayout((baseIdStr + "_sec").c_str(),
+                                    sec,
+                                    Sizing::Grow(),
+                                    Sizing::Fit());
+            return &sec;
+        }
+        return nullptr;
+    };
+
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.beatmap.info").data(), true) ) {
+        const char* labels[] = {
+            TR_CACHE("ui.settings.beatmap.name").data(),
+            TR_CACHE("ui.settings.beatmap.title").data(),
+            TR_CACHE("ui.settings.beatmap.title_unicode").data(),
+            TR_CACHE("ui.settings.beatmap.artist").data(),
+            TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
+            TR_CACHE("ui.settings.beatmap.mapper").data(),
+            TR_CACHE("ui.settings.beatmap.version").data(),
+        };
+        float maxLabelW = 0;
+        for ( auto* l : labels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
 
         auto DrawInput = [&](const char* label, std::string& val) {
-            char buf[256];
-            strncpy(buf, val.c_str(), sizeof(buf));
-            if ( ImGui::InputText(label, buf, sizeof(buf)) ) {
-                val     = buf;
-                changed = true;
-            }
+            addSettingItem(
+                *sec,
+                rowIndex,
+                label,
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    char buf[256];
+                    strncpy(buf, val.c_str(), sizeof(buf));
+                    ImGui::SetNextItemWidth(r.width);
+                    if ( ImGui::InputText((std::string("##") + label).c_str(),
+                                          buf,
+                                          sizeof(buf)) ) {
+                        val     = buf;
+                        changed = true;
+                    }
+                });
         };
 
         DrawInput(TR_CACHE("ui.settings.beatmap.name").data(), meta.name);
@@ -1154,201 +1418,261 @@ void SettingsView::drawBeatmapSettings()
         DrawInput(TR_CACHE("ui.settings.beatmap.version").data(), meta.version);
     }
 
-    if ( ImGui::CollapsingHeader(
-             TR_CACHE("ui.settings.beatmap.cover_type").data(),
-             ImGuiTreeNodeFlags_DefaultOpen) ) {
-        int coverType = (int)meta.cover_type;
-        if ( ImGui::RadioButton(
-                 TR_CACHE("ui.settings.beatmap.cover_type.image").data(),
-                 coverType == 0) ) {
-            meta.cover_type = MMM::CoverType::IMAGE;
-            changed         = true;
-        }
-        ImGui::SameLine();
-        if ( ImGui::RadioButton(
-                 TR_CACHE("ui.settings.beatmap.cover_type.video").data(),
-                 coverType == 1) ) {
-            meta.cover_type = MMM::CoverType::VIDEO;
-            changed         = true;
-        }
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.beatmap.cover_type").data(), true) ) {
+        const char* labels[] = {
+            TR_CACHE("ui.settings.beatmap.cover_type").data(),
+            TR_CACHE("ui.settings.beatmap.video_start").data(),
+            TR_CACHE("ui.settings.beatmap.bg_offset").data()
+        };
+        float maxLabelW = 0;
+        for ( auto* l : labels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
+
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.beatmap.cover_type").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.beatmap.cover_type.image").data(), 0 },
+              { TR_CACHE("ui.settings.beatmap.cover_type.video").data(), 1 } },
+            (int&)meta.cover_type,
+            changed);
 
         if ( meta.cover_type == MMM::CoverType::VIDEO ) {
-            if ( ImGui::InputInt(
-                     TR_CACHE("ui.settings.beatmap.video_start").data(),
-                     &meta.video_starttime) ) {
-                changed = true;
-            }
+            addSettingItem(*sec,
+                           rowIndex,
+                           TR_CACHE("ui.settings.beatmap.video_start").data(),
+                           maxLabelW,
+                           [&](Clay_BoundingBox r, bool) {
+                               ImGui::SetNextItemWidth(r.width);
+                               if ( ImGui::InputInt("##VideoStart",
+                                                    &meta.video_starttime) ) {
+                                   changed = true;
+                               }
+                           });
         }
 
-        int offsets[2] = { meta.bgxoffset, meta.bgyoffset };
-        if ( ImGui::DragInt2(TR_CACHE("ui.settings.beatmap.bg_offset").data(),
-                             offsets) ) {
-            meta.bgxoffset = offsets[0];
-            meta.bgyoffset = offsets[1];
-            changed        = true;
-        }
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.beatmap.bg_offset").data(),
+                       maxLabelW,
+                       [&](Clay_BoundingBox r, bool) {
+                           int offsets[2] = { meta.bgxoffset, meta.bgyoffset };
+                           ImGui::SetNextItemWidth(r.width);
+                           if ( ImGui::DragInt2("##BgOffset", offsets) ) {
+                               meta.bgxoffset = offsets[0];
+                               meta.bgyoffset = offsets[1];
+                               changed        = true;
+                           }
+                       });
     }
 
-    if ( ImGui::CollapsingHeader(
-             TR_CACHE("ui.settings.beatmap.preference").data(),
-             ImGuiTreeNodeFlags_DefaultOpen) ) {
-        float bpm = (float)meta.preference_bpm;
-        if ( ImGui::DragFloat(TR_CACHE("ui.settings.beatmap.bpm").data(),
-                              &bpm,
-                              0.1f,
-                              -1.0f,
-                              1000.0f,
-                              "%.2f") ) {
-            meta.preference_bpm = (double)bpm;
-            changed             = true;
-        }
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.beatmap.preference").data(), true) ) {
+        const char* labels[] = {
+            TR_CACHE("ui.settings.beatmap.bpm").data(),
+            TR_CACHE("ui.settings.beatmap.tracks").data(),
+            TR_CACHE("ui.settings.beatmap.length").data()
+        };
+        float maxLabelW = 0;
+        for ( auto* l : labels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
 
-        if ( ImGui::InputInt(TR_CACHE("ui.settings.beatmap.tracks").data(),
-                             &meta.track_count) ) {
-            changed = true;
-        }
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.bpm").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                float bpm = (float)meta.preference_bpm;
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::DragFloat(
+                         "##BPM", &bpm, 0.1f, -1.0f, 1000.0f, "%.2f") ) {
+                    meta.preference_bpm = (double)bpm;
+                    changed             = true;
+                }
+            });
 
-        ImGui::BeginDisabled();
-        double length = meta.map_length;
-        ImGui::InputDouble(TR_CACHE("ui.settings.beatmap.length").data(),
-                           &length,
-                           0,
-                           0,
-                           "%.3f s");
-        ImGui::EndDisabled();
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.tracks").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::InputInt("##Tracks", &meta.track_count) ) {
+                    changed = true;
+                }
+            });
+
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.beatmap.length").data(),
+                       maxLabelW,
+                       [&](Clay_BoundingBox r, bool) {
+                           ImGui::BeginDisabled();
+                           double length = meta.map_length;
+                           ImGui::SetNextItemWidth(r.width);
+                           ImGui::InputDouble(
+                               "##Length", &length, 0, 0, "%.3f s");
+                           ImGui::EndDisabled();
+                       });
     }
 
-    if ( ImGui::CollapsingHeader(
-             TR_CACHE("ui.settings.beatmap.resource").data(),
-             ImGuiTreeNodeFlags_DefaultOpen) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.beatmap.resource").data(),
+                               true) ) {
+        const char* labels[] = { TR_CACHE("ui.settings.beatmap.audio").data(),
+                                 TR_CACHE("ui.settings.beatmap.cover").data() };
+        float       maxLabelW = 0;
+        for ( auto* l : labels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
 
-        std::string currentAudioPath = Config::pathToUtf8(meta.main_audio_path);
-        std::string audioPreview     = currentAudioPath;
-        if ( project && !audioPreview.empty() ) {
-            if ( meta.main_audio_path.is_absolute() ) {
-                try {
-                    audioPreview = Config::pathToUtf8(std::filesystem::relative(
-                        meta.main_audio_path, project->m_projectRoot));
-                } catch ( ... ) {
-                }
-            }
-        }
-
-        bool audioExists = false;
-        if ( project ) {
-            auto absAudio = project->m_projectRoot / meta.main_audio_path;
-            audioExists   = std::filesystem::exists(absAudio);
-        }
-
-        bool audioPushed = false;
-        if ( !audioExists && !currentAudioPath.empty() ) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  Utils::UIThemeUtils::getWarningColor());
-            audioPushed = true;
-        }
-
-        if ( ImGui::BeginCombo(TR_CACHE("ui.settings.beatmap.audio").data(),
-                               audioPreview.c_str()) ) {
-            if ( audioPushed ) {
-                ImGui::PopStyleColor();
-                audioPushed = false;
-            }
-
-            if ( project ) {
-                for ( const auto& res : project->m_audioResources ) {
-                    if ( res.m_type != MMM::AudioTrackType::Main ) continue;
-
-                    bool        isSelected = (currentAudioPath == res.m_path);
-                    std::string label      = res.m_id + "##" + res.m_path;
-                    if ( ImGui::Selectable(label.c_str(), isSelected) ) {
-                        meta.main_audio_path = res.m_path;
-                        changed              = true;
-                    }
-                    if ( isSelected ) ImGui::SetItemDefaultFocus();
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("(%s)", res.m_path.c_str());
-                }
-            } else {
-                ImGui::TextDisabled(
-                    "%s", TR_CACHE("ui.settings.beatmap.no_beatmap").data());
-            }
-            ImGui::EndCombo();
-        }
-        if ( audioPushed ) ImGui::PopStyleColor();
-
-        std::string currentCoverPath = Config::pathToUtf8(meta.main_cover_path);
-        std::string coverPreview     = currentCoverPath;
-        if ( project && !coverPreview.empty() ) {
-            if ( meta.main_cover_path.is_absolute() ) {
-                try {
-                    coverPreview = Config::pathToUtf8(std::filesystem::relative(
-                        meta.main_cover_path, project->m_projectRoot));
-                } catch ( ... ) {
-                }
-            }
-        }
-
-        bool coverExists = false;
-        if ( project ) {
-            auto absCover = project->m_projectRoot / meta.main_cover_path;
-            coverExists   = std::filesystem::exists(absCover);
-        }
-
-        bool coverPushed = false;
-        if ( !coverExists && !currentCoverPath.empty() ) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  Utils::UIThemeUtils::getWarningColor());
-            coverPushed = true;
-        }
-
-        if ( ImGui::BeginCombo(TR_CACHE("ui.settings.beatmap.cover").data(),
-                               coverPreview.c_str()) ) {
-            if ( coverPushed ) {
-                ImGui::PopStyleColor();
-                coverPushed = false;
-            }
-
-            if ( project ) {
-                // 扫描项目中的图片文件
-                std::vector<std::string> images;
-                try {
-                    for ( const auto& entry :
-                          std::filesystem::recursive_directory_iterator(
-                              project->m_projectRoot) ) {
-                        if ( entry.is_regular_file() ) {
-                            auto ext =
-                                Config::pathToUtf8(entry.path().extension());
-                            std::transform(
-                                ext.begin(), ext.end(), ext.begin(), ::tolower);
-                            if ( ext == ".png" || ext == ".jpg" ||
-                                 ext == ".jpeg" || ext == ".bmp" ||
-                                 ext == ".mp4" || ext == ".avi" ) {
-                                auto rel = std::filesystem::relative(
-                                    entry.path(), project->m_projectRoot);
-                                images.push_back(Config::pathToUtf8(rel));
-                            }
+        // 音频选择
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.audio").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                std::string currentAudioPath =
+                    Config::pathToUtf8(meta.main_audio_path);
+                std::string audioPreview = currentAudioPath;
+                if ( project && !audioPreview.empty() ) {
+                    if ( meta.main_audio_path.is_absolute() ) {
+                        try {
+                            audioPreview =
+                                Config::pathToUtf8(std::filesystem::relative(
+                                    meta.main_audio_path,
+                                    project->m_projectRoot));
+                        } catch ( ... ) {
                         }
                     }
-                } catch ( ... ) {
                 }
 
-                for ( const auto& imgPath : images ) {
-                    bool        isSelected = (currentCoverPath == imgPath);
-                    std::string label      = imgPath + "##" + imgPath;
-                    if ( ImGui::Selectable(label.c_str(), isSelected) ) {
-                        meta.main_cover_path = imgPath;
-                        changed              = true;
-                    }
-                    if ( isSelected ) ImGui::SetItemDefaultFocus();
+                bool audioExists =
+                    project && std::filesystem::exists(project->m_projectRoot /
+                                                       meta.main_audio_path);
+                bool audioPushed = false;
+                if ( !audioExists && !currentAudioPath.empty() ) {
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Text, Utils::UIThemeUtils::getWarningColor());
+                    audioPushed = true;
                 }
-            } else {
-                ImGui::TextDisabled(
-                    "%s", TR_CACHE("ui.settings.beatmap.no_beatmap").data());
-            }
-            ImGui::EndCombo();
-        }
-        if ( coverPushed ) ImGui::PopStyleColor();
+
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##AudioCombo", audioPreview.c_str()) ) {
+                    if ( audioPushed ) {
+                        ImGui::PopStyleColor();
+                        audioPushed = false;
+                    }
+                    if ( project ) {
+                        for ( const auto& res : project->m_audioResources ) {
+                            if ( res.m_type != MMM::AudioTrackType::Main )
+                                continue;
+                            bool isSelected = (currentAudioPath == res.m_path);
+                            if ( ImGui::Selectable(
+                                     (res.m_id + "##" + res.m_path).c_str(),
+                                     isSelected) ) {
+                                meta.main_audio_path = res.m_path;
+                                changed              = true;
+                            }
+                            if ( isSelected ) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if ( audioPushed ) ImGui::PopStyleColor();
+            });
+
+        // 封面选择
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.cover").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                std::string currentCoverPath =
+                    Config::pathToUtf8(meta.main_cover_path);
+                std::string coverPreview = currentCoverPath;
+                if ( project && !coverPreview.empty() ) {
+                    if ( meta.main_cover_path.is_absolute() ) {
+                        try {
+                            coverPreview =
+                                Config::pathToUtf8(std::filesystem::relative(
+                                    meta.main_cover_path,
+                                    project->m_projectRoot));
+                        } catch ( ... ) {
+                        }
+                    }
+                }
+
+                bool coverExists =
+                    project && std::filesystem::exists(project->m_projectRoot /
+                                                       meta.main_cover_path);
+                bool coverPushed = false;
+                if ( !coverExists && !currentCoverPath.empty() ) {
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Text, Utils::UIThemeUtils::getWarningColor());
+                    coverPushed = true;
+                }
+
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##CoverCombo", coverPreview.c_str()) ) {
+                    if ( coverPushed ) {
+                        ImGui::PopStyleColor();
+                        coverPushed = false;
+                    }
+                    if ( project ) {
+                        std::vector<std::string> images;
+                        try {
+                            for ( const auto& entry :
+                                  std::filesystem::recursive_directory_iterator(
+                                      project->m_projectRoot) ) {
+                                if ( entry.is_regular_file() ) {
+                                    auto ext = Config::pathToUtf8(
+                                        entry.path().extension());
+                                    std::transform(ext.begin(),
+                                                   ext.end(),
+                                                   ext.begin(),
+                                                   ::tolower);
+                                    if ( ext == ".png" || ext == ".jpg" ||
+                                         ext == ".jpeg" || ext == ".bmp" ||
+                                         ext == ".mp4" || ext == ".avi" ) {
+                                        images.push_back(Config::pathToUtf8(
+                                            std::filesystem::relative(
+                                                entry.path(),
+                                                project->m_projectRoot)));
+                                    }
+                                }
+                            }
+                        } catch ( ... ) {
+                        }
+
+                        for ( const auto& imgPath : images ) {
+                            bool isSelected = (currentCoverPath == imgPath);
+                            if ( ImGui::Selectable(
+                                     (imgPath + "##" + imgPath).c_str(),
+                                     isSelected) ) {
+                                meta.main_cover_path = imgPath;
+                                changed              = true;
+                            }
+                            if ( isSelected ) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if ( coverPushed ) ImGui::PopStyleColor();
+            });
     }
+
+    ImVec2 sz = m_contentVBox.renderInCurrent(
+        ImGui::GetCursorScreenPos(), { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::Dummy({ 0, sz.y });
 
     if ( changed ) {
         engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
@@ -1366,35 +1690,58 @@ void SettingsView::drawEditorSettings()
     size_t sectionIndex = 0;
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
-        ImGuiID id     = ImGui::GetID(label);
-        bool    isOpen =
+        std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
+                                std::to_string(rowIndex) + "_H_" + label;
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+
+        bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(0, 0, 0, 0).setSpacing(0);
+        row.setPadding(8, 8, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
+
         row.addElement(
-            std::string(label) + "_header",
+            (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, defaultOpen](Clay_BoundingBox r, bool) {
+            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::PushStyleColor(
-                    ImGuiCol_Header,
-                    ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-                ImGui::CollapsingHeader(
-                    label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-                ImGui::PopStyleColor();
+
+                ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
+                bgCol.w *= 0.5f;
+                ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
+                                      { bgCol.x + 0.05f,
+                                        bgCol.y + 0.05f,
+                                        bgCol.z + 0.05f,
+                                        bgCol.w + 0.1f });
+                ImGui::PushStyleColor(ImGuiCol_HeaderActive,
+                                      { bgCol.x + 0.1f,
+                                        bgCol.y + 0.1f,
+                                        bgCol.z + 0.1f,
+                                        bgCol.w + 0.15f });
+
+                bool nowOpen = ImGui::TreeNodeEx(
+                    (void*)(intptr_t)id,
+                    ImGuiTreeNodeFlags_CollapsingHeader |
+                        (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
+                    "%s",
+                    label);
+
+                ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
+                ImGui::PopStyleColor(3);
             });
-        m_contentVBox.addLayout((std::string(label) + "_hdr").c_str(),
+
+        m_contentVBox.addLayout((baseIdStr + "_layout").c_str(),
                                 row,
                                 Sizing::Grow(),
                                 Sizing::Fixed(h));
 
         if ( isOpen ) {
             auto& sec = getSection(sectionIndex++);
-            sec.setDecorated(true).setSpacing(2).setPadding(8, 8, 6, 6);
-            m_contentVBox.addLayout((std::string(label) + "_sec").c_str(),
+            sec.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);
+            m_contentVBox.addLayout((baseIdStr + "_sec").c_str(),
                                     sec,
                                     Sizing::Grow(),
                                     Sizing::Fit());
@@ -1403,7 +1750,8 @@ void SettingsView::drawEditorSettings()
         return nullptr;
     };
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.editor.behavior").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.editor.behavior").data(), true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
@@ -1433,7 +1781,8 @@ void SettingsView::drawEditorSettings()
                            changed |= ImGui::Checkbox("##ScrollSnap",
                                                       &settings.scrollSnap);
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
                 .data(),
@@ -1456,7 +1805,8 @@ void SettingsView::drawEditorSettings()
                                10.0f,
                                "%.1f");
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.editor.beat_divisor").data(),
             maxLabelW,
@@ -1470,7 +1820,8 @@ void SettingsView::drawEditorSettings()
             });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.editor.selection").data(), true) ) {
+    if ( auto* sec = addHeader(TR_CACHE("ui.settings.editor.selection").data(),
+                               true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.editor.selection").data(),
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
@@ -1481,29 +1832,20 @@ void SettingsView::drawEditorSettings()
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
 
-        addSettingItem(*sec,
+        addRadioSetting(
+            *sec,
             rowIndex,
+            sectionIndex,
             TR_CACHE("ui.settings.editor.selection").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                int mode = (int)settings.selectionMode;
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.editor.selection.strict").data(),
-                         mode == (int)Config::SelectionMode::Strict) ) {
-                    settings.selectionMode = Config::SelectionMode::Strict;
-                    changed                = true;
-                }
-                ImGui::SameLine();
-                if ( ImGui::RadioButton(
-                         TR_CACHE("ui.settings.editor.selection.intersection")
-                             .data(),
-                         mode == (int)Config::SelectionMode::Intersection) ) {
-                    settings.selectionMode =
-                        Config::SelectionMode::Intersection;
-                    changed = true;
-                }
-            });
-        addSettingItem(*sec,
+            { { TR_CACHE("ui.settings.editor.selection.strict").data(),
+                (int)Config::SelectionMode::Strict },
+              { TR_CACHE("ui.settings.editor.selection.intersection").data(),
+                (int)Config::SelectionMode::Intersection } },
+            (int&)settings.selectionMode,
+            changed);
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
             maxLabelW,
@@ -1530,7 +1872,8 @@ void SettingsView::drawEditorSettings()
                        });
     }
 
-    if ( auto* sec = addHeader(TR_CACHE("ui.settings.editor.sfx").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.editor.sfx").data(), true) ) {
         const char* labels[] = {
             TR_CACHE("ui.settings.editor.sfx_strategy").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
@@ -1563,7 +1906,8 @@ void SettingsView::drawEditorSettings()
                                changed = true;
                            }
                        });
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             maxLabelW,
@@ -1573,7 +1917,8 @@ void SettingsView::drawEditorSettings()
                     &settings.sfxConfig.enableFlickWidthVolumeScaling);
             });
         if ( settings.sfxConfig.enableFlickWidthVolumeScaling ) {
-            addSettingItem(*sec,
+            addSettingItem(
+                *sec,
                 rowIndex,
                 TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
                 maxLabelW,
@@ -1586,7 +1931,8 @@ void SettingsView::drawEditorSettings()
                         10.0f);
                 });
         }
-        addSettingItem(*sec,
+        addSettingItem(
+            *sec,
             rowIndex,
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data(),
             maxLabelW,

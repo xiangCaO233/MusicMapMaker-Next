@@ -56,6 +56,13 @@ private:
     /// @brief 添加一个设置项行（标签 + 控件）
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget);
+
+    /// @brief 添加一个带自动换行的 RadioButton 组
+    void addRadioSetting(
+        CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex,
+        const char* label, float labelWidth,
+        const std::vector<std::pair<std::string, int>>& options, int& current,
+        bool& changed);
 };
 
 }  // namespace MMM::UI
