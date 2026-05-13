@@ -11,6 +11,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/UIManager.h"
 #include "logic/EditorEngine.h"
+#include "ui/layout/box/CLayBox.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -175,35 +176,92 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    ImGui::SliderFloat(
-        TR("ui.waveform.zoom").data(), &m_zoom, 0.1f, 10.0f, "%.1fs");
+    ImGuiStyle& style = ImGui::GetStyle();
+    float frameH = ImGui::GetFrameHeight();
+    auto calcSliderWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+    };
+    auto calcButtonWidth = [&](const char* label) {
+        return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+    };
+    auto drawSep = [&](Clay_BoundingBox r, bool) {
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(r.x, r.y + 2.0f), ImVec2(r.x, r.y + r.height - 2.0f), ImGui::GetColorU32(ImGuiCol_Separator));
+    };
 
-    ImGui::SetNextItemWidth(120);
-    if ( ImGui::SliderFloat(TR("ui.spectrum.max_freq").data(),
-                            &m_maxFreq,
-                            2000.0f,
-                            24000.0f,
-                            "%.0f Hz") ) {
-        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+    CLayVBox topContainer;
+    topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
+    std::deque<CLayHBox> rows;
+    CLayHBox* currentRow = nullptr;
+    float currentW = 0.0f;
+    float availW = ImGui::GetContentRegionAvail().x;
+    float spacing = 8.0f;
+
+    auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
+        bool addSep = false;
+        float totalW = w;
+        if (currentRow) {
+            totalW += 1.0f + spacing; // Sep + spacing
+        }
+        if (!currentRow || currentW + totalW > availW) {
+            rows.emplace_back();
+            currentRow = &rows.back();
+            currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
+            topContainer.addLayout(("Row_" + std::to_string(rows.size())).c_str(), *currentRow, Sizing::Grow(), Sizing::Fit());
+            currentW = 8.0f; // 4 + 4 padding
+        } else {
+            addSep = true;
+        }
+
+        if (addSep) {
+            currentRow->addElement(id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
+            currentW += 1.0f + spacing;
+        }
+        currentRow->addElement(id, Sizing::Fixed(w), Sizing::Fixed(h), drawCb);
+        currentW += w + spacing;
+    };
+
+    pushGroup("ZoomSlider", calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", TR("ui.waveform.zoom").data());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+    });
+    pushGroup("MaxFreqSlider", calcSliderWidth(120.0f, TR("ui.spectrum.max_freq").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        if ( ImGui::SliderFloat("##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
+            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                startAsyncRecalculate();
+            }
+        }
+    });
+    pushGroup("LogBiasSlider", calcSliderWidth(120.0f, TR("ui.spectrum.log_bias").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        if ( ImGui::SliderFloat("##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
+            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                startAsyncRecalculate();
+            }
+        }
+    });
+    pushGroup("SyncEffectsBtn", calcButtonWidth(TR("ui.spectrum.sync_effects").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
             startAsyncRecalculate();
         }
-    }
-    ImGui::SameLine();
+    });
 
-    ImGui::SetNextItemWidth(120);
-    if ( ImGui::SliderFloat(TR("ui.spectrum.log_bias").data(),
-                            &m_logBias,
-                            0.01f,
-                            20.0f,
-                            "%.2f") ) {
-        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-            startAsyncRecalculate();
-        }
-    }
-
-    if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
-        startAsyncRecalculate();
-    }
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz = topContainer.renderInCurrent(startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     syncEQ();
 
