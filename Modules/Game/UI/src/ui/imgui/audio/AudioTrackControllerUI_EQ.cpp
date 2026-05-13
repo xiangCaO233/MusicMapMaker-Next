@@ -139,11 +139,12 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(eqSpacing, 4));
 
+            float startX = 1.0f; // Buffer offset
             float startY = ImGui::GetCursorPosY();
             for ( size_t i = 0; i < bandCount; ++i ) {
                 ImGui::PushID((int)i);
 
-                ImGui::SetCursorPosY(i == 0 ? startY + 3 : startY);
+                ImGui::SetCursorPos(ImVec2(startX + i * (colWidth + eqSpacing), startY + 3));
 
                 ImGui::BeginGroup();
 
@@ -192,10 +193,6 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
 
             ImGui::EndGroup();
             ImGui::PopID();
-
-            if ( i < bandCount - 1 ) {
-                ImGui::SameLine();
-            }
         }
         ImGui::PopStyleVar();
     }
