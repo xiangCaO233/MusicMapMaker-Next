@@ -7,6 +7,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -41,8 +42,9 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
                    [label](Clay_BoundingBox r, bool) {
-                       ImGui::SetCursorScreenPos({ r.x, r.y });
-                       ImGui::AlignTextToFramePadding();
+                       float textH  = ImGui::CalcTextSize(label).y;
+                       float offset = (r.height - textH) * 0.5f;
+                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
                        ImGui::Text("%s", label);
                    });
 
@@ -80,8 +82,9 @@ void SettingsView::addRadioSetting(
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
                    [label](Clay_BoundingBox r, bool) {
-                       ImGui::SetCursorScreenPos({ r.x, r.y });
-                       ImGui::AlignTextToFramePadding();
+                       float textH  = ImGui::CalcTextSize(label).y;
+                       float offset = (r.height - textH) * 0.5f;
+                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
                        ImGui::Text("%s", label);
                    });
 
@@ -157,7 +160,7 @@ void SettingsView::drawSoftwareSettings()
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        row.setPadding(0, 0, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
 
         row.addElement(
@@ -167,7 +170,6 @@ void SettingsView::drawSoftwareSettings()
             [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
-                bgCol.w *= 0.5f;
                 ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                                       { bgCol.x + 0.05f,
@@ -180,12 +182,24 @@ void SettingsView::drawSoftwareSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
+                // Clamp TreeNodeEx to Clay bounding box: push zero
+                // WindowPadding to eliminate outer_extend, and
+                // temporarily set WorkRect.Max.x to match Clay width.
+                ImGuiWindow* win         = ImGui::GetCurrentWindow();
+                float        savedWRMaxX = win->WorkRect.Max.x;
+                win->WorkRect.Max.x      = r.x + r.width;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    { 0.0f, 0.0f });
+
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
                         (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
                     "%s",
                     label);
+
+                ImGui::PopStyleVar();
+                win->WorkRect.Max.x = savedWRMaxX;
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
@@ -730,7 +744,7 @@ void SettingsView::drawVisualSettings()
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        row.setPadding(0, 0, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
 
         row.addElement(
@@ -740,7 +754,6 @@ void SettingsView::drawVisualSettings()
             [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
-                bgCol.w *= 0.5f;
                 ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                                       { bgCol.x + 0.05f,
@@ -753,12 +766,21 @@ void SettingsView::drawVisualSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
+                ImGuiWindow* win         = ImGui::GetCurrentWindow();
+                float        savedWRMaxX = win->WorkRect.Max.x;
+                win->WorkRect.Max.x      = r.x + r.width;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    { 0.0f, 0.0f });
+
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
                         (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
                     "%s",
                     label);
+
+                ImGui::PopStyleVar();
+                win->WorkRect.Max.x = savedWRMaxX;
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
@@ -1220,7 +1242,7 @@ void SettingsView::drawProjectSettings()
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        row.setPadding(0, 0, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
 
         row.addElement(
@@ -1230,7 +1252,6 @@ void SettingsView::drawProjectSettings()
             [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
-                bgCol.w *= 0.5f;
                 ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                                       { bgCol.x + 0.05f,
@@ -1243,12 +1264,21 @@ void SettingsView::drawProjectSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
+                ImGuiWindow* win         = ImGui::GetCurrentWindow();
+                float        savedWRMaxX = win->WorkRect.Max.x;
+                win->WorkRect.Max.x      = r.x + r.width;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    { 0.0f, 0.0f });
+
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
                         (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
                     "%s",
                     label);
+
+                ImGui::PopStyleVar();
+                win->WorkRect.Max.x = savedWRMaxX;
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
@@ -1321,7 +1351,7 @@ void SettingsView::drawBeatmapSettings()
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        row.setPadding(0, 0, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
 
         row.addElement(
@@ -1331,7 +1361,6 @@ void SettingsView::drawBeatmapSettings()
             [label, id, defaultOpen](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
-                bgCol.w *= 0.5f;
                 ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                                       { bgCol.x + 0.05f,
@@ -1344,12 +1373,21 @@ void SettingsView::drawBeatmapSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
+                ImGuiWindow* win         = ImGui::GetCurrentWindow();
+                float        savedWRMaxX = win->WorkRect.Max.x;
+                win->WorkRect.Max.x      = r.x + r.width;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    { 0.0f, 0.0f });
+
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
                         (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
                     "%s",
                     label);
+
+                ImGui::PopStyleVar();
+                win->WorkRect.Max.x = savedWRMaxX;
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
@@ -1698,7 +1736,7 @@ void SettingsView::drawEditorSettings()
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
 
         auto& row = getRow(rowIndex++);
-        row.setPadding(8, 8, 0, 0).setSpacing(0);
+        row.setPadding(0, 0, 0, 0).setSpacing(0);
         float h = ImGui::GetFrameHeight();
 
         row.addElement(
@@ -1709,7 +1747,6 @@ void SettingsView::drawEditorSettings()
                 ImGui::SetCursorScreenPos({ r.x, r.y });
 
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
-                bgCol.w *= 0.5f;
                 ImGui::PushStyleColor(ImGuiCol_Header, bgCol);
                 ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                                       { bgCol.x + 0.05f,
@@ -1722,12 +1759,21 @@ void SettingsView::drawEditorSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
+                ImGuiWindow* win         = ImGui::GetCurrentWindow();
+                float        savedWRMaxX = win->WorkRect.Max.x;
+                win->WorkRect.Max.x      = r.x + r.width;
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    { 0.0f, 0.0f });
+
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
                         (defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0),
                     "%s",
                     label);
+
+                ImGui::PopStyleVar();
+                win->WorkRect.Max.x = savedWRMaxX;
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
