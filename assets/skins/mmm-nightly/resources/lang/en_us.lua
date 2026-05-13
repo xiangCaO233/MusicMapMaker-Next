@@ -88,7 +88,7 @@ return {
 	["ui.settings.software.trail_life"] = "Trail Life Time",
 	["ui.settings.software.smoke_size"] = "Smoke Initial Size",
 	["ui.settings.software.smoke_life"] = "Smoke Life Time",
-	["ui.settings.software.cursor_bpm_sync"] = "Sync Smoke Life with BPM (1 Beat)",
+	["ui.settings.software.cursor_bpm_sync"] = "Sync Smoke Life with BPM",
 
 	["ui.settings.visual"] = "Visual Config",
 	["ui.settings.visual.layout"] = "Layout",

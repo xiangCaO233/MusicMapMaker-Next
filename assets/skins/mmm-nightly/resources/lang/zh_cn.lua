@@ -81,7 +81,7 @@ return {
 	["ui.settings.software.sync_factor"] = "积分追踪系数",
 	["ui.settings.software.sync_buffer"] = "水箱缓冲时间",
 	["ui.settings.software.sync_interval"] = "同步时间间隔",
-	["ui.settings.software.save_format"] = "Ctrl+S 保存行为",
+	["ui.settings.software.save_format"] = "Ctrl+S 保存为",
 	["ui.settings.software.save_format.original"] = "保存原始文件格式",
 	["ui.settings.software.save_format.force_mmm"] = "强制保存为 .mmm",
 	["ui.settings.software.cursor_params"] = "内置光标参数",
@@ -90,7 +90,7 @@ return {
 	["ui.settings.software.trail_life"] = "拖尾存活时间",
 	["ui.settings.software.smoke_size"] = "烟雾初始大小",
 	["ui.settings.software.smoke_life"] = "烟雾存活时间",
-	["ui.settings.software.cursor_bpm_sync"] = "烟雾时间同步 BPM (1拍时长)",
+	["ui.settings.software.cursor_bpm_sync"] = "烟雾时间同步 BPM",
 
 	["ui.settings.visual"] = "视觉配置",
 	["ui.settings.visual.layout"] = "布局比例",
