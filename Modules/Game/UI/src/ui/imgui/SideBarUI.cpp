@@ -44,7 +44,7 @@ void SideBarUI::update(UIManager* sourceManager)
     float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
     float sidebarWidth = GetSidebarWidth(dpiScale);
     float btnSize      = std::floor(sidebarBaseW * dpiScale);
-    float expandedBtnW = sidebarWidth - std::floor(12.0f * dpiScale);
+    float expandedBtnW = sidebarWidth;
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
     ImGuiStyle& style         = ImGui::GetStyle();
@@ -53,13 +53,19 @@ void SideBarUI::update(UIManager* sourceManager)
     float statusBarHeight = menuBarHeight;
 
     // ================== C. 左侧侧边栏窗口 ==================
-    float floatGap    = std::floor(4.0f * dpiScale);
-    float windowRound = std::floor(8.0f * dpiScale);
+    auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    float floatGap    = std::floor(aesthetics.windowGap * dpiScale);
+    float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
+
+    float windowPaddingVal  = std::floor(aesthetics.windowPadding * dpiScale);
+    float totalSidebarWidth = sidebarWidth + 2.0f * windowPaddingVal;
 
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + floatGap,
-               viewport->WorkPos.y + menuBarHeight + floatGap));
-    ImGui::SetNextWindowSize(ImVec2(sidebarWidth,
+               viewport->WorkPos.y + menuBarHeight + floatGap),
+        ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(totalSidebarWidth,
                                     viewport->WorkSize.y - menuBarHeight -
                                         statusBarHeight - 2.0f * floatGap));
     ImGui::SetNextWindowViewport(viewport->ID);
@@ -70,13 +76,15 @@ void SideBarUI::update(UIManager* sourceManager)
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoDocking;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(windowPadding, windowPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     if ( ImGui::Begin("SideBarUI", nullptr, sidebar_flags) ) {
         CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         // --- 核心：进入窗口后，立即强制锁定所有“圆角”变量 ---
-        float rounding = std::floor(6.0f * dpiScale);
+        float rounding = std::floor(aesthetics.frameRounding * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
@@ -137,12 +145,13 @@ void SideBarUI::update(UIManager* sourceManager)
             if ( sideBarFont ) ImGui::PushFont(sideBarFont);
             ImVec2 iconSize = ImGui::CalcTextSize(iconStr);
             ImVec2 iconPos  = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                               rect.y + (rect.height - iconSize.y) * 0.5f };
-            ImGui::GetWindowDrawList()->AddText(sideBarFont,
-                                                ImGui::GetFontSize(),
-                                                iconPos,
-                                                ImGui::GetColorU32(ImGuiCol_Text),
-                                                iconStr);
+                                rect.y + (rect.height - iconSize.y) * 0.5f };
+            ImGui::GetWindowDrawList()->AddText(
+                sideBarFont,
+                ImGui::GetFontSize(),
+                iconPos,
+                ImGui::GetColorU32(ImGuiCol_Text),
+                iconStr);
             if ( sideBarFont ) ImGui::PopFont();
 
             // 2. 分隔线
@@ -159,12 +168,11 @@ void SideBarUI::update(UIManager* sourceManager)
             ImFont*     contentFont = skinCfg.getFont("content");
             if ( contentFont ) {
                 ImGui::PushFont(contentFont);
-                ImVec2 labelSize = ImGui::CalcTextSize(label.c_str());
+                ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = {
-                    sepX + textLeftPadding,
-                    rect.y + (rect.height - labelSize.y) * 0.5f
-                };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     contentFont,
                     ImGui::GetFontSize(),
@@ -189,20 +197,17 @@ void SideBarUI::update(UIManager* sourceManager)
         };
 
         CLayVBox vbox;
-        vbox.setPadding(std::floor(6.0f * dpiScale),
-                        std::floor(6.0f * dpiScale),
-                        std::floor(8.0f * dpiScale),
-                        std::floor(8.0f * dpiScale))
-            .setSpacing(std::floor(4.0f * dpiScale))
+        vbox.setPadding(0, 0, 0, 0)
+            .setSpacing(std::floor(aesthetics.itemSpacing * dpiScale))
             .addElement("SearchButton",
-                        Sizing::Fixed(expandedBtnW),
+                        Sizing::Grow(),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(
                                 ICON_MMM_SEARCH, SideBarTab::Search, rect);
                         })
             .addElement("FileExplorerButton",
-                        Sizing::Fixed(expandedBtnW),
+                        Sizing::Grow(),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_FOLDER_OPEN,
@@ -210,7 +215,7 @@ void SideBarUI::update(UIManager* sourceManager)
                                               rect);
                         })
             .addElement("AudioExplorerButton",
-                        Sizing::Fixed(expandedBtnW),
+                        Sizing::Grow(),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_MUSIC,
@@ -218,7 +223,7 @@ void SideBarUI::update(UIManager* sourceManager)
                                               rect);
                         })
             .addElement("BeatMapExplorerButton",
-                        Sizing::Fixed(expandedBtnW),
+                        Sizing::Grow(),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_FILE,
@@ -227,7 +232,7 @@ void SideBarUI::update(UIManager* sourceManager)
                         })
             .addSpring()
             .addElement("SettingsButton",
-                        Sizing::Fixed(expandedBtnW),
+                        Sizing::Grow(),
                         Sizing::Fixed(btnSize),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(
@@ -236,7 +241,8 @@ void SideBarUI::update(UIManager* sourceManager)
 
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         float  availH   = ImGui::GetContentRegionAvail().y;
-        ImVec2 sz = vbox.renderInCurrent(startPos, { sidebarWidth, availH });
+        float  availW   = ImGui::GetContentRegionAvail().x;
+        ImVec2 sz       = vbox.renderInCurrent(startPos, { availW, availH });
         ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
         // --- 弹出样式变量 ---

@@ -91,6 +91,12 @@ return {
 	["ui.settings.software.smoke_size"] = "烟雾初始大小",
 	["ui.settings.software.smoke_life"] = "烟雾存活时间",
 	["ui.settings.software.cursor_bpm_sync"] = "烟雾时间同步 BPM",
+	["ui.settings.software.aesthetics"] = "界面美化设置",
+	["ui.settings.software.aesthetics.window_rounding"] = "全局窗口圆角半径",
+	["ui.settings.software.aesthetics.frame_rounding"] = "全局组件圆角半径",
+	["ui.settings.software.aesthetics.window_gap"] = "窗口/面板间隙",
+	["ui.settings.software.aesthetics.item_spacing"] = "容器内部组件间距",
+	["ui.settings.software.aesthetics.window_padding"] = "全局窗口内边距",
 
 	["ui.settings.visual"] = "视觉配置",
 	["ui.settings.visual.layout"] = "布局比例",

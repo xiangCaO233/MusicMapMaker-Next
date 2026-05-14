@@ -126,11 +126,19 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         }
 
         // 仅在内容溢出时才显示水平滚动条
-        ImGuiWindowFlags childFlags = (totalWidthWithBuffer > availWidth) ? ImGuiWindowFlags_HorizontalScrollbar : ImGuiWindowFlags_None;
+        ImGuiWindowFlags childFlags = (totalWidthWithBuffer > availWidth)
+                                          ? ImGuiWindowFlags_HorizontalScrollbar
+                                          : ImGuiWindowFlags_None;
+
+        // 动态计算可用高度，预留底部按钮位置
+        float footerHeight =
+            ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+        float availHeight = ImGui::GetContentRegionAvail().y;
+        float childHeight = std::max(220.0f, availHeight - footerHeight);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         bool opened = ImGui::BeginChild("EQSliders",
-                                        ImVec2(childWidth, 220),
+                                        ImVec2(childWidth, childHeight),
                                         ImGuiChildFlags_None,
                                         childFlags);
         ImGui::PopStyleVar(); // WindowPadding
@@ -141,6 +149,13 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
 
             float startX = 1.0f; // Buffer offset
             float startY = ImGui::GetCursorPosY();
+
+            // 动态计算内部滑块高度 (总高度减去标签和间距)
+            float fixedElementsH = 36.0f; // 标签 + 基础间距
+            float totalSlidersH = childHeight - fixedElementsH - 12.0f; // 留一点余量
+            float gainSliderH = std::max(60.0f, totalSlidersH * 0.6f);
+            float qSliderH    = std::max(40.0f, totalSlidersH * 0.4f);
+
             for ( size_t i = 0; i < bandCount; ++i ) {
                 ImGui::PushID((int)i);
 
@@ -166,7 +181,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 2. 增益滑块 (固定宽度，也要在列内居中)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (colWidth - sliderWidth) * 0.5f);
                 if ( ImGui::VSliderFloat("##Gain",
-                                         ImVec2(sliderWidth, 110),
+                                         ImVec2(sliderWidth, gainSliderH),
                                          &gain,
                                          -24.0f,
                                          24.0f,
@@ -182,7 +197,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 3. Q 值滑块
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (colWidth - sliderWidth) * 0.5f);
                 if ( ImGui::VSliderFloat(
-                         "##Q", ImVec2(sliderWidth, 72), &q, 0.1f, 10.0f, "") ) {
+                         "##Q", ImVec2(sliderWidth, qSliderH), &q, 0.1f, 10.0f, "") ) {
                 audio.setMainTrackEQBandQ(i, q);
                 changed = true;
             }

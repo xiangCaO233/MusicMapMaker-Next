@@ -32,14 +32,22 @@ void ToolbarView::update(UIManager* sourceManager)
         fontSize = toolFont->LegacySize;
     }
 
+    // 样式锁定
+    auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+
+    float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
+
     // 强制固定宽度 (增加 12px 左右各 6px 补白)
     float fixedBaseW   = 32.0f;
     float toolbarBaseW = fixedBaseW * dpiScale;
-    float fixedW       = std::floor((fixedBaseW + 12.0f) * dpiScale);
+    float fixedW       = std::floor(fixedBaseW * dpiScale);
     float btnSize      = toolbarBaseW;
+    float totalFixedW  = fixedW + 2.0f * windowPadding;
 
     // 2. 锁定窗口尺寸约束
-    ImGui::SetNextWindowSizeConstraints(ImVec2(fixedW, -1), ImVec2(fixedW, -1));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(totalFixedW, -1),
+                                        ImVec2(totalFixedW, -1));
 
     // 3. 核心标志
     ImGuiWindowFlags flags =
@@ -48,8 +56,7 @@ void ToolbarView::update(UIManager* sourceManager)
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoDocking;
 
-    // 样式锁定
-    float rounding = std::floor(6.0f * dpiScale);
+    float rounding = std::floor(aesthetics.frameRounding * dpiScale);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
@@ -67,8 +74,9 @@ void ToolbarView::update(UIManager* sourceManager)
         }
     };
 
-    float windowRound = std::floor(8.0f * dpiScale);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(windowPadding, windowPadding));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
@@ -76,11 +84,8 @@ void ToolbarView::update(UIManager* sourceManager)
         if ( auto f = skinCfg.getFont("pure_icons") ) ImGui::PushFont(f);
 
         CLayVBox vbox;
-        vbox.setPadding(std::floor(6.0f * dpiScale),
-                        std::floor(6.0f * dpiScale),
-                        std::floor(8.0f * dpiScale),
-                        std::floor(8.0f * dpiScale))
-            .setSpacing(std::floor(4.0f * dpiScale));
+        vbox.setPadding(0, 0, 0, 0)
+            .setSpacing(std::floor(aesthetics.itemSpacing * dpiScale));
 
         // 1. 移动工具
         vbox.addElement("MoveTool",
@@ -118,7 +123,18 @@ void ToolbarView::update(UIManager* sourceManager)
                                            rect.width);
                         });
 
-        vbox.addSpacing(std::floor(8.0f * dpiScale));
+        // 分隔线
+        vbox.addElement(
+            "GroupSeparator",
+            Sizing::Grow(),
+            Sizing::Fixed(2.0f * dpiScale),
+            [&](Clay_BoundingBox r, bool) {
+                ImVec2 pMin = { r.x + 4.0f * dpiScale, r.y + r.height * 0.5f };
+                ImVec2 pMax = { r.x + r.width - 4.0f * dpiScale,
+                                r.y + r.height * 0.5f };
+                ImGui::GetWindowDrawList()->AddLine(
+                    pMin, pMax, IM_COL32(100, 100, 100, 150), 1.0f * dpiScale);
+            });
 
         // 鼠标滚动翻转
         vbox.addElement(
@@ -356,7 +372,8 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         float  availH   = ImGui::GetContentRegionAvail().y;
-        ImVec2 sz       = vbox.renderInCurrent(startPos, { fixedW, availH });
+        float  availW   = ImGui::GetContentRegionAvail().x;
+        ImVec2 sz       = vbox.renderInCurrent(startPos, { availW, availH });
         ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
         if ( toolFont ) ImGui::PopFont();

@@ -15,7 +15,9 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-    float floatGap = std::floor(4.0f * dpiScale);
+    auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    float floatGap = std::floor(aesthetics.windowGap * dpiScale);
 
     ImGui::SetNextWindowPos(
         ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * floatGap,
@@ -32,21 +34,29 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
         ImGuiWindowFlags_NoDocking;
 
-    float windowRound = std::floor(8.0f * dpiScale);
-    float frameRound  = std::floor(6.0f * dpiScale);
+    float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
+    float frameRound  = std::floor(aesthetics.frameRounding * dpiScale);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_TabRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_DockingSeparatorSize, floatGap);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(floatGap, floatGap));
+
+    float separatorSize =
+        std::min(8.0f * dpiScale, std::max(3.0f * dpiScale, floatGap));
+    ImGui::PushStyleVar(ImGuiStyleVar_DockingSeparatorSize, separatorSize);
+
+    // --- 宿主窗口使用 0 内边距以撑满容器 ---
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
 
     ImFont* titleFont = skinCfg.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont);
 
     ImGui::Begin("RightDockHost", nullptr, dock_flags);
+    // 立即弹出 WindowPadding，防止其应用到停靠在其中的子窗口
+    ImGui::PopStyleVar(1);
 
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
     ImGui::DockSpace(
@@ -107,7 +117,8 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     }
 
     ImGui::End();
-    ImGui::PopStyleVar(7);
+    ImGui::PopStyleColor(1);
+    ImGui::PopStyleVar(6);
 }
 
 }  // namespace MMM::UI

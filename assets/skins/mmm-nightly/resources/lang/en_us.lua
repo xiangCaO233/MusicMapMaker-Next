@@ -79,6 +79,8 @@ return {
 	["ui.settings.software.recent_limit"] = "Recent Projects Limit",
 	["ui.settings.software.sync"] = "Sync & Clock",
 	["ui.settings.software.sync_mode"] = "Audio Sync Mode",
+	["ui.settings.software.aesthetics.item_spacing"] = "Internal Item Spacing",
+	["ui.settings.software.aesthetics.window_padding"] = "Global Window Padding",
 	["ui.settings.software.sync_factor"] = "Integral Tracking Factor",
 	["ui.settings.software.sync_buffer"] = "WaterTank Buffer",
 	["ui.settings.software.sync_interval"] = "Sync Interval",

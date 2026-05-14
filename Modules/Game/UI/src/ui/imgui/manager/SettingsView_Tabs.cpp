@@ -411,40 +411,45 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
+                static float tmpUIScale = settings.uiScaleMultiplier;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::SliderFloat("##UIScale",
-                                        &settings.uiScaleMultiplier,
-                                        0.5f,
-                                        2.0f,
-                                        "%.2f") ) {
-                    changed = true;
+                ImGui::SliderFloat(
+                    "##UIScale", &tmpUIScale, 0.5f, 2.0f, "%.2f");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.uiScaleMultiplier = tmpUIScale;
+                    changed                    = true;
                     if ( auto ctx = Graphic::VKContext::get() ) {
                         ctx->get().applyTheme();
                         ctx->get().updateFontScales();
                         ctx->get().requestFontRebuild();
                     }
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpUIScale = settings.uiScaleMultiplier;
                 }
             });
 
         // 7. 字体大小倍率
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.software.font.multiplier").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::SliderFloat("##FontScale",
-                                                   &settings.fontSizeMultiplier,
-                                                   0.5f,
-                                                   2.0f,
-                                                   "%.2f") ) {
-                               changed = true;
-                               if ( auto ctx = Graphic::VKContext::get() ) {
-                                   ctx->get().updateFontScales();
-                                   ctx->get().requestFontRebuild();
-                               }
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.font.multiplier").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpFontScale = settings.fontSizeMultiplier;
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat(
+                    "##FontScale", &tmpFontScale, 0.5f, 2.0f, "%.2f");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.fontSizeMultiplier = tmpFontScale;
+                    changed                     = true;
+                    if ( auto ctx = Graphic::VKContext::get() ) {
+                        ctx->get().updateFontScales();
+                        ctx->get().requestFontRebuild();
+                    }
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpFontScale = settings.fontSizeMultiplier;
+                }
+            });
 
         // 处理文件选择器结果 (保持在 Clay 之后，因为它们开启新窗口)
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
@@ -586,6 +591,116 @@ void SettingsView::drawSoftwareSettings()
                         ImGui::EndDisabled();
                 });
         }
+    }
+
+    // 界面美化/审美设置
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.software.aesthetics").data(), true) ) {
+        const char* aesLabels[] = {
+            TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
+            TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
+        };
+        float maxLabelW = 0;
+        for ( auto* l : aesLabels )
+            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+        maxLabelW += 8.0f;
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpRounding = settings.aesthetics.windowRounding;
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat(
+                    "##WinRounding", &tmpRounding, 0.0f, 32.0f, "%.1f px");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.windowRounding = tmpRounding;
+                    changed                            = true;
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().applyTheme();
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpRounding = settings.aesthetics.windowRounding;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpFrame = settings.aesthetics.frameRounding;
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat(
+                    "##FrameRounding", &tmpFrame, 0.0f, 32.0f, "%.1f px");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.frameRounding = tmpFrame;
+                    changed                           = true;
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().applyTheme();
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpFrame = settings.aesthetics.frameRounding;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpGap = settings.aesthetics.windowGap;
+                ImGui::SetNextWindowSizeConstraints(ImVec2(r.width, -1),
+                                                    ImVec2(r.width, -1));
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat("##WinGap", &tmpGap, 0.0f, 32.0f, "%.1f px");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.windowGap = tmpGap;
+                    changed                       = true;
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpGap = settings.aesthetics.windowGap;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpSpacing = settings.aesthetics.itemSpacing;
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat(
+                    "##ItemSpacing", &tmpSpacing, 0.0f, 32.0f, "%.1f px");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.itemSpacing = tmpSpacing;
+                    changed                         = true;
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().applyTheme();
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpSpacing = settings.aesthetics.itemSpacing;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpPadding = settings.aesthetics.windowPadding;
+                ImGui::SetNextItemWidth(r.width);
+                ImGui::SliderFloat(
+                    "##WinPadding", &tmpPadding, 0.0f, 32.0f, "%.1f px");
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.windowPadding = tmpPadding;
+                    changed                           = true;
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().applyTheme();
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpPadding = settings.aesthetics.windowPadding;
+                }
+            });
     }
 
     // 3. 界面偏好 (文件选择器、保存格式等)

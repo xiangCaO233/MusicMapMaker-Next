@@ -178,7 +178,7 @@ void CLayBox::internalExecute(ImVec2 origin)
                 auto           data     = Clay_GetElementData(nestedId);
                 if ( data.found ) {
                     auto& style    = ImGui::GetStyle();
-                    float rounding = style.ChildRounding;
+                    float rounding = style.FrameRounding;
 
                     ImVec2 pMin = { origin.x + data.boundingBox.x,
                                     origin.y + data.boundingBox.y };

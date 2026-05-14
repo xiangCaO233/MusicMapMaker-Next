@@ -62,13 +62,17 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
     ImGui::BeginChild("SettingsCategories", { sidebarWidth, 0 }, false);
     {
-        float rounding = std::floor(6.0f * dpiScale);
+        auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        float rounding = std::floor(aesthetics.frameRounding * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
-        auto DrawCategoryIcon = [&](Event::SettingsTab tab, const char* iconStr,
-                                    const char* tooltip, Clay_BoundingBox rect) {
+        auto DrawCategoryIcon = [&](Event::SettingsTab tab,
+                                    const char*        iconStr,
+                                    const char*        tooltip,
+                                    Clay_BoundingBox   rect) {
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
 
             bool isActive = (m_currentTab == tab);
@@ -91,8 +95,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
 
             std::string btnId = std::string(iconStr) + "##setting_tab_" +
                                 std::to_string((int)tab);
-            if ( ImGui::Button(btnId.c_str(),
-                               { rect.width, rect.height }) ) {
+            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
                 m_currentTab = tab;
             }
 
@@ -119,7 +122,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                         std::floor(6.0f * dpiScale),
                         std::floor(8.0f * dpiScale),
                         std::floor(8.0f * dpiScale))
-            .setSpacing(std::floor(4.0f * dpiScale));
+            .setSpacing(std::floor(aesthetics.itemSpacing * dpiScale));
 
         vbox.addElement("SoftwareTab",
                         Sizing::Fixed(btnSize),
@@ -177,13 +180,13 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
                         });
 
         ImVec2 startPos = ImGui::GetCursorScreenPos();
-        vbox.renderInCurrent(startPos,
-                             { sidebarWidth, ImGui::GetContentRegionAvail().y });
+        vbox.renderInCurrent(
+            startPos, { sidebarWidth, ImGui::GetContentRegionAvail().y });
 
         ImGui::PopStyleVar(3);
     }
     ImGui::EndChild();
-    ImGui::PopStyleVar(2); // WindowPadding, ChildRounding
+    ImGui::PopStyleVar(2);  // WindowPadding, ChildRounding
 
     ImGui::SameLine(0, 0);
 

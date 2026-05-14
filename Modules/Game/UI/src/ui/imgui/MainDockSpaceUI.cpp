@@ -1,5 +1,4 @@
 #include "ui/imgui/MainDockSpaceUI.h"
-#include "ui/imgui/SideBarUI.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
@@ -8,6 +7,7 @@
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "ui/imgui/SideBarUI.h"
 #include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
 #include <fmt/format.h>
@@ -20,6 +20,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     m_mainMenuview.update(sourceManager);
 
+    auto&                engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -31,22 +32,31 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    float sidebarWidth = SideBarUI::GetSidebarWidth(dpiScale);
-    float toolbarWidth = std::floor(44.0f * dpiScale);
+    auto& editorSettings = engine.getEditorConfig().settings;
+    auto& aesthetics     = editorSettings.aesthetics;
+
+    float windowPaddingVal = std::floor(aesthetics.windowPadding * dpiScale);
+
+    float sidebarWidth =
+        SideBarUI::GetSidebarWidth(dpiScale) + 2.0f * windowPaddingVal;
+    float toolbarWidth = std::floor(32.0f * dpiScale) + 2.0f * windowPaddingVal;
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
     ImGuiStyle& style         = ImGui::GetStyle();
 
     // --- 同步全局样式与 DPI 感知的圆角 (Premium Look) ---
-    float windowRound = std::floor(8.0f * dpiScale);
-    float frameRound  = std::floor(6.0f * dpiScale);
-    style.WindowRounding    = windowRound;
-    style.ChildRounding     = windowRound;
-    style.FrameRounding     = frameRound;
-    style.PopupRounding     = frameRound;
-    style.TabRounding       = frameRound;
-    style.WindowBorderSize  = 0.0f;
-    style.FrameBorderSize   = 0.0f;
+    float windowRound      = std::floor(aesthetics.windowRounding * dpiScale);
+    float frameRound       = std::floor(aesthetics.frameRounding * dpiScale);
+    style.WindowRounding   = windowRound;
+    style.ChildRounding    = windowRound;
+    style.FrameRounding    = frameRound;
+    style.PopupRounding    = frameRound;
+    style.TabRounding      = frameRound;
+    style.ItemSpacing      = { std::floor(aesthetics.itemSpacing * dpiScale),
+                               std::floor(aesthetics.itemSpacing * dpiScale) };
+    style.WindowPadding    = { windowPaddingVal, windowPaddingVal };
+    style.WindowBorderSize = 0.0f;
+    style.FrameBorderSize  = 0.0f;
 
     float menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
@@ -68,11 +78,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 4. 右侧工具栏 (保持原样调用的简易块) ---
     {
-        float floatGap = std::floor(4.0f * dpiScale);
+        float floatGap = std::floor(aesthetics.windowGap * dpiScale);
         ImGui::SetNextWindowPos(
             ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth -
                        floatGap,
-                   viewport->WorkPos.y + menuBarHeight + floatGap));
+                   viewport->WorkPos.y + menuBarHeight + floatGap),
+            ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(toolbarWidth,
                                         viewport->WorkSize.y - menuBarHeight -
                                             statusBarHeight - 2.0f * floatGap));
@@ -81,8 +92,6 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     }
 
     // --- 4. 全局弹出式对话框 ---
-    auto& engine         = Logic::EditorEngine::instance();
-    auto& editorSettings = engine.getEditorConfig().settings;
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
         // --- Project Folder Picker ---
         if ( ImGuiFileDialog::Instance()->Display("ProjectFolderPicker",

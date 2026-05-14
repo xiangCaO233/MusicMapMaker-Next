@@ -65,11 +65,30 @@ public:
         if ( titleFont ) ImGui::PushFont(titleFont);
 
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
+        auto& editorSettings =
+            Config::AppConfig::instance().getEditorSettings();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-        float windowRound = std::floor(8.0f * dpiScale);
-        m_dpiScale        = dpiScale;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        float windowRound =
+            std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+        float frameRound =
+            std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+        ImVec2 itemSpacing = {
+            std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+            std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
+        };
+
+        m_dpiScale = dpiScale;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_WindowPadding,
+            ImVec2(
+                std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+                std::floor(editorSettings.aesthetics.windowPadding *
+                           dpiScale)));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
         if ( custom_window_flags ) {
             ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);
@@ -100,7 +119,7 @@ public:
 
         ImGui::End();
         // 恢复样式，否则会影响到后面其他的窗口
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(6);
     }
 
     ImVec2 m_startPos;

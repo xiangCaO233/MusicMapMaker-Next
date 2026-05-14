@@ -30,6 +30,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto& audio   = Audio::AudioManager::instance();
     auto& engine  = Logic::EditorEngine::instance();
     auto* project = engine.getCurrentProject();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
@@ -108,6 +109,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         // --- 执行 Clay 布局渲染 ---
+        // 预留微量顶部空间，防止某些布局下盖住 Tab
+        ImGui::Dummy(ImVec2(0, 2 * dpiScale));
+
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         ImVec2 sz       = m_contentVBox.renderInCurrent(
             startPos, { ImGui::GetContentRegionAvail().x, 0 });
