@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/Icons.h"
@@ -33,8 +34,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     CLayVBox listVBox;
     listVBox.setSpacing(4);
 
-    // 通用音量/增益控制组件渲染函数
-    auto renderControl = [&](const char* id,
+    size_t rowIndex     = 0;
+    size_t subHBoxIndex = 0;
+
+    // 渲染一行音频控制项 (Label + Mute + Slider)
+    auto addControlRow = [&](CLayVBox&   parent,
+                             const char* id,
+                             const char* label,
+                             float       labelWidth,
                              float       volume,
                              bool        muted,
                              float       levelL,
@@ -43,58 +50,118 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                              float       maxVal,
                              const char* tooltip,
                              const char* format,
-                             float       totalWidth,
                              auto        onVolumeChange,
                              auto        onMuteChange) {
-        // --- 1. 静音按钮 + 响度显示 ---
-        const char* icon = ICON_MMM_VOLUME_MUTE;
-        if ( !muted ) {
-            if ( volume <= 0.33f )
-                icon = ICON_MMM_VOLUME_OFF;
-            else if ( volume <= 0.66f )
-                icon = ICON_MMM_VOLUME_LOW;
-            else
-                icon = ICON_MMM_VOLUME_HIGH;
-        }
+        // 创建水平行布局 (主容器)
+        CLayHBox& row = this->getRow(rowIndex++);
+        row.clear();
+        row.setPadding(0, 0, 0, 0)
+            .setSpacing(8)
+            .setAlignment(Alignment::Center());
 
-        ImVec2 pos       = ImGui::GetCursorScreenPos();
-        float  btnWidth  = 32.0f;
-        float  btnHeight = ImGui::GetFrameHeight();
+        // --- A. 左侧容器: (FixW) [ 标签 + 弹簧 ] ---
+        CLayHBox& leftBox = this->getSubHBox(subHBoxIndex++);
+        leftBox.clear();
+        leftBox.setSpacing(4).setAlignment(Alignment::Center());
 
-        if ( muted ) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                                  Utils::UIThemeUtils::getDangerColor());
-        }
-        if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
-                           ImVec2(btnWidth, 0)) ) {
-            onMuteChange(!muted);
-        }
-        if ( muted ) {
-            ImGui::PopStyleColor();
-        }
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip("%s (%s)",
-                              tooltip,
-                              muted ? TR("ui.audio_manager.unmute").data()
-                                    : TR("ui.audio_manager.mute").data());
-        }
+        // 1. 标签
+        leftBox.addElement(std::string(id) + "_lbl",
+                           Sizing::Fixed(ImGui::CalcTextSize(label).x),
+                           Sizing::Grow(),
+                           [label](Clay_BoundingBox r, bool) {
+                               float textH  = ImGui::CalcTextSize(label).y;
+                               float offset = (r.height - textH) * 0.5f;
+                               ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                               ImGui::Text("%s", label);
+                           });
 
-        ImGui::SameLine();
+        // 2. 弹簧 (填充 FixW 剩余空间)
+        leftBox.addSpring();
 
-        // --- 2. 拉条 ---
-        float spacing     = ImGui::GetStyle().ItemSpacing.x;
-        float sliderWidth = totalWidth - btnWidth - spacing;
-        ImGui::SetNextItemWidth(sliderWidth);
-        if ( ImGui::SliderFloat((std::string("##Slider") + id).c_str(),
-                                &volume,
-                                minVal,
-                                maxVal,
-                                format) ) {
-            onVolumeChange(volume);
-        }
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetTooltip("%s", tooltip);
-        }
+        // 将左侧容器加入主行
+        row.addLayout((std::string(id) + "_left").c_str(),
+                      leftBox,
+                      Sizing::Fixed(labelWidth),
+                      Sizing::Grow());
+
+        // --- B. 右侧容器: (GrowW) [ 按钮 + 滑条 ] ---
+        CLayHBox& rightBox = this->getSubHBox(subHBoxIndex++);
+        rightBox.clear();
+        rightBox.setSpacing(8).setAlignment(Alignment::Center());
+
+        // 1. 静音按钮
+        rightBox.addElement(
+            std::string(id) + "_mute",
+            Sizing::Fixed(32),
+            Sizing::Fixed(30),
+            [&, id, muted, volume, tooltip, onMuteChange](Clay_BoundingBox r,
+                                                          bool isHovered) {
+                const char* icon = ICON_MMM_VOLUME_MUTE;
+                if ( !muted ) {
+                    if ( volume <= 0.33f )
+                        icon = ICON_MMM_VOLUME_OFF;
+                    else if ( volume <= 0.66f )
+                        icon = ICON_MMM_VOLUME_LOW;
+                    else
+                        icon = ICON_MMM_VOLUME_HIGH;
+                }
+
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - 30) * 0.5f });
+                if ( muted ) {
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
+                }
+                if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
+                                   ImVec2(32, 30)) ) {
+                    onMuteChange(!muted);
+                }
+                if ( muted ) {
+                    ImGui::PopStyleColor();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s (%s)",
+                                      tooltip,
+                                      muted
+                                          ? TR("ui.audio_manager.unmute").data()
+                                          : TR("ui.audio_manager.mute").data());
+                }
+            });
+
+        // 2. 拉条 (自动延伸)
+        rightBox.addElement(
+            std::string(id) + "_slider",
+            Sizing::Grow(),
+            Sizing::Fixed(30),
+            [&, id, volume, minVal, maxVal, format, tooltip, onVolumeChange](
+                Clay_BoundingBox r, bool isHovered) {
+                float frameH = ImGui::GetFrameHeight();
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - frameH) * 0.5f });
+                ImGui::SetNextItemWidth(r.width);
+                float val = volume;
+                if ( ImGui::SliderFloat((std::string("##Slider") + id).c_str(),
+                                        &val,
+                                        minVal,
+                                        maxVal,
+                                        format) ) {
+                    onVolumeChange(val);
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s", tooltip);
+                }
+            });
+
+        // 将右侧容器加入主行
+        row.addLayout((std::string(id) + "_right").c_str(),
+                      rightBox,
+                      Sizing::Grow(),
+                      Sizing::Grow());
+
+        parent.addLayout((std::string(id) + "_row").c_str(),
+                         row,
+                         Sizing::Grow(),
+                         Sizing::Fixed(32));
     };
 
     // 渲染音轨列表项的辅助函数
@@ -112,13 +179,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     std::string viewName = "TrackController_" + audio.m_id;
                     if ( !sourceManager->getView<AudioTrackControllerUI>(
                              viewName) ) {
-                        auto controller = std::make_unique<
-                            AudioTrackControllerUI>(
-                            audio.m_id,
-                            audio.m_id,
-                            audio.m_type == AudioTrackType::Main
+                        AudioTrackControllerUI::TrackType type =
+                            (audio.m_type == AudioTrackType::Main)
                                 ? AudioTrackControllerUI::TrackType::Main
-                                : AudioTrackControllerUI::TrackType::Effect);
+                                : AudioTrackControllerUI::TrackType::Effect;
+                        std::unique_ptr<IUIView> controller =
+                            std::make_unique<AudioTrackControllerUI>(
+                                audio.m_id, audio.m_id, type);
                         sourceManager->registerView(viewName,
                                                     std::move(controller));
                     }
@@ -231,87 +298,99 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     footerVBox.addElement("FooterHeader",
                           Sizing::Grow(),
-                          Sizing::Fixed(ImGui::GetFrameHeightWithSpacing()),
+                          Sizing::Fixed(ImGui::GetFrameHeight()),
                           [&](Clay_BoundingBox r, bool isHovered) {
                               ImGui::SetCursorScreenPos({ r.x, r.y });
-                              ImGui::SetNextItemWidth(r.width);
+
+                              // 核心修复：应用 SettingsView_Tabs 中的技巧，
+                              // 使 CollapsingHeader 受到 Clay 布局内边距的影响
+                              ImGuiWindow* win = ImGui::GetCurrentWindow();
+                              float        savedWRMaxX = win->WorkRect.Max.x;
+                              win->WorkRect.Max.x      = r.x + r.width;
+                              ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                                  { 0.0f, 0.0f });
+
                               m_showGlobalSettings = ImGui::CollapsingHeader(
                                   TR("ui.audio_manager.global_settings").data(),
                                   ImGuiTreeNodeFlags_DefaultOpen);
+
+                              ImGui::PopStyleVar();
+                              win->WorkRect.Max.x = savedWRMaxX;
                           });
 
     if ( m_showGlobalSettings ) {
-        footerVBox.addSpring();  // 顶部弹簧，将内容向下推
+        footerVBox.addSpring();  // 顶部弹簧，实现垂直居中
 
-        footerVBox.addElement(
-            "GlobalVolume",
-            Sizing::Grow(),
-            Sizing::Fixed(30),
-            [&](Clay_BoundingBox r, bool isHovered) {
-                renderControl(
-                    "Global",
-                    audioManager.getGlobalVolume(),
-                    audioManager.isGlobalMuted(),
-                    audioManager.getOutputLevelL(),
-                    audioManager.getOutputLevelR(),
-                    0.0f,
-                    1.0f,
-                    TR("ui.audio_manager.global_volume").data(),
-                    "%.2f",
-                    r.width,
-                    [&](float v) { audioManager.setGlobalVolume(v); },
-                    [&](bool m) { audioManager.setGlobalMute(m); });
-            });
+        // 计算标签宽度 (FixW)
+        float maxLabelW = 0;
+        maxLabelW       = std::max(
+            maxLabelW,
+            ImGui::CalcTextSize(TR("ui.audio_manager.global_volume").data()).x);
+        maxLabelW = std::max(
+            maxLabelW,
+            ImGui::CalcTextSize(TR("ui.audio_manager.bgm_gain").data()).x);
+        maxLabelW = std::max(
+            maxLabelW,
+            ImGui::CalcTextSize(TR("ui.audio_manager.sfx_gain").data()).x);
+        maxLabelW += 12.0f;  // 额外间距 (预留弹簧运动空间)
 
-        footerVBox.addElement(
+        addControlRow(
+            footerVBox,
+            "Global",
+            TR("ui.audio_manager.global_volume").data(),
+            maxLabelW,
+            audioManager.getGlobalVolume(),
+            audioManager.isGlobalMuted(),
+            audioManager.getOutputLevelL(),
+            audioManager.getOutputLevelR(),
+            0.0f,
+            1.0f,
+            TR("ui.audio_manager.global_volume").data(),
+            "%.2f",
+            [&](float v) { audioManager.setGlobalVolume(v); },
+            [&](bool m) { audioManager.setGlobalMute(m); });
+
+        addControlRow(
+            footerVBox,
             "BGMGain",
-            Sizing::Grow(),
-            Sizing::Fixed(30),
-            [&](Clay_BoundingBox r, bool isHovered) {
-                renderControl(
-                    "BGMGain",
-                    audioManager.getBGMGain(),
-                    audioManager.isBGMGainMuted(),
-                    audioManager.getMainTrackLevelL(),
-                    audioManager.getMainTrackLevelR(),
-                    0.0f,
-                    1.0f,
-                    TR("ui.audio_manager.bgm_gain").data(),
-                    "%.2f",
-                    r.width,
-                    [&](float v) { audioManager.setBGMGain(v); },
-                    [&](bool m) { audioManager.setBGMGainMute(m); });
-            });
+            TR("ui.audio_manager.bgm_gain").data(),
+            maxLabelW,
+            audioManager.getBGMGain(),
+            audioManager.isBGMGainMuted(),
+            audioManager.getMainTrackLevelL(),
+            audioManager.getMainTrackLevelR(),
+            0.0f,
+            1.0f,
+            TR("ui.audio_manager.bgm_gain").data(),
+            "%.2f",
+            [&](float v) { audioManager.setBGMGain(v); },
+            [&](bool m) { audioManager.setBGMGainMute(m); });
 
-        footerVBox.addElement(
+        addControlRow(
+            footerVBox,
             "SFXGain",
-            Sizing::Grow(),
-            Sizing::Fixed(30),
-            [&](Clay_BoundingBox r, bool isHovered) {
-                renderControl(
-                    "SFXGain",
-                    audioManager.getSFXGain(),
-                    audioManager.isSFXGainMuted(),
-                    0.0f,
-                    0.0f,
-                    0.0f,
-                    1.0f,
-                    TR("ui.audio_manager.sfx_gain").data(),
-                    "%.2f",
-                    r.width,
-                    [&](float v) { audioManager.setSFXGain(v); },
-                    [&](bool m) { audioManager.setSFXGainMute(m); });
-            });
+            TR("ui.audio_manager.sfx_gain").data(),
+            maxLabelW,
+            audioManager.getSFXGain(),
+            audioManager.isSFXGainMuted(),
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            TR("ui.audio_manager.sfx_gain").data(),
+            "%.2f",
+            [&](float v) { audioManager.setSFXGain(v); },
+            [&](bool m) { audioManager.setSFXGainMute(m); });
 
-        footerVBox.addSpring();  // 底部弹簧，向上推，实现居中
+        footerVBox.addSpring();  // 底部弹簧
     }
 
     // --- 执行分段渲染 ---
     // 1. 动态计算页脚高度
     float footerH = ImGui::GetFrameHeightWithSpacing();
     if ( m_showGlobalSettings ) {
-        // 3个30px的项目 + 间距 + 上下预留的缓冲空间
-        footerH += 3 * 30.0f + 3 * 2.0f + 16.0f;
+        // 3个32px的项目 + 间距 + 上下预留的缓冲空间
+        footerH += 3 * 32.0f + 3 * 2.0f + 16.0f;
     }
 
     // 2. 渲染顶部列表区域 (自动占据剩余空间)
