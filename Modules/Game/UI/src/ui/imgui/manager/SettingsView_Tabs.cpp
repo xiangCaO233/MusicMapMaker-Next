@@ -14,6 +14,7 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <ImGuiFileDialog.h>
+#include <nfd.h>
 #include <filesystem>
 
 namespace MMM::UI
@@ -370,13 +371,37 @@ void SettingsView::drawSoftwareSettings()
                 }
                 ImGui::SameLine();
                 if ( ImGui::Button("...##BrowseAscii", { 35, 0 }) ) {
-                    IGFD::FileDialogConfig config;
-                    config.path = ".";
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "AsciiFontPicker",
-                        TR_CACHE("ui.settings.software.font.browse").data(),
-                        ".ttf,.otf",
-                        config);
+                    if ( settings.filePickerStyle ==
+                         Config::FilePickerStyle::Native ) {
+                        nfdu8char_t*      outPath    = nullptr;
+                        nfdu8filteritem_t filters[1] = { { "Font Files",
+                                                           "ttf,otf" } };
+                        nfdresult_t       result     = NFD_OpenDialogU8(
+                            &outPath, filters, 1, nullptr);
+
+                        if ( result == NFD_OKAY ) {
+                            settings.preferredAsciiFont = outPath;
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
+                            changed = true;
+                            NFD_FreePathU8(outPath);
+                        } else if ( result == NFD_ERROR ) {
+                            XERROR("NFD Error: {}", NFD_GetError());
+                        }
+                    } else {
+                        IGFD::FileDialogConfig config;
+                        config.path     = ".";
+                        config.fileName = "";
+                        config.flags    = ImGuiFileDialogFlags_Modal |
+                                       ImGuiFileDialogFlags_HideColumnType |
+                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "AsciiFontPicker",
+                            TR_CACHE("ui.settings.software.font.browse")
+                                .data(),
+                            ".ttf,.otf",
+                            config);
+                    }
                 }
             });
 
@@ -430,13 +455,37 @@ void SettingsView::drawSoftwareSettings()
                 }
                 ImGui::SameLine();
                 if ( ImGui::Button("...##BrowseCjk", { 35, 0 }) ) {
-                    IGFD::FileDialogConfig config;
-                    config.path = ".";
-                    ImGuiFileDialog::Instance()->OpenDialog(
-                        "CjkFontPicker",
-                        TR_CACHE("ui.settings.software.font.browse").data(),
-                        ".ttf,.otf",
-                        config);
+                    if ( settings.filePickerStyle ==
+                         Config::FilePickerStyle::Native ) {
+                        nfdu8char_t*      outPath    = nullptr;
+                        nfdu8filteritem_t filters[1] = { { "Font Files",
+                                                           "ttf,otf" } };
+                        nfdresult_t       result     = NFD_OpenDialogU8(
+                            &outPath, filters, 1, nullptr);
+
+                        if ( result == NFD_OKAY ) {
+                            settings.preferredCjkFont = outPath;
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
+                            changed = true;
+                            NFD_FreePathU8(outPath);
+                        } else if ( result == NFD_ERROR ) {
+                            XERROR("NFD Error: {}", NFD_GetError());
+                        }
+                    } else {
+                        IGFD::FileDialogConfig config;
+                        config.path     = ".";
+                        config.fileName = "";
+                        config.flags    = ImGuiFileDialogFlags_Modal |
+                                       ImGuiFileDialogFlags_HideColumnType |
+                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "CjkFontPicker",
+                            TR_CACHE("ui.settings.software.font.browse")
+                                .data(),
+                            ".ttf,.otf",
+                            config);
+                    }
                 }
             });
 

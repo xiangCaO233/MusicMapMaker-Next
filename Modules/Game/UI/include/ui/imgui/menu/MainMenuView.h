@@ -37,6 +37,7 @@ private:
     void openFolderPicker();
     void openPackFilePicker();
     void openExportFilePicker(const std::string& ext);
+    void openAudioImportPicker();
     void dispatchCommand(const Logic::LogicCommand& cmd);
     void renderHelpMenu(UIManager* sourceManager);
     void renderAboutPopup();

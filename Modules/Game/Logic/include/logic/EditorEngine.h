@@ -74,6 +74,18 @@ public:
      */
     void syncProjectWithFile(const std::filesystem::path& mapPath);
 
+    /// @brief 处理导入音频指令
+    void handleImportAudio(const CmdImportAudio& cmd);
+
+    /// @brief 更新音轨资源信息
+    void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
+
+    /// @brief 移除项目音轨资源
+    void handleRemoveAudioResource(const CmdRemoveAudioResource& cmd);
+
+    /// @brief 从项目中移除谱面
+    void handleRemoveBeatmap(const CmdRemoveBeatmap& cmd);
+
     /**
      * @brief 获取当前激活的谱面会话
      */

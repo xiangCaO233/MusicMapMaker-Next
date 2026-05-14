@@ -5,7 +5,9 @@
 #include "ui/imgui/menu/MainMenuView.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include <memory>
+#include <functional>
 
 
 namespace MMM::UI
@@ -23,6 +25,13 @@ public:
                      e.type == Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
                     m_isMaximized = e.isMaximized;
                 }
+            });
+
+        // 订阅音频导入触发事件
+        Event::EventBus::instance().subscribe<Event::AudioImportTriggerEvent>(
+            [&](Event::AudioImportTriggerEvent e) {
+                m_pendingImportPath   = e.path;
+                m_showImportTypeModal = true;
             });
     }
     MainDockSpaceUI(MainDockSpaceUI&&)                 = delete;
@@ -70,6 +79,16 @@ public:
 
     /// @brief 是否显示退出确认弹窗
     bool m_showExitConfirmation{ false };
+
+    /// @brief 待导入的音频路径 (用于模态弹窗)
+    std::string m_pendingImportPath;
+    /// @brief 是否显示音频导入类型选择弹窗
+    bool m_showImportTypeModal{ false };
+
+    // 文件覆盖确认
+    bool                  m_showOverwriteModal = false;
+    std::string           m_pendingOverwritePath;
+    std::function<void()> m_onOverwriteConfirm;
 };
 
 }  // namespace MMM::UI

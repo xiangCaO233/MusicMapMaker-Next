@@ -26,6 +26,10 @@ public:
 private:
     bool m_showBeatmapList = true;
 
+    // --- 谱面管理相关 ---
+    std::string m_manageBeatmapPath;
+    bool        m_openManageModal{ false };
+
     // --- 布局池 (用于避免热路径堆分配) ---
     std::deque<CLayHBox> m_rows;
     std::deque<CLayVBox> m_vboxes;

@@ -680,6 +680,21 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
     return true;
 }
 
+void AudioManager::unloadSoundEffect(const std::string& key)
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        auto mixer = it->second->getMixer();
+        if ( mixer ) {
+            m_mainMixer->remove_source(mixer);
+            m_preStretcherMixer->remove_source(mixer);
+        }
+        m_sfxPools.erase(it);
+        m_sfxMutes.erase(key);
+        XINFO("Unloaded SFX: {}", key);
+    }
+}
+
 void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
 {
     if ( getSFXPoolMute(key) ) return;

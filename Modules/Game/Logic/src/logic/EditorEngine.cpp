@@ -218,7 +218,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
             for ( auto& res : newProject->m_audioResources ) {
                 for ( const auto& loadedRes : loadedProject.m_audioResources ) {
                     if ( res.m_id == loadedRes.m_id ) {
+                        res.m_type   = loadedRes.m_type;
                         res.m_config = loadedRes.m_config;
+
                         // 如果是项目音效，应用音量
                         if ( res.m_type == AudioTrackType::Effect ) {
                             Audio::AudioManager::instance().setSFXPoolVolume(
@@ -438,6 +440,100 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     pushCommand(CmdLoadBeatmap{ newBeatmap });
 }
 
+void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) {
+        XERROR("Cannot import audio: No project opened.");
+        return;
+    }
+
+    std::filesystem::path audioPath = Config::utf8ToPath(cmd.path);
+    if ( !std::filesystem::exists(audioPath) ) {
+        XERROR("Cannot import audio: File does not exist: {}", cmd.path);
+        return;
+    }
+
+    XINFO("Importing audio: {}", cmd.path);
+
+    // 1. 确定在项目中的相对路径
+    std::filesystem::path finalPath = audioPath;
+    bool                  needsCopy = false;
+
+    try {
+        // 检查是否已经在项目目录下
+        auto absAudioPath = std::filesystem::absolute(audioPath);
+        auto absRoot      = std::filesystem::absolute(m_currentProject->m_projectRoot);
+
+        auto [rootIt, pathIt] = std::mismatch(
+            absRoot.begin(), absRoot.end(), absAudioPath.begin(), absAudioPath.end());
+
+        if ( rootIt != absRoot.end() ) {
+            // 在项目外，标记需要复制到项目根目录
+            needsCopy = true;
+            finalPath = m_currentProject->m_projectRoot / audioPath.filename();
+            // 如果文件名冲突，加后缀
+            int suffix = 1;
+            while ( std::filesystem::exists(finalPath) ) {
+                finalPath = m_currentProject->m_projectRoot /
+                            (audioPath.stem().string() + "_" +
+                             std::to_string(suffix++) + audioPath.extension().string());
+            }
+        } else {
+            // 已在项目内，转为相对路径
+            finalPath = std::filesystem::relative(absAudioPath, absRoot);
+        }
+    } catch ( ... ) {
+        needsCopy = true;
+        finalPath = m_currentProject->m_projectRoot / audioPath.filename();
+    }
+
+    // 2. 如果需要，执行物理复制
+    if ( needsCopy ) {
+        try {
+            std::filesystem::copy_file(audioPath, finalPath);
+            XINFO("Copied external audio to project: {}",
+                  Config::pathToUtf8(finalPath));
+            finalPath = std::filesystem::relative(
+                finalPath, m_currentProject->m_projectRoot);
+        } catch ( const std::exception& e ) {
+            XERROR("Failed to copy audio file: {}", e.what());
+            return;
+        }
+    }
+
+    // 3. 检查是否已经在列表中
+    std::string relPathUtf8 = Config::pathToUtf8(finalPath);
+    for ( const auto& res : m_currentProject->m_audioResources ) {
+        if ( res.m_path == relPathUtf8 ) {
+            XWARN("Audio already exists in project: {}", relPathUtf8);
+            return;
+        }
+    }
+
+    // 4. 添加到资源列表 (默认为 Effect)
+    AudioResource res;
+    res.m_id                   = Config::pathToUtf8(finalPath.filename());
+    res.m_path                 = relPathUtf8;
+    res.m_type                 = AudioTrackType::Effect;
+    res.m_config.volume        = 0.5f;
+    res.m_config.playbackSpeed = 1.0f;
+    res.m_config.playbackPitch = 0.0f;
+    res.m_config.muted         = false;
+
+    m_currentProject->m_audioResources.push_back(res);
+
+    // 5. 立即预加载音效资源
+    auto absFinalPath = m_currentProject->m_projectRoot / finalPath;
+    Audio::AudioManager::instance().preloadSoundEffect(
+        res.m_id, Config::pathToUtf8(absFinalPath), res.m_config.volume);
+
+    // 6. 保存项目配置
+    saveProject();
+
+    XINFO("Successfully imported audio: {} as ID: {}", relPathUtf8, res.m_id);
+}
+
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
@@ -498,6 +594,26 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 拦截创建谱面等引擎级别的指令
     if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
         handleCreateBeatmap(std::get<CmdCreateBeatmap>(cmd));
+        return;
+    }
+
+    // 拦截项目资源管理指令
+    if ( std::holds_alternative<CmdUpdateAudioResource>(cmd) ) {
+        handleUpdateAudioResource(std::get<CmdUpdateAudioResource>(cmd));
+        return;
+    }
+    if ( std::holds_alternative<CmdRemoveAudioResource>(cmd) ) {
+        handleRemoveAudioResource(std::get<CmdRemoveAudioResource>(cmd));
+        return;
+    }
+    if ( std::holds_alternative<CmdRemoveBeatmap>(cmd) ) {
+        handleRemoveBeatmap(std::get<CmdRemoveBeatmap>(cmd));
+        return;
+    }
+
+    // 拦截导入音频指令
+    if ( std::holds_alternative<CmdImportAudio>(cmd) ) {
+        handleImportAudio(std::get<CmdImportAudio>(cmd));
         return;
     }
 
@@ -645,6 +761,79 @@ void EditorEngine::loop()
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
+}
+
+void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    XINFO("Updating audio resource type: {} -> {}",
+          cmd.id,
+          (cmd.newType == AudioTrackType::Main ? "Main" : "Effect"));
+
+    for ( auto& res : m_currentProject->m_audioResources ) {
+        if ( res.m_id == cmd.id ) {
+            res.m_type = cmd.newType;
+            // 如果切为音效，确保加载到池中
+            if ( res.m_type == AudioTrackType::Effect ) {
+                auto absPath = m_currentProject->m_projectRoot / res.m_path;
+                if ( std::filesystem::exists(absPath) ) {
+                    Audio::AudioManager::instance().preloadSoundEffect(
+                        res.m_id,
+                        Config::pathToUtf8(absPath),
+                        res.m_config.volume);
+                }
+            }
+            break;
+        }
+    }
+
+    saveProject();
+}
+
+void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    XINFO("Removing audio resource from project: {}", cmd.id);
+
+    auto& resources = m_currentProject->m_audioResources;
+    resources.erase(std::remove_if(resources.begin(),
+                                   resources.end(),
+                                   [&](const AudioResource& res) {
+                                       return res.m_id == cmd.id;
+                                   }),
+                    resources.end());
+
+    // 同时清理谱面对该音轨的引用
+    for ( auto& map : m_currentProject->m_beatmaps ) {
+        if ( map.m_audioTrackId == cmd.id ) {
+            map.m_audioTrackId = "";
+        }
+    }
+
+    saveProject();
+}
+
+void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    XINFO("Removing beatmap from project list: {}", cmd.filePath);
+
+    auto& maps = m_currentProject->m_beatmaps;
+    maps.erase(
+        std::remove_if(maps.begin(),
+                       maps.end(),
+                       [&](const Project::BeatmapEntry& e) {
+                           return e.m_filePath == cmd.filePath;
+                       }),
+        maps.end());
+
+    saveProject();
 }
 
 }  // namespace MMM::Logic

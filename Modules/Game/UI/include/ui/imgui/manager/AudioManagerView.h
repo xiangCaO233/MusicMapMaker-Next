@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <deque>
@@ -25,6 +26,11 @@ private:
     bool m_showPermanentSFX   = true;
     bool m_showMainTracks     = true;
     bool m_showProjectSFX     = true;
+
+    // --- 音轨管理相关 ---
+    std::string    m_manageTrackId;
+    AudioTrackType m_manageTrackType;
+    bool           m_openManageModal{ false };
 
     // --- 布局池 (用于避免热路径堆分配) ---
     std::deque<CLayHBox> m_settingRows;

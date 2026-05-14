@@ -1,8 +1,10 @@
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "graphic/imguivk/VKContext.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
@@ -10,6 +12,7 @@
 #include "ui/imgui/SideBarUI.h"
 #include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
+#include <filesystem>
 #include <fmt/format.h>
 #include <utility>
 
@@ -20,10 +23,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     m_mainMenuview.update(sourceManager);
 
-    auto&                engine   = Logic::EditorEngine::instance();
+    auto& engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+
+    // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
 
     if ( !m_initializedWindow && viewport->PlatformHandle ) {
         if ( GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle ) {
@@ -110,8 +115,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.setEditorConfig(config);
 
                 Event::OpenProjectEvent ev;
-                ev.m_projectPath = std::filesystem::path(
-                    reinterpret_cast<const char8_t*>(folderPath.c_str()));
+                ev.m_projectPath = std::filesystem::path(folderPath);
                 Event::EventBus::instance().publish(ev);
             }
             ImGuiFileDialog::Instance()->Close();
@@ -130,8 +134,18 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 engine.setEditorConfig(config);
 
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSaveBeatmapAs{ filePath }));
+                if ( std::filesystem::exists(filePath) ) {
+                    m_pendingOverwritePath = filePath;
+                    this->m_onOverwriteConfirm = [filePath]() {
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdSaveBeatmapAs{ filePath }));
+                    };
+                    m_showOverwriteModal = true;
+                } else {
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdSaveBeatmapAs{ filePath }));
+                }
             }
             ImGuiFileDialog::Instance()->Close();
         }
@@ -149,14 +163,141 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 engine.setEditorConfig(config);
 
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdPackBeatmap{ filePath }));
+                if ( std::filesystem::exists(filePath) ) {
+                    m_pendingOverwritePath = filePath;
+                    this->m_onOverwriteConfirm = [filePath]() {
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdPackBeatmap{ filePath }));
+                    };
+                    m_showOverwriteModal = true;
+                } else {
+                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                        Logic::CmdPackBeatmap{ filePath }));
+                }
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // --- Audio Import Picker ---
+        if ( ImGuiFileDialog::Instance()->Display("AudioImportPicker",
+                                                  ImGuiWindowFlags_NoCollapse,
+                                                  { 600, 400 }) ) {
+            if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                std::string filePath =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+
+                auto config = engine.getEditorConfig();
+                config.settings.lastFilePickerPath =
+                    ImGuiFileDialog::Instance()->GetCurrentPath();
+                engine.setEditorConfig(config);
+
+                // 不再直接执行指令，而是触发类型选择弹窗
+                m_pendingImportPath   = filePath;
+                m_showImportTypeModal = true;
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // --- Ascii Font Picker ---
+        if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
+                                                  ImGuiWindowFlags_NoCollapse,
+                                                  { 600, 400 }) ) {
+            if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                std::string filePath =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                auto config = engine.getEditorConfig();
+                config.settings.preferredAsciiFont = filePath;
+                engine.setEditorConfig(config);
+                if ( auto ctx = Graphic::VKContext::get() )
+                    ctx->get().requestFontRebuild();
+            }
+            ImGuiFileDialog::Instance()->Close();
+        }
+
+        // --- Cjk Font Picker ---
+        if ( ImGuiFileDialog::Instance()->Display("CjkFontPicker",
+                                                  ImGuiWindowFlags_NoCollapse,
+                                                  { 600, 400 }) ) {
+            if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                std::string filePath =
+                    ImGuiFileDialog::Instance()->GetFilePathName();
+                auto config = engine.getEditorConfig();
+                config.settings.preferredCjkFont = filePath;
+                engine.setEditorConfig(config);
+                if ( auto ctx = Graphic::VKContext::get() )
+                    ctx->get().requestFontRebuild();
             }
             ImGuiFileDialog::Instance()->Close();
         }
     }
 
-    // --- 5. 退出确认模态弹窗 ---
+    // --- 5. 音频导入类型选择模态弹窗 ---
+    if ( m_showImportTypeModal ) {
+        ImGui::OpenPopup("AudioImportTypeModal");
+        m_showImportTypeModal = false;
+    }
+
+    if ( ImGui::BeginPopupModal("AudioImportTypeModal",
+                                nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+        ImGui::Text("%s", TR("ui.audio_import.type_hint").data());
+        ImGui::Spacing();
+
+        if ( ImGui::Button(TR("ui.audio_track.main").data(), { 120, 0 }) ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdImportAudio{ m_pendingImportPath,
+                                       AudioTrackType::Main }));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.audio_track.effect").data(), { 120, 0 }) ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdImportAudio{ m_pendingImportPath,
+                                       AudioTrackType::Effect }));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.common.cancel").data(), { 80, 0 }) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // --- 5.5 文件覆盖确认模态弹窗 ---
+    if ( m_showOverwriteModal ) {
+        ImGui::OpenPopup("OverwriteConfirmModal");
+        m_showOverwriteModal = false;
+    }
+
+    if ( ImGui::BeginPopupModal("OverwriteConfirmModal",
+                                nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+        ImGui::Text("%s", TR("ui.file.overwrite.title").data());
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::Text("%s",
+                    TR_FMT("ui.file.overwrite.msg", m_pendingOverwritePath)
+                        .c_str());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if ( ImGui::Button(TR("ui.common.confirm").data(), { 120, 0 }) ) {
+            if ( m_onOverwriteConfirm ) m_onOverwriteConfirm();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.common.cancel").data(), { 120, 0 }) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+
+    // --- 6. 退出确认模态弹窗 ---
     if ( viewport->PlatformHandle ) {
         GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle;
         if ( glfwWindowShouldClose(nativeWin) ) {

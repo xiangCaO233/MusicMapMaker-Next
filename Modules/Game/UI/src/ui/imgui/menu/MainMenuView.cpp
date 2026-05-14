@@ -9,6 +9,7 @@
 #include "event/ui/UISettingsTabEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -64,6 +65,9 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                     "NewBeatmapWizard");
                 if ( wizard ) wizard->open();
             }
+        }
+        if ( ImGui::IsKeyPressed(ImGuiKey_I, false) ) {
+            openAudioImportPicker();
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_O) ) {
             openFolderPicker();
@@ -176,9 +180,45 @@ void MainMenuView::openPackFilePicker()
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "map.osz";
-        fdConfig.flags             = ImGuiFileDialogFlags_Default;
+        fdConfig.flags =
+            ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
         ImGuiFileDialog::Instance()->OpenDialog(
             "PackFilePicker", TR("ui.file.pack"), ".osz,.mcz,.zip", fdConfig);
+    }
+}
+
+void MainMenuView::openAudioImportPicker()
+{
+    auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return;
+
+    auto& config = Config::AppConfig::instance().getEditorSettings();
+    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        nfdu8char_t*      outPath    = nullptr;
+        nfdu8filteritem_t filters[1] = { { "Audio Files", "mp3,ogg,wav,flac" } };
+        nfdresult_t       result =
+            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+
+        if ( result == NFD_OKAY ) {
+            Event::EventBus::instance().publish(
+                Event::AudioImportTriggerEvent{ outPath });
+            NFD_FreePath(outPath);
+        } else if ( result == NFD_ERROR ) {
+            XERROR("NFD Error: {}", NFD_GetError());
+        }
+    } else {
+        IGFD::FileDialogConfig fdConfig;
+        fdConfig.path              = config.lastFilePickerPath;
+        fdConfig.countSelectionMax = 1;
+        fdConfig.fileName          = "";
+        fdConfig.flags = ImGuiFileDialogFlags_Modal |
+                         ImGuiFileDialogFlags_HideColumnType |
+                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
+        ImGuiFileDialog::Instance()->OpenDialog(
+            "AudioImportPicker",
+            TR("ui.audio_manager.import_audio").data(),
+            ".mp3,.ogg,.wav,.flac",
+            fdConfig);
     }
 }
 
@@ -228,7 +268,8 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = defaultName;
-        fdConfig.flags             = ImGuiFileDialogFlags_Default;
+        fdConfig.flags =
+            ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
 
         std::string filterStr;
         if ( ext == ".mmm" )
@@ -884,6 +925,11 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(
                  ICON_MMM_FOLDER_OPEN, TR("ui.file.open_pro"), "Ctrl+O") ) {
             openFolderPicker();
+        }
+
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_MUSIC, TR("ui.audio_manager.import_audio"), "Ctrl+I", hasProject) ) {
+            openAudioImportPicker();
         }
 
         if ( ImGui::BeginMenu(TR("ui.file.open_recent")) ) {
