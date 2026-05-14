@@ -122,7 +122,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         m_mainMenuview.renderMenus(sourceManager);
         ImGui::PopStyleVar(1);
 
-        float barWidth = ImGui::GetWindowWidth();
+        float barWidth  = ImGui::GetWindowWidth();
         float menusEndX = ImGui::GetCursorPosX();
 
         // 3. 标题：MusicMapMaker-Next (严格居中)
@@ -136,16 +136,20 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         // 4. 帧信息 (FPS) - 靠右对齐到按钮左侧
         ImGuiIO& io = ImGui::GetIO();
-        char fpsBuf[128];
-        snprintf(fpsBuf, sizeof(fpsBuf), "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+        char     fpsBuf[128];
+        snprintf(fpsBuf,
+                 sizeof(fpsBuf),
+                 "%.3f ms/frame (%.1f FPS)",
+                 1000.0f / io.Framerate,
+                 io.Framerate);
         float fpsWidth = ImGui::CalcTextSize(fpsBuf).x;
-        
-        float numberOfButtons = 3;
+
+        float numberOfButtons  = 3;
         float buttonsAreaWidth = buttonSize * numberOfButtons;
-        float buttonsStartX = barWidth - buttonsAreaWidth;
-        
+        float buttonsStartX    = barWidth - buttonsAreaWidth;
+
         float fpsGap = std::floor(12.0f * dpiScale);
-        float fpsX = buttonsStartX - fpsGap - fpsWidth;
+        float fpsX   = buttonsStartX - fpsGap - fpsWidth;
         ImGui::SetCursorPosX(fpsX);
         ImGui::TextUnformatted(fpsBuf);
         float fpsEndX = fpsX + fpsWidth;
@@ -153,17 +157,23 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         // 5. 拖拽区域 (Springs)
         // Area 1: MenusEnd -> TitleX
-        // Area 2: TitleEnd -> ButtonsStartX (包含 FPS 信息)
+        // Area 2: TitleX -> TitleEnd (标题文字本身)
+        // Area 3: TitleEnd -> ButtonsStartX (包含 FPS 信息)
 
         static std::vector<Event::DragArea> lastAreas;
-        std::vector<Event::DragArea> currentAreas;
-        currentAreas.push_back({ menusEndX, 0.0f, titleX - menusEndX, menuBarHeight });
-        currentAreas.push_back({ titleEndX, 0.0f, buttonsStartX - titleEndX, menuBarHeight });
+        std::vector<Event::DragArea>        currentAreas;
+        currentAreas.push_back(
+            { menusEndX, 0.0f, titleX - menusEndX, menuBarHeight });
+        currentAreas.push_back(
+            { titleX, 0.0f, titleEndX - titleX, menuBarHeight });
+        currentAreas.push_back(
+            { titleEndX, 0.0f, buttonsStartX - titleEndX, menuBarHeight });
 
         bool areasChanged = (currentAreas.size() != lastAreas.size());
-        if (!areasChanged) {
-            for (size_t i = 0; i < currentAreas.size(); ++i) {
-                if (currentAreas[i].x != lastAreas[i].x || currentAreas[i].w != lastAreas[i].w) {
+        if ( !areasChanged ) {
+            for ( size_t i = 0; i < currentAreas.size(); ++i ) {
+                if ( currentAreas[i].x != lastAreas[i].x ||
+                     currentAreas[i].w != lastAreas[i].w ) {
                     areasChanged = true;
                     break;
                 }
@@ -180,27 +190,31 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         }
 
         // 绘制透明按钮以捕获双击全屏事件
-        for (const auto& area : currentAreas) {
-            if (area.w > 0) {
+        for ( const auto& area : currentAreas ) {
+            if ( area.w > 0 ) {
                 ImGui::SetCursorPosX(area.x);
-                ImGui::InvisibleButton(fmt::format("DragArea##{}", area.x).c_str(), ImVec2(area.w, area.h));
-                if ( ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+                ImGui::InvisibleButton(
+                    fmt::format("DragArea##{}", area.x).c_str(),
+                    ImVec2(area.w, area.h));
+                if ( ImGui::IsItemHovered() &&
+                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
                     Event::EventBus::instance().publish(Event::GLFWNativeEvent{
-                        .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+                        .type = Event::NativeEventType::
+                            GLFW_TOGGLE_WINDOW_MAXIMIZE });
                 }
             }
         }
 
         // 6. 分隔线与窗口控制按钮
-        float  lineX = buttonsStartX - fpsGap * 0.5f;
+        float  lineX     = buttonsStartX - fpsGap * 0.5f;
         ImVec2 windowPos = ImGui::GetWindowPos();
         ImVec4 sepCol    = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        sepCol.w *= 0.5f; // 进一步增加不透明度
+        sepCol.w *= 0.5f;  // 进一步增加不透明度
         ImGui::GetWindowDrawList()->AddLine(
             { windowPos.x + lineX, windowPos.y + menuBarHeight * 0.25f },
             { windowPos.x + lineX, windowPos.y + menuBarHeight * 0.75f },
             ImGui::GetColorU32(sepCol),
-            1.5f); // 稍微加粗
+            1.5f);  // 稍微加粗
 
         ImGui::SetCursorPosX(buttonsStartX);
 
