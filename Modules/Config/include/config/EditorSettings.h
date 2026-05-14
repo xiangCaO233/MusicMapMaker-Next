@@ -120,7 +120,7 @@ struct UIAestheticsConfig {
     /// @brief 全局组件圆角半径 (px, 基准值)
     float frameRounding{ 6.0f };
     /// @brief 窗口间的间隙/边距 (px, 基准值)
-    float windowGap{ 4.0f };
+    float windowGap{ 8.0f };
     /// @brief 容器内部组件间距 (px, 基准值)
     float itemSpacing{ 8.0f };
     /// @brief 全局窗口内边距 (px, 基准值)
@@ -253,7 +253,7 @@ struct EditorSettings {
     bool vsync{ false };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
-    float fontSizeMultiplier{ 1.0f };
+    float fontSizeMultiplier{ 1.15f };
 
     /// @brief 界面全局缩放倍率 (1.0 代表原始大小)
     float uiScaleMultiplier{ 1.0f };
@@ -366,7 +366,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.recentProjectsLimit   = j.value("recentProjectsLimit", 10);
     c.language              = j.value("language", std::string("zh_cn"));
     c.vsync                 = j.value("vsync", false);
-    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.0f);
+    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
     c.globalVolume          = j.value("globalVolume", 0.25f);

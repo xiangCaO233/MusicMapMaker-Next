@@ -109,7 +109,7 @@ local Skin = {
 		-- 文件管理器字体大小/主要是资源管理器音频管理器谱面管理器等里面浏览的文件的字体大小
 		filemanager = 16,
 		-- 内容字体大小/主要是设置项，文本编辑器等字体的大小
-		content = 14,
+		content = 15,
 
 		-- 侧边栏字体图标的尺寸
 		side_bar = 24,
@@ -177,7 +177,7 @@ local Skin = {
 			window1 = {
 				initial_title = "title.FileManager",
 				initial_side = "left",
-				initial_ratio = 0.275,
+				initial_ratio = 0.325,
 			},
 		},
 	},

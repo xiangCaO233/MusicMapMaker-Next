@@ -7,6 +7,7 @@
 #include "ui/Icons.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -101,14 +102,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
 
             if ( settingIconFont ) ImGui::PopFont();
 
-            if ( ImGui::IsItemHovered() ) {
-                ImFont* contentFont = skinCfg.getFont("content");
-                if ( contentFont ) ImGui::PushFont(contentFont);
-                ImGui::BeginTooltip();
-                ImGui::TextUnformatted(tooltip);
-                ImGui::EndTooltip();
-                if ( contentFont ) ImGui::PopFont();
-            }
+            Utils::renderTooltip(tooltip, Utils::TooltipDir::Right);
 
             ImGui::PopStyleColor(1);
             if ( isActive )

@@ -64,10 +64,6 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform
     // windows can look identical to regular ones.
-    if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
-        style.WindowRounding              = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForVulkan(window_handle, true);
@@ -124,6 +120,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     setupFonts();
 
+    applyTheme();
     XDEBUG("ImGui Vulkan backend initialized.");
 }
 
@@ -449,7 +446,7 @@ void VKContext::applyTheme()
     style.WindowRounding = std::floor(aes.windowRounding * dpiScale);
     style.ChildRounding  = style.WindowRounding;
     style.FrameRounding  = std::floor(aes.frameRounding * dpiScale);
-    style.PopupRounding  = style.FrameRounding;
+    style.PopupRounding  = style.WindowRounding;
     style.TabRounding    = style.FrameRounding;
     style.ItemSpacing    = { std::floor(aes.itemSpacing * dpiScale),
                              std::floor(aes.itemSpacing * dpiScale) };

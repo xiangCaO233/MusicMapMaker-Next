@@ -98,9 +98,9 @@ public:
             sidebarBaseWStr.empty() ? 32.0f : std::stof(sidebarBaseWStr);
 
         float   maxLabelWidth = 0.0f;
-        ImFont* contentFont   = skinCfg.getFont("content");
-        if ( contentFont && ImGui::GetCurrentContext() ) {
-            ImGui::PushFont(contentFont);
+        ImFont* menuFont      = skinCfg.getFont("menu");
+        if ( menuFont && ImGui::GetCurrentContext() ) {
+            ImGui::PushFont(menuFont);
             std::vector<SideBarTab> tabs = {
                 SideBarTab::Search, SideBarTab::FileExplorer, SideBarTab::AudioExplorer,
                 SideBarTab::BeatMapExplorer, SideBarTab::Settings

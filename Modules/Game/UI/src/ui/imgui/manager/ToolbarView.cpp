@@ -8,6 +8,7 @@
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -153,13 +154,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.settings.reverseScroll = !isReverse;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.reverse_scroll").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.reverse_scroll").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -180,13 +175,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.settings.scrollSnap = !isScrollSnap;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.scroll_snap").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.scroll_snap").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -207,12 +196,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.settings.snapFloor = !isSnapFloor;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s", TR("ui.toolbar.snap_floor").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.snap_floor").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -234,13 +218,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.visual.enableLinearScrollMapping = isTimingMapped;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.toolbar.scroll_timing_mapping").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.scroll_timing_mapping").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -261,13 +239,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.visual.drawBeatLines = !isDrawBeatLines;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.draw_beat_lines").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.draw_beat_lines").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -288,13 +260,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.settings.stopPlaybackOnScroll = !isStopOnScroll;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.stop_on_scroll").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.stop_on_scroll").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -315,13 +281,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     newConfig.visual.enableHitEffects = !isHitEffects;
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImFont* contentFont = skinCfg.getFont("content");
-                    if ( contentFont ) ImGui::PushFont(contentFont);
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.hit_effects").data());
-                    if ( contentFont ) ImGui::PopFont();
-                }
+                drawTooltip(TR("ui.toolbar.hit_effects").data());
                 ImGui::PopStyleColor(3);
             });
 
@@ -363,8 +323,8 @@ void ToolbarView::update(UIManager* sourceManager)
                                 newConfig);
                         }
                     }
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.toolbar.beat_divisor").data());
+
+                drawTooltip(TR("ui.toolbar.beat_divisor").data());
                 }
                 if ( contentFont ) ImGui::PopFont();
                 ImGui::PopStyleColor(3);
@@ -468,14 +428,14 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         }
     }
 
-    if ( ImGui::IsItemHovered() ) {
-        ImFont* contentFont = skinCfg.getFont("content");
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetTooltip("%s", tooltip);
-        if ( contentFont ) ImGui::PopFont();
-    }
+    drawTooltip(tooltip);
 
     ImGui::PopStyleColor(3);
+}
+
+void ToolbarView::drawTooltip(const char* text)
+{
+    Utils::renderTooltip(text, Utils::TooltipDir::Left);
 }
 
 }  // namespace MMM::UI

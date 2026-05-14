@@ -1,5 +1,7 @@
 #pragma once
 
+#include "config/AppConfig.h"
+#include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <algorithm>
@@ -147,6 +149,60 @@ static bool renderScrollingTreeNode(const std::string& id,
     if ( isClicked ) onClick();
 
     return open;
+}
+
+enum class TooltipDir
+{
+    Left,
+    Right
+};
+
+/**
+ * @brief 绘制标准的、带有审美风格的 Tooltip。
+ * @param text 文本内容
+ * @param dir 弹出方向 (相对于当前 Item)
+ */
+static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
+{
+    if ( ImGui::IsItemHovered() ) {
+        // 动态获取配置
+        auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        float winPadding = std::floor(aesthetics.windowPadding * dpiScale);
+        float winRounding = std::floor(aesthetics.windowRounding * dpiScale);
+
+        ImVec2 pos    = ImGui::GetItemRectMin();
+        ImVec2 max    = ImGui::GetItemRectMax();
+        float  gap    = 6.0f * dpiScale;
+        ImVec2 target = { 0.0f, 0.0f };
+        ImVec2 pivot  = { 0.0f, 0.0f };
+
+        if ( dir == TooltipDir::Left ) {
+            target = { pos.x - gap, pos.y };
+            pivot  = { 1.0f, 0.0f };
+        } else {
+            target = { max.x + gap, pos.y };
+            pivot  = { 0.0f, 0.0f };
+        }
+
+        ImGui::SetNextWindowPos(target, ImGuiCond_Always, pivot);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(winPadding, winPadding));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
+
+        ImFont* contentFont = Config::SkinManager::instance().getFont("content");
+        if ( contentFont ) ImGui::PushFont(contentFont);
+
+        if ( ImGui::BeginTooltip() ) {
+            ImGui::TextUnformatted(text);
+            ImGui::EndTooltip();
+        }
+
+        if ( contentFont ) ImGui::PopFont();
+        ImGui::PopStyleVar(2);
+    }
 }
 
 }  // namespace MMM::UI::Utils

@@ -8,6 +8,7 @@
 #include "ui/Icons.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <lunasvg.h>
 
 namespace MMM::UI
@@ -164,28 +165,27 @@ void SideBarUI::update(UIManager* sourceManager)
                 std::floor(1.0f * dpiScale));
 
             // 3. 文本描述
-            std::string label       = TabToShortLabel(tab);
-            ImFont*     contentFont = skinCfg.getFont("content");
-            if ( contentFont ) {
-                ImGui::PushFont(contentFont);
+            std::string label    = TabToShortLabel(tab);
+            ImFont*     menuFont = skinCfg.getFont("menu");
+            if ( menuFont ) {
+                ImGui::PushFont(menuFont);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
                 ImVec2 labelPos = { sepX + textLeftPadding,
                                     rect.y +
                                         (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
-                    contentFont,
+                    menuFont,
                     ImGui::GetFontSize(),
                     labelPos,
                     ImGui::GetColorU32(ImGuiCol_Text),
                     label.c_str());
                 ImGui::PopFont();
             }
-
+ 
             // --- 悬停提示 (保留以增强可用性) ---
-            if ( contentFont ) ImGui::PushFont(contentFont);
-            ImGui::SetItemTooltip("%s", TabToTooltip(tab).c_str());
-            if ( contentFont ) ImGui::PopFont();
+            Utils::renderTooltip(TabToTooltip(tab).c_str(),
+                                 Utils::TooltipDir::Right);
 
             // --- 清理状态栈 ---
             ImGui::PopStyleColor(1);
