@@ -47,8 +47,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // Enable Multi-Viewport / Platform
     // Windows
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    io.ConfigViewportsNoAutoMerge   = false;
-    io.ConfigViewportsNoTaskBarIcon = true;
+    io.ConfigViewportsNoAutoMerge        = false;
+    io.ConfigViewportsNoTaskBarIcon      = true;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Setup Dear ImGui style
     // ImGui::StyleColorsDark();
