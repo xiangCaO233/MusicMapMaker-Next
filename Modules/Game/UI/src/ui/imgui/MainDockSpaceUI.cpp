@@ -1,4 +1,5 @@
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/SideBarUI.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
@@ -30,8 +31,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    float sidebarWidth = std::floor((sidebarBaseW + 12.0f) * dpiScale);
+    float sidebarWidth = SideBarUI::GetSidebarWidth(dpiScale);
     float toolbarWidth = std::floor(44.0f * dpiScale);
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);

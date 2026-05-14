@@ -267,6 +267,13 @@ return {
 	["ui.sidebar.beatmap_explorer"] = "Beatmap Explorer",
 	["ui.sidebar.settings"] = "Settings",
 
+	-- Sidebar short labels
+	["ui.sidebar.search.short"] = "Search",
+	["ui.sidebar.file.short"] = "Files",
+	["ui.sidebar.audio.short"] = "Audio",
+	["ui.sidebar.beatmap.short"] = "Charts",
+	["ui.sidebar.settings.short"] = "Config",
+
 	-- Toolbar tooltips
 	["ui.toolbar.move"] = "Grab Tool (1)",
 	["ui.toolbar.marquee"] = "Marquee Tool (2)",

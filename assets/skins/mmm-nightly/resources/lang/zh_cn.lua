@@ -265,6 +265,13 @@ return {
 	["ui.sidebar.beatmap_explorer"] = "谱面资源管理器",
 	["ui.sidebar.settings"] = "设置",
 
+	-- 侧边栏简短描述
+	["ui.sidebar.search.short"] = "搜索",
+	["ui.sidebar.file.short"] = "文件",
+	["ui.sidebar.audio.short"] = "音频",
+	["ui.sidebar.beatmap.short"] = "谱面",
+	["ui.sidebar.settings.short"] = "设置",
+
 	-- 工具栏 tooltips
 	["ui.toolbar.move"] = "抓取工具 (1)",
 	["ui.toolbar.marquee"] = "选取工具 (2)",
