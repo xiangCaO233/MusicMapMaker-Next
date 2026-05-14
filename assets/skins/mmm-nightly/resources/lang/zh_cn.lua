@@ -135,6 +135,10 @@ return {
 
 	["ui.settings.project"] = "项目配置",
 	["ui.settings.project.no_project"] = "当前未打开任何项目",
+	["ui.settings.project.info"] = "项目基本信息",
+	["ui.settings.project.name"] = "项目标题",
+	["ui.settings.project.artist"] = "艺术家",
+	["ui.settings.project.mapper"] = "谱师",
 	["ui.settings.project.path"] = "项目物理路径",
 	["ui.settings.beatmap"] = "谱面配置",
 	["ui.settings.beatmap.no_beatmap"] = "当前未加载任何谱面",

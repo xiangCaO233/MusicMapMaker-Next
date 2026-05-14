@@ -9,6 +9,7 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
+#include <stb_image.h>
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
@@ -43,6 +44,29 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwWindowHintString(GLFW_X11_CLASS_NAME, "MusicMapMaker-Next");
 #endif
     m_windowHandle = glfwCreateWindow(w, h, wtitle, nullptr, nullptr);
+
+    // 设置窗口图标
+    if ( m_windowHandle ) {
+        int            width, height, channels;
+        unsigned char* pixels =
+            stbi_load("assets/skins/mmm-nightly/resources/image/logo.png",
+                      &width,
+                      &height,
+                      &channels,
+                      4);
+        if ( pixels ) {
+            GLFWimage images[1];
+            images[0].width  = width;
+            images[0].height = height;
+            images[0].pixels = pixels;
+            glfwSetWindowIcon(m_windowHandle, 1, images);
+            stbi_image_free(pixels);
+        } else {
+            XWARN(
+                "Failed to load window icon: "
+                "assets/skins/mmm-nightly/resources/image/logo.png");
+        }
+    }
 
     // 窗口启动时居中
     if ( m_windowHandle ) {
