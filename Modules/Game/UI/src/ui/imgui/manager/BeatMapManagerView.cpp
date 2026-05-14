@@ -21,6 +21,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();
 
+    float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
 
@@ -75,16 +76,20 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             listVBox.addElement(
                 "Beatmap_" + beatmap.m_filePath,
                 Sizing::Grow(),
-                Sizing::Fixed(28),
-                [&beatmap, &engine, project](Clay_BoundingBox r,
-                                             bool             isHovered) {
+                Sizing::Fixed(28 * dpiScale),
+                [&beatmap, &engine, project, dpiScale](Clay_BoundingBox r,
+                                                       bool isHovered) {
                     ImGui::Indent();
                     std::string labelStr =
                         beatmap.m_name + " - " + beatmap.m_filePath;
                     float availW = ImGui::GetContentRegionAvail().x;
 
                     Utils::renderScrollingSelectable(
-                        beatmap.m_filePath, labelStr, availW, 28, [&]() {
+                        beatmap.m_filePath,
+                        labelStr,
+                        availW,
+                        28 * dpiScale,
+                        [&]() {
                             XINFO("Request to load beatmap: {}",
                                   beatmap.m_name);
                             auto fullPath =
@@ -108,9 +113,10 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
         }
     }
 
-    // 渲染列表区域
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(8)
+    // 1. 顶部列表区域
+    float footerH = 44.0f * dpiScale;
+    rootVBox.setPadding(12 * dpiScale, 12 * dpiScale, 12 * dpiScale, 0)
+        .setSpacing(8 * dpiScale)
         .addElement(
             "BeatmapListArea",
             Sizing::Grow(),
@@ -135,13 +141,19 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::EndChild();
             });
 
-    // 新建谱面按钮 (居中显示在列表下方)
+    ImVec2 totalSize = rootVBox.renderInCurrent(
+        layoutContext.m_startPos,
+        { layoutContext.m_avail.x, layoutContext.m_avail.y - footerH });
+
+    // 2. 底部按钮区域 (独立渲染，确保不被列表遮挡)
     CLayHBox bottomBtnHBox;
-    bottomBtnHBox.addSpring()
+    float    btnSize = 32.0f * dpiScale;
+    bottomBtnHBox.setPadding(12 * dpiScale, 12 * dpiScale, 0, 0)
+        .setAlignment(Alignment::Center())  // 垂直居中
         .addElement(
             "Beatmap_CreateNew",
-            Sizing::Fixed(32),
-            Sizing::Fixed(32),
+            Sizing::Grow(),  // 宽度拉满
+            Sizing::Fixed(btnSize),
             [&engine, sourceManager](Clay_BoundingBox r, bool isHovered) {
                 ImGui::PushStyleColor(
                     ImGuiCol_Text,
@@ -154,6 +166,19 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
                 ImGui::SetCursorScreenPos({ r.x, r.y });
+                // 使用带有圆角的装饰背景 (与列表项风格统一)
+                ImDrawList* dl    = ImGui::GetWindowDrawList();
+                ImVec4      bgCol = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+                bgCol.w *= 0.5f;
+                float rounding = ImGui::GetStyle().FrameRounding;
+
+                if ( isHovered ) bgCol.w *= 1.5f;
+
+                dl->AddRectFilled({ r.x, r.y },
+                                  { r.x + r.width, r.y + r.height },
+                                  ImGui::ColorConvertFloat4ToU32(bgCol),
+                                  rounding);
+
                 if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(r.width, r.height)) ) {
                     auto* wizard = sourceManager->getView<NewBeatmapWizard>(
                         "NewBeatmapWizard");
@@ -165,13 +190,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("%s", TR_CACHE("ui.file.new_map").data());
                 }
-            })
-        .addSpring();
+            });
 
-    rootVBox.addLayout(
-        "BottomBtnArea", bottomBtnHBox, Sizing::Grow(), Sizing::Fixed(32));
-
-    rootVBox.render(layoutContext);
+    ImVec2 footerPos = { layoutContext.m_startPos.x,
+                         layoutContext.m_startPos.y + totalSize.y };
+    bottomBtnHBox.renderInCurrent(footerPos,
+                                  { layoutContext.m_avail.x, footerH });
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

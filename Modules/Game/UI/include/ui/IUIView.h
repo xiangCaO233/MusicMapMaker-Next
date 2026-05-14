@@ -67,6 +67,7 @@ public:
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         float windowRound = std::floor(8.0f * dpiScale);
+        m_dpiScale        = dpiScale;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
 
@@ -105,6 +106,7 @@ public:
     ImVec2 m_startPos;
     ImVec2 m_avail;
     ImVec2 m_mousePos;
+    float  m_dpiScale;
     bool   m_isMouseDown;
 };
 
