@@ -1452,7 +1452,7 @@ void SettingsView::drawBeatmapSettings()
     }
 
     auto& beatmap = *session->getContext().currentBeatmap;
-    auto  meta    = beatmap.m_baseMapMetadata;
+    auto& meta    = beatmap.m_baseMapMetadata;
     bool  changed = false;
 
     m_contentVBox.clear();
@@ -1544,22 +1544,24 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
 
-        auto DrawInput = [&](const char* label, std::string& val) {
+        auto DrawInput = [&](const char* labelPtr, std::string& valRef) {
             addSettingItem(
                 *sec,
                 rowIndex,
-                label,
+                labelPtr,
                 maxLabelW,
-                [&](Clay_BoundingBox r, bool) {
+                [labelPtr, &valRef = valRef, &changed](Clay_BoundingBox r,
+                                                       bool) {
+                    ImGui::PushID(labelPtr);
                     char buf[256];
-                    strncpy(buf, val.c_str(), sizeof(buf));
+                    strncpy(buf, valRef.c_str(), sizeof(buf));
+                    buf[sizeof(buf) - 1] = '\0';
                     ImGui::SetNextItemWidth(r.width);
-                    if ( ImGui::InputText((std::string("##") + label).c_str(),
-                                          buf,
-                                          sizeof(buf)) ) {
-                        val     = buf;
+                    if ( ImGui::InputText("##Input", buf, sizeof(buf)) ) {
+                        valRef  = buf;
                         changed = true;
                     }
+                    ImGui::PopID();
                 });
         };
 
