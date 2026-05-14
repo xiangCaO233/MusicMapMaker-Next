@@ -43,6 +43,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                              float       maxVal,
                              const char* tooltip,
                              const char* format,
+                             float       totalWidth,
                              auto        onVolumeChange,
                              auto        onMuteChange) {
         // --- 1. 静音按钮 + 响度显示 ---
@@ -81,7 +82,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         ImGui::SameLine();
 
         // --- 2. 拉条 ---
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - 5.0f);
+        float spacing     = ImGui::GetStyle().ItemSpacing.x;
+        float sliderWidth = totalWidth - btnWidth - spacing;
+        ImGui::SetNextItemWidth(sliderWidth);
         if ( ImGui::SliderFloat((std::string("##Slider") + id).c_str(),
                                 &volume,
                                 minVal,
@@ -223,81 +226,95 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     // 底部全局控制 - 始终显示
     CLayVBox footerVBox;
+    // 使用对称的水平内边距，移除手动 Indent，确保左右居中对齐
+    footerVBox.setPadding(16, 16, 0, 0).setSpacing(2);
 
-    footerVBox.addElement(
-        "FooterSeparator",
-        Sizing::Grow(),
-        Sizing::Fixed(24),
-        [](Clay_BoundingBox r, bool isHovered) {
-            float indent = ImGui::CalcTextSize("AA").x;
-            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
-            ImGui::SeparatorText(TR("ui.audio_manager.global_settings").data());
-            ImGui::PopStyleVar();
-        });
+    footerVBox.addElement("FooterHeader",
+                          Sizing::Grow(),
+                          Sizing::Fixed(ImGui::GetFrameHeightWithSpacing()),
+                          [&](Clay_BoundingBox r, bool isHovered) {
+                              ImGui::SetCursorScreenPos({ r.x, r.y });
+                              ImGui::SetNextItemWidth(r.width);
+                              m_showGlobalSettings = ImGui::CollapsingHeader(
+                                  TR("ui.audio_manager.global_settings").data(),
+                                  ImGuiTreeNodeFlags_DefaultOpen);
+                          });
 
-    footerVBox.addElement(
-        "GlobalVolume",
-        Sizing::Grow(),
-        Sizing::Fixed(30),
-        [&](Clay_BoundingBox r, bool isHovered) {
-            ImGui::Indent();
-            renderControl(
-                "Global",
-                audioManager.getGlobalVolume(),
-                audioManager.isGlobalMuted(),
-                audioManager.getOutputLevelL(),
-                audioManager.getOutputLevelR(),
-                0.0f,
-                1.0f,
-                TR("ui.audio_manager.global_volume").data(),
-                "%.2f",
-                [&](float v) { audioManager.setGlobalVolume(v); },
-                [&](bool m) { audioManager.setGlobalMute(m); });
-            ImGui::Unindent();
-        });
+    if ( m_showGlobalSettings ) {
+        footerVBox.addSpring();  // 顶部弹簧，将内容向下推
 
-    footerVBox.addElement(
-        "BGMGain",
-        Sizing::Grow(),
-        Sizing::Fixed(30),
-        [&](Clay_BoundingBox r, bool isHovered) {
-            ImGui::Indent();
-            renderControl(
-                "BGMGain",
-                audioManager.getBGMGain(),
-                audioManager.isBGMGainMuted(),
-                audioManager.getMainTrackLevelL(),
-                audioManager.getMainTrackLevelR(),
-                0.0f,
-                1.0f,
-                TR("ui.audio_manager.bgm_gain").data(),
-                "%.2f",
-                [&](float v) { audioManager.setBGMGain(v); },
-                [&](bool m) { audioManager.setBGMGainMute(m); });
-            ImGui::Unindent();
-        });
+        footerVBox.addElement(
+            "GlobalVolume",
+            Sizing::Grow(),
+            Sizing::Fixed(30),
+            [&](Clay_BoundingBox r, bool isHovered) {
+                renderControl(
+                    "Global",
+                    audioManager.getGlobalVolume(),
+                    audioManager.isGlobalMuted(),
+                    audioManager.getOutputLevelL(),
+                    audioManager.getOutputLevelR(),
+                    0.0f,
+                    1.0f,
+                    TR("ui.audio_manager.global_volume").data(),
+                    "%.2f",
+                    r.width,
+                    [&](float v) { audioManager.setGlobalVolume(v); },
+                    [&](bool m) { audioManager.setGlobalMute(m); });
+            });
 
-    footerVBox.addElement(
-        "SFXGain",
-        Sizing::Grow(),
-        Sizing::Fixed(30),
-        [&](Clay_BoundingBox r, bool isHovered) {
-            ImGui::Indent();
-            renderControl(
-                "SFXGain",
-                audioManager.getSFXGain(),
-                audioManager.isSFXGainMuted(),
-                0.0f,
-                0.0f,  // TODO: 总音效电平
-                0.0f,
-                1.0f,
-                TR("ui.audio_manager.sfx_gain").data(),
-                "%.2f",
-                [&](float v) { audioManager.setSFXGain(v); },
-                [&](bool m) { audioManager.setSFXGainMute(m); });
-            ImGui::Unindent();
-        });
+        footerVBox.addElement(
+            "BGMGain",
+            Sizing::Grow(),
+            Sizing::Fixed(30),
+            [&](Clay_BoundingBox r, bool isHovered) {
+                renderControl(
+                    "BGMGain",
+                    audioManager.getBGMGain(),
+                    audioManager.isBGMGainMuted(),
+                    audioManager.getMainTrackLevelL(),
+                    audioManager.getMainTrackLevelR(),
+                    0.0f,
+                    1.0f,
+                    TR("ui.audio_manager.bgm_gain").data(),
+                    "%.2f",
+                    r.width,
+                    [&](float v) { audioManager.setBGMGain(v); },
+                    [&](bool m) { audioManager.setBGMGainMute(m); });
+            });
 
+        footerVBox.addElement(
+            "SFXGain",
+            Sizing::Grow(),
+            Sizing::Fixed(30),
+            [&](Clay_BoundingBox r, bool isHovered) {
+                renderControl(
+                    "SFXGain",
+                    audioManager.getSFXGain(),
+                    audioManager.isSFXGainMuted(),
+                    0.0f,
+                    0.0f,
+                    0.0f,
+                    1.0f,
+                    TR("ui.audio_manager.sfx_gain").data(),
+                    "%.2f",
+                    r.width,
+                    [&](float v) { audioManager.setSFXGain(v); },
+                    [&](bool m) { audioManager.setSFXGainMute(m); });
+            });
+
+        footerVBox.addSpring();  // 底部弹簧，向上推，实现居中
+    }
+
+    // --- 执行分段渲染 ---
+    // 1. 动态计算页脚高度
+    float footerH = ImGui::GetFrameHeightWithSpacing();
+    if ( m_showGlobalSettings ) {
+        // 3个30px的项目 + 间距 + 上下预留的缓冲空间
+        footerH += 3 * 30.0f + 3 * 2.0f + 16.0f;
+    }
+
+    // 2. 渲染顶部列表区域 (自动占据剩余空间)
     rootVBox.setPadding(12, 12, 12, 12)
         .setSpacing(12)
         .addElement(
@@ -310,9 +327,6 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                   false,
                                   ImGuiWindowFlags_HorizontalScrollbar);
 
-                // 直接修改临时的 LayoutContext
-                // 字段，而不触发其析构函数（LayoutContext 析构会调用 End()）
-                // 方案：手动备份和恢复关键字段，而不是拷贝整个对象
                 ImVec2 oldStartPos = layoutContext.m_startPos;
                 ImVec2 oldAvail    = layoutContext.m_avail;
 
@@ -325,15 +339,20 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::SetCursorScreenPos(layoutContext.m_startPos);
                 ImGui::Dummy({ r.width, 1200.0f });
 
-                // 恢复上下文状态
                 layoutContext.m_startPos = oldStartPos;
                 layoutContext.m_avail    = oldAvail;
 
                 ImGui::EndChild();
-            })
-        .addLayout(
-            "footerVBox", footerVBox, Sizing::Grow(), Sizing::Fixed(120));
-    rootVBox.render(layoutContext);
+            });
+
+    ImVec2 totalSize = rootVBox.renderInCurrent(
+        layoutContext.m_startPos,
+        { layoutContext.m_avail.x, layoutContext.m_avail.y - footerH });
+
+    // 3. 底部全局控制区域 (独立渲染)
+    ImVec2 footerPos = { layoutContext.m_startPos.x,
+                         layoutContext.m_startPos.y + totalSize.y };
+    footerVBox.renderInCurrent(footerPos, { layoutContext.m_avail.x, footerH });
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

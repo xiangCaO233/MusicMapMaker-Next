@@ -19,6 +19,7 @@ public:
                   UIManager*     sourceManager) override;
 
 private:
+    bool m_showGlobalSettings = true;
 };
 
 }  // namespace MMM::UI
