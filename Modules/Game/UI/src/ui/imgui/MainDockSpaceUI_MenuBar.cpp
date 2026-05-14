@@ -43,7 +43,15 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiStyleVar_FramePadding,
         ImVec2(style.FramePadding.x, style.FramePadding.y + extraPaddingY));
 
-    ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
+    // 确保菜单栏背景色同步为 MenuBarBg
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg,
+                          ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+    // 设置 WindowBg 以确保完全覆盖
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+
+    ImGui::Begin(
+        "TopMenuBarHost", nullptr, menu_flags & ~ImGuiWindowFlags_NoBackground);
 
     if ( ImGui::BeginMenuBar() ) {
         float  buttonSize          = menuBarHeight;
@@ -189,6 +197,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::EndMenuBar();
     }
     ImGui::End();
+    ImGui::PopStyleColor(2);  // MenuBarBg, WindowBg
     ImGui::PopStyleVar(3);
 }
 

@@ -2,6 +2,8 @@
 #include "config/Utf8Path.h"
 #include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
+#include "event/core/EventBus.h"
+#include "event/ui/ClearColorUpdateEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
@@ -438,6 +440,12 @@ void VKContext::applyTheme()
     // 应用全局缩放 (注意：ScaleAllSizes 是增量修改，但由于各 setStyle
     // 函数都会重置 style，所以这里直接应用是安全的)
     ImGui::GetStyle().ScaleAllSizes(settings.uiScaleMultiplier);
+
+    // 发布清屏颜色更新事件，同步 Vulkan 背景色与 UI 菜单栏背景色
+    ImVec4 barBg = ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg];
+    Event::ClearColorUpdateEvent clearEvt;
+    clearEvt.clear_color_value = { barBg.x, barBg.y, barBg.z, barBg.w };
+    Event::EventBus::instance().publish(clearEvt);
 }
 
 /**
