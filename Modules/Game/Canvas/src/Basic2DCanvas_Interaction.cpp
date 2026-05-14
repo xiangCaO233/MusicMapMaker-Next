@@ -451,16 +451,23 @@ void Basic2DCanvasInteraction::handleInteractions(
                 m_speedTooltipTimer = 2.0f;
             }
         } else if ( isCtrlPressed ) {
-            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
-            int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
-            float adjustedWheel = wheel * direction;
-            float step          = 0.1f;
-            if ( isShiftPressed )
-                step *= editorCfg.settings.scrollSpeedMultiplier;
-            editorCfg.visual.timelineZoom += adjustedWheel * step;
-            editorCfg.visual.timelineZoom =
-                std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+                 currentSnapshot->isSelecting ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
+            } else {
+                auto editorCfg =
+                    Logic::EditorEngine::instance().getEditorConfig();
+                int   direction     = editorCfg.settings.reverseScroll ? -1 : 1;
+                float adjustedWheel = wheel * direction;
+                float step          = 0.1f;
+                if ( isShiftPressed )
+                    step *= editorCfg.settings.scrollSpeedMultiplier;
+                editorCfg.visual.timelineZoom += adjustedWheel * step;
+                editorCfg.visual.timelineZoom =
+                    std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
+                Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            }
         } else if ( isAltPressed ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
