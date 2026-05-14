@@ -35,6 +35,12 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
+        m_ctx.isPlaying = false;
+        Audio::AudioManager::instance().pause();
+        m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
+    }
+
     double totalTime       = Audio::AudioManager::instance().getTotalTime();
     double minTime         = -m_ctx.lastConfig.visual.visualOffset;
     m_ctx.currentTime      = std::clamp(cmd.time, minTime, totalTime);
@@ -55,7 +61,8 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
 
 void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 {
-    float oldSpeed = static_cast<float>(Audio::AudioManager::instance().getPlaybackSpeed());
+    float oldSpeed =
+        static_cast<float>(Audio::AudioManager::instance().getPlaybackSpeed());
     if ( std::abs(static_cast<float>(cmd.speed) - oldSpeed) < 1e-6f ) {
         return;
     }
@@ -68,8 +75,9 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
                 .count();
 
         // 1. 在切换速度前，以旧速度计算出当前的精确逻辑时间
-        m_ctx.currentTime = m_ctx.playStartVisualTime +
-                            (currentSysTime - m_ctx.playStartSysTime) * oldSpeed;
+        m_ctx.currentTime =
+            m_ctx.playStartVisualTime +
+            (currentSysTime - m_ctx.playStartSysTime) * oldSpeed;
 
         // 2. 以当前逻辑时间作为新速度的起点，重置系统时钟基准
         m_ctx.playStartVisualTime = m_ctx.currentTime;
@@ -77,7 +85,8 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 
         // 3. 强制重置音频同步系统，使其在变速后立即重新对齐硬件时钟
         m_ctx.hasInitialAudioOffset = false;
-        // 将计时器设为间隔值，确保在下一次 BeatmapSession::update 中立即触发同步块
+        // 将计时器设为间隔值，确保在下一次 BeatmapSession::update
+        // 中立即触发同步块
         m_ctx.syncTimer = m_ctx.lastConfig.settings.syncConfig.syncInterval;
 
         m_ctx.syncClock.reset(m_ctx.currentTime);
@@ -98,7 +107,8 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         m_ctx.isPlaying = false;
         Audio::AudioManager::instance().pause();
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
-        // 如果停止了播放，需要同步一下渲染状态 (虽然 seek 也会做，但这里明确一下更好)
+        // 如果停止了播放，需要同步一下渲染状态 (虽然 seek
+        // 也会做，但这里明确一下更好)
     }
 
     bool isShiftAccelerated = cmd.isShiftDown;

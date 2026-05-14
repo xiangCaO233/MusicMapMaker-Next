@@ -2,13 +2,13 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "ui/UIManager.h"
 #include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
 #include <algorithm>
 #include <cmath>
@@ -87,21 +87,27 @@ void AudioWaveformView::update(UIManager* sourceManager)
         return;
     }
 
-    float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
-    double audioTime = audioManager.getCurrentTime();
+    float visualOffset =
+        Config::AppConfig::instance().getVisualConfig().visualOffset;
+    double audioTime  = audioManager.getCurrentTime();
     double visualTime = audioTime + visualOffset;
     double totalTime  = audioManager.getTotalTime();
-    double speed       = audioManager.getPlaybackSpeed();
+    double speed      = audioManager.getPlaybackSpeed();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
-    auto snapshot =
-        Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+    auto snapshot = Logic::EditorEngine::instance()
+                        .getSyncBuffer("Basic2DCanvas")
+                        ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime = visualTime - visualOffset;
+        audioTime  = visualTime - visualOffset;
         // 亚帧平滑补偿 (同步视觉偏移)
-        if ( !snapshot->isPreviewDragging && snapshot->isPlaying && snapshot->snapshotSysTime > 0.0 ) {
-            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
+             snapshot->snapshotSysTime > 0.0 ) {
+            double now =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
             double dt = now - snapshot->snapshotSysTime;
             if ( dt > 0.0 && dt < 0.1 ) {
                 visualTime += dt * snapshot->playbackSpeed;
@@ -110,71 +116,91 @@ void AudioWaveformView::update(UIManager* sourceManager)
         }
     }
 
-    ImGuiStyle& style = ImGui::GetStyle();
-    float frameH = ImGui::GetFrameHeight();
-    auto calcSliderWidth = [&](float sliderW, const char* label) {
-        return sliderW + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+    ImGuiStyle& style           = ImGui::GetStyle();
+    float       frameH          = ImGui::GetFrameHeight();
+    auto        calcSliderWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemInnerSpacing.x +
+               ImGui::CalcTextSize(label).x;
     };
     auto calcButtonWidth = [&](const char* label) {
         return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
     };
     auto drawSep = [&](Clay_BoundingBox r, bool) {
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(r.x, r.y + 2.0f), ImVec2(r.x, r.y + r.height - 2.0f), ImGui::GetColorU32(ImGuiCol_Separator));
+        ImGui::GetWindowDrawList()->AddLine(
+            ImVec2(r.x, r.y + 2.0f),
+            ImVec2(r.x, r.y + r.height - 2.0f),
+            ImGui::GetColorU32(ImGuiCol_Separator));
     };
 
     CLayVBox topContainer;
     topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
     std::deque<CLayHBox> rows;
-    CLayHBox* currentRow = nullptr;
-    float currentW = 0.0f;
-    float availW = ImGui::GetContentRegionAvail().x;
-    float spacing = 8.0f;
+    CLayHBox*            currentRow = nullptr;
+    float                currentW   = 0.0f;
+    float                availW     = ImGui::GetContentRegionAvail().x;
+    float                spacing    = 8.0f;
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
-        bool addSep = false;
+        bool  addSep = false;
         float totalW = w;
-        if (currentRow) {
-            totalW += 1.0f + spacing; // Sep + spacing
+        if ( currentRow ) {
+            totalW += 1.0f + spacing;  // Sep + spacing
         }
-        if (!currentRow || currentW + totalW > availW) {
+        if ( !currentRow || currentW + totalW > availW ) {
             rows.emplace_back();
             currentRow = &rows.back();
             currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
-            topContainer.addLayout(("Row_" + std::to_string(rows.size())).c_str(), *currentRow, Sizing::Grow(), Sizing::Fit());
-            currentW = 8.0f; // 4 + 4 padding
+            topContainer.addLayout(
+                ("Row_" + std::to_string(rows.size())).c_str(),
+                *currentRow,
+                Sizing::Grow(),
+                Sizing::Fit());
+            currentW = 8.0f;  // 4 + 4 padding
         } else {
             addSep = true;
         }
 
-        if (addSep) {
-            currentRow->addElement(id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
+        if ( addSep ) {
+            currentRow->addElement(
+                id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
             currentW += 1.0f + spacing;
         }
         currentRow->addElement(id, Sizing::Fixed(w), Sizing::Fixed(h), drawCb);
         currentW += w + spacing;
     };
 
-    pushGroup("ZoomSlider", calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%s", TR("ui.waveform.zoom").data());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
-    });
-    pushGroup("ResetZoomBtn", calcButtonWidth(TR("ui.waveform.reset_zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        if ( ImGui::Button(TR("ui.waveform.reset_zoom").data()) ) m_zoom = 1.0f;
-    });
-    pushGroup("SyncEffectsBtn", calcButtonWidth(TR("ui.waveform.sync_effects").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        if ( ImGui::Button(TR("ui.waveform.sync_effects").data()) ) {
-            fullRecalculate();
-        }
-    });
+    pushGroup("ZoomSlider",
+              calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  ImGui::AlignTextToFramePadding();
+                  ImGui::Text("%s", TR("ui.waveform.zoom").data());
+                  ImGui::SameLine();
+                  ImGui::SetNextItemWidth(100);
+                  ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+              });
+    pushGroup("ResetZoomBtn",
+              calcButtonWidth(TR("ui.waveform.reset_zoom").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  if ( ImGui::Button(TR("ui.waveform.reset_zoom").data()) )
+                      m_zoom = 1.0f;
+              });
+    pushGroup("SyncEffectsBtn",
+              calcButtonWidth(TR("ui.waveform.sync_effects").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  if ( ImGui::Button(TR("ui.waveform.sync_effects").data()) ) {
+                      fullRecalculate();
+                  }
+              });
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
-    ImVec2 sz = topContainer.renderInCurrent(startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImVec2 sz       = topContainer.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     syncEQ();
@@ -188,19 +214,18 @@ void AudioWaveformView::update(UIManager* sourceManager)
                              const double* minEnv,
                              const double* maxEnv,
                              const char*   label) {
-        
         double viewStart = visualTime - m_zoom;
         double viewEnd   = visualTime + m_zoom;
 
         // 使用静态变量存储上一帧的交互状态，以便在本帧 BeginPlot 中使用
         static bool s_lastActive[2] = { false, false };
-        int chanIdx = (std::string(id) == "##WaveL") ? 0 : 1;
+        int         chanIdx         = (std::string(id) == "##WaveL") ? 0 : 1;
 
-        if ( ImPlot::BeginPlot(
-                 id,
-                 ImVec2(-1, channelH),
-                 ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect | ImPlotFlags_NoMouseText) ) {
-            
+        if ( ImPlot::BeginPlot(id,
+                               ImVec2(-1, channelH),
+                               ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect |
+                                   ImPlotFlags_NoMouseText) ) {
+
             ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_None);
             ImPlot::SetupAxis(
                 ImAxis_Y1,
@@ -234,47 +259,88 @@ void AudioWaveformView::update(UIManager* sourceManager)
             // 1. 绘制主画布可见范围包围框
             auto session = Logic::EditorEngine::instance().getActiveSession();
             if ( session ) {
-                auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                auto snapshot = Logic::EditorEngine::instance()
+                                    .getSyncBuffer("Basic2DCanvas")
+                                    ->getReadingSnapshot();
                 if ( snapshot && snapshot->hasBeatmap ) {
-                    double boxX[2] = { snapshot->visibleTimeStart, snapshot->visibleTimeEnd };
+                    double boxX[2] = { snapshot->visibleTimeStart,
+                                       snapshot->visibleTimeEnd };
                     double boxY[2] = { 1.0, 1.0 };
-                    ImVec4 boxCol = ImVec4(0.5f, 0.0f, 1.0f, 0.15f);
-                    ImPlot::PlotShaded("##MainViewBox", &boxX[0], &boxY[0], 2, -1.0, ImPlotSpec(ImPlotProp_FillColor, boxCol));
-                    double edgeL[2] = { snapshot->visibleTimeStart, snapshot->visibleTimeStart };
-                    double edgeR[2] = { snapshot->visibleTimeEnd, snapshot->visibleTimeEnd };
+                    ImVec4 boxCol  = ImVec4(0.5f, 0.0f, 1.0f, 0.15f);
+                    ImPlot::PlotShaded(
+                        "##MainViewBox",
+                        &boxX[0],
+                        &boxY[0],
+                        2,
+                        -1.0,
+                        ImPlotSpec(ImPlotProp_FillColor, boxCol));
+                    double edgeL[2] = { snapshot->visibleTimeStart,
+                                        snapshot->visibleTimeStart };
+                    double edgeR[2] = { snapshot->visibleTimeEnd,
+                                        snapshot->visibleTimeEnd };
                     double edgeY[2] = { -1.0, 1.0 };
-                    ImPlot::PlotLine("##BoxEdgeL", edgeL, edgeY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
-                    ImPlot::PlotLine("##BoxEdgeR", edgeR, edgeY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
+                    ImPlot::PlotLine(
+                        "##BoxEdgeL",
+                        edgeL,
+                        edgeY,
+                        2,
+                        ImPlotSpec(ImPlotProp_LineColor,
+                                   ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
+                    ImPlot::PlotLine(
+                        "##BoxEdgeR",
+                        edgeR,
+                        edgeY,
+                        2,
+                        ImPlotSpec(ImPlotProp_LineColor,
+                                   ImVec4(0.5f, 0.0f, 1.0f, 0.8f)));
                 }
             }
 
             double currentHoverVisualTime = viewStart;
             double currentHoverAudioTime  = viewStart - visualOffset;
-            if ( ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) ) {
+            if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
                 ImPlotPoint mousePlotPos = ImPlot::GetPlotMousePos();
-                currentHoverVisualTime = mousePlotPos.x;
-                currentHoverAudioTime  = currentHoverVisualTime - visualOffset;
+                currentHoverVisualTime   = mousePlotPos.x;
+                currentHoverAudioTime = currentHoverVisualTime - visualOffset;
             }
 
             // 2. 绘制悬停绿色竖线和预览框
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
                 ImVec2 plotMin = ImPlot::GetPlotPos();
-                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x, plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
+                                   plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
                 double hLineX[2] = { hoverVisualTime, hoverVisualTime };
                 double hLineY[2] = { -1.1, 1.1 };
-                ImPlot::PlotLine("##HoverLine", hLineX, hLineY, 2, ImPlotSpec(ImPlotProp_LineColor, ImVec4(0, 1, 0, 0.6f)));
+                ImPlot::PlotLine(
+                    "##HoverLine",
+                    hLineX,
+                    hLineY,
+                    2,
+                    ImPlotSpec(ImPlotProp_LineColor, ImVec4(0, 1, 0, 0.6f)));
 
                 if ( s_lastActive[chanIdx] ) {
-                    auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+                    auto snapshot = Logic::EditorEngine::instance()
+                                        .getSyncBuffer("Basic2DCanvas")
+                                        ->getReadingSnapshot();
                     if ( snapshot && snapshot->hasBeatmap ) {
-                        double offsetStart = snapshot->visibleTimeStart - visualTime;
-                        double offsetEnd   = snapshot->visibleTimeEnd - visualTime;
-                        double preBoxX[2] = { hoverVisualTime + offsetStart, hoverVisualTime + offsetEnd };
+                        double offsetStart =
+                            snapshot->visibleTimeStart - visualTime;
+                        double offsetEnd =
+                            snapshot->visibleTimeEnd - visualTime;
+                        double preBoxX[2] = { hoverVisualTime + offsetStart,
+                                              hoverVisualTime + offsetEnd };
                         double preBoxY[2] = { 1.0, 1.0 };
-                        ImPlot::PlotShaded("##PreviewViewBox", &preBoxX[0], &preBoxY[0], 2, -1.0, ImPlotSpec(ImPlotProp_FillColor, ImVec4(0.5f, 0.0f, 1.0f, 0.35f)));
+                        ImPlot::PlotShaded(
+                            "##PreviewViewBox",
+                            &preBoxX[0],
+                            &preBoxY[0],
+                            2,
+                            -1.0,
+                            ImPlotSpec(ImPlotProp_FillColor,
+                                       ImVec4(0.5f, 0.0f, 1.0f, 0.35f)));
                     }
                 }
             }
@@ -283,8 +349,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
             ImPlot::EndPlot();
 
             // 3. 交互逻辑 (获取本帧状态供下一帧绘制使用)
-            ImVec2 plotMin = ImGui::GetItemRectMin();
-            ImVec2 plotMax = ImGui::GetItemRectMax();
+            ImVec2 plotMin        = ImGui::GetItemRectMin();
+            ImVec2 plotMax        = ImGui::GetItemRectMax();
             s_lastActive[chanIdx] = ImGui::IsItemActive();
 
             if ( ImGui::IsItemHovered() || ImGui::IsItemActive() ) {
@@ -295,20 +361,36 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
                 if ( ImGui::IsItemActive() ) {
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                        Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
-                                                    plotMax.x - plotMin.x, plotMax.y - plotMin.y,
-                                                    true, true, hoverVisualTime }));
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                        mousePos.x - plotMin.x,
+                                                        mousePos.y - plotMin.y,
+                                                        plotMax.x - plotMin.x,
+                                                        plotMax.y - plotMin.y,
+                                                        true,
+                                                        true,
+                                                        hoverVisualTime }));
                 }
 
-                if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-                    audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
+                if ( ImGui::IsItemDeactivated() &&
+                     ImGui::GetIO().MouseReleased[0] ) {
+                    audioManager.seek(
+                        std::clamp(hoverAudioTime, 0.0, totalTime));
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSeek{ hoverAudioTime }));
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                        Logic::CmdSetMousePosition{ "AudioWaveform", mousePos.x - plotMin.x, mousePos.y - plotMin.y,
-                                                    plotMax.x - plotMin.x, plotMax.y - plotMin.y,
-                                                    false, false, -1.0 }));
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                        mousePos.x - plotMin.x,
+                                                        mousePos.y - plotMin.y,
+                                                        plotMax.x - plotMin.x,
+                                                        plotMax.y - plotMin.y,
+                                                        false,
+                                                        false,
+                                                        -1.0 }));
                 }
             }
         }
@@ -446,7 +528,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
             m_viewMinR[i]     = m_cachedMinR[p];
             m_maxEnvelopeR[i] = m_cachedMaxR[p];
         } else {
-            m_viewMinL[i] = m_maxEnvelopeL[i] = m_viewMinR[i] = m_maxEnvelopeR[i] = 0;
+            m_viewMinL[i] = m_maxEnvelopeL[i] = m_viewMinR[i] =
+                m_maxEnvelopeR[i]             = 0;
         }
     }
 }
