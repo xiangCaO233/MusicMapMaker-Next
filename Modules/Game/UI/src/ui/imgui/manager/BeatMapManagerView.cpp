@@ -9,6 +9,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -20,6 +21,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     auto* project = engine.getCurrentProject();
     auto& skinCfg = Config::SkinManager::instance();
 
+    float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
 
@@ -35,12 +37,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 Sizing::Fixed(fh),
                 [=](Clay_BoundingBox r, bool isHovered) {
                     float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offY);
+                    ImGui::SetCursorScreenPos({ r.x, r.y + offY });
                     ImVec2 textSize = ImGui::CalcTextSize(
-                        TR("ui.beatmap_manager.initial_hint"));
+                        TR("ui.beatmap_manager.initial_hint").data());
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                          (r.width - textSize.x) * 0.5f);
-                    ImGui::TextEx(TR("ui.beatmap_manager.initial_hint"));
+                    ImGui::TextDisabled(
+                        "%s", TR("ui.beatmap_manager.initial_hint").data());
                 })
             .addSpring();
 
@@ -58,47 +61,62 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     CLayVBox listVBox;
     listVBox.setSpacing(4);
 
-    listVBox.addElement(
-        "BeatmapsHeader",
-        Sizing::Grow(),
-        Sizing::Fixed(24),
-        [this](Clay_BoundingBox r, bool isHovered) {
-            float indent = ImGui::CalcTextSize("AA").x;
-            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
-            ImGui::SeparatorText(TR("ui.beatmap_manager.beatmaps").data());
-            ImGui::PopStyleVar();
-        });
+    listVBox.addElement("BeatmapsHeader",
+                        Sizing::Grow(),
+                        Sizing::Fixed(ImGui::GetFrameHeight()),
+                        [this](Clay_BoundingBox r, bool isHovered) {
+                            Utils::renderCollapsingHeader(
+                                TR("ui.beatmap_manager.beatmaps").data(),
+                                &m_showBeatmapList,
+                                r);
+                        });
 
-    for ( const auto& beatmap : project->m_beatmaps ) {
-        listVBox.addElement(
-            "Beatmap_" + beatmap.m_filePath,
-            Sizing::Grow(),
-            Sizing::Fixed(28),
-            [&beatmap, &engine, project](Clay_BoundingBox r, bool isHovered) {
-                ImGui::Indent();
-                std::string label = beatmap.m_name + "##" + beatmap.m_filePath;
-                if ( ImGui::Selectable(label.c_str()) ) {
-                    XINFO("Request to load beatmap: {}", beatmap.m_name);
-                    auto fullPath =
-                        project->m_projectRoot /
-                        std::filesystem::path(reinterpret_cast<const char8_t*>(
-                            beatmap.m_filePath.c_str()));
-                    auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                        MMM::BeatMap::loadFromFile(fullPath));
-                    engine.pushCommand(Logic::CmdLoadBeatmap{ loadedBeatmap });
-                }
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("File: %s\nTrack: %s",
-                                      beatmap.m_filePath.c_str(),
-                                      beatmap.m_audioTrackId.c_str());
-                }
-                ImGui::Unindent();
-            });
+    if ( m_showBeatmapList ) {
+        for ( const auto& beatmap : project->m_beatmaps ) {
+            listVBox.addElement(
+                "Beatmap_" + beatmap.m_filePath,
+                Sizing::Grow(),
+                Sizing::Fixed(28 * dpiScale),
+                [&beatmap, &engine, project, dpiScale](Clay_BoundingBox r,
+                                                       bool isHovered) {
+                    ImGui::Indent();
+                    std::string labelStr =
+                        beatmap.m_name + " - " + beatmap.m_filePath;
+                    float availW = ImGui::GetContentRegionAvail().x;
+
+                    Utils::renderScrollingSelectable(
+                        beatmap.m_filePath,
+                        labelStr,
+                        availW,
+                        28 * dpiScale,
+                        [&]() {
+                            XINFO("Request to load beatmap: {}",
+                                  beatmap.m_name);
+                            auto fullPath =
+                                project->m_projectRoot /
+                                std::filesystem::path(
+                                    reinterpret_cast<const char8_t*>(
+                                        beatmap.m_filePath.c_str()));
+                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                                MMM::BeatMap::loadFromFile(fullPath));
+                            engine.pushCommand(
+                                Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        });
+
+                    if ( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip("File: %s\nTrack: %s",
+                                          beatmap.m_filePath.c_str(),
+                                          beatmap.m_audioTrackId.c_str());
+                    }
+                    ImGui::Unindent();
+                });
+        }
     }
 
-
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(8)
+    // 1. 顶部列表区域
+    float footerH = 44.0f * dpiScale;
+    rootVBox.setPadding(12 * dpiScale, 12 * dpiScale, 12 * dpiScale, 0)
+        .setSpacing(8 * dpiScale)
         .addElement(
             "BeatmapListArea",
             Sizing::Grow(),
@@ -107,17 +125,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::BeginChild("BeatmapListChild",
                                   { r.width, r.height },
                                   false,
-                                  ImGuiWindowFlags_HorizontalScrollbar);
+                                  ImGuiWindowFlags_None);
 
-                // 统一处理 LayoutContext
-                // 的重映射，由于是在子窗口绘制，需要重定向
                 ImVec2 oldStartPos = layoutContext.m_startPos;
                 ImVec2 oldAvail    = layoutContext.m_avail;
 
                 layoutContext.m_startPos = ImGui::GetCursorScreenPos();
-                layoutContext.m_avail    = {
-                    2000.0f, 10000.0f
-                };  // 给予极大的垂直/水平空间以便显示滚动条
+                layoutContext.m_avail    = { r.width, 10000.0f };
 
                 listVBox.render(layoutContext);
 
@@ -127,13 +141,19 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::EndChild();
             });
 
-    // 新建谱面按钮 (居中显示在列表下方)
+    ImVec2 totalSize = rootVBox.renderInCurrent(
+        layoutContext.m_startPos,
+        { layoutContext.m_avail.x, layoutContext.m_avail.y - footerH });
+
+    // 2. 底部按钮区域 (独立渲染，确保不被列表遮挡)
     CLayHBox bottomBtnHBox;
-    bottomBtnHBox.addSpring()
+    float    btnSize = 32.0f * dpiScale;
+    bottomBtnHBox.setPadding(12 * dpiScale, 12 * dpiScale, 0, 0)
+        .setAlignment(Alignment::Center())  // 垂直居中
         .addElement(
             "Beatmap_CreateNew",
-            Sizing::Fixed(32),
-            Sizing::Fixed(32),
+            Sizing::Grow(),  // 宽度拉满
+            Sizing::Fixed(btnSize),
             [&engine, sourceManager](Clay_BoundingBox r, bool isHovered) {
                 ImGui::PushStyleColor(
                     ImGuiCol_Text,
@@ -145,9 +165,21 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                       ImVec4(1, 1, 1, 0.2f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                     (r.width - 32.0f) * 0.5f);
-                if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(32, 32)) ) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                // 使用带有圆角的装饰背景 (与列表项风格统一)
+                ImDrawList* dl    = ImGui::GetWindowDrawList();
+                ImVec4      bgCol = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+                bgCol.w *= 0.5f;
+                float rounding = ImGui::GetStyle().FrameRounding;
+
+                if ( isHovered ) bgCol.w *= 1.5f;
+
+                dl->AddRectFilled({ r.x, r.y },
+                                  { r.x + r.width, r.y + r.height },
+                                  ImGui::ColorConvertFloat4ToU32(bgCol),
+                                  rounding);
+
+                if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(r.width, r.height)) ) {
                     auto* wizard = sourceManager->getView<NewBeatmapWizard>(
                         "NewBeatmapWizard");
                     if ( wizard ) wizard->open();
@@ -158,13 +190,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("%s", TR_CACHE("ui.file.new_map").data());
                 }
-            })
-        .addSpring();
+            });
 
-    rootVBox.addLayout(
-        "BottomBtnArea", bottomBtnHBox, Sizing::Grow(), Sizing::Fixed(32));
-
-    rootVBox.render(layoutContext);
+    ImVec2 footerPos = { layoutContext.m_startPos.x,
+                         layoutContext.m_startPos.y + totalSize.y };
+    bottomBtnHBox.renderInCurrent(footerPos,
+                                  { layoutContext.m_avail.x, footerH });
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

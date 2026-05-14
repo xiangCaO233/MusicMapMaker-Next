@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ui/ISubView.h"
+#include "ui/layout/box/CLayBox.h"
+#include <deque>
 
 namespace MMM::UI
 {
@@ -22,6 +24,19 @@ public:
                   UIManager*     sourceManager) override;
 
 private:
+    bool m_showBeatmapList = true;
+
+    // --- 布局池 (用于避免热路径堆分配) ---
+    std::deque<CLayHBox> m_rows;
+    std::deque<CLayVBox> m_vboxes;
+
+    CLayHBox& getRow(size_t index)
+    {
+        while ( m_rows.size() <= index ) {
+            m_rows.emplace_back();
+        }
+        return m_rows[index];
+    }
 };
 
 }  // namespace MMM::UI

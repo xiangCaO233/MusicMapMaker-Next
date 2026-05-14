@@ -58,7 +58,8 @@ public:
     /// @brief 设置窗口缩放比例
     void setNativeContentScale(float scale) { m_nativeContentScale = scale; }
 
-    /// @brief 获取 UI 布局缩放比例 (已减去系统自动缩放部分，并包含用户自定义倍率)
+    /// @brief 获取 UI 布局缩放比例
+    /// (已减去系统自动缩放部分，并包含用户自定义倍率)
     float getUIScale() const
     {
         return m_uiScale * m_editorConfig.settings.uiScaleMultiplier;

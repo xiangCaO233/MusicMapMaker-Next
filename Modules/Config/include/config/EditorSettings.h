@@ -114,6 +114,23 @@ struct SoftwareCursorConfig {
                                    enableBpmSyncSmokeLife)
 };
 
+struct UIAestheticsConfig {
+    /// @brief 全局窗口圆角半径 (px, 基准值)
+    float windowRounding{ 8.0f };
+    /// @brief 全局组件圆角半径 (px, 基准值)
+    float frameRounding{ 6.0f };
+    /// @brief 窗口间的间隙/边距 (px, 基准值)
+    float windowGap{ 8.0f };
+    /// @brief 容器内部组件间距 (px, 基准值)
+    float itemSpacing{ 8.0f };
+    /// @brief 全局窗口内边距 (px, 基准值)
+    float windowPadding{ 8.0f };
+
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UIAestheticsConfig, windowRounding,
+                                   frameRounding, windowGap, itemSpacing,
+                                   windowPadding)
+};
+
 enum class UITheme {
     Auto,
     DeepDark,
@@ -236,7 +253,7 @@ struct EditorSettings {
     bool vsync{ false };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
-    float fontSizeMultiplier{ 1.0f };
+    float fontSizeMultiplier{ 1.15f };
 
     /// @brief 界面全局缩放倍率 (1.0 代表原始大小)
     float uiScaleMultiplier{ 1.0f };
@@ -294,6 +311,9 @@ struct EditorSettings {
 
     /// @brief 吸附向下取整 (总是吸附到早于鼠标位置的分拍线)
     bool snapFloor{ false };
+
+    /// @brief UI 审美/视觉表现配置
+    UIAestheticsConfig aesthetics;
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
@@ -329,7 +349,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "preferredAsciiFont", c.preferredAsciiFont },
                         { "preferredCjkFont", c.preferredCjkFont },
                         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
-                        { "snapFloor", c.snapFloor } };
+                        { "snapFloor", c.snapFloor },
+                        { "aesthetics", c.aesthetics } };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -345,7 +366,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.recentProjectsLimit   = j.value("recentProjectsLimit", 10);
     c.language              = j.value("language", std::string("zh_cn"));
     c.vsync                 = j.value("vsync", false);
-    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.0f);
+    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
     c.globalVolume          = j.value("globalVolume", 0.25f);
@@ -369,6 +390,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
     c.snapFloor            = j.value("snapFloor", false);
+    c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
 }
 
 }  // namespace MMM::Config

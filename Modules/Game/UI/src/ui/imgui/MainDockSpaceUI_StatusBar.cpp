@@ -36,7 +36,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGuiStyleVar_WindowPadding,
         ImVec2(4.0f * dpiScale, 0.0f));  // 左右留点边距，上下为0
 
-    // 背景颜色 (稍微暗一点或者使用菜单栏颜色)
+    // 背景颜色 (同步为 MenuBarBg)
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
 

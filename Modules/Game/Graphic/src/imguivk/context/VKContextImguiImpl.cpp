@@ -2,6 +2,8 @@
 #include "config/Utf8Path.h"
 #include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
+#include "event/core/EventBus.h"
+#include "event/ui/ClearColorUpdateEvent.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_impl_glfw.h"
@@ -62,10 +64,6 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     // When viewports are enabled we tweak WindowRounding/WindowBg so platform
     // windows can look identical to regular ones.
-    if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
-        style.WindowRounding              = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
 
     // Setup Platform/Renderer backends
     ImGui_ImplGlfw_InitForVulkan(window_handle, true);
@@ -122,6 +120,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 
     setupFonts();
 
+    applyTheme();
     XDEBUG("ImGui Vulkan backend initialized.");
 }
 
@@ -437,7 +436,28 @@ void VKContext::applyTheme()
 
     // 应用全局缩放 (注意：ScaleAllSizes 是增量修改，但由于各 setStyle
     // 函数都会重置 style，所以这里直接应用是安全的)
-    ImGui::GetStyle().ScaleAllSizes(settings.uiScaleMultiplier);
+    ImGuiStyle& style = ImGui::GetStyle();
+    float dpiScale    = Config::AppConfig::instance().getWindowContentScale();
+    auto& aes         = settings.aesthetics;
+
+    style.ScaleAllSizes(settings.uiScaleMultiplier);
+
+    // 应用审美设置 (防止 setStyle 重置了这些值)
+    style.WindowRounding = std::floor(aes.windowRounding * dpiScale);
+    style.ChildRounding  = style.WindowRounding;
+    style.FrameRounding  = std::floor(aes.frameRounding * dpiScale);
+    style.PopupRounding  = style.WindowRounding;
+    style.TabRounding    = style.FrameRounding;
+    style.ItemSpacing    = { std::floor(aes.itemSpacing * dpiScale),
+                             std::floor(aes.itemSpacing * dpiScale) };
+    style.WindowPadding  = { std::floor(aes.windowPadding * dpiScale),
+                             std::floor(aes.windowPadding * dpiScale) };
+
+    // 发布清屏颜色更新事件，同步 Vulkan 背景色与 UI 菜单栏背景色
+    ImVec4 barBg = ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg];
+    Event::ClearColorUpdateEvent clearEvt;
+    clearEvt.clear_color_value = { barBg.x, barBg.y, barBg.z, barBg.w };
+    Event::EventBus::instance().publish(clearEvt);
 }
 
 /**

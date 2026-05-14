@@ -79,6 +79,8 @@ return {
 	["ui.settings.software.recent_limit"] = "Recent Projects Limit",
 	["ui.settings.software.sync"] = "Sync & Clock",
 	["ui.settings.software.sync_mode"] = "Audio Sync Mode",
+	["ui.settings.software.aesthetics.item_spacing"] = "Internal Item Spacing",
+	["ui.settings.software.aesthetics.window_padding"] = "Global Window Padding",
 	["ui.settings.software.sync_factor"] = "Integral Tracking Factor",
 	["ui.settings.software.sync_buffer"] = "WaterTank Buffer",
 	["ui.settings.software.sync_interval"] = "Sync Interval",
@@ -88,7 +90,7 @@ return {
 	["ui.settings.software.trail_life"] = "Trail Life Time",
 	["ui.settings.software.smoke_size"] = "Smoke Initial Size",
 	["ui.settings.software.smoke_life"] = "Smoke Life Time",
-	["ui.settings.software.cursor_bpm_sync"] = "Sync Smoke Life with BPM (1 Beat)",
+	["ui.settings.software.cursor_bpm_sync"] = "Sync Smoke Life with BPM",
 
 	["ui.settings.visual"] = "Visual Config",
 	["ui.settings.visual.layout"] = "Layout",
@@ -244,6 +246,11 @@ return {
 	["ui.audio_manager.pitch_n12"] = "0.5x (-12)",
 	["ui.audio_manager.pitch_n5"] = "0.75x (-5)",
 	["ui.audio_manager.pitch_0"] = "1.0x (0)",
+	["ui.audio_manager.speed_presets"] = "Speed Presets",
+	["ui.audio_manager.speed_value"] = "Playback Speed",
+	["ui.audio_manager.pitch_presets"] = "Pitch Presets",
+	["ui.audio_manager.pitch_value"] = "Pitch Offset",
+	["ui.audio_manager.analysis"] = "Analysis Tools",
 
 	["title.beatmap_manager"] = "Beatmap Manager",
 	["ui.beatmap_manager.initial_hint"] = "No project opened, no beatmap resources",
@@ -261,6 +268,13 @@ return {
 	["ui.sidebar.audio_explorer"] = "Audio Explorer",
 	["ui.sidebar.beatmap_explorer"] = "Beatmap Explorer",
 	["ui.sidebar.settings"] = "Settings",
+
+	-- Sidebar short labels
+	["ui.sidebar.search.short"] = "Search",
+	["ui.sidebar.file.short"] = "Files",
+	["ui.sidebar.audio.short"] = "Audio",
+	["ui.sidebar.beatmap.short"] = "Charts",
+	["ui.sidebar.settings.short"] = "Config",
 
 	-- Toolbar tooltips
 	["ui.toolbar.move"] = "Grab Tool (1)",

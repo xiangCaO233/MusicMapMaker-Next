@@ -661,12 +661,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) {
-        XERROR("无法打开文件 [{}] 进行 Malody 谱面写出",
+        XERROR("Failed to open file [{}] for Malody map write",
                Config::pathToUtf8(path));
         return false;
     }
     ofs << fileData.dump(4);
-    XINFO("Successfully saved Malody map to {}", Config::pathToUtf8(path));
+    XINFO("Successfully saved map to {}", Config::pathToUtf8(path));
     return true;
 }
 

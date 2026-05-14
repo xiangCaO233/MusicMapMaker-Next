@@ -4,11 +4,15 @@
 #include "imgui.h"
 #include "ui/IUIView.h"
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <vector>
 
 namespace MMM::UI
 {
+
+class CLayHBox;
+class CLayVBox;
 
 class CLayBox
 {
@@ -20,6 +24,9 @@ public:
         std::function<void(const std::string& id, Rect rect)>;
 
     virtual ~CLayBox() = default;
+
+    static CLayHBox HBox();
+    static CLayVBox VBox();
 
     // --- 容器属性 ---
     CLayBox& setSpacing(uint16_t gap)
@@ -35,6 +42,20 @@ public:
     CLayBox& setAlignment(Alignment align)
     {
         m_align = align;
+        return *this;
+    }
+
+    void clear()
+    {
+        m_items.clear();
+        m_decorated = false;
+    }
+
+    /// @brief 启用/禁用容器装饰（圆角边框+淡色背景），
+    ///        颜色和圆角从 ImGui::GetStyle() 动态获取
+    CLayBox& setDecorated(bool v)
+    {
+        m_decorated = v;
         return *this;
     }
 
@@ -77,7 +98,6 @@ public:
         return *this;
     }
 
-
     // 添加弹簧 (Spring)
     CLayBox& addSpring()
     {
@@ -110,8 +130,21 @@ public:
     // --- 执行布局与映射 ---
     void render(LayoutContext& lctx);
 
+    /// @brief 在当前 ImGui 窗口上下文中执行布局渲染
+    /// @param startPos 起始绝对坐标
+    /// @param avail 可用空间
+    /// @return 返回布局的实际尺寸
+    ImVec2 renderInCurrent(ImVec2 startPos, ImVec2 avail);
+
 protected:
-    CLayBox(Clay_LayoutDirection dir) : m_dir(dir) {}
+    CLayBox(Clay_LayoutDirection dir)
+        : m_dir(dir)
+        , m_gap(0)
+        , m_padding({ 0, 0, 0, 0 })
+        , m_align(Alignment::Start())
+        , m_items({})
+    {
+    }
 
     enum class ItemType { Element, Text, Spring, Spacer, NestedLayout };
     struct Item {
@@ -137,10 +170,13 @@ protected:
     void internalExecute(ImVec2 origin);
 
     Clay_LayoutDirection m_dir;
-    uint16_t             m_gap     = 0;
-    Clay_Padding         m_padding = { 0 };
-    Alignment            m_align   = Alignment::Start();
+    uint16_t             m_gap;
+    Clay_Padding         m_padding;
+    Alignment            m_align;
     std::vector<Item>    m_items;
+
+    /// @brief 是否绘制装饰（圆角边框+淡色背景），使用 ImGui 主题色
+    bool m_decorated{ false };
 };
 
 class CLayHBox : public CLayBox
@@ -153,5 +189,14 @@ class CLayVBox : public CLayBox
 public:
     CLayVBox() : CLayBox(CLAY_TOP_TO_BOTTOM) {}
 };
+
+inline CLayHBox CLayBox::HBox()
+{
+    return CLayHBox();
+}
+inline CLayVBox CLayBox::VBox()
+{
+    return CLayVBox();
+}
 
 }  // namespace MMM::UI

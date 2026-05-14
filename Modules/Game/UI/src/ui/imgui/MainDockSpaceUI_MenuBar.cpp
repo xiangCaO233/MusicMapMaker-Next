@@ -43,7 +43,15 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiStyleVar_FramePadding,
         ImVec2(style.FramePadding.x, style.FramePadding.y + extraPaddingY));
 
-    ImGui::Begin("TopMenuBarHost", nullptr, menu_flags);
+    // 确保菜单栏背景色同步为 MenuBarBg
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg,
+                          ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+    // 设置 WindowBg 以确保完全覆盖
+    ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                          ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+
+    ImGui::Begin(
+        "TopMenuBarHost", nullptr, menu_flags & ~ImGuiWindowFlags_NoBackground);
 
     if ( ImGui::BeginMenuBar() ) {
         float  buttonSize          = menuBarHeight;
@@ -100,52 +108,101 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImVec4 textCol   = ImGui::GetStyleColorVec4(ImGuiCol_Text);
         ImVec4 hoverVec4 = ImVec4(textCol.x, textCol.y, textCol.z, 0.1f);
 
+        // 1. Logo (固定左侧)
         ImGui::SetCursorPosX(0.0f);
         DrawIconButton("##logo", m_logo_texture, buttonSize, hoverVec4);
 
+        // 2. 菜单栏 (紧跟 Logo)
         ImGui::PushStyleVar(
             ImGuiStyleVar_FramePadding,
             ImVec2(std::floor(10.0f * dpiScale), defaultFramePadding.y));
-        ImGui::SetCursorPosX(buttonSize + 4.0f);
+        ImGui::SetCursorPosX(buttonSize + 4.0f * dpiScale);
 
         ImFont* menuFont = skinCfg.getFont("menu");
-        if ( menuFont ) ImGui::PushFont(menuFont);
         m_mainMenuview.renderMenus(sourceManager);
-
-        float dragStartX = ImGui::GetCursorPosX();
-
-        m_mainMenuview.renderInfoText();
-        if ( menuFont ) ImGui::PopFont();
-
         ImGui::PopStyleVar(1);
 
-        float numberOfButtons = 3;
-        float dragEndX =
-            ImGui::GetWindowWidth() - (buttonSize * numberOfButtons);
-        ImGui::SetCursorPosX(dragEndX);
+        float barWidth = ImGui::GetWindowWidth();
+        float menusEndX = ImGui::GetCursorPosX();
 
-        static float lastDragStartX = -1.0f;
-        static float lastDragEndX   = -1.0f;
-        if ( dragStartX != lastDragStartX || dragEndX != lastDragEndX ) {
-            lastDragStartX = dragStartX;
-            lastDragEndX   = dragEndX;
+        // 3. 标题：MusicMapMaker-Next (严格居中)
+        const char* titleText = "MusicMapMaker-Next";
+        if ( menuFont ) ImGui::PushFont(menuFont);
+        float titleWidth = ImGui::CalcTextSize(titleText).x;
+        float titleX     = (barWidth - titleWidth) * 0.5f;
+        ImGui::SetCursorPosX(titleX);
+        ImGui::TextUnformatted(titleText);
+        float titleEndX = titleX + titleWidth;
+
+        // 4. 帧信息 (FPS) - 靠右对齐到按钮左侧
+        ImGuiIO& io = ImGui::GetIO();
+        char fpsBuf[128];
+        snprintf(fpsBuf, sizeof(fpsBuf), "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+        float fpsWidth = ImGui::CalcTextSize(fpsBuf).x;
+        
+        float numberOfButtons = 3;
+        float buttonsAreaWidth = buttonSize * numberOfButtons;
+        float buttonsStartX = barWidth - buttonsAreaWidth;
+        
+        float fpsGap = std::floor(12.0f * dpiScale);
+        float fpsX = buttonsStartX - fpsGap - fpsWidth;
+        ImGui::SetCursorPosX(fpsX);
+        ImGui::TextUnformatted(fpsBuf);
+        float fpsEndX = fpsX + fpsWidth;
+        if ( menuFont ) ImGui::PopFont();
+
+        // 5. 拖拽区域 (Springs)
+        // Area 1: MenusEnd -> TitleX
+        // Area 2: TitleEnd -> ButtonsStartX (包含 FPS 信息)
+
+        static std::vector<Event::DragArea> lastAreas;
+        std::vector<Event::DragArea> currentAreas;
+        currentAreas.push_back({ menusEndX, 0.0f, titleX - menusEndX, menuBarHeight });
+        currentAreas.push_back({ titleEndX, 0.0f, buttonsStartX - titleEndX, menuBarHeight });
+
+        bool areasChanged = (currentAreas.size() != lastAreas.size());
+        if (!areasChanged) {
+            for (size_t i = 0; i < currentAreas.size(); ++i) {
+                if (currentAreas[i].x != lastAreas[i].x || currentAreas[i].w != lastAreas[i].w) {
+                    areasChanged = true;
+                    break;
+                }
+            }
+        }
+
+        if ( areasChanged ) {
+            lastAreas = currentAreas;
             Event::UpdateDragAreaEvent e;
             e.uiManager    = sourceManager;
             e.sourceUiName = "TopMenuBarHost";
-            e.areas.push_back(
-                { dragStartX, 0.0f, dragEndX - dragStartX, menuBarHeight });
+            e.areas        = currentAreas;
             Event::EventBus::instance().publish(e);
         }
 
-        ImGui::SetCursorPosX(dragStartX);
-        ImGui::InvisibleButton("DragArea",
-                               ImVec2(dragEndX - dragStartX, menuBarHeight));
-        if ( ImGui::IsItemHovered() &&
-             ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
-            Event::EventBus::instance().publish(Event::GLFWNativeEvent{
-                .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+        // 绘制透明按钮以捕获双击全屏事件
+        for (const auto& area : currentAreas) {
+            if (area.w > 0) {
+                ImGui::SetCursorPosX(area.x);
+                ImGui::InvisibleButton(fmt::format("DragArea##{}", area.x).c_str(), ImVec2(area.w, area.h));
+                if ( ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+                    Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+                        .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
+                }
+            }
         }
-        ImGui::SetCursorPosX(dragEndX);
+
+        // 6. 分隔线与窗口控制按钮
+        float  lineX = buttonsStartX - fpsGap * 0.5f;
+        ImVec2 windowPos = ImGui::GetWindowPos();
+        ImVec4 sepCol    = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        sepCol.w *= 0.5f; // 进一步增加不透明度
+        ImGui::GetWindowDrawList()->AddLine(
+            { windowPos.x + lineX, windowPos.y + menuBarHeight * 0.25f },
+            { windowPos.x + lineX, windowPos.y + menuBarHeight * 0.75f },
+            ImGui::GetColorU32(sepCol),
+            1.5f); // 稍微加粗
+
+        ImGui::SetCursorPosX(buttonsStartX);
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
         ImFont* contentFont = skinCfg.getFont("content");
@@ -189,6 +246,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::EndMenuBar();
     }
     ImGui::End();
+    ImGui::PopStyleColor(2);  // MenuBarBg, WindowBg
     ImGui::PopStyleVar(3);
 }
 

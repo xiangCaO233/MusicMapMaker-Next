@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ui/ISubView.h"
+#include "ui/layout/box/CLayBox.h"
+#include <deque>
 
 namespace MMM::UI
 {
@@ -19,6 +21,40 @@ public:
                   UIManager*     sourceManager) override;
 
 private:
+    bool m_showGlobalSettings = true;
+    bool m_showPermanentSFX   = true;
+    bool m_showMainTracks     = true;
+    bool m_showProjectSFX     = true;
+
+    // --- 布局池 (用于避免热路径堆分配) ---
+    std::deque<CLayHBox> m_settingRows;
+    std::deque<CLayHBox> m_subHBoxes;
+    std::deque<CLayVBox> m_subVBoxes;
+
+    // 辅助方法：获取或创建一个行布局
+    CLayHBox& getRow(size_t index)
+    {
+        while ( m_settingRows.size() <= index ) {
+            m_settingRows.emplace_back();
+        }
+        return m_settingRows[index];
+    }
+
+    CLayHBox& getSubHBox(size_t index)
+    {
+        while ( m_subHBoxes.size() <= index ) {
+            m_subHBoxes.emplace_back();
+        }
+        return m_subHBoxes[index];
+    }
+
+    CLayVBox& getSubVBox(size_t index)
+    {
+        while ( m_subVBoxes.size() <= index ) {
+            m_subVBoxes.emplace_back();
+        }
+        return m_subVBoxes[index];
+    }
 };
 
 }  // namespace MMM::UI

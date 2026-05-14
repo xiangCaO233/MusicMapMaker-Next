@@ -1,9 +1,9 @@
 #define CLAY_IMPLEMENTATION
 #include "ui/layout/CLayWrapperCore.h"
-#include "ui/layout/CLayDefs.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "ui/layout/CLayDefs.h"
 
 namespace MMM::UI
 {
@@ -98,13 +98,14 @@ static Clay_Dimensions MeasureTextForImGui(Clay_StringSlice        text,
 
     if ( !font ) font = ImGui::GetFont();
 
-    // 使用 ImGui 的字体 API 测量。注意：Clay 传入的 fontSize 是配置值
+    // 使用字体实际加载尺寸来测量，而非用户传入的 fontSize。
+    // ImGui 1.92+ 字体可以渲染为任意尺寸，但为了与 ImGui 内部一致，
+    // 我们使用 LegacySize (即 AddFont 时传入的 size_pixels)。
     std::string s(text.chars, text.length);
-    ImVec2      size = font->CalcTextSizeA((float)config->fontSize, FLT_MAX,
-                                      0.0f, s.c_str());
+    float       actualSize = font->LegacySize * font->Scale;
+    ImVec2      sz = font->CalcTextSizeA(actualSize, FLT_MAX, 0.0f, s.c_str());
 
-    // 必须乘以 font->Scale，因为 ImGui 渲染时会应用此缩放，布局必须与之对齐
-    return { size.x * font->Scale, size.y * font->Scale };
+    return { sz.x, sz.y };
 }
 
 void CLayWrapperCore::setupClayTextMeasurement()

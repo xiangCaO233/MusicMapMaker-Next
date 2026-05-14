@@ -2,6 +2,8 @@
 
 #include "event/core/EventBus.h"
 #include "ui/ISubView.h"
+#include "ui/layout/box/CLayBox.h"
+#include <deque>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <string>
@@ -40,6 +42,10 @@ private:
     void openFolderPicker();
 
     std::filesystem::path m_currentRoot;
+    bool                  m_showRoot = true;
+
+    // --- 布局池 ---
+    std::deque<CLayHBox> m_rows;
 
     struct PendingDrop {
         std::vector<std::string> paths;

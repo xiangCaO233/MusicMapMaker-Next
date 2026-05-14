@@ -34,6 +34,12 @@ private:
      */
     void drawToolButton(const char* icon, Logic::EditTool tool,
                         const char* tooltip, float width);
+
+    /**
+     * @brief 绘制左侧偏移的提示框
+     * @param text 提示文本
+     */
+    void drawTooltip(const char* text);
 };
 
 }  // namespace MMM::UI

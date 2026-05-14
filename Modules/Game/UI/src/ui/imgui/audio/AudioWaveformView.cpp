@@ -9,6 +9,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/UIManager.h"
 #include "logic/EditorEngine.h"
+#include "ui/layout/box/CLayBox.h"
 #include <algorithm>
 #include <cmath>
 #include <ice/config/config.hpp>
@@ -109,16 +110,72 @@ void AudioWaveformView::update(UIManager* sourceManager)
         }
     }
 
-    ImGui::SetNextItemWidth(100);
-    ImGui::SliderFloat(
-        TR("ui.waveform.zoom").data(), &m_zoom, 0.1f, 10.0f, "%.1fs");
-    ImGui::SameLine();
-    if ( ImGui::Button(TR("ui.waveform.reset_zoom").data()) ) m_zoom = 1.0f;
-    ImGui::SameLine();
+    ImGuiStyle& style = ImGui::GetStyle();
+    float frameH = ImGui::GetFrameHeight();
+    auto calcSliderWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+    };
+    auto calcButtonWidth = [&](const char* label) {
+        return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+    };
+    auto drawSep = [&](Clay_BoundingBox r, bool) {
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(r.x, r.y + 2.0f), ImVec2(r.x, r.y + r.height - 2.0f), ImGui::GetColorU32(ImGuiCol_Separator));
+    };
 
-    if ( ImGui::Button(TR("ui.waveform.sync_effects").data()) ) {
-        fullRecalculate();
-    }
+    CLayVBox topContainer;
+    topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
+    std::deque<CLayHBox> rows;
+    CLayHBox* currentRow = nullptr;
+    float currentW = 0.0f;
+    float availW = ImGui::GetContentRegionAvail().x;
+    float spacing = 8.0f;
+
+    auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
+        bool addSep = false;
+        float totalW = w;
+        if (currentRow) {
+            totalW += 1.0f + spacing; // Sep + spacing
+        }
+        if (!currentRow || currentW + totalW > availW) {
+            rows.emplace_back();
+            currentRow = &rows.back();
+            currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
+            topContainer.addLayout(("Row_" + std::to_string(rows.size())).c_str(), *currentRow, Sizing::Grow(), Sizing::Fit());
+            currentW = 8.0f; // 4 + 4 padding
+        } else {
+            addSep = true;
+        }
+
+        if (addSep) {
+            currentRow->addElement(id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
+            currentW += 1.0f + spacing;
+        }
+        currentRow->addElement(id, Sizing::Fixed(w), Sizing::Fixed(h), drawCb);
+        currentW += w + spacing;
+    };
+
+    pushGroup("ZoomSlider", calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s", TR("ui.waveform.zoom").data());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+    });
+    pushGroup("ResetZoomBtn", calcButtonWidth(TR("ui.waveform.reset_zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        if ( ImGui::Button(TR("ui.waveform.reset_zoom").data()) ) m_zoom = 1.0f;
+    });
+    pushGroup("SyncEffectsBtn", calcButtonWidth(TR("ui.waveform.sync_effects").data()), frameH, [&](Clay_BoundingBox r, bool) {
+        ImGui::SetCursorScreenPos({ r.x, r.y });
+        if ( ImGui::Button(TR("ui.waveform.sync_effects").data()) ) {
+            fullRecalculate();
+        }
+    });
+
+    ImVec2 startPos = ImGui::GetCursorScreenPos();
+    ImVec2 sz = topContainer.renderInCurrent(startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     syncEQ();
     updateEnvelopes(visualTime, totalTime, speed, visualOffset);
