@@ -9,6 +9,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -35,12 +36,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 Sizing::Fixed(fh),
                 [=](Clay_BoundingBox r, bool isHovered) {
                     float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offY);
+                    ImGui::SetCursorScreenPos({ r.x, r.y + offY });
                     ImVec2 textSize = ImGui::CalcTextSize(
-                        TR("ui.beatmap_manager.initial_hint"));
+                        TR("ui.beatmap_manager.initial_hint").data());
                     ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                          (r.width - textSize.x) * 0.5f);
-                    ImGui::TextEx(TR("ui.beatmap_manager.initial_hint"));
+                    ImGui::TextDisabled(
+                        "%s", TR("ui.beatmap_manager.initial_hint").data());
                 })
             .addSpring();
 
@@ -58,45 +60,55 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     CLayVBox listVBox;
     listVBox.setSpacing(4);
 
-    listVBox.addElement(
-        "BeatmapsHeader",
-        Sizing::Grow(),
-        Sizing::Fixed(24),
-        [this](Clay_BoundingBox r, bool isHovered) {
-            float indent = ImGui::CalcTextSize("AA").x;
-            ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
-            ImGui::SeparatorText(TR("ui.beatmap_manager.beatmaps").data());
-            ImGui::PopStyleVar();
-        });
+    listVBox.addElement("BeatmapsHeader",
+                        Sizing::Grow(),
+                        Sizing::Fixed(ImGui::GetFrameHeight()),
+                        [this](Clay_BoundingBox r, bool isHovered) {
+                            Utils::renderCollapsingHeader(
+                                TR("ui.beatmap_manager.beatmaps").data(),
+                                &m_showBeatmapList,
+                                r);
+                        });
 
-    for ( const auto& beatmap : project->m_beatmaps ) {
-        listVBox.addElement(
-            "Beatmap_" + beatmap.m_filePath,
-            Sizing::Grow(),
-            Sizing::Fixed(28),
-            [&beatmap, &engine, project](Clay_BoundingBox r, bool isHovered) {
-                ImGui::Indent();
-                std::string label = beatmap.m_name + "##" + beatmap.m_filePath;
-                if ( ImGui::Selectable(label.c_str()) ) {
-                    XINFO("Request to load beatmap: {}", beatmap.m_name);
-                    auto fullPath =
-                        project->m_projectRoot /
-                        std::filesystem::path(reinterpret_cast<const char8_t*>(
-                            beatmap.m_filePath.c_str()));
-                    auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                        MMM::BeatMap::loadFromFile(fullPath));
-                    engine.pushCommand(Logic::CmdLoadBeatmap{ loadedBeatmap });
-                }
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("File: %s\nTrack: %s",
-                                      beatmap.m_filePath.c_str(),
-                                      beatmap.m_audioTrackId.c_str());
-                }
-                ImGui::Unindent();
-            });
+    if ( m_showBeatmapList ) {
+        for ( const auto& beatmap : project->m_beatmaps ) {
+            listVBox.addElement(
+                "Beatmap_" + beatmap.m_filePath,
+                Sizing::Grow(),
+                Sizing::Fixed(28),
+                [&beatmap, &engine, project](Clay_BoundingBox r,
+                                             bool             isHovered) {
+                    ImGui::Indent();
+                    std::string labelStr =
+                        beatmap.m_name + " - " + beatmap.m_filePath;
+                    float availW = ImGui::GetContentRegionAvail().x;
+
+                    Utils::renderScrollingSelectable(
+                        beatmap.m_filePath, labelStr, availW, 28, [&]() {
+                            XINFO("Request to load beatmap: {}",
+                                  beatmap.m_name);
+                            auto fullPath =
+                                project->m_projectRoot /
+                                std::filesystem::path(
+                                    reinterpret_cast<const char8_t*>(
+                                        beatmap.m_filePath.c_str()));
+                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                                MMM::BeatMap::loadFromFile(fullPath));
+                            engine.pushCommand(
+                                Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        });
+
+                    if ( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip("File: %s\nTrack: %s",
+                                          beatmap.m_filePath.c_str(),
+                                          beatmap.m_audioTrackId.c_str());
+                    }
+                    ImGui::Unindent();
+                });
+        }
     }
 
-
+    // 渲染列表区域
     rootVBox.setPadding(12, 12, 12, 12)
         .setSpacing(8)
         .addElement(
@@ -107,17 +119,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::BeginChild("BeatmapListChild",
                                   { r.width, r.height },
                                   false,
-                                  ImGuiWindowFlags_HorizontalScrollbar);
+                                  ImGuiWindowFlags_None);
 
-                // 统一处理 LayoutContext
-                // 的重映射，由于是在子窗口绘制，需要重定向
                 ImVec2 oldStartPos = layoutContext.m_startPos;
                 ImVec2 oldAvail    = layoutContext.m_avail;
 
                 layoutContext.m_startPos = ImGui::GetCursorScreenPos();
-                layoutContext.m_avail    = {
-                    2000.0f, 10000.0f
-                };  // 给予极大的垂直/水平空间以便显示滚动条
+                layoutContext.m_avail    = { r.width, 10000.0f };
 
                 listVBox.render(layoutContext);
 
@@ -145,9 +153,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                       ImVec4(1, 1, 1, 0.2f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
 
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                     (r.width - 32.0f) * 0.5f);
-                if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(32, 32)) ) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(r.width, r.height)) ) {
                     auto* wizard = sourceManager->getView<NewBeatmapWizard>(
                         "NewBeatmapWizard");
                     if ( wizard ) wizard->open();

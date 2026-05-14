@@ -22,6 +22,9 @@ public:
 
 private:
     bool m_showGlobalSettings = true;
+    bool m_showPermanentSFX   = true;
+    bool m_showMainTracks     = true;
+    bool m_showProjectSFX     = true;
 
     // --- 布局池 (用于避免热路径堆分配) ---
     std::deque<CLayHBox> m_settingRows;

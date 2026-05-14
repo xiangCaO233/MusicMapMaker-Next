@@ -13,9 +13,11 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
+
 // 内部绘制逻辑 (Clay/ImGui)
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                 UIManager*     sourceManager)
@@ -173,23 +175,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             Sizing::Fixed(28),
             [&, audio](Clay_BoundingBox r, bool isHovered) {
                 ImGui::Indent();
-                std::string label = audio.m_id + "##" + audio.m_path;
-                if ( ImGui::Selectable(label.c_str()) ) {
-                    // 点击弹出控制器
-                    std::string viewName = "TrackController_" + audio.m_id;
-                    if ( !sourceManager->getView<AudioTrackControllerUI>(
-                             viewName) ) {
-                        AudioTrackControllerUI::TrackType type =
-                            (audio.m_type == AudioTrackType::Main)
-                                ? AudioTrackControllerUI::TrackType::Main
-                                : AudioTrackControllerUI::TrackType::Effect;
-                        std::unique_ptr<IUIView> controller =
-                            std::make_unique<AudioTrackControllerUI>(
-                                audio.m_id, audio.m_id, type);
-                        sourceManager->registerView(viewName,
-                                                    std::move(controller));
-                    }
-                }
+                std::string labelStr = audio.m_id + " - " + audio.m_path;
+                float       availW   = ImGui::GetContentRegionAvail().x;
+
+                Utils::renderScrollingSelectable(
+                    audio.m_id, labelStr, availW, 28, [&]() {
+                        // 点击弹出控制器
+                        std::string viewName = "TrackController_" + audio.m_id;
+                        if ( !sourceManager->getView<AudioTrackControllerUI>(
+                                 viewName) ) {
+                            AudioTrackControllerUI::TrackType type =
+                                (audio.m_type == AudioTrackType::Main)
+                                    ? AudioTrackControllerUI::TrackType::Main
+                                    : AudioTrackControllerUI::TrackType::Effect;
+                            std::unique_ptr<IUIView> controller =
+                                std::make_unique<AudioTrackControllerUI>(
+                                    audio.m_id, audio.m_id, type);
+                            sourceManager->registerView(viewName,
+                                                        std::move(controller));
+                        }
+                    });
+
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("%s (Type: %s)",
                                       audio.m_path.c_str(),
@@ -201,30 +207,30 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             });
     };
 
-    // 1. 特效音轨常驻显示 (皮肤音效) - 始终显示
+    // 1. 特效音轨常驻显示 (皮肤音效)
     auto& skinData = Config::SkinManager::instance().getData();
     if ( !skinData.audioPaths.empty() ) {
-        listVBox.addElement(
-            "PermanentSFXHeader",
-            Sizing::Grow(),
-            Sizing::Fixed(24),
-            [](Clay_BoundingBox r, bool isHovered) {
-                float indent = ImGui::CalcTextSize("AA").x;
-                ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
-                ImGui::SeparatorText(
-                    TR("ui.audio_manager.permanent_sfx").data());
-                ImGui::PopStyleVar();
-            });
+        listVBox.addElement("PermanentSFXHeader",
+                            Sizing::Grow(),
+                            Sizing::Fixed(ImGui::GetFrameHeight()),
+                            [&](Clay_BoundingBox r, bool isHovered) {
+                                Utils::renderCollapsingHeader(
+                                    TR("ui.audio_manager.permanent_sfx").data(),
+                                    &m_showPermanentSFX,
+                                    r);
+                            });
 
-        for ( const auto& [key, path] : skinData.audioPaths ) {
-            AudioResource res;
-            res.m_id            = key;
-            res.m_path          = Config::pathToUtf8(path);
-            res.m_type          = AudioTrackType::Effect;
-            res.m_config.volume = audioManager.getSFXPoolVolume(key);
-            res.m_config.muted  = audioManager.getSFXPoolMute(key);
+        if ( m_showPermanentSFX ) {
+            for ( const auto& [key, path] : skinData.audioPaths ) {
+                AudioResource res;
+                res.m_id            = key;
+                res.m_path          = Config::pathToUtf8(path);
+                res.m_type          = AudioTrackType::Effect;
+                res.m_config.volume = audioManager.getSFXPoolVolume(key);
+                res.m_config.muted  = audioManager.getSFXPoolMute(key);
 
-            renderAudioItem(res, true);
+                renderAudioItem(res, true);
+            }
         }
     }
 
@@ -232,45 +238,47 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 2. 显示主音轨列表
         listVBox.addElement("AudioTracksHeader",
                             Sizing::Grow(),
-                            Sizing::Fixed(24),
-                            [](Clay_BoundingBox r, bool isHovered) {
-                                float indent = ImGui::CalcTextSize("AA").x;
-                                ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing,
-                                                    indent);
-                                ImGui::SeparatorText(
-                                    TR("ui.audio_manager.audio_tracks").data());
-                                ImGui::PopStyleVar();
+                            Sizing::Fixed(ImGui::GetFrameHeight()),
+                            [&](Clay_BoundingBox r, bool isHovered) {
+                                Utils::renderCollapsingHeader(
+                                    TR("ui.audio_manager.audio_tracks").data(),
+                                    &m_showMainTracks,
+                                    r);
                             });
 
-        std::vector<AudioResource> mainTracks;
-        std::vector<AudioResource> effectTracks;
-        for ( const auto& audio : project->m_audioResources ) {
-            if ( audio.m_type == AudioTrackType::Main ) {
-                mainTracks.push_back(audio);
-            } else {
-                effectTracks.push_back(audio);
+        if ( m_showMainTracks ) {
+            std::vector<AudioResource> mainTracks;
+            std::vector<AudioResource> effectTracks;
+            for ( const auto& audio : project->m_audioResources ) {
+                if ( audio.m_type == AudioTrackType::Main ) {
+                    mainTracks.push_back(audio);
+                } else {
+                    effectTracks.push_back(audio);
+                }
             }
-        }
 
-        for ( const auto& audio : mainTracks ) {
-            renderAudioItem(audio);
-        }
-
-        // 3. 显示项目特效音轨
-        if ( !effectTracks.empty() ) {
-            listVBox.addElement(
-                "ProjectSFXHeader",
-                Sizing::Grow(),
-                Sizing::Fixed(24),
-                [](Clay_BoundingBox r, bool isHovered) {
-                    float indent = ImGui::CalcTextSize("AA").x;
-                    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
-                    ImGui::SeparatorText(
-                        TR("ui.audio_manager.project_sfx").data());
-                    ImGui::PopStyleVar();
-                });
-            for ( const auto& audio : effectTracks ) {
+            for ( const auto& audio : mainTracks ) {
                 renderAudioItem(audio);
+            }
+
+            // 3. 显示项目特效音轨
+            if ( !effectTracks.empty() ) {
+                listVBox.addElement(
+                    "ProjectSFXHeader",
+                    Sizing::Grow(),
+                    Sizing::Fixed(ImGui::GetFrameHeight()),
+                    [&](Clay_BoundingBox r, bool isHovered) {
+                        Utils::renderCollapsingHeader(
+                            TR("ui.audio_manager.project_sfx").data(),
+                            &m_showProjectSFX,
+                            r);
+                    });
+
+                if ( m_showProjectSFX ) {
+                    for ( const auto& audio : effectTracks ) {
+                        renderAudioItem(audio);
+                    }
+                }
             }
         }
     } else {
@@ -300,22 +308,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                           Sizing::Grow(),
                           Sizing::Fixed(ImGui::GetFrameHeight()),
                           [&](Clay_BoundingBox r, bool isHovered) {
-                              ImGui::SetCursorScreenPos({ r.x, r.y });
-
-                              // 核心修复：应用 SettingsView_Tabs 中的技巧，
-                              // 使 CollapsingHeader 受到 Clay 布局内边距的影响
-                              ImGuiWindow* win = ImGui::GetCurrentWindow();
-                              float        savedWRMaxX = win->WorkRect.Max.x;
-                              win->WorkRect.Max.x      = r.x + r.width;
-                              ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                                  { 0.0f, 0.0f });
-
-                              m_showGlobalSettings = ImGui::CollapsingHeader(
+                              Utils::renderCollapsingHeader(
                                   TR("ui.audio_manager.global_settings").data(),
-                                  ImGuiTreeNodeFlags_DefaultOpen);
-
-                              ImGui::PopStyleVar();
-                              win->WorkRect.Max.x = savedWRMaxX;
+                                  &m_showGlobalSettings,
+                                  r);
                           });
 
     if ( m_showGlobalSettings ) {
@@ -404,19 +400,15 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::BeginChild("AudioListChild",
                                   { r.width, r.height },
                                   false,
-                                  ImGuiWindowFlags_HorizontalScrollbar);
+                                  ImGuiWindowFlags_None);
 
                 ImVec2 oldStartPos = layoutContext.m_startPos;
                 ImVec2 oldAvail    = layoutContext.m_avail;
 
                 layoutContext.m_startPos = ImGui::GetCursorScreenPos();
-                layoutContext.m_avail    = { 2000.0f, 10000.0f };
+                layoutContext.m_avail    = { r.width, 10000.0f };
 
                 listVBox.render(layoutContext);
-
-                // 强制撑开滚动区域
-                ImGui::SetCursorScreenPos(layoutContext.m_startPos);
-                ImGui::Dummy({ r.width, 1200.0f });
 
                 layoutContext.m_startPos = oldStartPos;
                 layoutContext.m_avail    = oldAvail;

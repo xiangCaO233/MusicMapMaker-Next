@@ -10,6 +10,7 @@
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI
 {
@@ -23,16 +24,19 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
 
     m_currentRoot = project->m_projectRoot;
 
-    CLayHBox titleHBox;
-    titleHBox.addElement(
-        "ProjectTitle",
+    CLayVBox treeVBox;
+    treeVBox.setSpacing(2);
+
+    // 1. Root 节点作为 CollapsingHeader
+    treeVBox.addElement(
+        "ProjectRootHeader",
         Sizing::Grow(),
         Sizing::Fixed(ImGui::GetFrameHeight()),
-        [project](Clay_BoundingBox r, bool isHovered) {
-            ImVec4      highlightCol = Utils::UIThemeUtils::getHighlightColor();
+        [this, project](Clay_BoundingBox r, bool isHovered) {
             std::string rootName =
                 Config::pathToUtf8(project->m_projectRoot.filename());
-            ImGui::TextColored(highlightCol, "Root: %s", rootName.c_str());
+            std::string label = rootName;
+            Utils::renderCollapsingHeader(label.c_str(), &m_showRoot, r);
             if ( ImGui::IsItemHovered() ) {
                 std::string fullPath =
                     Config::pathToUtf8(project->m_projectRoot);
@@ -40,34 +44,39 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
             }
         });
 
-    CLayVBox treeVBox;
-    treeVBox.setPadding(4, 4, 4, 4)
-        .addElement(
+    if ( m_showRoot ) {
+        treeVBox.addElement(
             "FileTree",
             Sizing::Grow(),
             Sizing::Grow(),
             [this, sourceManager, &layoutContext](Clay_BoundingBox r,
                                                   bool             isHovered) {
-                ImGui::SetNextWindowContentSize(ImVec2(2000.0f, 0.0f));
                 ImGui::BeginChild("FileTreeChild",
-                                  { 0, 0 },
+                                  { r.width, r.height },
                                   false,
-                                  ImGuiWindowFlags_HorizontalScrollbar);
+                                  ImGuiWindowFlags_None);
 
-                ImVec2 oldAvail       = layoutContext.m_avail;
-                layoutContext.m_avail = { 2000.0f, 10000.0f };
-                float indent          = ImGui::CalcTextSize("AA").x;
+                ImVec2 oldStartPos = layoutContext.m_startPos;
+                ImVec2 oldAvail    = layoutContext.m_avail;
+
+                layoutContext.m_startPos = ImGui::GetCursorScreenPos();
+                layoutContext.m_avail    = { r.width, 10000.0f };
+
+                float indent = ImGui::CalcTextSize("AA").x;
                 ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, indent);
                 this->drawDirectoryRecursive(m_currentRoot, sourceManager);
                 ImGui::PopStyleVar();
-                layoutContext.m_avail = oldAvail;
+
+                layoutContext.m_startPos = oldStartPos;
+                layoutContext.m_avail    = oldAvail;
+
                 ImGui::EndChild();
             });
+    }
 
     CLayVBox rootVBox;
-    rootVBox.setPadding(8, 8, 8, 8)
-        .setSpacing(4)
-        .addLayout("titleHBox", titleHBox, Sizing::Grow(), Sizing::Fixed(24))
+    rootVBox.setPadding(12, 12, 12, 12)
+        .setSpacing(8)
         .addLayout("treeVBox", treeVBox, Sizing::Grow(), Sizing::Grow());
 
     rootVBox.render(layoutContext);
@@ -77,24 +86,27 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                              UIManager* sourceManager)
 {
     try {
+        float availW = ImGui::GetContentRegionAvail().x;
+
         for ( const auto& entry : std::filesystem::directory_iterator(path) ) {
             const auto& p        = entry.path();
             std::string filename = Config::pathToUtf8(p.filename());
+            std::string fullPath = Config::pathToUtf8(p);
+
             if ( filename.size() > 1 && filename[0] == '.' ) continue;
 
-            if ( entry.is_directory() ) {
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                                           ImGuiTreeNodeFlags_OpenOnDoubleClick;
-                bool open = ImGui::TreeNodeEx(filename.c_str(), flags);
-                if ( open ) {
-                    drawDirectoryRecursive(p, sourceManager);
-                    ImGui::TreePop();
-                }
-            } else {
-                ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf |
-                                           ImGuiTreeNodeFlags_NoTreePushOnOpen;
-                ImGui::TreeNodeEx(filename.c_str(), flags);
-                if ( ImGui::IsItemClicked() ) {
+            bool isDir = entry.is_directory();
+            bool open  = Utils::renderScrollingTreeNode(
+                fullPath,
+                filename,
+                availW,
+                24.0f,
+                !isDir,
+                [&]() {
+                    // 文件点击逻辑 (仅对非目录项有效，目录由 TreeNode
+                    // 自己处理展开)
+                    if ( isDir ) return;
+
                     auto& engine  = Logic::EditorEngine::instance();
                     auto* project = engine.getCurrentProject();
                     if ( project ) {
@@ -154,7 +166,12 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                             }
                         }
                     }
-                }
+                },
+                fullPath);
+
+            if ( isDir && open ) {
+                drawDirectoryRecursive(p, sourceManager);
+                ImGui::TreePop();
             }
         }
     } catch ( ... ) {
