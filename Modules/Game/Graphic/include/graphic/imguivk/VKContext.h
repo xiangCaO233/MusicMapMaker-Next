@@ -117,6 +117,18 @@ public:
      */
     void applyTheme();
 
+    /**
+     * @brief 显式释放资源
+     *
+     * 在程序退出前，且窗口句柄仍然有效时调用，
+     * 以确保 ImGui 和 Vulkan 资源的正确释放顺序。
+     */
+    void release();
+
+private:
+    /// @brief 资源是否已释放
+    bool m_isReleased{ false };
+
 private:
     /// @brief 字体重建请求标志
     std::atomic<bool> m_fontRebuildRequested{ false };

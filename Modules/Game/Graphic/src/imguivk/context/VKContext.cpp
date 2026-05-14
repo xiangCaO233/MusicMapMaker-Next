@@ -118,18 +118,35 @@ VKContext::VKContext()
 
 VKContext::~VKContext()
 {
+    release();
+
+    // 最后释放 GLFW，确保所有窗口和上下文都已安全销毁
+    releaseGLFW();
+}
+
+void VKContext::release()
+{
+    if ( m_isReleased ) return;
+
     if ( m_vkLogicalDevice ) {
         (void)m_vkLogicalDevice.waitIdle();
     }
 
-    // 在关闭 ImGui之前必须先释放渲染器中imgui对纹理的引用！
-    m_vkRenderer->releaseCursorManager();
+    XDEBUG("Starting VKContext explicit release...");
+
+    // 在关闭 ImGui 之前必须先释放渲染器中 imgui 对纹理的引用！
+    if ( m_vkRenderer ) {
+        m_vkRenderer->releaseCursorManager();
+    }
 
     // 在销毁 DescriptorPool 和 Device 之前必须先关闭 ImGui！
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-    XDEBUG("ImGui Destroyed.");
+    // 检查 ImGui 上下文是否存在
+    if ( ImGui::GetCurrentContext() ) {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        XDEBUG("ImGui Destroyed.");
+    }
 
     // 销毁渲染器
     m_vkRenderer.reset();
@@ -149,25 +166,34 @@ VKContext::~VKContext()
     // 销毁逻辑设备
     if ( m_vkLogicalDevice ) {
         m_vkLogicalDevice.destroy();
+        m_vkLogicalDevice = nullptr;
         XDEBUG("VK Logical Device destroyed.");
     }
 
-    // 销毁vk表面
-    if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
-    XDEBUG("VK Surface destroyed.");
+    // 销毁 vk 表面
+    if ( m_vkSurface ) {
+        m_vkInstance.destroySurfaceKHR(m_vkSurface);
+        m_vkSurface = nullptr;
+        XDEBUG("VK Surface destroyed.");
+    }
 
-    // 销毁可能的vk调试信息工具实例
+    // 销毁可能的 vk 调试信息工具实例
     if ( is_debug() && m_vkDebugMessenger ) {
         m_vkInstance.destroyDebugUtilsMessengerEXT(
             m_vkDebugMessenger, nullptr, m_vkDldy);
+        m_vkDebugMessenger = nullptr;
         XDEBUG("VK Debug Messenger destroyed.");
     }
-    // 销毁vk实例
-    m_vkInstance.destroy();
-    XDEBUG("VK Instance destroyed.");
 
-    // 释放GLFW上下文
-    releaseGLFW();
+    // 销毁 vk 实例
+    if ( m_vkInstance ) {
+        m_vkInstance.destroy();
+        m_vkInstance = nullptr;
+        XDEBUG("VK Instance destroyed.");
+    }
+
+    m_isReleased = true;
+    XINFO("VKContext resources released.");
 }
 
 /**
