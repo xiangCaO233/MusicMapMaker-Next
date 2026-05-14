@@ -331,12 +331,30 @@ void SettingsView::drawSoftwareSettings()
                 std::string currentAscii = settings.preferredAsciiFont.empty()
                                                ? "Default"
                                                : settings.preferredAsciiFont;
-                if ( currentAscii == "Default" && !asciiFonts.empty() )
-                    currentAscii = asciiFonts.front().first;
+
+                std::string label =
+                    (currentAscii == "Default")
+                        ? TR_CACHE("ui.settings.software.font.default").data()
+                        : currentAscii;
 
                 ImGui::SetNextItemWidth(r.width - 40.0f);
-                if ( ImGui::BeginCombo("##AsciiFontCombo",
-                                       currentAscii.c_str()) ) {
+                if ( ImGui::BeginCombo("##AsciiFontCombo", label.c_str()) ) {
+                    // 1. 默认选项
+                    {
+                        bool isSelected = (currentAscii == "Default");
+                        if ( ImGui::Selectable(
+                                 TR_CACHE("ui.settings.software.font.default")
+                                     .data(),
+                                 isSelected) ) {
+                            settings.preferredAsciiFont = "Default";
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
+                            changed = true;
+                        }
+                        if ( isSelected ) ImGui::SetItemDefaultFocus();
+                    }
+
+                    // 2. 皮肤自带的额外字体
                     for ( const auto& [name, path] : asciiFonts ) {
                         bool        isSelected = (currentAscii == name);
                         std::string lbl =
@@ -374,11 +392,29 @@ void SettingsView::drawSoftwareSettings()
                 std::string currentCjk = settings.preferredCjkFont.empty()
                                              ? "Default"
                                              : settings.preferredCjkFont;
-                if ( currentCjk == "Default" && !cjkFonts.empty() )
-                    currentCjk = cjkFonts.front().first;
+                std::string label =
+                    (currentCjk == "Default")
+                        ? TR_CACHE("ui.settings.software.font.default").data()
+                        : currentCjk;
 
                 ImGui::SetNextItemWidth(r.width - 40.0f);
-                if ( ImGui::BeginCombo("##CjkFontCombo", currentCjk.c_str()) ) {
+                if ( ImGui::BeginCombo("##CjkFontCombo", label.c_str()) ) {
+                    // 1. 默认选项
+                    {
+                        bool isSelected = (currentCjk == "Default");
+                        if ( ImGui::Selectable(
+                                 TR_CACHE("ui.settings.software.font.default")
+                                     .data(),
+                                 isSelected) ) {
+                            settings.preferredCjkFont = "Default";
+                            if ( auto ctx = Graphic::VKContext::get() )
+                                ctx->get().requestFontRebuild();
+                            changed = true;
+                        }
+                        if ( isSelected ) ImGui::SetItemDefaultFocus();
+                    }
+
+                    // 2. 皮肤自带的额外字体
                     for ( const auto& [name, path] : cjkFonts ) {
                         bool        isSelected = (currentCjk == name);
                         std::string lbl =

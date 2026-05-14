@@ -69,6 +69,7 @@ return {
 	["ui.settings.software.theme.auto"] = "Auto (Follow Skin)",
 	["ui.settings.software.font.ascii"] = "ASCII Font",
 	["ui.settings.software.font.cjk"] = "CJK Font",
+	["ui.settings.software.font.default"] = "Default (Skin Provided)",
 	["ui.settings.software.font.multiplier"] = "UI Font Size Multiplier",
 	["ui.settings.software.ui_scale.multiplier"] = "UI Global Scale Multiplier",
 	["ui.settings.software.font.browse"] = "Browse System Font",

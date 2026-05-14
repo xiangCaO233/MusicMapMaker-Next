@@ -29,9 +29,23 @@ struct TrackLayout {
     float right{ .8f };
     /// @brief 底部分隔比例位置
     float bottom{ .95f };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(TrackLayout, left, top, right, bottom)
 };
+
+inline void to_json(nlohmann::json& j, const TrackLayout& c)
+{
+    j = nlohmann::json{ { "left", c.left },
+                        { "top", c.top },
+                        { "right", c.right },
+                        { "bottom", c.bottom } };
+}
+
+inline void from_json(const nlohmann::json& j, TrackLayout& c)
+{
+    c.left   = j.value("left", .2f);
+    c.top    = j.value("top", .05f);
+    c.right  = j.value("right", .8f);
+    c.bottom = j.value("bottom", .95f);
+}
 
 struct BackgroundConfig {
     /// @brief 填充模式
@@ -40,10 +54,21 @@ struct BackgroundConfig {
     float darken_ratio{ .7f };
     /// @brief 背景不透明度-0.0代表完全透明
     float opaque_ratio{ 1.f };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(BackgroundConfig, fillMode, darken_ratio,
-                                   opaque_ratio)
 };
+
+inline void to_json(nlohmann::json& j, const BackgroundConfig& c)
+{
+    j = nlohmann::json{ { "fillMode", c.fillMode },
+                        { "darken_ratio", c.darken_ratio },
+                        { "opaque_ratio", c.opaque_ratio } };
+}
+
+inline void from_json(const nlohmann::json& j, BackgroundConfig& c)
+{
+    c.fillMode     = j.value("fillMode", BackgroundFillMode::AspectFill);
+    c.darken_ratio = j.value("darken_ratio", .7f);
+    c.opaque_ratio = j.value("opaque_ratio", 1.f);
+}
 
 struct PreviewAreaConfig {
     /// @brief 预览区视口范围相对主画布的倍率
@@ -58,19 +83,47 @@ struct PreviewAreaConfig {
         float top{ 4.f };
         float right{ 4.f };
         float bottom{ 4.f };
-
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE(AreaMargin, left, top, right, bottom)
     };
     AreaMargin margin;
     /// @brief 是否绘制分拍线
     bool drawBeatLines{ true };
     /// @brief 是否绘制 Timing 线
     bool drawTimingLines{ true };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(PreviewAreaConfig, areaRatio,
-                                   edgeScrollSensitivity, margin, drawBeatLines,
-                                   drawTimingLines)
 };
+
+inline void to_json(nlohmann::json& j, const PreviewAreaConfig::AreaMargin& c)
+{
+    j = nlohmann::json{ { "left", c.left },
+                        { "top", c.top },
+                        { "right", c.right },
+                        { "bottom", c.bottom } };
+}
+
+inline void from_json(const nlohmann::json& j, PreviewAreaConfig::AreaMargin& c)
+{
+    c.left   = j.value("left", 4.f);
+    c.top    = j.value("top", 4.f);
+    c.right  = j.value("right", 4.f);
+    c.bottom = j.value("bottom", 4.f);
+}
+
+inline void to_json(nlohmann::json& j, const PreviewAreaConfig& c)
+{
+    j = nlohmann::json{ { "areaRatio", c.areaRatio },
+                        { "edgeScrollSensitivity", c.edgeScrollSensitivity },
+                        { "margin", c.margin },
+                        { "drawBeatLines", c.drawBeatLines },
+                        { "drawTimingLines", c.drawTimingLines } };
+}
+
+inline void from_json(const nlohmann::json& j, PreviewAreaConfig& c)
+{
+    c.areaRatio             = j.value("areaRatio", 5.f);
+    c.edgeScrollSensitivity = j.value("edgeScrollSensitivity", 1.0f);
+    c.margin          = j.value("margin", PreviewAreaConfig::AreaMargin());
+    c.drawBeatLines   = j.value("drawBeatLines", true);
+    c.drawTimingLines = j.value("drawTimingLines", true);
+}
 
 /// @brief 视觉与渲染相关的整体配置
 struct VisualConfig {
