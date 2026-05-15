@@ -20,7 +20,16 @@ else()
 	# 编译MusicMapMaker-Next可执行文件
 	add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
+add_gcc_debug_extract(MusicMapMaker-Next)
 add_strip_command_for_release(MusicMapMaker-Next)
+
+target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp)
+target_include_directories(MusicMapMaker-Next PRIVATE include)
+
+if(MMM_PGO_INSTRUMENT)
+    # PGO 插桩版本需要 curl 上传 profile
+    target_link_libraries(MusicMapMaker-Next PRIVATE Network)
+endif()
 
 target_link_libraries(MusicMapMaker-Next
 	PRIVATE

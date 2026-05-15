@@ -1,3 +1,4 @@
+#include "common/MessageBox.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -5,7 +6,7 @@
 #include "game/GameLoop.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
-#include "common/MessageBox.h"
+#include "main/PGOProfiler.h"
 #include <filesystem>
 
 int main(int argc, char* argv[])
@@ -22,9 +23,11 @@ int main(int argc, char* argv[])
     }
 
     if ( !std::filesystem::exists(rootDir / "assets") ) {
-        std::string msg = "Could not find assets directory!\n"
-                          "Please download the resource package (assets.zip) from the website "
-                          "and extract it to the executable directory.";
+        std::string msg =
+            "Could not find assets directory!\n"
+            "Please download the resource package (assets.zip) from the "
+            "website "
+            "and extract it to the executable directory.";
         XERROR("Fatal: {}", msg);
         UI::showFatalError("MusicMapMaker - Assets Missing", msg);
         return -1;
@@ -45,6 +48,9 @@ int main(int argc, char* argv[])
 
     XINFO(TR("tips.welcome"));
 
+    // PGO instrumentation — 设置 profile 输出路径
+    Main::initPGOProfiler();
+
     // 测试vulkan
     auto& gameLoop = GameLoop::instance();
 
@@ -62,6 +68,9 @@ int main(int argc, char* argv[])
     Graphic::NativeWindow nativeWindow(1280, 720, "MusicMapMaker(Gamma)");
 
     const auto ret = gameLoop.start(nativeWindow, argc, argv);
+
+    // PGO — 强制写出 profile 并异步上传
+    Main::shutdownPGOProfiler();
 
     return ret;
 }

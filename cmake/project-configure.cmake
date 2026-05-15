@@ -20,7 +20,7 @@ else()
 
 		# 检查编译器是否是 Clang
 		message(STATUS
-			"Compiler is Clang. Enabling global ThinLTO for Release builds."
+			"Compiler is Clang. Enabling ThinLTO for Release/RelWithDebInfo/MinSizeRel."
 		)
 
 		if(WIN32)
@@ -32,11 +32,19 @@ else()
 		endif()
 
 		# 同时，也为链接器添加 LTO 标志
-		# 仅在 Release 或 RelWithDebInfo 模式下添加编译选项
-		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo>:-flto=thin>")
+		# 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加编译选项
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
 
-		# 仅在 Release 或 RelWithDebInfo 模式下添加链接选项
-		add_link_options("$<$<CONFIG:Release,RelWithDebInfo>:-flto=thin>")
+		# 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加链接选项
+		add_link_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
+
+		# --- 每个函数/数据放入独立 section，供链接器 GC 丢弃未引用部分 ---
+		add_compile_options("-ffunction-sections")
+		add_compile_options("-fdata-sections")
+		if(NOT WIN32)
+			# Linux 上由链接器丢弃死节
+			add_link_options("-Wl,--gc-sections")
+		endif()
 	else()
 		message(STATUS "Compiler is GCC. Disable LTO.")
 	endif()
@@ -51,19 +59,43 @@ endif()
 # 函数有自己的变量作用域。对于这种简单的命令添加，宏更直观。
 macro(add_strip_command_for_release TARGET_NAME)
 	# $<TARGET_FILE:...>: 获取目标的完整路径
-	# CONFIGURATIONS Release: 只在 Release 模式下执行此命令
+	# CONFIGURATIONS Release/MinSizeRel: 在这些模式下执行此命令
 	# POST_BUILD:             在目标成功构建之后执行
 	add_custom_command(
 		TARGET ${TARGET_NAME}
 		POST_BUILD
-		COMMAND $<$<CONFIG:Release>:${CMAKE_STRIP}> $<$<CONFIG:Release>:-s>
-			$<$<CONFIG:Release>:$<TARGET_FILE:${TARGET_NAME}>>
-		COMMENT "Stripping symbols from ${TARGET_NAME} in Release mode"
+		COMMAND $<$<CONFIG:Release,MinSizeRel>:${CMAKE_STRIP}> $<$<CONFIG:Release,MinSizeRel>:-s>
+			$<$<CONFIG:Release,MinSizeRel>:$<TARGET_FILE:${TARGET_NAME}>>
+		COMMENT "Stripping symbols from ${TARGET_NAME} in Release/MinSizeRel mode"
 		VERBATIM
 	)
 	message(STATUS
-		"Added post-build strip command for target '${TARGET_NAME}' in Release mode."
+		"Added post-build strip command for target '${TARGET_NAME}' in Release/MinSizeRel."
 	)
+endmacro()
+
+# ==============================================================================
+#  GCC (MinGW) 调试信息分离宏
+#  将 DWARF 调试信息从 exe 中提取到 .dbg 文件，类似 Clang 的 PDB
+#  仅对 Debug 和 RelWithDebInfo 生效
+# ==============================================================================
+macro(add_gcc_debug_extract TARGET_NAME)
+	if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+		add_custom_command(
+			TARGET ${TARGET_NAME}
+			POST_BUILD
+			COMMAND ${CMAKE_COMMAND}
+				-D TARGET_FILE="$<TARGET_FILE:${TARGET_NAME}>"
+				-D OBJCOPY="${CMAKE_OBJCOPY}"
+				-D STRIP_EXE="${CMAKE_STRIP}"
+				-D CONFIG="$<CONFIG>"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GccExtractDebug.cmake"
+			COMMENT "GCC: extracting debug to .dbg for ${TARGET_NAME}"
+		)
+		message(STATUS
+			"Added GCC debug extraction for target '${TARGET_NAME}'."
+		)
+	endif()
 endmacro()
 
 # 设置所有可执行文件的输出目录为 build/bin
