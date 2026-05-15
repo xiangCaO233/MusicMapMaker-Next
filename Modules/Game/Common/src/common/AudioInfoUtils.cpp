@@ -31,8 +31,14 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
 
     std::array<char, 128>                    buffer;
     std::string                              result;
+#ifdef _WIN32
+    std::wstring wcommand = Config::utf8ToPath(command).wstring();
+    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_wpopen(wcommand.c_str(), L"r"),
+                                                  _pclose);
+#else
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"),
                                                   pclose);
+#endif
 
     if ( !pipe ) {
         XERROR("AudioInfoUtils: popen() failed for command: {}", command);

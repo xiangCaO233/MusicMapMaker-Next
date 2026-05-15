@@ -135,7 +135,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 engine.setEditorConfig(config);
 
-                if ( std::filesystem::exists(filePath) ) {
+                if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
                     m_pendingOverwritePath = filePath;
                     this->m_onOverwriteConfirm = [filePath]() {
                         Event::EventBus::instance().publish(
@@ -164,7 +164,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     ImGuiFileDialog::Instance()->GetCurrentPath();
                 engine.setEditorConfig(config);
 
-                if ( std::filesystem::exists(filePath) ) {
+                if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
                     m_pendingOverwritePath = filePath;
                     this->m_onOverwriteConfirm = [filePath]() {
                         Event::EventBus::instance().publish(
