@@ -449,7 +449,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 
     // 重置状态
     ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = 0.0;
+    ctx.brushState.holdStartTime = -1.0;
     ctx.brushState.duration      = 0.0;
     ctx.brushState.dtrack        = 0;
     ctx.brushState.isActive      = false;
