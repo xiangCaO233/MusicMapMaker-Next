@@ -1,6 +1,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "graphic/imguivk/VKContext.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -115,7 +116,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.setEditorConfig(config);
 
                 Event::OpenProjectEvent ev;
-                ev.m_projectPath = std::filesystem::path(folderPath);
+                ev.m_projectPath = Config::utf8ToPath(folderPath);
                 Event::EventBus::instance().publish(ev);
             }
             ImGuiFileDialog::Instance()->Close();

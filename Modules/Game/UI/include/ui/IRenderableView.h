@@ -33,6 +33,8 @@ public:
     ITextureLoader*  asTextureLoader() override { return this; }
     IRenderableView* asRenderableView() override { return this; }
 
+    void* getActualInstance() override { return this; }
+
     ///@brief 获取笔刷
     const Brush& getBrush() const { return m_brush; }
 

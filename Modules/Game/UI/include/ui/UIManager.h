@@ -39,10 +39,12 @@ public:
             IUIView* raw = it->second.get();
             if constexpr ( std::is_same_v<T, IUIView> ) {
                 return raw;
-            } else if constexpr ( std::is_same_v<T, ITextureLoader> ) {
-                return raw->asTextureLoader();
-            } else if constexpr ( std::is_same_v<T, IRenderableView> ) {
-                return raw->asRenderableView();
+            } else {
+                // 核心修复：由于项目禁用了 RTTI 且使用了虚继承 (virtual public IUIView)，
+                // 编译器禁止从 IUIView* 直接 static_cast 到派生类。
+                // 我们通过 getActualInstance() 虚函数获取校正后的指针，
+                // 然后通过 void* 桥接进行 static_cast。
+                return static_cast<T*>(raw->getActualInstance());
             }
         }
         return nullptr;

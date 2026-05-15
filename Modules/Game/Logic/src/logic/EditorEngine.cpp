@@ -250,7 +250,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 预加载所有项目内的音效资源
     for ( const auto& res : newProject->m_audioResources ) {
         if ( res.m_type == AudioTrackType::Effect ) {
-            auto absPath = actualProjectPath / res.m_path;
+            auto absPath = actualProjectPath / Config::utf8ToPath(res.m_path);
             if ( std::filesystem::exists(absPath) ) {
                 Audio::AudioManager::instance().preloadSoundEffect(
                     res.m_id, Config::pathToUtf8(absPath), res.m_config.volume);
@@ -370,13 +370,13 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
         '_');
 
     std::filesystem::path mapPath =
-        m_currentProject->m_projectRoot / (safeFilename + ".mmm");
+        m_currentProject->m_projectRoot / Config::utf8ToPath(safeFilename + ".mmm");
 
     // 如果文件已存在，增加后缀
     int suffix = 1;
     while ( std::filesystem::exists(mapPath) ) {
         mapPath = m_currentProject->m_projectRoot /
-                  (safeFilename + "_" + std::to_string(suffix++) + ".mmm");
+                  Config::utf8ToPath(safeFilename + "_" + std::to_string(suffix++) + ".mmm");
     }
 
     meta.map_path = mapPath;
@@ -476,8 +476,9 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
             int suffix = 1;
             while ( std::filesystem::exists(finalPath) ) {
                 finalPath = m_currentProject->m_projectRoot /
-                            (audioPath.stem().string() + "_" +
-                             std::to_string(suffix++) + audioPath.extension().string());
+                            Config::utf8ToPath(audioPath.stem().string() + "_" +
+                                               std::to_string(suffix++) +
+                                               audioPath.extension().string());
             }
         } else {
             // 已在项目内，转为相对路径
@@ -777,7 +778,8 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
             res.m_type = cmd.newType;
             // 如果切为音效，确保加载到池中
             if ( res.m_type == AudioTrackType::Effect ) {
-                auto absPath = m_currentProject->m_projectRoot / res.m_path;
+                auto absPath =
+                    m_currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
                 if ( std::filesystem::exists(absPath) ) {
                     Audio::AudioManager::instance().preloadSoundEffect(
                         res.m_id,

@@ -47,6 +47,9 @@ public:
     /// @brief 安全转换为 IRenderableView
     virtual class IRenderableView* asRenderableView() { return nullptr; }
 
+    /// @brief 获取实际实例指针，用于在禁用 RTTI 且存在虚继承时进行下行转换
+    virtual void* getActualInstance() { return this; }
+
     /// @brief 更新ui
     virtual void update(UIManager* sourceManager) = 0;
 

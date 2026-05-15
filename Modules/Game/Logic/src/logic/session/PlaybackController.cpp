@@ -43,6 +43,14 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
 
     double totalTime       = Audio::AudioManager::instance().getTotalTime();
     double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+
+    // 核心修复：确保 std::clamp 的上限不小于下限。
+    // 如果由于配置（如负的 visualOffset）导致 minTime > totalTime，
+    // 我们将 minTime 限制为 totalTime，防止触发 std::clamp 的断言失败。
+    if ( minTime > totalTime ) {
+        minTime = totalTime;
+    }
+
     m_ctx.currentTime      = std::clamp(cmd.time, minTime, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
@@ -198,6 +206,11 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 
     double totalTime       = Audio::AudioManager::instance().getTotalTime();
     double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+
+    if ( minTime > totalTime ) {
+        minTime = totalTime;
+    }
+
     m_ctx.currentTime      = std::clamp(targetTime, minTime, totalTime);
     m_ctx.lastAudioPos     = 0.0;
     m_ctx.lastAudioSysTime = 0.0;
