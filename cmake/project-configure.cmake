@@ -45,7 +45,7 @@ else()
 
 		# --- Release 模式额外优化 ---
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>")
-		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fmerge-functions>")
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Xclang;-fmerge-functions>")
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-ffp-contract=fast>")
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-semantic-interposition>")
 
