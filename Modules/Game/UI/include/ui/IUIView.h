@@ -12,6 +12,14 @@
 namespace MMM::UI
 {
 class UIManager;
+
+/// @brief 视图类型判别枚举,替代 dynamic_cast (支持 -fno-rtti)
+enum class ViewType : uint8_t {
+    Base,           ///< 基础 IUIView
+    TextureLoader,  ///< ITextureLoader + IUIView
+    RenderableView  ///< IRenderableView = ITextureLoader + VKOffScreenRenderer
+};
+
 class IUIView
 {
 public:
@@ -28,6 +36,16 @@ public:
     {
         CLayWrapperCore::instance().destroyWindowContext(m_layoutCtx);
     }
+
+    /// @brief 获取视图具体类型,替代 dynamic_cast
+    virtual ViewType getViewType() const { return ViewType::Base; }
+
+    /// @brief 安全转换为 ITextureLoader,替代 dynamic_cast (虚继承下 static_cast
+    /// 不可用)
+    virtual class ITextureLoader* asTextureLoader() { return nullptr; }
+
+    /// @brief 安全转换为 IRenderableView
+    virtual class IRenderableView* asRenderableView() { return nullptr; }
 
     /// @brief 更新ui
     virtual void update(UIManager* sourceManager) = 0;

@@ -31,12 +31,23 @@ else()
 			message(STATUS "Windows Clang detected. Enabling PDB generation via lld-link.")
 		endif()
 
+		# --- 全局 Clang 优化 (所有配置) ---
+		add_compile_options("-fno-math-errno")
+		add_compile_options("-funique-internal-linkage-names")
+		add_compile_options("-ftime-trace")
+
 		# 同时，也为链接器添加 LTO 标志
 		# 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加编译选项
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
 
 		# 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加链接选项
 		add_link_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
+
+		# --- Release 模式额外优化 ---
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>")
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fmerge-functions>")
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-ffp-contract=fast>")
+		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-semantic-interposition>")
 
 		# --- 每个函数/数据放入独立 section，供链接器 GC 丢弃未引用部分 ---
 		add_compile_options("-ffunction-sections")
@@ -47,6 +58,7 @@ else()
 		endif()
 	else()
 		message(STATUS "Compiler is GCC. Disable LTO.")
+		add_compile_options("-ftime-report")
 	endif()
 endif()
 

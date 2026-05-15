@@ -36,7 +36,14 @@ public:
     {
         auto it = m_uiviews.find(name);
         if ( it != m_uiviews.end() ) {
-            return dynamic_cast<T*>(it->second.get());
+            IUIView* raw = it->second.get();
+            if constexpr ( std::is_same_v<T, IUIView> ) {
+                return raw;
+            } else if constexpr ( std::is_same_v<T, ITextureLoader> ) {
+                return raw->asTextureLoader();
+            } else if constexpr ( std::is_same_v<T, IRenderableView> ) {
+                return raw->asRenderableView();
+            }
         }
         return nullptr;
     }
@@ -56,7 +63,8 @@ public:
     void onUpdateUI() override;
 
     /// @brief 录制所有离屏渲染指令
-    void onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex) override;
+    void onRecordOffscreen(vk::CommandBuffer& cmd,
+                           uint32_t           frameIndex) override;
 
 private:
     /// @brief 所有ui接口

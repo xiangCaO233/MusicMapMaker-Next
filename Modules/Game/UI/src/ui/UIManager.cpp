@@ -27,7 +27,7 @@ void UIManager::registerView(const std::string&       name,
         XINFO("Registered General [{}] UIView", name);
     }
 
-    auto textureLoader = dynamic_cast<ITextureLoader*>(view.get());
+    auto textureLoader = view->asTextureLoader();
     if ( textureLoader ) {
         m_textureLoaderSequence.push_back(name);
     }
@@ -49,8 +49,7 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 {
     // 检查并重建所有离屏帧缓冲
     for ( const auto& name : m_renderableUiSequence ) {
-        auto renderableView =
-            dynamic_cast<IRenderableView*>(m_uiviews[name].get());
+        auto renderableView = m_uiviews[name]->asRenderableView();
         if ( renderableView && renderableView->needReCreateFrameBuffer() ) {
             renderableView->reCreateFrameBuffer(
                 physicalDevice, logicalDevice, swapchain, cmdPool, queue);
@@ -59,8 +58,7 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 
     // 检查并重载所有纹理
     for ( const auto& name : m_textureLoaderSequence ) {
-        auto textureLoader =
-            dynamic_cast<ITextureLoader*>(m_uiviews[name].get());
+        auto textureLoader = m_uiviews[name]->asTextureLoader();
         if ( textureLoader && textureLoader->needReload() ) {
             textureLoader->reloadTextures(
                 physicalDevice, logicalDevice, cmdPool, queue);
@@ -101,8 +99,7 @@ void UIManager::onUpdateUI()
 void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 {
     for ( const auto& name : m_renderableUiSequence ) {
-        auto renderableView =
-            dynamic_cast<IRenderableView*>(m_uiviews[name].get());
+        auto renderableView = m_uiviews[name]->asRenderableView();
         if ( renderableView ) {
             renderableView->recordCmds(cmd, frameIndex);
         }

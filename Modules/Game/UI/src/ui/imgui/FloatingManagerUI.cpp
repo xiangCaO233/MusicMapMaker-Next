@@ -73,19 +73,12 @@ bool FloatingManagerUI::needReload()
     return std::exchange(m_needReload, false);
 }
 
-/// @brief 重载纹理
-void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
-                                       vk::Device&         logicalDevice,
-                                       vk::CommandPool&    cmdPool,
-                                       vk::Queue&          queue)
+/// @brief 重载纹理 (当前无 ISubView 同时继承 ITextureLoader,预留接口)
+void FloatingManagerUI::reloadTextures(vk::PhysicalDevice& /*physicalDevice*/,
+                                       vk::Device& /*logicalDevice*/,
+                                       vk::CommandPool& /*cmdPool*/,
+                                       vk::Queue& /*queue*/)
 {
-    for ( auto& [id, subView] : m_subViews ) {
-        auto textureLoader = dynamic_cast<ITextureLoader*>(subView.get());
-        if ( textureLoader ) {
-            textureLoader->reloadTextures(
-                physicalDevice, logicalDevice, cmdPool, queue);
-        }
-    }
 }
 
 }  // namespace MMM::UI
