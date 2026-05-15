@@ -50,7 +50,7 @@ endif()
 
 # --- 数据源 (三选一) ---
 set(MMM_PGO_DATA "" CACHE FILEPATH "Path to pre-merged .profdata file")
-set(MMM_PGO_SOURCE_DIR "" CACHE STRING "Directory containing .profraw files to auto-merge")
+set(MMM_PGO_PROFILE_DIR "" CACHE STRING "Directory containing .profraw files to auto-merge")
 set(MMM_PGO_SOURCE_URL "" CACHE STRING "URL to download profiles from (autoindex dir or .profdata file)")
 
 set(MMM_PGO_UPLOAD_URL "" CACHE STRING "URL for uploading collected .profraw profiles")
@@ -59,11 +59,18 @@ set(MMM_PGO_UPLOAD_URL "" CACHE STRING "URL for uploading collected .profraw pro
 #  解析 profile 数据源 → 统一为 MMM_PGO_DATA (在需要时自动下载/合并)
 # =============================================================================
 if(MMM_PGO_USE)
-    # 调试信息：显示当前 PGO 变量状态
-    message(STATUS "PGO: Configuration check:")
-    message(STATUS "  MMM_PGO_DATA       = '${MMM_PGO_DATA}'")
-    message(STATUS "  MMM_PGO_SOURCE_DIR = '${MMM_PGO_SOURCE_DIR}'")
-    message(STATUS "  MMM_PGO_SOURCE_URL = '${MMM_PGO_SOURCE_URL}'")
+    # 彻底的调试信息：列出所有可能影响 PGO 的变量
+    message(STATUS "PGO: --- Configuration Debug Start ---")
+    message(STATUS "  MMM_PGO_USE         = '${MMM_PGO_USE}'")
+    message(STATUS "  MMM_PGO_DATA        = '${MMM_PGO_DATA}'")
+    message(STATUS "  MMM_PGO_PROFILE_DIR = '${MMM_PGO_PROFILE_DIR}'")
+    message(STATUS "  MMM_PGO_SOURCE_URL  = '${MMM_PGO_SOURCE_URL}'")
+    
+    # 尝试从缓存中强制同步 (防止某些环境下本地变量覆盖缓存)
+    if("${MMM_PGO_PROFILE_DIR}" STREQUAL "" AND NOT "$CACHE{MMM_PGO_PROFILE_DIR}" STREQUAL "")
+        set(MMM_PGO_PROFILE_DIR "$CACHE{MMM_PGO_PROFILE_DIR}")
+        message(STATUS "  (Recovered MMM_PGO_PROFILE_DIR from cache: '${MMM_PGO_PROFILE_DIR}')")
+    endif()
 
     # 查找 llvm-profdata (与 clang 同目录)
     get_filename_component(_clang_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
@@ -77,7 +84,7 @@ if(MMM_PGO_USE)
     endif()
 
     if(NOT "${MMM_PGO_DATA}" STREQUAL "")
-        # A) 直接指定 .profdata 文件 (支持 URL 下载)
+        # A) 直接指定 .profdata 文件
         if(MMM_PGO_DATA MATCHES "^https?://")
             set(_downloaded "${CMAKE_BINARY_DIR}/pgo_downloaded.profdata")
             message(STATUS "PGO: Downloading profile from ${MMM_PGO_DATA}")
@@ -88,14 +95,13 @@ if(MMM_PGO_USE)
                 message(FATAL_ERROR "PGO: Download failed (${_dl_code}): ${_dl_msg}")
             endif()
             set(MMM_PGO_DATA "${_downloaded}")
-            message(STATUS "PGO: Downloaded → ${_downloaded}")
         endif()
 
         if(NOT EXISTS "${MMM_PGO_DATA}")
             message(FATAL_ERROR "PGO: Profile data not found: ${MMM_PGO_DATA}")
         endif()
 
-    elseif(NOT "${MMM_PGO_SOURCE_URL}" STREQUAL "" OR NOT "${MMM_PGO_SOURCE_DIR}" STREQUAL "")
+    elseif(NOT "${MMM_PGO_SOURCE_URL}" STREQUAL "" OR NOT "${MMM_PGO_PROFILE_DIR}" STREQUAL "")
         # B/C) 自动合并: 调 pgo_merge.py
         set(_merged "${CMAKE_BINARY_DIR}/pgo_merged.profdata")
         set(_script "${CMAKE_CURRENT_SOURCE_DIR}/scripts/pgo_merge.py")
@@ -120,11 +126,11 @@ if(MMM_PGO_USE)
                 OUTPUT_VARIABLE _out
                 ERROR_VARIABLE  _err
             )
-        elseif(NOT "${MMM_PGO_SOURCE_DIR}" STREQUAL "")
-            message(STATUS "PGO: Merging profiles from ${MMM_PGO_SOURCE_DIR}")
+        elseif(NOT "${MMM_PGO_PROFILE_DIR}" STREQUAL "")
+            message(STATUS "PGO: Merging profiles from ${MMM_PGO_PROFILE_DIR}")
             execute_process(
                 COMMAND ${_py_cmd} "${_script}"
-                    --input-dir "${MMM_PGO_SOURCE_DIR}"
+                    --input-dir "${MMM_PGO_PROFILE_DIR}"
                     --output "${_merged}"
                     --profdata "${LLVM_PROFDATA}"
                     --min-files 1
@@ -147,7 +153,11 @@ if(MMM_PGO_USE)
 
     else()
         message(FATAL_ERROR
-            "PGO: Set one of MMM_PGO_DATA, MMM_PGO_SOURCE_DIR, or MMM_PGO_SOURCE_URL")
+            "PGO: Profile data source missing!\n"
+            "  Please set one of:\n"
+            "  -DMMM_PGO_DATA=path/to/merged.profdata\n"
+            "  -DMMM_PGO_PROFILE_DIR=path/to/raw_profiles_dir\n"
+            "  -DMMM_PGO_SOURCE_URL=https://...\n")
     endif()
 endif()
 
@@ -155,8 +165,10 @@ endif()
 #  Optimized 模式 — 使用收集的 profile 数据优化编译
 # =========================================================================
 if(MMM_PGO_USE)
-    message(STATUS "PGO: Using profile data = ${MMM_PGO_DATA}")
-    add_compile_options("-fprofile-instr-use=${MMM_PGO_DATA}")
+    if(NOT "${MMM_PGO_DATA}" STREQUAL "")
+        message(STATUS "PGO: Using profile data = ${MMM_PGO_DATA}")
+        add_compile_options("-fprofile-instr-use=${MMM_PGO_DATA}")
+    endif()
 endif()
 
 # =========================================================================
