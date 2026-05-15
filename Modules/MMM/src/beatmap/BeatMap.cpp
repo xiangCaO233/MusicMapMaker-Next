@@ -23,16 +23,20 @@ namespace MMM
  */
 BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
 {
-    if ( !std::filesystem::exists(mapFilePath) ) {
-        XWARN("Load Map Failed: File Not Exists.");
+    std::error_code ec;
+    if ( !std::filesystem::exists(mapFilePath, ec) ) {
+        XWARN("Load Map Failed: File Not Exists or Access Denied: {}", Config::pathToUtf8(mapFilePath));
         return {};
     }
+
     if ( !mapFilePath.has_extension() ) {
         std::ifstream ifs(mapFilePath);
-        std::string   firstLine;
-        if ( std::getline(ifs, firstLine) ) {
-            if ( firstLine.find("osu file format") != std::string::npos ) {
-                return loadOSUMap(mapFilePath);
+        if ( ifs.is_open() ) {
+            std::string firstLine;
+            if ( std::getline(ifs, firstLine) ) {
+                if ( firstLine.find("osu file format") != std::string::npos ) {
+                    return loadOSUMap(mapFilePath);
+                }
             }
         }
         XWARN(

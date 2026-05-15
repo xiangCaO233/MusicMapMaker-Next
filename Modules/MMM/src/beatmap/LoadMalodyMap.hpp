@@ -23,9 +23,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 获取谱面基本元数据
     BaseMapMeta& basemeta = beatMap.m_baseMapMetadata;
     basemeta.map_path     = path;
-    // 切换为绝对路径
+    // 切换为绝对路径 (使用 error_code 避免异常)
+    std::error_code ec;
     if ( basemeta.map_path.is_relative() ) {
-        basemeta.map_path = std::filesystem::absolute(basemeta.map_path);
+        auto abs_path = std::filesystem::absolute(basemeta.map_path, ec);
+        if ( !ec ) {
+            basemeta.map_path = abs_path;
+        }
     }
 
     XINFO("加载malody谱面路径:{}", Config::pathToUtf8(basemeta.map_path));
