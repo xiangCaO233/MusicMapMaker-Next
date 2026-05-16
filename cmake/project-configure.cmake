@@ -47,7 +47,6 @@ else()
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>")
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Xclang;-fmerge-functions>")
 		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-ffp-contract=fast>")
-		add_compile_options("$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-semantic-interposition>")
 
 		# --- 每个函数/数据放入独立 section，供链接器 GC 丢弃未引用部分 ---
 		add_compile_options("-ffunction-sections")
