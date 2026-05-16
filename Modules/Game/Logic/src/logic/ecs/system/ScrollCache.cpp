@@ -48,7 +48,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         500.0;  // 基准流速 (px/s) = scrollLength / timeRange
     const auto& visualConfig =
         EditorEngine::instance().getEditorConfig().visual;
-    const bool isLinearMapping = visualConfig.enableLinearScrollMapping;
+    const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
+    const double timelineZoom    = visualConfig.timelineZoom;
 
     // 1. 获取基准 BPM (对应 osu! 的 BaseBeatLength)
     double refBPM = 120.0;
@@ -73,12 +74,14 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     //   Multiplier = Velocity × ScrollSpeed × BaseBeatLength / BeatLength
     //            = 1.0  × scrollMult  × (60000/refBPM) / (60000/bpm)
     //            = scrollMult × bpm / refBPM
+    //   speed     = Multiplier × scrollLength / timeRange
+    //            = scrollMult × bpm/refBPM × BASE_SPEED × timelineZoom
     auto calcSpeed = [&](double bpm, double sm) {
         if ( isLinearMapping ) {
-            return BASE_SPEED;
+            return BASE_SPEED * timelineZoom;
         }
         double ratio = std::clamp(bpm / refBPM, 0.0, 1000000.0);
-        return ratio * sm * BASE_SPEED;
+        return ratio * sm * BASE_SPEED * timelineZoom;
     };
 
     // osu! 关键：SV 跨 BPM 红线继承，不重置。仅绿线显式修改 ScrollSpeed。
@@ -128,7 +131,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 
 double ScrollCache::getAbsY(double t) const
 {
-    const double DEFAULT_SPEED = 500.0;
+    const double DEFAULT_SPEED =
+        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
 
     auto it = std::upper_bound(
@@ -148,7 +152,8 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getTime(double absY) const
 {
-    const double DEFAULT_SPEED = 500.0;
+    const double DEFAULT_SPEED =
+        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     auto it = std::lower_bound(
