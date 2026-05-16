@@ -26,8 +26,18 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    int defaultXW = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
-    int defaultWW = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : defaultXW));
+    int defaultXW =
+        (trackCount == 4)
+            ? 64
+            : (trackCount == 5
+                   ? 51
+                   : (trackCount == 6
+                          ? 43
+                          : static_cast<int>(std::round(256.0 / trackCount))));
+    int defaultWW =
+        (trackCount == 4)
+            ? 60
+            : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : defaultXW));
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标（画布宽度 256）
     auto columnToX = [&](int column) {
@@ -266,7 +276,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 ej["beat"] = timeToBeat(t.m_timestamp);
             }
 
-            ej["scroll"] = t.m_timingEffectParameter;
+            if ( t.m_timingEffectParameter < 0 ) {
+                ej["scroll"] = -100.0 / t.m_timingEffectParameter;
+            } else {
+                ej["scroll"] = t.m_timingEffectParameter;
+            }
 
             // 恢复 Malody 特有字段
             if ( auto it = t.m_metadata.timing_properties.find(
@@ -323,8 +337,12 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         if ( mode == 7 || mode == 4 ) {
             nj["x"] = columnToX((int)note.m_track);
-            // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度 (60/50/40)
-            nj["w"] = (note.m_type == NoteType::POLYLINE || note.m_type == NoteType::HOLD) ? defaultXW : defaultWW;
+            // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度
+            // (60/50/40)
+            nj["w"] = (note.m_type == NoteType::POLYLINE ||
+                       note.m_type == NoteType::HOLD)
+                          ? defaultXW
+                          : defaultWW;
         } else {
             nj["column"] = (int)note.m_track;
         }
@@ -379,7 +397,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 // 普通 Hold 写成单 seg 模式，且 seg 内不包含 w 和 x
                 nj["seg"] = json::array();
                 json sj;
-                sj["beat"] = getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
+                sj["beat"] =
+                    getRelBeat(h.m_timestamp + h.m_duration, nj["beat"]);
                 nj["seg"].push_back(sj);
             } else {
                 nj["endbeat"] = timeToBeat(h.m_timestamp + h.m_duration);
@@ -580,11 +599,13 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              it != note.m_metadata.note_properties.end() ) {
             for ( const auto& [key, val] : it->second ) {
                 // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
-                if ( key != "beat" && key != "column" && key != "x" && key != "endbeat" &&
-                     key != "seg" && key != "dir" &&
+                if ( key != "beat" && key != "column" && key != "x" &&
+                     key != "endbeat" && key != "seg" && key != "dir" &&
                      key != "original_structure" &&
                      key != "original_structure_flick" &&
-                     ((note.m_type != NoteType::FLICK && note.m_type != NoteType::NOTE) || key != "w") ) {
+                     ((note.m_type != NoteType::FLICK &&
+                       note.m_type != NoteType::NOTE) ||
+                      key != "w") ) {
                     try {
                         nj[key] = json::parse(val);
                     } catch ( ... ) {
