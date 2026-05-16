@@ -653,6 +653,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                             nextNC.m_duration   = s.duration;
                             nextNC.m_trackIndex = s.trackIndex;
                             nextNC.m_dtrack     = s.dtrack;
+                            nextNC.m_metadata   = s.metadata;
+                            nextNC.m_isSubNote  = false;
+                            nextNC.m_parentPolyline = entt::null;
+                            nextNC.m_subIndex   = -1;
                             nextNC.m_subNotes.clear();
 
                             // 降级时，删除该 Polyline 下的所有剩余子物件实体
@@ -729,6 +733,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                 nextNC.m_duration   = s.duration;
                                 nextNC.m_trackIndex = s.trackIndex;
                                 nextNC.m_dtrack     = s.dtrack;
+                                nextNC.m_metadata   = s.metadata;
+                                nextNC.m_isSubNote  = false;
+                                nextNC.m_parentPolyline = entt::null;
+                                nextNC.m_subIndex   = -1;
                                 nextNC.m_subNotes.clear();
 
                                 for ( auto subEnt : subNoteView ) {
