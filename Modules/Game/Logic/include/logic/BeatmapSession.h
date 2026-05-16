@@ -48,7 +48,8 @@ public:
 
 private:
     /// @brief 消费并路由指令队列中的所有命令
-    void processCommands();
+    /// @return 如果处理了至少一个指令，则返回 true
+    bool processCommands();
 
     /// @brief 更新 ECS 状态并为所有活跃视口生成渲染快照
     void updateECSAndRender(const Config::EditorConfig& config);

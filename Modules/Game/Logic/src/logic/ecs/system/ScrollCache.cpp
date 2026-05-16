@@ -11,18 +11,16 @@ namespace MMM::Logic::System
 
 void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 {
-    struct TimingEntry {
-        entt::entity             entity;
-        const TimelineComponent* component;
-    };
-    std::vector<TimingEntry> timings;
+    m_rebuildScratch.clear();
     auto tlView = timelineRegistry.view<const TimelineComponent>();
+    m_rebuildScratch.reserve(tlView.size());
+
     for ( auto entity : tlView ) {
-        timings.push_back(
+        m_rebuildScratch.push_back(
             { entity, &tlView.get<const TimelineComponent>(entity) });
     }
-
-    if ( timings.empty() ) {
+ 
+    if ( m_rebuildScratch.empty() ) {
         m_segments.clear();
         isDirty = false;
         return;
@@ -30,7 +28,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 
     // 排序逻辑：时间戳升序；时间戳相同时，BPM 类型优先于 SCROLL 类型
     std::stable_sort(
-        timings.begin(), timings.end(), [](const auto& a, const auto& b) {
+        m_rebuildScratch.begin(), m_rebuildScratch.end(), [](const auto& a, const auto& b) {
             if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) >
                  1e-9 ) {
                 return a.component->m_timestamp < b.component->m_timestamp;
@@ -40,16 +38,16 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             }
             return false;  // 保持原始顺序
         });
-
+ 
     std::vector<ScrollSegment> newSegments;
-    newSegments.reserve(timings.size() + 1);
-
+    newSegments.reserve(m_rebuildScratch.size() + 1);
+ 
     const double BASE_SPEED = 500.0;  // 基准流速
     const auto&  visualConfig =
         EditorEngine::instance().getEditorConfig().visual;
     const double globalMultiplier = visualConfig.timelineZoom;
     const bool   isLinearMapping  = visualConfig.enableLinearScrollMapping;
-
+ 
     // 1. 获取基准 BPM (优先使用谱面元数据中的预设值)
     double refBPM = 120.0;
     if ( auto session = EditorEngine::instance().getActiveSession() ) {
@@ -57,24 +55,24 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             refBPM = beatmap->m_baseMapMetadata.preference_bpm;
         }
     }
-
+ 
     if ( refBPM <= 0.0 ) {
-        for ( const auto& entry : timings ) {
+        for ( const auto& entry : m_rebuildScratch ) {
             if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
                 refBPM = entry.component->m_value;
                 break;
             }
         }
     }
-
+ 
     if ( refBPM < 1.0 ) refBPM = 120.0;
     if ( refBPM > 1000000.0 ) refBPM = 1000000.0;
-
+ 
     double currentBPM        = refBPM;
     double currentScrollMult = 1.0;
-    double lastTime          = std::min(0.0, timings[0].component->m_timestamp);
+    double lastTime          = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
     double currentAbsY       = 0.0;
-
+ 
     auto calcSpeed = [&](double bpm, double sm) {
         if ( isLinearMapping ) {
             return BASE_SPEED * globalMultiplier;
@@ -83,11 +81,11 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         double safeBPM = std::clamp(bpm, 0.0, 1000000.0);
         return (safeBPM / refBPM) * sm * BASE_SPEED * globalMultiplier;
     };
-
+ 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
     newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
-
-    for ( const auto& entry : timings ) {
+ 
+    for ( const auto& entry : m_rebuildScratch ) {
         const auto* tl = entry.component;
         if ( tl->m_timestamp > lastTime ) {
             double dt = tl->m_timestamp - lastTime;

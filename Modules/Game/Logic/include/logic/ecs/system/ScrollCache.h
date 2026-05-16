@@ -4,6 +4,8 @@
 #include <entt/entt.hpp>
 #include <vector>
 
+namespace MMM::Logic { struct TimelineComponent; }
+
 namespace MMM::Logic::System
 {
 
@@ -55,6 +57,12 @@ public:
 
 private:
     std::vector<ScrollSegment> m_segments;
+ 
+    struct TimingEntry {
+        entt::entity             entity;
+        const TimelineComponent* component;
+    };
+    std::vector<TimingEntry> m_rebuildScratch;
 };
 
 }  // namespace MMM::Logic::System

@@ -79,6 +79,7 @@ struct SessionContext {
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*> bpmEvents;    ///< 缓存并排序后的 BPM 事件
     bool                                  isBpmEventsDirty{ true }; ///< BPM 缓存脏标记
+    double                                lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌

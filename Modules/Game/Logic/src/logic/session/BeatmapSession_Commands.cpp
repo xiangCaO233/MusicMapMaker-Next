@@ -16,10 +16,12 @@
 namespace MMM::Logic
 {
 
-void BeatmapSession::processCommands()
+bool BeatmapSession::processCommands()
 {
     LogicCommand cmd;
+    bool         processed = false;
     while ( m_commandQueue.try_dequeue(cmd) ) {
+        processed = true;
         std::visit(
             [this](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
@@ -146,6 +148,7 @@ void BeatmapSession::processCommands()
             },
             cmd);
     }
+    return processed;
 }
 
 // --- Session 自己处理的 ---
