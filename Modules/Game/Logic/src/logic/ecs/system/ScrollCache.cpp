@@ -44,47 +44,27 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
 
-    const double BASE_SPEED = 500.0;  // 基准流速
+    const double BASE_SPEED = 500.0;  // 基准流速 (px/s)
     const auto&  visualConfig =
         EditorEngine::instance().getEditorConfig().visual;
     const double globalMultiplier = visualConfig.timelineZoom;
     const bool   isLinearMapping  = visualConfig.enableLinearScrollMapping;
 
-    // 1. 获取基准 BPM (优先使用谱面元数据中的预设值)
-    double refBPM = 120.0;
-    if ( auto session = EditorEngine::instance().getActiveSession() ) {
-        if ( auto beatmap = session->getContext().currentBeatmap ) {
-            refBPM = beatmap->m_baseMapMetadata.preference_bpm;
+    // osu! 风格：流速仅由 scroll 倍率决定，BPM 不影响 scroll speed。
+    // BPM 通过 time-to-beat 间距 (物件密度)
+    // 间接影响视觉，不需在速度公式中乘入。
+    auto calcSpeed = [&](double /*bpm*/, double sm) {
+        if ( isLinearMapping ) {
+            return BASE_SPEED * globalMultiplier;
         }
-    }
+        return sm * BASE_SPEED * globalMultiplier;
+    };
 
-    if ( refBPM <= 0.0 ) {
-        for ( const auto& entry : m_rebuildScratch ) {
-            if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
-                refBPM = entry.component->m_value;
-                break;
-            }
-        }
-    }
-
-    if ( refBPM < 1.0 ) refBPM = 120.0;
-    if ( refBPM > 1000000.0 ) refBPM = 1000000.0;
-
-    double currentBPM        = refBPM;
     double currentScrollMult = 1.0;
     double lastTime = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
     double currentAbsY = 0.0;
 
-    auto calcSpeed = [&](double bpm, double sm) {
-        if ( isLinearMapping ) {
-            return BASE_SPEED * globalMultiplier;
-        }
-        if ( std::abs(refBPM) < 1e-6 ) return 0.0;
-        double safeBPM = std::clamp(bpm, 0.0, 1000000.0);
-        return (safeBPM / refBPM) * sm * BASE_SPEED * globalMultiplier;
-    };
-
-    double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
+    double currentSpeed = calcSpeed(0.0, currentScrollMult);
     newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
 
     for ( const auto& entry : m_rebuildScratch ) {
@@ -100,7 +80,6 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             newSegments.back().effects |= SCROLL_EFFECT_BPM;
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
-            currentBPM                   = tl->m_value;
             currentScrollMult            = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
@@ -116,7 +95,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             if ( currentScrollMult > 10000.0 ) currentScrollMult = 10000.0;
         }
 
-        currentSpeed             = calcSpeed(currentBPM, currentScrollMult);
+        currentSpeed             = calcSpeed(0.0, currentScrollMult);
         newSegments.back().speed = currentSpeed;
     }
 
