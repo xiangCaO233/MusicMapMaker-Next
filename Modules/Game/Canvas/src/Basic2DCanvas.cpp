@@ -40,7 +40,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     if ( m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
          !m_currentSnapshot->beatmapName.empty() ) {
         title = m_currentSnapshot->beatmapName;
-        if ( m_currentSnapshot->isDirty ) { title += " *"; }
+        if ( m_currentSnapshot->isDirty ) {
+            title += " *";
+        }
     }
     std::string       windowName = fmt::format("{}###{}", title, m_canvasName);
     UI::LayoutContext lctx(m_layoutCtx, windowName);
@@ -73,23 +75,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                     .count();
             double dt = now - m_currentSnapshot->snapshotSysTime;
             if ( dt > 0.0 && dt < 0.1 ) {
-                double      scrollSpeed  = 500.0;
-                double      snapshotTime = m_currentSnapshot->currentTime;
-                const auto& segs         = m_currentSnapshot->scrollSegments;
-                if ( !segs.empty() ) {
-                    auto it = std::upper_bound(
-                        segs.begin(),
-                        segs.end(),
-                        snapshotTime,
-                        [](double                              val,
-                           const Logic::System::ScrollSegment& seg) {
-                            return val < seg.time;
-                        });
-                    if ( it != segs.begin() ) { --it; }
-                    scrollSpeed = it->speed;
-                }
                 newYOffset = static_cast<float>(
-                    dt * m_currentSnapshot->playbackSpeed * scrollSpeed);
+                    m_currentSnapshot->getInterpolatedOffset(dt));
             }
         }
 

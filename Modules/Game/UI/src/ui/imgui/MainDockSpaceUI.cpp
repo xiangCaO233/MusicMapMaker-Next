@@ -1,5 +1,4 @@
 #include "ui/imgui/MainDockSpaceUI.h"
-#include "graphic/imguivk/VKContext.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -7,6 +6,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -24,7 +24,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     m_mainMenuview.update(sourceManager);
 
-    auto& engine   = Logic::EditorEngine::instance();
+    auto&                engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -136,7 +136,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.setEditorConfig(config);
 
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                    m_pendingOverwritePath = filePath;
+                    m_pendingOverwritePath     = filePath;
                     this->m_onOverwriteConfirm = [filePath]() {
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
@@ -144,8 +144,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     };
                     m_showOverwriteModal = true;
                 } else {
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                        Logic::CmdSaveBeatmapAs{ filePath }));
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSaveBeatmapAs{ filePath }));
                 }
             }
             ImGuiFileDialog::Instance()->Close();
@@ -165,7 +166,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.setEditorConfig(config);
 
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                    m_pendingOverwritePath = filePath;
+                    m_pendingOverwritePath     = filePath;
                     this->m_onOverwriteConfirm = [filePath]() {
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
@@ -173,8 +174,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     };
                     m_showOverwriteModal = true;
                 } else {
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                        Logic::CmdPackBeatmap{ filePath }));
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdPackBeatmap{ filePath }));
                 }
             }
             ImGuiFileDialog::Instance()->Close();
@@ -207,7 +209,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 std::string filePath =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                auto config = engine.getEditorConfig();
+                auto config                        = engine.getEditorConfig();
                 config.settings.preferredAsciiFont = filePath;
                 engine.setEditorConfig(config);
                 if ( auto ctx = Graphic::VKContext::get() )
@@ -217,13 +219,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Cjk Font Picker ---
-        if ( ImGuiFileDialog::Instance()->Display("CjkFontPicker",
-                                                  ImGuiWindowFlags_NoCollapse,
-                                                  { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->Display(
+                 "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 std::string filePath =
                     ImGuiFileDialog::Instance()->GetFilePathName();
-                auto config = engine.getEditorConfig();
+                auto config                      = engine.getEditorConfig();
                 config.settings.preferredCjkFont = filePath;
                 engine.setEditorConfig(config);
                 if ( auto ctx = Graphic::VKContext::get() )
@@ -239,23 +240,24 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         m_showImportTypeModal = false;
     }
 
-    if ( ImGui::BeginPopupModal("AudioImportTypeModal",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if ( ImGui::BeginPopupModal(
+             "AudioImportTypeModal", nullptr, ImGuiWindowFlags_None) ) {
         ImGui::Text("%s", TR("ui.audio_import.type_hint").data());
         ImGui::Spacing();
 
         if ( ImGui::Button(TR("ui.audio_track.main").data(), { 120, 0 }) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdImportAudio{ m_pendingImportPath,
-                                       AudioTrackType::Main }));
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdImportAudio{
+                    m_pendingImportPath, AudioTrackType::Main }));
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.audio_track.effect").data(), { 120, 0 }) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdImportAudio{ m_pendingImportPath,
-                                       AudioTrackType::Effect }));
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdImportAudio{
+                    m_pendingImportPath, AudioTrackType::Effect }));
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -272,16 +274,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         m_showOverwriteModal = false;
     }
 
-    if ( ImGui::BeginPopupModal("OverwriteConfirmModal",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if ( ImGui::BeginPopupModal(
+             "OverwriteConfirmModal", nullptr, ImGuiWindowFlags_None) ) {
         ImGui::Text("%s", TR("ui.file.overwrite.title").data());
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::Text("%s",
-                    TR_FMT("ui.file.overwrite.msg", m_pendingOverwritePath)
-                        .c_str());
+        ImGui::Text(
+            "%s",
+            TR_FMT("ui.file.overwrite.msg", m_pendingOverwritePath).c_str());
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -312,11 +315,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     if ( ImGui::BeginPopupModal(
              fmt::format("{}###ExitConfirmation", TR("ui.exit.confirm_title"))
                  .c_str(),
              nullptr,
-             ImGuiWindowFlags_AlwaysAutoResize) ) {
+             ImGuiWindowFlags_None) ) {
         auto        session = engine.getActiveSession();
         std::string mapName = "Unknown";
         if ( session && session->getContext().currentBeatmap ) {

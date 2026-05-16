@@ -61,26 +61,9 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
                     .count();
             double dt = now - m_currentSnapshot->snapshotSysTime;
             if ( dt > 0.0 && dt < 0.1 ) {
-                double      scrollSpeed  = 500.0;
-                double      snapshotTime = m_currentSnapshot->currentTime;
-                const auto& segs         = m_currentSnapshot->scrollSegments;
-                if ( !segs.empty() ) {
-                    auto it = std::upper_bound(
-                        segs.begin(),
-                        segs.end(),
-                        snapshotTime,
-                        [](double                              val,
-                           const Logic::System::ScrollSegment& seg) {
-                            return val < seg.time;
-                        });
-                    if ( it != segs.begin() ) {
-                        --it;
-                    }
-                    scrollSpeed = it->speed;
-                }
                 // 关键点：预览区的偏移需要乘上预览区的缩放倍率 renderScaleY
                 newYOffset = static_cast<float>(
-                    dt * m_currentSnapshot->playbackSpeed * scrollSpeed *
+                    m_currentSnapshot->getInterpolatedOffset(dt) *
                     m_currentSnapshot->renderScaleY);
             }
         }
@@ -124,17 +107,22 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     ImVec2 localMousePos = { mousePos.x - windowPos.x,
                              mousePos.y - windowPos.y };
 
-    bool isHoveringContent = mousePos.x >= windowPos.x && mousePos.x <= windowPos.x + contentSize.x &&
-                             mousePos.y >= windowPos.y && mousePos.y <= windowPos.y + contentSize.y;
+    bool isHoveringContent = mousePos.x >= windowPos.x &&
+                             mousePos.x <= windowPos.x + contentSize.x &&
+                             mousePos.y >= windowPos.y &&
+                             mousePos.y <= windowPos.y + contentSize.y;
 
     bool isHovered = ImGui::IsWindowHovered() && isHoveringContent;
 
-    ImVec2 clickPos = ImGui::GetIO().MouseClickedPos[0];
-    bool clickStartedInContent = clickPos.x >= windowPos.x && clickPos.x <= windowPos.x + contentSize.x &&
-                                 clickPos.y >= windowPos.y && clickPos.y <= windowPos.y + contentSize.y;
+    ImVec2 clickPos              = ImGui::GetIO().MouseClickedPos[0];
+    bool   clickStartedInContent = clickPos.x >= windowPos.x &&
+                                   clickPos.x <= windowPos.x + contentSize.x &&
+                                   clickPos.y >= windowPos.y &&
+                                   clickPos.y <= windowPos.y + contentSize.y;
 
     // 仅当点击起源于内容区，并且当前窗口拥有焦点时，才视为拖拽
-    bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent && ImGui::IsWindowFocused();
+    bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent &&
+                      ImGui::IsWindowFocused();
 
     Event::EventBus::instance().publish(Event::LogicCommandEvent(
         Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
@@ -156,10 +144,13 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     if ( m_currentSnapshot && isHovered ) {
         // 核心修复：仅在鼠标松开时，且初始点击是在当前内容区发生时，才触发跳转。
         // 这防止了从其他窗口拖拽进入预览区松开时造成的误触跳转。
-        if ( ImGui::IsMouseReleased(0) && clickStartedInContent && ImGui::IsWindowFocused() ) {
-            float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSeek{ m_currentSnapshot->hoveredTime - visualOffset }));
+        if ( ImGui::IsMouseReleased(0) && clickStartedInContent &&
+             ImGui::IsWindowFocused() ) {
+            float visualOffset =
+                Config::AppConfig::instance().getVisualConfig().visualOffset;
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSeek{
+                    m_currentSnapshot->hoveredTime - visualOffset }));
         }
 
         // --- 交互：滚轮调整预览区倍率 ---

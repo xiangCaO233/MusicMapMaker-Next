@@ -537,7 +537,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(4);
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s", TR("ui.audio_manager.import_audio").data());
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.audio_manager.import_audio").data());
                 }
             });
 
@@ -548,9 +549,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     bool showManageModal = !m_manageTrackId.empty();
     if ( showManageModal ) {
         std::string windowTitle =
-            fmt::format("{} {}", TR("ui.audio_manager.manage_title").data(),
+            fmt::format("{} {}",
+                        TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
-        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_Appearing);
         if ( ImGui::Begin(windowTitle.c_str(),
                           &showManageModal,
                           ImGuiWindowFlags_NoCollapse) ) {
@@ -558,113 +563,131 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 m_manageTrackId = "";
             }
 
-        // --- 使用 Clay 重构对话框内容 ---
-        CLayVBox modalLayout;
-        float padding = 16 * dpiScale;
-        modalLayout.setPadding(padding, padding, padding, padding);
-        modalLayout.setSpacing(12 * dpiScale);
+            // --- 使用 Clay 重构对话框内容 ---
+            CLayVBox modalLayout;
+            float    padding = 16 * dpiScale;
+            modalLayout.setPadding(padding, padding, padding, padding);
+            modalLayout.setSpacing(12 * dpiScale);
 
-        // 1. 标题与分隔线 (移除了冗余的 Text，仅保留分隔线)
-        modalLayout.addElement(
-            "ModalSep1", Sizing::Grow(), Sizing::Fixed(1),
-            [=, this](Clay_BoundingBox r, bool) {
-                ImGui::GetWindowDrawList()->AddLine(
-                    { r.x, r.y }, { r.x + r.width, r.y },
-                    ImGui::GetColorU32(ImGuiCol_Separator));
-            });
+            // 1. 标题与分隔线 (移除了冗余的 Text，仅保留分隔线)
+            modalLayout.addElement(
+                "ModalSep1",
+                Sizing::Grow(),
+                Sizing::Fixed(1),
+                [=, this](Clay_BoundingBox r, bool) {
+                    ImGui::GetWindowDrawList()->AddLine(
+                        { r.x, r.y },
+                        { r.x + r.width, r.y },
+                        ImGui::GetColorU32(ImGuiCol_Separator));
+                });
 
-        // 2. 配置项 (音轨类型)
-        CLayHBox typeRow;
-        typeRow.setAlignment(Alignment::Center());
-        typeRow.setSpacing(8 * dpiScale);
-        typeRow.addElement(
-            "TypeLabel", Sizing::Fixed(100 * dpiScale), Sizing::Grow(),
-            [=, this](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("%s:", TR("ui.audio_manager.track_type").data());
-            });
-        typeRow.addElement(
-            "TypeCombo", Sizing::Grow(), Sizing::Fixed(28 * dpiScale),
-            [=, this, &engine](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                int         currentType = (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
-                const char* typeNames[] = { "Main", "Effect" };
-                ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##TrackType", &currentType, typeNames, 2) ) {
-                    m_manageTrackType = (currentType == 0
-                                             ? AudioTrackType::Main
-                                             : AudioTrackType::Effect);
-                    engine.pushCommand(Logic::CmdUpdateAudioResource{
-                        m_manageTrackId, m_manageTrackType });
-                    ImGui::CloseCurrentPopup();
-                }
-            });
-        modalLayout.addLayout("TypeRow",
-                              typeRow,
-                              Sizing::Grow(),
-                              Sizing::Fixed(32 * dpiScale));
+            // 2. 配置项 (音轨类型)
+            CLayHBox typeRow;
+            typeRow.setAlignment(Alignment::Center());
+            typeRow.setSpacing(8 * dpiScale);
+            typeRow.addElement(
+                "TypeLabel",
+                Sizing::Fixed(100 * dpiScale),
+                Sizing::Grow(),
+                [=, this](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::Text("%s:",
+                                TR("ui.audio_manager.track_type").data());
+                });
+            typeRow.addElement(
+                "TypeCombo",
+                Sizing::Grow(),
+                Sizing::Fixed(28 * dpiScale),
+                [=, this, &engine](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    int currentType =
+                        (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
+                    const char* typeNames[] = { "Main", "Effect" };
+                    ImGui::SetNextItemWidth(r.width);
+                    if ( ImGui::Combo(
+                             "##TrackType", &currentType, typeNames, 2) ) {
+                        m_manageTrackType =
+                            (currentType == 0 ? AudioTrackType::Main
+                                              : AudioTrackType::Effect);
+                        engine.pushCommand(Logic::CmdUpdateAudioResource{
+                            m_manageTrackId, m_manageTrackType });
+                        ImGui::CloseCurrentPopup();
+                    }
+                });
+            modalLayout.addLayout("TypeRow",
+                                  typeRow,
+                                  Sizing::Grow(),
+                                  Sizing::Fixed(32 * dpiScale));
 
-        modalLayout.addElement(
-            "ModalSep2", Sizing::Grow(), Sizing::Fixed(1),
-            [=, this](Clay_BoundingBox r, bool) {
-                ImGui::GetWindowDrawList()->AddLine(
-                    { r.x, r.y }, { r.x + r.width, r.y },
-                    ImGui::GetColorU32(ImGuiCol_Separator));
-            });
+            modalLayout.addElement(
+                "ModalSep2",
+                Sizing::Grow(),
+                Sizing::Fixed(1),
+                [=, this](Clay_BoundingBox r, bool) {
+                    ImGui::GetWindowDrawList()->AddLine(
+                        { r.x, r.y },
+                        { r.x + r.width, r.y },
+                        ImGui::GetColorU32(ImGuiCol_Separator));
+                });
 
-        // 3. 操作按钮
-        CLayHBox btnRow;
-        btnRow.setAlignment(Alignment::Center());
-        btnRow.setSpacing(12 * dpiScale);
-        btnRow.addElement(
-            "RemoveBtn", Sizing::Fixed(140 * dpiScale),
-            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                if ( ImGui::Button(TR("ui.audio_manager.remove_track").data(),
-                                   { r.width, r.height }) ) {
-                    ImGui::OpenPopup("RemoveTrackConfirm");
-                }
-            });
-        btnRow.addElement(
-            "CancelBtn", Sizing::Fixed(100 * dpiScale),
-            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                   { r.width, r.height }) ) {
+            // 3. 操作按钮
+            CLayHBox btnRow;
+            btnRow.setAlignment(Alignment::Center());
+            btnRow.setSpacing(12 * dpiScale);
+            btnRow.addElement(
+                "RemoveBtn",
+                Sizing::Fixed(140 * dpiScale),
+                Sizing::Fixed(32 * dpiScale),
+                [=](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ImGui::Button(
+                             TR("ui.audio_manager.remove_track").data(),
+                             { r.width, r.height }) ) {
+                        ImGui::OpenPopup("RemoveTrackConfirm");
+                    }
+                });
+            btnRow.addElement(
+                "CancelBtn",
+                Sizing::Fixed(100 * dpiScale),
+                Sizing::Fixed(32 * dpiScale),
+                [=](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                       { r.width, r.height }) ) {
+                        m_manageTrackId = "";
+                    }
+                });
+            modalLayout.addLayout(
+                "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(32 * dpiScale));
+
+            // 渲染布局
+            // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算
+            ImVec2 modalSize = modalLayout.renderInCurrent(
+                ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+            ImGui::Dummy(modalSize);
+
+            // 二次确认弹窗
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                    ImGuiCond_Appearing,
+                                    ImVec2(0.5f, 0.5f));
+            if ( ImGui::BeginPopupModal(
+                     "RemoveTrackConfirm", nullptr, ImGuiWindowFlags_None) ) {
+                ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());
+                ImGui::Spacing();
+                if ( ImGui::Button(TR("ui.common.confirm").data(),
+                                   { 100 * dpiScale, 0 }) ) {
+                    engine.pushCommand(
+                        Logic::CmdRemoveAudioResource{ m_manageTrackId });
                     m_manageTrackId = "";
                 }
-            });
-        modalLayout.addLayout("BtnRow",
-                              btnRow,
-                              Sizing::Grow(),
-                              Sizing::Fixed(32 * dpiScale));
-
-        // 渲染布局
-        // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算
-        ImVec2 modalSize = modalLayout.renderInCurrent(
-            ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
-        ImGui::Dummy(modalSize);
-
-        // 二次确认弹窗
-        if ( ImGui::BeginPopupModal("RemoveTrackConfirm",
-                                    nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize) ) {
-            ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());
-            ImGui::Spacing();
-            if ( ImGui::Button(TR("ui.common.confirm").data(),
-                               { 100 * dpiScale, 0 }) ) {
-                engine.pushCommand(
-                    Logic::CmdRemoveAudioResource{ m_manageTrackId });
-                m_manageTrackId = "";
+                ImGui::SameLine();
+                if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                   { 100 * dpiScale, 0 }) ) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(),
-                               { 100 * dpiScale, 0 }) ) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
 
             ImGui::End();
         }

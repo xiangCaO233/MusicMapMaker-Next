@@ -1,8 +1,14 @@
 #pragma once
 
+#include "config/EditorConfig.h"
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <vector>
+
+namespace MMM::Logic
+{
+struct TimelineComponent;
+}
 
 namespace MMM::Logic::System
 {
@@ -36,7 +42,8 @@ public:
     ScrollCache() = default;
 
     /// @brief 根据时间线注册表重建缓存表
-    void rebuild(const entt::registry& timelineRegistry);
+    void rebuild(const entt::registry& timelineRegistry,
+                 const Config::EditorConfig& config);
 
     /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
     double getAbsY(double t) const;
@@ -55,6 +62,14 @@ public:
 
 private:
     std::vector<ScrollSegment> m_segments;
+
+    double                     m_lastZoom{ 1.0 };  // 记录最后一次 rebuild 使用的缩放
+
+    struct TimingEntry {
+        entt::entity             entity;
+        const TimelineComponent* component;
+    };
+    std::vector<TimingEntry> m_rebuildScratch;
 };
 
 }  // namespace MMM::Logic::System

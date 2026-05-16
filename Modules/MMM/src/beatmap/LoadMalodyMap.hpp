@@ -141,6 +141,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
     if ( fileData.contains("effect") ) {
         for ( const auto& e : fileData["effect"] ) {
+            // 跳过不包含 scroll 字段的效果（如 sign），避免产生虚假 SCROLL
+            // 计时点
+            if ( !e.contains("scroll") ) continue;
             RawEvent ev;
             ev.beat   = beatToDouble(e.value("beat", json::array()));
             ev.scroll = e.value("scroll", 1.0);
@@ -214,8 +217,8 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         bool   foundBetter   = false;
 
         for ( int k : { 4, 5, 6, 7, 8, 9 } ) {
-            float  w     = 256.0f / k;
-            float  s     = w / 2.0f;
+            float w = 256.0f / k;
+            float s = w / 2.0f;
             if ( k == 4 ) {
                 w = 64.0f;
                 s = 31.0f;
@@ -363,10 +366,15 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            timing.m_timingEffect          = TimingEffect::SCROLL;
-            timing.m_bpm                   = currentBpm;
-            timing.m_timingEffectParameter = ev.scroll;
-            timing.m_beat_length           = ev.scroll;
+            timing.m_timingEffect = TimingEffect::SCROLL;
+            timing.m_bpm          = currentBpm;
+            // 内部统一使用 Osu 风格存储 SCROLL (负值 = -100 / multiplier)
+            if ( ev.scroll > 0 ) {
+                timing.m_timingEffectParameter = -100.0 / ev.scroll;
+            } else {
+                timing.m_timingEffectParameter = ev.scroll;
+            }
+            timing.m_beat_length = timing.m_timingEffectParameter;
         }
 
         auto& malody_timing_props =
@@ -532,8 +540,18 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 notePtr          = &hold;
             } else if ( n.contains("dir") ) {
                 int trackCount = basemeta.track_count;
-                int x_w = (trackCount == 4) ? 64 : (trackCount == 5 ? 51 : (trackCount == 6 ? 43 : static_cast<int>(std::round(256.0 / trackCount))));
-                int w_w = (trackCount == 4) ? 60 : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
+                int x_w =
+                    (trackCount == 4)
+                        ? 64
+                        : (trackCount == 5
+                               ? 51
+                               : (trackCount == 6 ? 43
+                                                  : static_cast<int>(std::round(
+                                                        256.0 / trackCount))));
+                int w_w =
+                    (trackCount == 4)
+                        ? 60
+                        : (trackCount == 5 ? 50 : (trackCount == 6 ? 40 : x_w));
 
                 // 处理滑键 Flick (dtrack = (w - w_w) / x_w，方向由 dir 决定)
                 Flick& flick      = beatMap.m_noteData.flicks.emplace_back();
@@ -543,7 +561,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
                 int wVal            = n.value("w", w_w);
                 int distance_pixels = wVal - w_w;
-                int distance = distance_pixels;
+                int distance        = distance_pixels;
 
                 int direction = n.value("dir", 0);
                 // 8 为左 (-)，2 为右 (+)
@@ -599,9 +617,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                basemeta.title,
-                                basemeta.track_count,
-                                basemeta.version);
+                                            basemeta.title,
+                                            basemeta.track_count,
+                                            basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用

@@ -5,6 +5,11 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include <entt/entt.hpp>
 
+namespace MMM::Logic
+{
+struct TimelineComponent;
+}
+
 namespace MMM::Logic::System
 {
 
@@ -37,6 +42,7 @@ public:
      */
     static void generateSnapshot(
         entt::registry& registry, const entt::registry& timelineRegistry,
+        const std::vector<const TimelineComponent*>& bpmEvents,
         RenderSnapshot* snapshot, const std::string& cameraId,
         double currentTime, float viewportWidth, float viewportHeight,
         float judgmentLineY, int32_t trackCount,

@@ -27,21 +27,27 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                         m_ctx->currentTime,
                                         config);
 
-    // 筛选出所有 BPM 标记供后续视口处理（磁吸、智能拟合等）
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = m_ctx->timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
+    // 0. 更新 BPM 缓存（仅在脏时执行 O(N log N) 操作）
+    if ( m_ctx->isBpmEventsDirty ) {
+        m_ctx->bpmEvents.clear();
+        auto tlView = m_ctx->timelineRegistry.view<const TimelineComponent>();
+        for ( auto entity : tlView ) {
+            const auto& tl = tlView.get<const TimelineComponent>(entity);
+            if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+                m_ctx->bpmEvents.push_back(&tl);
+            }
         }
+        std::stable_sort(
+            m_ctx->bpmEvents.begin(),
+            m_ctx->bpmEvents.end(),
+            [](const TimelineComponent* a, const TimelineComponent* b) {
+                return a->m_timestamp < b->m_timestamp;
+            });
+        m_ctx->isBpmEventsDirty = false;
     }
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
+
+    // 筛选出所有 BPM 标记供后续视口处理（磁轴、智能拟合等）
+    const auto& bpmEvents = m_ctx->bpmEvents;
 
     // 0. 如果存在框选区域，更新选中状态
     if ( m_ctx->isSelecting || !m_ctx->marqueeBoxes.empty() ) {
@@ -90,12 +96,15 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         if ( cache ) {
             float judgmentLineY =
                 camera.viewportHeight * config.visual.judgeline_pos;
-            double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-            double scale       = snapshot->renderScaleY;
-            if ( cameraId == "Basic2DCanvas" ) {
-                scale = config.visual.timelineZoom;
+            double currentAbsY =
+                cache->getAbsY(m_ctx->visualTime);
+            // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
+            double scale = snapshot->renderScaleY;
+            if ( cameraId != "Basic2DCanvas" && std::abs(scale) > 0.0001f ) {
+                if ( std::abs(scale) < 1e-6 ) scale = 1.0;
+            } else if ( cameraId == "Basic2DCanvas" ) {
+                scale = 1.0;
             }
-            if ( std::abs(scale) < 1e-6 ) scale = 1.0;
 
             snapshot->visibleTimeStart = cache->getTime(
                 currentAbsY - (camera.viewportHeight - judgmentLineY) / scale);
@@ -141,8 +150,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
 
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-                double deltaY      = (judgmentLineY - m_ctx->lastMousePos.y);
+                double currentAbsY =
+                    cache->getAbsY(m_ctx->visualTime);
+                double deltaY = (judgmentLineY - m_ctx->lastMousePos.y);
 
                 float renderScaleY = 1.0f;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
@@ -378,8 +388,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             if ( cache ) {
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-                double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
+                double currentAbsY =
+                    cache->getAbsY(m_ctx->visualTime);
+                double targetAbsY = cache->getAbsY(snapshot->previewHoverTime);
 
                 float mainViewportHeight = 1000.0f;
                 auto  itMain             = m_ctx->cameras.find("Basic2DCanvas");
@@ -443,6 +454,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // 使用视觉时间 m_ctx->visualTime 进行剔除 and 位置映射
         System::NoteRenderSystem::generateSnapshot(m_ctx->noteRegistry,
                                                    m_ctx->timelineRegistry,
+                                                   bpmEvents,
                                                    snapshot,
                                                    cameraId,
                                                    m_ctx->visualTime,

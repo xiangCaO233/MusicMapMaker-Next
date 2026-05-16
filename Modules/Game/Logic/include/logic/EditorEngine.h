@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <shared_mutex>
 
 namespace MMM::Logic
 {
@@ -108,27 +109,15 @@ public:
     void setAtlasUVMap(const std::string&                             cameraId,
                        const std::unordered_map<uint32_t, glm::vec4>& uvMap)
     {
-        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
+        std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
         m_cameraUVMaps[cameraId] = uvMap;
     }
 
     /**
      * @brief 获取当前全局图集 UV 映射
      */
-    std::unordered_map<uint32_t, glm::vec4> getAtlasUVMap(
-        const std::string& cameraId)
-    {
-        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
-        if ( m_cameraUVMaps.find(cameraId) != m_cameraUVMaps.end() ) {
-            return m_cameraUVMaps[cameraId];
-        }
-        // 回退到默认图集 (Basic2DCanvas)
-        if ( cameraId != "Basic2DCanvas" ) {
-            auto it = m_cameraUVMaps.find("Basic2DCanvas");
-            if ( it != m_cameraUVMaps.end() ) return it->second;
-        }
-        return {};
-    }
+    const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
+        const std::string& cameraId) const;
 
     /**
      * @brief 获取当前编辑器配置
@@ -192,7 +181,7 @@ private:
 
     /// @brief 保护 m_syncBuffers 和 m_cameraUVMaps 的独立锁（与 m_sessionMutex
     /// 无交叉，防止死锁）
-    mutable std::recursive_mutex m_buffersMutex;
+    mutable std::shared_mutex m_buffersMutex;
 
     /// @brief 待处理的项目路径（由 EventBus 回调写入，由逻辑线程消费）
     std::filesystem::path m_pendingProjectPath;

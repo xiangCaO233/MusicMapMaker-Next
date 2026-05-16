@@ -55,25 +55,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         .count();
                 double dt = now - m_currentSnapshot->snapshotSysTime;
                 if ( dt > 0.0 && dt < 0.1 ) {
-                    double      scrollSpeed  = 500.0;
-                    double      snapshotTime = m_currentSnapshot->currentTime;
-                    const auto& segs = m_currentSnapshot->scrollSegments;
-                    if ( !segs.empty() ) {
-                        auto it = std::upper_bound(
-                            segs.begin(),
-                            segs.end(),
-                            snapshotTime,
-                            [](double                              val,
-                               const Logic::System::ScrollSegment& seg) {
-                                return val < seg.time;
-                            });
-                        if ( it != segs.begin() ) {
-                            --it;
-                        }
-                        scrollSpeed = it->speed;
-                    }
                     newYOffset = static_cast<float>(
-                        dt * m_currentSnapshot->playbackSpeed * scrollSpeed);
+                        m_currentSnapshot->getInterpolatedOffset(dt));
                 }
             }
 
@@ -119,10 +102,12 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                          0.0f,
                                          total,
                                          "") ) {
-                    float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
+                    float visualOffset = Config::AppConfig::instance()
+                                             .getVisualConfig()
+                                             .visualOffset;
                     Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSeek{ static_cast<double>(time) - visualOffset }));
+                        Event::LogicCommandEvent(Logic::CmdSeek{
+                            static_cast<double>(time) - visualOffset }));
                 }
 
                 if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {

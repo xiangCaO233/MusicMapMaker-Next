@@ -1,43 +1,39 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include <algorithm>
 #include <cmath>
 
 namespace MMM::Logic::System
 {
 
-void ScrollCache::rebuild(const entt::registry& timelineRegistry)
+void ScrollCache::rebuild(const entt::registry& timelineRegistry,
+                          const Config::EditorConfig& config)
 {
-    m_segments.clear();
-    const double BASE_SPEED = 500.0;  // 基准流速
-    const auto&  visualConfig =
-        EditorEngine::instance().getEditorConfig().visual;
-    const double globalMultiplier = visualConfig.timelineZoom;
-    const bool   isLinearMapping  = visualConfig.enableLinearScrollMapping;
-
-    // 获取并排序时间线点
-    struct TimingEntry {
-        entt::entity             entity;
-        const TimelineComponent* component;
-    };
-    std::vector<TimingEntry> timings;
+    m_rebuildScratch.clear();
     auto tlView = timelineRegistry.view<const TimelineComponent>();
+    m_rebuildScratch.reserve(tlView.size());
+
     for ( auto entity : tlView ) {
-        timings.push_back({ entity, &tlView.get<const TimelineComponent>(entity) });
+        m_rebuildScratch.push_back(
+            { entity, &tlView.get<const TimelineComponent>(entity) });
     }
 
-    if ( timings.empty() ) {
+    if ( m_rebuildScratch.empty() ) {
+        m_segments.clear();
         isDirty = false;
         return;
     }
 
     // 排序逻辑：时间戳升序；时间戳相同时，BPM 类型优先于 SCROLL 类型
     std::stable_sort(
-        timings.begin(), timings.end(), [](const auto& a, const auto& b) {
-            if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) > 1e-9 ) {
+        m_rebuildScratch.begin(),
+        m_rebuildScratch.end(),
+        [](const auto& a, const auto& b) {
+            if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) >
+                 1e-9 ) {
                 return a.component->m_timestamp < b.component->m_timestamp;
             }
             if ( a.component->m_effect != b.component->m_effect ) {
@@ -46,97 +42,119 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             return false;  // 保持原始顺序
         });
 
-    // 1. 获取基准 BPM (优先使用谱面元数据中的预设值)
-    double refBPM = 120.0;
+    std::vector<ScrollSegment> newSegments;
+    newSegments.reserve(m_rebuildScratch.size() + 1);
+
+    const double BASE_SPEED      = 500.0;
+    const auto&  visualConfig    = config.visual;
+    const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
+    const double timelineZoom    = visualConfig.timelineZoom;
+    m_lastZoom                   = timelineZoom;
+
+    // 1. 完整版 osu! 逻辑：计算 Most Common BPM 作为基准，并获取
+    // SliderMultiplier
+    double refBPM           = 120.0;
+    double sliderMultiplier = 1.0;
     if ( auto session = EditorEngine::instance().getActiveSession() ) {
         if ( auto beatmap = session->getContext().currentBeatmap ) {
-            refBPM = beatmap->m_baseMapMetadata.preference_bpm;
-        }
-    }
+            // 尝试获取 SliderMultiplier (默认为 1.4)
+            sliderMultiplier = beatmap->m_metadata.get_value<double>(
+                MapMetadataType::OSU, "Difficulty::SliderMultiplier", 1.4);
 
-    // 如果元数据中没有有效值，则回退到查找第一个时间线点
-    if ( refBPM <= 0.0 ) {
-        for ( const auto& entry : timings ) {
-            if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
-                refBPM = entry.component->m_value;
-                break;
+            // 自动计算最常见的 BPM (持续时间最长)
+            std::map<double, double> bpmDurations;
+            double                   lastBpmTime   = 0.0;
+            double                   currentBpmVal = -1.0;
+            for ( const auto& entry : m_rebuildScratch ) {
+                if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
+                    if ( currentBpmVal > 0 ) {
+                        bpmDurations[currentBpmVal] +=
+                            (entry.component->m_timestamp - lastBpmTime);
+                    }
+                    currentBpmVal = entry.component->m_value;
+                    lastBpmTime   = entry.component->m_timestamp;
+                }
+            }
+            // 加上最后一个段落到末尾的时间 (假设谱面时长)
+            bpmDurations[currentBpmVal] +=
+                (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
+
+            double maxDuration = -1.0;
+            for ( const auto& [bpm, dur] : bpmDurations ) {
+                if ( dur > maxDuration ) {
+                    maxDuration = dur;
+                    refBPM      = bpm;
+                }
             }
         }
     }
-
-    // 限制 refBPM 范围，防止流速计算溢出
     if ( refBPM < 1.0 ) refBPM = 120.0;
-    if ( refBPM > 1000000.0 ) refBPM = 1000000.0;
 
-    // 2. 初始参数
-    double currentBPM        = refBPM;
-    double currentScrollMult = 1.0;
+    double currentBPM = refBPM;
 
-    // 如果第一个点在 0ms 之后，我们需要从 0ms 开始的一段默认速度
-    // 如果第一个点就在 0ms
-    // 或更早，这个初始段会在后续循环中被同步时间戳的点修正速度
-    double lastTime    = std::min(0.0, timings[0].component->m_timestamp);
-    double currentAbsY = 0.0;
-
+    // osu! MultiplierControlPoint:
+    //   Multiplier = Velocity × ScrollSpeed × BaseBeatLength / BeatLength
+    //            = 1.0  × scrollMult  × (60000/refBPM) / (60000/bpm)
+    //            = scrollMult × bpm / refBPM
+    //   speed     = Multiplier × scrollLength / timeRange
+    //            = scrollMult × bpm/refBPM × BASE_SPEED × timelineZoom
     auto calcSpeed = [&](double bpm, double sm) {
         if ( isLinearMapping ) {
-            return BASE_SPEED * globalMultiplier;
+            return BASE_SPEED * timelineZoom;
         }
-        if ( std::abs(refBPM) < 1e-6 ) return 0.0;
-        
-        // 限制极端 BPM 导致的流速爆炸
-        double safeBPM = std::clamp(bpm, 0.0, 1000000.0);
-        return (safeBPM / refBPM) * sm * BASE_SPEED * globalMultiplier;
+        double ratio = std::clamp(bpm / refBPM, 0.0, 1000000.0);
+        return ratio * sm * sliderMultiplier * BASE_SPEED * timelineZoom;
     };
 
-    double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
-    m_segments.push_back({ lastTime, 0.0, currentSpeed, 0 });
+    // osu! 关键：SV 跨 BPM 红线继承，不重置。仅绿线显式修改 ScrollSpeed。
+    double currentScrollMult = 1.0;
+    double lastTime = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
+    double currentAbsY = 0.0;
 
-    for ( const auto& entry : timings ) {
+    double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
+    newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
+
+    for ( const auto& entry : m_rebuildScratch ) {
         const auto* tl = entry.component;
-        // 如果时间戳推进了，则结算上一段的积分
         if ( tl->m_timestamp > lastTime ) {
             double dt = tl->m_timestamp - lastTime;
             currentAbsY += dt * currentSpeed;
             lastTime = tl->m_timestamp;
-            m_segments.push_back({ lastTime, currentAbsY, currentSpeed, 0 });
+            newSegments.push_back({ lastTime, currentAbsY, currentSpeed, 0 });
         }
 
-        // 累计当前时间戳的效果类型
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
-            m_segments.back().effects |= SCROLL_EFFECT_BPM;
-            m_segments.back().bpmEntity = entry.entity;
-            m_segments.back().bpmValue   = tl->m_value;
-            currentBPM = tl->m_value;
-            // 在 osu! 逻辑中，新的 BPM 标记（红线）会重置继承的流速倍率
+            newSegments.back().effects |= SCROLL_EFFECT_BPM;
+            newSegments.back().bpmEntity = entry.entity;
+            newSegments.back().bpmValue  = tl->m_value;
+            currentBPM                   = tl->m_value;
+            // 完整版 osu! 逻辑：红线 (Uninherited) 必须将 SV 重置为 1.0
             currentScrollMult = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
-            m_segments.back().effects |= SCROLL_EFFECT_SCROLL;
-            m_segments.back().scrollEntity = entry.entity;
-            m_segments.back().scrollValue   = tl->m_value;
+            newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
+            newSegments.back().scrollEntity = entry.entity;
+            newSegments.back().scrollValue  = tl->m_value;
             if ( tl->m_value < -1e-6 ) {
                 currentScrollMult = -100.0 / tl->m_value;
             } else if ( tl->m_value >= 0 ) {
                 currentScrollMult = tl->m_value;
             } else {
-                currentScrollMult = 1.0; // 避免除以极小值或零
+                currentScrollMult = 1.0;
             }
-            // 限制倍率上限，防止溢出
             if ( currentScrollMult > 10000.0 ) currentScrollMult = 10000.0;
         }
 
-        // 更新当前路段速度
-        currentSpeed            = calcSpeed(currentBPM, currentScrollMult);
-        m_segments.back().speed = currentSpeed;
+        currentSpeed             = calcSpeed(currentBPM, currentScrollMult);
+        newSegments.back().speed = currentSpeed;
     }
 
-    isDirty = false;
+    m_segments = std::move(newSegments);
+    isDirty    = false;
 }
 
 double ScrollCache::getAbsY(double t) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
 
     auto it = std::upper_bound(
@@ -156,8 +174,7 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getTime(double absY) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     auto it = std::lower_bound(
@@ -189,5 +206,6 @@ double ScrollCache::getSpeedAt(double t) const
     --it;
     return it->speed;
 }
+
 
 }  // namespace MMM::Logic::System

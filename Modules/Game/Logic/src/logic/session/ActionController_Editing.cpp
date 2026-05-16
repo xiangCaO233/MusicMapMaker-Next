@@ -21,11 +21,13 @@ namespace MMM::Logic
 void ActionController::handleCommand(const CmdUndo& cmd)
 {
     m_ctx.actionStack.undo(m_ctx);
+    m_ctx.isBpmEventsDirty = true;
 }
 
 void ActionController::handleCommand(const CmdRedo& cmd)
 {
     m_ctx.actionStack.redo(m_ctx);
+    m_ctx.isBpmEventsDirty = true;
 }
 
 void ActionController::handleCommand(const CmdCopy& cmd)
@@ -282,6 +284,7 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         auto action = std::make_unique<TimelineAction>(
             TimelineAction::Type::Update, cmd.entity, oldTl, newTl);
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        m_ctx.isBpmEventsDirty = true;
     }
 }
 
@@ -292,6 +295,7 @@ void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)
         auto action = std::make_unique<TimelineAction>(
             TimelineAction::Type::Delete, cmd.entity, oldTl, std::nullopt);
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        m_ctx.isBpmEventsDirty = true;
     }
 }
 
@@ -301,6 +305,7 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     auto              action = std::make_unique<TimelineAction>(
         TimelineAction::Type::Create, entt::null, std::nullopt, newTl);
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
 }
 
 }  // namespace MMM::Logic
