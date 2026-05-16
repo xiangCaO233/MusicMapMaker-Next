@@ -228,9 +228,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     bool showBMModal = !m_manageBeatmapPath.empty();
     if ( showBMModal ) {
         std::string windowTitle =
-            fmt::format("{} {}", TR("ui.beatmap_manager.manage_title").data(),
+            fmt::format("{} {}",
+                        TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
-        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                ImGuiCond_Appearing,
+                                ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_Appearing);
         if ( ImGui::Begin(windowTitle.c_str(),
                           &showBMModal,
                           ImGuiWindowFlags_NoCollapse) ) {
@@ -238,75 +242,86 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 m_manageBeatmapPath = "";
             }
 
-        // --- 使用 Clay 重构对话框内容 ---
-        CLayVBox modalLayout;
-        float padding = 16 * dpiScale;
-        modalLayout.setPadding(padding, padding, padding, padding);
-        modalLayout.setSpacing(16 * dpiScale);
+            // --- 使用 Clay 重构对话框内容 ---
+            CLayVBox modalLayout;
+            float    padding = 16 * dpiScale;
+            modalLayout.setPadding(padding, padding, padding, padding);
+            modalLayout.setSpacing(16 * dpiScale);
 
-        // 1. 标题与信息 (移除了冗余 Text)
-        modalLayout.addElement(
-            "ModalSep", Sizing::Grow(), Sizing::Fixed(1),
-            [=, this](Clay_BoundingBox r, bool) {
-                ImGui::GetWindowDrawList()->AddLine(
-                    { r.x, r.y }, { r.x + r.width, r.y },
-                    ImGui::GetColorU32(ImGuiCol_Separator));
-            });
+            // 1. 标题与信息 (移除了冗余 Text)
+            modalLayout.addElement(
+                "ModalSep",
+                Sizing::Grow(),
+                Sizing::Fixed(1),
+                [=, this](Clay_BoundingBox r, bool) {
+                    ImGui::GetWindowDrawList()->AddLine(
+                        { r.x, r.y },
+                        { r.x + r.width, r.y },
+                        ImGui::GetColorU32(ImGuiCol_Separator));
+                });
 
-        // 2. 操作按钮区
-        CLayHBox btnRow;
-        btnRow.setAlignment(Alignment::Center());
-        btnRow.setSpacing(12 * dpiScale);
+            // 2. 操作按钮区
+            CLayHBox btnRow;
+            btnRow.setAlignment(Alignment::Center());
+            btnRow.setSpacing(12 * dpiScale);
 
-        btnRow.addElement(
-            "RemoveBtn", Sizing::Fixed(140 * dpiScale),
-            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                if ( ImGui::Button(TR("ui.beatmap_manager.remove_beatmap").data(),
-                                   { r.width, r.height }) ) {
-                    ImGui::OpenPopup("RemoveBeatmapConfirm");
-                }
-            });
+            btnRow.addElement(
+                "RemoveBtn",
+                Sizing::Fixed(140 * dpiScale),
+                Sizing::Fixed(32 * dpiScale),
+                [=](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ImGui::Button(
+                             TR("ui.beatmap_manager.remove_beatmap").data(),
+                             { r.width, r.height }) ) {
+                        ImGui::OpenPopup("RemoveBeatmapConfirm");
+                    }
+                });
 
-        btnRow.addElement(
-            "CancelBtn", Sizing::Fixed(100 * dpiScale),
-            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                   { r.width, r.height }) ) {
+            btnRow.addElement(
+                "CancelBtn",
+                Sizing::Fixed(100 * dpiScale),
+                Sizing::Fixed(32 * dpiScale),
+                [=](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                       { r.width, r.height }) ) {
+                        m_manageBeatmapPath = "";
+                    }
+                });
+
+            modalLayout.addLayout("BtnRowLayout",
+                                  btnRow,
+                                  Sizing::Grow(),
+                                  Sizing::Fixed(32 * dpiScale));
+
+            // 渲染布局
+            ImVec2 modalSize = modalLayout.renderInCurrent(
+                ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+            ImGui::Dummy(modalSize);
+
+            // --- 二次确认弹窗 ---
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                    ImGuiCond_Appearing,
+                                    ImVec2(0.5f, 0.5f));
+            if ( ImGui::BeginPopupModal(
+                     "RemoveBeatmapConfirm", nullptr, ImGuiWindowFlags_None) ) {
+                ImGui::Text("%s",
+                            TR("ui.beatmap_manager.remove_confirm").data());
+                ImGui::Spacing();
+                if ( ImGui::Button(TR("ui.common.confirm").data(),
+                                   { 100 * dpiScale, 0 }) ) {
+                    engine.pushCommand(
+                        Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
                     m_manageBeatmapPath = "";
                 }
-            });
-
-        modalLayout.addLayout("BtnRowLayout",
-                              btnRow,
-                              Sizing::Grow(),
-                              Sizing::Fixed(32 * dpiScale));
-
-        // 渲染布局
-        ImVec2 modalSize = modalLayout.renderInCurrent(
-            ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
-        ImGui::Dummy(modalSize);
-
-        // --- 二次确认弹窗 ---
-        if ( ImGui::BeginPopupModal("RemoveBeatmapConfirm",
-                                    nullptr,
-                                    ImGuiWindowFlags_AlwaysAutoResize) ) {
-            ImGui::Text("%s", TR("ui.beatmap_manager.remove_confirm").data());
-            ImGui::Spacing();
-            if ( ImGui::Button(TR("ui.common.confirm").data(),
-                               { 100 * dpiScale, 0 }) ) {
-                engine.pushCommand(
-                    Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
-                m_manageBeatmapPath = "";
+                ImGui::SameLine();
+                if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                   { 100 * dpiScale, 0 }) ) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(),
-                               { 100 * dpiScale, 0 }) ) {
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
 
             ImGui::End();
         }

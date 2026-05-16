@@ -11,10 +11,11 @@ void TimelineCanvas::renderEventEditorPopup()
 {
     ImGui::SetNextWindowSize(ImVec2(300, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
     if ( ImGui::BeginPopupModal(
-             "TimelineEventEditor",
-             &m_isPopupOpen,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+             "TimelineEventEditor", &m_isPopupOpen, ImGuiWindowFlags_None) ) {
         std::string typeTitle =
             (m_editType == "BPM") ? TR("ui.timeline.event_type.bpm").data()
                                   : TR("ui.timeline.event_type.scroll").data();
@@ -84,10 +85,12 @@ void TimelineCanvas::renderEventCreationPopup()
     ImGui::SetNextWindowSize(ImVec2(350, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
 
-    if ( ImGui::BeginPopupModal(
-             "TimelineCreateEvent",
-             &m_isCreatePopupOpen,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+    if ( ImGui::BeginPopupModal("TimelineCreateEvent",
+                                &m_isCreatePopupOpen,
+                                ImGuiWindowFlags_None) ) {
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::Separator();
         ImGui::Spacing();

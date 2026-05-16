@@ -2,15 +2,15 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "ui/UIManager.h"
 #include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
 #include <algorithm>
 #include <cmath>
@@ -129,12 +129,15 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         ImGui::OpenPopup("###SpectrumCalcModal");
     }
 
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
     if ( ImGui::BeginPopupModal(
              (std::string(TR("ui.spectrum.calc_modal.title").data()) +
               "###SpectrumCalcModal")
                  .c_str(),
              nullptr,
-             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove) ) {
+             ImGuiWindowFlags_None) ) {
         float progress = m_calcProgress.load();
         ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
         ImGui::Spacing();
@@ -153,21 +156,27 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         if ( m_isCalculating.load() ) return;
     }
 
-    float visualOffset = Config::AppConfig::instance().getVisualConfig().visualOffset;
-    double audioTime = audioManager.getCurrentTime();
+    float visualOffset =
+        Config::AppConfig::instance().getVisualConfig().visualOffset;
+    double audioTime  = audioManager.getCurrentTime();
     double visualTime = audioTime + visualOffset;
     double totalTime  = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
-    auto snapshot =
-        Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
+    auto snapshot = Logic::EditorEngine::instance()
+                        .getSyncBuffer("Basic2DCanvas")
+                        ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime = visualTime - visualOffset;
-        
+        audioTime  = visualTime - visualOffset;
+
         // 亚帧平滑补偿 (同步视觉偏移)
-        if ( !snapshot->isPreviewDragging && snapshot->isPlaying && snapshot->snapshotSysTime > 0.0 ) {
-            double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
+             snapshot->snapshotSysTime > 0.0 ) {
+            double now =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
             double dt = now - snapshot->snapshotSysTime;
             if ( dt > 0.0 && dt < 0.1 ) {
                 visualTime += dt * snapshot->playbackSpeed;
@@ -176,91 +185,116 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    ImGuiStyle& style = ImGui::GetStyle();
-    float frameH = ImGui::GetFrameHeight();
-    auto calcSliderWidth = [&](float sliderW, const char* label) {
-        return sliderW + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+    ImGuiStyle& style           = ImGui::GetStyle();
+    float       frameH          = ImGui::GetFrameHeight();
+    auto        calcSliderWidth = [&](float sliderW, const char* label) {
+        return sliderW + style.ItemInnerSpacing.x +
+               ImGui::CalcTextSize(label).x;
     };
     auto calcButtonWidth = [&](const char* label) {
         return ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
     };
     auto drawSep = [&](Clay_BoundingBox r, bool) {
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(r.x, r.y + 2.0f), ImVec2(r.x, r.y + r.height - 2.0f), ImGui::GetColorU32(ImGuiCol_Separator));
+        ImGui::GetWindowDrawList()->AddLine(
+            ImVec2(r.x, r.y + 2.0f),
+            ImVec2(r.x, r.y + r.height - 2.0f),
+            ImGui::GetColorU32(ImGuiCol_Separator));
     };
 
     CLayVBox topContainer;
     topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
     std::deque<CLayHBox> rows;
-    CLayHBox* currentRow = nullptr;
-    float currentW = 0.0f;
-    float availW = ImGui::GetContentRegionAvail().x;
-    float spacing = 8.0f;
+    CLayHBox*            currentRow = nullptr;
+    float                currentW   = 0.0f;
+    float                availW     = ImGui::GetContentRegionAvail().x;
+    float                spacing    = 8.0f;
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
-        bool addSep = false;
+        bool  addSep = false;
         float totalW = w;
-        if (currentRow) {
-            totalW += 1.0f + spacing; // Sep + spacing
+        if ( currentRow ) {
+            totalW += 1.0f + spacing;  // Sep + spacing
         }
-        if (!currentRow || currentW + totalW > availW) {
+        if ( !currentRow || currentW + totalW > availW ) {
             rows.emplace_back();
             currentRow = &rows.back();
             currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
-            topContainer.addLayout(("Row_" + std::to_string(rows.size())).c_str(), *currentRow, Sizing::Grow(), Sizing::Fit());
-            currentW = 8.0f; // 4 + 4 padding
+            topContainer.addLayout(
+                ("Row_" + std::to_string(rows.size())).c_str(),
+                *currentRow,
+                Sizing::Grow(),
+                Sizing::Fit());
+            currentW = 8.0f;  // 4 + 4 padding
         } else {
             addSep = true;
         }
 
-        if (addSep) {
-            currentRow->addElement(id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
+        if ( addSep ) {
+            currentRow->addElement(
+                id + "_Sep", Sizing::Fixed(1.0f), Sizing::Fixed(h), drawSep);
             currentW += 1.0f + spacing;
         }
         currentRow->addElement(id, Sizing::Fixed(w), Sizing::Fixed(h), drawCb);
         currentW += w + spacing;
     };
 
-    pushGroup("ZoomSlider", calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%s", TR("ui.waveform.zoom").data());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
-        ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
-    });
-    pushGroup("MaxFreqSlider", calcSliderWidth(120.0f, TR("ui.spectrum.max_freq").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if ( ImGui::SliderFloat("##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
-            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                startAsyncRecalculate();
+    pushGroup("ZoomSlider",
+              calcSliderWidth(100.0f, TR("ui.waveform.zoom").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  ImGui::AlignTextToFramePadding();
+                  ImGui::Text("%s", TR("ui.waveform.zoom").data());
+                  ImGui::SameLine();
+                  ImGui::SetNextItemWidth(100);
+                  ImGui::SliderFloat("##zoom", &m_zoom, 0.1f, 10.0f, "%.1fs");
+              });
+    pushGroup(
+        "MaxFreqSlider",
+        calcSliderWidth(120.0f, TR("ui.spectrum.max_freq").data()),
+        frameH,
+        [&](Clay_BoundingBox r, bool) {
+            ImGui::SetCursorScreenPos({ r.x, r.y });
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%s", TR("ui.spectrum.max_freq").data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120);
+            if ( ImGui::SliderFloat(
+                     "##max_freq", &m_maxFreq, 2000.0f, 24000.0f, "%.0f Hz") ) {
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    startAsyncRecalculate();
+                }
             }
-        }
-    });
-    pushGroup("LogBiasSlider", calcSliderWidth(120.0f, TR("ui.spectrum.log_bias").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if ( ImGui::SliderFloat("##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
-            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                startAsyncRecalculate();
-            }
-        }
-    });
-    pushGroup("SyncEffectsBtn", calcButtonWidth(TR("ui.spectrum.sync_effects").data()), frameH, [&](Clay_BoundingBox r, bool) {
-        ImGui::SetCursorScreenPos({ r.x, r.y });
-        if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
-            startAsyncRecalculate();
-        }
-    });
+        });
+    pushGroup("LogBiasSlider",
+              calcSliderWidth(120.0f, TR("ui.spectrum.log_bias").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  ImGui::AlignTextToFramePadding();
+                  ImGui::Text("%s", TR("ui.spectrum.log_bias").data());
+                  ImGui::SameLine();
+                  ImGui::SetNextItemWidth(120);
+                  if ( ImGui::SliderFloat(
+                           "##log_bias", &m_logBias, 0.01f, 20.0f, "%.2f") ) {
+                      if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                          startAsyncRecalculate();
+                      }
+                  }
+              });
+    pushGroup("SyncEffectsBtn",
+              calcButtonWidth(TR("ui.spectrum.sync_effects").data()),
+              frameH,
+              [&](Clay_BoundingBox r, bool) {
+                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                  if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
+                      startAsyncRecalculate();
+                  }
+              });
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
-    ImVec2 sz = topContainer.renderInCurrent(startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    ImVec2 sz       = topContainer.renderInCurrent(
+        startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     syncEQ();
@@ -273,179 +307,237 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double viewStart = visualTime - m_zoom;
     double viewEnd   = visualTime + m_zoom;
 
-    auto renderChannelBank =
-        [&](const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures) {
-            ImGui::BeginGroup();
+    auto renderChannelBank = [&](const std::vector<std::unique_ptr<
+                                     Graphic::VKTexture>>& textures) {
+        ImGui::BeginGroup();
 
-            // 捕获绘图区域在屏幕上的绝对起始位置
-            ImVec2 plotStartPos = ImGui::GetCursorScreenPos();
+        // 捕获绘图区域在屏幕上的绝对起始位置
+        ImVec2 plotStartPos = ImGui::GetCursorScreenPos();
 
-            // 计算全局像素坐标范围（使用音频时间）
-            // 补偿 FFT 窗口造成的中心点偏移 (2048样本 @ 44100Hz = 约 46.4ms，中心点为 23.2ms)
-            double fftOffset = (2048.0 / 2.0) / 44100.0;
-            double audioViewStart = viewStart - visualOffset - fftOffset;
-            double audioViewEnd = viewEnd - visualOffset - fftOffset;
-            double pixelStart = audioViewStart * m_cacheSegmentsPerSecond;
-            double pixelEnd   = audioViewEnd * m_cacheSegmentsPerSecond;
-            double pixelWidth = pixelEnd - pixelStart;
+        // 计算全局像素坐标范围（使用音频时间）
+        // 补偿 FFT 窗口造成的中心点偏移 (2048样本 @ 44100Hz =
+        // 约 46.4ms，中心点为 23.2ms)
+        double fftOffset      = (2048.0 / 2.0) / 44100.0;
+        double audioViewStart = viewStart - visualOffset - fftOffset;
+        double audioViewEnd   = viewEnd - visualOffset - fftOffset;
+        double pixelStart     = audioViewStart * m_cacheSegmentsPerSecond;
+        double pixelEnd       = audioViewEnd * m_cacheSegmentsPerSecond;
+        double pixelWidth     = pixelEnd - pixelStart;
 
-            if ( pixelStart < 0.0 ) {
-                float emptyScreenW = static_cast<float>( (0.0 - pixelStart) / pixelWidth * avail.x );
-                ImGui::Dummy(ImVec2(emptyScreenW, plotH));
-                ImGui::SameLine(0, 0);
-            }
+        if ( pixelStart < 0.0 ) {
+            float emptyScreenW =
+                static_cast<float>((0.0 - pixelStart) / pixelWidth * avail.x);
+            ImGui::Dummy(ImVec2(emptyScreenW, plotH));
+            ImGui::SameLine(0, 0);
+        }
 
-            for ( size_t i = 0; i < textures.size(); ++i ) {
-                double texGlobalStart = static_cast<double>(i * MAX_TEXTURE_W);
-                double texGlobalEnd   = texGlobalStart + textures[i]->width();
+        for ( size_t i = 0; i < textures.size(); ++i ) {
+            double texGlobalStart = static_cast<double>(i * MAX_TEXTURE_W);
+            double texGlobalEnd   = texGlobalStart + textures[i]->width();
 
-                // 检查贴图块是否在视口内
-                if ( texGlobalEnd < pixelStart || texGlobalStart > pixelEnd )
-                    continue;
+            // 检查贴图块是否在视口内
+            if ( texGlobalEnd < pixelStart || texGlobalStart > pixelEnd )
+                continue;
 
-                // 计算贴图在视口内的局部 UV
-                double intersectStart = std::max(texGlobalStart, pixelStart);
-                double intersectEnd   = std::min(texGlobalEnd, pixelEnd);
+            // 计算贴图在视口内的局部 UV
+            double intersectStart = std::max(texGlobalStart, pixelStart);
+            double intersectEnd   = std::min(texGlobalEnd, pixelEnd);
 
-                float uv0_x = static_cast<float>(
-                    (intersectStart - texGlobalStart) / textures[i]->width());
-                float uv1_x = static_cast<float>(
-                    (intersectEnd - texGlobalStart) / textures[i]->width());
+            float uv0_x = static_cast<float>((intersectStart - texGlobalStart) /
+                                             textures[i]->width());
+            float uv1_x = static_cast<float>((intersectEnd - texGlobalStart) /
+                                             textures[i]->width());
 
-                // 计算屏幕上的宽度比例
-                float screenW = static_cast<float>(
-                    (intersectEnd - intersectStart) / pixelWidth * avail.x);
+            // 计算屏幕上的宽度比例
+            float screenW = static_cast<float>((intersectEnd - intersectStart) /
+                                               pixelWidth * avail.x);
 
-                // 绘制贴图块
-                ImGui::Image(textures[i]->getImTextureID(),
-                             ImVec2(screenW, plotH),
-                             ImVec2(uv0_x, 0),
-                             ImVec2(uv1_x, 1));
-                ImGui::SameLine(0, 0);
-            }
+            // 绘制贴图块
+            ImGui::Image(textures[i]->getImTextureID(),
+                         ImVec2(screenW, plotH),
+                         ImVec2(uv0_x, 0),
+                         ImVec2(uv1_x, 1));
+            ImGui::SameLine(0, 0);
+        }
 
-            // --- 绘制游标 ---
-            if ( visualTime >= viewStart && visualTime <= viewEnd ) {
-                float relativePos = static_cast<float>(
-                    (visualTime - viewStart) / (viewEnd - viewStart));
+        // --- 绘制游标 ---
+        if ( visualTime >= viewStart && visualTime <= viewEnd ) {
+            float relativePos = static_cast<float>((visualTime - viewStart) /
+                                                   (viewEnd - viewStart));
 
-                float lineX      = plotStartPos.x + (relativePos * avail.x);
-                float lineTop    = plotStartPos.y;
-                float lineBottom = plotStartPos.y + plotH;
+            float lineX      = plotStartPos.x + (relativePos * avail.x);
+            float lineTop    = plotStartPos.y;
+            float lineBottom = plotStartPos.y + plotH;
 
-                ImDrawList* drawList = ImGui::GetWindowDrawList();
-                drawList->AddLine(ImVec2(lineX, lineTop),
-                                  ImVec2(lineX, lineBottom),
-                                  IM_COL32(255, 0, 0, 255),
-                                  2.0f);
-            }
+            ImDrawList* drawList = ImGui::GetWindowDrawList();
+            drawList->AddLine(ImVec2(lineX, lineTop),
+                              ImVec2(lineX, lineBottom),
+                              IM_COL32(255, 0, 0, 255),
+                              2.0f);
+        }
 
-            ImGui::EndGroup();
+        ImGui::EndGroup();
 
-            // 交互层：使用 InvisibleButton 捕获鼠标，防止拖动时移动窗口
-            ImVec2 groupMin = ImGui::GetItemRectMin();
-            ImVec2 groupMax = ImGui::GetItemRectMax();
-            ImGui::SetCursorScreenPos(groupMin);
-            std::string btnId = std::string(textures == m_texturesL ? "##SeekL" : "##SeekR");
-            ImGui::InvisibleButton(btnId.c_str(), ImVec2(avail.x, groupMax.y - groupMin.y));
+        // 交互层：使用 InvisibleButton 捕获鼠标，防止拖动时移动窗口
+        ImVec2 groupMin = ImGui::GetItemRectMin();
+        ImVec2 groupMax = ImGui::GetItemRectMax();
+        ImGui::SetCursorScreenPos(groupMin);
+        std::string btnId =
+            std::string(textures == m_texturesL ? "##SeekL" : "##SeekR");
+        ImGui::InvisibleButton(btnId.c_str(),
+                               ImVec2(avail.x, groupMax.y - groupMin.y));
 
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-                ImVec2 mousePos  = ImGui::GetMousePos();
-                float  relX      = std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
-                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-                double hoverAudioTime  = hoverVisualTime - visualOffset;
+        if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+            ImVec2 mousePos = ImGui::GetMousePos();
+            float  relX =
+                std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
+            double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
+            double hoverAudioTime  = hoverVisualTime - visualOffset;
 
-                ImGui::SetTooltip("%.3fs", hoverAudioTime);
+            ImGui::SetTooltip("%.3fs", hoverAudioTime);
 
-                // 绘制悬停绿色竖线
-                float hoverLineX = groupMin.x + relX * avail.x;
-                ImGui::GetWindowDrawList()->AddLine(
-                    ImVec2(hoverLineX, groupMin.y), ImVec2(hoverLineX, groupMax.y),
-                    IM_COL32(0, 255, 0, 150), 1.0f);
+            // 绘制悬停绿色竖线
+            float hoverLineX = groupMin.x + relX * avail.x;
+            ImGui::GetWindowDrawList()->AddLine(ImVec2(hoverLineX, groupMin.y),
+                                                ImVec2(hoverLineX, groupMax.y),
+                                                IM_COL32(0, 255, 0, 150),
+                                                1.0f);
 
-                if ( ImGui::IsItemActive() ) {
+            if ( ImGui::IsItemActive() ) {
 
 
-                    // 发送预览同步指令给逻辑线程
-                    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                        Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
-                                                    avail.x, groupMax.y - groupMin.y,
-                                                    true, true, hoverVisualTime }));
+                // 发送预览同步指令给逻辑线程
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSetMousePosition{ "AudioSpectrum",
+                                                mousePos.x - groupMin.x,
+                                                mousePos.y - groupMin.y,
+                                                avail.x,
+                                                groupMax.y - groupMin.y,
+                                                true,
+                                                true,
+                                                hoverVisualTime }));
 
-                    // 绘制预览包围框 (拖拽时跟随鼠标的预测框)
-                    auto session = Logic::EditorEngine::instance().getActiveSession();
-                    if ( session ) {
-                        auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
-                        if ( snapshot && snapshot->hasBeatmap ) {
-                            double offsetStart = snapshot->visibleTimeStart - snapshot->currentTime;
-                            double offsetEnd   = snapshot->visibleTimeEnd - snapshot->currentTime;
-                            float  viewRange   = static_cast<float>(viewEnd - viewStart);
+                // 绘制预览包围框 (拖拽时跟随鼠标的预测框)
+                auto session =
+                    Logic::EditorEngine::instance().getActiveSession();
+                if ( session ) {
+                    auto snapshot = Logic::EditorEngine::instance()
+                                        .getSyncBuffer("Basic2DCanvas")
+                                        ->getReadingSnapshot();
+                    if ( snapshot && snapshot->hasBeatmap ) {
+                        double offsetStart =
+                            snapshot->visibleTimeStart - snapshot->currentTime;
+                        double offsetEnd =
+                            snapshot->visibleTimeEnd - snapshot->currentTime;
+                        float viewRange =
+                            static_cast<float>(viewEnd - viewStart);
 
-                            if ( viewRange > 0.001f ) {
-                                float preX1 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetStart - viewStart) / viewRange) * avail.x;
-                                float preX2 = groupMin.x + (static_cast<float>(hoverVisualTime + offsetEnd - viewStart) / viewRange) * avail.x;
+                        if ( viewRange > 0.001f ) {
+                            float preX1 =
+                                groupMin.x +
+                                (static_cast<float>(hoverVisualTime +
+                                                    offsetStart - viewStart) /
+                                 viewRange) *
+                                    avail.x;
+                            float preX2 =
+                                groupMin.x +
+                                (static_cast<float>(hoverVisualTime +
+                                                    offsetEnd - viewStart) /
+                                 viewRange) *
+                                    avail.x;
 
-                                // 裁剪并绘制
-                                float drawPreX1 = std::clamp(preX1, groupMin.x, groupMax.x);
-                                float drawPreX2 = std::clamp(preX2, groupMin.x, groupMax.x);
+                            // 裁剪并绘制
+                            float drawPreX1 =
+                                std::clamp(preX1, groupMin.x, groupMax.x);
+                            float drawPreX2 =
+                                std::clamp(preX2, groupMin.x, groupMax.x);
 
-                                if ( drawPreX2 > drawPreX1 ) {
-                                    ImGui::GetWindowDrawList()->AddRectFilled(
-                                        ImVec2(drawPreX1, groupMin.y), ImVec2(drawPreX2, groupMax.y),
-                                        IM_COL32(128, 0, 255, 80)); // 较明显的预览紫色
-                                    ImGui::GetWindowDrawList()->AddRect(
-                                        ImVec2(drawPreX1, groupMin.y), ImVec2(drawPreX2, groupMax.y),
-                                        IM_COL32(128, 0, 255, 230), 0.0f, 0, 1.5f);
-                                }
+                            if ( drawPreX2 > drawPreX1 ) {
+                                ImGui::GetWindowDrawList()->AddRectFilled(
+                                    ImVec2(drawPreX1, groupMin.y),
+                                    ImVec2(drawPreX2, groupMax.y),
+                                    IM_COL32(
+                                        128, 0, 255, 80));  // 较明显的预览紫色
+                                ImGui::GetWindowDrawList()->AddRect(
+                                    ImVec2(drawPreX1, groupMin.y),
+                                    ImVec2(drawPreX2, groupMax.y),
+                                    IM_COL32(128, 0, 255, 230),
+                                    0.0f,
+                                    0,
+                                    1.5f);
                             }
                         }
                     }
                 }
             }
+        }
 
-            // 绘制主画布可见范围包围框
-            auto session = Logic::EditorEngine::instance().getActiveSession();
-            if ( session ) {
-                auto snapshot = Logic::EditorEngine::instance().getSyncBuffer("Basic2DCanvas")->getReadingSnapshot();
-                if ( snapshot && snapshot->hasBeatmap ) {
-                    float viewRange = static_cast<float>(viewEnd - viewStart);
-                    if ( viewRange > 0.001f ) {
-                        float xStart = groupMin.x + (static_cast<float>(snapshot->visibleTimeStart - viewStart) / viewRange) * avail.x;
-                        float xEnd   = groupMin.x + (static_cast<float>(snapshot->visibleTimeEnd - viewStart) / viewRange) * avail.x;
-                        
-                        // 裁剪到组范围内显示
-                        float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
-                        float drawX2 = std::clamp(xEnd, groupMin.x, groupMax.x);
+        // 绘制主画布可见范围包围框
+        auto session = Logic::EditorEngine::instance().getActiveSession();
+        if ( session ) {
+            auto snapshot = Logic::EditorEngine::instance()
+                                .getSyncBuffer("Basic2DCanvas")
+                                ->getReadingSnapshot();
+            if ( snapshot && snapshot->hasBeatmap ) {
+                float viewRange = static_cast<float>(viewEnd - viewStart);
+                if ( viewRange > 0.001f ) {
+                    float xStart =
+                        groupMin.x +
+                        (static_cast<float>(snapshot->visibleTimeStart -
+                                            viewStart) /
+                         viewRange) *
+                            avail.x;
+                    float xEnd = groupMin.x +
+                                 (static_cast<float>(snapshot->visibleTimeEnd -
+                                                     viewStart) /
+                                  viewRange) *
+                                     avail.x;
 
-                        if ( drawX2 > drawX1 ) {
-                            ImGui::GetWindowDrawList()->AddRectFilled(
-                                ImVec2(drawX1, groupMin.y), ImVec2(drawX2, groupMax.y),
-                                IM_COL32(128, 0, 255, 40)); // 半透明紫色
-                            ImGui::GetWindowDrawList()->AddRect(
-                                ImVec2(drawX1, groupMin.y), ImVec2(drawX2, groupMax.y),
-                                IM_COL32(128, 0, 255, 180), 0.0f, 0, 1.5f);
-                        }
+                    // 裁剪到组范围内显示
+                    float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
+                    float drawX2 = std::clamp(xEnd, groupMin.x, groupMax.x);
+
+                    if ( drawX2 > drawX1 ) {
+                        ImGui::GetWindowDrawList()->AddRectFilled(
+                            ImVec2(drawX1, groupMin.y),
+                            ImVec2(drawX2, groupMax.y),
+                            IM_COL32(128, 0, 255, 40));  // 半透明紫色
+                        ImGui::GetWindowDrawList()->AddRect(
+                            ImVec2(drawX1, groupMin.y),
+                            ImVec2(drawX2, groupMax.y),
+                            IM_COL32(128, 0, 255, 180),
+                            0.0f,
+                            0,
+                            1.5f);
                     }
                 }
             }
+        }
 
-            if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-                ImVec2 mousePos  = ImGui::GetMousePos();
-                float  relX      = std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
-                double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-                double hoverAudioTime  = hoverVisualTime - visualOffset;
+        if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
+            ImVec2 mousePos = ImGui::GetMousePos();
+            float  relX =
+                std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
+            double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
+            double hoverAudioTime  = hoverVisualTime - visualOffset;
 
-                audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
-                // 核心修复：同步逻辑层时间
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
+            audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
+            // 核心修复：同步逻辑层时间
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
 
-                // 停止预览状态
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSetMousePosition{ "AudioSpectrum", mousePos.x - groupMin.x, mousePos.y - groupMin.y,
-                                                avail.x, groupMax.y - groupMin.y,
-                                                false, false, -1.0 }));
-            }
-        };
+            // 停止预览状态
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetMousePosition{ "AudioSpectrum",
+                                            mousePos.x - groupMin.x,
+                                            mousePos.y - groupMin.y,
+                                            avail.x,
+                                            groupMax.y - groupMin.y,
+                                            false,
+                                            false,
+                                            -1.0 }));
+        }
+    };
 
     ImGui::Text("%s", TR("ui.spectrum.channel_l").data());
     if ( !m_texturesL.empty() ) {

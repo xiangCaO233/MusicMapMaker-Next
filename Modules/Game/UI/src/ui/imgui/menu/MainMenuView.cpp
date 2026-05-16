@@ -8,8 +8,8 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/ui/UISettingsTabEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
-#include "event/ui/menu/OpenProjectEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
+#include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -189,15 +189,15 @@ void MainMenuView::openPackFilePicker()
 
 void MainMenuView::openAudioImportPicker()
 {
-    auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) return;
 
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         nfdu8char_t*      outPath    = nullptr;
-        nfdu8filteritem_t filters[1] = { { "Audio Files", "mp3,ogg,wav,flac" } };
-        nfdresult_t       result =
-            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+        nfdu8filteritem_t filters[1] = { { "Audio Files",
+                                           "mp3,ogg,wav,flac" } };
+        nfdresult_t result = NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
         if ( result == NFD_OKAY ) {
             Event::EventBus::instance().publish(
@@ -211,9 +211,9 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
-        fdConfig.flags = ImGuiFileDialogFlags_Modal |
-                         ImGuiFileDialogFlags_HideColumnType |
-                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
+        fdConfig.flags             = ImGuiFileDialogFlags_Modal |
+                                     ImGuiFileDialogFlags_HideColumnType |
+                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),
@@ -348,12 +348,10 @@ void MainMenuView::renderAboutPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
-             TR("ui.help.about_title"),
-             nullptr,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+             TR("ui.help.about_title"), nullptr, ImGuiWindowFlags_None) ) {
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
@@ -450,13 +448,11 @@ void MainMenuView::renderUpdateCheckingPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     bool open = true;
     if ( ImGui::BeginPopupModal(
-             TR("ui.help.check_update"),
-             &open,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+             TR("ui.help.check_update"), &open, ImGuiWindowFlags_None) ) {
         if ( !open ) ImGui::CloseCurrentPopup();
         auto  info     = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -535,15 +531,14 @@ void MainMenuView::renderUpdatePopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
                       info.status == MMM::Network::UpdateStatus::kDownloaded);
     bool open      = true;
-    if ( ImGui::BeginPopupModal(
-             TR("ui.help.update_found"),
-             isWorking ? nullptr : &open,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(TR("ui.help.update_found"),
+                                isWorking ? nullptr : &open,
+                                ImGuiWindowFlags_None) ) {
         if ( !open ) ImGui::CloseCurrentPopup();
         info           = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -727,12 +722,10 @@ void MainMenuView::renderUpdateSuccessPopup()
     }
 
     ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
     if ( ImGui::BeginPopupModal(
-             TR("ui.help.update_success"),
-             nullptr,
-             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize) ) {
+             TR("ui.help.update_success"), nullptr, ImGuiWindowFlags_None) ) {
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
@@ -927,8 +920,10 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             openFolderPicker();
         }
 
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_MUSIC, TR("ui.audio_manager.import_audio"), "Ctrl+I", hasProject) ) {
+        if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
+                                  TR("ui.audio_manager.import_audio"),
+                                  "Ctrl+I",
+                                  hasProject) ) {
             openAudioImportPicker();
         }
 
