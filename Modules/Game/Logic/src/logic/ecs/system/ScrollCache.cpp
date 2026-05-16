@@ -51,18 +51,40 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
     const double timelineZoom    = visualConfig.timelineZoom;
 
-    // 1. 获取基准 BPM (对应 osu! 的 BaseBeatLength)
-    double refBPM = 120.0;
+    // 1. 完整版 osu! 逻辑：计算 Most Common BPM 作为基准，并获取
+    // SliderMultiplier
+    double refBPM           = 120.0;
+    double sliderMultiplier = 1.0;
     if ( auto session = EditorEngine::instance().getActiveSession() ) {
         if ( auto beatmap = session->getContext().currentBeatmap ) {
-            refBPM = beatmap->m_baseMapMetadata.preference_bpm;
-        }
-    }
-    if ( refBPM <= 0.0 ) {
-        for ( const auto& entry : m_rebuildScratch ) {
-            if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
-                refBPM = entry.component->m_value;
-                break;
+            // 尝试获取 SliderMultiplier (默认为 1.4)
+            sliderMultiplier = beatmap->m_metadata.get_value<double>(
+                MapMetadataType::OSU, "Difficulty::SliderMultiplier", 1.4);
+
+            // 自动计算最常见的 BPM (持续时间最长)
+            std::map<double, double> bpmDurations;
+            double                   lastBpmTime   = 0.0;
+            double                   currentBpmVal = -1.0;
+            for ( const auto& entry : m_rebuildScratch ) {
+                if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
+                    if ( currentBpmVal > 0 ) {
+                        bpmDurations[currentBpmVal] +=
+                            (entry.component->m_timestamp - lastBpmTime);
+                    }
+                    currentBpmVal = entry.component->m_value;
+                    lastBpmTime   = entry.component->m_timestamp;
+                }
+            }
+            // 加上最后一个段落到末尾的时间 (假设谱面时长)
+            bpmDurations[currentBpmVal] +=
+                (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
+
+            double maxDuration = -1.0;
+            for ( const auto& [bpm, dur] : bpmDurations ) {
+                if ( dur > maxDuration ) {
+                    maxDuration = dur;
+                    refBPM      = bpm;
+                }
             }
         }
     }
@@ -81,7 +103,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             return BASE_SPEED * timelineZoom;
         }
         double ratio = std::clamp(bpm / refBPM, 0.0, 1000000.0);
-        return ratio * sm * BASE_SPEED * timelineZoom;
+        return ratio * sm * sliderMultiplier * BASE_SPEED * timelineZoom;
     };
 
     // osu! 关键：SV 跨 BPM 红线继承，不重置。仅绿线显式修改 ScrollSpeed。
@@ -106,7 +128,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
             currentBPM                   = tl->m_value;
-            // osu! 红线不重置 ScrollSpeed，SV 从上一绿线继承
+            // 完整版 osu! 逻辑：红线 (Uninherited) 必须将 SV 重置为 1.0
+            currentScrollMult = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
             newSegments.back().scrollEntity = entry.entity;
