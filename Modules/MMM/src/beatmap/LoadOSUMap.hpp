@@ -158,9 +158,13 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     BeatMap beatMap;
     beatMap.m_baseMapMetadata.map_path = path;
     BaseMapMeta& basemeta              = beatMap.m_baseMapMetadata;
-    // 切换谱面路径为绝对路径
+    // 切换谱面路径为绝对路径 (使用 error_code 避免异常)
+    std::error_code ec;
     if ( basemeta.map_path.is_relative() ) {
-        basemeta.map_path = std::filesystem::absolute(basemeta.map_path);
+        auto abs_path = std::filesystem::absolute(basemeta.map_path, ec);
+        if ( !ec ) {
+            basemeta.map_path = abs_path;
+        }
     }
     auto fname = basemeta.map_path.filename();
     XINFO("载入osu谱面路径:" + Config::pathToUtf8(basemeta.map_path));
@@ -226,8 +230,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     trim(main_audio_rpath);
     osumeta_props["General::AudioFilename"] = main_audio_rpath;
 
-    basemeta.main_audio_path = std::filesystem::path(
-        reinterpret_cast<const char8_t*>(main_audio_rpath.c_str()));
+    basemeta.main_audio_path = Config::utf8ToPath(main_audio_rpath);
 
     osumeta_props["General::AudioLeadIn"] =
         osureader.get_value("General", "AudioLeadIn", std::string("0"));
@@ -373,8 +376,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     // 去引号再次trim
     trim(cover_path);
 
-    basemeta.main_cover_path = std::filesystem::path(
-        reinterpret_cast<const char8_t*>(cover_path.c_str()));
+    basemeta.main_cover_path = Config::utf8ToPath(cover_path);
     if ( background_paras.size() >= 5 ) {
         basemeta.bgxoffset =
             MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 3));

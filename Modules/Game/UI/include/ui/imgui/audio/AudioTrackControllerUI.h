@@ -27,6 +27,8 @@ public:
 
     void update(UIManager* sourceManager) override;
 
+    void* getActualInstance() override { return this; }
+
     const std::string& getTrackId() const { return m_trackId; }
 
 private:

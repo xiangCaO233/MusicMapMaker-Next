@@ -251,6 +251,10 @@ public:
     bool preloadSoundEffect(const std::string& key, const std::string& filePath,
                             float defaultVolume = 1.0f);
 
+    /// @brief 卸载并释放指定 key 的音效
+    /// @param key 标识符
+    void unloadSoundEffect(const std::string& key);
+
     /// @brief 播放指定 key 的音效
     /// @param key 标识符
     /// @param volumeFactor 额外音量倍率 (默认 1.0)

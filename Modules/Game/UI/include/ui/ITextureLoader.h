@@ -20,6 +20,14 @@ public:
 
     virtual ~ITextureLoader() override = default;
 
+    /// @brief 获取视图具体类型,替代 dynamic_cast
+    ViewType getViewType() const override { return ViewType::TextureLoader; }
+
+    /// @brief 安全转换为自身
+    ITextureLoader* asTextureLoader() override { return this; }
+
+    void* getActualInstance() override { return this; }
+
     /// @brief 是否需要重载
     virtual bool needReload() = 0;
 

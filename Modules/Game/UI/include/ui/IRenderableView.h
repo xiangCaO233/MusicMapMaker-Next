@@ -26,6 +26,15 @@ public:
     IRenderableView& operator=(const IRenderableView&) = delete;
     virtual ~IRenderableView() override                = default;
 
+    /// @brief 获取视图具体类型,替代 dynamic_cast
+    ViewType getViewType() const override { return ViewType::RenderableView; }
+
+    /// @brief 安全转换为自身
+    ITextureLoader*  asTextureLoader() override { return this; }
+    IRenderableView* asRenderableView() override { return this; }
+
+    void* getActualInstance() override { return this; }
+
     ///@brief 获取笔刷
     const Brush& getBrush() const { return m_brush; }
 

@@ -20,7 +20,27 @@ else()
 	# 编译MusicMapMaker-Next可执行文件
 	add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
+add_gcc_debug_extract(MusicMapMaker-Next)
 add_strip_command_for_release(MusicMapMaker-Next)
+
+# 构建完成后分析 Clang -ftime-trace 并打印编译耗时 Top 10
+find_package(Python3 QUIET)
+if(Python3_EXECUTABLE)
+    add_custom_command(
+        TARGET MusicMapMaker-Next
+        POST_BUILD
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/analyze_build_times.py" "${CMAKE_BINARY_DIR}"
+        COMMENT "Analyzing compile times (Top 10 slowest TUs)..."
+    )
+endif()
+
+target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp)
+target_include_directories(MusicMapMaker-Next PRIVATE include)
+
+if(MMM_PGO_INSTRUMENT)
+    # PGO 插桩版本需要 curl 上传 profile
+    target_link_libraries(MusicMapMaker-Next PRIVATE Network)
+endif()
 
 target_link_libraries(MusicMapMaker-Next
 	PRIVATE

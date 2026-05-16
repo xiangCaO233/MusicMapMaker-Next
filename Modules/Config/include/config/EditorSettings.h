@@ -23,10 +23,23 @@ struct SyncConfig {
     float    integralFactor{ 0.1f };    ///< 积分追踪系数 (0.0~1.0)
     float    waterTankBuffer{ 0.05f };  ///< 水箱缓冲时间 (秒)
     double   syncInterval{ 10.0 };      ///< 强制同步周期 (秒)
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(SyncConfig, mode, integralFactor,
-                                   waterTankBuffer, syncInterval)
 };
+
+inline void to_json(nlohmann::json& j, const SyncConfig& c)
+{
+    j = nlohmann::json{ { "mode", c.mode },
+                        { "integralFactor", c.integralFactor },
+                        { "waterTankBuffer", c.waterTankBuffer },
+                        { "syncInterval", c.syncInterval } };
+}
+
+inline void from_json(const nlohmann::json& j, SyncConfig& c)
+{
+    c.mode            = j.value("mode", SyncMode::Integral);
+    c.integralFactor  = j.value("integralFactor", 0.1f);
+    c.waterTankBuffer = j.value("waterTankBuffer", 0.05f);
+    c.syncInterval    = j.value("syncInterval", 10.0);
+}
 
 enum class PolylineSfxStrategy {
     Exact,             ///< 策略一: 所有子物件精确按照他们的类型播放对应音效
@@ -65,13 +78,35 @@ struct SfxConfig {
 
     /// @brief 是否启用打击音效
     bool enableHitSfx{ true };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(SfxConfig, polylineStrategy,
-                                   enableFlickWidthVolumeScaling,
-                                   flickWidthVolumeMultiplier,
-                                   permanentSfxVolumes, permanentSfxMutes,
-                                   hitSfxSyncSpeed, enableHitSfx)
 };
+
+inline void to_json(nlohmann::json& j, const SfxConfig& c)
+{
+    j = nlohmann::json{
+        { "polylineStrategy", c.polylineStrategy },
+        { "enableFlickWidthVolumeScaling", c.enableFlickWidthVolumeScaling },
+        { "flickWidthVolumeMultiplier", c.flickWidthVolumeMultiplier },
+        { "permanentSfxVolumes", c.permanentSfxVolumes },
+        { "permanentSfxMutes", c.permanentSfxMutes },
+        { "hitSfxSyncSpeed", c.hitSfxSyncSpeed },
+        { "enableHitSfx", c.enableHitSfx }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, SfxConfig& c)
+{
+    c.polylineStrategy =
+        j.value("polylineStrategy", PolylineSfxStrategy::Exact);
+    c.enableFlickWidthVolumeScaling =
+        j.value("enableFlickWidthVolumeScaling", false);
+    c.flickWidthVolumeMultiplier = j.value("flickWidthVolumeMultiplier", 0.1f);
+    c.permanentSfxVolumes =
+        j.value("permanentSfxVolumes", std::map<std::string, float>());
+    c.permanentSfxMutes =
+        j.value("permanentSfxMutes", std::map<std::string, bool>());
+    c.hitSfxSyncSpeed = j.value("hitSfxSyncSpeed", true);
+    c.enableHitSfx    = j.value("enableHitSfx", true);
+}
 
 enum class FilePickerStyle {
     Native,  ///< 系统原生对话框 (nfd-extended)
@@ -108,11 +143,28 @@ struct SoftwareCursorConfig {
     float smokeLifeTime{ 0.8f };
     /// @brief 是否根据当前谱面 BPM 自动适配烟雾存活时间 (1拍长度)
     bool enableBpmSyncSmokeLife{ false };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(SoftwareCursorConfig, cursorSize, trailSize,
-                                   trailLifeTime, smokeSize, smokeLifeTime,
-                                   enableBpmSyncSmokeLife)
 };
+
+inline void to_json(nlohmann::json& j, const SoftwareCursorConfig& c)
+{
+    j = nlohmann::json{ { "cursorSize", c.cursorSize },
+                        { "trailSize", c.trailSize },
+                        { "trailLifeTime", c.trailLifeTime },
+                        { "smokeSize", c.smokeSize },
+                        { "smokeLifeTime", c.smokeLifeTime },
+                        { "enableBpmSyncSmokeLife",
+                          c.enableBpmSyncSmokeLife } };
+}
+
+inline void from_json(const nlohmann::json& j, SoftwareCursorConfig& c)
+{
+    c.cursorSize             = j.value("cursorSize", 64.0f);
+    c.trailSize              = j.value("trailSize", 48.0f);
+    c.trailLifeTime          = j.value("trailLifeTime", 0.4f);
+    c.smokeSize              = j.value("smokeSize", 32.0f);
+    c.smokeLifeTime          = j.value("smokeLifeTime", 0.8f);
+    c.enableBpmSyncSmokeLife = j.value("enableBpmSyncSmokeLife", false);
+}
 
 struct UIAestheticsConfig {
     /// @brief 全局窗口圆角半径 (px, 基准值)
@@ -125,11 +177,25 @@ struct UIAestheticsConfig {
     float itemSpacing{ 8.0f };
     /// @brief 全局窗口内边距 (px, 基准值)
     float windowPadding{ 8.0f };
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(UIAestheticsConfig, windowRounding,
-                                   frameRounding, windowGap, itemSpacing,
-                                   windowPadding)
 };
+
+inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
+{
+    j = nlohmann::json{ { "windowRounding", c.windowRounding },
+                        { "frameRounding", c.frameRounding },
+                        { "windowGap", c.windowGap },
+                        { "itemSpacing", c.itemSpacing },
+                        { "windowPadding", c.windowPadding } };
+}
+
+inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
+{
+    c.windowRounding = j.value("windowRounding", 8.0f);
+    c.frameRounding  = j.value("frameRounding", 6.0f);
+    c.windowGap      = j.value("windowGap", 8.0f);
+    c.itemSpacing    = j.value("itemSpacing", 8.0f);
+    c.windowPadding  = j.value("windowPadding", 8.0f);
+}
 
 enum class UITheme {
     Auto,

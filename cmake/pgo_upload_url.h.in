@@ -1,0 +1,4 @@
+// 由 CMake configure_file() 生成，包含 PGO profile 上传 URL
+#pragma once
+
+#define MMM_PGO_UPLOAD_URL "@PGO_UPLOAD_URL@"

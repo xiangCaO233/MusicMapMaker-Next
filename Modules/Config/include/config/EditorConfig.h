@@ -20,9 +20,20 @@ struct EditorConfig {
 
     /// @brief 最近打开的项目路径列表
     std::vector<std::string> recentProjects;
-
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(EditorConfig, visual, settings,
-                                   recentProjects)
 };
+
+inline void to_json(nlohmann::json& j, const EditorConfig& c)
+{
+    j = nlohmann::json{ { "visual", c.visual },
+                        { "settings", c.settings },
+                        { "recentProjects", c.recentProjects } };
+}
+
+inline void from_json(const nlohmann::json& j, EditorConfig& c)
+{
+    c.visual         = j.value("visual", VisualConfig());
+    c.settings       = j.value("settings", EditorSettings());
+    c.recentProjects = j.value("recentProjects", std::vector<std::string>());
+}
 
 }  // namespace MMM::Config

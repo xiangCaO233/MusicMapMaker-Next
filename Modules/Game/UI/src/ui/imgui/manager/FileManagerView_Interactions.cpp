@@ -28,7 +28,7 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
     if ( isHovered ) {
         for ( const auto& drop : m_pendingDrops ) {
             if ( !drop.paths.empty() ) {
-                std::filesystem::path p(drop.paths[0]);
+                std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
                 std::filesystem::path projectPath =
                     std::filesystem::is_directory(p) ? p : p.parent_path();
 

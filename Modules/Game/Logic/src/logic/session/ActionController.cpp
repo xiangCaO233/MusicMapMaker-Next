@@ -19,8 +19,8 @@ void TimelineAction::execute(SessionContext& ctx)
 {
     auto& reg = ctx.timelineRegistry;
     if ( m_type == Type::Create ) {
-        if ( !reg.valid(m_entity) ) m_entity = reg.create();
-        reg.emplace<TimelineComponent>(m_entity, *m_after);
+        if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
+        reg.emplace_or_replace<TimelineComponent>(m_entity, *m_after);
         XINFO("[Action] Create Timeline: Time={:.3f}, Val={:.2f}",
               m_after->m_timestamp,
               m_after->m_value);
@@ -53,8 +53,8 @@ void TimelineAction::undo(SessionContext& ctx)
     if ( m_type == Type::Create ) {
         if ( reg.valid(m_entity) ) reg.destroy(m_entity);
     } else if ( m_type == Type::Delete ) {
-        if ( !reg.valid(m_entity) ) m_entity = reg.create();
-        reg.emplace<TimelineComponent>(m_entity, *m_before);
+        if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
+        reg.emplace_or_replace<TimelineComponent>(m_entity, *m_before);
     } else if ( m_type == Type::Update ) {
         if ( reg.valid(m_entity) ) {
             reg.patch<TimelineComponent>(
@@ -102,10 +102,10 @@ void NoteAction::execute(SessionContext& ctx)
 {
     auto& reg = ctx.noteRegistry;
     if ( m_type == Type::Create ) {
-        if ( !reg.valid(m_entity) ) m_entity = reg.create();
-        reg.emplace<NoteComponent>(m_entity, *m_after);
-        reg.emplace<TransformComponent>(m_entity);
-        reg.emplace<InteractionComponent>(m_entity);
+        if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
+        reg.emplace_or_replace<NoteComponent>(m_entity, *m_after);
+        reg.emplace_or_replace<TransformComponent>(m_entity);
+        reg.emplace_or_replace<InteractionComponent>(m_entity);
         XINFO("[Action] Create Note: Type={}, Time={:.3f}, Track={}",
               (int)m_after->m_type,
               m_after->m_timestamp,
@@ -140,10 +140,10 @@ void NoteAction::undo(SessionContext& ctx)
     if ( m_type == Type::Create ) {
         if ( reg.valid(m_entity) ) reg.destroy(m_entity);
     } else if ( m_type == Type::Delete ) {
-        if ( !reg.valid(m_entity) ) m_entity = reg.create();
-        reg.emplace<NoteComponent>(m_entity, *m_before);
-        reg.emplace<TransformComponent>(m_entity);
-        reg.emplace<InteractionComponent>(m_entity);
+        if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
+        reg.emplace_or_replace<NoteComponent>(m_entity, *m_before);
+        reg.emplace_or_replace<TransformComponent>(m_entity);
+        reg.emplace_or_replace<InteractionComponent>(m_entity);
     } else if ( m_type == Type::Update ) {
         if ( reg.valid(m_entity) ) {
             reg.patch<NoteComponent>(m_entity,
@@ -192,7 +192,7 @@ void BatchNoteAction::execute(SessionContext& ctx)
     XINFO("[Action] BatchNoteAction: {} entries", m_entries.size());
     for ( auto& entry : m_entries ) {
         if ( entry.after.has_value() ) {
-            if ( !reg.valid(entry.entity) ) entry.entity = reg.create();
+            if ( !reg.valid(entry.entity) ) entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
             reg.emplace_or_replace<InteractionComponent>(entry.entity);
@@ -209,11 +209,12 @@ void BatchNoteAction::undo(SessionContext& ctx)
     XINFO("[Undo] BatchNoteAction: {} entries", m_entries.size());
     for ( auto& entry : m_entries ) {
         if ( entry.before.has_value() ) {
-            if ( !reg.valid(entry.entity) ) entry.entity = reg.create();
+            if ( !reg.valid(entry.entity) ) entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
             reg.emplace_or_replace<InteractionComponent>(entry.entity);
-        } else if ( entry.after.has_value() ) {
+        }
+        else if ( entry.after.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }

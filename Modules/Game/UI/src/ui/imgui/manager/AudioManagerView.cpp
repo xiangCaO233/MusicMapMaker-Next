@@ -3,6 +3,8 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "logic/EditorEngine.h"
@@ -14,6 +16,8 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <ImGuiFileDialog.h>
+#include <nfd.h>
 
 namespace MMM::UI
 {
@@ -27,6 +31,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto& skinCfg      = Config::SkinManager::instance();
     auto& audioManager = Audio::AudioManager::instance();
 
+    float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
 
@@ -172,14 +177,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         listVBox.addElement(
             "Audio_" + audio.m_id + "_" + audio.m_path,
             Sizing::Grow(),
-            Sizing::Fixed(28),
-            [&, audio](Clay_BoundingBox r, bool isHovered) {
+            Sizing::Fixed(28 * dpiScale),
+            [=, &engine, this](Clay_BoundingBox r, bool isHovered) {
                 ImGui::Indent();
                 std::string labelStr = audio.m_id + " - " + audio.m_path;
                 float       availW   = ImGui::GetContentRegionAvail().x;
 
                 Utils::renderScrollingSelectable(
-                    audio.m_id, labelStr, availW, 28, [&]() {
+                    audio.m_id, labelStr, availW, 28 * dpiScale, [&]() {
                         // 点击弹出控制器
                         std::string viewName = "TrackController_" + audio.m_id;
                         if ( !sourceManager->getView<AudioTrackControllerUI>(
@@ -195,6 +200,37 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                                         std::move(controller));
                         }
                     });
+
+                static int s_audioLogCounter = 0;
+                if ( !isPermanentEffect ) {
+                    bool hovered = ImGui::IsItemHovered();
+                    bool rclicked =
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                    if ( (hovered || rclicked) && s_audioLogCounter < 10 ) {
+                        XINFO(
+                            "AudioItem [{}]: hovered={} rclicked={} "
+                            "isPermanent={} pos=({},{}) size=({},{}) "
+                            "mouse=({},{})",
+                            audio.m_id,
+                            hovered,
+                            rclicked,
+                            isPermanentEffect,
+                            r.x,
+                            r.y,
+                            r.width,
+                            r.height,
+                            ImGui::GetMousePos().x,
+                            ImGui::GetMousePos().y);
+                        s_audioLogCounter++;
+                    }
+                    if ( hovered && rclicked ) {
+                        XINFO("AudioItem RIGHT-CLICK TRIGGERED: {}",
+                              audio.m_id);
+                        m_manageTrackId   = audio.m_id;
+                        m_manageTrackType = audio.m_type;
+                        m_openManageModal = true;
+                    }
+                }
 
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("%s (Type: %s)",
@@ -388,6 +424,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 3个32px的项目 + 间距 + 上下预留的缓冲空间
         footerH += 3 * 32.0f + 3 * 2.0f + 16.0f;
     }
+    // 3. 底部导入按钮 (32px + 间距)
+    footerH += 32.0f + 8.0f;
 
     // 2. 渲染顶部列表区域 (自动占据剩余空间)
     rootVBox.setPadding(12, 12, 12, 12)
@@ -423,7 +461,214 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 3. 底部全局控制区域 (独立渲染)
     ImVec2 footerPos = { layoutContext.m_startPos.x,
                          layoutContext.m_startPos.y + totalSize.y };
-    footerVBox.renderInCurrent(footerPos, { layoutContext.m_avail.x, footerH });
+
+    float controlH = footerH - (32.0f + 8.0f);
+    footerVBox.renderInCurrent(footerPos,
+                               { layoutContext.m_avail.x, controlH });
+
+    // 4. 底部加号按钮 (全宽)
+    CLayHBox bottomBtnHBox;
+    bottomBtnHBox.setPadding(12, 12, 0, 0)
+        .setAlignment(Alignment::Center())
+        .addElement(
+            "Audio_ImportNew",
+            Sizing::Grow(),
+            Sizing::Fixed(32.0f),
+            [&engine](Clay_BoundingBox r, bool isHovered) {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Text,
+                    ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                      ImVec4(1, 1, 1, 0.1f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                      ImVec4(1, 1, 1, 0.2f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImDrawList* dl    = ImGui::GetWindowDrawList();
+                ImVec4      bgCol = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+                bgCol.w *= 0.5f;
+                float rounding = ImGui::GetStyle().FrameRounding;
+
+                if ( isHovered ) bgCol.w *= 1.5f;
+
+                dl->AddRectFilled({ r.x, r.y },
+                                  { r.x + r.width, r.y + r.height },
+                                  ImGui::ColorConvertFloat4ToU32(bgCol),
+                                  rounding);
+
+                if ( ImGui::Button(
+                         fmt::format("{}##ImportAudio", ICON_MMM_PLUS).c_str(),
+                         ImVec2(r.width, r.height)) ) {
+                    auto& settings = engine.getEditorConfig().settings;
+                    if ( settings.filePickerStyle ==
+                         Config::FilePickerStyle::Native ) {
+                        nfdu8char_t*      outPath    = nullptr;
+                        nfdu8filteritem_t filters[1] = {
+                            { "Audio Files", "mp3,ogg,wav,flac" }
+                        };
+                        nfdresult_t result =
+                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
+
+                        if ( result == NFD_OKAY ) {
+                            Event::EventBus::instance().publish(
+                                Event::AudioImportTriggerEvent{ outPath });
+                            NFD_FreePathU8(outPath);
+                        } else if ( result == NFD_ERROR ) {
+                            XERROR("NFD Error: {}", NFD_GetError());
+                        }
+                    } else {
+                        IGFD::FileDialogConfig fdConfig;
+                        fdConfig.path     = settings.lastFilePickerPath;
+                        fdConfig.fileName = "";
+                        fdConfig.flags =
+                            ImGuiFileDialogFlags_Modal |
+                            ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        ImGuiFileDialog::Instance()->OpenDialog(
+                            "AudioImportPicker",
+                            TR("ui.audio_manager.import_audio").data(),
+                            ".mp3,.ogg,.wav,.flac",
+                            fdConfig);
+                    }
+                }
+
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(4);
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s", TR("ui.audio_manager.import_audio").data());
+                }
+            });
+
+    ImVec2 btnPos = { footerPos.x, footerPos.y + controlH + 4.0f };
+    bottomBtnHBox.renderInCurrent(btnPos, { layoutContext.m_avail.x, 32.0f });
+
+    // --- 5. 音轨管理窗口 ---
+    bool showManageModal = !m_manageTrackId.empty();
+    if ( showManageModal ) {
+        std::string windowTitle =
+            fmt::format("{} {}", TR("ui.audio_manager.manage_title").data(),
+                        m_manageTrackId);
+        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_FirstUseEver);
+        if ( ImGui::Begin(windowTitle.c_str(),
+                          &showManageModal,
+                          ImGuiWindowFlags_NoCollapse) ) {
+            if ( !showManageModal ) {
+                m_manageTrackId = "";
+            }
+
+        // --- 使用 Clay 重构对话框内容 ---
+        CLayVBox modalLayout;
+        float padding = 16 * dpiScale;
+        modalLayout.setPadding(padding, padding, padding, padding);
+        modalLayout.setSpacing(12 * dpiScale);
+
+        // 1. 标题与分隔线 (移除了冗余的 Text，仅保留分隔线)
+        modalLayout.addElement(
+            "ModalSep1", Sizing::Grow(), Sizing::Fixed(1),
+            [=, this](Clay_BoundingBox r, bool) {
+                ImGui::GetWindowDrawList()->AddLine(
+                    { r.x, r.y }, { r.x + r.width, r.y },
+                    ImGui::GetColorU32(ImGuiCol_Separator));
+            });
+
+        // 2. 配置项 (音轨类型)
+        CLayHBox typeRow;
+        typeRow.setAlignment(Alignment::Center());
+        typeRow.setSpacing(8 * dpiScale);
+        typeRow.addElement(
+            "TypeLabel", Sizing::Fixed(100 * dpiScale), Sizing::Grow(),
+            [=, this](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("%s:", TR("ui.audio_manager.track_type").data());
+            });
+        typeRow.addElement(
+            "TypeCombo", Sizing::Grow(), Sizing::Fixed(28 * dpiScale),
+            [=, this, &engine](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                int         currentType = (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
+                const char* typeNames[] = { "Main", "Effect" };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##TrackType", &currentType, typeNames, 2) ) {
+                    m_manageTrackType = (currentType == 0
+                                             ? AudioTrackType::Main
+                                             : AudioTrackType::Effect);
+                    engine.pushCommand(Logic::CmdUpdateAudioResource{
+                        m_manageTrackId, m_manageTrackType });
+                    ImGui::CloseCurrentPopup();
+                }
+            });
+        modalLayout.addLayout("TypeRow",
+                              typeRow,
+                              Sizing::Grow(),
+                              Sizing::Fixed(32 * dpiScale));
+
+        modalLayout.addElement(
+            "ModalSep2", Sizing::Grow(), Sizing::Fixed(1),
+            [=, this](Clay_BoundingBox r, bool) {
+                ImGui::GetWindowDrawList()->AddLine(
+                    { r.x, r.y }, { r.x + r.width, r.y },
+                    ImGui::GetColorU32(ImGuiCol_Separator));
+            });
+
+        // 3. 操作按钮
+        CLayHBox btnRow;
+        btnRow.setAlignment(Alignment::Center());
+        btnRow.setSpacing(12 * dpiScale);
+        btnRow.addElement(
+            "RemoveBtn", Sizing::Fixed(140 * dpiScale),
+            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::Button(TR("ui.audio_manager.remove_track").data(),
+                                   { r.width, r.height }) ) {
+                    ImGui::OpenPopup("RemoveTrackConfirm");
+                }
+            });
+        btnRow.addElement(
+            "CancelBtn", Sizing::Fixed(100 * dpiScale),
+            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                   { r.width, r.height }) ) {
+                    m_manageTrackId = "";
+                }
+            });
+        modalLayout.addLayout("BtnRow",
+                              btnRow,
+                              Sizing::Grow(),
+                              Sizing::Fixed(32 * dpiScale));
+
+        // 渲染布局
+        // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算
+        ImVec2 modalSize = modalLayout.renderInCurrent(
+            ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+        ImGui::Dummy(modalSize);
+
+        // 二次确认弹窗
+        if ( ImGui::BeginPopupModal("RemoveTrackConfirm",
+                                    nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize) ) {
+            ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());
+            ImGui::Spacing();
+            if ( ImGui::Button(TR("ui.common.confirm").data(),
+                               { 100 * dpiScale, 0 }) ) {
+                engine.pushCommand(
+                    Logic::CmdRemoveAudioResource{ m_manageTrackId });
+                m_manageTrackId = "";
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(),
+                               { 100 * dpiScale, 0 }) ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+            ImGui::End();
+        }
+    }
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

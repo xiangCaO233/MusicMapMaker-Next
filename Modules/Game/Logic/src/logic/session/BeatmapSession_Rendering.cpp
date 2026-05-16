@@ -369,6 +369,44 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             }
         }
 
+        // 非预览区拖拽时（AudioWaveform/AudioSpectrum），从 previewHoverTime
+        // 反算 previewHoverY
+        if ( cameraId == "Preview" && snapshot->isPreviewDragging &&
+             !snapshot->isHoveringCanvas ) {
+            auto* cache =
+                m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
+            if ( cache ) {
+                float judgmentLineY =
+                    camera.viewportHeight * config.visual.judgeline_pos;
+                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+                double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
+
+                float mainViewportHeight = 1000.0f;
+                auto  itMain             = m_ctx->cameras.find("Basic2DCanvas");
+                if ( itMain != m_ctx->cameras.end() ) {
+                    mainViewportHeight = itMain->second.viewportHeight;
+                }
+
+                float mainEffectiveH = (config.visual.trackLayout.bottom -
+                                        config.visual.trackLayout.top) *
+                                       mainViewportHeight;
+                float previewDrawH =
+                    camera.viewportHeight -
+                    (config.visual.previewConfig.margin.top +
+                     config.visual.previewConfig.margin.bottom);
+                float renderScaleY =
+                    previewDrawH /
+                    (mainEffectiveH * config.visual.previewConfig.areaRatio);
+
+                if ( std::abs(renderScaleY) > 0.0001f ) {
+                    snapshot->previewHoverY =
+                        judgmentLineY -
+                        static_cast<float>((targetAbsY - currentAbsY) *
+                                           renderScaleY);
+                }
+            }
+        }
+
         // 判定线高度比例计算
         float judgmentLineY =
             camera.viewportHeight * config.visual.judgeline_pos;

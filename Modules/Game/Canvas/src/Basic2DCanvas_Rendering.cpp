@@ -29,10 +29,10 @@ void Basic2DCanvas::updateBackgroundTexture()
 
         if ( m_physicalDevice && m_logicalDevice && m_cmdPool && m_queue &&
              !m_loadedBgPath.empty() &&
-             std::filesystem::exists(m_loadedBgPath) ) {
+             std::filesystem::exists(Config::utf8ToPath(m_loadedBgPath)) ) {
             try {
                 m_bgTexture =
-                    std::make_unique<Graphic::VKTexture>(m_loadedBgPath,
+                    std::make_unique<Graphic::VKTexture>(Config::utf8ToPath(m_loadedBgPath),
                                                          m_physicalDevice,
                                                          m_logicalDevice,
                                                          m_cmdPool,

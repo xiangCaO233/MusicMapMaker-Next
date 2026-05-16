@@ -265,6 +265,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // 此时 VKContext 还健在，m_device 也是有效的！
         (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
+        context.release();
         return EXIT_NORMAL;
     } else {
         return EXIT_WINDOW_EXEPTION;

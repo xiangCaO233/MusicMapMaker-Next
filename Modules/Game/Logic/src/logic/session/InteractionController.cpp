@@ -142,7 +142,8 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
             m_ctx.previewHoverTime = cmd.hoverTime;
             m_ctx.isDragging       = cmd.isDragging;
             m_ctx.dragCameraId     = cmd.cameraId;
-        } else if ( cmd.cameraId == "AudioWaveform" || cmd.cameraId == "AudioSpectrum" ) {
+        } else if ( cmd.cameraId == "AudioWaveform" ||
+                    cmd.cameraId == "AudioSpectrum" ) {
             // 处理音频视图的释放操作
             m_ctx.isDragging = cmd.isDragging;
         } else if ( cmd.cameraId == "Preview" ) {
@@ -154,7 +155,8 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
         // 边缘滚动逻辑
         m_ctx.previewEdgeScrollVelocity = 0.0;
 
-        if ( cmd.isDragging && cmd.viewportWidth > 0 && cmd.viewportHeight > 0 ) {
+        if ( cmd.isDragging && cmd.viewportWidth > 0 &&
+             cmd.viewportHeight > 0 ) {
             float margin = 20.0f;
             float dist   = 0.0f;
 
@@ -303,20 +305,44 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
             float  maxTrack = std::max(box.startTrack, box.endTrack);
 
             bool insideThis = false;
-            if ( mode == Config::SelectionMode::Strict ) {
-                double noteEnd = note.m_timestamp + note.m_duration;
-                float  trackL  = static_cast<float>(note.m_trackIndex);
-                float  trackR  = trackL + 1.0f;
-                if ( note.m_type == ::MMM::NoteType::FLICK ) {
-                    if ( note.m_dtrack > 0 )
-                        trackR += note.m_dtrack;
-                    else
-                        trackL += note.m_dtrack;
+
+            // 折线：通过所有子物件计算完整包围框
+            if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                 !note.m_subNotes.empty() ) {
+                double polyMinTime = note.m_subNotes.front().timestamp;
+                double polyMaxTime = polyMinTime;
+                float  polyMinTrack =
+                    static_cast<float>(note.m_subNotes.front().trackIndex);
+                float polyMaxTrack = polyMinTrack;
+
+                for ( const auto& sub : note.m_subNotes ) {
+                    double subEnd = sub.timestamp + sub.duration;
+                    polyMinTime   = std::min(polyMinTime, sub.timestamp);
+                    polyMaxTime   = std::max(polyMaxTime, subEnd);
+
+                    float subTrackL = static_cast<float>(sub.trackIndex);
+                    float subTrackR = subTrackL + 1.0f;
+                    if ( sub.type == ::MMM::NoteType::FLICK &&
+                         sub.dtrack != 0 ) {
+                        if ( sub.dtrack > 0 )
+                            subTrackR += sub.dtrack;
+                        else
+                            subTrackL += sub.dtrack;
+                    }
+                    polyMinTrack = std::min(polyMinTrack, subTrackL);
+                    polyMaxTrack = std::max(polyMaxTrack, subTrackR);
                 }
 
-                if ( note.m_timestamp >= minTime && noteEnd <= maxTime &&
-                     trackL >= minTrack && trackR <= maxTrack ) {
-                    insideThis = true;
+                if ( mode == Config::SelectionMode::Strict ) {
+                    insideThis =
+                        (polyMinTime >= minTime && polyMaxTime <= maxTime &&
+                         polyMinTrack >= minTrack && polyMaxTrack <= maxTrack);
+                } else {
+                    bool timeOverlap  = std::max(polyMinTime, minTime) <=
+                                        std::min(polyMaxTime, maxTime);
+                    bool trackOverlap = std::max(polyMinTrack, minTrack) <=
+                                        std::min(polyMaxTrack, maxTrack);
+                    insideThis        = timeOverlap && trackOverlap;
                 }
             } else {
                 double noteEnd = note.m_timestamp + note.m_duration;
@@ -329,12 +355,19 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
                         trackL += note.m_dtrack;
                 }
 
-                bool timeOverlap = std::max(note.m_timestamp, minTime) <=
-                                   std::min(noteEnd, maxTime);
-                bool trackOverlap =
-                    std::max(trackL, minTrack) <= std::min(trackR, maxTrack);
-                if ( timeOverlap && trackOverlap ) {
-                    insideThis = true;
+                if ( mode == Config::SelectionMode::Strict ) {
+                    if ( note.m_timestamp >= minTime && noteEnd <= maxTime &&
+                         trackL >= minTrack && trackR <= maxTrack ) {
+                        insideThis = true;
+                    }
+                } else {
+                    bool timeOverlap  = std::max(note.m_timestamp, minTime) <=
+                                        std::min(noteEnd, maxTime);
+                    bool trackOverlap = std::max(trackL, minTrack) <=
+                                        std::min(trackR, maxTrack);
+                    if ( timeOverlap && trackOverlap ) {
+                        insideThis = true;
+                    }
                 }
             }
 

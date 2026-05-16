@@ -97,8 +97,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                             ctx.cameras);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
-    float trackAreaW   = rightX - leftX;
-    float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
+    float trackAreaW    = rightX - leftX;
+    float singleTrackW  = trackAreaW / static_cast<float>(ctx.trackCount);
     int   track =
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
@@ -194,7 +194,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
              ctx.brushState.polylineSegments.empty() &&
              ctx.brushState.duration == 0.0 && ctx.brushState.dtrack == 0 ) {
             // 刚按下 Shift 或处于 Note 状态，锁定初始状态
-            if ( ctx.brushState.holdStartTime == 0.0 ) {
+            if ( ctx.brushState.holdStartTime < 0.0 ) {
                 ctx.brushState.holdStartTime      = currentPosTime;
                 ctx.brushState.startTrack         = currentTrack;
                 ctx.brushState.startMouseY        = cmd.mouseY;
@@ -208,7 +208,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         if ( ctx.brushState.polylineSegments.empty() ) {
             // [Phase 1] 决定初始物件 (HOLD or FLICK)
             float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
-            bool timeChanged = std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
+            bool  timeChanged =
+                std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
 
             // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
             if ( !timeChanged && diffY <= 5.0f ) {
@@ -333,7 +334,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                     // 轨道稳定：检查垂直移动
                     float diffYLocal = std::abs(
                         cmd.mouseY - ctx.brushState.segmentStartMouseY);
-                    bool timeChangedLocal = std::abs(currentPosTime - last.timestamp) > 1e-5;
+                    bool timeChangedLocal =
+                        std::abs(currentPosTime - last.timestamp) > 1e-5;
 
                     if ( timeChangedLocal || diffYLocal > 5.0f ) {
                         // 开启新的 Hold
@@ -355,7 +357,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.brushState.track         = currentTrack;
         ctx.brushState.duration      = 0.0;
         ctx.brushState.dtrack        = 0;
-        ctx.brushState.holdStartTime = 0.0;
+        ctx.brushState.holdStartTime = -1.0;
         ctx.brushState.polylineSegments.clear();
     }
 }
@@ -381,11 +383,14 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             changed = false;
 
             // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
-            auto it = std::remove_if(segments.begin(), segments.end(), [](const auto& s) {
-                if ( s.type == ::MMM::NoteType::HOLD ) return s.duration < 1e-5;
-                if ( s.type == ::MMM::NoteType::FLICK ) return s.dtrack == 0;
-                return false;
-            });
+            auto it = std::remove_if(
+                segments.begin(), segments.end(), [](const auto& s) {
+                    if ( s.type == ::MMM::NoteType::HOLD )
+                        return s.duration < 1e-5;
+                    if ( s.type == ::MMM::NoteType::FLICK )
+                        return s.dtrack == 0;
+                    return false;
+                });
             if ( it != segments.end() ) {
                 segments.erase(it, segments.end());
                 changed = true;
@@ -403,7 +408,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             curr.duration += next.duration;
                             segments.erase(segments.begin() + i + 1);
                             changed = true;
-                            continue; // 继续检查合并后的段
+                            continue;  // 继续检查合并后的段
                         } else if ( curr.type == ::MMM::NoteType::FLICK ) {
                             // 合并滑键位移量
                             curr.dtrack += next.dtrack;
@@ -419,11 +424,11 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 
         // 3. 根据最终清洗结果进行降级
         if ( segments.empty() ) {
-            note.m_type = ::MMM::NoteType::NOTE;
+            note.m_type     = ::MMM::NoteType::NOTE;
             note.m_duration = 0.0;
-            note.m_dtrack = 0;
+            note.m_dtrack   = 0;
         } else if ( segments.size() == 1 ) {
-            auto s = segments[0];
+            auto s            = segments[0];
             note.m_type       = s.type;
             note.m_timestamp  = s.timestamp;
             note.m_duration   = s.duration;
@@ -444,7 +449,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 
     // 重置状态
     ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = 0.0;
+    ctx.brushState.holdStartTime = -1.0;
     ctx.brushState.duration      = 0.0;
     ctx.brushState.dtrack        = 0;
     ctx.brushState.isActive      = false;

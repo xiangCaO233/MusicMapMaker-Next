@@ -29,6 +29,8 @@ public:
 
     void update(UIManager* sourceManager) override;
 
+    void* getActualInstance() override { return this; }
+
     /// @brief 是否需要重载
     bool needReload() override;
 

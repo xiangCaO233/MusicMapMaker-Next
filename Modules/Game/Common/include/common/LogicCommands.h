@@ -3,6 +3,7 @@
 #include "config/EditorConfig.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/project/AudioResource.h"
 #include <entt/entt.hpp>
 #include <memory>
 #include <string>
@@ -344,6 +345,36 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /**
+ * @brief 导入音频指令
+ */
+struct CmdImportAudio {
+    std::string path;
+    ::MMM::AudioTrackType trackType;
+};
+
+/**
+ * @brief 更新音轨资源类型指令
+ */
+struct CmdUpdateAudioResource {
+    std::string           id;
+    ::MMM::AudioTrackType newType;
+};
+
+/**
+ * @brief 移除音轨资源指令
+ */
+struct CmdRemoveAudioResource {
+    std::string id;
+};
+
+/**
+ * @brief 移除谱面指令
+ */
+struct CmdRemoveBeatmap {
+    std::string filePath;
+};
+
+/**
  * @brief 所有可能的逻辑指令变体
  */
 using LogicCommand = std::variant<
@@ -351,11 +382,12 @@ using LogicCommand = std::variant<
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
-    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected, CmdSelectAll, CmdSaveBeatmap,
-    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata>;
+    CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
+    CmdSelectAll, CmdSaveBeatmap, CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll,
+    CmdUpdateTimelineEvent, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

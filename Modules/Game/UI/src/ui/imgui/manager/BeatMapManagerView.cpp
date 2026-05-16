@@ -77,8 +77,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 "Beatmap_" + beatmap.m_filePath,
                 Sizing::Grow(),
                 Sizing::Fixed(28 * dpiScale),
-                [&beatmap, &engine, project, dpiScale](Clay_BoundingBox r,
-                                                       bool isHovered) {
+                [=, &engine, this](Clay_BoundingBox r, bool isHovered) {
                     ImGui::Indent();
                     std::string labelStr =
                         beatmap.m_name + " - " + beatmap.m_filePath;
@@ -102,6 +101,34 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                             engine.pushCommand(
                                 Logic::CmdLoadBeatmap{ loadedBeatmap });
                         });
+
+                    static int s_bmLogCounter = 0;
+                    {
+                        bool hovered = ImGui::IsItemHovered();
+                        bool rclicked =
+                            ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                        if ( (hovered || rclicked) && s_bmLogCounter < 10 ) {
+                            XINFO(
+                                "BeatmapItem [{}]: hovered={} rclicked={} "
+                                "pos=({},{}) size=({},{}) mouse=({},{})",
+                                beatmap.m_name,
+                                hovered,
+                                rclicked,
+                                r.x,
+                                r.y,
+                                r.width,
+                                r.height,
+                                ImGui::GetMousePos().x,
+                                ImGui::GetMousePos().y);
+                            s_bmLogCounter++;
+                        }
+                        if ( hovered && rclicked ) {
+                            XINFO("BeatmapItem RIGHT-CLICK TRIGGERED: {}",
+                                  beatmap.m_filePath);
+                            m_manageBeatmapPath = beatmap.m_filePath;
+                            m_openManageModal   = true;
+                        }
+                    }
 
                     if ( ImGui::IsItemHovered() ) {
                         ImGui::SetTooltip("File: %s\nTrack: %s",
@@ -196,6 +223,94 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                          layoutContext.m_startPos.y + totalSize.y };
     bottomBtnHBox.renderInCurrent(footerPos,
                                   { layoutContext.m_avail.x, footerH });
+
+    // --- 3. 谱面管理窗口 ---
+    bool showBMModal = !m_manageBeatmapPath.empty();
+    if ( showBMModal ) {
+        std::string windowTitle =
+            fmt::format("{} {}", TR("ui.beatmap_manager.manage_title").data(),
+                        m_manageBeatmapPath);
+        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_FirstUseEver);
+        if ( ImGui::Begin(windowTitle.c_str(),
+                          &showBMModal,
+                          ImGuiWindowFlags_NoCollapse) ) {
+            if ( !showBMModal ) {
+                m_manageBeatmapPath = "";
+            }
+
+        // --- 使用 Clay 重构对话框内容 ---
+        CLayVBox modalLayout;
+        float padding = 16 * dpiScale;
+        modalLayout.setPadding(padding, padding, padding, padding);
+        modalLayout.setSpacing(16 * dpiScale);
+
+        // 1. 标题与信息 (移除了冗余 Text)
+        modalLayout.addElement(
+            "ModalSep", Sizing::Grow(), Sizing::Fixed(1),
+            [=, this](Clay_BoundingBox r, bool) {
+                ImGui::GetWindowDrawList()->AddLine(
+                    { r.x, r.y }, { r.x + r.width, r.y },
+                    ImGui::GetColorU32(ImGuiCol_Separator));
+            });
+
+        // 2. 操作按钮区
+        CLayHBox btnRow;
+        btnRow.setAlignment(Alignment::Center());
+        btnRow.setSpacing(12 * dpiScale);
+
+        btnRow.addElement(
+            "RemoveBtn", Sizing::Fixed(140 * dpiScale),
+            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::Button(TR("ui.beatmap_manager.remove_beatmap").data(),
+                                   { r.width, r.height }) ) {
+                    ImGui::OpenPopup("RemoveBeatmapConfirm");
+                }
+            });
+
+        btnRow.addElement(
+            "CancelBtn", Sizing::Fixed(100 * dpiScale),
+            Sizing::Fixed(32 * dpiScale), [=](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                   { r.width, r.height }) ) {
+                    m_manageBeatmapPath = "";
+                }
+            });
+
+        modalLayout.addLayout("BtnRowLayout",
+                              btnRow,
+                              Sizing::Grow(),
+                              Sizing::Fixed(32 * dpiScale));
+
+        // 渲染布局
+        ImVec2 modalSize = modalLayout.renderInCurrent(
+            ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+        ImGui::Dummy(modalSize);
+
+        // --- 二次确认弹窗 ---
+        if ( ImGui::BeginPopupModal("RemoveBeatmapConfirm",
+                                    nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize) ) {
+            ImGui::Text("%s", TR("ui.beatmap_manager.remove_confirm").data());
+            ImGui::Spacing();
+            if ( ImGui::Button(TR("ui.common.confirm").data(),
+                               { 100 * dpiScale, 0 }) ) {
+                engine.pushCommand(
+                    Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
+                m_manageBeatmapPath = "";
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(),
+                               { 100 * dpiScale, 0 }) ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+
+            ImGui::End();
+        }
+    }
 
     if ( fileManagerFont ) ImGui::PopFont();
 }

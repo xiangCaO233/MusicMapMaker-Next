@@ -47,8 +47,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // Enable Multi-Viewport / Platform
     // Windows
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
-    io.ConfigViewportsNoAutoMerge   = false;
-    io.ConfigViewportsNoTaskBarIcon = true;
+    io.ConfigViewportsNoAutoMerge        = false;
+    io.ConfigViewportsNoTaskBarIcon      = true;
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
 
     // Setup Dear ImGui style
     // ImGui::StyleColorsDark();
@@ -153,7 +154,7 @@ void VKContext::setupFonts()
                 });
             if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
-            } else if ( std::filesystem::exists(settings.preferredAsciiFont) ) {
+            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredAsciiFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 asciiFontPath = settings.preferredAsciiFont;
             }
@@ -169,7 +170,7 @@ void VKContext::setupFonts()
                 });
             if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
-            } else if ( std::filesystem::exists(settings.preferredCjkFont) ) {
+            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredCjkFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 cjkFontPath = settings.preferredCjkFont;
             }
