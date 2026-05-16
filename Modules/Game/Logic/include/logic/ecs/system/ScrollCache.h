@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/EditorConfig.h"
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <vector>
@@ -41,7 +42,8 @@ public:
     ScrollCache() = default;
 
     /// @brief 根据时间线注册表重建缓存表
-    void rebuild(const entt::registry& timelineRegistry);
+    void rebuild(const entt::registry& timelineRegistry,
+                 const Config::EditorConfig& config);
 
     /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
     double getAbsY(double t) const;
@@ -52,9 +54,6 @@ public:
     /// @brief 获取给定时间戳对应的流速倍率
     double getSpeedAt(double t) const;
 
-    /// @brief 获取当前绝对 Y 的 EMA 平滑值，用于视觉渲染消除帧间抖动
-    double getSmoothedAbsY(double t, double alpha) const;
-
     /// @brief 获取所有分段信息 (只读)
     const std::vector<ScrollSegment>& getSegments() const { return m_segments; }
 
@@ -64,9 +63,7 @@ public:
 private:
     std::vector<ScrollSegment> m_segments;
 
-    mutable double m_smoothedAbsY{ 0.0 };
-    mutable bool   m_emaInitialized{ false };
-    mutable double m_lastSmoothedTime{ -1.0 };
+    double                     m_lastZoom{ 1.0 };  // 记录最后一次 rebuild 使用的缩放
 
     struct TimingEntry {
         entt::entity             entity;

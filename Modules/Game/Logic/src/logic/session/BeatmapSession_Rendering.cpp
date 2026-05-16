@@ -97,7 +97,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             float judgmentLineY =
                 camera.viewportHeight * config.visual.judgeline_pos;
             double currentAbsY =
-                cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+                cache->getAbsY(m_ctx->visualTime);
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             double scale = snapshot->renderScaleY;
             if ( cameraId != "Basic2DCanvas" && std::abs(scale) > 0.0001f ) {
@@ -151,7 +151,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     camera.viewportHeight * config.visual.judgeline_pos;
 
                 double currentAbsY =
-                    cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+                    cache->getAbsY(m_ctx->visualTime);
                 double deltaY = (judgmentLineY - m_ctx->lastMousePos.y);
 
                 float renderScaleY = 1.0f;
@@ -389,7 +389,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
                 double currentAbsY =
-                    cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+                    cache->getAbsY(m_ctx->visualTime);
                 double targetAbsY = cache->getAbsY(snapshot->previewHoverTime);
 
                 float mainViewportHeight = 1000.0f;
