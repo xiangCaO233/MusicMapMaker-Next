@@ -9,7 +9,8 @@
 namespace MMM::Logic::System
 {
 
-void ScrollCache::rebuild(const entt::registry& timelineRegistry)
+void ScrollCache::rebuild(const entt::registry& timelineRegistry,
+                          const Config::EditorConfig& config)
 {
     m_rebuildScratch.clear();
     auto tlView = timelineRegistry.view<const TimelineComponent>();
@@ -44,12 +45,11 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
 
-    const double BASE_SPEED =
-        500.0;  // 基准流速 (px/s) = scrollLength / timeRange
-    const auto& visualConfig =
-        EditorEngine::instance().getEditorConfig().visual;
+    const double BASE_SPEED      = 500.0;
+    const auto&  visualConfig    = config.visual;
     const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
     const double timelineZoom    = visualConfig.timelineZoom;
+    m_lastZoom                   = timelineZoom;
 
     // 1. 完整版 osu! 逻辑：计算 Most Common BPM 作为基准，并获取
     // SliderMultiplier
@@ -154,8 +154,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 
 double ScrollCache::getAbsY(double t) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
 
     auto it = std::upper_bound(
@@ -175,8 +174,7 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getTime(double absY) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     auto it = std::lower_bound(
@@ -209,22 +207,5 @@ double ScrollCache::getSpeedAt(double t) const
     return it->speed;
 }
 
-double ScrollCache::getSmoothedAbsY(double t, double alpha) const
-{
-    double raw = getAbsY(t);
-    if ( !m_emaInitialized ) {
-        m_smoothedAbsY     = raw;
-        m_emaInitialized   = true;
-        m_lastSmoothedTime = t;
-        return raw;
-    }
-    // 防止同帧内多次调用叠加平滑
-    if ( std::abs(t - m_lastSmoothedTime) < 1e-6 ) {
-        return m_smoothedAbsY;
-    }
-    m_lastSmoothedTime = t;
-    m_smoothedAbsY     = alpha * raw + (1.0 - alpha) * m_smoothedAbsY;
-    return m_smoothedAbsY;
-}
 
 }  // namespace MMM::Logic::System

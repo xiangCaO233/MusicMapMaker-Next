@@ -88,7 +88,7 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     const auto** cachePtr = registry.ctx().find<const ScrollCache*>();
     if ( !cachePtr || !(*cachePtr) ) return ctx;
     ctx.cache       = *cachePtr;
-    ctx.currentAbsY = ctx.cache->getSmoothedAbsY(currentTime, 0.25);
+    ctx.currentAbsY = ctx.cache->getAbsY(currentTime);
 
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
     if ( itBase == snapshot->uvMap.end() ) return ctx;
