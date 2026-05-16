@@ -103,13 +103,96 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
 
-    if ( cmd.isShiftDown ) {
-        ctx.brushState.type          = ::MMM::NoteType::NOTE;  // 初始为 Note
-        ctx.brushState.holdStartTime = ctx.brushState.time;
-        ctx.brushState.startTrack    = ctx.brushState.track;
-        ctx.brushState.startMouseY   = cmd.mouseY;
-    } else {
-        ctx.brushState.type = ::MMM::NoteType::NOTE;
+    bool isResuming = false;
+    if ( cmd.isShiftDown && ctx.hoveredEntity != entt::null &&
+         ctx.noteRegistry.valid(ctx.hoveredEntity) ) {
+        const auto& note =
+            ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
+        entt::entity targetEntity = ctx.hoveredEntity;
+        if ( note.m_isSubNote && note.m_parentPolyline != entt::null ) {
+            targetEntity = note.m_parentPolyline;
+        }
+
+        if ( ctx.noteRegistry.valid(targetEntity) ) {
+            const auto& parentNote =
+                ctx.noteRegistry.get<NoteComponent>(targetEntity);
+            if ( parentNote.m_type == ::MMM::NoteType::POLYLINE &&
+                 !parentNote.m_subNotes.empty() ) {
+                int lastIdx =
+                    static_cast<int>(parentNote.m_subNotes.size() - 1);
+                if ( ctx.hoveredSubIndex == lastIdx ) {
+                    // 检查是否悬停在能够继续延伸的部分 (Node, HoldEnd, FlickArrow)
+                    if ( ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::PolylineNode) ||
+                         ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::HoldEnd) ||
+                         ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::FlickArrow) ) {
+                        // 进入恢复编辑模式
+                        ctx.brushState.isActive = true;
+                        ctx.brushState.type     = ::MMM::NoteType::POLYLINE;
+                        ctx.brushState.polylineSegments =
+                            parentNote.m_subNotes;
+
+                        // 恢复笔刷状态的各个参考值，以便 handleUpdateBrush 能够平滑接续
+                        ctx.brushState.holdStartTime = parentNote.m_timestamp;
+                        ctx.brushState.startTrack    = parentNote.m_trackIndex;
+
+                        // 计算起始 Y 坐标，用于退化到普通音符时的参考
+                        double startAbsY =
+                            cache->getAbsY(parentNote.m_timestamp);
+                        ctx.brushState.startMouseY =
+                            judgmentLineY -
+                            static_cast<float>(startAbsY - currentAbsY) *
+                                renderScaleY;
+
+                        // 当前鼠标 Y 为新段参考点
+                        ctx.brushState.segmentStartMouseY = cmd.mouseY;
+
+                        // 删除原物件及其子物件实体 (通过 BatchNoteAction，以便整体撤销)
+                        std::vector<BatchNoteAction::Entry> deleteEntries;
+                        deleteEntries.push_back(
+                            { targetEntity, parentNote, std::nullopt });
+
+                        // 查找并加入所有子物件实体
+                        auto subNoteView =
+                            ctx.noteRegistry.view<NoteComponent>();
+                        for ( auto subEnt : subNoteView ) {
+                            const auto& subNC =
+                                subNoteView.get<NoteComponent>(subEnt);
+                            if ( subNC.m_isSubNote &&
+                                 subNC.m_parentPolyline == targetEntity ) {
+                                deleteEntries.push_back(
+                                    { subEnt, subNC, std::nullopt });
+                            }
+                        }
+
+                        auto deleteAction = std::make_unique<BatchNoteAction>(
+                            std::move(deleteEntries), "Resume Polyline Edit");
+                        ctx.actionStack.pushAndExecute(std::move(deleteAction),
+                                                       ctx);
+
+                        // 设置拖拽状态
+                        ctx.isDragging   = true;
+                        ctx.dragCameraId = cmd.cameraId;
+                        isResuming       = true;
+                        XINFO("Resuming Polyline edit for entity {}",
+                              static_cast<uint32_t>(targetEntity));
+                    }
+                }
+            }
+        }
+    }
+
+    if ( !isResuming ) {
+        if ( cmd.isShiftDown ) {
+            ctx.brushState.type          = ::MMM::NoteType::NOTE;  // 初始为 Note
+            ctx.brushState.holdStartTime = ctx.brushState.time;
+            ctx.brushState.startTrack    = ctx.brushState.track;
+            ctx.brushState.startMouseY   = cmd.mouseY;
+        } else {
+            ctx.brushState.type = ::MMM::NoteType::NOTE;
+        }
     }
 }
 
