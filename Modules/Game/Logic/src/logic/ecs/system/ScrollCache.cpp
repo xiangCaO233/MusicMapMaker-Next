@@ -44,13 +44,13 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
 
-    const double BASE_SPEED = 500.0;  // 基准流速 (px/s)
-    const auto&  visualConfig =
+    const double BASE_SPEED =
+        500.0;  // 基准流速 (px/s) = scrollLength / timeRange
+    const auto& visualConfig =
         EditorEngine::instance().getEditorConfig().visual;
-    const double globalMultiplier = visualConfig.timelineZoom;
-    const bool   isLinearMapping  = visualConfig.enableLinearScrollMapping;
+    const bool isLinearMapping = visualConfig.enableLinearScrollMapping;
 
-    // 1. 获取基准 BPM
+    // 1. 获取基准 BPM (对应 osu! 的 BaseBeatLength)
     double refBPM = 120.0;
     if ( auto session = EditorEngine::instance().getActiveSession() ) {
         if ( auto beatmap = session->getContext().currentBeatmap ) {
@@ -66,23 +66,22 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         }
     }
     if ( refBPM < 1.0 ) refBPM = 120.0;
-    if ( refBPM > 1000000.0 ) refBPM = 1000000.0;
 
-    // osu! 风格：流速 = min(bpm/refBPM, maxBpmRatio) × scrollMult × baseSpeed
-    // 保留 BPM 倍率使得 timelineZoom 对高低 BPM 段落均有自然的缩放响应，
-    // 同时通过上限制约极端 BPM (如 10000) 导致的速度爆发
-    constexpr double maxBpmRatio = 20.0;
+    double currentBPM = refBPM;
 
+    // osu! MultiplierControlPoint:
+    //   Multiplier = Velocity × ScrollSpeed × BaseBeatLength / BeatLength
+    //            = 1.0  × scrollMult  × (60000/refBPM) / (60000/bpm)
+    //            = scrollMult × bpm / refBPM
     auto calcSpeed = [&](double bpm, double sm) {
         if ( isLinearMapping ) {
-            return BASE_SPEED * globalMultiplier;
+            return BASE_SPEED;
         }
-        if ( std::abs(refBPM) < 1e-6 ) return 0.0;
-        double bpmRatio = std::clamp(std::abs(bpm) / refBPM, 0.1, maxBpmRatio);
-        return bpmRatio * sm * BASE_SPEED * globalMultiplier;
+        double ratio = std::clamp(bpm / refBPM, 0.0, 1000000.0);
+        return ratio * sm * BASE_SPEED;
     };
 
-    double currentBPM        = refBPM;
+    // osu! 关键：SV 跨 BPM 红线继承，不重置。仅绿线显式修改 ScrollSpeed。
     double currentScrollMult = 1.0;
     double lastTime = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
     double currentAbsY = 0.0;
@@ -104,7 +103,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
             currentBPM                   = tl->m_value;
-            currentScrollMult            = 1.0;
+            // osu! 红线不重置 ScrollSpeed，SV 从上一绿线继承
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
             newSegments.back().scrollEntity = entry.entity;
@@ -129,8 +128,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
 
 double ScrollCache::getAbsY(double t) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
 
     auto it = std::upper_bound(
@@ -150,8 +148,7 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getTime(double absY) const
 {
-    const double DEFAULT_SPEED =
-        500.0 * EditorEngine::instance().getEditorConfig().visual.timelineZoom;
+    const double DEFAULT_SPEED = 500.0;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     auto it = std::lower_bound(
