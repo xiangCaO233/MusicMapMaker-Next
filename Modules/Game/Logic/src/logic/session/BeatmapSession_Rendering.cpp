@@ -96,8 +96,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         if ( cache ) {
             float judgmentLineY =
                 camera.viewportHeight * config.visual.judgeline_pos;
-            double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-            double scale       = snapshot->renderScaleY;
+            double currentAbsY =
+                cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+            double scale = snapshot->renderScaleY;
             if ( cameraId == "Basic2DCanvas" ) {
                 scale = config.visual.timelineZoom;
             }
@@ -147,8 +148,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
 
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-                double deltaY      = (judgmentLineY - m_ctx->lastMousePos.y);
+                double currentAbsY =
+                    cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+                double deltaY = (judgmentLineY - m_ctx->lastMousePos.y);
 
                 float renderScaleY = 1.0f;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
@@ -384,8 +386,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             if ( cache ) {
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
-                double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
+                double currentAbsY =
+                    cache->getSmoothedAbsY(m_ctx->visualTime, 0.25);
+                double targetAbsY = cache->getAbsY(snapshot->previewHoverTime);
 
                 float mainViewportHeight = 1000.0f;
                 auto  itMain             = m_ctx->cameras.find("Basic2DCanvas");

@@ -382,7 +382,7 @@ void NoteRenderSystem::renderMarqueeBox(
     float x1 = leftX + box.startTrack * singleTrackW;
     float x2 = leftX + box.endTrack * singleTrackW;
 
-    double currentAbsY = cache->getAbsY(renderTime);
+    double currentAbsY = cache->getSmoothedAbsY(renderTime, 0.25);
     double startAbsY   = cache->getAbsY(box.startTime);
     double endAbsY     = cache->getAbsY(box.endTime);
 
@@ -433,7 +433,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
     auto& skin    = Config::SkinManager::instance();
     auto  tickCol = skin.getColor("timeline.tick");
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getSmoothedAbsY(currentTime, 0.25);
     double startTime =
         cache->getTime(currentAbsY - (viewportHeight - judgmentLineY));
     double endTime = cache->getTime(currentAbsY + judgmentLineY);

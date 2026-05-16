@@ -199,7 +199,7 @@ void NoteRenderSystem::drawBeatLines(
             return a->m_timestamp < b->m_timestamp;
         });
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getSmoothedAbsY(currentTime, 0.25);
     double startTime   = cache->getTime(
         currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
     double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
@@ -314,7 +314,7 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
 {
     if ( !cache ) return;
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getSmoothedAbsY(currentTime, 0.25);
     double startTime   = cache->getTime(
         currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
     double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
