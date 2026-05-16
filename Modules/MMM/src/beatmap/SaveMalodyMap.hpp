@@ -255,8 +255,60 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         fileData["time"] = timeArr;
     }
 
-    json effectArr = json::array();
+    bool isOsuSource =
+        beatMap.m_metadata.map_properties.find(MapMetadataType::OSU) !=
+        beatMap.m_metadata.map_properties.end();
+
+    double currentScroll = -1.0;  // 哨兵值，确保首个 BPM 点必定输出
+
+    // 对计时点排序：相同时间戳时红线(BPM)必须在绿线(SCROLL)之前
+    // 确保 scroll=1.0 重置在绿线的 scroll=0.01 覆盖之前输出
+    std::vector<const Timing*> sortedTimings;
+    sortedTimings.reserve(beatMap.m_timings.size());
     for ( const auto& t : beatMap.m_timings ) {
+        sortedTimings.push_back(&t);
+    }
+    std::stable_sort(sortedTimings.begin(),
+                     sortedTimings.end(),
+                     [](const Timing* a, const Timing* b) {
+                         if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-4 )
+                             return a->m_timestamp < b->m_timestamp;
+                         // 同一时间：BPM（红线）排在 SCROLL（绿线）之前
+                         return a->m_timingEffect == TimingEffect::BPM &&
+                                b->m_timingEffect == TimingEffect::SCROLL;
+                     });
+
+    json effectArr = json::array();
+    for ( const Timing* tp : sortedTimings ) {
+        const auto& t = *tp;
+        if ( t.m_timingEffect == TimingEffect::BPM && isOsuSource ) {
+            // OSU 红线隐式将滑条速度重置为 1.0
+            // 仅当当前有效 scroll 不等于 1.0 时才需要显式输出
+            if ( currentScroll != 1.0 ) {
+                json resetEj;
+
+                bool hasBeat = false;
+                if ( auto it = t.m_metadata.timing_properties.find(
+                         TimingMetadataType::MALODY);
+                     it != t.m_metadata.timing_properties.end() ) {
+                    if ( it->second.contains("beat") ) {
+                        try {
+                            resetEj["beat"] =
+                                json::parse(it->second.at("beat"));
+                            hasBeat = true;
+                        } catch ( ... ) {
+                        }
+                    }
+                }
+                if ( !hasBeat ) {
+                    resetEj["beat"] = timeToBeat(t.m_timestamp);
+                }
+                resetEj["scroll"] = 1.0;
+                effectArr.push_back(resetEj);
+                currentScroll = 1.0;
+            }
+        }
+
         if ( t.m_timingEffect == TimingEffect::SCROLL ) {
             json ej;
 
@@ -281,6 +333,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             } else {
                 ej["scroll"] = t.m_timingEffectParameter;
             }
+
+            currentScroll = ej["scroll"];
 
             // 恢复 Malody 特有字段
             if ( auto it = t.m_metadata.timing_properties.find(

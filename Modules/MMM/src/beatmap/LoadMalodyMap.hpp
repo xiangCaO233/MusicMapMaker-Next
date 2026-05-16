@@ -141,6 +141,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
     if ( fileData.contains("effect") ) {
         for ( const auto& e : fileData["effect"] ) {
+            // 跳过不包含 scroll 字段的效果（如 sign），避免产生虚假 SCROLL
+            // 计时点
+            if ( !e.contains("scroll") ) continue;
             RawEvent ev;
             ev.beat   = beatToDouble(e.value("beat", json::array()));
             ev.scroll = e.value("scroll", 1.0);
