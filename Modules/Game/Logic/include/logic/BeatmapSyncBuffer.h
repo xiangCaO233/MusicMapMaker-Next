@@ -143,8 +143,8 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
-    int32_t trackCount{ 4 };        ///< 谱面轨道数量
-    float   renderScaleY{ 1.0f };   ///< 垂直缩放倍率 (用于亚帧补偿计算)
+    int32_t trackCount{ 4 };          ///< 谱面轨道数量
+    float   renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
 
@@ -175,12 +175,52 @@ struct RenderSnapshot {
     uint32_t staticCmdCount{ 0 };
 
     /// @brief 静态布局顶点数量 (与 staticCmdCount 对应的顶点分界)
-    /// 从此索引开始到 staticVertexCount + dynamicVertexCount 的所有顶点属于动态元素
+    /// 从此索引开始到 staticVertexCount + dynamicVertexCount
+    /// 的所有顶点属于动态元素
     uint32_t staticVertexCount{ 0 };
 
     /// @brief 动态元素的顶点数量
     /// 用于区分“动态层”之后是否还有“置顶静态层”
     uint32_t dynamicVertexCount{ 0 };
+
+    /**
+     * @brief [UI 线程专用] 亚帧插值：获取从 currentTime 到 currentTime + dt
+     * 的累积绝对位移
+     *
+     * 核心修复：不再简单使用 dt * instantaneous_speed，而是通过 scrollSegments
+     * 进行分段积分 (Piecewise Linear Integration)。这能完美处理 dt 跨越 SV/BPM
+     * 突变点的情况，消除变速段落的视觉跳变。
+     *
+     * @param dt 滞后时间 (秒，UI绘制时刻 - 快照生成时刻)
+     * @return 累积位移 (AbsY 空间)
+     */
+    double getInterpolatedOffset(double dt) const
+    {
+        if ( scrollSegments.empty() ) {
+            return dt * 500.0 * playbackSpeed;
+        }
+
+        auto getAbsY = [&](double t) {
+            auto it = std::upper_bound(
+                scrollSegments.begin(),
+                scrollSegments.end(),
+                t,
+                [](double val, const System::ScrollSegment& seg) {
+                    return val < seg.time;
+                });
+
+            if ( it == scrollSegments.begin() ) {
+                return scrollSegments[0].absY +
+                       (t - scrollSegments[0].time) * scrollSegments[0].speed;
+            }
+            auto prev = std::prev(it);
+            return prev->absY + (t - prev->time) * prev->speed;
+        };
+
+        double t1 = currentTime;
+        double t2 = currentTime + dt * playbackSpeed;
+        return getAbsY(t2) - getAbsY(t1);
+    }
 
     /// @brief 清理当前快照数据（保留内存容量）
     void clear()
@@ -223,12 +263,12 @@ struct RenderSnapshot {
         isPreviewDragging      = false;
         brush.isActive         = false;
         erasingEntities.clear();
-        hasBeatmap        = false;
+        hasBeatmap = false;
         beatmapName.clear();
-        isDirty           = false;
+        isDirty = false;
         lastActionMessage.clear();
-        staticCmdCount    = 0;
-        staticVertexCount = 0;
+        staticCmdCount     = 0;
+        staticVertexCount  = 0;
         dynamicVertexCount = 0;
         visibleTimeStart   = 0.0;
         visibleTimeEnd     = 0.0;
