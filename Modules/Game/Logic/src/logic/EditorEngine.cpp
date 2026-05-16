@@ -369,14 +369,15 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
         },
         '_');
 
-    std::filesystem::path mapPath =
-        m_currentProject->m_projectRoot / Config::utf8ToPath(safeFilename + ".mmm");
+    std::filesystem::path mapPath = m_currentProject->m_projectRoot /
+                                    Config::utf8ToPath(safeFilename + ".mmm");
 
     // 如果文件已存在，增加后缀
     int suffix = 1;
     while ( std::filesystem::exists(mapPath) ) {
         mapPath = m_currentProject->m_projectRoot /
-                  Config::utf8ToPath(safeFilename + "_" + std::to_string(suffix++) + ".mmm");
+                  Config::utf8ToPath(safeFilename + "_" +
+                                     std::to_string(suffix++) + ".mmm");
     }
 
     meta.map_path = mapPath;
@@ -463,10 +464,13 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     try {
         // 检查是否已经在项目目录下
         auto absAudioPath = std::filesystem::absolute(audioPath);
-        auto absRoot      = std::filesystem::absolute(m_currentProject->m_projectRoot);
+        auto absRoot =
+            std::filesystem::absolute(m_currentProject->m_projectRoot);
 
-        auto [rootIt, pathIt] = std::mismatch(
-            absRoot.begin(), absRoot.end(), absAudioPath.begin(), absAudioPath.end());
+        auto [rootIt, pathIt] = std::mismatch(absRoot.begin(),
+                                              absRoot.end(),
+                                              absAudioPath.begin(),
+                                              absAudioPath.end());
 
         if ( rootIt != absRoot.end() ) {
             // 在项目外，标记需要复制到项目根目录
@@ -682,6 +686,9 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
 
+    XINFO("EditorEngine: Updated config. VSync: {}",
+          m_editorConfig.settings.vsync ? "ON" : "OFF");
+
     // 发布配置更新事件，供 UI 层订阅
     Event::EventBus::instance().publish(
         Event::EditorConfigChangedEvent{ m_editorConfig });
@@ -718,14 +725,26 @@ void EditorEngine::loop()
                 Config::AppConfig::instance().getDeviceRefreshRate();
             if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
             targetDt = 1.0 / static_cast<double>(refreshRate);
+        } else {
+            // 用户要求：关闭垂直同步时，逻辑线程拉满运行，不进行任何 sleep
+            targetDt = 0.0;
         }
 
         auto currentTime = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double> passed = currentTime - lastTime;
 
         // 如果设置了帧率限制，并且距离上一帧还没有达到目标时间，就主动让出 CPU
-        if ( targetDt > 0.0 && passed.count() < targetDt ) {
-            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        if ( passed.count() < targetDt ) {
+            auto remaining = std::chrono::duration<double>(targetDt) - passed;
+            if ( remaining.count() > 0.0015 ) {
+                // 剩余时间较长，进行较粗粒度的睡眠（减去 1ms 预留以补偿精度）
+                std::this_thread::sleep_for(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        remaining - std::chrono::milliseconds(1)));
+            } else {
+                // 剩余时间很少，微量让出 CPU 或进行非常短的睡眠
+                std::this_thread::yield();
+            }
             continue;
         }
 
@@ -778,8 +797,8 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
             res.m_type = cmd.newType;
             // 如果切为音效，确保加载到池中
             if ( res.m_type == AudioTrackType::Effect ) {
-                auto absPath =
-                    m_currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
+                auto absPath = m_currentProject->m_projectRoot /
+                               Config::utf8ToPath(res.m_path);
                 if ( std::filesystem::exists(absPath) ) {
                     Audio::AudioManager::instance().preloadSoundEffect(
                         res.m_id,
@@ -827,13 +846,12 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     XINFO("Removing beatmap from project list: {}", cmd.filePath);
 
     auto& maps = m_currentProject->m_beatmaps;
-    maps.erase(
-        std::remove_if(maps.begin(),
-                       maps.end(),
-                       [&](const Project::BeatmapEntry& e) {
-                           return e.m_filePath == cmd.filePath;
-                       }),
-        maps.end());
+    maps.erase(std::remove_if(maps.begin(),
+                              maps.end(),
+                              [&](const Project::BeatmapEntry& e) {
+                                  return e.m_filePath == cmd.filePath;
+                              }),
+               maps.end());
 
     saveProject();
 }
