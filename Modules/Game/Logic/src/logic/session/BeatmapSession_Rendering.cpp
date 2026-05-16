@@ -447,6 +447,22 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // --- 注入橡皮擦预览状态 ---
         if ( m_ctx->eraserState.isActive ) {
             snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
+            snapshot->erasingSubIndex = -1;
+
+            // 只有当悬停在 Polyline 的最后一个子物件时，才允许局部高亮红色
+            if ( m_ctx->hoveredEntity != entt::null &&
+                 m_ctx->noteRegistry.all_of<NoteComponent>(
+                     m_ctx->hoveredEntity) ) {
+                const auto& nc =
+                    m_ctx->noteRegistry.get<NoteComponent>(m_ctx->hoveredEntity);
+                if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                     !nc.m_subNotes.empty() ) {
+                    int lastIdx = static_cast<int>(nc.m_subNotes.size() - 1);
+                    if ( m_ctx->hoveredSubIndex == lastIdx ) {
+                        snapshot->erasingSubIndex = m_ctx->hoveredSubIndex;
+                    }
+                }
+            }
         }
 
 

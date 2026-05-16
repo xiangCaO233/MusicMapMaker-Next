@@ -163,6 +163,7 @@ struct RenderSnapshot {
 
     // 橡皮擦预览状态
     std::unordered_set<entt::entity> erasingEntities;
+    int                              erasingSubIndex{ -1 };
 
     // 是否已加载谱面
     bool        hasBeatmap{ false };
@@ -263,7 +264,8 @@ struct RenderSnapshot {
         isPreviewDragging      = false;
         brush.isActive         = false;
         erasingEntities.clear();
-        hasBeatmap = false;
+        erasingSubIndex   = -1;
+        hasBeatmap        = false;
         beatmapName.clear();
         isDirty = false;
         lastActionMessage.clear();
