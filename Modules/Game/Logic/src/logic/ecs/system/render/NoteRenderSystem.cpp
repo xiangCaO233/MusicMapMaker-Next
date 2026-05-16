@@ -18,6 +18,7 @@ namespace MMM::Logic::System
 
 void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
+    const std::vector<const TimelineComponent*>& bpmEvents,
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
@@ -142,23 +143,8 @@ void NoteRenderSystem::generateSnapshot(
             double hoveredTime = snapshot->isPreviewDragging
                                      ? snapshot->previewHoverTime
                                      : snapshot->hoveredTime;
-            std::vector<const TimelineComponent*> bpmEvents;
-            auto tlView = timelineRegistry.view<const TimelineComponent>();
-            for ( auto entity : tlView ) {
-                const auto& tl = tlView.get<const TimelineComponent>(entity);
-                if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-                    bpmEvents.push_back(&tl);
-                }
-            }
 
             if ( !bpmEvents.empty() ) {
-                std::stable_sort(
-                    bpmEvents.begin(),
-                    bpmEvents.end(),
-                    [](const TimelineComponent* a, const TimelineComponent* b) {
-                        return a->m_timestamp < b->m_timestamp;
-                    });
-
                 int64_t totalBeats = 0;
                 bool    found      = false;
                 for ( size_t i = 0; i < bpmEvents.size(); ++i ) {

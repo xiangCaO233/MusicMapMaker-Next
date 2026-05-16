@@ -279,7 +279,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 逻辑线程必须知道画布宽高，否则无法生成几何体
     auto newSession = std::make_shared<BeatmapSession>();
     {
-        std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
+        std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
         // 重要：不再调用 m_syncBuffers.clear()！
         // 核心原因是 UI 线程的组件（如 TimelineCanvas）持有这些 Buffer 的
         // shared_ptr。 如果清空并重新创建，UI 和逻辑线程将指向不同的 Buffer
@@ -624,8 +624,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
-        const auto&     v = std::get<CmdUpdateViewport>(cmd);
-        std::lock_guard lk(m_buffersMutex);
+        const auto&                         v = std::get<CmdUpdateViewport>(cmd);
+        std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
         m_lastViewportSizes[v.cameraId] = { v.width, v.height };
     }
 
@@ -647,11 +647,41 @@ bool EditorEngine::hasUnsavedChanges() const
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_buffersMutex);
+    {
+        std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
+        auto it = m_syncBuffers.find(cameraId);
+        if ( it != m_syncBuffers.end() ) {
+            return it->second;
+        }
+    }
+
+    std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
     if ( m_syncBuffers.find(cameraId) == m_syncBuffers.end() ) {
         m_syncBuffers[cameraId] = std::make_shared<BeatmapSyncBuffer>();
     }
     return m_syncBuffers[cameraId];
+}
+
+const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
+    const std::string& cameraId) const
+{
+    std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
+
+    auto it = m_cameraUVMaps.find(cameraId);
+    if ( it != m_cameraUVMaps.end() ) {
+        return it->second;
+    }
+
+    // 回退到默认图集 (Basic2DCanvas)
+    if ( cameraId != "Basic2DCanvas" ) {
+        auto itMain = m_cameraUVMaps.find("Basic2DCanvas");
+        if ( itMain != m_cameraUVMaps.end() ) {
+            return itMain->second;
+        }
+    }
+
+    static const std::unordered_map<uint32_t, glm::vec4> emptyMap;
+    return emptyMap;
 }
 
 EditTool EditorEngine::getCurrentTool() const

@@ -1,8 +1,8 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include <algorithm>
 #include <cmath>
 
@@ -26,7 +26,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     std::vector<TimingEntry> timings;
     auto tlView = timelineRegistry.view<const TimelineComponent>();
     for ( auto entity : tlView ) {
-        timings.push_back({ entity, &tlView.get<const TimelineComponent>(entity) });
+        timings.push_back(
+            { entity, &tlView.get<const TimelineComponent>(entity) });
     }
 
     if ( timings.empty() ) {
@@ -37,7 +38,8 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
     // 排序逻辑：时间戳升序；时间戳相同时，BPM 类型优先于 SCROLL 类型
     std::stable_sort(
         timings.begin(), timings.end(), [](const auto& a, const auto& b) {
-            if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) > 1e-9 ) {
+            if ( std::abs(a.component->m_timestamp - b.component->m_timestamp) >
+                 1e-9 ) {
                 return a.component->m_timestamp < b.component->m_timestamp;
             }
             if ( a.component->m_effect != b.component->m_effect ) {
@@ -83,7 +85,7 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
             return BASE_SPEED * globalMultiplier;
         }
         if ( std::abs(refBPM) < 1e-6 ) return 0.0;
-        
+
         // 限制极端 BPM 导致的流速爆炸
         double safeBPM = std::clamp(bpm, 0.0, 1000000.0);
         return (safeBPM / refBPM) * sm * BASE_SPEED * globalMultiplier;
@@ -106,20 +108,20 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry)
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
             m_segments.back().effects |= SCROLL_EFFECT_BPM;
             m_segments.back().bpmEntity = entry.entity;
-            m_segments.back().bpmValue   = tl->m_value;
+            m_segments.back().bpmValue  = tl->m_value;
             currentBPM = tl->m_value;
             // 在 osu! 逻辑中，新的 BPM 标记（红线）会重置继承的流速倍率
             currentScrollMult = 1.0;
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             m_segments.back().effects |= SCROLL_EFFECT_SCROLL;
             m_segments.back().scrollEntity = entry.entity;
-            m_segments.back().scrollValue   = tl->m_value;
+            m_segments.back().scrollValue  = tl->m_value;
             if ( tl->m_value < -1e-6 ) {
                 currentScrollMult = -100.0 / tl->m_value;
             } else if ( tl->m_value >= 0 ) {
                 currentScrollMult = tl->m_value;
             } else {
-                currentScrollMult = 1.0; // 避免除以极小值或零
+                currentScrollMult = 1.0;  // 避免除以极小值或零
             }
             // 限制倍率上限，防止溢出
             if ( currentScrollMult > 10000.0 ) currentScrollMult = 10000.0;

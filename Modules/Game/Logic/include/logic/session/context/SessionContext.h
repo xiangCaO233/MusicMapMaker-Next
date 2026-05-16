@@ -10,11 +10,12 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <memory>
-#include <optional>
-#include <unordered_map>
-#include <unordered_set>
+#include "logic/ecs/components/TimelineComponent.h"
 #include <vector>
+#include <unordered_set>
+#include <unordered_map>
+#include <optional>
+#include <memory>
 
 namespace MMM::Logic
 {
@@ -76,6 +77,8 @@ struct SessionContext {
     size_t nextHitIndex{ 0 };         ///< 下一个待触发的视觉打击事件索引
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
+    std::vector<const TimelineComponent*> bpmEvents;    ///< 缓存并排序后的 BPM 事件
+    bool                                  isBpmEventsDirty{ true }; ///< BPM 缓存脏标记
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌
