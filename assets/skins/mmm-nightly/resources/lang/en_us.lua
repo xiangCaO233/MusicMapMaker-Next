@@ -324,7 +324,7 @@ return {
 	["ui.canvas.note_time"] = "Exact Time",
 	["ui.canvas.overlapping_hitboxes"] = "Overlapping Check",
 	["ui.canvas.overlapping_warning"] = " (Warning: Overlap detected!)",
-	["ui.tools"] = "Tools",
+	["ui.tools"] = "&Tools",
 	["ui.tools.overlap_check"] = "Overlap Check",
 	["ui.tools.overlap_check_title"] = "Overlap Check###OverlapCheckWindow",
 	["ui.tools.overlap_type"] = "Type",

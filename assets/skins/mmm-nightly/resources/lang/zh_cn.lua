@@ -331,7 +331,7 @@ return {
 	["ui.canvas.note_time"] = "精确时间",
 	["ui.canvas.overlapping_hitboxes"] = "重叠检测",
 	["ui.canvas.overlapping_warning"] = " (可能发生重叠！)",
-	["ui.tools"] = "工具",
+	["ui.tools"] = "工具(&T)",
 	["ui.tools.overlap_check"] = "重叠键检测",
 	["ui.tools.overlap_check_title"] = "重叠键检测###OverlapCheckWindow",
 	["ui.tools.overlap_type"] = "类型",
