@@ -195,6 +195,58 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                               static_cast<uint32_t>(targetEntity));
                     }
                 }
+            } else if ( !parentNote.m_isSubNote &&
+                        (parentNote.m_type == ::MMM::NoteType::NOTE ||
+                         parentNote.m_type == ::MMM::NoteType::HOLD ||
+                         parentNote.m_type == ::MMM::NoteType::FLICK) ) {
+                // 将普通的 Note/Hold/Flick 转换为包含单个 subNote 的
+                // Polyline，并恢复编辑
+                ctx.brushState.isActive = true;
+                ctx.brushState.type     = ::MMM::NoteType::POLYLINE;
+
+                NoteComponent::SubNote s;
+                s.type                          = parentNote.m_type;
+                s.timestamp                     = parentNote.m_timestamp;
+                s.duration                      = parentNote.m_duration;
+                s.trackIndex                    = parentNote.m_trackIndex;
+                s.dtrack                        = parentNote.m_dtrack;
+                s.metadata                      = parentNote.m_metadata;
+                ctx.brushState.polylineSegments = { s };
+
+                // 如果是 Hold，则根据当前点击位置缩短/伸长它
+                if ( parentNote.m_type == ::MMM::NoteType::HOLD ) {
+                    double snapTime =
+                        snap.isSnapped ? snap.snappedTime : rawTime;
+                    ctx.brushState.polylineSegments.back().duration =
+                        std::max(0.0, snapTime - parentNote.m_timestamp);
+                }
+
+                ctx.brushState.holdStartTime = parentNote.m_timestamp;
+                ctx.brushState.startTrack    = parentNote.m_trackIndex;
+
+                double startAbsY = cache->getAbsY(parentNote.m_timestamp);
+                ctx.brushState.startMouseY =
+                    judgmentLineY -
+                    static_cast<float>(startAbsY - currentAbsY) * renderScaleY;
+
+                ctx.brushState.segmentStartMouseY = cmd.mouseY;
+
+                std::vector<BatchNoteAction::Entry> deleteEntries;
+                deleteEntries.push_back(
+                    { targetEntity, parentNote, std::nullopt });
+
+                auto deleteAction = std::make_unique<BatchNoteAction>(
+                    std::move(deleteEntries), "Convert Note to Polyline");
+                ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
+
+                ctx.isDragging   = true;
+                ctx.dragCameraId = cmd.cameraId;
+                isResuming       = true;
+                XINFO(
+                    "Converting ordinary note (type {}) to Polyline and "
+                    "resuming edit for entity {}",
+                    static_cast<int>(parentNote.m_type),
+                    static_cast<uint32_t>(targetEntity));
             }
         }
     }
@@ -445,6 +497,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                               0 });
                         ctx.brushState.segmentStartMouseY = cmd.mouseY;
                     }
+                }
+            } else if ( last.type == ::MMM::NoteType::NOTE ) {
+                float diffYLocal =
+                    std::abs(cmd.mouseY - ctx.brushState.segmentStartMouseY);
+                bool timeChangedLocal =
+                    std::abs(currentPosTime - last.timestamp) > 1e-5;
+
+                if ( currentTrack != last.trackIndex ) {
+                    // 改变轨道 -> 变成 Flick 段
+                    last.type   = ::MMM::NoteType::FLICK;
+                    last.dtrack = currentTrack - last.trackIndex;
+                    ctx.brushState.segmentStartMouseY = cmd.mouseY;
+                } else if ( timeChangedLocal || diffYLocal > 5.0f ) {
+                    // 垂直拖动 -> 变成 Hold 段
+                    last.type = ::MMM::NoteType::HOLD;
+                    last.duration =
+                        std::max(0.0, currentPosTime - last.timestamp);
+                    ctx.brushState.segmentStartMouseY = cmd.mouseY;
                 }
             }
         }
