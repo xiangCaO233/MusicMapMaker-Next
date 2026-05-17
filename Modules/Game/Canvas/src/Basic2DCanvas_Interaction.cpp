@@ -562,6 +562,17 @@ void Basic2DCanvasInteraction::handleInteractions(
         } else if ( !isCtrlPressed && !isAltPressed ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
+
+            if ( !currentSnapshot->isPlaying &&
+                 currentSnapshot->currentTool == Logic::EditTool::Draw &&
+                 ImGui::IsMouseDown(0) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateBrush{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           ImGui::GetIO().KeyShift,
+                                           ImGui::GetIO().KeyCtrl }));
+            }
         }
     }
 }
