@@ -6,15 +6,26 @@
 namespace MMM::Logic::System
 {
 
-void NoteTransformSystem::update(entt::registry& registry,
-                                 entt::registry& timelineRegistry,
-                                 double          currentTime,
-                                 const Config::EditorConfig& config)
+void NoteTransformSystem::update(entt::registry&             registry,
+                                 entt::registry&             timelineRegistry,
+                                 double                      currentTime,
+                                 const Config::EditorConfig& config,
+                                 bool                        forceRebuild)
 {
-    auto& cache = timelineRegistry.ctx().get<ScrollCache>();
+    auto& cache      = timelineRegistry.ctx().get<ScrollCache>();
+    bool  cacheDirty = cache.isDirty;
     if ( cache.isDirty ) {
         cache.rebuild(timelineRegistry, config);
     }
+
+    if ( !cacheDirty && !forceRebuild ) {
+        return;
+    }
+
+    registry.sort<NoteComponent>(
+        [](const NoteComponent& lhs, const NoteComponent& rhs) {
+            return lhs.m_timestamp < rhs.m_timestamp;
+        });
 
     double currentAbsY = cache.getAbsY(currentTime);
 

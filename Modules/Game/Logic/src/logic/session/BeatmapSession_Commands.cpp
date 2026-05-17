@@ -21,10 +21,37 @@ bool BeatmapSession::processCommands()
     LogicCommand cmd;
     bool         processed = false;
     while ( m_commandQueue.try_dequeue(cmd) ) {
-        processed = true;
         std::visit(
-            [this](auto&& arg) {
+            [this, &processed](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
+                if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
+                               !std::is_same_v<T, CmdSetHoveredEntity> ) {
+                    processed = true;
+                }
+                if constexpr ( std::is_same_v<T, CmdStartDrag> ||
+                               std::is_same_v<T, CmdUpdateDrag> ||
+                               std::is_same_v<T, CmdEndDrag> ||
+                               std::is_same_v<T, CmdUndo> ||
+                               std::is_same_v<T, CmdRedo> ||
+                               std::is_same_v<T, CmdPaste> ||
+                               std::is_same_v<T, CmdCut> ||
+                               std::is_same_v<T, CmdDeleteSelected> ||
+                               std::is_same_v<T, CmdMirrorSelected> ||
+                               std::is_same_v<T, CmdStartBrush> ||
+                               std::is_same_v<T, CmdUpdateBrush> ||
+                               std::is_same_v<T, CmdEndBrush> ||
+                               std::is_same_v<T, CmdStartErase> ||
+                               std::is_same_v<T, CmdUpdateErase> ||
+                               std::is_same_v<T, CmdEndErase> ||
+                               std::is_same_v<T, CmdLoadBeatmap> ||
+                               std::is_same_v<T, CmdCreateBeatmap> ||
+                               std::is_same_v<T, CmdRemoveBeatmap> ||
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                               std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                               std::is_same_v<T, CmdCreateTimelineEvent> ) {
+                    m_ctx->isTransformDirty = true;
+                }
 
                 // --- 自动更新操作状态描述 ---
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {

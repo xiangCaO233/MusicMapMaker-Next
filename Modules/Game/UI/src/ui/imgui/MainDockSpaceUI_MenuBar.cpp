@@ -6,6 +6,7 @@
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -134,14 +135,16 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::TextUnformatted(titleText);
         float titleEndX = titleX + titleWidth;
 
-        // 4. 帧信息 (FPS) - 靠右对齐到按钮左侧
-        ImGuiIO& io = ImGui::GetIO();
+        // 4. 帧信息 (FPS & UPS) - 靠右对齐到按钮左侧
+        ImGuiIO& io       = ImGui::GetIO();
+        float    logicUps = Logic::EditorEngine::instance().getLogicUps();
         char     fpsBuf[128];
         snprintf(fpsBuf,
                  sizeof(fpsBuf),
-                 "%.3f ms/frame (%.1f FPS)",
+                 "%.3f ms/frame (%.1f FPS) | UPS: %.1f",
                  1000.0f / io.Framerate,
-                 io.Framerate);
+                 io.Framerate,
+                 logicUps);
         float fpsWidth = ImGui::CalcTextSize(fpsBuf).x;
 
         float numberOfButtons  = 3;

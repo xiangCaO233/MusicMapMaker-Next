@@ -8,10 +8,10 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <shared_mutex>
 
 namespace MMM::Logic
 {
@@ -138,6 +138,15 @@ public:
     bool isPlaybackPlaying() const;
 
     /**
+     * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
+     */
+    float getLogicUps() const
+    {
+        return m_logicUps.load(std::memory_order_relaxed);
+    }
+
+
+    /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
      */
     void setEditorConfig(const Config::EditorConfig& config);
@@ -191,6 +200,15 @@ private:
 
     /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
+
+    /// @brief 逻辑线程实时刷新率 (UPS)
+    std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 逻辑线程更新计数器，用于 UPS 计算
+    uint32_t m_logicUpdateCount{ 0 };
+
+    /// @brief 上一次计算 UPS 的时间戳
+    std::chrono::high_resolution_clock::time_point m_lastUpsTime;
 };
 
 }  // namespace MMM::Logic

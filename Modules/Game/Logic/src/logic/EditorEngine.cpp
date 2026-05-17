@@ -624,7 +624,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
-        const auto&                         v = std::get<CmdUpdateViewport>(cmd);
+        const auto& v = std::get<CmdUpdateViewport>(cmd);
         std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
         m_lastViewportSizes[v.cameraId] = { v.width, v.height };
     }
@@ -649,7 +649,7 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
 {
     {
         std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
-        auto it = m_syncBuffers.find(cameraId);
+        auto                                it = m_syncBuffers.find(cameraId);
         if ( it != m_syncBuffers.end() ) {
             return it->second;
         }
@@ -745,7 +745,10 @@ void EditorEngine::saveProject()
 
 void EditorEngine::loop()
 {
-    auto lastTime = std::chrono::high_resolution_clock::now();
+    auto lastTime      = std::chrono::high_resolution_clock::now();
+    m_lastUpsTime      = lastTime;
+    m_logicUpdateCount = 0;
+    m_logicUps.store(0.0f, std::memory_order_relaxed);
 
     while ( m_running ) {
         // 动态获取当前的延迟目标
@@ -780,6 +783,17 @@ void EditorEngine::loop()
 
         lastTime  = currentTime;
         double dt = passed.count();
+
+        // 统计逻辑线程实时刷新率 (UPS)
+        m_logicUpdateCount++;
+        std::chrono::duration<double> upsElapsed = currentTime - m_lastUpsTime;
+        if ( upsElapsed.count() >= 0.5 ) {
+            m_logicUps.store(
+                static_cast<float>(m_logicUpdateCount / upsElapsed.count()),
+                std::memory_order_relaxed);
+            m_logicUpdateCount = 0;
+            m_lastUpsTime      = currentTime;
+        }
 
         // 关键修复：使用 shared_ptr 在锁内获取引用。
         // 这样即使 UI 线程在此时 openProject 销毁了原有 Session，

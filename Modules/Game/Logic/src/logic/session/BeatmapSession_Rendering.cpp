@@ -20,12 +20,32 @@ namespace MMM::Logic
 
 void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 {
+    // Rebuild sorted note entities cache if needed
+    if ( m_ctx->sortedNoteEntities.empty() || m_ctx->isTransformDirty ) {
+        auto noteView = m_ctx->noteRegistry.view<const NoteComponent>();
+        m_ctx->sortedNoteEntities.assign(noteView.begin(), noteView.end());
+        std::sort(m_ctx->sortedNoteEntities.begin(),
+                  m_ctx->sortedNoteEntities.end(),
+                  [this](entt::entity a, entt::entity b) {
+                      return m_ctx->noteRegistry.get<const NoteComponent>(a)
+                                 .m_timestamp <
+                             m_ctx->noteRegistry.get<const NoteComponent>(b)
+                                 .m_timestamp;
+                  });
+    }
+
+    m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
+    m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
+        &m_ctx->sortedNoteEntities);
+
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
     // 注意：物理位置更新应基于逻辑时间 m_ctx->currentTime
     System::NoteTransformSystem::update(m_ctx->noteRegistry,
                                         m_ctx->timelineRegistry,
                                         m_ctx->currentTime,
-                                        config);
+                                        config,
+                                        m_ctx->isTransformDirty);
+    m_ctx->isTransformDirty = false;
 
     // 0. 更新 BPM 缓存（仅在脏时执行 O(N log N) 操作）
     if ( m_ctx->isBpmEventsDirty ) {
