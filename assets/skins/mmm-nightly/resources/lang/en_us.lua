@@ -322,6 +322,8 @@ return {
 	["ui.canvas.beat_index"] = "Beat",
 	["ui.canvas.note_fraction"] = "Note Position",
 	["ui.canvas.note_time"] = "Exact Time",
+	["ui.canvas.overlapping_hitboxes"] = "Overlapping Check",
+	["ui.canvas.overlapping_warning"] = " (Warning: Overlap detected!)",
 
 	["ui.wizard.new_beatmap.title"] = "New Beatmap Wizard",
 	["ui.wizard.new_beatmap.create"] = "Create Now",

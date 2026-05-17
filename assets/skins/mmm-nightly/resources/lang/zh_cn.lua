@@ -329,6 +329,8 @@ return {
 	["ui.canvas.beat_index"] = "拍号",
 	["ui.canvas.note_fraction"] = "物件位置",
 	["ui.canvas.note_time"] = "精确时间",
+	["ui.canvas.overlapping_hitboxes"] = "重叠检测",
+	["ui.canvas.overlapping_warning"] = " (可能发生重叠！)",
 
 	["ui.wizard.new_beatmap.title"] = "新建谱面向导",
 	["ui.wizard.new_beatmap.create"] = "立即创建",

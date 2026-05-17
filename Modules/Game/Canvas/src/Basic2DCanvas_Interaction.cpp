@@ -238,6 +238,35 @@ void Basic2DCanvasInteraction::handleInteractions(
                                        "%s: %.3f s",
                                        TR("ui.canvas.note_time").data(),
                                        currentSnapshot->hoveredNoteTime);
+
+                    // 计算鼠标当前所在的非 PolylineNode 物件包围框个数
+                    int overlappingCount = 0;
+                    for ( const auto& hb : currentSnapshot->hitboxes ) {
+                        if ( hb.part != Logic::HoverPart::PolylineNode ) {
+                            if ( localMousePos.x >= hb.x &&
+                                 localMousePos.x <= hb.x + hb.w &&
+                                 localMousePos.y >= hb.y &&
+                                 localMousePos.y <= hb.y + hb.h ) {
+                                overlappingCount++;
+                            }
+                        }
+                    }
+
+                    if ( overlappingCount > 1 ) {
+                        ImGui::TextColored(
+                            ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+                            "%s: %d%s",
+                            TR("ui.canvas.overlapping_hitboxes").data(),
+                            overlappingCount,
+                            TR("ui.canvas.overlapping_warning").data());
+                    } else {
+                        ImGui::TextColored(
+                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                            "%s: %d",
+                            TR("ui.canvas.overlapping_hitboxes").data(),
+                            overlappingCount);
+                    }
+
                     ImGui::Spacing();
                     ImGui::Separator();
                     ImGui::Spacing();
