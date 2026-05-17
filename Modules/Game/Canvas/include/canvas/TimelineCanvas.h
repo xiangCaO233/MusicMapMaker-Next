@@ -86,6 +86,7 @@ private:
     int    m_createType{ 0 };     // 0: BPM, 1: Scroll
     int    m_createPosType{ 0 };  // 0: Click, 1: Current
     bool   m_isTimeSnapped{ false };
+    bool   m_keepSpeedOnBpmChange{ false };
 
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>

@@ -3,6 +3,9 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 
 namespace MMM::Canvas
 {
@@ -133,6 +136,9 @@ void TimelineCanvas::renderEventCreationPopup()
         if ( m_createType == 0 ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             ImGui::InputDouble("##BPMValue", &m_createValue, 0.1, 1.0, "%.2f");
+            ImGui::Spacing();
+            ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
+                            &m_keepSpeedOnBpmChange);
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
@@ -161,6 +167,26 @@ void TimelineCanvas::renderEventCreationPopup()
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     m_createTimeManual, type, finalValue }));
+
+            if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
+                double refBpm = 120.0;
+                if ( auto session =
+                         Logic::EditorEngine::instance().getActiveSession() ) {
+                    if ( auto beatmap = session->getContext().currentBeatmap ) {
+                        if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
+                            refBpm = beatmap->m_baseMapMetadata.preference_bpm;
+                        }
+                    }
+                }
+                double scrollSpeed = refBpm / m_createValue;
+                double finalScrollValue =
+                    scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed) : -100.0;
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdCreateTimelineEvent{ m_createTimeManual,
+                                                   ::MMM::TimingEffect::SCROLL,
+                                                   finalScrollValue }));
+            }
+
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }

@@ -362,6 +362,7 @@ return {
 	["ui.timeline.event_creator.type"] = "时间点类型",
 	["ui.timeline.event_creator.value"] = "具体数值",
 	["ui.timeline.event_creator.create"] = "创建",
+	["ui.timeline.event_creator.keep_speed"] = "保持画布速度",
 
 	-- 状态栏
 	["ui.status.ready"] = "就绪",

@@ -355,6 +355,7 @@ return {
 	["ui.timeline.event_creator.type"] = "Event Type",
 	["ui.timeline.event_creator.value"] = "Specific Value",
 	["ui.timeline.event_creator.create"] = "Create",
+	["ui.timeline.event_creator.keep_speed"] = "Keep Canvas Speed",
 
 	-- Status Bar
 	["ui.status.ready"] = "Ready",
