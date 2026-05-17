@@ -81,8 +81,12 @@ void TimelineCanvas::handleRightClick(const ImVec2& size)
     }
 
     m_isCreatePopupOpen = true;
-    m_createTimeManual =
-        m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
+    if ( m_createPosType == 1 ) {
+        m_createTimeManual = m_currentSnapshot->currentTime;
+    } else {
+        m_createTimeManual =
+            m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
+    }
     ImGui::OpenPopup("TimelineCreateEvent");
 }
 
