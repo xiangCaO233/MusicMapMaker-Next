@@ -709,6 +709,40 @@ void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
     it->second->play(sfxFinalVol * it->second->getVolume() * volumeFactor);
 }
 
+bool AudioManager::isSFXPlaying(const std::string& key) const
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        return it->second->isPlaying();
+    }
+    return false;
+}
+
+bool AudioManager::isSFXPaused(const std::string& key) const
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        return it->second->isPaused();
+    }
+    return false;
+}
+
+void AudioManager::pauseSoundEffect(const std::string& key)
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        it->second->pause();
+    }
+}
+
+void AudioManager::resumeSoundEffect(const std::string& key)
+{
+    auto it = m_sfxPools.find(key);
+    if ( it != m_sfxPools.end() ) {
+        it->second->resume();
+    }
+}
+
 void AudioManager::playSoundEffectScheduled(const std::string& key,
                                             double             targetTime,
                                             float              volumeFactor)

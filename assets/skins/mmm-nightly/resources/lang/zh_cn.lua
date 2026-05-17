@@ -226,6 +226,8 @@ return {
 	["ui.audio_manager.main_track_volume"] = "主音轨音量",
 	["ui.audio_manager.volume"] = "音量",
 	["ui.audio_manager.play_preview"] = "试听预览",
+	["ui.audio_manager.pause_preview"] = "暂停试听",
+	["ui.audio_manager.resume_preview"] = "恢复试听",
 	["ui.audio_manager.mute"] = "静音",
 	["ui.audio_manager.unmute"] = "取消静音",
 	["ui.audio_manager.mute_l"] = "静音 L",

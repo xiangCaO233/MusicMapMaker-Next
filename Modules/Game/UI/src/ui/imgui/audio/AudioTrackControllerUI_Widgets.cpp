@@ -62,9 +62,7 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
     row.addElement(labelId + "_wgt",
                    Sizing::Grow(),
                    Sizing::Grow(),
-                   [widget](Clay_BoundingBox r, bool h) {
-                       widget(r, h);
-                   });
+                   [widget](Clay_BoundingBox r, bool h) { widget(r, h); });
 
     float rowH = ImGui::GetFrameHeight() + 8.0f;
     parent.addLayout(
@@ -324,9 +322,25 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
             auto& audio = Audio::AudioManager::instance();
 
             ImGui::SetCursorScreenPos({ r.x, r.y });
-            if ( ImGui::Button(TR("ui.audio_manager.play_preview").data(),
+
+            bool        isPaused = audio.isSFXPaused(m_trackId);
+            const char* playText =
+                isPaused ? TR("ui.audio_manager.resume_preview").data()
+                         : TR("ui.audio_manager.play_preview").data();
+
+            if ( ImGui::Button(playText, ImVec2(80, 0)) ) {
+                if ( isPaused ) {
+                    audio.resumeSoundEffect(m_trackId);
+                } else {
+                    audio.playSoundEffect(m_trackId);
+                }
+            }
+
+            ImGui::SameLine();
+
+            if ( ImGui::Button(TR("ui.audio_manager.pause_preview").data(),
                                ImVec2(80, 0)) ) {
-                audio.playSoundEffect(m_trackId);
+                audio.pauseSoundEffect(m_trackId);
             }
 
             ImGui::SameLine();
@@ -338,7 +352,7 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
             std::string progressText =
                 fmt::format("{:.2f}s / {:.2f}s", playbackTime, duration);
 
-            float remaining = r.width - 80.0f - 8.0f;
+            float remaining = r.width - 80.0f - 80.0f - 16.0f;
             ImGui::ProgressBar(
                 progress, ImVec2(remaining, 0), progressText.c_str());
         });

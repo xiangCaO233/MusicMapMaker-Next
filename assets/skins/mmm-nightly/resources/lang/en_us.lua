@@ -219,6 +219,8 @@ return {
 	["ui.audio_manager.main_track_volume"] = "Main Track Volume",
 	["ui.audio_manager.volume"] = "Volume",
 	["ui.audio_manager.play_preview"] = "Play Preview",
+	["ui.audio_manager.pause_preview"] = "Pause Preview",
+	["ui.audio_manager.resume_preview"] = "Resume Preview",
 	["ui.audio_manager.mute"] = "Mute",
 	["ui.audio_manager.unmute"] = "Unmute",
 	["ui.audio_manager.mute_l"] = "Mute L",

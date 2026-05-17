@@ -24,12 +24,15 @@ AudioTrackControllerUI::AudioTrackControllerUI(const std::string& trackId,
 void AudioTrackControllerUI::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) {
+        if ( m_type == TrackType::Effect ) {
+            Audio::AudioManager::instance().pauseSoundEffect(m_trackId);
+        }
         return;
     }
 
-    auto& audio   = Audio::AudioManager::instance();
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
+    auto& audio    = Audio::AudioManager::instance();
+    auto& engine   = Logic::EditorEngine::instance();
+    auto* project  = engine.getCurrentProject();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);

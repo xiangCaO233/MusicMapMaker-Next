@@ -204,4 +204,34 @@ double SoundEffectPool::getLatestPlaybackTime() const
     return static_cast<double>(latest->get_playpos()) / samplerate;
 }
 
+bool SoundEffectPool::isPlaying() const
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if ( !m_latestNode ) return false;
+    return m_latestNode->isplaying();
+}
+
+bool SoundEffectPool::isPaused() const
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if ( !m_latestNode ) return false;
+    return !m_latestNode->isplaying() && (m_latestNode->get_playpos() > 0);
+}
+
+void SoundEffectPool::pause()
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if ( m_latestNode ) {
+        m_latestNode->pause();
+    }
+}
+
+void SoundEffectPool::resume()
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    if ( m_latestNode ) {
+        m_latestNode->play();
+    }
+}
+
 }  // namespace MMM::Audio
