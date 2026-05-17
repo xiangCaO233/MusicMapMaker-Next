@@ -1088,90 +1088,61 @@ void MainMenuView::performOverlapScan()
 
     auto session = Logic::EditorEngine::instance().getActiveSession();
     if ( !session ) return;
-    auto beatmap = session->getContext().currentBeatmap;
-    if ( !beatmap ) return;
 
     struct CheckItem {
-        MMM::NoteType        type;
-        double               start_time;
-        double               end_time;
-        uint32_t             track;
-        const MMM::Note*     note_ptr;
-        const MMM::Polyline* parent_polyline;
-        std::string          desc;
+        ::MMM::NoteType type;
+        double          start_time;
+        double          end_time;
+        int             track;
+        entt::entity    entity;
+        entt::entity    parent_polyline;
+        std::string     desc;
     };
 
     std::vector<CheckItem> items;
-    beatmap->sync();
+    const auto&            registry = session->getContext().noteRegistry;
+    auto                   view = registry.view<const Logic::NoteComponent>();
 
-    for ( const auto& note_ref : beatmap->m_allNotes ) {
-        const auto& note = note_ref.get();
-        if ( note.m_type == MMM::NoteType::NOTE ) {
-            items.push_back({ MMM::NoteType::NOTE,
-                              note.m_timestamp,
-                              note.m_timestamp,
-                              note.m_track,
-                              &note,
-                              nullptr,
-                              "Note" });
-        } else if ( note.m_type == MMM::NoteType::HOLD ) {
-            const auto& hold = static_cast<const MMM::Hold&>(note);
-            items.push_back({ MMM::NoteType::HOLD,
-                              hold.m_timestamp,
-                              hold.m_timestamp + hold.m_duration,
-                              hold.m_track,
-                              &hold,
-                              nullptr,
-                              "Hold" });
-        } else if ( note.m_type == MMM::NoteType::FLICK ) {
-            items.push_back({ MMM::NoteType::FLICK,
-                              note.m_timestamp,
-                              note.m_timestamp,
-                              note.m_track,
-                              &note,
-                              nullptr,
-                              "Flick" });
-        } else if ( note.m_type == MMM::NoteType::POLYLINE ) {
-            const auto& poly = static_cast<const MMM::Polyline&>(note);
-            for ( const auto& sub_ref : poly.m_subNotes ) {
-                const auto& sub = sub_ref.get();
-                if ( sub.m_type == MMM::NoteType::HOLD ) {
-                    const auto& subHold = static_cast<const MMM::Hold&>(sub);
-                    items.push_back({ MMM::NoteType::HOLD,
-                                      subHold.m_timestamp,
-                                      subHold.m_timestamp + subHold.m_duration,
-                                      subHold.m_track,
-                                      &subHold,
-                                      &poly,
-                                      "Polyline Hold" });
-                } else if ( sub.m_type == MMM::NoteType::FLICK ) {
-                    items.push_back({ MMM::NoteType::FLICK,
-                                      sub.m_timestamp,
-                                      sub.m_timestamp,
-                                      sub.m_track,
-                                      &sub,
-                                      &poly,
-                                      "Polyline Flick" });
-                } else {
-                    items.push_back({ sub.m_type,
-                                      sub.m_timestamp,
-                                      sub.m_timestamp,
-                                      sub.m_track,
-                                      &sub,
-                                      &poly,
-                                      "Polyline Node" });
-                }
-            }
+    for ( auto entity : view ) {
+        const auto& nc = view.get<const Logic::NoteComponent>(entity);
+
+        // Skip Polyline container entities because its individual subnotes are
+        // separate entities checked below
+        if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
+
+        double startTime = nc.m_timestamp;
+        double endTime   = startTime;
+        if ( nc.m_type == ::MMM::NoteType::HOLD ) {
+            endTime = startTime + nc.m_duration;
         }
+
+        std::string desc = "Note";
+        if ( nc.m_type == ::MMM::NoteType::HOLD ) {
+            desc = nc.m_isSubNote ? "Polyline Hold" : "Hold";
+        } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
+            desc = nc.m_isSubNote ? "Polyline Flick" : "Flick";
+        }
+
+        items.push_back({ nc.m_type,
+                          startTime,
+                          endTime,
+                          nc.m_trackIndex,
+                          entity,
+                          nc.m_parentPolyline,
+                          desc });
     }
 
+    // Pairwise comparison of all items
     for ( size_t i = 0; i < items.size(); ++i ) {
         for ( size_t j = i + 1; j < items.size(); ++j ) {
             const auto& a = items[i];
             const auto& b = items[j];
 
+            // 1. Must be on the same track
             if ( a.track != b.track ) continue;
-            if ( a.parent_polyline != nullptr &&
+
+            // 2. Must not belong to the same Polyline
+            if ( a.parent_polyline != entt::null &&
                  a.parent_polyline == b.parent_polyline )
                 continue;
 
@@ -1193,6 +1164,7 @@ void MainMenuView::performOverlapScan()
             bool is_definite  = false;
             bool is_suspected = false;
 
+            // Strict time check in seconds (1ms = 0.001s, 10ms = 0.010s)
             if ( diff_start < 0.001 ) {
                 is_definite = true;
             } else if ( t2_start > t1_start + 0.001 &&
@@ -1208,7 +1180,7 @@ void MainMenuView::performOverlapScan()
             if ( is_definite || is_suspected ) {
                 m_overlapResults.push_back({ is_definite,
                                              t2_start,
-                                             a.track,
+                                             static_cast<uint32_t>(a.track),
                                              first->desc,
                                              second->desc });
             }
@@ -1289,7 +1261,7 @@ void MainMenuView::renderOverlapCheckWindow()
                                        5,
                                        tableFlags,
                                        ImVec2(0.0f, -1.0f)) ) {
-                    ImGui::TableSetupColumn(TR("ui.file.pack").data(),
+                    ImGui::TableSetupColumn(TR("ui.tools.overlap_type").data(),
                                             ImGuiTableColumnFlags_WidthFixed,
                                             100.0f * dpiScale);
                     ImGui::TableSetupColumn(TR("ui.canvas.note_time").data(),
@@ -1299,10 +1271,10 @@ void MainMenuView::renderOverlapCheckWindow()
                                             ImGuiTableColumnFlags_WidthFixed,
                                             60.0f * dpiScale);
                     ImGui::TableSetupColumn(
-                        TR("ui.wizard.new_beatmap.select_audio").data(),
+                        TR("ui.tools.overlap_detail_header").data(),
                         ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn(
-                        TR("ui.status.playback.seek").data(),
+                        TR("ui.tools.overlap_jump_header").data(),
                         ImGuiTableColumnFlags_WidthFixed,
                         50.0f * dpiScale);
 
@@ -1352,12 +1324,17 @@ void MainMenuView::renderOverlapCheckWindow()
                                  fmt::format("{}##{}", ICON_MMM_SEARCH, index++)
                                      .c_str(),
                                  ImVec2(-1, 0)) ) {
-                            dispatchCommand(Logic::CmdSeek{ r.timestamp });
+                            float visualOffset = Config::AppConfig::instance()
+                                                     .getVisualConfig()
+                                                     .visualOffset;
+                            dispatchCommand(
+                                Logic::CmdSeek{ r.timestamp - visualOffset });
                         }
                         ImGui::PopStyleColor(2);
                         if ( ImGui::IsItemHovered() ) {
                             ImGui::SetTooltip(
-                                "%s", TR("canvas.preview.jump_to").data());
+                                TR("canvas.preview.jump_to").data(),
+                                r.timestamp);
                         }
                     }
                     ImGui::EndTable();

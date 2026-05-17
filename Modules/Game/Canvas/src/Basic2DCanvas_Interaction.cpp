@@ -239,18 +239,26 @@ void Basic2DCanvasInteraction::handleInteractions(
                                        TR("ui.canvas.note_time").data(),
                                        currentSnapshot->hoveredNoteTime);
 
-                    // 计算鼠标当前所在的非 PolylineNode 物件包围框个数
-                    int overlappingCount = 0;
+                    // 计算鼠标当前所在的非 PolylineNode 唯一物件包围框个数
+                    std::vector<entt::entity> hoveredEntities;
                     for ( const auto& hb : currentSnapshot->hitboxes ) {
-                        if ( hb.part != Logic::HoverPart::PolylineNode ) {
+                        if ( hb.part != Logic::HoverPart::PolylineNode &&
+                             hb.entity != entt::null ) {
                             if ( localMousePos.x >= hb.x &&
                                  localMousePos.x <= hb.x + hb.w &&
                                  localMousePos.y >= hb.y &&
                                  localMousePos.y <= hb.y + hb.h ) {
-                                overlappingCount++;
+                                if ( std::find(hoveredEntities.begin(),
+                                               hoveredEntities.end(),
+                                               hb.entity) ==
+                                     hoveredEntities.end() ) {
+                                    hoveredEntities.push_back(hb.entity);
+                                }
                             }
                         }
                     }
+                    int overlappingCount =
+                        static_cast<int>(hoveredEntities.size());
 
                     if ( overlappingCount > 1 ) {
                         ImGui::TextColored(
