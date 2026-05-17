@@ -285,13 +285,19 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 如果音频路径发生变化，重新加载音频
         if ( oldAudio != cmd.baseMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
-            auto audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                                 .parent_path() /
-                             cmd.baseMeta.main_audio_path;
+            std::filesystem::path audioPath;
+            auto* project = EditorEngine::instance().getCurrentProject();
+            if ( project ) {
+                audioPath =
+                    project->m_projectRoot / cmd.baseMeta.main_audio_path;
+            } else {
+                audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
+                                .parent_path() /
+                            cmd.baseMeta.main_audio_path;
+            }
             if ( std::filesystem::exists(audioPath) ) {
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
-                auto* project = EditorEngine::instance().getCurrentProject();
                 if ( project ) {
                     auto fileName = Config::pathToUtf8(
                         cmd.baseMeta.main_audio_path.filename());
@@ -308,14 +314,25 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 }
                 Audio::AudioManager::instance().loadBGM(
                     Config::pathToUtf8(audioPath), config);
+            } else {
+                XERROR(
+                    "BeatmapSession: Audio file does not exist at resolved "
+                    "path: {}",
+                    Config::pathToUtf8(audioPath));
             }
         }
 
         // 如果封面路径发生变化，更新背景图尺寸
         if ( oldCover != cmd.baseMeta.main_cover_path ) {
-            auto bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                              .parent_path() /
-                          cmd.baseMeta.main_cover_path;
+            std::filesystem::path bgPath;
+            auto* project = EditorEngine::instance().getCurrentProject();
+            if ( project ) {
+                bgPath = project->m_projectRoot / cmd.baseMeta.main_cover_path;
+            } else {
+                bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
+                             .parent_path() /
+                         cmd.baseMeta.main_cover_path;
+            }
             if ( std::filesystem::exists(bgPath) ) {
                 int w = 0, h = 0, comp = 0;
                 if ( stbi_info(
