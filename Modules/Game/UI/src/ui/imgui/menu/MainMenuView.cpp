@@ -13,6 +13,9 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Hold.h"
+#include "mmm/note/Polyline.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
@@ -29,10 +32,14 @@ namespace MMM::UI
 MainMenuView::MainMenuView()
     : m_openFileMenuNextFrame(false)
     , m_openEditMenuNextFrame(false)
+    , m_openToolsMenuNextFrame(false)
     , m_openHelpMenuNextFrame(false)
     , m_closeFileMenuNextFrame(false)
     , m_closeEditMenuNextFrame(false)
+    , m_closeToolsMenuNextFrame(false)
     , m_closeHelpMenuNextFrame(false)
+    , m_showOverlapCheckWindow(false)
+    , m_hasOverlapScan(false)
     , m_showAboutPopup(false)
     , m_showUpdatePopup(false)
     , m_showCheckingPopup(false)
@@ -118,6 +125,13 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 m_closeEditMenuNextFrame = true;
             } else {
                 m_openEditMenuNextFrame = true;
+            }
+        }
+        if ( ImGui::IsKeyPressed(ImGuiKey_T, false) ) {
+            if ( ImGui::IsPopupOpen(TR("ui.tools")) ) {
+                m_closeToolsMenuNextFrame = true;
+            } else {
+                m_openToolsMenuNextFrame = true;
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
@@ -1025,6 +1039,25 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::EndMenu();
     }
 
+    // ========== Tools Menu ==========
+    if ( m_openToolsMenuNextFrame ) {
+        ImGui::OpenPopup(TR("ui.tools"));
+        m_openToolsMenuNextFrame = false;
+    }
+    if ( ImGui::BeginMenu(TR("ui.tools")) ) {
+        if ( m_closeToolsMenuNextFrame ) {
+            ImGui::CloseCurrentPopup();
+            m_closeToolsMenuNextFrame = false;
+        }
+
+        if ( MenuItemWithFontIcon(ICON_MMM_SELECT_ALL,
+                                  TR("ui.tools.overlap_check")) ) {
+            m_showOverlapCheckWindow = !m_showOverlapCheckWindow;
+        }
+
+        ImGui::EndMenu();
+    }
+
     // ========== Help Menu ==========
     renderHelpMenu(sourceManager);
 
@@ -1033,6 +1066,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderUpdateCheckingPopup();
     renderUpdatePopup();
     renderUpdateSuccessPopup();
+    renderOverlapCheckWindow();
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
@@ -1045,6 +1079,293 @@ void MainMenuView::renderInfoText()
     ImGui::SameLine();
     ImGui::Text(
         "%.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+}
+
+void MainMenuView::performOverlapScan()
+{
+    m_overlapResults.clear();
+    m_hasOverlapScan = true;
+
+    auto session = Logic::EditorEngine::instance().getActiveSession();
+    if ( !session ) return;
+    auto beatmap = session->getContext().currentBeatmap;
+    if ( !beatmap ) return;
+
+    struct CheckItem {
+        MMM::NoteType        type;
+        double               start_time;
+        double               end_time;
+        uint32_t             track;
+        const MMM::Note*     note_ptr;
+        const MMM::Polyline* parent_polyline;
+        std::string          desc;
+    };
+
+    std::vector<CheckItem> items;
+    beatmap->sync();
+
+    for ( const auto& note_ref : beatmap->m_allNotes ) {
+        const auto& note = note_ref.get();
+        if ( note.m_type == MMM::NoteType::NOTE ) {
+            items.push_back({ MMM::NoteType::NOTE,
+                              note.m_timestamp,
+                              note.m_timestamp,
+                              note.m_track,
+                              &note,
+                              nullptr,
+                              "Note" });
+        } else if ( note.m_type == MMM::NoteType::HOLD ) {
+            const auto& hold = static_cast<const MMM::Hold&>(note);
+            items.push_back({ MMM::NoteType::HOLD,
+                              hold.m_timestamp,
+                              hold.m_timestamp + hold.m_duration,
+                              hold.m_track,
+                              &hold,
+                              nullptr,
+                              "Hold" });
+        } else if ( note.m_type == MMM::NoteType::FLICK ) {
+            items.push_back({ MMM::NoteType::FLICK,
+                              note.m_timestamp,
+                              note.m_timestamp,
+                              note.m_track,
+                              &note,
+                              nullptr,
+                              "Flick" });
+        } else if ( note.m_type == MMM::NoteType::POLYLINE ) {
+            const auto& poly = static_cast<const MMM::Polyline&>(note);
+            for ( const auto& sub_ref : poly.m_subNotes ) {
+                const auto& sub = sub_ref.get();
+                if ( sub.m_type == MMM::NoteType::HOLD ) {
+                    const auto& subHold = static_cast<const MMM::Hold&>(sub);
+                    items.push_back({ MMM::NoteType::HOLD,
+                                      subHold.m_timestamp,
+                                      subHold.m_timestamp + subHold.m_duration,
+                                      subHold.m_track,
+                                      &subHold,
+                                      &poly,
+                                      "Polyline Hold" });
+                } else if ( sub.m_type == MMM::NoteType::FLICK ) {
+                    items.push_back({ MMM::NoteType::FLICK,
+                                      sub.m_timestamp,
+                                      sub.m_timestamp,
+                                      sub.m_track,
+                                      &sub,
+                                      &poly,
+                                      "Polyline Flick" });
+                } else {
+                    items.push_back({ sub.m_type,
+                                      sub.m_timestamp,
+                                      sub.m_timestamp,
+                                      sub.m_track,
+                                      &sub,
+                                      &poly,
+                                      "Polyline Node" });
+                }
+            }
+        }
+    }
+
+    for ( size_t i = 0; i < items.size(); ++i ) {
+        for ( size_t j = i + 1; j < items.size(); ++j ) {
+            const auto& a = items[i];
+            const auto& b = items[j];
+
+            if ( a.track != b.track ) continue;
+            if ( a.parent_polyline != nullptr &&
+                 a.parent_polyline == b.parent_polyline )
+                continue;
+
+            double t1_start = a.start_time;
+            double t1_end   = a.end_time;
+            double t2_start = b.start_time;
+            double t2_end   = b.end_time;
+
+            const CheckItem* first  = &a;
+            const CheckItem* second = &b;
+            if ( t1_start > t2_start ) {
+                std::swap(t1_start, t2_start);
+                std::swap(t1_end, t2_end);
+                std::swap(first, second);
+            }
+
+            double diff_start = std::abs(t1_start - t2_start);
+
+            bool is_definite  = false;
+            bool is_suspected = false;
+
+            if ( diff_start < 0.001 ) {
+                is_definite = true;
+            } else if ( t2_start > t1_start + 0.001 &&
+                        t2_start < t1_end - 0.001 ) {
+                is_definite = true;
+            } else if ( diff_start >= 0.001 && diff_start <= 0.010 ) {
+                is_suspected = true;
+            } else if ( std::abs(t1_end - t2_start) >= 0.001 &&
+                        std::abs(t1_end - t2_start) <= 0.010 ) {
+                is_suspected = true;
+            }
+
+            if ( is_definite || is_suspected ) {
+                m_overlapResults.push_back({ is_definite,
+                                             t2_start,
+                                             a.track,
+                                             first->desc,
+                                             second->desc });
+            }
+        }
+    }
+}
+
+void MainMenuView::renderOverlapCheckWindow()
+{
+    if ( !m_showOverlapCheckWindow ) return;
+
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    ImGui::SetNextWindowSize(ImVec2(550.0f * dpiScale, 450.0f * dpiScale),
+                             ImGuiCond_FirstUseEver);
+
+    if ( ImGui::Begin(TR("ui.tools.overlap_check_title").data(),
+                      &m_showOverlapCheckWindow,
+                      ImGuiWindowFlags_None) ) {
+        auto session = Logic::EditorEngine::instance().getActiveSession();
+        if ( !session ) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "%s",
+                               TR("ui.tools.no_active_session").data());
+            ImGui::End();
+            return;
+        }
+        auto beatmap = session->getContext().currentBeatmap;
+        if ( !beatmap ) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "%s",
+                               TR("ui.tools.no_active_beatmap").data());
+            ImGui::End();
+            return;
+        }
+
+        if ( !m_hasOverlapScan ) {
+            if ( ImGui::Button(TR("ui.tools.scan_now").data(),
+                               ImVec2(-1.0f, 40.0f * dpiScale)) ) {
+                performOverlapScan();
+            }
+        } else {
+            if ( ImGui::Button(TR("ui.tools.rescan").data(),
+                               ImVec2(120.0f * dpiScale, 30.0f * dpiScale)) ) {
+                performOverlapScan();
+            }
+
+            ImGui::SameLine();
+            int definiteCount  = 0;
+            int suspectedCount = 0;
+            for ( const auto& r : m_overlapResults ) {
+                if ( r.is_definite )
+                    definiteCount++;
+                else
+                    suspectedCount++;
+            }
+
+            char summaryBuf[256];
+            snprintf(summaryBuf,
+                     sizeof(summaryBuf),
+                     TR("ui.tools.scan_summary").data(),
+                     definiteCount,
+                     suspectedCount);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(summaryBuf);
+
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            if ( m_overlapResults.empty() ) {
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+                                   "%s",
+                                   TR("ui.tools.no_overlaps").data());
+            } else {
+                ImGuiTableFlags tableFlags =
+                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersOuter | ImGuiTableFlags_Resizable;
+                if ( ImGui::BeginTable("OverlapResultsTable",
+                                       5,
+                                       tableFlags,
+                                       ImVec2(0.0f, -1.0f)) ) {
+                    ImGui::TableSetupColumn(TR("ui.file.pack").data(),
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            100.0f * dpiScale);
+                    ImGui::TableSetupColumn(TR("ui.canvas.note_time").data(),
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            90.0f * dpiScale);
+                    ImGui::TableSetupColumn(TR("ui.canvas.track").data(),
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            60.0f * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.wizard.new_beatmap.select_audio").data(),
+                        ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn(
+                        TR("ui.status.playback.seek").data(),
+                        ImGuiTableColumnFlags_WidthFixed,
+                        50.0f * dpiScale);
+
+                    ImGui::TableHeadersRow();
+
+                    int index = 0;
+                    for ( const auto& r : m_overlapResults ) {
+                        ImGui::TableNextRow();
+
+                        // 1. Type
+                        ImGui::TableNextColumn();
+                        if ( r.is_definite ) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                                               "%s",
+                                               TR("ui.tools.definite").data());
+                        } else {
+                            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                               "%s",
+                                               TR("ui.tools.suspected").data());
+                        }
+
+                        // 2. Time
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%.3f s", r.timestamp);
+
+                        // 3. Track
+                        ImGui::TableNextColumn();
+                        ImGui::Text("%d", r.track + 1);
+
+                        // 4. Detail
+                        ImGui::TableNextColumn();
+                        char detailBuf[256];
+                        snprintf(detailBuf,
+                                 sizeof(detailBuf),
+                                 TR("ui.tools.overlap_detail").data(),
+                                 r.note1_desc.c_str(),
+                                 r.note2_desc.c_str());
+                        ImGui::TextUnformatted(detailBuf);
+
+                        // 5. Jump Action
+                        ImGui::TableNextColumn();
+                        ImGui::PushStyleColor(ImGuiCol_Button,
+                                              ImVec4(0, 0, 0, 0));
+                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                              ImVec4(0.4f, 0.7f, 1.0f, 0.3f));
+                        if ( ImGui::Button(
+                                 fmt::format("{}##{}", ICON_MMM_SEARCH, index++)
+                                     .c_str(),
+                                 ImVec2(-1, 0)) ) {
+                            dispatchCommand(Logic::CmdSeek{ r.timestamp });
+                        }
+                        ImGui::PopStyleColor(2);
+                        if ( ImGui::IsItemHovered() ) {
+                            ImGui::SetTooltip(
+                                "%s", TR("canvas.preview.jump_to").data());
+                        }
+                    }
+                    ImGui::EndTable();
+                }
+            }
+        }
+    }
+    ImGui::End();
 }
 
 }  // namespace MMM::UI
