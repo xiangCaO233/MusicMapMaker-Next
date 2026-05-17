@@ -47,6 +47,9 @@ public:
     void playScheduled(float volume, size_t targetFrame,
                        std::function<size_t()> refProvider);
 
+    /// @brief 停止所有正在播放或预定的音效，并重置状态
+    void stopAll();
+
     /// @brief 释放节点回池 (供回调内部调用)
     void releaseNode(std::shared_ptr<ice::SourceNode> node);
 
@@ -69,7 +72,7 @@ private:
     std::shared_ptr<ice::AudioTrack> m_track;
     std::shared_ptr<ice::MixBus>     m_localMixer;
 
-    std::queue<std::shared_ptr<ice::SourceNode>>  m_readyQueue;
+    std::deque<std::shared_ptr<ice::SourceNode>>  m_readyQueue;
     std::vector<std::shared_ptr<ice::SourceNode>> m_allNodes;
     std::shared_ptr<ice::SourceNode>              m_latestNode;
     mutable std::mutex                            m_mtx;

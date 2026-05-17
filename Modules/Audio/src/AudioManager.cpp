@@ -212,6 +212,7 @@ void AudioManager::stop()
         m_bgmSource->pause();
         m_bgmSource->set_playpos(static_cast<size_t>(0));
         m_status = PlaybackStatus::Stopped;
+        clearAllScheduledSoundEffects();
     }
 }
 
@@ -219,6 +220,7 @@ void AudioManager::seek(double seconds)
 {
     if ( m_bgmSource ) {
         m_bgmSource->set_playpos(std::chrono::duration<double>(seconds));
+        clearAllScheduledSoundEffects();
     }
 }
 
@@ -734,6 +736,16 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
         sfxFinalVol * it->second->getVolume() * volumeFactor,
         targetFrame,
         bgmRef);
+}
+
+/// @brief 清空并停止所有正在播放和预定的音效
+void AudioManager::clearAllScheduledSoundEffects()
+{
+    for ( auto& [key, pool] : m_sfxPools ) {
+        if ( pool ) {
+            pool->stopAll();
+        }
+    }
 }
 
 void AudioManager::createMainTrackEQ(EQPreset preset)
