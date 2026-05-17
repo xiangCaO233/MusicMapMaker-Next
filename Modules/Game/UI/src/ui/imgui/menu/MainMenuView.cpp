@@ -1192,157 +1192,194 @@ void MainMenuView::renderOverlapCheckWindow()
 {
     if ( !m_showOverlapCheckWindow ) return;
 
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    ImVec2 itemSpacing = {
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
     ImGui::SetNextWindowSize(ImVec2(550.0f * dpiScale, 450.0f * dpiScale),
                              ImGuiCond_FirstUseEver);
 
-    if ( ImGui::Begin(TR("ui.tools.overlap_check_title").data(),
-                      &m_showOverlapCheckWindow,
-                      ImGuiWindowFlags_None) ) {
+    auto&   skinMgr   = Config::SkinManager::instance();
+    ImFont* titleFont = skinMgr.getFont("title");
+    if ( titleFont ) ImGui::PushFont(titleFont);
+
+    bool opened = ImGui::Begin(TR("ui.tools.overlap_check_title").data(),
+                               &m_showOverlapCheckWindow,
+                               ImGuiWindowFlags_None);
+
+    if ( titleFont ) ImGui::PopFont();
+
+    if ( opened ) {
         auto session = Logic::EditorEngine::instance().getActiveSession();
         if ( !session ) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                "%s",
                                TR("ui.tools.no_active_session").data());
-            ImGui::End();
-            return;
-        }
-        auto beatmap = session->getContext().currentBeatmap;
-        if ( !beatmap ) {
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
-                               "%s",
-                               TR("ui.tools.no_active_beatmap").data());
-            ImGui::End();
-            return;
-        }
-
-        if ( !m_hasOverlapScan ) {
-            if ( ImGui::Button(TR("ui.tools.scan_now").data(),
-                               ImVec2(-1.0f, 40.0f * dpiScale)) ) {
-                performOverlapScan();
-            }
         } else {
-            if ( ImGui::Button(TR("ui.tools.rescan").data(),
-                               ImVec2(120.0f * dpiScale, 30.0f * dpiScale)) ) {
-                performOverlapScan();
-            }
-
-            ImGui::SameLine();
-            int definiteCount  = 0;
-            int suspectedCount = 0;
-            for ( const auto& r : m_overlapResults ) {
-                if ( r.is_definite )
-                    definiteCount++;
-                else
-                    suspectedCount++;
-            }
-
-            char summaryBuf[256];
-            snprintf(summaryBuf,
-                     sizeof(summaryBuf),
-                     TR("ui.tools.scan_summary").data(),
-                     definiteCount,
-                     suspectedCount);
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted(summaryBuf);
-
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            if ( m_overlapResults.empty() ) {
-                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+            auto beatmap = session->getContext().currentBeatmap;
+            if ( !beatmap ) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                    "%s",
-                                   TR("ui.tools.no_overlaps").data());
+                                   TR("ui.tools.no_active_beatmap").data());
             } else {
-                ImGuiTableFlags tableFlags =
-                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
-                    ImGuiTableFlags_BordersOuter | ImGuiTableFlags_Resizable;
-                if ( ImGui::BeginTable("OverlapResultsTable",
-                                       5,
-                                       tableFlags,
-                                       ImVec2(0.0f, -1.0f)) ) {
-                    ImGui::TableSetupColumn(TR("ui.tools.overlap_type").data(),
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            100.0f * dpiScale);
-                    ImGui::TableSetupColumn(TR("ui.canvas.note_time").data(),
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            90.0f * dpiScale);
-                    ImGui::TableSetupColumn(TR("ui.canvas.track").data(),
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            60.0f * dpiScale);
-                    ImGui::TableSetupColumn(
-                        TR("ui.tools.overlap_detail_header").data(),
-                        ImGuiTableColumnFlags_WidthStretch);
-                    ImGui::TableSetupColumn(
-                        TR("ui.tools.overlap_jump_header").data(),
-                        ImGuiTableColumnFlags_WidthFixed,
-                        50.0f * dpiScale);
+                if ( !m_hasOverlapScan ) {
+                    if ( ImGui::Button(TR("ui.tools.scan_now").data(),
+                                       ImVec2(-1.0f, 40.0f * dpiScale)) ) {
+                        performOverlapScan();
+                    }
+                } else {
+                    if ( ImGui::Button(
+                             TR("ui.tools.rescan").data(),
+                             ImVec2(120.0f * dpiScale, 30.0f * dpiScale)) ) {
+                        performOverlapScan();
+                    }
 
-                    ImGui::TableHeadersRow();
-
-                    int index = 0;
+                    ImGui::SameLine();
+                    int definiteCount  = 0;
+                    int suspectedCount = 0;
                     for ( const auto& r : m_overlapResults ) {
-                        ImGui::TableNextRow();
+                        if ( r.is_definite )
+                            definiteCount++;
+                        else
+                            suspectedCount++;
+                    }
 
-                        // 1. Type
-                        ImGui::TableNextColumn();
-                        if ( r.is_definite ) {
-                            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
-                                               "%s",
-                                               TR("ui.tools.definite").data());
-                        } else {
-                            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
-                                               "%s",
-                                               TR("ui.tools.suspected").data());
-                        }
+                    char summaryBuf[256];
+                    snprintf(summaryBuf,
+                             sizeof(summaryBuf),
+                             TR("ui.tools.scan_summary").data(),
+                             definiteCount,
+                             suspectedCount);
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(summaryBuf);
 
-                        // 2. Time
-                        ImGui::TableNextColumn();
-                        ImGui::Text("%.3f s", r.timestamp);
+                    ImGui::Separator();
+                    ImGui::Spacing();
 
-                        // 3. Track
-                        ImGui::TableNextColumn();
-                        ImGui::Text("%d", r.track + 1);
+                    if ( m_overlapResults.empty() ) {
+                        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f),
+                                           "%s",
+                                           TR("ui.tools.no_overlaps").data());
+                    } else {
+                        ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersOuter |
+                            ImGuiTableFlags_Resizable;
+                        if ( ImGui::BeginTable("OverlapResultsTable",
+                                               5,
+                                               tableFlags,
+                                               ImVec2(0.0f, -1.0f)) ) {
+                            ImGui::TableSetupColumn(
+                                TR("ui.tools.overlap_type").data(),
+                                ImGuiTableColumnFlags_WidthFixed,
+                                100.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                TR("ui.canvas.note_time").data(),
+                                ImGuiTableColumnFlags_WidthFixed,
+                                90.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                TR("ui.canvas.track").data(),
+                                ImGuiTableColumnFlags_WidthFixed,
+                                60.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                TR("ui.tools.overlap_detail_header").data(),
+                                ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(
+                                TR("ui.tools.overlap_jump_header").data(),
+                                ImGuiTableColumnFlags_WidthFixed,
+                                50.0f * dpiScale);
 
-                        // 4. Detail
-                        ImGui::TableNextColumn();
-                        char detailBuf[256];
-                        snprintf(detailBuf,
-                                 sizeof(detailBuf),
-                                 TR("ui.tools.overlap_detail").data(),
-                                 r.note1_desc.c_str(),
-                                 r.note2_desc.c_str());
-                        ImGui::TextUnformatted(detailBuf);
+                            ImGui::TableHeadersRow();
 
-                        // 5. Jump Action
-                        ImGui::TableNextColumn();
-                        ImGui::PushStyleColor(ImGuiCol_Button,
-                                              ImVec4(0, 0, 0, 0));
-                        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                              ImVec4(0.4f, 0.7f, 1.0f, 0.3f));
-                        if ( ImGui::Button(
-                                 fmt::format("{}##{}", ICON_MMM_SEARCH, index++)
-                                     .c_str(),
-                                 ImVec2(-1, 0)) ) {
-                            float visualOffset = Config::AppConfig::instance()
-                                                     .getVisualConfig()
-                                                     .visualOffset;
-                            dispatchCommand(
-                                Logic::CmdSeek{ r.timestamp - visualOffset });
-                        }
-                        ImGui::PopStyleColor(2);
-                        if ( ImGui::IsItemHovered() ) {
-                            ImGui::SetTooltip(
-                                TR("canvas.preview.jump_to").data(),
-                                r.timestamp);
+                            int index = 0;
+                            for ( const auto& r : m_overlapResults ) {
+                                ImGui::TableNextRow();
+
+                                // 1. Type
+                                ImGui::TableNextColumn();
+                                if ( r.is_definite ) {
+                                    ImGui::TextColored(
+                                        ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                                        "%s",
+                                        TR("ui.tools.definite").data());
+                                } else {
+                                    ImGui::TextColored(
+                                        ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                                        "%s",
+                                        TR("ui.tools.suspected").data());
+                                }
+
+                                // 2. Time
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%.3f s", r.timestamp);
+
+                                // 3. Track
+                                ImGui::TableNextColumn();
+                                ImGui::Text("%d", r.track + 1);
+
+                                // 4. Detail
+                                ImGui::TableNextColumn();
+                                char detailBuf[256];
+                                snprintf(detailBuf,
+                                         sizeof(detailBuf),
+                                         TR("ui.tools.overlap_detail").data(),
+                                         r.note1_desc.c_str(),
+                                         r.note2_desc.c_str());
+                                ImGui::TextUnformatted(detailBuf);
+
+                                // 5. Jump Action
+                                ImGui::TableNextColumn();
+                                ImGui::PushStyleColor(ImGuiCol_Button,
+                                                      ImVec4(0, 0, 0, 0));
+                                ImGui::PushStyleColor(
+                                    ImGuiCol_ButtonHovered,
+                                    ImVec4(0.4f, 0.7f, 1.0f, 0.3f));
+                                if ( ImGui::Button(
+                                         fmt::format(
+                                             "{}##{}", ICON_MMM_SEARCH, index++)
+                                             .c_str(),
+                                         ImVec2(-1, 0)) ) {
+                                    float visualOffset =
+                                        Config::AppConfig::instance()
+                                            .getVisualConfig()
+                                            .visualOffset;
+                                    dispatchCommand(Logic::CmdSeek{
+                                        r.timestamp - visualOffset });
+                                }
+                                ImGui::PopStyleColor(2);
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip(
+                                        TR("canvas.preview.jump_to").data(),
+                                        r.timestamp);
+                                }
+                            }
+                            ImGui::EndTable();
                         }
                     }
-                    ImGui::EndTable();
                 }
             }
         }
     }
     ImGui::End();
+
+    ImGui::PopStyleVar(6);
 }
 
 }  // namespace MMM::UI
