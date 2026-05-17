@@ -14,8 +14,8 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <ImGuiFileDialog.h>
-#include <nfd.h>
 #include <filesystem>
+#include <nfd.h>
 
 namespace MMM::UI
 {
@@ -376,8 +376,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result     = NFD_OpenDialogU8(
-                            &outPath, filters, 1, nullptr);
+                        nfdresult_t       result =
+                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredAsciiFont = outPath;
@@ -392,13 +392,13 @@ void SettingsView::drawSoftwareSettings()
                         IGFD::FileDialogConfig config;
                         config.path     = ".";
                         config.fileName = "";
-                        config.flags    = ImGuiFileDialogFlags_Modal |
-                                       ImGuiFileDialogFlags_HideColumnType |
-                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        config.flags =
+                            ImGuiFileDialogFlags_Modal |
+                            ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AsciiFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse")
-                                .data(),
+                            TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
                     }
@@ -460,8 +460,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result     = NFD_OpenDialogU8(
-                            &outPath, filters, 1, nullptr);
+                        nfdresult_t       result =
+                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredCjkFont = outPath;
@@ -476,13 +476,13 @@ void SettingsView::drawSoftwareSettings()
                         IGFD::FileDialogConfig config;
                         config.path     = ".";
                         config.fileName = "";
-                        config.flags    = ImGuiFileDialogFlags_Modal |
-                                       ImGuiFileDialogFlags_HideColumnType |
-                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        config.flags =
+                            ImGuiFileDialogFlags_Modal |
+                            ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "CjkFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse")
-                                .data(),
+                            TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
                     }
@@ -1536,8 +1536,14 @@ void SettingsView::drawBeatmapSettings()
         return;
     }
 
-    auto& beatmap = *session->getContext().currentBeatmap;
-    auto& meta    = beatmap.m_baseMapMetadata;
+    auto&       beatmap = *session->getContext().currentBeatmap;
+    std::string currentPath =
+        Config::pathToUtf8(beatmap.m_baseMapMetadata.map_path);
+    if ( m_lastBeatmapPath != currentPath ) {
+        m_editingMeta     = beatmap.m_baseMapMetadata;
+        m_lastBeatmapPath = currentPath;
+    }
+    auto& meta    = m_editingMeta;
     bool  changed = false;
 
     m_contentVBox.clear();

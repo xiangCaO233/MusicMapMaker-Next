@@ -2,6 +2,7 @@
 
 #include "event/ui/UISettingsTabEvent.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/ISubView.h"
 #include "ui/ITextureLoader.h"
 #include "ui/layout/box/CLayBox.h"
@@ -37,6 +38,9 @@ private:
     CLayVBox             m_contentVBox;
     std::deque<CLayHBox> m_settingRows;
     std::deque<CLayVBox> m_sectionBoxes;
+
+    ::MMM::BaseMapMeta m_editingMeta;
+    std::string        m_lastBeatmapPath;
 
     void drawSoftwareSettings();
     void drawVisualSettings();

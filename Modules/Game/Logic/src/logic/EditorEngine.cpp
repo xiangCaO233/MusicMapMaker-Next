@@ -480,9 +480,10 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
             int suffix = 1;
             while ( std::filesystem::exists(finalPath) ) {
                 finalPath = m_currentProject->m_projectRoot /
-                            Config::utf8ToPath(audioPath.stem().string() + "_" +
-                                               std::to_string(suffix++) +
-                                               audioPath.extension().string());
+                            Config::utf8ToPath(
+                                Config::pathToUtf8(audioPath.stem()) + "_" +
+                                std::to_string(suffix++) +
+                                Config::pathToUtf8(audioPath.extension()));
             }
         } else {
             // 已在项目内，转为相对路径
@@ -516,11 +517,11 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
         }
     }
 
-    // 4. 添加到资源列表 (默认为 Effect)
+    // 4. 添加到资源列表
     AudioResource res;
     res.m_id                   = Config::pathToUtf8(finalPath.filename());
     res.m_path                 = relPathUtf8;
-    res.m_type                 = AudioTrackType::Effect;
+    res.m_type                 = cmd.trackType;
     res.m_config.volume        = 0.5f;
     res.m_config.playbackSpeed = 1.0f;
     res.m_config.playbackPitch = 0.0f;
@@ -529,9 +530,11 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     m_currentProject->m_audioResources.push_back(res);
 
     // 5. 立即预加载音效资源
-    auto absFinalPath = m_currentProject->m_projectRoot / finalPath;
-    Audio::AudioManager::instance().preloadSoundEffect(
-        res.m_id, Config::pathToUtf8(absFinalPath), res.m_config.volume);
+    if ( res.m_type == AudioTrackType::Effect ) {
+        auto absFinalPath = m_currentProject->m_projectRoot / finalPath;
+        Audio::AudioManager::instance().preloadSoundEffect(
+            res.m_id, Config::pathToUtf8(absFinalPath), res.m_config.volume);
+    }
 
     // 6. 保存项目配置
     saveProject();

@@ -338,9 +338,15 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 if ( std::filesystem::exists(fullEntryPath) &&
                      std::filesystem::equivalent(fullEntryPath,
                                                  cmd.baseMeta.map_path) ) {
-                    entry.m_name = cmd.baseMeta.version;
-                    XINFO("BeatmapSession: Synced name '{}' to project entry",
-                          entry.m_name);
+                    entry.m_name         = cmd.baseMeta.version;
+                    entry.m_audioTrackId = Config::pathToUtf8(
+                        cmd.baseMeta.main_audio_path.filename());
+                    XINFO(
+                        "BeatmapSession: Synced name '{}' and audioTrackId "
+                        "'{}' to project entry",
+                        entry.m_name,
+                        entry.m_audioTrackId);
+                    EditorEngine::instance().saveProject();
                     break;
                 }
             }
