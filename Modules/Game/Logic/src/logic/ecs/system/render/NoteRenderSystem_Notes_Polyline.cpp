@@ -168,7 +168,8 @@ void NoteRenderSystem::drawPolylineBody(
 
                 glm::vec4 finalBodyColor = colorHold;
                 if ( snapshot->erasingEntities.count(entity) &&
-                     snapshot->erasingSubIndex == static_cast<int>(i) ) {
+                     (snapshot->erasingSubIndex == static_cast<int>(i) ||
+                      snapshot->erasingSubIndex == 0) ) {
                     finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
                 }
 
@@ -201,7 +202,8 @@ void NoteRenderSystem::drawPolylineBody(
 
             glm::vec4 finalBodyColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
-                 snapshot->erasingSubIndex == static_cast<int>(i) ) {
+                 (snapshot->erasingSubIndex == static_cast<int>(i) ||
+                  snapshot->erasingSubIndex == 0) ) {
                 finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
@@ -239,7 +241,8 @@ void NoteRenderSystem::drawPolylineBody(
 
             glm::vec4 finalTransColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
-                 snapshot->erasingSubIndex == static_cast<int>(i + 1) ) {
+                 (snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
+                  snapshot->erasingSubIndex == 0) ) {
                 finalTransColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
@@ -297,7 +300,8 @@ void NoteRenderSystem::drawPolylineNodes(
 
         glm::vec4 finalNodeColor = colorNode;
         if ( snapshot->erasingEntities.count(entity) &&
-             snapshot->erasingSubIndex == static_cast<int>(i) ) {
+             (snapshot->erasingSubIndex == static_cast<int>(i) ||
+              snapshot->erasingSubIndex == 0) ) {
             finalNodeColor = { 1.0f, 0.2f, 0.2f, colorNode.a * 0.5f };
         }
 
@@ -342,8 +346,8 @@ void NoteRenderSystem::drawPolylineHead(
     float fStartY = judgmentLineY -
                     static_cast<float>(fStartAbsY - currentAbsY) * renderScaleY;
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
-    float headX = leftX + first.trackIndex * singleTrackW +
-                  (singleTrackW - headSize.x) * 0.5f;
+    float     headX    = leftX + first.trackIndex * singleTrackW +
+                         (singleTrackW - headSize.x) * 0.5f;
 
     glm::vec4 finalHeadColor = colorHold;
     if ( snapshot->erasingEntities.count(entity) &&
@@ -406,7 +410,8 @@ void NoteRenderSystem::drawPolylineDecoration(
 
             glm::vec4 finalArrowColor = colorArrow;
             if ( snapshot->erasingEntities.count(entity) &&
-                 snapshot->erasingSubIndex == lastIdx ) {
+                 (snapshot->erasingSubIndex == lastIdx ||
+                  snapshot->erasingSubIndex == 0) ) {
                 finalArrowColor = { 1.0f, 0.2f, 0.2f, colorArrow.a * 0.5f };
             }
 
@@ -442,7 +447,8 @@ void NoteRenderSystem::drawPolylineDecoration(
 
             glm::vec4 finalEndColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
-                 snapshot->erasingSubIndex == lastIdx ) {
+                 (snapshot->erasingSubIndex == lastIdx ||
+                  snapshot->erasingSubIndex == 0) ) {
                 finalEndColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
