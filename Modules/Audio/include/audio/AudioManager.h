@@ -267,6 +267,9 @@ public:
     void playSoundEffectScheduled(const std::string& key, double targetTime,
                                   float volumeFactor = 1.0f);
 
+    /// @brief 清空并停止所有正在播放和预定的音效
+    void clearAllScheduledSoundEffects();
+
     /// @brief 获取当前加载的 BGM 轨道数据 (用于可视化)
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 

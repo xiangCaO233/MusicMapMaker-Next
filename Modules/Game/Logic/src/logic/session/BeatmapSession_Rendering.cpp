@@ -96,8 +96,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         if ( cache ) {
             float judgmentLineY =
                 camera.viewportHeight * config.visual.judgeline_pos;
-            double currentAbsY =
-                cache->getAbsY(m_ctx->visualTime);
+            double currentAbsY = cache->getAbsY(m_ctx->visualTime);
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             double scale = snapshot->renderScaleY;
             if ( cameraId != "Basic2DCanvas" && std::abs(scale) > 0.0001f ) {
@@ -150,9 +149,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
 
-                double currentAbsY =
-                    cache->getAbsY(m_ctx->visualTime);
-                double deltaY = (judgmentLineY - m_ctx->lastMousePos.y);
+                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+                double deltaY      = (judgmentLineY - m_ctx->lastMousePos.y);
 
                 float renderScaleY = 1.0f;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
@@ -388,9 +386,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             if ( cache ) {
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
-                double currentAbsY =
-                    cache->getAbsY(m_ctx->visualTime);
-                double targetAbsY = cache->getAbsY(snapshot->previewHoverTime);
+                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+                double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
 
                 float mainViewportHeight = 1000.0f;
                 auto  itMain             = m_ctx->cameras.find("Basic2DCanvas");
@@ -447,6 +444,23 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // --- 注入橡皮擦预览状态 ---
         if ( m_ctx->eraserState.isActive ) {
             snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
+            snapshot->erasingSubIndex = -1;
+
+            // 悬停在 Polyline 的任意子物件时，允许局部高亮红色
+            if ( m_ctx->hoveredEntity != entt::null &&
+                 m_ctx->noteRegistry.all_of<NoteComponent>(
+                     m_ctx->hoveredEntity) ) {
+                const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(
+                    m_ctx->hoveredEntity);
+                if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                     !nc.m_subNotes.empty() ) {
+                    if ( m_ctx->hoveredSubIndex >= 0 &&
+                         m_ctx->hoveredSubIndex <
+                             static_cast<int>(nc.m_subNotes.size()) ) {
+                        snapshot->erasingSubIndex = m_ctx->hoveredSubIndex;
+                    }
+                }
+            }
         }
 
 

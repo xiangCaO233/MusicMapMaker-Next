@@ -1,5 +1,6 @@
 #include "audio/SoundEffectPool.h"
 
+#include <algorithm>
 #include <ice/core/MixBus.hpp>
 #include <ice/core/PlayCallBack.hpp>
 #include <ice/core/SourceNode.hpp>
@@ -68,7 +69,7 @@ void SoundEffectPool::init(int count)
             std::make_shared<SFXPlayCallback>(shared_from_this(), node);
         node->add_playcallback(callback);
         m_allNodes.push_back(node);
-        m_readyQueue.push(node);
+        m_readyQueue.push_back(node);
         if ( m_localMixer ) {
             m_localMixer->add_source(node);
         }
@@ -92,7 +93,7 @@ void SoundEffectPool::play(float volume)
             }
         } else {
             node = m_readyQueue.front();
-            m_readyQueue.pop();
+            m_readyQueue.pop_front();
         }
     }
 
@@ -124,7 +125,7 @@ void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
             }
         } else {
             node = m_readyQueue.front();
-            m_readyQueue.pop();
+            m_readyQueue.pop_front();
         }
     }
 
@@ -136,10 +137,29 @@ void SoundEffectPool::playScheduled(float volume, size_t targetFrame,
     }
 }
 
+/// @brief 停止所有正在播放或预定的音效，并重置状态
+void SoundEffectPool::stopAll()
+{
+    std::lock_guard<std::mutex> lock(m_mtx);
+    m_readyQueue.clear();
+
+    for ( auto& node : m_allNodes ) {
+        node->pause();
+        node->set_playpos(static_cast<size_t>(0));
+        node->set_scheduled_start_frame(0);
+        node->set_reference_pos_provider(std::function<size_t()>());
+        m_readyQueue.push_back(node);
+    }
+    m_latestNode.reset();
+}
+
 void SoundEffectPool::releaseNode(std::shared_ptr<ice::SourceNode> node)
 {
     std::lock_guard<std::mutex> lock(m_mtx);
-    m_readyQueue.push(std::move(node));
+    if ( std::find(m_readyQueue.begin(), m_readyQueue.end(), node) ==
+         m_readyQueue.end() ) {
+        m_readyQueue.push_back(std::move(node));
+    }
 }
 
 void SoundEffectPool::setVolume(float volume)

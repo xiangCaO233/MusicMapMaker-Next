@@ -88,15 +88,16 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
 void BeatmapSession::update(double dt, const Config::EditorConfig& config)
 {
     m_ctx->lastConfig = config;
-    bool processed = processCommands();
+    bool processed    = processCommands();
 
     // --- 性能节流 (Performance Throttling) ---
     // 逻辑：如果 VSync 关闭，逻辑线程会极其频繁地执行。
     // 我们限制渲染快照和 ECS 变换的最高频率（约为 2000Hz），
     // 除非有关键状态变化（如指令输入、正在播放或正在交互）。
-    double currentSysTime = std::chrono::duration<double>(
-                                std::chrono::steady_clock::now().time_since_epoch())
-                                .count();
+    double currentSysTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
 
     bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                          m_ctx->brushState.isActive ||
@@ -189,6 +190,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
                       (m_ctx->visualTime < prevVisualTime) || !m_wasPlaying;
 
         if ( isJump ) {
+            Audio::AudioManager::instance().clearAllScheduledSoundEffects();
             m_ctx->hitFXSystem.clearActiveEffects();
             SessionUtils::syncHitIndex(*m_ctx);
 

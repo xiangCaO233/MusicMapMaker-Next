@@ -345,7 +345,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
             curColorHold = { 1.0f, 1.0f, 0.4f, 1.0f };
         }
 
-        if ( snapshot->erasingEntities.count(entity) ) {
+        bool isFullErasing = snapshot->erasingEntities.count(entity) &&
+                             (snapshot->erasingSubIndex == -1);
+        if ( isFullErasing ) {
             curColorTap   = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorHold  = { 1.0f, 0.2f, 0.2f, 1.0f };
             curColorNode  = { 1.0f, 0.2f, 0.2f, 1.0f };

@@ -282,7 +282,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 "CancelBtn",
                 Sizing::Fixed(100 * dpiScale),
                 Sizing::Fixed(32 * dpiScale),
-                [=](Clay_BoundingBox r, bool) {
+                [=, this](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(TR("ui.common.cancel").data(),
                                        { r.width, r.height }) ) {

@@ -165,9 +165,20 @@ void NoteRenderSystem::drawPolylineBody(
                 float startTrack = std::min((float)sub.trackIndex, subEndTrack);
                 float bodyX =
                     leftX + startTrack * singleTrackW + singleTrackW * 0.5f;
+
+                glm::vec4 finalBodyColor = colorHold;
+                if ( snapshot->erasingEntities.count(entity) &&
+                     (snapshot->erasingSubIndex == static_cast<int>(i) ||
+                      snapshot->erasingSubIndex == 0) ) {
+                    finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+                }
+
                 batcher.setTexture(TextureID::HoldBodyHorizontal);
-                batcher.pushQuad(
-                    bodyX, subStartY + drawH * 0.5f, drawW, drawH, colorHold);
+                batcher.pushQuad(bodyX,
+                                 subStartY + drawH * 0.5f,
+                                 drawW,
+                                 drawH,
+                                 finalBodyColor);
 
                 if ( generateHitboxes && entity != entt::null ) {
                     snapshot->hitboxes.push_back({ entity,
@@ -188,9 +199,20 @@ void NoteRenderSystem::drawPolylineBody(
                 snapshot, TextureID::HoldBodyVertical, noteW, noteH);
             float bodyX = leftX + sub.trackIndex * singleTrackW +
                           (singleTrackW - bodySize.x) * 0.5f;
+
+            glm::vec4 finalBodyColor = colorHold;
+            if ( snapshot->erasingEntities.count(entity) &&
+                 (snapshot->erasingSubIndex == static_cast<int>(i) ||
+                  snapshot->erasingSubIndex == 0) ) {
+                finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+            }
+
             batcher.setTexture(TextureID::HoldBodyVertical);
-            batcher.pushQuad(
-                bodyX, subStartY, bodySize.x, subStartY - subEndY, colorHold);
+            batcher.pushQuad(bodyX,
+                             subStartY,
+                             bodySize.x,
+                             subStartY - subEndY,
+                             finalBodyColor);
 
             if ( generateHitboxes && entity != entt::null ) {
                 snapshot->hitboxes.push_back({ entity,
@@ -217,12 +239,19 @@ void NoteRenderSystem::drawPolylineBody(
             float nextBodyX = leftX + next.trackIndex * singleTrackW +
                               (singleTrackW - bodySize.x) * 0.5f;
 
+            glm::vec4 finalTransColor = colorHold;
+            if ( snapshot->erasingEntities.count(entity) &&
+                 (snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
+                  snapshot->erasingSubIndex == 0) ) {
+                finalTransColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+            }
+
             batcher.setTexture(TextureID::HoldBodyVertical);
             batcher.pushFreeQuad({ curBodyX, subEndY },
                                  { curBodyX + bodySize.x, subEndY },
                                  { nextBodyX + bodySize.x, nextStartY },
                                  { nextBodyX, nextStartY },
-                                 colorHold);
+                                 finalTransColor);
 
             if ( generateHitboxes && entity != entt::null ) {
                 float xmin = std::min(curBodyX, nextBodyX);
@@ -268,6 +297,14 @@ void NoteRenderSystem::drawPolylineNodes(
             getDrawSize(snapshot, TextureID::Node, noteW, noteH);
         float nodeX = leftX + sub.trackIndex * singleTrackW +
                       (singleTrackW - nodeSize.x) * 0.5f;
+
+        glm::vec4 finalNodeColor = colorNode;
+        if ( snapshot->erasingEntities.count(entity) &&
+             (snapshot->erasingSubIndex == static_cast<int>(i) ||
+              snapshot->erasingSubIndex == 0) ) {
+            finalNodeColor = { 1.0f, 0.2f, 0.2f, colorNode.a * 0.5f };
+        }
+
         batcher.setTexture(TextureID::Node);
         batcher.pushFilledQuad(
             nodeX,
@@ -276,7 +313,7 @@ void NoteRenderSystem::drawPolylineNodes(
             nodeSize.y,
             { getTexAspect(snapshot, TextureID::Node), 1.0f },
             config.visual.noteFillMode,
-            colorNode);
+            finalNodeColor);
 
         if ( generateHitboxes && entity != entt::null ) {
             snapshot->hitboxes.push_back({ entity,
@@ -311,6 +348,13 @@ void NoteRenderSystem::drawPolylineHead(
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
     float     headX    = leftX + first.trackIndex * singleTrackW +
                          (singleTrackW - headSize.x) * 0.5f;
+
+    glm::vec4 finalHeadColor = colorHold;
+    if ( snapshot->erasingEntities.count(entity) &&
+         snapshot->erasingSubIndex == 0 ) {
+        finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+    }
+
     batcher.setTexture(TextureID::Note);
     batcher.pushFilledQuad(headX,
                            fStartY + headSize.y * 0.5f,
@@ -318,7 +362,7 @@ void NoteRenderSystem::drawPolylineHead(
                            headSize.y,
                            { getTexAspect(snapshot, TextureID::Note), 1.0f },
                            config.visual.noteFillMode,
-                           colorHold);
+                           finalHeadColor);
 
     if ( generateHitboxes && entity != entt::null ) {
         snapshot->hitboxes.push_back({ entity,
@@ -364,6 +408,13 @@ void NoteRenderSystem::drawPolylineDecoration(
             float     arrowX    = leftX + lEndTrack * singleTrackW +
                                   (singleTrackW - arrowSize.x) * 0.5f;
 
+            glm::vec4 finalArrowColor = colorArrow;
+            if ( snapshot->erasingEntities.count(entity) &&
+                 (snapshot->erasingSubIndex == lastIdx ||
+                  snapshot->erasingSubIndex == 0) ) {
+                finalArrowColor = { 1.0f, 0.2f, 0.2f, colorArrow.a * 0.5f };
+            }
+
             batcher.setTexture(arrowId);
             batcher.pushFilledQuad(arrowX,
                                    lStartY + arrowSize.y * 0.5f,
@@ -371,7 +422,7 @@ void NoteRenderSystem::drawPolylineDecoration(
                                    arrowSize.y,
                                    { getTexAspect(snapshot, arrowId), 1.0f },
                                    config.visual.noteFillMode,
-                                   colorArrow);
+                                   finalArrowColor);
 
             if ( generateHitboxes && entity != entt::null ) {
                 snapshot->hitboxes.push_back({ entity,
@@ -394,6 +445,13 @@ void NoteRenderSystem::drawPolylineDecoration(
             float endX = leftX + last.trackIndex * singleTrackW +
                          (singleTrackW - endSize.x) * 0.5f;
 
+            glm::vec4 finalEndColor = colorHold;
+            if ( snapshot->erasingEntities.count(entity) &&
+                 (snapshot->erasingSubIndex == lastIdx ||
+                  snapshot->erasingSubIndex == 0) ) {
+                finalEndColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+            }
+
             batcher.setTexture(TextureID::HoldEnd);
             batcher.pushFilledQuad(
                 endX,
@@ -402,7 +460,7 @@ void NoteRenderSystem::drawPolylineDecoration(
                 endSize.y,
                 { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
                 config.visual.noteFillMode,
-                colorHold);
+                finalEndColor);
 
             if ( generateHitboxes && entity != entt::null ) {
                 snapshot->hitboxes.push_back({ entity,

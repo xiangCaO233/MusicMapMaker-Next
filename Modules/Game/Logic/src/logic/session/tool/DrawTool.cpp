@@ -103,13 +103,163 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
 
-    if ( cmd.isShiftDown ) {
-        ctx.brushState.type          = ::MMM::NoteType::NOTE;  // 初始为 Note
-        ctx.brushState.holdStartTime = ctx.brushState.time;
-        ctx.brushState.startTrack    = ctx.brushState.track;
-        ctx.brushState.startMouseY   = cmd.mouseY;
-    } else {
-        ctx.brushState.type = ::MMM::NoteType::NOTE;
+    bool isResuming = false;
+    if ( cmd.isShiftDown && ctx.hoveredEntity != entt::null &&
+         ctx.noteRegistry.valid(ctx.hoveredEntity) ) {
+        const auto& note =
+            ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
+        entt::entity targetEntity = ctx.hoveredEntity;
+        if ( note.m_isSubNote && note.m_parentPolyline != entt::null ) {
+            targetEntity = note.m_parentPolyline;
+        }
+
+        if ( ctx.noteRegistry.valid(targetEntity) ) {
+            const auto& parentNote =
+                ctx.noteRegistry.get<NoteComponent>(targetEntity);
+            if ( parentNote.m_type == ::MMM::NoteType::POLYLINE &&
+                 !parentNote.m_subNotes.empty() ) {
+                int lastIdx =
+                    static_cast<int>(parentNote.m_subNotes.size() - 1);
+                if ( ctx.hoveredSubIndex == lastIdx ) {
+                    // 检查是否悬停在能够继续延伸的部分 (Node, Body, HoldEnd,
+                    // FlickArrow)
+                    if ( ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::PolylineNode) ||
+                         ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::HoldEnd) ||
+                         ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::FlickArrow) ||
+                         ctx.hoveredPart ==
+                             static_cast<uint8_t>(HoverPart::HoldBody) ) {
+                        // 进入恢复编辑模式
+                        ctx.brushState.isActive = true;
+                        ctx.brushState.type     = ::MMM::NoteType::POLYLINE;
+                        ctx.brushState.polylineSegments = parentNote.m_subNotes;
+
+                        // 如果最后一段是 Hold，则根据当前点击位置缩短/伸长它
+                        if ( ctx.brushState.polylineSegments.back().type ==
+                             ::MMM::NoteType::HOLD ) {
+                            double snapTime =
+                                snap.isSnapped ? snap.snappedTime : rawTime;
+                            auto& lastSeg =
+                                ctx.brushState.polylineSegments.back();
+                            lastSeg.duration =
+                                std::max(0.0, snapTime - lastSeg.timestamp);
+                        }
+
+                        // 恢复笔刷状态的各个参考值，以便 handleUpdateBrush
+                        // 能够平滑接续
+                        ctx.brushState.holdStartTime = parentNote.m_timestamp;
+                        ctx.brushState.startTrack    = parentNote.m_trackIndex;
+
+                        // 计算起始 Y 坐标，用于退化到普通音符时的参考
+                        double startAbsY =
+                            cache->getAbsY(parentNote.m_timestamp);
+                        ctx.brushState.startMouseY =
+                            judgmentLineY -
+                            static_cast<float>(startAbsY - currentAbsY) *
+                                renderScaleY;
+
+                        // 当前鼠标 Y 为新段参考点
+                        ctx.brushState.segmentStartMouseY = cmd.mouseY;
+
+                        // 删除原物件及其子物件实体 (通过
+                        // BatchNoteAction，以便整体撤销)
+                        std::vector<BatchNoteAction::Entry> deleteEntries;
+                        deleteEntries.push_back(
+                            { targetEntity, parentNote, std::nullopt });
+
+                        // 查找并加入所有子物件实体
+                        auto subNoteView =
+                            ctx.noteRegistry.view<NoteComponent>();
+                        for ( auto subEnt : subNoteView ) {
+                            const auto& subNC =
+                                subNoteView.get<NoteComponent>(subEnt);
+                            if ( subNC.m_isSubNote &&
+                                 subNC.m_parentPolyline == targetEntity ) {
+                                deleteEntries.push_back(
+                                    { subEnt, subNC, std::nullopt });
+                            }
+                        }
+
+                        auto deleteAction = std::make_unique<BatchNoteAction>(
+                            std::move(deleteEntries), "Resume Polyline Edit");
+                        ctx.actionStack.pushAndExecute(std::move(deleteAction),
+                                                       ctx);
+
+                        // 设置拖拽状态
+                        ctx.isDragging   = true;
+                        ctx.dragCameraId = cmd.cameraId;
+                        isResuming       = true;
+                        XINFO("Resuming Polyline edit for entity {}",
+                              static_cast<uint32_t>(targetEntity));
+                    }
+                }
+            } else if ( !parentNote.m_isSubNote &&
+                        (parentNote.m_type == ::MMM::NoteType::NOTE ||
+                         parentNote.m_type == ::MMM::NoteType::HOLD ||
+                         parentNote.m_type == ::MMM::NoteType::FLICK) ) {
+                // 将普通的 Note/Hold/Flick 转换为包含单个 subNote 的
+                // Polyline，并恢复编辑
+                ctx.brushState.isActive = true;
+                ctx.brushState.type     = ::MMM::NoteType::POLYLINE;
+
+                NoteComponent::SubNote s;
+                s.type                          = parentNote.m_type;
+                s.timestamp                     = parentNote.m_timestamp;
+                s.duration                      = parentNote.m_duration;
+                s.trackIndex                    = parentNote.m_trackIndex;
+                s.dtrack                        = parentNote.m_dtrack;
+                s.metadata                      = parentNote.m_metadata;
+                ctx.brushState.polylineSegments = { s };
+
+                // 如果是 Hold，则根据当前点击位置缩短/伸长它
+                if ( parentNote.m_type == ::MMM::NoteType::HOLD ) {
+                    double snapTime =
+                        snap.isSnapped ? snap.snappedTime : rawTime;
+                    ctx.brushState.polylineSegments.back().duration =
+                        std::max(0.0, snapTime - parentNote.m_timestamp);
+                }
+
+                ctx.brushState.holdStartTime = parentNote.m_timestamp;
+                ctx.brushState.startTrack    = parentNote.m_trackIndex;
+
+                double startAbsY = cache->getAbsY(parentNote.m_timestamp);
+                ctx.brushState.startMouseY =
+                    judgmentLineY -
+                    static_cast<float>(startAbsY - currentAbsY) * renderScaleY;
+
+                ctx.brushState.segmentStartMouseY = cmd.mouseY;
+
+                std::vector<BatchNoteAction::Entry> deleteEntries;
+                deleteEntries.push_back(
+                    { targetEntity, parentNote, std::nullopt });
+
+                auto deleteAction = std::make_unique<BatchNoteAction>(
+                    std::move(deleteEntries), "Convert Note to Polyline");
+                ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
+
+                ctx.isDragging   = true;
+                ctx.dragCameraId = cmd.cameraId;
+                isResuming       = true;
+                XINFO(
+                    "Converting ordinary note (type {}) to Polyline and "
+                    "resuming edit for entity {}",
+                    static_cast<int>(parentNote.m_type),
+                    static_cast<uint32_t>(targetEntity));
+            }
+        }
+    }
+
+    if ( !isResuming ) {
+        if ( cmd.isShiftDown ) {
+            ctx.brushState.type = ::MMM::NoteType::NOTE;  // 初始为 Note
+            ctx.brushState.holdStartTime = ctx.brushState.time;
+            ctx.brushState.startTrack    = ctx.brushState.track;
+            ctx.brushState.startMouseY   = cmd.mouseY;
+        } else {
+            ctx.brushState.type = ::MMM::NoteType::NOTE;
+        }
     }
 }
 
@@ -348,6 +498,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                         ctx.brushState.segmentStartMouseY = cmd.mouseY;
                     }
                 }
+            } else if ( last.type == ::MMM::NoteType::NOTE ) {
+                float diffYLocal =
+                    std::abs(cmd.mouseY - ctx.brushState.segmentStartMouseY);
+                bool timeChangedLocal =
+                    std::abs(currentPosTime - last.timestamp) > 1e-5;
+
+                if ( currentTrack != last.trackIndex ) {
+                    // 改变轨道 -> 变成 Flick 段
+                    last.type   = ::MMM::NoteType::FLICK;
+                    last.dtrack = currentTrack - last.trackIndex;
+                    ctx.brushState.segmentStartMouseY = cmd.mouseY;
+                } else if ( timeChangedLocal || diffYLocal > 5.0f ) {
+                    // 垂直拖动 -> 变成 Hold 段
+                    last.type = ::MMM::NoteType::HOLD;
+                    last.duration =
+                        std::max(0.0, currentPosTime - last.timestamp);
+                    ctx.brushState.segmentStartMouseY = cmd.mouseY;
+                }
             }
         }
     } else {
@@ -518,21 +686,262 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
             }
 
             for ( auto entity : toDelete ) {
-                entries.push_back({ entity,
-                                    ctx.noteRegistry.get<NoteComponent>(entity),
-                                    std::nullopt });
+                const auto& nc = ctx.noteRegistry.get<NoteComponent>(entity);
+                bool        handled = false;
+
+                // 特殊逻辑：如果是
+                // Polyline，且当前悬停在它上面，则执行“分裂/缩减”而非“直接全部删除”
+                if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                     !nc.m_subNotes.empty() &&
+                     ctx.eraserState.targetEntities.count(entity) ) {
+                    int k = ctx.hoveredSubIndex;
+                    if ( entity == ctx.hoveredEntity && k >= 0 &&
+                         k < static_cast<int>(nc.m_subNotes.size()) ) {
+
+                        // 1. 收集并删除该 Polyline 的所有旧子物件实体
+                        auto subNoteView =
+                            ctx.noteRegistry.view<NoteComponent>();
+                        for ( auto subEnt : subNoteView ) {
+                            const auto& subNC =
+                                subNoteView.get<NoteComponent>(subEnt);
+                            if ( subNC.m_isSubNote &&
+                                 subNC.m_parentPolyline == entity ) {
+                                bool alreadyAdded = false;
+                                for ( auto& e : entries ) {
+                                    if ( e.entity == subEnt ) {
+                                        alreadyAdded = true;
+                                        break;
+                                    }
+                                }
+                                if ( !alreadyAdded ) {
+                                    entries.push_back(
+                                        { subEnt, subNC, std::nullopt });
+                                }
+                            }
+                        }
+
+                        // 2. 删除原 Polyline 实体
+                        entries.push_back({ entity, nc, std::nullopt });
+
+                        // 3. 计算左右半段
+                        if ( k > 0 ) {
+                            auto subNotes = nc.m_subNotes;
+                            std::vector<NoteComponent::SubNote> L(
+                                subNotes.begin(), subNotes.begin() + k);
+                            std::vector<NoteComponent::SubNote> R(
+                                subNotes.begin() + k + 1, subNotes.end());
+
+                            auto processPart =
+                                [&](const std::vector<NoteComponent::SubNote>&
+                                        part) {
+                                    if ( part.empty() ) return;
+                                    if ( part.size() == 1 ) {
+                                        auto          s = part[0];
+                                        NoteComponent nextNC;
+                                        nextNC.m_type           = s.type;
+                                        nextNC.m_timestamp      = s.timestamp;
+                                        nextNC.m_duration       = s.duration;
+                                        nextNC.m_trackIndex     = s.trackIndex;
+                                        nextNC.m_dtrack         = s.dtrack;
+                                        nextNC.m_metadata       = s.metadata;
+                                        nextNC.m_isSubNote      = false;
+                                        nextNC.m_parentPolyline = entt::null;
+                                        nextNC.m_subIndex       = -1;
+
+                                        entt::entity newEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back(
+                                            { newEnt, std::nullopt, nextNC });
+                                    } else {
+                                        NoteComponent nextNC;
+                                        nextNC.m_type =
+                                            ::MMM::NoteType::POLYLINE;
+                                        nextNC.m_timestamp =
+                                            part.front().timestamp;
+                                        nextNC.m_trackIndex =
+                                            part.front().trackIndex;
+                                        nextNC.m_duration       = 0.0;
+                                        nextNC.m_dtrack         = 0;
+                                        nextNC.m_metadata       = nc.m_metadata;
+                                        nextNC.m_isSubNote      = false;
+                                        nextNC.m_parentPolyline = entt::null;
+                                        nextNC.m_subIndex       = -1;
+                                        nextNC.m_subNotes       = part;
+
+                                        entt::entity parentEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back({ parentEnt,
+                                                            std::nullopt,
+                                                            nextNC });
+
+                                        for ( size_t i = 0; i < part.size();
+                                              ++i ) {
+                                            const auto&   s = part[i];
+                                            NoteComponent subNC;
+                                            subNC.m_type       = s.type;
+                                            subNC.m_timestamp  = s.timestamp;
+                                            subNC.m_duration   = s.duration;
+                                            subNC.m_trackIndex = s.trackIndex;
+                                            subNC.m_dtrack     = s.dtrack;
+                                            subNC.m_metadata   = s.metadata;
+                                            subNC.m_isSubNote  = true;
+                                            subNC.m_parentPolyline = parentEnt;
+                                            subNC.m_subIndex =
+                                                static_cast<int>(i);
+
+                                            entt::entity subEnt =
+                                                ctx.noteRegistry.create();
+                                            entries.push_back({ subEnt,
+                                                                std::nullopt,
+                                                                subNC });
+                                        }
+                                    }
+                                };
+
+                            processPart(L);
+                            processPart(R);
+                        }
+
+                        handled = true;
+                    }
+                }
+
+                if ( !handled ) {
+                    entries.push_back({ entity, nc, std::nullopt });
+                }
             }
-            XINFO("Eraser: Deleting all {} items (selected + targets)",
+            XINFO("Eraser: Processing all {} items (selected + targets)",
                   entries.size());
         } else {
-            // 场景 B: 擦除的目标全都是未选中物件 -> 只删除这些目标物件
+            // 场景 B: 擦除的目标全都是未选中物件 ->
+            // 只处理这些目标物件（支持缩减/分裂）
             for ( auto entity : ctx.eraserState.targetEntities ) {
                 if ( ctx.noteRegistry.valid(entity) &&
                      ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
-                    entries.push_back(
-                        { entity,
-                          ctx.noteRegistry.get<NoteComponent>(entity),
-                          std::nullopt });
+                    const auto& nc =
+                        ctx.noteRegistry.get<NoteComponent>(entity);
+                    bool handled = false;
+
+                    if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                         !nc.m_subNotes.empty() ) {
+                        int k = ctx.hoveredSubIndex;
+                        if ( entity == ctx.hoveredEntity && k >= 0 &&
+                             k < static_cast<int>(nc.m_subNotes.size()) ) {
+
+                            // 1. 收集并删除该 Polyline 的所有旧子物件实体
+                            auto subNoteView =
+                                ctx.noteRegistry.view<NoteComponent>();
+                            for ( auto subEnt : subNoteView ) {
+                                const auto& subNC =
+                                    subNoteView.get<NoteComponent>(subEnt);
+                                if ( subNC.m_isSubNote &&
+                                     subNC.m_parentPolyline == entity ) {
+                                    bool alreadyAdded = false;
+                                    for ( auto& e : entries ) {
+                                        if ( e.entity == subEnt ) {
+                                            alreadyAdded = true;
+                                            break;
+                                        }
+                                    }
+                                    if ( !alreadyAdded ) {
+                                        entries.push_back(
+                                            { subEnt, subNC, std::nullopt });
+                                    }
+                                }
+                            }
+
+                            // 2. 删除原 Polyline 实体
+                            entries.push_back({ entity, nc, std::nullopt });
+
+                            // 3. 计算左右半段
+                            if ( k > 0 ) {
+                                auto subNotes = nc.m_subNotes;
+                                std::vector<NoteComponent::SubNote> L(
+                                    subNotes.begin(), subNotes.begin() + k);
+                                std::vector<NoteComponent::SubNote> R(
+                                    subNotes.begin() + k + 1, subNotes.end());
+
+                                auto processPart = [&](const std::vector<
+                                                       NoteComponent::SubNote>&
+                                                           part) {
+                                    if ( part.empty() ) return;
+                                    if ( part.size() == 1 ) {
+                                        auto          s = part[0];
+                                        NoteComponent nextNC;
+                                        nextNC.m_type           = s.type;
+                                        nextNC.m_timestamp      = s.timestamp;
+                                        nextNC.m_duration       = s.duration;
+                                        nextNC.m_trackIndex     = s.trackIndex;
+                                        nextNC.m_dtrack         = s.dtrack;
+                                        nextNC.m_metadata       = s.metadata;
+                                        nextNC.m_isSubNote      = false;
+                                        nextNC.m_parentPolyline = entt::null;
+                                        nextNC.m_subIndex       = -1;
+
+                                        entt::entity newEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back(
+                                            { newEnt, std::nullopt, nextNC });
+                                    } else {
+                                        NoteComponent nextNC;
+                                        nextNC.m_type =
+                                            ::MMM::NoteType::POLYLINE;
+                                        nextNC.m_timestamp =
+                                            part.front().timestamp;
+                                        nextNC.m_trackIndex =
+                                            part.front().trackIndex;
+                                        nextNC.m_duration       = 0.0;
+                                        nextNC.m_dtrack         = 0;
+                                        nextNC.m_metadata       = nc.m_metadata;
+                                        nextNC.m_isSubNote      = false;
+                                        nextNC.m_parentPolyline = entt::null;
+                                        nextNC.m_subIndex       = -1;
+                                        nextNC.m_subNotes       = part;
+
+                                        entt::entity parentEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back({ parentEnt,
+                                                            std::nullopt,
+                                                            nextNC });
+
+                                        for ( size_t i = 0; i < part.size();
+                                              ++i ) {
+                                            const auto&   s = part[i];
+                                            NoteComponent subNC;
+                                            subNC.m_type       = s.type;
+                                            subNC.m_timestamp  = s.timestamp;
+                                            subNC.m_duration   = s.duration;
+                                            subNC.m_trackIndex = s.trackIndex;
+                                            subNC.m_dtrack     = s.dtrack;
+                                            subNC.m_metadata   = s.metadata;
+                                            subNC.m_isSubNote  = true;
+                                            subNC.m_parentPolyline = parentEnt;
+                                            subNC.m_subIndex =
+                                                static_cast<int>(i);
+
+                                            entt::entity subEnt =
+                                                ctx.noteRegistry.create();
+                                            entries.push_back({ subEnt,
+                                                                std::nullopt,
+                                                                subNC });
+                                        }
+                                    }
+                                };
+
+                                processPart(L);
+                                processPart(R);
+                            }
+
+                            handled = true;
+                        }
+                    }
+
+                    if ( !handled ) {
+                        entries.push_back(
+                            { entity,
+                              ctx.noteRegistry.get<NoteComponent>(entity),
+                              std::nullopt });
+                    }
                 }
             }
         }
@@ -558,8 +967,17 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                 ctx.noteRegistry.get<NoteComponent>(subEnt);
                             if ( subNC.m_isSubNote &&
                                  subNC.m_parentPolyline == parentEntity ) {
-                                entries.push_back(
-                                    { subEnt, subNC, std::nullopt });
+                                bool alreadyAdded = false;
+                                for ( auto& e : entries ) {
+                                    if ( e.entity == subEnt ) {
+                                        alreadyAdded = true;
+                                        break;
+                                    }
+                                }
+                                if ( !alreadyAdded ) {
+                                    entries.push_back(
+                                        { subEnt, subNC, std::nullopt });
+                                }
                             }
                         }
                     }
