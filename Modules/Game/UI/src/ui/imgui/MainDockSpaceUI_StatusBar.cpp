@@ -72,7 +72,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
             if ( snapshot ) {
                 auto formatTime = [](double seconds) {
                     int totalMillis =
-                        static_cast<int>(std::floor(seconds * 1000.0));
+                        static_cast<int>(std::round(seconds * 1000.0));
                     int ms = std::abs(totalMillis % 1000);
                     int s  = std::abs((totalMillis / 1000) % 60);
                     int m  = (totalMillis / 60000);
