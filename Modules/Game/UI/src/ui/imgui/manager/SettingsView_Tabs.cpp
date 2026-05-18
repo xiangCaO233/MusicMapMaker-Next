@@ -1542,7 +1542,17 @@ void SettingsView::drawProjectSettings()
                        TR_CACHE("ui.settings.project.path").data(),
                        labelW,
                        [projPath](Clay_BoundingBox r, bool) {
-                           ImGui::Text("%s", projPath.c_str());
+                           float widgetH = ImGui::GetFrameHeight();
+                           float offset  = (r.height - widgetH) * 0.5f;
+                           ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+
+                           ImGui::SetNextItemWidth(r.width);
+                           char buf[1024];
+                           snprintf(buf, sizeof(buf), "%s", projPath.c_str());
+                           ImGui::InputText("##ProjPath",
+                                            buf,
+                                            sizeof(buf),
+                                            ImGuiInputTextFlags_ReadOnly);
                        });
     }
 
