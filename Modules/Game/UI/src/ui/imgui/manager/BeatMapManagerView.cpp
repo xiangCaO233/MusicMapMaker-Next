@@ -234,7 +234,10 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
                                 ImGuiCond_Appearing,
                                 ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_Appearing);
+        if ( m_openManageModal ) {
+            ImGui::SetNextWindowSize({ 420 * dpiScale, 0 });
+            m_openManageModal = false;
+        }
         if ( ImGui::Begin(windowTitle.c_str(),
                           &showBMModal,
                           ImGuiWindowFlags_NoCollapse) ) {
@@ -297,7 +300,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
             // 渲染布局
             ImVec2 modalSize = modalLayout.renderInCurrent(
-                ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+                ImGui::GetCursorScreenPos(),
+                { ImGui::GetContentRegionAvail().x, 0 });
             ImGui::Dummy(modalSize);
 
             // --- 二次确认弹窗 ---
