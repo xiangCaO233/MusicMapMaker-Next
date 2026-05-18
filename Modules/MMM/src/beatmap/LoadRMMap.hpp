@@ -100,12 +100,16 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     if ( !file_presuffix.empty() ) {
         auto parent = basemeta.map_path.parent_path();
         bool has_audio{ true };
-        basemeta.main_audio_path = parent / Config::utf8ToPath(file_presuffix + ".mp3");
-        if ( !std::filesystem::exists(basemeta.main_audio_path, ec) ) {
-            basemeta.main_audio_path = parent / Config::utf8ToPath(file_presuffix + ".wav");
-            if ( !std::filesystem::exists(basemeta.main_audio_path, ec) ) {
-                basemeta.main_audio_path = parent / Config::utf8ToPath(file_presuffix + ".ogg");
-                if ( !std::filesystem::exists(basemeta.main_audio_path, ec) ) {
+        basemeta.main_audio_path = Config::utf8ToPath(file_presuffix + ".mp3");
+        if ( !std::filesystem::exists(parent / basemeta.main_audio_path, ec) ) {
+            basemeta.main_audio_path =
+                Config::utf8ToPath(file_presuffix + ".wav");
+            if ( !std::filesystem::exists(parent / basemeta.main_audio_path,
+                                          ec) ) {
+                basemeta.main_audio_path =
+                    Config::utf8ToPath(file_presuffix + ".ogg");
+                if ( !std::filesystem::exists(parent / basemeta.main_audio_path,
+                                              ec) ) {
                     has_audio = false;
                 }
             }
@@ -117,12 +121,16 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
         // 同文件夹内查询可能存在的封面文件
         bool has_bg{ true };
-        basemeta.main_cover_path = parent / Config::utf8ToPath(file_presuffix + ".png");
-        if ( !std::filesystem::exists(basemeta.main_cover_path, ec) ) {
-            basemeta.main_cover_path = parent / Config::utf8ToPath(file_presuffix + ".jpg");
-            if ( !std::filesystem::exists(basemeta.main_cover_path, ec) ) {
-                basemeta.main_cover_path = parent / Config::utf8ToPath(file_presuffix + ".jpeg");
-                if ( !std::filesystem::exists(basemeta.main_cover_path, ec) ) {
+        basemeta.main_cover_path = Config::utf8ToPath(file_presuffix + ".png");
+        if ( !std::filesystem::exists(parent / basemeta.main_cover_path, ec) ) {
+            basemeta.main_cover_path =
+                Config::utf8ToPath(file_presuffix + ".jpg");
+            if ( !std::filesystem::exists(parent / basemeta.main_cover_path,
+                                          ec) ) {
+                basemeta.main_cover_path =
+                    Config::utf8ToPath(file_presuffix + ".jpeg");
+                if ( !std::filesystem::exists(parent / basemeta.main_cover_path,
+                                              ec) ) {
                     has_bg = false;
                 }
             }
@@ -146,7 +154,8 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     file.seekg(0, std::ios::beg);
 
     if ( fileSize < 8 ) {
-        XWARN("imd文件太小，格式不合法: {}", Config::pathToUtf8(basemeta.map_path));
+        XWARN("imd文件太小，格式不合法: {}",
+              Config::pathToUtf8(basemeta.map_path));
         return {};
     }
 
@@ -164,10 +173,10 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     const char*  data_pos   = data_start;
 
     // 安全检查宏
-#define CHECK_BOUNDS(needed)                                                   \
-    if ( data_pos + (needed) > data_end ) {                                    \
-        XERROR("imd文件意外结束，读取失败");                                    \
-        return beatMap;                                                        \
+#define CHECK_BOUNDS(needed)                 \
+    if ( data_pos + (needed) > data_end ) {  \
+        XERROR("imd文件意外结束，读取失败"); \
+        return beatMap;                      \
     }
 
     // 读取0~4字节:int32 谱面时长
@@ -188,16 +197,16 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
     for ( int i = 0; i < timing_point_amount; i++ ) {
         CHECK_BOUNDS(12);
-        auto   timing_timestamp = reader.read_value<int32_t>(data_pos);
+        auto timing_timestamp = reader.read_value<int32_t>(data_pos);
         data_pos += 4;
-        auto   timing_bpm = reader.read_value<double>(data_pos);
+        auto timing_bpm = reader.read_value<double>(data_pos);
         data_pos += 8;
 
         Timing read_timing;
-        read_timing.m_timestamp             = timing_timestamp;
-        read_timing.m_bpm                   = timing_bpm;
-        read_timing.m_beat_length           = 60000. / std::max(0.001, timing_bpm);
-        read_timing.m_timingEffect          = TimingEffect::BPM;
+        read_timing.m_timestamp    = timing_timestamp;
+        read_timing.m_bpm          = timing_bpm;
+        read_timing.m_beat_length  = 60000. / std::max(0.001, timing_bpm);
+        read_timing.m_timingEffect = TimingEffect::BPM;
         read_timing.m_timingEffectParameter = timing_bpm;
 
         if ( beatMap.m_timings.empty() ||
@@ -226,13 +235,16 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     bool     is_building_polyline = false;
     int      obj_count{ 0 };
 
+    std::vector<std::vector<std::pair<NoteType, size_t>>> all_polylines_indices;
+    std::vector<std::pair<NoteType, size_t>> current_polyline_indices;
+
     // 读取全部物件
     while ( data_pos < data_end ) {
         CHECK_BOUNDS(11);
         auto note_type_info    = reader.read_value<int8_t>(data_pos);
         auto note_complex_info = note_type_info & 0xf0;
         auto note_type         = note_type_info & 0x0f;
-        data_pos += 2; // 跳过类型和固定位
+        data_pos += 2;  // 跳过类型和固定位
 
         auto note_timestamp = reader.read_value<int32_t>(data_pos);
         data_pos += 4;
@@ -244,30 +256,33 @@ inline BeatMap loadRMMap(std::filesystem::path path)
         data_pos += 4;
 
         // 更新元数据
-        basemeta.track_count = std::max(basemeta.track_count, (int32_t)note_track + 1);
-        basemeta.map_length  = std::max((int64_t)basemeta.map_length, (int64_t)note_timestamp);
+        basemeta.track_count =
+            std::max(basemeta.track_count, (int32_t)note_track + 1);
+        basemeta.map_length =
+            std::max((int64_t)basemeta.map_length, (int64_t)note_timestamp);
 
         // 初始化物件
         switch ( note_type ) {
-        case 0: { // Note
+        case 0: {  // Note
             Note& note    = beatMap.m_noteData.notes.emplace_back();
             temp_note_ptr = &note;
             break;
         }
-        case 1: { // Flick
+        case 1: {  // Flick
             Flick& flick   = beatMap.m_noteData.flicks.emplace_back();
             flick.m_type   = NoteType::FLICK;
             flick.m_dtrack = note_parameter;
             temp_note_ptr  = &flick;
             break;
         }
-        case 2: { // Hold
+        case 2: {  // Hold
             Hold& hold      = beatMap.m_noteData.holds.emplace_back();
             hold.m_type     = NoteType::HOLD;
             hold.m_duration = note_parameter;
             temp_note_ptr   = &hold;
             basemeta.map_length =
-                std::max((int64_t)basemeta.map_length, (int64_t)note_timestamp + note_parameter);
+                std::max((int64_t)basemeta.map_length,
+                         (int64_t)note_timestamp + note_parameter);
             break;
         }
         default: continue;
@@ -275,31 +290,36 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
         temp_note_ptr->m_timestamp = note_timestamp;
         temp_note_ptr->m_track     = note_track;
-        temp_note_ptr->m_metadata.note_properties[NoteMetadataType::RM]["Parameter"] =
+        temp_note_ptr->m_metadata
+            .note_properties[NoteMetadataType::RM]["Parameter"] =
             std::to_string(note_parameter);
-        beatMap.m_allNotes.push_back(*temp_note_ptr);
 
         // 处理折线逻辑
-        if ( note_complex_info == 0x60 ) { // 头
+        if ( note_complex_info == 0x60 ) {  // 头
             current_polyline.m_timestamp = temp_note_ptr->m_timestamp;
             current_polyline.m_track     = temp_note_ptr->m_track;
             current_polyline.m_type      = NoteType::POLYLINE;
             current_polyline.m_subNotes.clear();
             current_polyline.m_subFlicks.clear();
             current_polyline.m_subHolds.clear();
+            current_polyline_indices.clear();
             is_building_polyline = true;
         }
 
         if ( is_building_polyline ) {
-            current_polyline.m_subNotes.push_back(*temp_note_ptr);
-            if ( temp_note_ptr->m_type == NoteType::FLICK )
-                current_polyline.m_subFlicks.push_back(*static_cast<Flick*>(temp_note_ptr));
-            else if ( temp_note_ptr->m_type == NoteType::HOLD )
-                current_polyline.m_subHolds.push_back(*static_cast<Hold*>(temp_note_ptr));
+            size_t idx = 0;
+            if ( temp_note_ptr->m_type == NoteType::NOTE ) {
+                idx = beatMap.m_noteData.notes.size() - 1;
+            } else if ( temp_note_ptr->m_type == NoteType::FLICK ) {
+                idx = beatMap.m_noteData.flicks.size() - 1;
+            } else if ( temp_note_ptr->m_type == NoteType::HOLD ) {
+                idx = beatMap.m_noteData.holds.size() - 1;
+            }
+            current_polyline_indices.push_back({ temp_note_ptr->m_type, idx });
 
-            if ( note_complex_info == 0xa0 ) { // 尾
+            if ( note_complex_info == 0xa0 ) {  // 尾
                 beatMap.m_noteData.polylines.push_back(current_polyline);
-                beatMap.m_allNotes.push_back(beatMap.m_noteData.polylines.back());
+                all_polylines_indices.push_back(current_polyline_indices);
                 is_building_polyline = false;
             }
         }
@@ -310,10 +330,33 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
     XINFO("读取到物件总数: {}", obj_count);
 
-    basemeta.name = std::format("[rm] {} [{}k] {}",
-                                (file_presuffix.empty() ? "Map" : file_presuffix),
-                                basemeta.track_count,
-                                basemeta.version);
+    // 重新构建所有折线子物件的引用 (解析最终的稳定内存地址)
+    for ( size_t i = 0; i < beatMap.m_noteData.polylines.size(); ++i ) {
+        auto&       poly    = beatMap.m_noteData.polylines[i];
+        const auto& indices = all_polylines_indices[i];
+        for ( const auto& [type, idx] : indices ) {
+            if ( type == NoteType::NOTE ) {
+                auto& ref = beatMap.m_noteData.notes[idx];
+                poly.m_subNotes.push_back(std::ref(ref));
+            } else if ( type == NoteType::HOLD ) {
+                auto& ref = beatMap.m_noteData.holds[idx];
+                poly.m_subNotes.push_back(std::ref(ref));
+                poly.m_subHolds.push_back(std::ref(ref));
+            } else if ( type == NoteType::FLICK ) {
+                auto& ref = beatMap.m_noteData.flicks[idx];
+                poly.m_subNotes.push_back(std::ref(ref));
+                poly.m_subFlicks.push_back(std::ref(ref));
+            }
+        }
+    }
+
+    beatMap.sync();
+
+    basemeta.name =
+        std::format("[rm] {} [{}k] {}",
+                    (file_presuffix.empty() ? "Map" : file_presuffix),
+                    basemeta.track_count,
+                    basemeta.version);
 
     return beatMap;
 }
