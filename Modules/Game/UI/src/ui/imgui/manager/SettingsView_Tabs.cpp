@@ -13,6 +13,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <filesystem>
 #include <nfd.h>
@@ -1369,18 +1370,24 @@ void SettingsView::drawVisualSettings()
                 changed |= ImGui::Checkbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.timeline_zoom").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat("##TimelineZoom",
-                                                         &visual.timelineZoom,
-                                                         0.1f,
-                                                         5.0f,
-                                                         "%.2fx");
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::SliderFloat("##TimelineZoom",
+                                              &visual.timelineZoom,
+                                              0.1f,
+                                              5.0f,
+                                              "%.2fx");
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.visual.timeline_zoom_tooltip").data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.visual.linear_scroll").data(),
@@ -2234,19 +2241,25 @@ void SettingsView::drawEditorSettings()
                     "##DisableAccel",
                     &settings.disableScrollAccelerationWhileDrawing);
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat(
-                               "##ScrollMul",
-                               &settings.scrollSpeedMultiplier,
-                               1.0f,
-                               10.0f,
-                               "%.1f");
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::SliderFloat("##ScrollMul",
+                                              &settings.scrollSpeedMultiplier,
+                                              1.0f,
+                                              10.0f,
+                                              "%.1f");
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.editor.scroll_multiplier_tooltip")
+                            .data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -2258,6 +2271,11 @@ void SettingsView::drawEditorSettings()
                 if ( ImGui::SliderInt("##BeatDivisor", &beatDivisor, 1, 64) ) {
                     settings.beatDivisor = beatDivisor;
                     changed              = true;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.editor.beat_divisor_tooltip").data(),
+                        Utils::TooltipDir::Right);
                 }
             });
     }

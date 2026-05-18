@@ -409,6 +409,11 @@ void ToolbarView::update(UIManager* sourceManager)
                 newConfig.settings.beatDivisor = currentDivisor;
                 Logic::EditorEngine::instance().setEditorConfig(newConfig);
             }
+            if ( ImGui::IsItemHovered() ) {
+                Utils::renderTooltip(
+                    TR("ui.settings.editor.beat_divisor_tooltip").data(),
+                    Utils::TooltipDir::Right);
+            }
 
             // 可以加一些常用的快速设置按钮
             const auto& commonDivisors =
