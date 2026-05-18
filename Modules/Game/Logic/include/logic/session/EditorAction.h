@@ -57,10 +57,16 @@ public:
     /// @brief 标记当前状态为已保存
     void markSaved();
 
+    /// @brief 获取撤销栈深度
+    size_t getUndoStackSize() const { return m_undoStack.size(); }
+
+    /// @brief 获取重做栈深度
+    size_t getRedoStackSize() const { return m_redoStack.size(); }
+
 private:
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
-    size_t                                      m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
+    size_t m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
 };
 
 }  // namespace MMM::Logic

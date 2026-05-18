@@ -102,36 +102,61 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 // 物件数量与最大连击数统计 (仅在谱面打开时显示)
                 auto session = engine.getActiveSession();
                 if ( session ) {
-                    size_t totalPlayableNotes = 0;
-                    size_t normalNotes        = 0;
-                    size_t holds              = 0;
-                    size_t flicks             = 0;
+                    static size_t s_cachedNoteCount  = 0;
+                    static void*  s_lastSessionPtr   = nullptr;
+                    static size_t s_lastUndoSize     = 0;
+                    static size_t s_lastRedoSize     = 0;
+                    static size_t s_lastRegistrySize = 0;
 
-                    auto noteView =
-                        session->getContext()
-                            .noteRegistry.view<Logic::NoteComponent>();
-                    for ( auto entity : noteView ) {
-                        const auto& nc =
-                            noteView.get<Logic::NoteComponent>(entity);
-                        if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
-                            for ( const auto& sub : nc.m_subNotes ) {
-                                if ( sub.type == ::MMM::NoteType::NOTE )
+                    auto&  ctx         = session->getContext();
+                    void*  currSession = session.get();
+                    size_t currUndo    = ctx.actionStack.getUndoStackSize();
+                    size_t currRedo    = ctx.actionStack.getRedoStackSize();
+                    auto*  noteStorage =
+                        ctx.noteRegistry.storage<Logic::NoteComponent>();
+                    size_t currRegSize = noteStorage ? noteStorage->size() : 0;
+
+                    if ( currSession != s_lastSessionPtr ||
+                         currUndo != s_lastUndoSize ||
+                         currRedo != s_lastRedoSize ||
+                         currRegSize != s_lastRegistrySize ) {
+                        // 发生更新时，重新计算
+                        s_lastSessionPtr   = currSession;
+                        s_lastUndoSize     = currUndo;
+                        s_lastRedoSize     = currRedo;
+                        s_lastRegistrySize = currRegSize;
+
+                        size_t normalNotes = 0;
+                        size_t holds       = 0;
+                        size_t flicks      = 0;
+
+                        auto noteView =
+                            ctx.noteRegistry.view<Logic::NoteComponent>();
+                        for ( auto entity : noteView ) {
+                            const auto& nc =
+                                noteView.get<Logic::NoteComponent>(entity);
+                            if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
+                                for ( const auto& sub : nc.m_subNotes ) {
+                                    if ( sub.type == ::MMM::NoteType::NOTE )
+                                        normalNotes++;
+                                    else if ( sub.type ==
+                                              ::MMM::NoteType::HOLD )
+                                        holds++;
+                                    else if ( sub.type ==
+                                              ::MMM::NoteType::FLICK )
+                                        flicks++;
+                                }
+                            } else if ( !nc.m_isSubNote ) {
+                                if ( nc.m_type == ::MMM::NoteType::NOTE )
                                     normalNotes++;
-                                else if ( sub.type == ::MMM::NoteType::HOLD )
+                                else if ( nc.m_type == ::MMM::NoteType::HOLD )
                                     holds++;
-                                else if ( sub.type == ::MMM::NoteType::FLICK )
+                                else if ( nc.m_type == ::MMM::NoteType::FLICK )
                                     flicks++;
                             }
-                        } else if ( !nc.m_isSubNote ) {
-                            if ( nc.m_type == ::MMM::NoteType::NOTE )
-                                normalNotes++;
-                            else if ( nc.m_type == ::MMM::NoteType::HOLD )
-                                holds++;
-                            else if ( nc.m_type == ::MMM::NoteType::FLICK )
-                                flicks++;
                         }
+                        s_cachedNoteCount = normalNotes + holds + flicks;
                     }
-                    totalPlayableNotes = normalNotes + holds + flicks;
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
@@ -140,7 +165,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::Text("%s: %zu",
                                 TR("ui.status.note_count").data(),
-                                totalPlayableNotes);
+                                s_cachedNoteCount);
 
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
@@ -150,7 +175,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     ImGui::Text(
                         "%s: %zu",
                         TR("ui.status.max_combo").data(),
-                        totalPlayableNotes);  // Combo数目前展示为物件数量
+                        s_cachedNoteCount);  // Combo数目前展示为物件数量
                 }
 
                 // 在状态栏最右侧显示最后一次操作信息
