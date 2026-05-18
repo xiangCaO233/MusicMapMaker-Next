@@ -120,6 +120,26 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
+    // 获取 audioOffset 和 initialDelay（优先从元数据中恢复）
+    double audioOffset  = 0.0;
+    double initialDelay = 0.0;
+    if ( auto it =
+             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
+         it != beatMap.m_metadata.map_properties.end() ) {
+        if ( it->second.contains("initialDelay") ) {
+            try {
+                initialDelay = std::stod(it->second.at("initialDelay"));
+            } catch ( ... ) {
+            }
+        }
+        if ( it->second.contains("audioOffset") ) {
+            try {
+                audioOffset = std::stod(it->second.at("audioOffset"));
+            } catch ( ... ) {
+            }
+        }
+    }
+
     auto timeToBeat = [&](double time) {
         double currentBpm = beatMap.m_baseMapMetadata.preference_bpm > 0
                                 ? beatMap.m_baseMapMetadata.preference_bpm
@@ -130,7 +150,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         // Find the first BPM timing point to use as origin
         for ( const auto& t : beatMap.m_timings ) {
             if ( t.m_timingEffect == TimingEffect::BPM ) {
-                lastTime   = t.m_timestamp;
+                lastTime   = t.m_timestamp - 2 * audioOffset - initialDelay;
                 currentBpm = t.m_bpm;
 
                 // 从元数据中恢复原始 Beat
@@ -155,10 +175,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
         for ( const auto& t : beatMap.m_timings ) {
             if ( t.m_timingEffect != TimingEffect::BPM ) continue;
-            if ( t.m_timestamp > time + 1e-4 ) break;
-            if ( t.m_timestamp > lastTime + 1e-4 ) {
-                lastBeat += (t.m_timestamp - lastTime) / (60000.0 / currentBpm);
-                lastTime = t.m_timestamp;
+            double t_aligned = t.m_timestamp - 2 * audioOffset - initialDelay;
+            if ( t_aligned > time + 1e-4 ) break;
+            if ( t_aligned > lastTime + 1e-4 ) {
+                lastBeat += (t_aligned - lastTime) / (60000.0 / currentBpm);
+                lastTime = t_aligned;
             }
             currentBpm = t.m_bpm;
         }
@@ -173,8 +194,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             return json::array({ integerBeat + 1, 0, 1 });
 
         // 尝试常见分母拟合，寻找最简约分
-        for ( int den :
-              { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 192, 1920 } ) {
+        for ( int den : { 1,  2,  3,  4,   6,   8,   12,  16,  24,  32,
+                          48, 64, 96, 192, 288, 384, 480, 768, 960, 1920 } ) {
             double num     = fraction * den;
             double rounded = std::round(num);
             if ( std::abs(num - rounded) < 1e-4 ) {
@@ -190,28 +211,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return json::array({ integerBeat, n / gcd, 1920 / gcd });
     };
 
-    // 获取 audioOffset 和 initialDelay（优先从元数据中恢复）
-    double audioOffset  = 0.0;
-    double initialDelay = 0.0;
-    if ( auto it =
-             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
-         it != beatMap.m_metadata.map_properties.end() ) {
-        if ( it->second.contains("initialDelay") ) {
-            try {
-                initialDelay = std::stod(it->second.at("initialDelay"));
-            } catch ( ... ) {
-            }
-        }
-        if ( it->second.contains("audioOffset") ) {
-            try {
-                audioOffset = std::stod(it->second.at("audioOffset"));
-            } catch ( ... ) {
-            }
-        }
-    }
-
     // Time & Effect
-    json timeArr = json::array();
+    json timeArr    = json::array();
+    bool isFirstBpm = true;
     for ( const auto& t : beatMap.m_timings ) {
         if ( t.m_timingEffect == TimingEffect::BPM ) {
             json tj;
@@ -229,17 +231,23 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
             if ( !hasBeat ) {
-                tj["beat"] = timeToBeat(t.m_timestamp);
+                tj["beat"] =
+                    timeToBeat(t.m_timestamp - 2 * audioOffset - initialDelay);
             }
 
             tj["bpm"] = t.m_bpm;
+            if ( isFirstBpm ) {
+                tj["delay"] = t.m_timestamp - audioOffset;
+                isFirstBpm  = false;
+            }
 
             // 恢复 Malody 特有字段
             if ( auto it = t.m_metadata.timing_properties.find(
                      TimingMetadataType::MALODY);
                  it != t.m_metadata.timing_properties.end() ) {
                 for ( const auto& [key, val] : it->second ) {
-                    if ( key != "bpm" ) {  // 已经有 bpm 了，排除
+                    if ( key != "bpm" &&
+                         key != "delay" ) {  // 已经有 bpm 和 delay 了，排除
                         try {
                             tj[key] = json::parse(val);
                         } catch ( ... ) {
@@ -301,7 +309,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
                 }
                 if ( !hasBeat ) {
-                    resetEj["beat"] = timeToBeat(t.m_timestamp);
+                    resetEj["beat"] = timeToBeat(
+                        t.m_timestamp - 2 * audioOffset - initialDelay);
                 }
                 resetEj["scroll"] = 1.0;
                 effectArr.push_back(resetEj);
@@ -325,7 +334,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 }
             }
             if ( !hasBeat ) {
-                ej["beat"] = timeToBeat(t.m_timestamp);
+                ej["beat"] =
+                    timeToBeat(t.m_timestamp - 2 * audioOffset - initialDelay);
             }
 
             if ( t.m_timingEffectParameter < 0 ) {
@@ -705,7 +715,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     // 如果仍然找不到 audioOffset，则使用推导值（假设 initialDelay 对应的
     // timestamp 是 firstTimingTime）
     if ( audioOffset == 0.0 && firstTimingTime != 0.0 ) {
-        audioOffset = initialDelay - firstTimingTime;
+        audioOffset = firstTimingTime - initialDelay;
     }
 
     audioNode["offset"] = static_cast<int64_t>(std::round(audioOffset));

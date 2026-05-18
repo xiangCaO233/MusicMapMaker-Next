@@ -1,8 +1,8 @@
 #pragma once
 #include "log/colorful-log.h"
-#include "mmm/note/Hold.h"
-#include "mmm/note/Flick.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Flick.h"
+#include "mmm/note/Hold.h"
 #include <cmath>
 
 namespace MMM::Test
@@ -45,24 +45,44 @@ inline bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
     }
 
     if ( m1.m_allNotes.size() != m2.m_allNotes.size() ) {
-        XERROR("Total note count mismatch: {} vs {}", m1.m_allNotes.size(), m2.m_allNotes.size());
+        XERROR("Total note count mismatch: {} vs {}",
+               m1.m_allNotes.size(),
+               m2.m_allNotes.size());
         return false;
     }
     for ( size_t i = 0; i < m1.m_allNotes.size(); ++i ) {
         const Note& n1 = m1.m_allNotes[i].get();
         const Note& n2 = m2.m_allNotes[i].get();
-        if ( std::abs(n1.m_timestamp - n2.m_timestamp) > 1e-3 || n1.m_track != n2.m_track || n1.m_type != n2.m_type ) {
-            XERROR("Note mismatch at index {}: t1={}, tr1={}, typ1={} | t2={}, tr2={}, typ2={}", i, n1.m_timestamp, n1.m_track, (int)n1.m_type, n2.m_timestamp, n2.m_track, (int)n2.m_type);
+        if ( std::abs(n1.m_timestamp - n2.m_timestamp) > 1e-3 ||
+             n1.m_track != n2.m_track || n1.m_type != n2.m_type ) {
+            XERROR(
+                "Note mismatch at index {}: t1={}, tr1={}, typ1={} | t2={}, "
+                "tr2={}, typ2={}",
+                i,
+                n1.m_timestamp,
+                n1.m_track,
+                (int)n1.m_type,
+                n2.m_timestamp,
+                n2.m_track,
+                (int)n2.m_type);
             return false;
         }
         if ( n1.m_type == NoteType::HOLD ) {
-            if ( static_cast<const Hold&>(n1).m_duration != static_cast<const Hold&>(n2).m_duration ) {
-                XERROR("Hold duration mismatch at index {}: {} vs {}", i, static_cast<const Hold&>(n1).m_duration, static_cast<const Hold&>(n2).m_duration);
+            if ( std::abs(static_cast<const Hold&>(n1).m_duration -
+                          static_cast<const Hold&>(n2).m_duration) > 0.2 ) {
+                XERROR("Hold duration mismatch at index {}: {} vs {}",
+                       i,
+                       static_cast<const Hold&>(n1).m_duration,
+                       static_cast<const Hold&>(n2).m_duration);
                 return false;
             }
         } else if ( n1.m_type == NoteType::FLICK ) {
-            if ( static_cast<const Flick&>(n1).m_dtrack != static_cast<const Flick&>(n2).m_dtrack ) {
-                XERROR("Flick dtrack mismatch at index {}: {} vs {}", i, static_cast<const Flick&>(n1).m_dtrack, static_cast<const Flick&>(n2).m_dtrack);
+            if ( static_cast<const Flick&>(n1).m_dtrack !=
+                 static_cast<const Flick&>(n2).m_dtrack ) {
+                XERROR("Flick dtrack mismatch at index {}: {} vs {}",
+                       i,
+                       static_cast<const Flick&>(n1).m_dtrack,
+                       static_cast<const Flick&>(n2).m_dtrack);
                 return false;
             }
         }

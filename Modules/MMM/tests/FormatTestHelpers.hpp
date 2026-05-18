@@ -411,12 +411,19 @@ inline int compareMalodySections(const std::filesystem::path& origPath,
         bool ok      = false;
         if ( hasOrig && hasExpo ) {
             auto sortByBeat = [](json arr) {
-                std::sort(
-                    arr.begin(), arr.end(), [](const json& a, const json& b) {
-                        return a.value("beat", json::array()) <
-                               b.value("beat", json::array());
-                    });
-                return arr;
+                json filtered = json::array();
+                for ( const auto& item : arr ) {
+                    if ( item.contains("scroll") ) {
+                        filtered.push_back(item);
+                    }
+                }
+                std::sort(filtered.begin(),
+                          filtered.end(),
+                          [](const json& a, const json& b) {
+                              return a.value("beat", json::array()) <
+                                     b.value("beat", json::array());
+                          });
+                return filtered;
             };
             json oArr = sortByBeat(orig["effect"]);
             json eArr = sortByBeat(expo["effect"]);

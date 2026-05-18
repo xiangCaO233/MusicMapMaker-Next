@@ -122,7 +122,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     };
     std::vector<RawEvent> rawEvents;
 
-    double initialDelay = 0.0;
+    double time0Delay = 0.0;
+    if ( fileData.contains("time") && fileData["time"].is_array() &&
+         !fileData["time"].empty() ) {
+        const auto& firstTime = fileData["time"][0];
+        time0Delay            = firstTime.value("delay", 0.0);
+    }
     if ( fileData.contains("time") ) {
         for ( const auto& t : fileData["time"] ) {
             RawEvent ev;
@@ -130,12 +135,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             ev.bpm   = t.value("bpm", 120.0);
             ev.isBpm = true;
             ev.raw   = t;
-            if ( t.contains("delay") ) {
-                initialDelay = t["delay"];
-                beatMap.m_metadata
-                    .map_properties[MapMetadataType::MALODY]["initialDelay"] =
-                    std::to_string(initialDelay);
-            }
+
             rawEvents.push_back(ev);
         }
     }
@@ -272,17 +272,19 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     };
 
     // 3. 辅助函数：计算绝对时间 (ms)
-    auto getAbsTime = [&](double beat) {
+    double audioOffset        = 0.0;
+    bool   hasSoundNoteOffset = false;
+    auto   getAbsTime         = [&](double beat) {
         double curBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
 
         double lastB = 0.0;
-        double lastT = initialDelay;  // 默认 initialDelay 对应 beat 0
+        double lastT = 0.0;  // 默认 0.0 对应 beat 0
 
         if ( !rawEvents.empty() ) {
             // Malody 的 delay 实际上是第一个 timing 点的时间戳
             lastB = rawEvents[0].beat;
-            lastT = initialDelay;
+            lastT = 0.0;
             if ( rawEvents[0].isBpm ) {
                 curBpm = rawEvents[0].bpm;
             }
@@ -313,7 +315,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     };
 
     // 4. 处理音频偏移
-    double audioOffset = 0.0;
+    audioOffset = 0.0;
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
             if ( isSoundNote(n) ) {
@@ -324,29 +326,39 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 if ( Config::utf8ToPath(soundFile) ==
                          basemeta.main_audio_path ||
                      soundFile.empty() ) {
-                    audioOffset = n.value("offset", 0.0);
-                    beatMap.m_metadata.map_properties[MapMetadataType::MALODY]
-                                                     ["audioOffset"] =
-                        std::to_string(audioOffset);
-                    XINFO("找到 Malody 音频偏移: {} ms, 音频文件: {}",
-                          audioOffset,
-                          Config::pathToUtf8(basemeta.main_audio_path));
+                    if ( n.contains("offset") ) {
+                        audioOffset        = n.value("offset", 0.0);
+                        hasSoundNoteOffset = true;
+                    }
                     break;
                 }
             }
         }
     }
 
+    if ( !hasSoundNoteOffset ) {
+        audioOffset = time0Delay;
+    }
+
+    beatMap.m_metadata.map_properties[MapMetadataType::MALODY]["initialDelay"] =
+        std::to_string(time0Delay);
+    beatMap.m_metadata.map_properties[MapMetadataType::MALODY]["audioOffset"] =
+        std::to_string(audioOffset);
+    XINFO("找到 Malody 音频偏移: {} ms, Timing Delay: {} ms, 音频文件: {}",
+          audioOffset,
+          time0Delay,
+          Config::pathToUtf8(basemeta.main_audio_path));
+
     // 4. 处理时间线点 (Timing Points)
     double currentBpm =
         basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
 
     double lastProcessedBeat = 0.0;
-    double lastProcessedTime = initialDelay;
+    double lastProcessedTime = time0Delay;
 
     if ( !rawEvents.empty() ) {
         lastProcessedBeat = rawEvents[0].beat;
-        lastProcessedTime = initialDelay;
+        lastProcessedTime = time0Delay;
         if ( rawEvents[0].isBpm ) currentBpm = rawEvents[0].bpm;
     }
 
@@ -357,7 +369,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         lastProcessedBeat = ev.beat;
 
         Timing timing;
-        timing.m_timestamp = lastProcessedTime - audioOffset;
+        timing.m_timestamp = lastProcessedTime + audioOffset;
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -393,7 +405,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     if ( beatMap.m_timings.empty() ) {
         Timing t;
-        t.m_timestamp             = initialDelay - audioOffset;
+        t.m_timestamp             = time0Delay + audioOffset;
         t.m_bpm                   = currentBpm;
         t.m_beat_length           = 60000.0 / currentBpm;
         t.m_timingEffect          = TimingEffect::BPM;
