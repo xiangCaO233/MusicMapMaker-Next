@@ -11,6 +11,8 @@
 #include <string>
 #include <thread>
 
+#include <cstdlib>
+
 // LLVM compiler-rt 提供的 PGO 运行时函数 (通过 -fprofile-instr-generate 链接)
 #ifdef MMM_PGO_INSTRUMENT
 extern "C" {
@@ -24,6 +26,35 @@ int  __llvm_profile_write_file(void);
 #    if __has_include("pgo_upload_url.h")
 #        include "pgo_upload_url.h"
 #    endif
+
+// 早期静态初始化器：利用全局静态变量的构造函数，抢在任何 instrumented 代码或
+// DLL 加载运行前， 将环境变量 LLVM_PROFILE_FILE 设置为用户 TEMP
+// 目录下的自定义路径。 这彻底避免了编译器/链接器默认在当前工作目录 (CWD) 生成
+// default.profraw 的问题。
+struct EarlyPGOInitializer {
+    EarlyPGOInitializer()
+    {
+        std::error_code ec;
+        auto            dir = std::filesystem::temp_directory_path(ec);
+        if ( ec ) return;
+        dir /= "MusicMapMaker";
+        std::filesystem::create_directories(dir, ec);
+
+        auto now = std::chrono::system_clock::now().time_since_epoch().count();
+        std::string path =
+            (dir / ("mmm_pgo_" + std::string(MMM_VERSION_STRING) + "_" +
+                    std::to_string(now) + "_%m_%p.profraw"))
+                .string();
+
+#    ifdef _WIN32
+        _putenv_s("LLVM_PROFILE_FILE", path.c_str());
+#    else
+        setenv("LLVM_PROFILE_FILE", path.c_str(), 1);
+#    endif
+    }
+};
+
+static EarlyPGOInitializer g_earlyPGOInit;
 #endif
 
 namespace MMM::Main
