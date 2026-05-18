@@ -269,6 +269,23 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
         parseValuesRecursive(valuesTableOpt.value(), "");
     }
 
+    // 解析 beat_divisors
+    sol::optional<sol::table> divisorsTableOpt = skinTable["beat_divisors"];
+    m_data.commonDivisors.clear();
+    if ( divisorsTableOpt ) {
+        sol::table divisorsTable = divisorsTableOpt.value();
+        for ( size_t i = 1; i <= divisorsTable.size(); ++i ) {
+            sol::object entry = divisorsTable[i];
+            if ( entry.is<int>() ) {
+                m_data.commonDivisors.push_back(entry.as<int>());
+            }
+        }
+    }
+    if ( m_data.commonDivisors.empty() ) {
+        m_data.commonDivisors = { 1, 2, 3, 4, 6, 8, 12, 16 };
+    }
+    std::sort(m_data.commonDivisors.begin(), m_data.commonDivisors.end());
+
     XINFO("Skin loaded: " + m_data.themeName);
     return true;
 }

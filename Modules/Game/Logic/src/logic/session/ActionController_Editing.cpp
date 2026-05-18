@@ -316,24 +316,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     // Helper function to extract common beat divisors from the skin
     auto getCommonDivisorsFromSkin = []() -> std::vector<int> {
-        std::vector<int> divisors;
-        const auto&      colors =
-            MMM::Config::SkinManager::instance().getData().colors;
-        for ( const auto& [key, col] : colors ) {
-            if ( key.rfind("beat_lines.beat_", 0) == 0 ) {
-                std::string sub = key.substr(16);
-                try {
-                    int div = std::stoi(sub);
-                    divisors.push_back(div);
-                } catch ( ... ) {
-                }
-            }
-        }
-        if ( divisors.empty() ) {
-            divisors = { 1, 2, 3, 4, 5, 6, 8, 12, 16 };
-        }
-        std::sort(divisors.begin(), divisors.end());
-        return divisors;
+        return MMM::Config::SkinManager::instance().getCommonDivisors();
     };
 
     std::vector<int> commonDivisors = getCommonDivisorsFromSkin();

@@ -225,9 +225,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_ICONFY_WINDOW });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", TR("ui.window.minimize").data());
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.window.minimize").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::SameLine();
 
@@ -240,9 +243,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", maxTip);
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", maxTip);
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::SameLine();
 
@@ -251,9 +257,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_CLOSE_WINDOW });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", TR("ui.window.close").data());
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.window.close").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::PopStyleVar(1);
         ImGui::PopStyleVar(2);
