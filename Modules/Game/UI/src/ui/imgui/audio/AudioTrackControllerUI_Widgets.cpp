@@ -50,7 +50,34 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
-    std::string labelId = "AT_R" + std::to_string(rowIndex) + "_L_" + label;
+    // 语义分析：自动检测合适的控件宽度 (Checkbox -> 24px, Sliders/Combo ->
+    // 240px)
+    auto getAutoWidgetWidth = [](const std::string& lbl) -> float {
+        std::string l = lbl;
+        std::transform(l.begin(), l.end(), l.begin(), ::tolower);
+
+        // Checkbox keywords
+        std::vector<std::string> checkboxKeywords = {
+            "vsync", "show",   "enable", "draw",     "lock", "reverse", "snap",
+            "sync",  "keep",   "allow",  "hide",     "use",  "play",    "mute",
+            "check", "toggle", "active", "垂直同步", "显示", "启用",    "是否",
+            "锁定",  "反转",   "吸附",   "同步",     "保持", "允许",    "隐藏",
+            "使用",  "播放",   "静音",   "开启",     "勾选", "双击",    "单击",
+            "自动",  "跟随",   "限制"
+        };
+        for ( const auto& kw : checkboxKeywords ) {
+            if ( l.find(kw) != std::string::npos ) {
+                return 24.0f;
+            }
+        }
+
+        return 240.0f;
+    };
+
+    float       wgtWidth = getAutoWidgetWidth(label);
+    std::string labelId  = "AT_R" + std::to_string(rowIndex) + "_L_" + label;
+
+    // 1. 标签
     row.addElement(labelId + "_lbl",
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
@@ -61,8 +88,15 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                        ImGui::Text("%s", label);
                    });
 
+    // 2. 弹簧 spacer
+    if ( wgtWidth > 0.0f ) {
+        row.addElement(
+            labelId + "_spring", Sizing::Grow(), Sizing::Grow(), nullptr);
+    }
+
+    // 3. 控件
     row.addElement(labelId + "_wgt",
-                   Sizing::Grow(),
+                   wgtWidth > 0.0f ? Sizing::Fixed(wgtWidth) : Sizing::Grow(),
                    Sizing::Grow(),
                    [widget](Clay_BoundingBox r, bool h) { widget(r, h); });
 
