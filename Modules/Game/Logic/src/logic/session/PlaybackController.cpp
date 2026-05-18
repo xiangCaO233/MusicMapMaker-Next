@@ -41,8 +41,8 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
     }
 
-    double totalTime       = Audio::AudioManager::instance().getTotalTime();
-    double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    double minTime   = -m_ctx.lastConfig.visual.getEffectiveVisualOffset();
 
     // 核心修复：确保 std::clamp 的上限不小于下限。
     // 如果由于配置（如负的 visualOffset）导致 minTime > totalTime，
@@ -51,9 +51,9 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
         minTime = totalTime;
     }
 
-    m_ctx.currentTime      = std::clamp(cmd.time, minTime, totalTime);
-    m_ctx.lastAudioPos     = 0.0;
-    m_ctx.lastAudioSysTime = 0.0;
+    m_ctx.currentTime           = std::clamp(cmd.time, minTime, totalTime);
+    m_ctx.lastAudioPos          = 0.0;
+    m_ctx.lastAudioSysTime      = 0.0;
     m_ctx.hasInitialAudioOffset = false;
     // 重置壁钟基准
     m_ctx.playStartSysTime =
@@ -126,7 +126,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     }
 
     double targetTime   = m_ctx.currentTime;
-    double visualOffset = m_ctx.lastConfig.visual.visualOffset;
+    double visualOffset = m_ctx.lastConfig.visual.getEffectiveVisualOffset();
 
     if ( m_ctx.lastConfig.settings.scrollSnap ) {
         int beatDivisor = m_ctx.lastConfig.settings.beatDivisor;
@@ -204,16 +204,16 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         targetTime = m_ctx.currentTime - static_cast<double>(wheel) * step;
     }
 
-    double totalTime       = Audio::AudioManager::instance().getTotalTime();
-    double minTime         = -m_ctx.lastConfig.visual.visualOffset;
+    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    double minTime   = -m_ctx.lastConfig.visual.getEffectiveVisualOffset();
 
     if ( minTime > totalTime ) {
         minTime = totalTime;
     }
 
-    m_ctx.currentTime      = std::clamp(targetTime, minTime, totalTime);
-    m_ctx.lastAudioPos     = 0.0;
-    m_ctx.lastAudioSysTime = 0.0;
+    m_ctx.currentTime           = std::clamp(targetTime, minTime, totalTime);
+    m_ctx.lastAudioPos          = 0.0;
+    m_ctx.lastAudioSysTime      = 0.0;
     m_ctx.hasInitialAudioOffset = false;
     // 重置壁钟基准
     m_ctx.playStartSysTime =

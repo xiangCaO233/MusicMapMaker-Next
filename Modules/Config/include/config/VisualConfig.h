@@ -136,13 +136,21 @@ struct VisualConfig {
     /// @brief 判定线位置 (0.0 - 1.0)
     float judgeline_pos{ .85f };
     /// @brief 音符 X 轴缩放
-    float noteScaleX{ 1.0f };
+    float noteScaleX{ 1.2f };
     /// @brief 音符 Y 轴缩放
-    float noteScaleY{ 1.0f };
+    float noteScaleY{ 1.2f };
     /// @brief 音符填充模式
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移
     float visualOffset{ 0.0f };
+    /// @brief 固定的硬件/多平台视觉偏置 (只读，加算到任何使用 visualOffset
+    /// 的地方)
+    static constexpr float staticVisualOffset{ -0.035f };
+    /// @brief 获取应用偏置后的最终视觉偏移量
+    float getEffectiveVisualOffset() const
+    {
+        return visualOffset + staticVisualOffset;
+    }
     /// @brief 时间轴缩放
     float timelineZoom{ 1.0f };
     /// @brief 是否启用线性滚动映射 (通常用于预览)

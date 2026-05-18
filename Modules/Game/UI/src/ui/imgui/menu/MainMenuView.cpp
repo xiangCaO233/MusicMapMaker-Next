@@ -1359,7 +1359,7 @@ void MainMenuView::renderOverlapCheckWindow()
                                     float visualOffset =
                                         Config::AppConfig::instance()
                                             .getVisualConfig()
-                                            .visualOffset;
+                                            .getEffectiveVisualOffset();
                                     dispatchCommand(Logic::CmdSeek{
                                         r.timestamp - visualOffset });
                                 }

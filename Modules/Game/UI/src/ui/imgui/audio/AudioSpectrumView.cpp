@@ -156,11 +156,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         if ( m_isCalculating.load() ) return;
     }
 
-    float visualOffset =
-        Config::AppConfig::instance().getVisualConfig().visualOffset;
-    double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
-    double totalTime  = audioManager.getTotalTime();
+    float  visualOffset = Config::AppConfig::instance()
+                              .getVisualConfig()
+                              .getEffectiveVisualOffset();
+    double audioTime    = audioManager.getCurrentTime();
+    double visualTime   = audioTime + visualOffset;
+    double totalTime    = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     auto snapshot = Logic::EditorEngine::instance()

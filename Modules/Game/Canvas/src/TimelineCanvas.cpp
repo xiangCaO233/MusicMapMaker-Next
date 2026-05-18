@@ -104,7 +104,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                          "") ) {
                     float visualOffset = Config::AppConfig::instance()
                                              .getVisualConfig()
-                                             .visualOffset;
+                                             .getEffectiveVisualOffset();
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdSeek{
                             static_cast<double>(time) - visualOffset }));
