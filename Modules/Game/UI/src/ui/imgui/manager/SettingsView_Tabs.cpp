@@ -113,16 +113,16 @@ void SettingsView::addRadioSetting(
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
     int& current, bool& changed)
 {
-    // 获取稳定宽度
-    float totalAvailW  = ImGui::GetWindowContentRegionMax().x -
-                         ImGui::GetWindowContentRegionMin().x;
-    float widgetAvailW = std::max(100.0f, totalAvailW - labelWidth - 32.0f);
+    float widgetAvailW =
+        240.0f;  // 统一为标准控件宽度，使得折行布局能完美居右对齐！
 
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
     std::string labelId = "S" + std::to_string(sectionIndex) + "_R" +
                           std::to_string(rowIndex) + "_L_" + label;
+
+    // 1. 标签
     row.addElement(labelId + "_lbl",
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
@@ -133,6 +133,11 @@ void SettingsView::addRadioSetting(
                        ImGui::Text("%s", label);
                    });
 
+    // 2. 弹簧 spacer
+    row.addElement(
+        labelId + "_spring", Sizing::Grow(), Sizing::Grow(), nullptr);
+
+    // 3. 控件组
     auto& containerVBox = getSection(sectionIndex++);
     containerVBox.clear();
     containerVBox.setSpacing(4).setPadding(0, 0, 0, 0);
@@ -150,7 +155,8 @@ void SettingsView::addRadioSetting(
             currentLineRow->clear();
             currentLineRow->setPadding(0, 0, 0, 0)
                 .setSpacing(12)
-                .setAlignment(Alignment::Start());
+                .setAlignment(
+                    Alignment::Center());  // 垂直居中对齐每一行 RadioButtons！
 
             std::string lineId =
                 labelId + "_line_" + std::to_string(lineCount++);
@@ -179,7 +185,7 @@ void SettingsView::addRadioSetting(
 
     row.addLayout((labelId + "_group").c_str(),
                   containerVBox,
-                  Sizing::Grow(),
+                  Sizing::Fixed(widgetAvailW),  // 统一设为 240px 宽度
                   Sizing::Fit());
 
     parent.addLayout(
