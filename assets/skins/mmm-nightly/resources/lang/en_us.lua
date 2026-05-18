@@ -237,6 +237,7 @@ return {
 	["ui.audio_manager.quality_best"] = "Best (High Load)",
 	["ui.audio_manager.pitch_control"] = "Pitch Offset Control",
 	["ui.audio_manager.speed_info"] = "Expected: %.4fx | Actual: %.4fx",
+	["ui.audio_manager.speed_tooltip"] = "Use Ctrl+Alt+Scroll to quickly adjust between preset speeds",
 	["ui.audio_manager.eq_control"] = "Graphic Equalizer (EQ)",
 	["ui.audio_manager.reset_eq"] = "Reset EQ",
 	["ui.audio_manager.eq_none"] = "None",

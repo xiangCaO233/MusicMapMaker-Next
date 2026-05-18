@@ -244,6 +244,7 @@ return {
 	["ui.audio_manager.quality_best"] = "最佳 (高负载)",
 	["ui.audio_manager.pitch_control"] = "音高偏移控制",
 	["ui.audio_manager.speed_info"] = "期望: %.4fx | 实际: %.4fx",
+	["ui.audio_manager.speed_tooltip"] = "使用 Ctrl+Alt+滚轮 快速在预设倍速中调整",
 	["ui.audio_manager.eq_control"] = "图形均衡器 (EQ)",
 	["ui.audio_manager.reset_eq"] = "重置 EQ",
 	["ui.audio_manager.eq_none"] = "无",

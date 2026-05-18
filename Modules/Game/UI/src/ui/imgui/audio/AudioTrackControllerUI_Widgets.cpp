@@ -9,6 +9,7 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 #include <fmt/core.h>
 
@@ -332,6 +333,11 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
             if ( ImGui::SliderFloat(
                      "##SpeedSlider", &speed, 0.25f, 2.0f, "%.4fx") ) {
                 changed = true;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                Utils::renderTooltip(
+                    TR("ui.audio_manager.speed_tooltip").data(),
+                    Utils::TooltipDir::Right);
             }
         });
 
