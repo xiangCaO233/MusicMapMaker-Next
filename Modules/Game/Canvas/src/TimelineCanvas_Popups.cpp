@@ -155,7 +155,7 @@ void TimelineCanvas::renderEventCreationPopup()
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
             ImGui::InputDouble(
-                "##ScrollValue", &m_createValue, 0.01, 0.1, "%.3f");
+                "##ScrollValue", &m_createValue, 0.01, 0.1, "%.4f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -257,10 +257,21 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
         // 批量修改工具
         if ( ImGui::TreeNode("批量修改工具##BulkTools") ) {
+            float spacing = ImGui::GetStyle().ItemSpacing.x;
+
             // 批量偏移
             static double bulkOffsetValue = 0.0;
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("批量时间偏移 (秒):");
-            ImGui::SameLine();
+
+            float btnWidthOffset = ImGui::CalcTextSize("应用时间偏移").x +
+                                   ImGui::GetStyle().FramePadding.x * 2.0f;
+            float controlsWidthOffset = 120.0f + spacing + btnWidthOffset;
+            float rightAlignXOffset   = ImGui::GetCursorPosX() +
+                                      ImGui::GetContentRegionAvail().x -
+                                      controlsWidthOffset;
+
+            ImGui::SameLine(rightAlignXOffset);
             ImGui::SetNextItemWidth(120.0f);
             ImGui::InputDouble(
                 "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.3f");
@@ -283,10 +294,21 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 bulkOffsetValue = 0.0;
             }
 
+            ImGui::Spacing();
+
             // 批量缩放
             static double bulkScaleValue = 1.0;
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("批量流速缩放倍率:");
-            ImGui::SameLine();
+
+            float btnWidthScale = ImGui::CalcTextSize("应用流速缩放").x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+            float controlsWidthScale = 120.0f + spacing + btnWidthScale;
+            float rightAlignXScale   = ImGui::GetCursorPosX() +
+                                     ImGui::GetContentRegionAvail().x -
+                                     controlsWidthScale;
+
+            ImGui::SameLine(rightAlignXScale);
             ImGui::SetNextItemWidth(120.0f);
             ImGui::InputDouble(
                 "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.2f");

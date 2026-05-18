@@ -16,7 +16,7 @@ return {
 	["ui.exit.confirm_title"] = "确认退出",
 	["ui.exit.confirm_msg_fmt"] = "谱面 '{}' 尚有未保存的修改。\n您想在退出前保存吗？",
 	["ui.exit.dont_save"] = "不保存",
-	["ui.menu.frame_stats_fmt"] = "帧时间: {:.3f} 毫秒 ({:.1f} 帧/秒) | 逻辑更新: {:.1f} 次/秒",
+	["ui.menu.frame_stats_fmt"] = "帧时间: {:.2f} 毫秒 ({:.1f} 帧/秒) | 逻辑更新: {:.1f} 次/秒",
 	["ui.edit"] = "编辑(&E)",
 	["ui.edit.undo"] = "撤销",
 	["ui.edit.redo"] = "重做",
