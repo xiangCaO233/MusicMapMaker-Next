@@ -537,6 +537,17 @@ void SettingsView::drawSoftwareSettings()
             });
 
         // 处理文件选择器结果 (保持在 Clay 之后，因为它们开启新窗口)
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -550,6 +561,17 @@ void SettingsView::drawSoftwareSettings()
             ImGuiFileDialog::Instance()->Close();
         }
 
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display(
                  "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {

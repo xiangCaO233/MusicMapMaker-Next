@@ -100,6 +100,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     // --- 4. 全局弹出式对话框 ---
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
         // --- Project Folder Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("ProjectFolderPicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -123,6 +134,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Save As File Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("SaveAsFilePicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -153,6 +175,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Pack File Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("PackFilePicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("PackFilePicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -183,6 +216,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Audio Import Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("AudioImportPicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -203,6 +247,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Ascii Font Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -219,6 +274,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
 
         // --- Cjk Font Picker ---
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display(
                  "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
