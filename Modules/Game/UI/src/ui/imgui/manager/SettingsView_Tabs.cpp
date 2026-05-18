@@ -1568,6 +1568,15 @@ void SettingsView::drawBeatmapSettings()
     auto& meta    = m_editingMeta;
     bool  changed = false;
 
+    bool isImd = false;
+    if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+        auto ext = beatmap.m_baseMapMetadata.map_path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if ( ext == ".imd" ) {
+            isImd = true;
+        }
+    }
+
     m_contentVBox.clear();
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
@@ -1651,21 +1660,27 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
             TR_CACHE("ui.settings.beatmap.mapper").data(),
             TR_CACHE("ui.settings.beatmap.version").data(),
+            TR_CACHE("ui.settings.beatmap.path").data(),
         };
         float maxLabelW = 0;
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
 
-        auto DrawInput = [&](const char* labelPtr, std::string& valRef) {
+        auto DrawInput = [&](const char*  labelPtr,
+                             std::string& valRef,
+                             bool         enabled = true) {
             addSettingItem(
                 *sec,
                 rowIndex,
                 labelPtr,
                 maxLabelW,
-                [labelPtr, &valRef = valRef, &changed](Clay_BoundingBox r,
-                                                       bool) {
+                [labelPtr, &valRef = valRef, &changed, enabled](
+                    Clay_BoundingBox r, bool) {
                     ImGui::PushID(labelPtr);
+                    if ( !enabled ) {
+                        ImGui::BeginDisabled();
+                    }
                     char buf[256];
                     strncpy(buf, valRef.c_str(), sizeof(buf));
                     buf[sizeof(buf) - 1] = '\0';
@@ -1674,19 +1689,96 @@ void SettingsView::drawBeatmapSettings()
                         valRef  = buf;
                         changed = true;
                     }
+                    if ( !enabled ) {
+                        ImGui::EndDisabled();
+                    }
                     ImGui::PopID();
                 });
         };
 
-        DrawInput(TR_CACHE("ui.settings.beatmap.name").data(), meta.name);
-        DrawInput(TR_CACHE("ui.settings.beatmap.title").data(), meta.title);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.name").data(), meta.name, !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.title").data(), meta.title, !isImd);
         DrawInput(TR_CACHE("ui.settings.beatmap.title_unicode").data(),
-                  meta.title_unicode);
-        DrawInput(TR_CACHE("ui.settings.beatmap.artist").data(), meta.artist);
+                  meta.title_unicode,
+                  !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.artist").data(), meta.artist, !isImd);
         DrawInput(TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
-                  meta.artist_unicode);
-        DrawInput(TR_CACHE("ui.settings.beatmap.mapper").data(), meta.author);
-        DrawInput(TR_CACHE("ui.settings.beatmap.version").data(), meta.version);
+                  meta.artist_unicode,
+                  !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.mapper").data(), meta.author, !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.version").data(), meta.version, true);
+
+        std::string relativePathStr = "";
+        std::string absolutePathStr = "";
+        if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+            auto absolutePath =
+                std::filesystem::absolute(beatmap.m_baseMapMetadata.map_path);
+            absolutePathStr = Config::pathToUtf8(absolutePath);
+            if ( project ) {
+                try {
+                    auto relativePath = std::filesystem::relative(
+                        absolutePath, project->m_projectRoot);
+                    relativePathStr = Config::pathToUtf8(relativePath);
+                } catch ( ... ) {
+                    relativePathStr = absolutePathStr;
+                }
+            } else {
+                relativePathStr = absolutePathStr;
+            }
+        }
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.path").data(),
+            maxLabelW,
+            [relativePathStr, absolutePathStr](Clay_BoundingBox r, bool) {
+                ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+                ImVec2 textSize  = ImGui::CalcTextSize(relativePathStr.c_str());
+
+                // 计算滚动位移
+                float offset       = 0.0f;
+                float visibleWidth = r.width;
+
+                if ( textSize.x > visibleWidth ) {
+                    float scrollRange = textSize.x - visibleWidth + 40.0f;
+                    float time        = (float)ImGui::GetTime();
+                    // 平滑往复滚动，两端停顿
+                    float t = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
+                    t       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+                    offset  = t * scrollRange;
+                }
+
+                // 垂直居中计算
+                float textH   = ImGui::GetFontSize();
+                float widgetH = ImGui::GetFrameHeight();
+                float offsetY = (widgetH - textH) * 0.5f;
+
+                // 应用剪切矩形并绘制文本
+                ImGui::PushClipRect(
+                    cursorPos,
+                    ImVec2(cursorPos.x + r.width, cursorPos.y + widgetH),
+                    true);
+
+                // 绘制一个透明的 dummy 控件以接收 hover 状态显示 Tooltip
+                ImGui::SetCursorScreenPos(cursorPos);
+                ImGui::Dummy(ImVec2(r.width, widgetH));
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s", absolutePathStr.c_str());
+                }
+
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(cursorPos.x - offset, cursorPos.y + offsetY),
+                    ImGui::GetColorU32(ImGuiCol_Text),
+                    relativePathStr.c_str());
+
+                ImGui::PopClipRect();
+            });
     }
 
     if ( auto* sec = addHeader(
@@ -1700,6 +1792,10 @@ void SettingsView::drawBeatmapSettings()
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
+
+        if ( isImd ) {
+            ImGui::BeginDisabled();
+        }
 
         addRadioSetting(
             *sec,
@@ -1739,6 +1835,10 @@ void SettingsView::drawBeatmapSettings()
                                changed        = true;
                            }
                        });
+
+        if ( isImd ) {
+            ImGui::EndDisabled();
+        }
     }
 
     if ( auto* sec = addHeader(
@@ -1759,12 +1859,18 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.bpm").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
+                if ( isImd ) {
+                    ImGui::BeginDisabled();
+                }
                 float bpm = (float)meta.preference_bpm;
                 ImGui::SetNextItemWidth(r.width);
                 if ( ImGui::DragFloat(
                          "##BPM", &bpm, 0.1f, -1.0f, 1000.0f, "%.2f") ) {
                     meta.preference_bpm = (double)bpm;
                     changed             = true;
+                }
+                if ( isImd ) {
+                    ImGui::EndDisabled();
                 }
             });
 
@@ -1802,6 +1908,10 @@ void SettingsView::drawBeatmapSettings()
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
+
+        if ( isImd ) {
+            ImGui::BeginDisabled();
+        }
 
         // 音频选择
         addSettingItem(
@@ -1939,6 +2049,10 @@ void SettingsView::drawBeatmapSettings()
                 }
                 if ( coverPushed ) ImGui::PopStyleColor();
             });
+
+        if ( isImd ) {
+            ImGui::EndDisabled();
+        }
     }
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();

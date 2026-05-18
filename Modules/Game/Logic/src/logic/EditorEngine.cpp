@@ -903,4 +903,50 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     saveProject();
 }
 
+void EditorEngine::updateBeatmapFilePathInProject(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    auto absRoot = std::filesystem::absolute(m_currentProject->m_projectRoot);
+    auto absOld  = std::filesystem::absolute(oldPath);
+    auto absNew  = std::filesystem::absolute(newPath);
+
+    std::error_code ec;
+    auto            relOldPath = std::filesystem::relative(absOld, absRoot, ec);
+    auto            relNewPath = std::filesystem::relative(absNew, absRoot, ec);
+
+    std::string relOld =
+        relOldPath.empty() ? "" : Config::pathToUtf8(relOldPath);
+    std::string relNew =
+        relNewPath.empty() ? "" : Config::pathToUtf8(relNewPath);
+
+    bool found = false;
+    for ( auto& entry : m_currentProject->m_beatmaps ) {
+        if ( entry.m_filePath == relOld ) {
+            entry.m_filePath = relNew;
+            try {
+                auto map     = BeatMap::loadFromFile(absNew);
+                entry.m_name = map.m_baseMapMetadata.version;
+                if ( entry.m_name.empty() )
+                    entry.m_name = Config::pathToUtf8(absNew.filename());
+                if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
+                    entry.m_audioTrackId = Config::pathToUtf8(
+                        map.m_baseMapMetadata.main_audio_path.filename());
+                }
+            } catch ( ... ) {
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if ( !found ) {
+        syncProjectWithFile(newPath);
+    } else {
+        saveProject();
+    }
+}
+
 }  // namespace MMM::Logic

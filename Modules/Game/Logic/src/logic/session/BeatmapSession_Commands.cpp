@@ -211,7 +211,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
     if ( m_ctx->currentBeatmap ) {
         SessionUtils::syncBeatmap(*m_ctx);
 
-        auto savePath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+        auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+        auto savePath = oldPath;
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
              Config::SaveFormatPreference::ForceMMM ) {
             savePath.replace_extension(".mmm");
@@ -226,7 +227,12 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             return;
         }
         m_ctx->actionStack.markSaved();
-        EditorEngine::instance().syncProjectWithFile(savePath);
+        if ( oldPath != savePath ) {
+            EditorEngine::instance().updateBeatmapFilePathInProject(oldPath,
+                                                                    savePath);
+        } else {
+            EditorEngine::instance().syncProjectWithFile(savePath);
+        }
     }
 }
 

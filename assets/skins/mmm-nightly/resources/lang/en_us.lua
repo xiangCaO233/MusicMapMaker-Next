@@ -137,6 +137,7 @@ return {
 	["ui.settings.project.path"] = "Physical Path",
 	["ui.settings.beatmap"] = "Beatmap Config",
 	["ui.settings.beatmap.no_beatmap"] = "No beatmap loaded currently",
+	["ui.settings.beatmap.path"] = "Beatmap File Path",
 	["ui.settings.beatmap.info"] = "Beatmap Metadata",
 	["ui.settings.beatmap.title"] = "Song Title",
 	["ui.settings.beatmap.artist"] = "Artist",

@@ -355,7 +355,7 @@ struct EditorSettings {
     float marqueeRounding{ 0.0f };
 
     /// @brief Ctrl+S 保存偏好
-    SaveFormatPreference saveFormatPreference{ SaveFormatPreference::Original };
+    SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
     /// @brief 上次打开文件的路径 (用于文件对话框记忆)
     std::string lastFilePickerPath{ "." };

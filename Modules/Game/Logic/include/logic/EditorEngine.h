@@ -75,6 +75,15 @@ public:
      */
     void syncProjectWithFile(const std::filesystem::path& mapPath);
 
+    /**
+     * @brief 更新项目内谱面的文件路径关联 (例如将 .imd 强制保存为 .mmm
+     * 后更新关联)
+     * @param oldPath 旧的谱面文件路径
+     * @param newPath 新的谱面文件路径
+     */
+    void updateBeatmapFilePathInProject(const std::filesystem::path& oldPath,
+                                        const std::filesystem::path& newPath);
+
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
 

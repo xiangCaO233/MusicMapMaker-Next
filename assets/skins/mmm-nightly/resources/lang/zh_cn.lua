@@ -143,6 +143,7 @@ return {
 	["ui.settings.project.path"] = "项目物理路径",
 	["ui.settings.beatmap"] = "谱面配置",
 	["ui.settings.beatmap.no_beatmap"] = "当前未加载任何谱面",
+	["ui.settings.beatmap.path"] = "谱面文件路径",
 	["ui.settings.beatmap.info"] = "谱面元数据",
 	["ui.settings.beatmap.title"] = "歌曲标题",
 	["ui.settings.beatmap.artist"] = "曲作者",
