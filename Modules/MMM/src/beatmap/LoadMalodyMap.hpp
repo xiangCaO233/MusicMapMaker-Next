@@ -580,15 +580,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             if ( notePtr ) {
                 auto& props = notePtr->m_metadata
                                   .note_properties[NoteMetadataType::MALODY];
-                if ( n.contains("endbeat") )
-                    props["original_structure"] = "endbeat";
-                if ( n.contains("seg") ) props["original_structure"] = "seg";
-                if ( n.contains("dir") )
-                    props["original_structure_flick"] = "dir";
 
                 for ( auto it = n.begin(); it != n.end(); ++it ) {
-                    if ( it.key() != "endbeat" && it.key() != "column" &&
-                         it.key() != "seg" ) {
+                    if ( it.key() != "beat" && it.key() != "column" &&
+                         it.key() != "x" && it.key() != "w" &&
+                         it.key() != "type" && it.key() != "dir" &&
+                         it.key() != "endbeat" && it.key() != "seg" ) {
                         props[it.key()] = it.value().dump();
                     }
                 }
