@@ -184,21 +184,69 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
 {
     auto& audio = Audio::AudioManager::instance();
 
+    // 动态检测并自动折行说明标签
+    auto trim = [](const std::string& str) {
+        size_t first = str.find_first_not_of(" \t\r\n");
+        if ( first == std::string::npos ) return std::string();
+        size_t last = str.find_last_not_of(" \t\r\n");
+        return str.substr(first, (last - first + 1));
+    };
+
+    float       actualSpeed = (float)audio.getActualPlaybackSpeed();
+    std::string rawStr      = TR("ui.audio_manager.speed_info").data();
+    size_t      pipePos     = rawStr.find('|');
+    bool        hasPipe     = (pipePos != std::string::npos);
+    std::string leftFmt  = hasPipe ? trim(rawStr.substr(0, pipePos)) : rawStr;
+    std::string rightFmt = hasPipe ? trim(rawStr.substr(pipePos + 1)) : "";
+
+    char leftBuf[128]  = { 0 };
+    char rightBuf[128] = { 0 };
+    char fullBuf[256]  = { 0 };
+
+    snprintf(leftBuf, sizeof(leftBuf), leftFmt.c_str(), speed);
+    if ( hasPipe ) {
+        snprintf(rightBuf, sizeof(rightBuf), rightFmt.c_str(), actualSpeed);
+        snprintf(fullBuf, sizeof(fullBuf), "%s | %s", leftBuf, rightBuf);
+    } else {
+        snprintf(fullBuf, sizeof(fullBuf), "%s", leftBuf);
+    }
+
+    std::string leftStr  = leftBuf;
+    std::string rightStr = rightBuf;
+    std::string fullStr  = fullBuf;
+
+    float textW      = ImGui::CalcTextSize(fullStr.c_str()).x;
+    bool  labelWraps = (textW > availWidgetW);
+    float labelH     = labelWraps ? (2.0f * ImGui::GetFrameHeight() +
+                                     ImGui::GetStyle().ItemSpacing.y + 8.0f)
+                                  : (ImGui::GetFrameHeight() + 8.0f);
+
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.speed_control").data(),
         labelWidth,
-        [&speed, &audio](Clay_BoundingBox r, bool) {
-            float widgetH = ImGui::GetFrameHeight();
-            float offset  = (r.height - widgetH) * 0.5f;
-            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-
-            float actualSpeed = (float)audio.getActualPlaybackSpeed();
+        [leftStr, rightStr, fullStr, labelWraps](Clay_BoundingBox r, bool) {
+            float widgetH     = ImGui::GetFrameHeight();
+            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
             ImGui::AlignTextToFramePadding();
-            ImGui::Text(
-                TR("ui.audio_manager.speed_info").data(), speed, actualSpeed);
-        });
+
+            if ( labelWraps ) {
+                // 第一行期望值
+                ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+                ImGui::TextUnformatted(leftStr.c_str());
+
+                // 第二行实际值
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + 4.0f + widgetH + lineSpacing });
+                ImGui::TextUnformatted(rightStr.c_str());
+            } else {
+                float offset = (r.height - widgetH) * 0.5f;
+                ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                ImGui::TextUnformatted(fullStr.c_str());
+            }
+        },
+        labelH);
 
     // 动态计算速度预设按钮自动折行的高度与宽度
     std::string speed025 = TR("ui.audio_manager.speed_025x").data();
