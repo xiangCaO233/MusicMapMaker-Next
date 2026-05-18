@@ -77,9 +77,16 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
     if ( m_isCalculating ) {
         ImGui::OpenPopup("ProcessingWaveform");
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Appearing,
-                                ImVec2(0.5f, 0.5f));
+        {
+            static bool wasOpen = false;
+            bool        isOpen  = ImGui::IsPopupOpen("ProcessingWaveform");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGui::BeginPopupModal(
                  "ProcessingWaveform", nullptr, ImGuiWindowFlags_None) ) {
             ImGui::Text("%s", TR("ui.waveform.processing.text").data());

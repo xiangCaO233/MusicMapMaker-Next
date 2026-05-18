@@ -301,9 +301,17 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             ImGui::Dummy(modalSize);
 
             // --- 二次确认弹窗 ---
-            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                    ImGuiCond_Appearing,
-                                    ImVec2(0.5f, 0.5f));
+            {
+                static bool wasOpen = false;
+                bool        isOpen = ImGui::IsPopupOpen("RemoveBeatmapConfirm");
+                if ( isOpen && !wasOpen ) {
+                    ImGui::SetNextWindowPos(
+                        ImGui::GetMainViewport()->GetCenter(),
+                        ImGuiCond_Always,
+                        ImVec2(0.5f, 0.5f));
+                }
+                wasOpen = isOpen;
+            }
             if ( ImGui::BeginPopupModal(
                      "RemoveBeatmapConfirm", nullptr, ImGuiWindowFlags_None) ) {
                 ImGui::Text("%s",

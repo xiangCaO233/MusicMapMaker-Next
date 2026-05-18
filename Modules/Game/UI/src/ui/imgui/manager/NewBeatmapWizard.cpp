@@ -30,9 +30,17 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         XINFO("NewBeatmapWizard: Opening popup modal...");
     }
 
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    {
+        static bool wasOpen = false;
+        bool        isOpen =
+            ImGui::IsPopupOpen(TR("ui.wizard.new_beatmap.title").data());
+        if ( isOpen && !wasOpen ) {
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                    ImGuiCond_Always,
+                                    ImVec2(0.5f, 0.5f));
+        }
+        wasOpen = isOpen;
+    }
     ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_Appearing);
     if ( ImGui::BeginPopupModal(TR("ui.wizard.new_beatmap.title").data(),
                                 &m_isOpen) ) {

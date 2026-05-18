@@ -129,9 +129,16 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         ImGui::OpenPopup("###SpectrumCalcModal");
     }
 
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    {
+        static bool wasOpen = false;
+        bool        isOpen  = ImGui::IsPopupOpen("###SpectrumCalcModal");
+        if ( isOpen && !wasOpen ) {
+            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                    ImGuiCond_Always,
+                                    ImVec2(0.5f, 0.5f));
+        }
+        wasOpen = isOpen;
+    }
     if ( ImGui::BeginPopupModal(
              (std::string(TR("ui.spectrum.calc_modal.title").data()) +
               "###SpectrumCalcModal")

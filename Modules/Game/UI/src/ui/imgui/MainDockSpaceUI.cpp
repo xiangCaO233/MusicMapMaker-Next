@@ -240,8 +240,15 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         m_showImportTypeModal = false;
     }
 
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    {
+        static bool importWasOpen = false;
+        bool        importIsOpen  = ImGui::IsPopupOpen("AudioImportTypeModal");
+        if ( importIsOpen && !importWasOpen ) {
+            ImGui::SetNextWindowPos(
+                viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        }
+        importWasOpen = importIsOpen;
+    }
     if ( ImGui::BeginPopupModal(
              "AudioImportTypeModal", nullptr, ImGuiWindowFlags_None) ) {
         ImGui::Text("%s", TR("ui.audio_import.type_hint").data());
@@ -274,8 +281,15 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         m_showOverwriteModal = false;
     }
 
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    {
+        static bool overwriteWasOpen = false;
+        bool overwriteIsOpen = ImGui::IsPopupOpen("OverwriteConfirmModal");
+        if ( overwriteIsOpen && !overwriteWasOpen ) {
+            ImGui::SetNextWindowPos(
+                viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        }
+        overwriteWasOpen = overwriteIsOpen;
+    }
     if ( ImGui::BeginPopupModal(
              "OverwriteConfirmModal", nullptr, ImGuiWindowFlags_None) ) {
         ImGui::Text("%s", TR("ui.file.overwrite.title").data());
@@ -315,8 +329,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    {
+        std::string exitPopupName =
+            fmt::format("{}###ExitConfirmation", TR("ui.exit.confirm_title"));
+        static bool exitWasOpen = false;
+        bool        exitIsOpen  = ImGui::IsPopupOpen(exitPopupName.c_str());
+        if ( exitIsOpen && !exitWasOpen ) {
+            ImGui::SetNextWindowPos(
+                viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        }
+        exitWasOpen = exitIsOpen;
+    }
     if ( ImGui::BeginPopupModal(
              fmt::format("{}###ExitConfirmation", TR("ui.exit.confirm_title"))
                  .c_str(),

@@ -12,11 +12,17 @@ namespace MMM::Canvas
 
 void TimelineCanvas::renderEventEditorPopup()
 {
+    static bool wasOpen = false;
+    bool        isOpen  = ImGui::IsPopupOpen("TimelineEventEditor");
+    if ( isOpen && !wasOpen ) {
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                ImGuiCond_Always,
+                                ImVec2(0.5f, 0.5f));
+    }
+    wasOpen = isOpen;
+
     ImGui::SetNextWindowSize(ImVec2(300, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
     if ( ImGui::BeginPopupModal(
              "TimelineEventEditor", &m_isPopupOpen, ImGuiWindowFlags_None) ) {
         std::string typeTitle =
@@ -85,12 +91,18 @@ void TimelineCanvas::renderEventEditorPopup()
 
 void TimelineCanvas::renderEventCreationPopup()
 {
+    static bool wasOpen = false;
+    bool        isOpen  = ImGui::IsPopupOpen("TimelineCreateEvent");
+    if ( isOpen && !wasOpen ) {
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                ImGuiCond_Always,
+                                ImVec2(0.5f, 0.5f));
+    }
+    wasOpen = isOpen;
+
     ImGui::SetNextWindowSize(ImVec2(350, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
 
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
     if ( ImGui::BeginPopupModal("TimelineCreateEvent",
                                 &m_isCreatePopupOpen,
                                 ImGuiWindowFlags_None) ) {
