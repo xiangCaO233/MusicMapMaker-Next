@@ -418,7 +418,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 session->getContext().currentBeatmap->m_baseMapMetadata.name;
         }
 
-        ImGui::Text(TR("ui.exit.confirm_msg_fmt").data(), mapName.c_str());
+        ImGui::TextUnformatted(
+            TR_FMT("ui.exit.confirm_msg_fmt", mapName).c_str());
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();

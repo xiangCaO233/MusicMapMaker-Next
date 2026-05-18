@@ -14,14 +14,14 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
     auto& audio = Audio::AudioManager::instance();
 
     ImGui::Separator();
-    
+
     // 水平居中 EQ 标题和下拉框
     float contentWidth = ImGui::GetContentRegionAvail().x;
-    float comboWidth   = 200.0f; // 固定宽度以方便居中
-    
+    float comboWidth   = 200.0f;  // 固定宽度以方便居中
+
     // 标题居中
-    const char* title = TR("ui.audio_manager.eq_control").data();
-    float titleWidth = ImGui::CalcTextSize(title).x;
+    const char* title      = TR("ui.audio_manager.eq_control").data();
+    float       titleWidth = ImGui::CalcTextSize(title).x;
     ImGui::SetCursorPosX((contentWidth - titleWidth) * 0.5f);
     ImGui::Text("%s", title);
 
@@ -99,7 +99,8 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         float sliderWidth = ImGui::GetFrameHeight();
         float eqSpacing   = 8.0f;  // 增加间距以提高可读性
 
-        // 预计算最大标签宽度，防止如 "16.0k" 这样较宽的标签被裁切导致滑块列也被裁切
+        // 预计算最大标签宽度，防止如 "16.0k"
+        // 这样较宽的标签被裁切导致滑块列也被裁切
         float maxLabelWidth = 0.0f;
         for ( size_t i = 0; i < bandCount; ++i ) {
             char  label[32];
@@ -108,7 +109,8 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 snprintf(label, sizeof(label), "%.1fk", freq / 1000.0f);
             else
                 snprintf(label, sizeof(label), "%.0f", freq);
-            maxLabelWidth = std::max(maxLabelWidth, ImGui::CalcTextSize(label).x);
+            maxLabelWidth =
+                std::max(maxLabelWidth, ImGui::CalcTextSize(label).x);
         }
 
         // 实际每列的宽度应取滑块和标签中的最大值
@@ -117,10 +119,10 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
 
         // 获取父容器可用宽度
         float availWidth = ImGui::GetContentRegionAvail().x;
-        
+
         // 策略：如果内容比窗口窄，则直接让子窗口宽度等于内容宽度，并居中子窗口
         float totalWidthWithBuffer = totalWidth + 2.0f;
-        float childWidth = std::min(totalWidthWithBuffer, availWidth);
+        float childWidth           = std::min(totalWidthWithBuffer, availWidth);
         if ( childWidth < availWidth ) {
             ImGui::SetCursorPosX((availWidth - childWidth) * 0.5f);
         }
@@ -131,35 +133,37 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                                           : ImGuiWindowFlags_None;
 
         // 动态计算可用高度，预留底部按钮位置
-        float footerHeight =
-            ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
-        float availHeight = ImGui::GetContentRegionAvail().y;
-        float childHeight = std::max(220.0f, availHeight - footerHeight);
+        float footerHeight = ImGui::GetFrameHeightWithSpacing() +
+                             ImGui::GetStyle().ItemSpacing.y;
+        float availHeight  = ImGui::GetContentRegionAvail().y;
+        float childHeight  = std::max(220.0f, availHeight - footerHeight);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         bool opened = ImGui::BeginChild("EQSliders",
                                         ImVec2(childWidth, childHeight),
                                         ImGuiChildFlags_None,
                                         childFlags);
-        ImGui::PopStyleVar(); // WindowPadding
+        ImGui::PopStyleVar();  // WindowPadding
 
-        if ( opened ) 
-        {
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(eqSpacing, 4));
+        if ( opened ) {
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                ImVec2(eqSpacing, 4));
 
-            float startX = 1.0f; // Buffer offset
+            float startX = 1.0f;  // Buffer offset
             float startY = ImGui::GetCursorPosY();
 
             // 动态计算内部滑块高度 (总高度减去标签和间距)
-            float fixedElementsH = 36.0f; // 标签 + 基础间距
-            float totalSlidersH = childHeight - fixedElementsH - 12.0f; // 留一点余量
+            float fixedElementsH = 36.0f;  // 标签 + 基础间距
+            float totalSlidersH =
+                childHeight - fixedElementsH - 12.0f;  // 留一点余量
             float gainSliderH = std::max(60.0f, totalSlidersH * 0.6f);
             float qSliderH    = std::max(40.0f, totalSlidersH * 0.4f);
 
             for ( size_t i = 0; i < bandCount; ++i ) {
                 ImGui::PushID((int)i);
 
-                ImGui::SetCursorPos(ImVec2(startX + i * (colWidth + eqSpacing), startY + 3));
+                ImGui::SetCursorPos(
+                    ImVec2(startX + i * (colWidth + eqSpacing), startY + 3));
 
                 ImGui::BeginGroup();
 
@@ -179,7 +183,8 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 ImGui::TextUnformatted(label);
 
                 // 2. 增益滑块 (固定宽度，也要在列内居中)
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (colWidth - sliderWidth) * 0.5f);
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     (colWidth - sliderWidth) * 0.5f);
                 if ( ImGui::VSliderFloat("##Gain",
                                          ImVec2(sliderWidth, gainSliderH),
                                          &gain,
@@ -191,32 +196,42 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 }
                 if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip(
-                        TR("ui.audio_manager.eq_tooltip").data(), label, gain);
+                        "%s",
+                        TR_FMT("ui.audio_manager.eq_tooltip", label, gain)
+                            .c_str());
                 }
 
                 // 3. Q 值滑块
-                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (colWidth - sliderWidth) * 0.5f);
-                if ( ImGui::VSliderFloat(
-                         "##Q", ImVec2(sliderWidth, qSliderH), &q, 0.1f, 10.0f, "") ) {
-                audio.setMainTrackEQBandQ(i, q);
-                changed = true;
-            }
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip(
-                    TR("ui.audio_manager.q_factor_tooltip").data(), q);
-            }
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     (colWidth - sliderWidth) * 0.5f);
+                if ( ImGui::VSliderFloat("##Q",
+                                         ImVec2(sliderWidth, qSliderH),
+                                         &q,
+                                         0.1f,
+                                         10.0f,
+                                         "") ) {
+                    audio.setMainTrackEQBandQ(i, q);
+                    changed = true;
+                }
+                if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR_FMT("ui.audio_manager.q_factor_tooltip", q).c_str());
+                }
 
-            ImGui::EndGroup();
-            ImGui::PopID();
+                ImGui::EndGroup();
+                ImGui::PopID();
+            }
+            ImGui::PopStyleVar();
         }
-        ImGui::PopStyleVar();
-    }
-    ImGui::EndChild();
+        ImGui::EndChild();
 
         // 按钮水平居中
         const char* resetLabel = TR("ui.audio_manager.reset_eq").data();
-        float btnWidth = ImGui::CalcTextSize(resetLabel).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnWidth) * 0.5f);
+        float       btnWidth   = ImGui::CalcTextSize(resetLabel).x +
+                                 ImGui::GetStyle().FramePadding.x * 2.0f;
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnWidth) *
+                             0.5f);
         if ( ImGui::Button(resetLabel) ) {
             for ( size_t i = 0; i < bandCount; ++i ) {
                 audio.setMainTrackEQBandGain(i, 0.0f);

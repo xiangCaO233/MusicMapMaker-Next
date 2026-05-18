@@ -1293,14 +1293,10 @@ void MainMenuView::renderOverlapCheckWindow()
                             suspectedCount++;
                     }
 
-                    char summaryBuf[256];
-                    snprintf(summaryBuf,
-                             sizeof(summaryBuf),
-                             TR("ui.tools.scan_summary").data(),
-                             definiteCount,
-                             suspectedCount);
+                    std::string summaryStr = TR_FMT(
+                        "ui.tools.scan_summary", definiteCount, suspectedCount);
                     ImGui::AlignTextToFramePadding();
-                    ImGui::TextUnformatted(summaryBuf);
+                    ImGui::TextUnformatted(summaryStr.c_str());
 
                     ImGui::Separator();
                     ImGui::Spacing();
@@ -1368,13 +1364,11 @@ void MainMenuView::renderOverlapCheckWindow()
 
                                 // 4. Detail
                                 ImGui::TableNextColumn();
-                                char detailBuf[256];
-                                snprintf(detailBuf,
-                                         sizeof(detailBuf),
-                                         TR("ui.tools.overlap_detail").data(),
-                                         r.note1_desc.c_str(),
-                                         r.note2_desc.c_str());
-                                ImGui::TextUnformatted(detailBuf);
+                                std::string detailStr =
+                                    TR_FMT("ui.tools.overlap_detail",
+                                           r.note1_desc,
+                                           r.note2_desc);
+                                ImGui::TextUnformatted(detailStr.c_str());
 
                                 // 5. Jump Action
                                 ImGui::TableNextColumn();
@@ -1398,8 +1392,10 @@ void MainMenuView::renderOverlapCheckWindow()
                                 ImGui::PopStyleColor(2);
                                 if ( ImGui::IsItemHovered() ) {
                                     ImGui::SetTooltip(
-                                        TR("canvas.preview.jump_to").data(),
-                                        r.timestamp);
+                                        "%s",
+                                        TR_FMT("canvas.preview.jump_to",
+                                               r.timestamp)
+                                            .c_str());
                                 }
                             }
                             ImGui::EndTable();

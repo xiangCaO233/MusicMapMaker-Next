@@ -136,16 +136,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         float titleEndX = titleX + titleWidth;
 
         // 4. 帧信息 (FPS & UPS) - 靠右对齐到按钮左侧
-        ImGuiIO& io       = ImGui::GetIO();
-        float    logicUps = Logic::EditorEngine::instance().getLogicUps();
-        char     fpsBuf[128];
-        snprintf(fpsBuf,
-                 sizeof(fpsBuf),
-                 "%.3f ms/frame (%.1f FPS) | UPS: %.1f",
-                 1000.0f / io.Framerate,
-                 io.Framerate,
-                 logicUps);
-        float fpsWidth = ImGui::CalcTextSize(fpsBuf).x;
+        ImGuiIO&    io       = ImGui::GetIO();
+        float       logicUps = Logic::EditorEngine::instance().getLogicUps();
+        std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
+                                      1000.0f / io.Framerate,
+                                      io.Framerate,
+                                      logicUps);
+        float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         float numberOfButtons  = 3;
         float buttonsAreaWidth = buttonSize * numberOfButtons;
@@ -154,7 +151,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         float fpsGap = std::floor(12.0f * dpiScale);
         float fpsX   = buttonsStartX - fpsGap - fpsWidth;
         ImGui::SetCursorPosX(fpsX);
-        ImGui::TextUnformatted(fpsBuf);
+        ImGui::TextUnformatted(fpsStr.c_str());
         float fpsEndX = fpsX + fpsWidth;
         if ( menuFont ) ImGui::PopFont();
 
