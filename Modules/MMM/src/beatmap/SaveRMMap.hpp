@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <unordered_set>
@@ -51,7 +52,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
             calculated_map_length = timing.m_timestamp;
     }
 
-    write_value(static_cast<int32_t>(calculated_map_length));
+    write_value(static_cast<int32_t>(std::round(calculated_map_length)));
 
     // 5~8字节:int32 图时间点数
     int32_t timing_count = static_cast<int32_t>(beatMap.m_timings.size());
@@ -59,7 +60,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 
     // 每12字节一组: 4字节int32 时间戳 + 8字节double bpm
     for ( const auto& timing : beatMap.m_timings ) {
-        write_value(static_cast<int32_t>(timing.m_timestamp));
+        write_value(static_cast<int32_t>(std::round(timing.m_timestamp)));
         write_value(static_cast<double>(timing.m_bpm));  // BPM
     }
 
@@ -88,10 +89,15 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         RMNoteRecord rec;
         int8_t       base_type = 0;
         int32_t      param     = 0;
+        int32_t      rounded_start =
+            static_cast<int32_t>(std::round(note.m_timestamp));
+
         if ( note.m_type == NoteType::HOLD ) {
-            base_type = 2;
-            param =
-                static_cast<int32_t>(static_cast<const Hold&>(note).m_duration);
+            base_type        = 2;
+            double  duration = static_cast<const Hold&>(note).m_duration;
+            int32_t rounded_end =
+                static_cast<int32_t>(std::round(note.m_timestamp + duration));
+            param = rounded_end - rounded_start;
         } else if ( note.m_type == NoteType::FLICK ) {
             base_type = 1;
             param =
@@ -109,7 +115,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         }
 
         rec.note_type_info = static_cast<int8_t>(complex_info | base_type);
-        rec.note_timestamp = static_cast<int32_t>(note.m_timestamp);
+        rec.note_timestamp = rounded_start;
         rec.note_track     = static_cast<uint8_t>(note.m_track);
         rec.note_parameter = param;
         return rec;
