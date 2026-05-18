@@ -1537,23 +1537,50 @@ void SettingsView::drawProjectSettings()
         std::string projPath = Config::pathToUtf8(project->m_projectRoot);
         float       labelW =
             measureLabelWidth(TR_CACHE("ui.settings.project.path").data()) + 8;
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.project.path").data(),
-                       labelW,
-                       [projPath](Clay_BoundingBox r, bool) {
-                           float widgetH = ImGui::GetFrameHeight();
-                           float offset  = (r.height - widgetH) * 0.5f;
-                           ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.project.path").data(),
+            labelW,
+            [projPath](Clay_BoundingBox r, bool) {
+                float textW  = ImGui::CalcTextSize(projPath.c_str()).x;
+                float textH  = ImGui::CalcTextSize(projPath.c_str()).y;
+                float offset = (r.height - textH) * 0.5f;
 
-                           ImGui::SetNextItemWidth(r.width);
-                           char buf[1024];
-                           snprintf(buf, sizeof(buf), "%s", projPath.c_str());
-                           ImGui::InputText("##ProjPath",
-                                            buf,
-                                            sizeof(buf),
-                                            ImGuiInputTextFlags_ReadOnly);
-                       });
+                if ( textW <= r.width ) {
+                    // 不需要滚动，静态居中渲染
+                    ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                    ImGui::TextUnformatted(projPath.c_str());
+                } else {
+                    // 需要自动滚动（跑马灯效果）
+                    float scrollSpeed = 40.0f;  // 每秒滚动像素数
+                    float maxScroll =
+                        textW - r.width + 30.0f;  // 滚到底部，留点余量
+                    float pauseTime      = 1.5f;  // 起点与终点停顿秒数
+                    float scrollDuration = maxScroll / scrollSpeed;
+                    float totalCycleTime = scrollDuration + pauseTime * 2.0f;
+
+                    float time      = (float)ImGui::GetTime();
+                    float cycleTime = fmodf(time, totalCycleTime);
+
+                    float scrollX = 0.0f;
+                    if ( cycleTime < pauseTime ) {
+                        scrollX = 0.0f;  // 起点停顿
+                    } else if ( cycleTime < pauseTime + scrollDuration ) {
+                        scrollX =
+                            (cycleTime - pauseTime) * scrollSpeed;  // 顺畅滑动
+                    } else {
+                        scrollX = maxScroll;  // 终点停顿
+                    }
+
+                    // 开启裁剪矩形防止文字超出 Widget 区域
+                    ImGui::PushClipRect(
+                        { r.x, r.y }, { r.x + r.width, r.y + r.height }, true);
+                    ImGui::SetCursorScreenPos({ r.x - scrollX, r.y + offset });
+                    ImGui::TextUnformatted(projPath.c_str());
+                    ImGui::PopClipRect();
+                }
+            });
     }
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
