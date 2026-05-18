@@ -384,6 +384,11 @@ return {
 	["ui.timeline.event_creator.create"] = "Create",
 	["ui.timeline.event_creator.keep_speed"] = "Keep Canvas Speed",
 
+	-- Timing Points Table
+	["ui.timeline.timing_points_table_btn"] = "Timing",
+	["ui.timeline.timing_points_table_btn_tooltip"] = "Open Timing Points Table (Bulk Edit)",
+	["ui.timeline.timing_points_table.title"] = "Bulk Edit Timing Points###TimingPointsTable",
+
 	-- Status Bar
 	["ui.status.ready"] = "Ready",
 	["ui.status.mouse_time"] = "Mouse",

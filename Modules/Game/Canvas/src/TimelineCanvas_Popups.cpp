@@ -215,4 +215,229 @@ void TimelineCanvas::renderEventCreationPopup()
     ImGui::PopStyleVar();
 }
 
+/// @brief 渲染可批量编辑时间点的表格窗口（非模态）
+void TimelineCanvas::renderTimingPointsTableWindow()
+{
+    if ( !m_isTableWindowOpen ) return;
+
+    ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
+
+    if ( ImGui::Begin(TR("ui.timeline.timing_points_table.title").data(),
+                      &m_isTableWindowOpen) ) {
+        if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
+            ImGui::TextDisabled("当前未加载任何谱面");
+            ImGui::End();
+            return;
+        }
+
+        auto elements = m_currentSnapshot->timelineElements;
+        std::sort(elements.begin(),
+                  elements.end(),
+                  [](const auto& a, const auto& b) { return a.time < b.time; });
+
+        // 顶层工具栏
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
+        ImGui::SameLine();
+        if ( ImGui::Button("添加 BPM") ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
+                                               ::MMM::TimingEffect::BPM,
+                                               120.0 }));
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button("添加流速 (SV)") ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
+                                               ::MMM::TimingEffect::SCROLL,
+                                               -100.0 }));
+        }
+
+        ImGui::Separator();
+
+        // 批量修改工具
+        if ( ImGui::TreeNode("批量修改工具##BulkTools") ) {
+            // 批量偏移
+            static double bulkOffsetValue = 0.0;
+            ImGui::TextUnformatted("批量时间偏移 (秒):");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputDouble(
+                "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.3f");
+            ImGui::SameLine();
+            if ( ImGui::Button("应用时间偏移") &&
+                 std::abs(bulkOffsetValue) > 1e-6 ) {
+                for ( const auto& el : elements ) {
+                    entt::entity ent =
+                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
+                            ? el.bpmEntity
+                            : el.scrollEntity;
+                    double rawVal =
+                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
+                            ? el.bpmValue
+                            : el.scrollValue;
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                            ent, el.time + bulkOffsetValue, rawVal }));
+                }
+                bulkOffsetValue = 0.0;
+            }
+
+            // 批量缩放
+            static double bulkScaleValue = 1.0;
+            ImGui::TextUnformatted("批量流速缩放倍率:");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::InputDouble(
+                "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.2f");
+            ImGui::SameLine();
+            if ( ImGui::Button("应用流速缩放") &&
+                 std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
+                for ( const auto& el : elements ) {
+                    if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
+                        double dispScroll = (el.scrollValue < -1e-6)
+                                                ? (-100.0 / el.scrollValue)
+                                                : el.scrollValue;
+                        double newDisp    = dispScroll * bulkScaleValue;
+                        double newVal =
+                            newDisp > 1e-6 ? (-100.0 / newDisp) : -100.0;
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdUpdateTimelineEvent{
+                                    el.scrollEntity, el.time, newVal }));
+                    }
+                }
+                bulkScaleValue = 1.0;
+            }
+
+            ImGui::TreePop();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // 渲染表格
+        if ( ImGui::BeginTable(
+                 "TimingPointsTableMain",
+                 5,
+                 ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                     ImGuiTableFlags_Hideable | ImGuiTableFlags_RowBg |
+                     ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
+                     ImGuiTableFlags_ScrollY,
+                 ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing())) ) {
+            ImGui::TableSetupColumn(
+                "序号", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+            ImGui::TableSetupColumn("时间戳 (秒)",
+                                    ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(
+                "类型", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+            ImGui::TableSetupColumn("数值", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn(
+                "操作", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+            ImGui::TableHeadersRow();
+
+            int idx = 0;
+            for ( const auto& el : elements ) {
+                idx++;
+                ImGui::TableNextRow();
+
+                // Column 0: 序号
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
+                ImGui::Text("#%d", idx);
+
+                // Column 1: 时间戳 (秒)
+                ImGui::TableSetColumnIndex(1);
+                double tVal = el.time;
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                std::string tId = fmt::format("##T_{}", idx);
+                if ( ImGui::InputDouble(
+                         tId.c_str(),
+                         &tVal,
+                         0.001,
+                         0.01,
+                         "%.3f",
+                         ImGuiInputTextFlags_EnterReturnsTrue) ) {
+                    entt::entity ent =
+                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
+                            ? el.bpmEntity
+                            : el.scrollEntity;
+                    double rawVal =
+                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
+                            ? el.bpmValue
+                            : el.scrollValue;
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                            ent, tVal, rawVal }));
+                }
+
+                // Column 2: 类型
+                ImGui::TableSetColumnIndex(2);
+                if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+                    ImGui::TextUnformatted("BPM");
+                    ImGui::PopStyleColor();
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+                    ImGui::TextUnformatted("流速 (SV)");
+                    ImGui::PopStyleColor();
+                }
+
+                // Column 3: 数值
+                ImGui::TableSetColumnIndex(3);
+                bool   isBpm = (el.effects & Logic::System::SCROLL_EFFECT_BPM);
+                double vVal  = isBpm ? el.bpmValue
+                                     : ((el.scrollValue < -1e-6)
+                                            ? (-100.0 / el.scrollValue)
+                                            : el.scrollValue);
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                std::string vId = fmt::format("##V_{}", idx);
+                if ( ImGui::InputDouble(
+                         vId.c_str(),
+                         &vVal,
+                         isBpm ? 0.1 : 0.01,
+                         isBpm ? 1.0 : 0.1,
+                         isBpm ? "%.2f" : "%.3f",
+                         ImGuiInputTextFlags_EnterReturnsTrue) ) {
+                    entt::entity ent = isBpm ? el.bpmEntity : el.scrollEntity;
+                    double       finalValue = vVal;
+                    if ( !isBpm ) {
+                        if ( vVal > 1e-6 ) {
+                            finalValue = -100.0 / vVal;
+                        }
+                    }
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+                            ent, el.time, finalValue }));
+                }
+
+                // Column 4: 操作
+                ImGui::TableSetColumnIndex(4);
+                std::string seekId = fmt::format("跳转##Seek_{}", idx);
+                if ( ImGui::Button(seekId.c_str()) ) {
+                    float visualOffset = Config::AppConfig::instance()
+                                             .getVisualConfig()
+                                             .getEffectiveVisualOffset();
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSeek{ el.time - visualOffset }));
+                }
+                ImGui::SameLine();
+                std::string delId = fmt::format("删除##Del_{}", idx);
+                if ( ImGui::Button(delId.c_str()) ) {
+                    entt::entity ent = isBpm ? el.bpmEntity : el.scrollEntity;
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdDeleteTimelineEvent{ ent }));
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+    ImGui::End();
+}
+
 }  // namespace MMM::Canvas

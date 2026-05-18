@@ -391,6 +391,11 @@ return {
 	["ui.timeline.event_creator.create"] = "创建",
 	["ui.timeline.event_creator.keep_speed"] = "保持画布速度",
 
+	-- 时间点表格
+	["ui.timeline.timing_points_table_btn"] = "时间点",
+	["ui.timeline.timing_points_table_btn_tooltip"] = "打开时间点表格 (批量编辑)",
+	["ui.timeline.timing_points_table.title"] = "时间点批量编辑###TimingPointsTable",
+
 	-- 状态栏
 	["ui.status.ready"] = "就绪",
 	["ui.status.mouse_time"] = "鼠标",
