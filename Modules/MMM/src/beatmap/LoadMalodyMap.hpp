@@ -354,11 +354,11 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
 
     double lastProcessedBeat = 0.0;
-    double lastProcessedTime = time0Delay;
+    double lastProcessedTime = 0.0;
 
     if ( !rawEvents.empty() ) {
         lastProcessedBeat = rawEvents[0].beat;
-        lastProcessedTime = time0Delay;
+        lastProcessedTime = 0.0;
         if ( rawEvents[0].isBpm ) currentBpm = rawEvents[0].bpm;
     }
 
@@ -369,7 +369,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         lastProcessedBeat = ev.beat;
 
         Timing timing;
-        timing.m_timestamp = lastProcessedTime + audioOffset;
+        timing.m_timestamp = lastProcessedTime - audioOffset;
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -405,7 +405,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     if ( beatMap.m_timings.empty() ) {
         Timing t;
-        t.m_timestamp             = time0Delay + audioOffset;
+        t.m_timestamp             = -audioOffset;
         t.m_bpm                   = currentBpm;
         t.m_beat_length           = 60000.0 / currentBpm;
         t.m_timingEffect          = TimingEffect::BPM;
