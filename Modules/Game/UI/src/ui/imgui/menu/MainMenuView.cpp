@@ -112,6 +112,9 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( ImGui::IsKeyPressed(ImGuiKey_M, false) ) {
             dispatchCommand(Logic::CmdMirrorSelected{});
         }
+        if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
+            dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
+        }
     } else if ( io.KeyAlt ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.file")) ) {
@@ -1085,6 +1088,11 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(ICON_MMM_SELECT_ALL,
                                   TR("ui.tools.overlap_check")) ) {
             m_showOverlapCheckWindow = !m_showOverlapCheckWindow;
+        }
+
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_BARS, TR("ui.tools.format"), "Ctrl+F") ) {
+            dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
         }
 
         ImGui::EndMenu();

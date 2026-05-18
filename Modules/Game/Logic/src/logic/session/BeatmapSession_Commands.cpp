@@ -37,6 +37,8 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdCut> ||
                                std::is_same_v<T, CmdDeleteSelected> ||
                                std::is_same_v<T, CmdMirrorSelected> ||
+                               std::is_same_v<T,
+                                              CmdAlignSelectedToCommonBeats> ||
                                std::is_same_v<T, CmdStartBrush> ||
                                std::is_same_v<T, CmdUpdateBrush> ||
                                std::is_same_v<T, CmdEndBrush> ||
@@ -94,6 +96,13 @@ bool BeatmapSession::processCommands()
                         fmt::format("{} {}",
                                     TR("ui.status.category.action"),
                                     TR("ui.edit.mirror"));
+                } else if constexpr ( std::is_same_v<
+                                          T,
+                                          CmdAlignSelectedToCommonBeats> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.action"),
+                                    TR("ui.tools.align_beats"));
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {} {:.3f}s",
@@ -159,17 +168,16 @@ bool BeatmapSession::processCommands()
                     m_interaction->handleCommand(arg);
                 }
                 // --- Action 处理的命令 ---
-                else if constexpr ( std::is_same_v<T, CmdUndo> ||
-                                    std::is_same_v<T, CmdRedo> ||
-                                    std::is_same_v<T, CmdCopy> ||
-                                    std::is_same_v<T, CmdCut> ||
-                                    std::is_same_v<T, CmdPaste> ||
-                                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
-                                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                                    std::is_same_v<T, CmdDeleteSelected> ||
-                                    std::is_same_v<T, CmdMirrorSelected> ||
-                                    std::is_same_v<T,
-                                                   CmdCreateTimelineEvent> ) {
+                else if constexpr (
+                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
+                    std::is_same_v<T, CmdCopy> || std::is_same_v<T, CmdCut> ||
+                    std::is_same_v<T, CmdPaste> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdMirrorSelected> ||
+                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
+                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
                 }
             },

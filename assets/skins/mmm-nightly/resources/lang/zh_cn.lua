@@ -350,6 +350,8 @@ return {
 	["ui.tools.definite"] = "确定重叠",
 	["ui.tools.suspected"] = "疑似重叠",
 	["ui.tools.overlap_detail"] = "{} 与 {} 重叠",
+	["ui.tools.align_beats"] = "对齐至常用分拍",
+	["ui.tools.format"] = "对齐常用分拍",
  
 	["ui.wizard.new_beatmap.title"] = "新建谱面向导",
 	["ui.wizard.new_beatmap.create"] = "立即创建",

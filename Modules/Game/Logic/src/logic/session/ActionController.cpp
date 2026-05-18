@@ -192,7 +192,8 @@ void BatchNoteAction::execute(SessionContext& ctx)
     XINFO("[Action] BatchNoteAction: {} entries", m_entries.size());
     for ( auto& entry : m_entries ) {
         if ( entry.after.has_value() ) {
-            if ( !reg.valid(entry.entity) ) entry.entity = reg.create(entry.entity);
+            if ( !reg.valid(entry.entity) )
+                entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
             reg.emplace_or_replace<InteractionComponent>(entry.entity);
@@ -209,12 +210,12 @@ void BatchNoteAction::undo(SessionContext& ctx)
     XINFO("[Undo] BatchNoteAction: {} entries", m_entries.size());
     for ( auto& entry : m_entries ) {
         if ( entry.before.has_value() ) {
-            if ( !reg.valid(entry.entity) ) entry.entity = reg.create(entry.entity);
+            if ( !reg.valid(entry.entity) )
+                entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
             reg.emplace_or_replace<TransformComponent>(entry.entity);
             reg.emplace_or_replace<InteractionComponent>(entry.entity);
-        }
-        else if ( entry.after.has_value() ) {
+        } else if ( entry.after.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }
@@ -234,6 +235,8 @@ std::string BatchNoteAction::getName() const
         nameKey = "ui.status.action.delete_selected";
     else if ( m_name == "Paste" )
         nameKey = "ui.status.action.paste";
+    else if ( m_name == "Align Selected" )
+        nameKey = "ui.tools.align_beats";
 
     return fmt::format("{}: {} {}",
                        TR(nameKey),

@@ -1,3 +1,5 @@
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
@@ -9,9 +11,12 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
-#include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -42,12 +47,11 @@ void ActionController::handleCommand(const CmdCopy& cmd)
         }
     }
     XINFO("Copied {} items to clipboard", m_ctx.clipboard.size());
-    m_ctx.lastActionMessage =
-        fmt::format("{} {} {} {}",
-                    TR("ui.status.category.clipboard"),
-                    TR("ui.status.clipboard.copied"),
-                    m_ctx.clipboard.size(),
-                    TR("ui.status.info.items"));
+    m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
+                                          TR("ui.status.category.clipboard"),
+                                          TR("ui.status.clipboard.copied"),
+                                          m_ctx.clipboard.size(),
+                                          TR("ui.status.info.items"));
 }
 
 void ActionController::handleCommand(const CmdCut& cmd)
@@ -60,12 +64,11 @@ void ActionController::handleCommand(const CmdCut& cmd)
             ic.isCut = true;
         }
     }
-    m_ctx.lastActionMessage =
-        fmt::format("{} {} {} {}",
-                    TR("ui.status.category.clipboard"),
-                    TR("ui.status.clipboard.cut"),
-                    m_ctx.clipboard.size(),
-                    TR("ui.status.info.items"));
+    m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
+                                          TR("ui.status.category.clipboard"),
+                                          TR("ui.status.clipboard.cut"),
+                                          m_ctx.clipboard.size(),
+                                          TR("ui.status.info.items"));
 }
 
 void ActionController::handleCommand(const CmdDeleteSelected& cmd)
@@ -119,9 +122,9 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 
     if ( !entries.empty() ) {
-        size_t count = entries.size();
-        auto   action =
-            std::make_unique<BatchNoteAction>(std::move(entries), "Delete Selected");
+        size_t count  = entries.size();
+        auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -186,18 +189,17 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     }
 
     if ( !entries.empty() ) {
-        size_t count = entries.size();
-        auto   action =
-            std::make_unique<BatchNoteAction>(std::move(entries), "Mirror Selected");
+        size_t count  = entries.size();
+        auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
-        m_ctx.lastActionMessage =
-            fmt::format("{} {} {} {}",
-                        TR("ui.status.category.action"),
-                        TR("ui.edit.mirror"),
-                        count,
-                        TR("ui.status.info.items"));
+        m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
+                                              TR("ui.status.category.action"),
+                                              TR("ui.edit.mirror"),
+                                              count,
+                                              TR("ui.status.info.items"));
     }
 }
 
@@ -306,6 +308,254 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
         TimelineAction::Type::Create, entt::null, std::nullopt, newTl);
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
+}
+
+void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
+{
+    if ( !m_ctx.currentBeatmap ) return;
+
+    // Helper function to extract common beat divisors from the skin
+    auto getCommonDivisorsFromSkin = []() -> std::vector<int> {
+        std::vector<int> divisors;
+        const auto&      colors =
+            MMM::Config::SkinManager::instance().getData().colors;
+        for ( const auto& [key, col] : colors ) {
+            if ( key.rfind("beat_lines.beat_", 0) == 0 ) {
+                std::string sub = key.substr(16);
+                try {
+                    int div = std::stoi(sub);
+                    divisors.push_back(div);
+                } catch ( ... ) {
+                }
+            }
+        }
+        if ( divisors.empty() ) {
+            divisors = { 1, 2, 3, 4, 5, 6, 8, 12, 16 };
+        }
+        std::sort(divisors.begin(), divisors.end());
+        return divisors;
+    };
+
+    std::vector<int> commonDivisors = getCommonDivisorsFromSkin();
+
+    // Gather BPM/Timing events
+    auto tlView = m_ctx.timelineRegistry.view<const TimelineComponent>();
+    std::vector<const TimelineComponent*> bpmEvents;
+    for ( auto entity : tlView ) {
+        const auto& tc = tlView.get<const TimelineComponent>(entity);
+        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
+            bpmEvents.push_back(&tc);
+        }
+    }
+    std::stable_sort(
+        bpmEvents.begin(), bpmEvents.end(), [](const auto* a, const auto* b) {
+            return a->m_timestamp < b->m_timestamp;
+        });
+
+    auto getAlignedTime = [&](double rawTime) -> double {
+        if ( bpmEvents.empty() ) return rawTime;
+        if ( rawTime < bpmEvents[0]->m_timestamp ) return rawTime;
+
+        double bestSnappedTime  = rawTime;
+        double minWeightedError = std::numeric_limits<double>::max();
+
+        // Find the timing event containing rawTime
+        const TimelineComponent* currentBPM = nullptr;
+        double                   bpmTime    = 0.0;
+        double                   bpmVal     = 120.0;
+        double nextBpmTime = std::numeric_limits<double>::infinity();
+
+        for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+            double tBpm  = bpmEvents[i]->m_timestamp;
+            double tNext = (i + 1 < bpmEvents.size())
+                               ? bpmEvents[i + 1]->m_timestamp
+                               : std::numeric_limits<double>::infinity();
+            if ( rawTime >= tBpm && rawTime < tNext ) {
+                currentBPM  = bpmEvents[i];
+                bpmTime     = tBpm;
+                bpmVal      = currentBPM->m_value;
+                nextBpmTime = tNext;
+                break;
+            }
+        }
+
+        if ( !currentBPM ) {
+            currentBPM  = bpmEvents.back();
+            bpmTime     = currentBPM->m_timestamp;
+            bpmVal      = currentBPM->m_value;
+            nextBpmTime = std::numeric_limits<double>::infinity();
+        }
+
+        double bVal = bpmVal;
+        if ( bVal <= 0.0 ) {
+            bVal = 120.0;
+            if ( auto session = EditorEngine::instance().getActiveSession() ) {
+                if ( auto beatmap = session->getContext().currentBeatmap ) {
+                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
+                        bVal = beatmap->m_baseMapMetadata.preference_bpm;
+                    }
+                }
+            }
+        }
+
+        double beatDuration = 60.0 / bVal;
+
+        for ( int divisor : commonDivisors ) {
+            if ( divisor <= 0 ) continue;
+            double stepDuration    = beatDuration / divisor;
+            double relativeTime    = rawTime - bpmTime;
+            double stepCount       = std::round(relativeTime / stepDuration);
+            double nearestStepTime = bpmTime + stepCount * stepDuration;
+
+            if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
+
+            double error         = std::abs(rawTime - nearestStepTime);
+            double weightedError = error * static_cast<double>(divisor);
+
+            if ( weightedError < minWeightedError ) {
+                minWeightedError = weightedError;
+                bestSnappedTime  = nearestStepTime;
+            }
+        }
+
+        return bestSnappedTime;
+    };
+
+    auto alignNote = [&](NoteComponent& nc) {
+        double alignedStart = getAlignedTime(nc.m_timestamp);
+        double alignedEnd   = getAlignedTime(nc.m_timestamp + nc.m_duration);
+        nc.m_timestamp      = alignedStart;
+        nc.m_duration       = std::max(0.0, alignedEnd - alignedStart);
+    };
+
+    std::unordered_set<entt::entity> toAlign;
+    auto                             noteView =
+        m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : noteView ) {
+        const auto& ic = noteView.get<InteractionComponent>(entity);
+        if ( ic.isSelected ) {
+            toAlign.insert(entity);
+
+            const auto& nc = noteView.get<NoteComponent>(entity);
+            if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
+                for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
+                    const auto& subNC =
+                        m_ctx.noteRegistry.get<NoteComponent>(subEnt);
+                    if ( subNC.m_isSubNote &&
+                         subNC.m_parentPolyline == entity ) {
+                        toAlign.insert(subEnt);
+                    }
+                }
+            } else if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
+                toAlign.insert(nc.m_parentPolyline);
+            }
+        }
+    }
+
+    if ( toAlign.empty() ) return;
+
+    std::vector<BatchNoteAction::Entry>             entries;
+    std::unordered_map<entt::entity, NoteComponent> originalNotes;
+    for ( auto entity : toAlign ) {
+        if ( m_ctx.noteRegistry.valid(entity) &&
+             m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+            originalNotes[entity] =
+                m_ctx.noteRegistry.get<NoteComponent>(entity);
+        }
+    }
+
+    std::unordered_map<entt::entity, NoteComponent> newNotes = originalNotes;
+
+    // Align non-polyline notes and child subnotes
+    for ( auto& [entity, newNote] : newNotes ) {
+        if ( newNote.m_type != ::MMM::NoteType::POLYLINE ) {
+            bool shouldAlign = false;
+            if ( m_ctx.noteRegistry.all_of<InteractionComponent>(entity) &&
+                 m_ctx.noteRegistry.get<InteractionComponent>(entity)
+                     .isSelected ) {
+                shouldAlign = true;
+            } else if ( newNote.m_isSubNote &&
+                        newNote.m_parentPolyline != entt::null ) {
+                if ( toAlign.count(newNote.m_parentPolyline) ) {
+                    shouldAlign = true;
+                }
+            } else {
+                shouldAlign = true;
+            }
+
+            if ( shouldAlign ) {
+                alignNote(newNote);
+            }
+        }
+    }
+
+    // Sync subnotes within parent polylines
+    for ( auto& [entity, newNote] : newNotes ) {
+        if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
+            struct ChildInfo {
+                entt::entity entity;
+                double       timestamp;
+                int          originalSubIndex;
+            };
+            std::vector<ChildInfo> children;
+            for ( const auto& [otherEnt, otherNote] : newNotes ) {
+                if ( otherNote.m_isSubNote &&
+                     otherNote.m_parentPolyline == entity ) {
+                    children.push_back({ otherEnt,
+                                         otherNote.m_timestamp,
+                                         otherNote.m_subIndex });
+                }
+            }
+
+            std::stable_sort(children.begin(),
+                             children.end(),
+                             [](const ChildInfo& a, const ChildInfo& b) {
+                                 return a.timestamp < b.timestamp;
+                             });
+
+            std::vector<NoteComponent::SubNote> newSubNotesList;
+            newSubNotesList.reserve(newNote.m_subNotes.size());
+
+            for ( size_t i = 0; i < children.size(); ++i ) {
+                entt::entity childEnt = children[i].entity;
+                int          oldIdx   = children[i].originalSubIndex;
+
+                NoteComponent::SubNote updatedSub = newNote.m_subNotes[oldIdx];
+                updatedSub.timestamp = newNotes[childEnt].m_timestamp;
+                updatedSub.duration  = newNotes[childEnt].m_duration;
+
+                newSubNotesList.push_back(updatedSub);
+                newNotes[childEnt].m_subIndex = static_cast<int>(i);
+            }
+
+            newNote.m_subNotes = std::move(newSubNotesList);
+
+            if ( !newNote.m_subNotes.empty() ) {
+                newNote.m_timestamp  = newNote.m_subNotes.front().timestamp;
+                newNote.m_trackIndex = newNote.m_subNotes.front().trackIndex;
+            }
+        }
+    }
+
+    // Generate BatchNoteAction entries
+    for ( auto entity : toAlign ) {
+        entries.push_back({ entity, originalNotes[entity], newNotes[entity] });
+    }
+
+    if ( !entries.empty() ) {
+        size_t count  = entries.size();
+        auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                          "Align Selected");
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        XINFO("Aligned {} selected items to nearest common beat divisors",
+              count);
+
+        m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
+                                              TR("ui.status.category.action"),
+                                              TR("ui.tools.align_beats"),
+                                              count,
+                                              TR("ui.status.info.items"));
+    }
 }
 
 }  // namespace MMM::Logic
