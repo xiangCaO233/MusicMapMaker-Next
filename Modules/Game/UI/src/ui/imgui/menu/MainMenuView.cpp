@@ -1179,6 +1179,33 @@ void MainMenuView::performOverlapScan()
             return x.start_time < y.start_time;
         });
 
+    // DSU structure for grouping contiguous overlapping notes
+    struct DSU {
+        std::vector<int> parent;
+        DSU(size_t n)
+        {
+            parent.resize(n);
+            for ( size_t i = 0; i < n; ++i ) parent[i] = i;
+        }
+        int find(int i)
+        {
+            if ( parent[i] == i ) return i;
+            return parent[i] = find(parent[i]);
+        }
+        void unite(int i, int j)
+        {
+            int root_i = find(i);
+            int root_j = find(j);
+            if ( root_i != root_j ) {
+                parent[root_i] = root_j;
+            }
+        }
+    };
+
+    DSU               dsu(items.size());
+    std::vector<bool> isDefiniteOverlap(items.size(), false);
+    std::vector<bool> hasAnyOverlap(items.size(), false);
+
     // Sweep-line with sliding window of max 10ms (0.010s) suspicion window
     for ( size_t i = 0; i < items.size(); ++i ) {
         const auto& a              = items[i];
@@ -1225,13 +1252,58 @@ void MainMenuView::performOverlapScan()
             }
 
             if ( is_definite || is_suspected ) {
-                m_overlapResults.push_back({ is_definite,
-                                             t2_start,
-                                             static_cast<uint32_t>(a.track),
-                                             a.desc,
-                                             b.desc });
+                dsu.unite(i, j);
+                hasAnyOverlap[i] = true;
+                hasAnyOverlap[j] = true;
+                if ( is_definite ) {
+                    isDefiniteOverlap[i] = true;
+                    isDefiniteOverlap[j] = true;
+                }
             }
         }
+    }
+
+    // Gather items into groups by DSU root
+    std::unordered_map<int, std::vector<size_t>> groups;
+    for ( size_t i = 0; i < items.size(); ++i ) {
+        if ( hasAnyOverlap[i] ) {
+            groups[dsu.find(i)].push_back(i);
+        }
+    }
+
+    // Build the finalized grouped overlap results
+    for ( const auto& pair : groups ) {
+        const auto& indices = pair.second;
+        if ( indices.size() < 2 ) continue;
+
+        // Find the earliest start time, track, and whether the group is
+        // definite
+        double min_time    = items[indices[0]].start_time;
+        int    track       = items[indices[0]].track;
+        bool   is_definite = false;
+
+        for ( size_t idx : indices ) {
+            min_time = std::min(min_time, items[idx].start_time);
+            if ( isDefiniteOverlap[idx] ) {
+                is_definite = true;
+            }
+        }
+
+        std::string desc1;
+        std::string desc2;
+        if ( indices.size() == 2 ) {
+            desc1 = items[indices[0]].desc;
+            desc2 = items[indices[1]].desc;
+        } else {
+            desc1 = TR_FMT("ui.tools.multiple_objects", indices.size());
+            desc2 = TR("ui.tools.each_other").data();
+        }
+
+        m_overlapResults.push_back({ is_definite,
+                                     min_time,
+                                     static_cast<uint32_t>(track),
+                                     desc1,
+                                     desc2 });
     }
 }
 

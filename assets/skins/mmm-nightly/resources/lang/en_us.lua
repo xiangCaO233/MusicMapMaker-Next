@@ -347,6 +347,8 @@ return {
 	["ui.tools.definite"] = "Definite",
 	["ui.tools.suspected"] = "Suspected",
 	["ui.tools.overlap_detail"] = "{} overlaps with {}",
+	["ui.tools.multiple_objects"] = "{} objects",
+	["ui.tools.each_other"] = "each other",
 	["ui.tools.align_beats"] = "Align Selected to Common Beats",
 	["ui.tools.format"] = "Format Beats",
  

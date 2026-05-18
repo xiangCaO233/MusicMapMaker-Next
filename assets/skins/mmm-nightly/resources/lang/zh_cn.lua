@@ -354,6 +354,8 @@ return {
 	["ui.tools.definite"] = "确定重叠",
 	["ui.tools.suspected"] = "疑似重叠",
 	["ui.tools.overlap_detail"] = "{} 与 {} 重叠",
+	["ui.tools.multiple_objects"] = "{} 个物件",
+	["ui.tools.each_other"] = "彼此",
 	["ui.tools.align_beats"] = "对齐至常用分拍",
 	["ui.tools.format"] = "对齐常用分拍",
  
