@@ -43,7 +43,7 @@ void TimelineCanvas::renderEventEditorPopup()
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
-            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.3f");
+            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.4f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -400,7 +400,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                          &vVal,
                          isBpm ? 0.1 : 0.01,
                          isBpm ? 1.0 : 0.1,
-                         isBpm ? "%.2f" : "%.3f",
+                         isBpm ? "%.2f" : "%.4f",
                          ImGuiInputTextFlags_EnterReturnsTrue) ) {
                     entt::entity ent = isBpm ? el.bpmEntity : el.scrollEntity;
                     double       finalValue = vVal;
