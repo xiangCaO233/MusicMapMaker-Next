@@ -102,29 +102,11 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                 Logic::CmdLoadBeatmap{ loadedBeatmap });
                         });
 
-                    static int s_bmLogCounter = 0;
                     {
                         bool hovered = ImGui::IsItemHovered();
                         bool rclicked =
                             ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-                        if ( (hovered || rclicked) && s_bmLogCounter < 10 ) {
-                            XINFO(
-                                "BeatmapItem [{}]: hovered={} rclicked={} "
-                                "pos=({},{}) size=({},{}) mouse=({},{})",
-                                beatmap.m_name,
-                                hovered,
-                                rclicked,
-                                r.x,
-                                r.y,
-                                r.width,
-                                r.height,
-                                ImGui::GetMousePos().x,
-                                ImGui::GetMousePos().y);
-                            s_bmLogCounter++;
-                        }
                         if ( hovered && rclicked ) {
-                            XINFO("BeatmapItem RIGHT-CLICK TRIGGERED: {}",
-                                  beatmap.m_filePath);
                             m_manageBeatmapPath = beatmap.m_filePath;
                             m_openManageModal   = true;
                         }

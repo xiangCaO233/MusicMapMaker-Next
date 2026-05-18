@@ -37,7 +37,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
 
-    UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0);
+    UI::LayoutContext lctx(
+        m_layoutCtx, windowName, true, ImGuiWindowFlags_NoScrollbar);
 
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -94,8 +95,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 float time = static_cast<float>(m_currentSnapshot->currentTime);
                 float total = static_cast<float>(m_currentSnapshot->totalTime);
 
-                float sliderWidth  = 20.0f;
-                float btnHeight    = 90.0f;
+                float sliderWidth  = 24.0f;
+                float btnHeight    = 70.0f;
                 float spacing      = ImGui::GetStyle().ItemSpacing.y;
                 float sliderHeight = size.y - btnHeight - spacing;
                 if ( sliderHeight < 20.0f ) {
@@ -124,7 +125,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 }
 
                 if ( sliderHeight < size.y ) {
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + spacing);
 
                     auto getVerticalText =
                         [](const std::string& input) -> std::string {

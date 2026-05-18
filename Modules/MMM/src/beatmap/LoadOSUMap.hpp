@@ -421,8 +421,6 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
                 basemeta.map_length = hold.m_timestamp + hold.m_duration;
             // 把长条物件加入列表
             beatMap.m_noteData.holds.push_back(hold);
-            // 加入物件引用表
-            beatMap.m_allNotes.push_back(beatMap.m_noteData.holds.back());
         } else {
             Note note;
             // 使用读取出的参数初始化物件
@@ -433,8 +431,6 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
 
             // 加入物件列表
             beatMap.m_noteData.notes.push_back(note);
-            // 加入物件引用表
-            beatMap.m_allNotes.push_back(beatMap.m_noteData.notes.back());
         }
     }
 
@@ -465,6 +461,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
             firstBpmSet                              = true;
         }
     }
+
+    beatMap.sync();
 
     return beatMap;
 }
