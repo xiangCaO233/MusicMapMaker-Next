@@ -43,7 +43,8 @@ float AudioTrackControllerUI::measureLabelWidth(const char* label)
 
 void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                             const char* label, float labelWidth,
-                                            CLayBox::DrawFunc widget)
+                                            CLayBox::DrawFunc widget,
+                                            float             heightOverride)
 {
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
@@ -64,7 +65,8 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                    Sizing::Grow(),
                    [widget](Clay_BoundingBox r, bool h) { widget(r, h); });
 
-    float rowH = ImGui::GetFrameHeight() + 8.0f;
+    float rowH = heightOverride > 0.0f ? heightOverride
+                                       : (ImGui::GetFrameHeight() + 8.0f);
     parent.addLayout(
         (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));
 }
@@ -177,8 +179,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
 }
 
 void AudioTrackControllerUI::buildSpeedAndPitchSection(
-    CLayVBox& parent, size_t& rowIndex, float labelWidth, float& speed,
-    float& pitch, bool& changed)
+    CLayVBox& parent, size_t& rowIndex, float labelWidth, float availWidgetW,
+    float& speed, float& pitch, bool& changed)
 {
     auto& audio = Audio::AudioManager::instance();
 
@@ -198,35 +200,79 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                 TR("ui.audio_manager.speed_info").data(), speed, actualSpeed);
         });
 
+    // 动态计算速度预设按钮自动折行的高度与宽度
+    std::string speed025 = TR("ui.audio_manager.speed_025x").data();
+    std::string speed050 = TR("ui.audio_manager.speed_050x").data();
+    std::string speed075 = TR("ui.audio_manager.speed_075x").data();
+    std::string speed100 = TR("ui.audio_manager.speed_100x").data();
+
+    std::vector<std::string> speedPresets = {
+        speed025, speed050, speed075, speed100
+    };
+    std::vector<float> targetSpeeds = { 0.25f, 0.5f, 0.75f, 1.0f };
+
+    float spacing    = ImGui::GetStyle().ItemSpacing.x;
+    float currentX   = 0.0f;
+    int   speedLines = 1;
+    for ( size_t i = 0; i < speedPresets.size(); ++i ) {
+        float btnW = ImGui::CalcTextSize(speedPresets[i].c_str()).x +
+                     ImGui::GetStyle().FramePadding.x * 2.0f;
+        if ( i > 0 ) {
+            if ( currentX + spacing + btnW < availWidgetW ) {
+                currentX += spacing + btnW;
+            } else {
+                speedLines++;
+                currentX = btnW;
+            }
+        } else {
+            currentX = btnW;
+        }
+    }
+    float speedPresetsH = speedLines * ImGui::GetFrameHeight() +
+                          (speedLines - 1) * ImGui::GetStyle().ItemSpacing.y +
+                          8.0f;
+
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.speed_presets").data(),
         labelWidth,
-        [&speed, &changed](Clay_BoundingBox r, bool) {
-            float widgetH = ImGui::GetFrameHeight();
-            float offset  = (r.height - widgetH) * 0.5f;
-            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-            if ( ImGui::Button(TR("ui.audio_manager.speed_025x").data()) ) {
-                speed   = 0.25f;
-                changed = true;
+        [speedPresets, targetSpeeds, &speed, &changed](Clay_BoundingBox r,
+                                                       bool) {
+            float widgetH     = ImGui::GetFrameHeight();
+            float spacing     = ImGui::GetStyle().ItemSpacing.x;
+            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
+
+            ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+
+            float currentX = 0.0f;
+            float currentY = 0.0f;
+            for ( size_t i = 0; i < speedPresets.size(); ++i ) {
+                float btnW = ImGui::CalcTextSize(speedPresets[i].c_str()).x +
+                             ImGui::GetStyle().FramePadding.x * 2.0f;
+                if ( i > 0 ) {
+                    if ( currentX + spacing + btnW < r.width ) {
+                        ImGui::SameLine();
+                        currentX += spacing + btnW;
+                    } else {
+                        currentY += widgetH + lineSpacing;
+                        ImGui::SetCursorScreenPos(
+                            { r.x, r.y + 4.0f + currentY });
+                        currentX = btnW;
+                    }
+                } else {
+                    currentX = btnW;
+                }
+
+                ImGui::PushID(static_cast<int>(i));
+                if ( ImGui::Button(speedPresets[i].c_str()) ) {
+                    speed   = targetSpeeds[i];
+                    changed = true;
+                }
+                ImGui::PopID();
             }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.speed_050x").data()) ) {
-                speed   = 0.5f;
-                changed = true;
-            }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.speed_075x").data()) ) {
-                speed   = 0.75f;
-                changed = true;
-            }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.speed_100x").data()) ) {
-                speed   = 1.0f;
-                changed = true;
-            }
-        });
+        },
+        speedPresetsH);
 
     addSettingItem(
         parent,
@@ -267,33 +313,78 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                        }
                    });
 
+    // 动态计算音高预设按钮自动折行的高度与宽度
+    std::string pitchN24 = TR("ui.audio_manager.pitch_n24").data();
+    std::string pitchN12 = TR("ui.audio_manager.pitch_n12").data();
+    std::string pitchN5  = TR("ui.audio_manager.pitch_n5").data();
+    std::string pitch0   = TR("ui.audio_manager.pitch_0").data();
+
+    std::vector<std::string> pitchPresets = {
+        pitchN24, pitchN12, pitchN5, pitch0
+    };
+    std::vector<float> targetPitches = { -24.0f, -12.0f, -5.0f, 0.0f };
+
+    currentX       = 0.0f;
+    int pitchLines = 1;
+    for ( size_t i = 0; i < pitchPresets.size(); ++i ) {
+        float btnW = ImGui::CalcTextSize(pitchPresets[i].c_str()).x +
+                     ImGui::GetStyle().FramePadding.x * 2.0f;
+        if ( i > 0 ) {
+            if ( currentX + spacing + btnW < availWidgetW ) {
+                currentX += spacing + btnW;
+            } else {
+                pitchLines++;
+                currentX = btnW;
+            }
+        } else {
+            currentX = btnW;
+        }
+    }
+    float pitchPresetsH = pitchLines * ImGui::GetFrameHeight() +
+                          (pitchLines - 1) * ImGui::GetStyle().ItemSpacing.y +
+                          8.0f;
+
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.pitch_presets").data(),
         labelWidth,
-        [&pitch, &changed](Clay_BoundingBox r, bool) {
-            ImGui::SetCursorScreenPos({ r.x, r.y });
-            if ( ImGui::Button(TR("ui.audio_manager.pitch_n24").data()) ) {
-                pitch   = -24.0f;
-                changed = true;
+        [pitchPresets, targetPitches, &pitch, &changed](Clay_BoundingBox r,
+                                                        bool) {
+            float widgetH     = ImGui::GetFrameHeight();
+            float spacing     = ImGui::GetStyle().ItemSpacing.x;
+            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
+
+            ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+
+            float currentX = 0.0f;
+            float currentY = 0.0f;
+            for ( size_t i = 0; i < pitchPresets.size(); ++i ) {
+                float btnW = ImGui::CalcTextSize(pitchPresets[i].c_str()).x +
+                             ImGui::GetStyle().FramePadding.x * 2.0f;
+                if ( i > 0 ) {
+                    if ( currentX + spacing + btnW < r.width ) {
+                        ImGui::SameLine();
+                        currentX += spacing + btnW;
+                    } else {
+                        currentY += widgetH + lineSpacing;
+                        ImGui::SetCursorScreenPos(
+                            { r.x, r.y + 4.0f + currentY });
+                        currentX = btnW;
+                    }
+                } else {
+                    currentX = btnW;
+                }
+
+                ImGui::PushID(static_cast<int>(i + 100));
+                if ( ImGui::Button(pitchPresets[i].c_str()) ) {
+                    pitch   = targetPitches[i];
+                    changed = true;
+                }
+                ImGui::PopID();
             }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.pitch_n12").data()) ) {
-                pitch   = -12.0f;
-                changed = true;
-            }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.pitch_n5").data()) ) {
-                pitch   = -5.0f;
-                changed = true;
-            }
-            ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_manager.pitch_0").data()) ) {
-                pitch   = 0.0f;
-                changed = true;
-            }
-        });
+        },
+        pitchPresetsH);
 
     addSettingItem(
         parent,

@@ -102,8 +102,15 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             m_contentVBox, rowIndex, maxLabelW, volume, muted, changed);
 
         if ( m_type == TrackType::Main ) {
-            buildSpeedAndPitchSection(
-                m_contentVBox, rowIndex, maxLabelW, speed, pitch, changed);
+            float availWidgetW =
+                ImGui::GetContentRegionAvail().x - maxLabelW - 24.0f;
+            buildSpeedAndPitchSection(m_contentVBox,
+                                      rowIndex,
+                                      maxLabelW,
+                                      availWidgetW,
+                                      speed,
+                                      pitch,
+                                      changed);
             buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
         }
 

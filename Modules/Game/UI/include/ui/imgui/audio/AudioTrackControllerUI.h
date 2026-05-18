@@ -38,8 +38,8 @@ private:
                             bool& changed);
     /// @brief 构建速度和音高区域的 Clay 布局
     void buildSpeedAndPitchSection(CLayVBox& parent, size_t& rowIndex,
-                                   float labelWidth, float& speed, float& pitch,
-                                   bool& changed);
+                                   float labelWidth, float availWidgetW,
+                                   float& speed, float& pitch, bool& changed);
     /// @brief 渲染 EQ 区域（保持原有 ImGui 直接绘制）
     void renderEQSection(bool& changed);
     /// @brief 构建音效预览区域的 Clay 布局
@@ -57,7 +57,8 @@ private:
     float measureLabelWidth(const char* label);
     /// @brief 添加一个设置项行（标签 + 控件）
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
-                        float labelWidth, CLayBox::DrawFunc widget);
+                        float labelWidth, CLayBox::DrawFunc widget,
+                        float heightOverride = 0.0f);
 
 private:
     std::string m_trackId;
