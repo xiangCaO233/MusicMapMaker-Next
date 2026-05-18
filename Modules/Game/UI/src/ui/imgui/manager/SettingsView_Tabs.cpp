@@ -1849,53 +1849,6 @@ void SettingsView::drawBeatmapSettings()
 
                 ImGui::PopClipRect();
             });
-
-        // 物件统计
-        size_t totalPlayableNotes = 0;
-        size_t normalNotes        = 0;
-        size_t holds              = 0;
-        size_t flicks             = 0;
-        size_t polylinesCount     = 0;
-
-        auto noteView =
-            session->getContext().noteRegistry.view<Logic::NoteComponent>();
-        for ( auto entity : noteView ) {
-            const auto& nc = noteView.get<Logic::NoteComponent>(entity);
-            if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
-                polylinesCount++;
-                for ( const auto& sub : nc.m_subNotes ) {
-                    if ( sub.type == ::MMM::NoteType::NOTE )
-                        normalNotes++;
-                    else if ( sub.type == ::MMM::NoteType::HOLD )
-                        holds++;
-                    else if ( sub.type == ::MMM::NoteType::FLICK )
-                        flicks++;
-                }
-            } else if ( !nc.m_isSubNote ) {
-                if ( nc.m_type == ::MMM::NoteType::NOTE )
-                    normalNotes++;
-                else if ( nc.m_type == ::MMM::NoteType::HOLD )
-                    holds++;
-                else if ( nc.m_type == ::MMM::NoteType::FLICK )
-                    flicks++;
-            }
-        }
-        totalPlayableNotes = normalNotes + holds + flicks;
-
-        std::string statsStr = TR_FMT("ui.settings.beatmap.stats_format",
-                                      totalPlayableNotes,
-                                      normalNotes,
-                                      holds,
-                                      flicks);
-
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.beatmap.stats").data(),
-                       maxLabelW,
-                       [statsStr](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           ImGui::TextUnformatted(statsStr.c_str());
-                       });
     }
 
     if ( auto* sec = addHeader(

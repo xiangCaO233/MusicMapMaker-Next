@@ -399,6 +399,8 @@ return {
 	-- 状态栏
 	["ui.status.ready"] = "就绪",
 	["ui.status.mouse_time"] = "鼠标",
+	["ui.status.max_combo"] = "最大连击数",
+	["ui.status.note_count"] = "物件数",
 
 	-- 状态栏操作信息
 	["ui.status.category.action"] = "[操作]",

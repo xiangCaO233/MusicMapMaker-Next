@@ -3,6 +3,8 @@
 #include "imgui_internal.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/session/context/SessionContext.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include <cmath>
 #include <fmt/format.h>
@@ -95,6 +97,60 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     ImGui::Text("%s: %s",
                                 TR("ui.status.mouse_time").data(),
                                 formatTime(snapshot->hoveredTime).c_str());
+                }
+
+                // 物件数量与最大连击数统计 (仅在谱面打开时显示)
+                auto session = engine.getActiveSession();
+                if ( session ) {
+                    size_t totalPlayableNotes = 0;
+                    size_t normalNotes        = 0;
+                    size_t holds              = 0;
+                    size_t flicks             = 0;
+
+                    auto noteView =
+                        session->getContext()
+                            .noteRegistry.view<Logic::NoteComponent>();
+                    for ( auto entity : noteView ) {
+                        const auto& nc =
+                            noteView.get<Logic::NoteComponent>(entity);
+                        if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
+                            for ( const auto& sub : nc.m_subNotes ) {
+                                if ( sub.type == ::MMM::NoteType::NOTE )
+                                    normalNotes++;
+                                else if ( sub.type == ::MMM::NoteType::HOLD )
+                                    holds++;
+                                else if ( sub.type == ::MMM::NoteType::FLICK )
+                                    flicks++;
+                            }
+                        } else if ( !nc.m_isSubNote ) {
+                            if ( nc.m_type == ::MMM::NoteType::NOTE )
+                                normalNotes++;
+                            else if ( nc.m_type == ::MMM::NoteType::HOLD )
+                                holds++;
+                            else if ( nc.m_type == ::MMM::NoteType::FLICK )
+                                flicks++;
+                        }
+                    }
+                    totalPlayableNotes = normalNotes + holds + flicks;
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text("%s: %zu",
+                                TR("ui.status.note_count").data(),
+                                totalPlayableNotes);
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text(
+                        "%s: %zu",
+                        TR("ui.status.max_combo").data(),
+                        totalPlayableNotes);  // Combo数目前展示为物件数量
                 }
 
                 // 在状态栏最右侧显示最后一次操作信息

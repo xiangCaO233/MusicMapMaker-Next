@@ -392,6 +392,8 @@ return {
 	-- Status Bar
 	["ui.status.ready"] = "Ready",
 	["ui.status.mouse_time"] = "Mouse",
+	["ui.status.max_combo"] = "Max Combo",
+	["ui.status.note_count"] = "Objects",
 
 	-- Status Bar Action Info
 	["ui.status.category.action"] = "[Action]",
