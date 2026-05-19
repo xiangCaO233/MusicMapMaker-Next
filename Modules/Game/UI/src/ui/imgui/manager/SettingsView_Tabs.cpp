@@ -1635,9 +1635,10 @@ void SettingsView::drawProjectSettings()
 
 void SettingsView::drawBeatmapSettings()
 {
-    auto& engine  = Logic::EditorEngine::instance();
-    auto  session = engine.getActiveSession();
-    auto* project = engine.getCurrentProject();
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    auto*                                 project = engine.getCurrentProject();
 
     if ( !session || !session->getContext().currentBeatmap ) {
         ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();

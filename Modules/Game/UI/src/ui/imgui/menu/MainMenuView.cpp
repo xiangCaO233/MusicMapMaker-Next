@@ -249,7 +249,9 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     auto& config = Config::AppConfig::instance().getEditorSettings();
 
     std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
-    auto        session = Logic::EditorEngine::instance().getActiveSession();
+    auto&       engine      = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
     if ( session && session->getContext().currentBeatmap ) {
         auto& meta = session->getContext().currentBeatmap->m_baseMapMetadata;
         if ( ext == ".imd" ) {
@@ -1131,7 +1133,9 @@ void MainMenuView::performOverlapScan()
     m_overlapResults.clear();
     m_hasOverlapScan = true;
 
-    auto session = Logic::EditorEngine::instance().getActiveSession();
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
     if ( !session ) return;
 
     struct CheckItem {
@@ -1351,7 +1355,10 @@ void MainMenuView::renderOverlapCheckWindow()
     if ( titleFont ) ImGui::PopFont();
 
     if ( opened ) {
-        auto session = Logic::EditorEngine::instance().getActiveSession();
+        auto& engine = Logic::EditorEngine::instance();
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
         if ( !session ) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                "%s",

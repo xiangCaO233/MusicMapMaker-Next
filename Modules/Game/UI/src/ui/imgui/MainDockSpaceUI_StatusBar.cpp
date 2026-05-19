@@ -161,6 +161,8 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 }
 
                 // 物件数量与最大连击数统计 (仅在谱面打开时显示)
+                std::lock_guard<std::recursive_mutex> sessionLock(
+                    engine.getSessionMutex());
                 auto session = engine.getActiveSession();
                 if ( session ) {
                     static size_t s_cachedNoteCount  = 0;
@@ -188,11 +190,12 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                         s_lastRedoSize     = currRedo;
                         s_lastRegistrySize = currRegSize;
 
-                        size_t normalNotes   = 0;
-                        size_t holds         = 0;
-                        size_t flicks        = 0;
-                        size_t totalMaxCombo = 0;
-                        const ::MMM::BeatMap* beatmap = ctx.currentBeatmap.get();
+                        size_t                normalNotes   = 0;
+                        size_t                holds         = 0;
+                        size_t                flicks        = 0;
+                        size_t                totalMaxCombo = 0;
+                        const ::MMM::BeatMap* beatmap =
+                            ctx.currentBeatmap.get();
 
                         auto noteView =
                             ctx.noteRegistry.view<Logic::NoteComponent>();

@@ -105,6 +105,11 @@ public:
         return m_activeSession;
     }
 
+    /**
+     * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态
+     */
+    std::recursive_mutex& getSessionMutex() const { return m_sessionMutex; }
+
 
     /**
      * @brief 获取指定摄像机/画布的同步缓冲区
