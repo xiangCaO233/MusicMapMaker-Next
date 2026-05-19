@@ -89,8 +89,16 @@ void SettingsView::addRadioSetting(
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
     int& current, bool& changed)
 {
-    float widgetAvailW =
-        240.0f;  // 统一为标准控件宽度，使得折行布局能完美居右对齐！
+    // 获取当前面板的实际可用宽度，并将剩余空间全部分配给控件
+    float totalWidth = ImGui::GetContentRegionAvail().x;
+
+    // 扣除 CLay 布局的多层 Padding (外层 VBox 8x2, 装饰 Section 8x2, Row 8x2,
+    // 元素间距 8) 以及额外预留滚动条/边缘的缓冲宽度
+    // (16)，算出控件可用的实际宽度
+    float widgetAvailW = totalWidth - labelWidth - 72.0f;
+    if ( widgetAvailW < 150.0f ) {
+        widgetAvailW = 150.0f;  // 保证极端情况下的最小可用度，防崩溃
+    }
 
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
@@ -98,7 +106,7 @@ void SettingsView::addRadioSetting(
     std::string labelId = "S" + std::to_string(sectionIndex) + "_R" +
                           std::to_string(rowIndex) + "_L_" + label;
 
-    // 1. 标签
+    // 1. 标签 (固定宽度为 labelWidth)
     row.addElement(labelId + "_lbl",
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
@@ -109,11 +117,7 @@ void SettingsView::addRadioSetting(
                        ImGui::Text("%s", label);
                    });
 
-    // 2. 弹簧 spacer
-    row.addElement(
-        labelId + "_spring", Sizing::Grow(), Sizing::Grow(), nullptr);
-
-    // 3. 控件组
+    // 2. 控件容器组 (动态计算和包含所有 RadioButtons)
     auto& containerVBox = getSection(sectionIndex++);
     containerVBox.clear();
     containerVBox.setSpacing(4).setPadding(0, 0, 0, 0);
@@ -159,9 +163,10 @@ void SettingsView::addRadioSetting(
         currentLineW += itemW + 12.0f;
     }
 
+    // 将整个控件组作为撑满剩余可用空间 (widgetAvailW) 的 HBox 加入主行
     row.addLayout((labelId + "_group").c_str(),
                   containerVBox,
-                  Sizing::Fixed(widgetAvailW),  // 统一设为 240px 宽度
+                  Sizing::Fixed(widgetAvailW),
                   Sizing::Fit());
 
     parent.addLayout(
@@ -177,6 +182,42 @@ void SettingsView::drawSoftwareSettings()
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
+
+    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
+    // Seg 完美垂直对齐！
+    const char* allSoftwareLabels[] = {
+        TR_CACHE("ui.settings.software.language").data(),
+        TR_CACHE("ui.settings.software.framelimit").data(),
+        TR_CACHE("ui.settings.software.theme").data(),
+        TR_CACHE("ui.settings.software.font.ascii").data(),
+        TR_CACHE("ui.settings.software.font.cjk").data(),
+        TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
+        TR_CACHE("ui.settings.software.font.multiplier").data(),
+        TR_CACHE("ui.settings.editor.cursor_style").data(),
+        TR_CACHE("ui.settings.software.cursor_size").data(),
+        TR_CACHE("ui.settings.software.trail_size").data(),
+        TR_CACHE("ui.settings.software.trail_life").data(),
+        TR_CACHE("ui.settings.software.smoke_size").data(),
+        TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
+        TR_CACHE("ui.settings.software.smoke_life").data(),
+        TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
+        TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
+        TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
+        TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
+        TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
+        TR_CACHE("ui.settings.software.picker_style").data(),
+        TR_CACHE("ui.settings.software.save_format").data(),
+        TR_CACHE("ui.settings.software.recent_limit").data(),
+        TR_CACHE("ui.settings.software.sync_mode").data(),
+        TR_CACHE("ui.settings.software.sync_factor").data(),
+        TR_CACHE("ui.settings.software.sync_buffer").data(),
+        TR_CACHE("ui.settings.software.sync_interval").data()
+    };
+    float maxLabelW = 0;
+    for ( auto* l : allSoftwareLabels ) {
+        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+    }
+    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
@@ -251,20 +292,7 @@ void SettingsView::drawSoftwareSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.general").data(),
                                true) ) {
-        // 计算本段所有标签的最大宽度
-        const char* genLabels[] = {
-            TR_CACHE("ui.settings.software.language").data(),
-            TR_CACHE("ui.settings.software.vsync").data(),
-            TR_CACHE("ui.settings.software.theme").data(),
-            TR_CACHE("ui.settings.software.font.ascii").data(),
-            TR_CACHE("ui.settings.software.font.cjk").data(),
-            TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
-            TR_CACHE("ui.settings.software.font.multiplier").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : genLabels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         // 1. 语言选择
         addSettingItem(
@@ -288,15 +316,30 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
-        // 2. 垂直同步
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.software.vsync").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           changed |=
-                               ImGui::Checkbox("##VSync", &settings.vsync);
-                       });
+        // 2. 帧数限制
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.framelimit").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         limit    = (int)settings.frameLimit;
+                const char* limits[] = {
+                    TR_CACHE("ui.settings.software.framelimit.vsync").data(),
+                    TR_CACHE("ui.settings.software.framelimit.2x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.4x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.8x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.unlimited").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##FrameLimitCombo",
+                                  &limit,
+                                  limits,
+                                  IM_ARRAYSIZE(limits)) ) {
+                    settings.frameLimit = (Config::FrameLimitPreference)limit;
+                    changed             = true;
+                }
+            });
 
         // 3. UI 主题
         addSettingItem(
@@ -615,19 +658,7 @@ void SettingsView::drawSoftwareSettings()
     if ( auto* sec = addHeader(
              TR_CACHE("ui.settings.software.cursor_params").data(), true) ) {
 
-        const char* curLabels[] = {
-            TR_CACHE("ui.settings.editor.cursor_style").data(),
-            TR_CACHE("ui.settings.software.cursor_size").data(),
-            TR_CACHE("ui.settings.software.trail_size").data(),
-            TR_CACHE("ui.settings.software.trail_life").data(),
-            TR_CACHE("ui.settings.software.smoke_size").data(),
-            TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
-            TR_CACHE("ui.settings.software.smoke_life").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : curLabels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addRadioSetting(
             *sec,
@@ -729,16 +760,7 @@ void SettingsView::drawSoftwareSettings()
     // 界面美化/审美设置
     if ( auto* sec = addHeader(
              TR_CACHE("ui.settings.software.aesthetics").data(), true) ) {
-        const char* aesLabels[] = {
-            TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
-            TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
-            TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
-            TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : aesLabels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(
             *sec,
@@ -840,19 +862,7 @@ void SettingsView::drawSoftwareSettings()
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.software.sync").data(), true) ) {
 
-        const char* syncLabels[] = {
-            TR_CACHE("ui.settings.software.picker_style").data(),
-            TR_CACHE("ui.settings.software.save_format").data(),
-            TR_CACHE("ui.settings.software.recent_limit").data(),
-            TR_CACHE("ui.settings.software.sync_mode").data(),
-            TR_CACHE("ui.settings.software.sync_factor").data(),
-            TR_CACHE("ui.settings.software.sync_buffer").data(),
-            TR_CACHE("ui.settings.software.sync_interval").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : syncLabels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         // 文件选择器样式
         addRadioSetting(
@@ -905,7 +915,11 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 int         syncMode    = (int)settings.syncConfig.mode;
-                const char* syncModes[] = { "None", "Integral", "WaterTank" };
+                const char* syncModes[] = {
+                    TR_CACHE("ui.settings.software.sync_mode.none").data(),
+                    TR_CACHE("ui.settings.software.sync_mode.integral").data(),
+                    TR_CACHE("ui.settings.software.sync_mode.watertank").data()
+                };
                 ImGui::SetNextItemWidth(r.width);
                 if ( ImGui::Combo("##SyncMode",
                                   &syncMode,
@@ -984,6 +998,41 @@ void SettingsView::drawVisualSettings()
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
+    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
+    // Seg 完美垂直对齐！
+    const char* allVisualLabels[] = {
+        TR_CACHE("ui.settings.visual.layout_left").data(),
+        TR_CACHE("ui.settings.visual.layout_top").data(),
+        TR_CACHE("ui.settings.visual.layout_right").data(),
+        TR_CACHE("ui.settings.visual.layout_bottom").data(),
+        TR_CACHE("ui.settings.visual.layout_box_width").data(),
+        TR_CACHE("ui.settings.visual.judgeline_pos").data(),
+        TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
+        TR_CACHE("ui.settings.visual.note_scale_x").data(),
+        TR_CACHE("ui.settings.visual.note_scale_y").data(),
+        TR_CACHE("ui.settings.visual.note_fill_mode").data(),
+        TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
+        TR_CACHE("ui.settings.visual.bg_opaque").data(),
+        TR_CACHE("ui.settings.visual.bg_darken").data(),
+        TR_CACHE("ui.settings.visual.preview_ratio").data(),
+        TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity").data(),
+        TR_CACHE("ui.settings.visual.preview_margin_left").data(),
+        TR_CACHE("ui.settings.visual.preview_margin_top").data(),
+        TR_CACHE("ui.settings.visual.preview_margin_right").data(),
+        TR_CACHE("ui.settings.visual.preview_margin_bottom").data(),
+        TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
+        TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
+        TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+        TR_CACHE("ui.settings.visual.linear_scroll").data(),
+        TR_CACHE("ui.settings.visual.snap_threshold").data(),
+        TR_CACHE("ui.settings.visual.visual_offset").data()
+    };
+    float maxLabelW = 0;
+    for ( auto* l : allVisualLabels ) {
+        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+    }
+    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
+
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
@@ -1054,17 +1103,7 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.layout").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.visual.layout_left").data(),
-            TR_CACHE("ui.settings.visual.layout_top").data(),
-            TR_CACHE("ui.settings.visual.layout_right").data(),
-            TR_CACHE("ui.settings.visual.layout_bottom").data(),
-            TR_CACHE("ui.settings.visual.layout_box_width").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(*sec,
                        rowIndex,
@@ -1143,10 +1182,7 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.judgeline").data(),
                                true) ) {
-        float maxLabelW =
-            measureLabelWidth(
-                TR_CACHE("ui.settings.visual.judgeline_pos").data()) +
-            8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
         addSettingItem(
             *sec,
             rowIndex,
@@ -1161,10 +1197,7 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.beat_line").data(),
                                true) ) {
-        float maxLabelW =
-            measureLabelWidth(
-                TR_CACHE("ui.settings.visual.beat_line_alpha").data()) +
-            8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
         addSettingItem(
             *sec,
             rowIndex,
@@ -1179,15 +1212,7 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.note").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.visual.note_scale_x").data(),
-            TR_CACHE("ui.settings.visual.note_scale_y").data(),
-            TR_CACHE("ui.settings.visual.note_fill_mode").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(*sec,
                        rowIndex,
@@ -1207,58 +1232,58 @@ void SettingsView::drawVisualSettings()
                            changed |= ImGui::SliderFloat(
                                "##NoteScaleY", &visual.noteScaleY, 0.5f, 3.0f);
                        });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.note_fill_mode").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int         noteFillMode = (int)visual.noteFillMode;
-                           const char* fillModes[]  = {
-                               "Stretch", "AspectFit", "AspectFill", "Center"
-                           };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##NoteFillMode",
-                                             &noteFillMode,
-                                             fillModes,
-                                             IM_ARRAYSIZE(fillModes)) ) {
-                               visual.noteFillMode =
-                                   (Config::BackgroundFillMode)noteFillMode;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.note_fill_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         noteFillMode = (int)visual.noteFillMode;
+                const char* fillModes[]  = {
+                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##NoteFillMode",
+                                  &noteFillMode,
+                                  fillModes,
+                                  IM_ARRAYSIZE(fillModes)) ) {
+                    visual.noteFillMode =
+                        (Config::BackgroundFillMode)noteFillMode;
+                    changed = true;
+                }
+            });
     }
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(),
                                true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
-            TR_CACHE("ui.settings.visual.bg_opaque").data(),
-            TR_CACHE("ui.settings.visual.bg_darken").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int bgFillMode = (int)visual.background.fillMode;
-                           const char* fillModes[] = {
-                               "Stretch", "AspectFit", "AspectFill", "Center"
-                           };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##BgFillMode",
-                                             &bgFillMode,
-                                             fillModes,
-                                             IM_ARRAYSIZE(fillModes)) ) {
-                               visual.background.fillMode =
-                                   (Config::BackgroundFillMode)bgFillMode;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         bgFillMode  = (int)visual.background.fillMode;
+                const char* fillModes[] = {
+                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##BgFillMode",
+                                  &bgFillMode,
+                                  fillModes,
+                                  IM_ARRAYSIZE(fillModes)) ) {
+                    visual.background.fillMode =
+                        (Config::BackgroundFillMode)bgFillMode;
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -1297,10 +1322,7 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.linear_scroll").data(),
             TR_CACHE("ui.settings.visual.snap_threshold").data(),
         };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(*sec,
                        rowIndex,
@@ -1438,10 +1460,7 @@ void SettingsView::drawVisualSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.visual.offset").data(), true) ) {
-        float maxLabelW =
-            measureLabelWidth(
-                TR_CACHE("ui.settings.visual.visual_offset").data()) +
-            8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.visual.visual_offset").data(),
@@ -1616,9 +1635,10 @@ void SettingsView::drawProjectSettings()
 
 void SettingsView::drawBeatmapSettings()
 {
-    auto& engine  = Logic::EditorEngine::instance();
-    auto  session = engine.getActiveSession();
-    auto* project = engine.getCurrentProject();
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    auto*                                 project = engine.getCurrentProject();
 
     if ( !session || !session->getContext().currentBeatmap ) {
         ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
@@ -1650,6 +1670,32 @@ void SettingsView::drawBeatmapSettings()
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
+
+    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
+    // Seg 完美垂直对齐！
+    const char* allBeatmapLabels[] = {
+        TR_CACHE("ui.settings.beatmap.name").data(),
+        TR_CACHE("ui.settings.beatmap.title").data(),
+        TR_CACHE("ui.settings.beatmap.title_unicode").data(),
+        TR_CACHE("ui.settings.beatmap.artist").data(),
+        TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
+        TR_CACHE("ui.settings.beatmap.mapper").data(),
+        TR_CACHE("ui.settings.beatmap.version").data(),
+        TR_CACHE("ui.settings.beatmap.path").data(),
+        TR_CACHE("ui.settings.beatmap.cover_type").data(),
+        TR_CACHE("ui.settings.beatmap.video_start").data(),
+        TR_CACHE("ui.settings.beatmap.bg_offset").data(),
+        TR_CACHE("ui.settings.beatmap.bpm").data(),
+        TR_CACHE("ui.settings.beatmap.tracks").data(),
+        TR_CACHE("ui.settings.beatmap.length").data(),
+        TR_CACHE("ui.settings.beatmap.audio").data(),
+        TR_CACHE("ui.settings.beatmap.cover").data()
+    };
+    float maxLabelW = 0;
+    for ( auto* l : allBeatmapLabels ) {
+        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+    }
+    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
@@ -1721,21 +1767,7 @@ void SettingsView::drawBeatmapSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.beatmap.info").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.beatmap.name").data(),
-            TR_CACHE("ui.settings.beatmap.title").data(),
-            TR_CACHE("ui.settings.beatmap.title_unicode").data(),
-            TR_CACHE("ui.settings.beatmap.artist").data(),
-            TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
-            TR_CACHE("ui.settings.beatmap.mapper").data(),
-            TR_CACHE("ui.settings.beatmap.version").data(),
-            TR_CACHE("ui.settings.beatmap.path").data(),
-            TR_CACHE("ui.settings.beatmap.stats").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         auto DrawInput = [&](const char*  labelPtr,
                              std::string& valRef,
@@ -1853,15 +1885,7 @@ void SettingsView::drawBeatmapSettings()
 
     if ( auto* sec = addHeader(
              TR_CACHE("ui.settings.beatmap.cover_type").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.beatmap.cover_type").data(),
-            TR_CACHE("ui.settings.beatmap.video_start").data(),
-            TR_CACHE("ui.settings.beatmap.bg_offset").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         if ( isImd ) {
             ImGui::BeginDisabled();
@@ -1913,15 +1937,7 @@ void SettingsView::drawBeatmapSettings()
 
     if ( auto* sec = addHeader(
              TR_CACHE("ui.settings.beatmap.preference").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.beatmap.bpm").data(),
-            TR_CACHE("ui.settings.beatmap.tracks").data(),
-            TR_CACHE("ui.settings.beatmap.length").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(
             *sec,
@@ -1972,12 +1988,7 @@ void SettingsView::drawBeatmapSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.beatmap.resource").data(),
                                true) ) {
-        const char* labels[] = { TR_CACHE("ui.settings.beatmap.audio").data(),
-                                 TR_CACHE("ui.settings.beatmap.cover").data() };
-        float       maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         if ( isImd ) {
             ImGui::BeginDisabled();
@@ -2029,8 +2040,9 @@ void SettingsView::drawBeatmapSettings()
                             if ( ImGui::Selectable(
                                      (res.m_id + "##" + res.m_path).c_str(),
                                      isSelected) ) {
-                                meta.main_audio_path = res.m_path;
-                                changed              = true;
+                                meta.main_audio_path =
+                                    Config::utf8ToPath(res.m_path);
+                                changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
@@ -2109,8 +2121,9 @@ void SettingsView::drawBeatmapSettings()
                             if ( ImGui::Selectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
-                                meta.main_cover_path = imgPath;
-                                changed              = true;
+                                meta.main_cover_path =
+                                    Config::utf8ToPath(imgPath);
+                                changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
@@ -2144,6 +2157,30 @@ void SettingsView::drawEditorSettings()
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
+
+    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
+    // Seg 完美垂直对齐！
+    const char* allEditorLabels[] = {
+        TR_CACHE("ui.settings.editor.reverse_scroll").data(),
+        TR_CACHE("ui.settings.editor.scroll_snap").data(),
+        TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
+            .data(),
+        TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path").data(),
+        TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
+        TR_CACHE("ui.settings.editor.beat_divisor").data(),
+        TR_CACHE("ui.settings.editor.selection").data(),
+        TR_CACHE("ui.settings.editor.selection.thickness").data(),
+        TR_CACHE("ui.settings.editor.selection.rounding").data(),
+        TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+        TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
+        TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
+        TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
+    };
+    float maxLabelW = 0;
+    for ( auto* l : allEditorLabels ) {
+        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
+    }
+    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
@@ -2216,18 +2253,7 @@ void SettingsView::drawEditorSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.editor.behavior").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.editor.reverse_scroll").data(),
-            TR_CACHE("ui.settings.editor.scroll_snap").data(),
-            TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
-                .data(),
-            TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
-            TR_CACHE("ui.settings.editor.beat_divisor").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addSettingItem(*sec,
                        rowIndex,
@@ -2255,6 +2281,17 @@ void SettingsView::drawEditorSettings()
                 changed |= ImGui::Checkbox(
                     "##DisableAccel",
                     &settings.disableScrollAccelerationWhileDrawing);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                changed |=
+                    ImGui::Checkbox("##RemoveObjectsOnPolylinePath",
+                                    &settings.removeObjectsOnPolylinePath);
             });
         addSettingItem(
             *sec,
@@ -2297,15 +2334,7 @@ void SettingsView::drawEditorSettings()
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.editor.selection").data(),
                                true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.editor.selection").data(),
-            TR_CACHE("ui.settings.editor.selection.thickness").data(),
-            TR_CACHE("ui.settings.editor.selection.rounding").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
         addRadioSetting(
             *sec,
@@ -2349,38 +2378,35 @@ void SettingsView::drawEditorSettings()
 
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.editor.sfx").data(), true) ) {
-        const char* labels[] = {
-            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
-            TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
-            TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
-            TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
-        };
-        float maxLabelW = 0;
-        for ( auto* l : labels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        // 采用全局统一最大标签宽度 maxLabelW
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.sfx_strategy").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int strategy =
-                               (int)settings.sfxConfig.polylineStrategy;
-                           const char* strategies[] = { "Exact",
-                                                        "InternalAsNormal",
-                                                        "OnlyTailExact",
-                                                        "AllAsNormal" };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##SfxStrategy",
-                                             &strategy,
-                                             strategies,
-                                             IM_ARRAYSIZE(strategies)) ) {
-                               settings.sfxConfig.polylineStrategy =
-                                   (Config::PolylineSfxStrategy)strategy;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         strategy = (int)settings.sfxConfig.polylineStrategy;
+                const char* strategies[] = {
+                    TR_CACHE("ui.settings.editor.sfx_strategy.exact").data(),
+                    TR_CACHE(
+                        "ui.settings.editor.sfx_strategy.internal_as_normal")
+                        .data(),
+                    TR_CACHE("ui.settings.editor.sfx_strategy.only_tail_exact")
+                        .data(),
+                    TR_CACHE("ui.settings.editor.sfx_strategy.all_as_normal")
+                        .data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##SfxStrategy",
+                                  &strategy,
+                                  strategies,
+                                  IM_ARRAYSIZE(strategies)) ) {
+                    settings.sfxConfig.polylineStrategy =
+                        (Config::PolylineSfxStrategy)strategy;
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,

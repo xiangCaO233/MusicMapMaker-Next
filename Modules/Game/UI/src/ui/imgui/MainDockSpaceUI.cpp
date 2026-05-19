@@ -411,6 +411,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                  .c_str(),
              nullptr,
              ImGuiWindowFlags_None) ) {
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
         auto        session = engine.getActiveSession();
         std::string mapName = "Unknown";
         if ( session && session->getContext().currentBeatmap ) {

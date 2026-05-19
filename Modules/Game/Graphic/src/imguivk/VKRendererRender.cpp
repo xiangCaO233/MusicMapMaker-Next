@@ -1,6 +1,7 @@
 #include "config/AppConfig.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
+#include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "imgui_impl_glfw.h"
@@ -121,6 +122,9 @@ void VKRenderer::render(NativeWindow&                  window,
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onUpdateUI();
     }
+
+    // 绘制中央临时通知
+    VKContext::get().value().get().drawCenterNotification();
 
     // 更新光标管理器
     if ( m_cursorManager &&

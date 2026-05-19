@@ -197,6 +197,22 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowPadding  = j.value("windowPadding", 8.0f);
 }
 
+enum class FrameLimitPreference {
+    VSync,
+    Refresh2x,
+    Refresh4x,
+    Refresh8x,
+    Unlimited
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(FrameLimitPreference,
+                             { { FrameLimitPreference::VSync, "VSync" },
+                               { FrameLimitPreference::Refresh2x, "Refresh2x" },
+                               { FrameLimitPreference::Refresh4x, "Refresh4x" },
+                               { FrameLimitPreference::Refresh8x, "Refresh8x" },
+                               { FrameLimitPreference::Unlimited,
+                                 "Unlimited" } })
+
 enum class UITheme {
     Auto,
     DeepDark,
@@ -315,8 +331,8 @@ struct EditorSettings {
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
-    /// @brief 是否开启垂直同步
-    bool vsync{ false };
+    /// @brief 帧数限制模式偏好
+    FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
@@ -366,6 +382,9 @@ struct EditorSettings {
     /// @brief 绘制物件(按住Shift)时是否屏蔽滚动加速
     bool disableScrollAccelerationWhileDrawing{ true };
 
+    /// @brief 移除折线路径上的物件
+    bool removeObjectsOnPolylinePath{ false };
+
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
 
@@ -394,7 +413,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "scrollSnap", c.scrollSnap },
                         { "recentProjectsLimit", c.recentProjectsLimit },
                         { "language", c.language },
-                        { "vsync", c.vsync },
+                        { "frameLimit", c.frameLimit },
                         { "fontSizeMultiplier", c.fontSizeMultiplier },
                         { "uiScaleMultiplier", c.uiScaleMultiplier },
                         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
@@ -411,6 +430,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "lastFilePickerPath", c.lastFilePickerPath },
                         { "disableScrollAccelerationWhileDrawing",
                           c.disableScrollAccelerationWhileDrawing },
+                        { "removeObjectsOnPolylinePath",
+                          c.removeObjectsOnPolylinePath },
                         { "softwareCursorConfig", c.softwareCursorConfig },
                         { "preferredAsciiFont", c.preferredAsciiFont },
                         { "preferredCjkFont", c.preferredCjkFont },
@@ -429,9 +450,14 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.beatDivisor     = j.value("beatDivisor", 4);
     c.reverseScroll   = j.value("reverseScroll", false);
     c.scrollSnap      = j.value("scrollSnap", false);
-    c.recentProjectsLimit   = j.value("recentProjectsLimit", 10);
-    c.language              = j.value("language", std::string("zh_cn"));
-    c.vsync                 = j.value("vsync", false);
+    c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
+    c.language            = j.value("language", std::string("zh_cn"));
+    c.frameLimit =
+        j.value("frameLimit",
+                j.contains("vsync") ? (j.value("vsync", false)
+                                           ? FrameLimitPreference::VSync
+                                           : FrameLimitPreference::Unlimited)
+                                    : FrameLimitPreference::Refresh2x);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
@@ -449,6 +475,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
     c.disableScrollAccelerationWhileDrawing =
         j.value("disableScrollAccelerationWhileDrawing", true);
+    c.removeObjectsOnPolylinePath =
+        j.value("removeObjectsOnPolylinePath", false);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =

@@ -60,6 +60,11 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     bool  hasProject = (project != nullptr);
 
     ImGuiIO& io = ImGui::GetIO();
+
+    // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键处理以防冲突 (如 Ctrl+A
+    // 全选)
+    if ( io.WantTextInput ) return;
+
     // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
 
@@ -244,7 +249,9 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     auto& config = Config::AppConfig::instance().getEditorSettings();
 
     std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
-    auto        session = Logic::EditorEngine::instance().getActiveSession();
+    auto&       engine      = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
     if ( session && session->getContext().currentBeatmap ) {
         auto& meta = session->getContext().currentBeatmap->m_baseMapMetadata;
         if ( ext == ".imd" ) {
@@ -1126,7 +1133,9 @@ void MainMenuView::performOverlapScan()
     m_overlapResults.clear();
     m_hasOverlapScan = true;
 
-    auto session = Logic::EditorEngine::instance().getActiveSession();
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
     if ( !session ) return;
 
     struct CheckItem {
@@ -1346,7 +1355,10 @@ void MainMenuView::renderOverlapCheckWindow()
     if ( titleFont ) ImGui::PopFont();
 
     if ( opened ) {
-        auto session = Logic::EditorEngine::instance().getActiveSession();
+        auto& engine = Logic::EditorEngine::instance();
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
         if ( !session ) {
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
                                "%s",

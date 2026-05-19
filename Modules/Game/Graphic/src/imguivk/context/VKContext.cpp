@@ -2,10 +2,12 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/input/MMMInput.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "imgui.h"
 
 #include "graphic/glfw/window/NativeWindow.h"
 #include "imgui_impl_glfw.h"
@@ -80,10 +82,14 @@ VKContext::VKContext()
         [&](MMM::Event::GLFWKeyEvent e) {
             if ( e.key == MMM::Event::Input::Key::F7 &&
                  e.action == MMM::Event::Input::Action::Press ) {
-                /// @brief F7 切换垂直同步状态
+                /// @brief F7 循环切换帧率限制模式
                 auto& config =
                     MMM::Config::AppConfig::instance().getEditorConfig();
-                config.settings.vsync = !config.settings.vsync;
+                int currentLimit = static_cast<int>(config.settings.frameLimit);
+                currentLimit     = (currentLimit + 1) % 5;
+                config.settings.frameLimit =
+                    static_cast<MMM::Config::FrameLimitPreference>(
+                        currentLimit);
 
                 // 发布配置更新事件，触发所有监听者（包括本类中的
                 // LogicCommandEvent 监听器）
@@ -94,13 +100,34 @@ VKContext::VKContext()
                 // 持久化配置
                 MMM::Config::AppConfig::instance().save();
 
-                XDEBUG("VSync toggled by shortcut: {}",
-                       config.settings.vsync ? "ON" : "OFF");
+                const char* displayNames[] = {
+                    TR("ui.settings.software.framelimit.vsync").data(),
+                    TR("ui.settings.software.framelimit.2x").data(),
+                    TR("ui.settings.software.framelimit.4x").data(),
+                    TR("ui.settings.software.framelimit.8x").data(),
+                    TR("ui.settings.software.framelimit.unlimited").data()
+                };
+                std::string title =
+                    TR("ui.settings.software.framelimit").data();
+                std::string notificationMsg =
+                    title + ": " + displayNames[currentLimit];
+                showCenterNotification(notificationMsg);
+
+                XDEBUG("Frame Limit mode toggled by shortcut: {}",
+                       notificationMsg);
             }
             if ( e.key == MMM::Event::Input::Key::F11 &&
                  e.action == MMM::Event::Input::Action::Press ) {
                 /// @brief F11 切换全屏
                 ToggleFullscreen();
+
+                bool isFullscreen =
+                    (glfwGetWindowMonitor(
+                         m_nativeWindow_ptr->getWindowHandle()) != nullptr);
+                showCenterNotification(
+                    isFullscreen
+                        ? TR("ui.settings.software.screen.fullscreen").data()
+                        : TR("ui.settings.software.screen.windowed").data());
             }
         });
 
@@ -110,7 +137,8 @@ VKContext::VKContext()
                      e.command) ) {
                 auto& cmd =
                     std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
-                setVSync(cmd.config.settings.vsync);
+                setVSync(cmd.config.settings.frameLimit ==
+                         MMM::Config::FrameLimitPreference::VSync);
                 applyTheme();
             }
         });
@@ -246,7 +274,8 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 在创建交换链之前，根据配置预设全局呈现模式，避免启动后再次重建
     updateGlobalPresentMode(
-        Config::AppConfig::instance().getEditorSettings().vsync);
+        Config::AppConfig::instance().getEditorSettings().frameLimit ==
+        Config::FrameLimitPreference::VSync);
 
     // 初始化逻辑设备
     initLogicDevice();
@@ -371,6 +400,78 @@ void VKContext::ToggleFullscreen()
     m_nativeWindow_ptr->ToggleFullscreen();
     // 因为全屏会导致窗口尺寸剧变，必须标记交换链需要重建
     m_swapchain->markDirty();
+}
+
+/**
+ * @brief 显示在窗口正中央的临时通知/Tooltip
+ */
+void VKContext::showCenterNotification(const std::string& message,
+                                       float              durationSeconds)
+{
+    m_notificationMessage = message;
+    m_notificationExpireTime =
+        glfwGetTime() + static_cast<double>(durationSeconds);
+}
+
+/**
+ * @brief 绘制临时中央通知 (每帧渲染)
+ */
+void VKContext::drawCenterNotification()
+{
+    double currentTime = glfwGetTime();
+    if ( currentTime >= m_notificationExpireTime ||
+         m_notificationMessage.empty() ) {
+        return;
+    }
+
+    // 计算剩余时间实现淡出效果
+    float timeLeft = static_cast<float>(m_notificationExpireTime - currentTime);
+    float alpha    = 1.0f;
+    if ( timeLeft < 0.3f ) {
+        alpha = timeLeft / 0.3f;  // 最后 0.3 秒进行渐隐淡出
+    }
+
+    // 设置无边框、无背景、不可交互的窗口
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.0f);  // 窗口底层完全透明
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoInputs;
+
+    if ( ImGui::Begin("##CenterNotification", nullptr, flags) ) {
+        // 自定义绘制一个圆角的高端黑色毛玻璃质感背板
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        ImVec2      minPos   = ImGui::GetWindowPos();
+        ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
+                                      minPos.y + ImGui::GetWindowHeight());
+
+        // 绘制毛玻璃/半透明背板 (深色磨砂)
+        ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(
+            ImVec4(0.07f, 0.07f, 0.11f, 0.85f * alpha));
+        ImU32 borderColor = ImGui::ColorConvertFloat4ToU32(ImVec4(
+            0.25f, 0.45f, 0.95f, 0.6f * alpha));  // 极富科技感的幽蓝色边框
+
+        // 稍微往外扩一点作为背板
+        float  paddingX = 24.0f;
+        float  paddingY = 16.0f;
+        ImVec2 bgMin    = ImVec2(minPos.x - paddingX, minPos.y - paddingY);
+        ImVec2 bgMax    = ImVec2(maxPos.x + paddingX, maxPos.y + paddingY);
+
+        drawList->AddRectFilled(bgMin, bgMax, bgColor, 12.0f);  // 12px 大圆角
+        drawList->AddRect(
+            bgMin, bgMax, borderColor, 12.0f, 0, 1.5f);  // 幽蓝外边框
+
+        // 渲染文本，使其发光/带有高饱和颜色
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.96f, 1.0f, alpha));
+        ImGui::TextUnformatted(m_notificationMessage.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::End();
 }
 
 }  // namespace MMM::Graphic

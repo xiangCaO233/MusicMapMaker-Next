@@ -22,6 +22,17 @@ private:
         // 可以存储更多初始信息，比如 Transform
     };
     std::unordered_map<entt::entity, InitialState> m_initialStates;
+
+    /// @brief 记录当前是否为折线内部子段拖拽模式
+    bool m_isPolylineSubDrag{ false };
+
+    /// @brief 将父折线的 m_subNotes 数据同步到所有子物件实体
+    void syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
+                                 const NoteComponent& note);
+
+    /// @brief 尝试在折线子段拖拽结束时执行合并操作 (dtrack==0 或 duration==0)
+    /// @return true 如果执行了合并并已提交 Action
+    bool tryPolylineSubDragMerge(SessionContext& ctx);
 };
 
 }  // namespace MMM::Logic

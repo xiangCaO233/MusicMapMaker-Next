@@ -135,20 +135,43 @@ void TimelineCanvas::renderEventCreationPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // 自动计算下一项 RadioButton 宽度并在空间充足时在同行显示的辅助函数
+        auto getRadioButtonWidth = [](const char* label) -> float {
+            ImGuiStyle& style      = ImGui::GetStyle();
+            float       circleSize = ImGui::GetFrameHeight();
+            float       textWidth  = ImGui::CalcTextSize(label).x;
+            return circleSize + style.ItemSpacing.x + textWidth +
+                   style.FramePadding.x * 2.0f;
+        };
+
+        auto wrapToNextLineIfNoSpace = [&](float nextItemWidth) {
+            float lastX2 = ImGui::GetItemRectMax().x;
+            float windowVisibleX2 =
+                ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+            float spacing = ImGui::GetStyle().ItemSpacing.x;
+            if ( lastX2 + spacing + nextItemWidth < windowVisibleX2 ) {
+                ImGui::SameLine(0.0f, spacing);
+            }
+        };
+
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.pos_type").data());
-        if ( ImGui::RadioButton(
-                 m_isTimeSnapped
-                     ? TR("ui.timeline.event_creator.pos_click_snapped").data()
-                     : TR("ui.timeline.event_creator.pos_click").data(),
-                 &m_createPosType,
-                 0) ) {
+
+        std::string posClickLabel =
+            m_isTimeSnapped
+                ? TR("ui.timeline.event_creator.pos_click_snapped").data()
+                : TR("ui.timeline.event_creator.pos_click").data();
+        std::string posCurrentLabel =
+            TR("ui.timeline.event_creator.pos_current").data();
+
+        if ( ImGui::RadioButton(posClickLabel.c_str(), &m_createPosType, 0) ) {
             m_createTimeManual =
                 m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
         }
+
+        wrapToNextLineIfNoSpace(getRadioButtonWidth(posCurrentLabel.c_str()));
+
         if ( ImGui::RadioButton(
-                 TR("ui.timeline.event_creator.pos_current").data(),
-                 &m_createPosType,
-                 1) ) {
+                 posCurrentLabel.c_str(), &m_createPosType, 1) ) {
             m_createTimeManual = m_currentSnapshot->currentTime;
         }
 
@@ -164,7 +187,9 @@ void TimelineCanvas::renderEventCreationPopup()
         if ( ImGui::RadioButton("BPM", &m_createType, 0) ) {
             m_createValue = 120.0;
         }
-        ImGui::SameLine();
+
+        wrapToNextLineIfNoSpace(getRadioButtonWidth("Scroll"));
+
         if ( ImGui::RadioButton("Scroll", &m_createType, 1) ) {
             m_createValue = 1.0;
         }

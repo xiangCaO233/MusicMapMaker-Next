@@ -103,8 +103,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
                          m_ctx->brushState.isActive ||
                          m_ctx->eraserState.isActive;
 
-    if ( !config.settings.vsync && !m_ctx->isPlaying && !isInteracting &&
-         !processed ) {
+    if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
+         !m_ctx->isPlaying && !isInteracting && !processed ) {
         // 阈值设为 0.5ms (2000Hz)。这对于非播放状态下的 UI 响应已经绰绰有余。
         if ( currentSysTime - m_ctx->lastSnapshotTime < 0.0005 ) {
             return;

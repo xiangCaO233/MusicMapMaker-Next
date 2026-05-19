@@ -31,6 +31,7 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include <chrono>
 #include <nfd.h>
+#include <thread>
 
 #ifdef _WIN32
 #    include <shellapi.h>
@@ -202,17 +203,70 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // Logic::EditorEngine::instance().pushCommand(
         //     Logic::CmdLoadBeatmap{ map });
 
+        auto lastRenderTime = std::chrono::high_resolution_clock::now();
+
         // 进入主循环
         while ( !window.shouldClose() ) {
+            auto& settings = Config::AppConfig::instance().getEditorSettings();
+
+            // 计算当前限制下的目标时间间隔
+            double targetDt = 0.0;
+            int    refreshRate =
+                Config::AppConfig::instance().getDeviceRefreshRate();
+            if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
+
+            switch ( settings.frameLimit ) {
+            case Config::FrameLimitPreference::VSync:
+                // VSync 下由 Vulkan 交换链自然阻塞限制，不需要额外的 CPU sleep
+                // 限制
+                targetDt = 0.0;
+                break;
+            case Config::FrameLimitPreference::Refresh2x:
+                targetDt = 1.0 / static_cast<double>(refreshRate * 2);
+                break;
+            case Config::FrameLimitPreference::Refresh4x:
+                targetDt = 1.0 / static_cast<double>(refreshRate * 4);
+                break;
+            case Config::FrameLimitPreference::Refresh8x:
+                targetDt = 1.0 / static_cast<double>(refreshRate * 8);
+                break;
+            case Config::FrameLimitPreference::Unlimited:
+            default: targetDt = 0.0; break;
+            }
+
+            if ( targetDt > 0.0 ) {
+                auto currentTime = std::chrono::high_resolution_clock::now();
+                std::chrono::duration<double> passed =
+                    currentTime - lastRenderTime;
+                if ( passed.count() < targetDt ) {
+                    auto remaining =
+                        std::chrono::duration<double>(targetDt) - passed;
+                    if ( remaining.count() > 0.0015 ) {
+                        // 剩余时间较长，粗粒度 Sleep (减去 1ms
+                        // 作为时间片调度补偿)
+                        std::this_thread::sleep_for(std::chrono::duration_cast<
+                                                    std::chrono::microseconds>(
+                            remaining - std::chrono::milliseconds(1)));
+                    } else {
+                        // 剩余时间极短，让出时间片或自旋
+                        std::this_thread::yield();
+                    }
+                    continue;
+                }
+            }
+
+            lastRenderTime = std::chrono::high_resolution_clock::now();
+
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
             // 已移至渲染循环内以降低 VSync 延迟 window.pollEvents();
 
             // 3.1.5 处理光标 BPM 同步逻辑
             float cursorSmokeLifeOverride = -1.0f;
-            auto& settings = Config::AppConfig::instance().getEditorSettings();
             if ( settings.cursorStyle == Config::CursorStyle::Software &&
                  settings.softwareCursorConfig.enableBpmSyncSmokeLife ) {
                 auto& engine = Logic::EditorEngine::instance();
+                std::lock_guard<std::recursive_mutex> lock(
+                    engine.getSessionMutex());
                 if ( auto session = engine.getActiveSession() ) {
                     auto& ctx = session->getContext();
                     if ( ctx.currentBeatmap ) {
@@ -220,7 +274,6 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
                         double bpm  = ctx.currentBeatmap->m_baseMapMetadata
                                           .preference_bpm;
 
-                        // 查找当前时间点的 BPM
                         for ( const auto& t : ctx.currentBeatmap->m_timings ) {
                             if ( t.m_timingEffect == MMM::TimingEffect::BPM ) {
                                 if ( t.m_timestamp <= time ) {

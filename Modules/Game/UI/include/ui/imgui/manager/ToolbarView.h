@@ -26,6 +26,10 @@ private:
     float           m_lastBtnY         = 0.0f;
     float           m_popupWidth       = 160.0f;
     float           m_popupHeight      = 120.0f;
+    bool            m_showKeyPopup     = false;
+    float           m_lastKeyBtnY      = 0.0f;
+    float           m_keyPopupWidth    = 160.0f;
+    float           m_keyPopupHeight   = 120.0f;
 
     /**
      * @brief 绘制工具按钮
