@@ -16,6 +16,8 @@ namespace MMM::Logic
 
 void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 {
+    m_isPolylineSubDrag = false;
+
     if ( cmd.entity != entt::null && ctx.noteRegistry.valid(cmd.entity) ) {
         ctx.draggedEntity   = cmd.entity;
         ctx.dragCameraId    = cmd.cameraId;
@@ -217,7 +219,107 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         }
     }
 
-    if ( isMultiDrag ) {
+    // --- 折线内部子段拖拽检测 ---
+    bool isPolylineSubDrag = false;
+    if ( !isPrimarySelected && ctx.draggedPart == HoverPart::HoldBody ) {
+        auto* draggedNote =
+            ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+        if ( draggedNote && draggedNote->m_type == ::MMM::NoteType::POLYLINE &&
+             ctx.draggedSubIndex > 0 &&
+             ctx.draggedSubIndex < (int)(draggedNote->m_subNotes.size()) ) {
+            isPolylineSubDrag = true;
+        }
+    }
+    m_isPolylineSubDrag = isPolylineSubDrag;
+
+    if ( isPolylineSubDrag ) {
+        auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+        if ( !note ) return;
+
+        const auto& initState    = m_initialStates[ctx.draggedEntity];
+        const auto& initSubNotes = initState.note.m_subNotes;
+        int         subIdx       = ctx.draggedSubIndex;
+        const auto& initSub      = initSubNotes[subIdx];
+
+        if ( initSub.type == ::MMM::NoteType::HOLD ) {
+            int localDelta = targetTrack - initSub.trackIndex;
+
+            for ( size_t j = subIdx; j < initSubNotes.size(); ++j ) {
+                int newTrack = initSubNotes[j].trackIndex + localDelta;
+                if ( newTrack < 0 ) localDelta = -initSubNotes[j].trackIndex;
+                if ( newTrack >= ctx.trackCount )
+                    localDelta =
+                        ctx.trackCount - 1 - initSubNotes[j].trackIndex;
+                if ( initSubNotes[j].type == ::MMM::NoteType::FLICK ) {
+                    int endTrack = newTrack + initSubNotes[j].dtrack;
+                    if ( endTrack < 0 )
+                        localDelta = -(initSubNotes[j].trackIndex +
+                                       initSubNotes[j].dtrack);
+                    if ( endTrack >= ctx.trackCount )
+                        localDelta = ctx.trackCount - 1 -
+                                     (initSubNotes[j].trackIndex +
+                                      initSubNotes[j].dtrack);
+                }
+            }
+            if ( subIdx > 0 &&
+                 initSubNotes[subIdx - 1].type == ::MMM::NoteType::FLICK ) {
+                int prevEnd = initSubNotes[subIdx - 1].trackIndex +
+                              initSubNotes[subIdx - 1].dtrack + localDelta;
+                if ( prevEnd < 0 )
+                    localDelta = -(initSubNotes[subIdx - 1].trackIndex +
+                                   initSubNotes[subIdx - 1].dtrack);
+                if ( prevEnd >= ctx.trackCount )
+                    localDelta = ctx.trackCount - 1 -
+                                 (initSubNotes[subIdx - 1].trackIndex +
+                                  initSubNotes[subIdx - 1].dtrack);
+            }
+
+            for ( size_t j = subIdx; j < note->m_subNotes.size(); ++j ) {
+                note->m_subNotes[j].trackIndex =
+                    initSubNotes[j].trackIndex + localDelta;
+            }
+            if ( subIdx > 0 &&
+                 note->m_subNotes[subIdx - 1].type == ::MMM::NoteType::FLICK ) {
+                note->m_subNotes[subIdx - 1].dtrack =
+                    initSubNotes[subIdx - 1].dtrack + localDelta;
+            }
+        } else if ( initSub.type == ::MMM::NoteType::FLICK ) {
+            double localDelta = targetTime - initSub.timestamp;
+
+            if ( subIdx > 0 &&
+                 initSubNotes[subIdx - 1].type == ::MMM::NoteType::HOLD ) {
+                double minDt = -initSubNotes[subIdx - 1].duration;
+                if ( localDelta < minDt ) localDelta = minDt;
+            }
+            for ( size_t j = subIdx; j < initSubNotes.size(); ++j ) {
+                if ( initSubNotes[j].timestamp + localDelta < 0.0 )
+                    localDelta = -initSubNotes[j].timestamp;
+            }
+
+            for ( size_t j = subIdx; j < note->m_subNotes.size(); ++j ) {
+                note->m_subNotes[j].timestamp =
+                    initSubNotes[j].timestamp + localDelta;
+            }
+            if ( subIdx > 0 &&
+                 note->m_subNotes[subIdx - 1].type == ::MMM::NoteType::HOLD ) {
+                note->m_subNotes[subIdx - 1].duration =
+                    initSubNotes[subIdx - 1].duration + localDelta;
+            }
+        }
+
+        syncPolylineSubEntities(ctx, ctx.draggedEntity, *note);
+
+        if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
+                 ctx.draggedEntity) ) {
+            float sTrackW  = (it->second.viewportWidth *
+                              (ctx.lastConfig.visual.trackLayout.right -
+                               ctx.lastConfig.visual.trackLayout.left)) /
+                             static_cast<float>(ctx.trackCount);
+            float lx       = it->second.viewportWidth *
+                             ctx.lastConfig.visual.trackLayout.left;
+            trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
+        }
+    } else if ( isMultiDrag ) {
         // 预检查增量限制
         for ( const auto& [entity, state] : m_initialStates ) {
             auto check =
@@ -323,6 +425,11 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
     if ( ctx.draggedEntity == entt::null ) return;
 
+    if ( m_isPolylineSubDrag && tryPolylineSubDragMerge(ctx) ) {
+        m_isPolylineSubDrag = false;
+        return;
+    }
+
     std::vector<BatchNoteAction::Entry> entries;
 
     for ( auto& [entity, state] : m_initialStates ) {
@@ -350,6 +457,131 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
     ctx.draggedEntity   = entt::null;
     ctx.dragInitialNote = std::nullopt;
     m_initialStates.clear();
+}
+
+void GrabTool::syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
+                                       const NoteComponent& note)
+{
+    auto subView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto subEnt : subView ) {
+        auto& subNC = subView.get<NoteComponent>(subEnt);
+        if ( !subNC.m_isSubNote || subNC.m_parentPolyline != parent ) continue;
+        if ( subNC.m_subIndex < 0 ||
+             subNC.m_subIndex >= (int)note.m_subNotes.size() )
+            continue;
+
+        const auto& sub    = note.m_subNotes[subNC.m_subIndex];
+        subNC.m_type       = sub.type;
+        subNC.m_timestamp  = sub.timestamp;
+        subNC.m_duration   = sub.duration;
+        subNC.m_trackIndex = sub.trackIndex;
+        subNC.m_dtrack     = sub.dtrack;
+        subNC.m_metadata   = sub.metadata;
+    }
+}
+
+bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
+{
+    if ( ctx.draggedEntity == entt::null ) return false;
+
+    auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+    if ( !note || note->m_type != ::MMM::NoteType::POLYLINE ) return false;
+
+    int subIdx  = ctx.draggedSubIndex;
+    int lastIdx = (int)note->m_subNotes.size() - 1;
+    if ( subIdx < 2 || subIdx >= lastIdx ) return false;
+
+    const auto& initState    = m_initialStates[ctx.draggedEntity];
+    const auto& initSubNotes = initState.note.m_subNotes;
+    auto&       subNotes     = note->m_subNotes;
+    const auto& initDragged  = initSubNotes[subIdx];
+
+    bool mergeSubHold  = (initDragged.type == ::MMM::NoteType::HOLD &&
+                          subNotes[subIdx - 1].dtrack == 0);
+    bool mergeSubFlick = (initDragged.type == ::MMM::NoteType::FLICK &&
+                          std::abs(subNotes[subIdx - 1].duration) < 0.001);
+
+    if ( !mergeSubHold && !mergeSubFlick ) return false;
+
+    NoteComponent parentBefore = initState.note;
+    NoteComponent parentAfter  = *note;
+
+    auto& newSubNotes = parentAfter.m_subNotes;
+
+    if ( mergeSubHold ) {
+        NoteComponent::SubNote merged;
+        merged.type      = ::MMM::NoteType::HOLD;
+        merged.timestamp = newSubNotes[subIdx - 2].timestamp;
+        merged.duration =
+            (newSubNotes[subIdx].timestamp + newSubNotes[subIdx].duration) -
+            newSubNotes[subIdx - 2].timestamp;
+        merged.trackIndex       = newSubNotes[subIdx - 2].trackIndex;
+        merged.dtrack           = 0;
+        merged.metadata         = newSubNotes[subIdx - 2].metadata;
+        newSubNotes[subIdx - 2] = merged;
+    } else {
+        NoteComponent::SubNote merged;
+        merged.type       = ::MMM::NoteType::FLICK;
+        merged.timestamp  = newSubNotes[subIdx - 2].timestamp;
+        merged.trackIndex = newSubNotes[subIdx - 2].trackIndex;
+        merged.dtrack =
+            (newSubNotes[subIdx].trackIndex + newSubNotes[subIdx].dtrack) -
+            newSubNotes[subIdx - 2].trackIndex;
+        merged.duration         = 0.0;
+        merged.metadata         = newSubNotes[subIdx - 2].metadata;
+        newSubNotes[subIdx - 2] = merged;
+    }
+    newSubNotes.erase(newSubNotes.begin() + subIdx - 1,
+                      newSubNotes.begin() + subIdx + 1);
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ ctx.draggedEntity, parentBefore, parentAfter });
+
+    auto subView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto subEnt : subView ) {
+        auto& subNC = subView.get<NoteComponent>(subEnt);
+        if ( !subNC.m_isSubNote || subNC.m_parentPolyline != ctx.draggedEntity )
+            continue;
+
+        int           oldIdx = subNC.m_subIndex;
+        auto          it     = m_initialStates.find(subEnt);
+        NoteComponent initNC =
+            (it != m_initialStates.end()) ? it->second.note : subNC;
+
+        if ( oldIdx == subIdx - 1 || oldIdx == subIdx ) {
+            entries.push_back({ subEnt, initNC, std::nullopt });
+        } else if ( oldIdx == subIdx - 2 ) {
+            const auto&   merged = newSubNotes[subIdx - 2];
+            NoteComponent after  = initNC;
+            after.m_type         = merged.type;
+            after.m_timestamp    = merged.timestamp;
+            after.m_duration     = merged.duration;
+            after.m_trackIndex   = merged.trackIndex;
+            after.m_dtrack       = merged.dtrack;
+            after.m_metadata     = merged.metadata;
+            entries.push_back({ subEnt, initNC, after });
+        } else if ( oldIdx > subIdx ) {
+            NoteComponent after = initNC;
+            after.m_subIndex    = oldIdx - 2;
+            entries.push_back({ subEnt, initNC, after });
+        } else {
+            entries.push_back({ subEnt, initNC, subNC });
+        }
+    }
+
+    if ( !entries.empty() ) {
+        auto action = std::make_unique<BatchNoteAction>(
+            std::move(entries), "Polyline Sub-Drag Merge");
+        ctx.actionStack.pushAndExecute(std::move(action), ctx);
+    }
+
+    SessionUtils::rebuildHitEvents(ctx);
+
+    ctx.draggedEntity   = entt::null;
+    ctx.dragInitialNote = std::nullopt;
+    m_initialStates.clear();
+
+    return true;
 }
 
 }  // namespace MMM::Logic
