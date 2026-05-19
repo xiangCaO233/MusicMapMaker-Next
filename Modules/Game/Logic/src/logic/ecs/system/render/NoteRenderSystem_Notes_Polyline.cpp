@@ -133,6 +133,7 @@ void NoteRenderSystem::drawPolylineBody(
     float noteH, glm::vec4 colorHold, entt::entity entity,
     bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
 {
+    if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::HoldBody )
         return;
 
@@ -278,6 +279,7 @@ void NoteRenderSystem::drawPolylineNodes(
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex)
 {
+    if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::PolylineNode )
         return;
 

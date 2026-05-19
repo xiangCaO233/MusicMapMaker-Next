@@ -838,17 +838,44 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         }
     }
 
-    if ( !mergeDeleteEntries.empty() ) {
-        // 有结合操作：使用 BatchNoteAction 将创建和删除打包为一个原子操作
-        mergeDeleteEntries.push_back(
-            { ctx.noteRegistry.create(), std::nullopt, note });
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        // 创建折线父实体及所有子物件实体
+        entt::entity parentEnt = ctx.noteRegistry.create();
+        mergeDeleteEntries.push_back({ parentEnt, std::nullopt, note });
+
+        for ( size_t i = 0; i < note.m_subNotes.size(); ++i ) {
+            const auto&   s = note.m_subNotes[i];
+            NoteComponent subNC;
+            subNC.m_type           = s.type;
+            subNC.m_timestamp      = s.timestamp;
+            subNC.m_duration       = s.duration;
+            subNC.m_trackIndex     = s.trackIndex;
+            subNC.m_dtrack         = s.dtrack;
+            subNC.m_metadata       = s.metadata;
+            subNC.m_isSubNote      = true;
+            subNC.m_parentPolyline = parentEnt;
+            subNC.m_subIndex       = static_cast<int>(i);
+
+            entt::entity subEnt = ctx.noteRegistry.create();
+            mergeDeleteEntries.push_back({ subEnt, std::nullopt, subNC });
+        }
+
         auto action = std::make_unique<BatchNoteAction>(
-            std::move(mergeDeleteEntries), "Polyline Merge");
+            std::move(mergeDeleteEntries), "Polyline Create");
         ctx.actionStack.pushAndExecute(std::move(action), ctx);
     } else {
-        auto action = std::make_unique<NoteAction>(
-            NoteAction::Type::Create, entt::null, std::nullopt, note);
-        ctx.actionStack.pushAndExecute(std::move(action), ctx);
+        // 非折线降级物件 (NOTE / HOLD / FLICK)
+        if ( !mergeDeleteEntries.empty() ) {
+            mergeDeleteEntries.push_back(
+                { ctx.noteRegistry.create(), std::nullopt, note });
+            auto action = std::make_unique<BatchNoteAction>(
+                std::move(mergeDeleteEntries), "Note Create & Merge");
+            ctx.actionStack.pushAndExecute(std::move(action), ctx);
+        } else {
+            auto action = std::make_unique<NoteAction>(
+                NoteAction::Type::Create, entt::null, std::nullopt, note);
+            ctx.actionStack.pushAndExecute(std::move(action), ctx);
+        }
     }
 
     // 重置状态
