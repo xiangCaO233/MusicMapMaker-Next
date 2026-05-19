@@ -16,6 +16,11 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    include <windows.h>
+#endif
+
 #include <unordered_set>
 
 namespace MMM::Logic
@@ -275,6 +280,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
           loadedEv.m_projectTitle,
           loadedEv.m_beatmapCount);
 
+    // 启动文件夹监听器实时监控项目目录
+    startDirectoryWatcher(actualProjectPath);
+
     // 关键修正：在将新 Session 设为激活前，先同步历史视口尺寸
     // 逻辑线程必须知道画布宽高，否则无法生成几何体
     auto newSession = std::make_shared<BeatmapSession>();
@@ -337,6 +345,8 @@ void EditorEngine::start()
 
 void EditorEngine::stop()
 {
+    stopDirectoryWatcher();
+
     if ( m_running ) {
         m_running = false;
         if ( m_thread.joinable() ) {
@@ -827,6 +837,28 @@ void EditorEngine::loop()
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        // 检查文件夹监听器是否捕获到了任何文件系统变更事件
+        static auto lastChangeTime = std::chrono::high_resolution_clock::now();
+        static bool hasPendingChange = false;
+
+        if ( m_directoryChangedPending.exchange(false,
+                                                std::memory_order_acq_rel) ) {
+            hasPendingChange = true;
+            lastChangeTime   = std::chrono::high_resolution_clock::now();
+        }
+
+        if ( hasPendingChange ) {
+            auto now = std::chrono::high_resolution_clock::now();
+            // 去抖动延时（200ms），在所有批量写操作静止后再执行安全扫描
+            if ( std::chrono::duration<double>(now - lastChangeTime).count() >=
+                 0.2 ) {
+                XINFO(
+                    "Directory Watcher: filesystem changes settled, rescanning "
+                    "directory...");
+                scanProjectDirectory();
+                hasPendingChange = false;
+            }
+        }
     }
 }
 
@@ -947,6 +979,321 @@ void EditorEngine::updateBeatmapFilePathInProject(
     } else {
         saveProject();
     }
+}
+
+void EditorEngine::scanProjectDirectory()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    auto actualProjectPath = m_currentProject->m_projectRoot;
+
+    // 收集当前目录下的所有有效文件
+    std::vector<std::filesystem::path> mapFiles;
+    std::vector<std::filesystem::path> audioFiles;
+
+    try {
+        if ( !std::filesystem::exists(actualProjectPath) ) return;
+
+        for ( const auto& entry : std::filesystem::recursive_directory_iterator(
+                  actualProjectPath) ) {
+            if ( !entry.is_regular_file() ) continue;
+
+            auto ext = Config::pathToUtf8(entry.path().extension());
+            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
+                 ext == ".mmm" ) {
+                mapFiles.push_back(entry.path());
+            } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
+                        ext == ".flac" ) {
+                audioFiles.push_back(entry.path());
+            }
+        }
+    } catch ( ... ) {
+        return;  // 防御可能的文件系统并发读写冲突
+    }
+
+    bool changed = false;
+
+    // 1. 同步谱面文件列表
+    std::vector<Project::BeatmapEntry> newBeatmaps;
+    std::unordered_set<std::string>    mainAudioPaths;
+
+    for ( const auto& mapPath : mapFiles ) {
+        auto relMapPath = Config::pathToUtf8(
+            std::filesystem::relative(mapPath, actualProjectPath));
+        auto filename = Config::pathToUtf8(mapPath.filename());
+
+        // 查找是否已经存在该谱面 entry
+        Project::BeatmapEntry mapEntry;
+        bool                  exists = false;
+        for ( const auto& entry : m_currentProject->m_beatmaps ) {
+            if ( entry.m_filePath == relMapPath ) {
+                mapEntry = entry;
+                exists   = true;
+                break;
+            }
+        }
+
+        if ( !exists ) {
+            // 新发现的谱面
+            mapEntry.m_name     = filename;
+            mapEntry.m_filePath = relMapPath;
+            try {
+                auto tempMap = BeatMap::loadFromFile(mapPath);
+                if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
+                    auto absAudioPath =
+                        mapPath.parent_path() /
+                        tempMap.m_baseMapMetadata.main_audio_path;
+                    auto relAudioPath =
+                        Config::pathToUtf8(std::filesystem::relative(
+                            absAudioPath, actualProjectPath));
+                    mapEntry.m_audioTrackId =
+                        Config::pathToUtf8(absAudioPath.filename());
+                    mainAudioPaths.insert(relAudioPath);
+                }
+            } catch ( ... ) {
+            }
+            changed = true;
+            XINFO("Directory Listener: Discovered new beatmap: {}", filename);
+        } else {
+            // 已有谱面，收集其主音轨引用
+            if ( !mapEntry.m_audioTrackId.empty() ) {
+                try {
+                    auto tempMap = BeatMap::loadFromFile(mapPath);
+                    if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
+                        auto absAudioPath =
+                            mapPath.parent_path() /
+                            tempMap.m_baseMapMetadata.main_audio_path;
+                        auto relAudioPath =
+                            Config::pathToUtf8(std::filesystem::relative(
+                                absAudioPath, actualProjectPath));
+                        mainAudioPaths.insert(relAudioPath);
+                    }
+                } catch ( ... ) {
+                }
+            }
+        }
+        newBeatmaps.push_back(mapEntry);
+    }
+
+    // 如果有任何谱面被删除了
+    if ( newBeatmaps.size() != m_currentProject->m_beatmaps.size() ) {
+        changed = true;
+        XINFO(
+            "Directory Listener: Some beatmaps were removed from the "
+            "directory.");
+    }
+    m_currentProject->m_beatmaps = newBeatmaps;
+
+    // 2. 同步音频资源列表
+    std::vector<AudioResource> newAudioResources;
+    for ( const auto& audioPath : audioFiles ) {
+        auto relAudioPath = Config::pathToUtf8(
+            std::filesystem::relative(audioPath, actualProjectPath));
+        auto filename = Config::pathToUtf8(audioPath.filename());
+
+        // 查找是否已经存在该音频资源
+        AudioResource res;
+        bool          exists = false;
+        for ( const auto& existingRes : m_currentProject->m_audioResources ) {
+            if ( existingRes.m_path == relAudioPath ) {
+                res    = existingRes;
+                exists = true;
+                break;
+            }
+        }
+
+        if ( !exists ) {
+            // 新加入的音频
+            res.m_id            = filename;
+            res.m_path          = relAudioPath;
+            res.m_type          = (mainAudioPaths.count(relAudioPath) > 0)
+                                      ? AudioTrackType::Main
+                                      : AudioTrackType::Effect;
+            res.m_config.volume = 0.5f;
+            res.m_config.playbackSpeed = 1.0f;
+            res.m_config.playbackPitch = 0.0f;
+            res.m_config.muted         = false;
+            res.m_config.eqEnabled     = false;
+            res.m_config.eqPreset      = 0;
+
+            // 自动加载音效
+            if ( res.m_type == AudioTrackType::Effect ) {
+                Audio::AudioManager::instance().preloadSoundEffect(
+                    res.m_id,
+                    Config::pathToUtf8(audioPath),
+                    res.m_config.volume);
+            }
+            changed = true;
+            XINFO("Directory Listener: Discovered new audio file: {}",
+                  filename);
+        } else {
+            // 已有音频，可能需要根据最近的谱面关系更新 m_type
+            auto newType = (mainAudioPaths.count(relAudioPath) > 0)
+                               ? AudioTrackType::Main
+                               : AudioTrackType::Effect;
+            if ( res.m_type != newType ) {
+                res.m_type = newType;
+                changed    = true;
+            }
+        }
+        newAudioResources.push_back(res);
+    }
+
+    // 如果有任何音频被删除了
+    if ( newAudioResources.size() !=
+         m_currentProject->m_audioResources.size() ) {
+        changed = true;
+        XINFO(
+            "Directory Listener: Some audio files were removed from the "
+            "directory.");
+    }
+    m_currentProject->m_audioResources = newAudioResources;
+
+    // 如果有任何文件发现/删除/更新，保存项目配置
+    if ( changed ) {
+        saveProject();
+    }
+}
+
+void EditorEngine::startDirectoryWatcher(const std::filesystem::path& path)
+{
+    stopDirectoryWatcher();
+
+    std::lock_guard<std::mutex> lk(m_watcherMutex);
+    m_watcherRunning          = true;
+    m_directoryChangedPending = false;
+#ifdef _WIN32
+    m_watcherExitEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+#endif
+    m_watcherThread = std::thread(&EditorEngine::watcherThreadLoop, this, path);
+    XINFO("Directory Watcher: Started monitoring directory: {}",
+          Config::pathToUtf8(path));
+}
+
+void EditorEngine::stopDirectoryWatcher()
+{
+    {
+        std::lock_guard<std::mutex> lk(m_watcherMutex);
+        if ( !m_watcherRunning ) return;
+        m_watcherRunning = false;
+#ifdef _WIN32
+        if ( m_watcherExitEvent &&
+             m_watcherExitEvent != INVALID_HANDLE_VALUE ) {
+            // 触发退出事件，使 ReadDirectoryChangesW 阻塞立刻解除并退出
+            SetEvent(static_cast<HANDLE>(m_watcherExitEvent));
+        }
+#endif
+    }
+
+    if ( m_watcherThread.joinable() ) {
+        m_watcherThread.join();
+    }
+
+    // 在线程完全退出并 Join 之后，再安全地在主线程清理句柄，防止重叠 I/O
+    // 并发冲突
+    {
+        std::lock_guard<std::mutex> lk(m_watcherMutex);
+#ifdef _WIN32
+        if ( m_watcherDirHandle &&
+             m_watcherDirHandle != INVALID_HANDLE_VALUE ) {
+            CloseHandle(static_cast<HANDLE>(m_watcherDirHandle));
+            m_watcherDirHandle = INVALID_HANDLE_VALUE;
+        }
+        if ( m_watcherExitEvent &&
+             m_watcherExitEvent != INVALID_HANDLE_VALUE ) {
+            CloseHandle(static_cast<HANDLE>(m_watcherExitEvent));
+            m_watcherExitEvent = nullptr;
+        }
+#endif
+    }
+    XINFO("Directory Watcher: Stopped monitoring.");
+}
+
+void EditorEngine::watcherThreadLoop(std::filesystem::path watchPath)
+{
+#ifdef _WIN32
+    std::wstring wpath = watchPath.wstring();
+    HANDLE       hDir =
+        CreateFileW(wpath.c_str(),
+                    FILE_LIST_DIRECTORY,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL,
+                    OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS |
+                        FILE_FLAG_OVERLAPPED,  // 使用重叠 I/O 开启非阻塞模式
+                    NULL);
+
+    if ( hDir == INVALID_HANDLE_VALUE ) {
+        XERROR("Directory Watcher: Failed to open directory for monitoring: {}",
+               Config::pathToUtf8(watchPath));
+        m_watcherRunning = false;
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(m_watcherMutex);
+        m_watcherDirHandle = hDir;
+    }
+
+    // 创建重叠 I/O 事件
+    HANDLE hChangeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if ( !hChangeEvent ) {
+        m_watcherRunning = false;
+        return;
+    }
+
+    alignas(DWORD) BYTE buffer[4096];
+
+    OVERLAPPED overlapped = {};
+    overlapped.hEvent     = hChangeEvent;
+
+    HANDLE waitHandles[2] = { static_cast<HANDLE>(m_watcherExitEvent),
+                              hChangeEvent };
+
+    while ( m_watcherRunning ) {
+        ResetEvent(hChangeEvent);
+
+        DWORD bytesReturned = 0;
+        BOOL  success = ReadDirectoryChangesW(hDir,
+                                              buffer,
+                                              sizeof(buffer),
+                                              TRUE,  // 递归监听子目录
+                                              FILE_NOTIFY_CHANGE_FILE_NAME |
+                                                  FILE_NOTIFY_CHANGE_DIR_NAME |
+                                                  FILE_NOTIFY_CHANGE_LAST_WRITE,
+                                              &bytesReturned,
+                                              &overlapped,
+                                              NULL);
+
+        if ( !success && GetLastError() != ERROR_IO_PENDING ) {
+            break;
+        }
+
+        // 等待退出事件或变更事件
+        DWORD waitResult =
+            WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
+
+        if ( waitResult == WAIT_OBJECT_0 ) {
+            // 收到退出事件，主动取消挂起的 I/O 并退出循环
+            CancelIoEx(hDir, &overlapped);
+            break;
+        } else if ( waitResult == WAIT_OBJECT_0 + 1 ) {
+            // 成功监听到文件系统事件，通知主逻辑线程挂起变更
+            m_directoryChangedPending.store(true, std::memory_order_release);
+        } else {
+            // 发生错误
+            break;
+        }
+    }
+
+    CloseHandle(hChangeEvent);
+#else
+    // 非 Windows 平台的模拟实现或备用监听
+    while ( m_watcherRunning ) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    }
+#endif
 }
 
 }  // namespace MMM::Logic

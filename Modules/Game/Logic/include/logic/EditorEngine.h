@@ -171,6 +171,11 @@ private:
      */
     void loop();
 
+    /**
+     * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
+     */
+    void scanProjectDirectory();
+
     /// @brief 逻辑线程
     std::thread m_thread;
 
@@ -218,6 +223,40 @@ private:
 
     /// @brief 上一次计算 UPS 的时间戳
     std::chrono::high_resolution_clock::time_point m_lastUpsTime;
+
+    /**
+     * @brief 启动文件夹监听器
+     */
+    void startDirectoryWatcher(const std::filesystem::path& path);
+
+    /**
+     * @brief 停止文件夹监听器
+     */
+    void stopDirectoryWatcher();
+
+    /**
+     * @brief 文件夹监听线程的主循环
+     */
+    void watcherThreadLoop(std::filesystem::path watchPath);
+
+    /// @brief 文件夹监听线程
+    std::thread m_watcherThread;
+
+    /// @brief 监听线程运行标志
+    std::atomic<bool> m_watcherRunning{ false };
+
+    /// @brief 是否有未处理的文件系统变更挂起
+    std::atomic<bool> m_directoryChangedPending{ false };
+
+#ifdef _WIN32
+    /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW
+    void* m_watcherDirHandle{ nullptr };
+    /// @brief Win32 退出事件句柄，用于安全退出监听线程
+    void* m_watcherExitEvent{ nullptr };
+#endif
+
+    /// @brief 保护目录句柄的独立锁
+    mutable std::mutex m_watcherMutex;
 };
 
 }  // namespace MMM::Logic
