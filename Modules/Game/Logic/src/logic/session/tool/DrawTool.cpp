@@ -545,60 +545,82 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     // 折线尾部结合所需的删除条目列表 (声明在外部以便后续使用)
     std::vector<BatchNoteAction::Entry> mergeDeleteEntries;
 
-    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-        // [深度清洗与递归简化]
-        auto& segments = ctx.brushState.polylineSegments;
+    bool isMergeableType = (note.m_type == ::MMM::NoteType::POLYLINE ||
+                            note.m_type == ::MMM::NoteType::HOLD ||
+                            note.m_type == ::MMM::NoteType::FLICK);
 
-        bool changed = true;
-        while ( changed ) {
-            changed = false;
+    if ( isMergeableType ) {
+        std::vector<NoteComponent::SubNote> segments;
+        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+            segments = ctx.brushState.polylineSegments;
+        } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+            segments.push_back({ ::MMM::NoteType::HOLD,
+                                 note.m_timestamp,
+                                 note.m_duration,
+                                 note.m_trackIndex,
+                                 0 });
+        } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+            segments.push_back({ ::MMM::NoteType::FLICK,
+                                 note.m_timestamp,
+                                 0.0,
+                                 note.m_trackIndex,
+                                 note.m_dtrack });
+        }
 
-            // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
-            auto it = std::remove_if(
-                segments.begin(), segments.end(), [](const auto& s) {
-                    if ( s.type == ::MMM::NoteType::HOLD )
-                        return s.duration < 1e-5;
-                    if ( s.type == ::MMM::NoteType::FLICK )
-                        return s.dtrack == 0;
-                    return false;
-                });
-            if ( it != segments.end() ) {
-                segments.erase(it, segments.end());
-                changed = true;
-            }
+        // [深度清洗与递归简化] - 仅针对折线类型进行零值清洗与合并，普通 Hold /
+        // Flick 无需深度清洗
+        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+            bool changed = true;
+            while ( changed ) {
+                changed = false;
 
-            // 2. 合并连续的同类型物件
-            if ( segments.size() > 1 ) {
-                for ( size_t i = 0; i < segments.size() - 1; ) {
-                    auto& curr = segments[i];
-                    auto& next = segments[i + 1];
+                // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
+                auto it = std::remove_if(
+                    segments.begin(), segments.end(), [](const auto& s) {
+                        if ( s.type == ::MMM::NoteType::HOLD )
+                            return s.duration < 1e-5;
+                        if ( s.type == ::MMM::NoteType::FLICK )
+                            return s.dtrack == 0;
+                        return false;
+                    });
+                if ( it != segments.end() ) {
+                    segments.erase(it, segments.end());
+                    changed = true;
+                }
 
-                    if ( curr.type == next.type ) {
-                        if ( curr.type == ::MMM::NoteType::HOLD ) {
-                            // 合并长条持续时间
-                            curr.duration += next.duration;
-                            segments.erase(segments.begin() + i + 1);
-                            changed = true;
-                            continue;  // 继续检查合并后的段
-                        } else if ( curr.type == ::MMM::NoteType::FLICK ) {
-                            // 合并滑键位移量
-                            curr.dtrack += next.dtrack;
-                            segments.erase(segments.begin() + i + 1);
-                            changed = true;
-                            continue;
+                // 2. 合并连续的同类型物件
+                if ( segments.size() > 1 ) {
+                    for ( size_t i = 0; i < segments.size() - 1; ) {
+                        auto& curr = segments[i];
+                        auto& next = segments[i + 1];
+
+                        if ( curr.type == next.type ) {
+                            if ( curr.type == ::MMM::NoteType::HOLD ) {
+                                // 合并长条持续时间
+                                curr.duration += next.duration;
+                                segments.erase(segments.begin() + i + 1);
+                                changed = true;
+                                continue;  // 继续检查合并后的段
+                            } else if ( curr.type == ::MMM::NoteType::FLICK ) {
+                                // 合并滑键位移量
+                                curr.dtrack += next.dtrack;
+                                segments.erase(segments.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            }
                         }
+                        i++;
                     }
-                    i++;
                 }
             }
         }
 
-        // 3. 折线尾部结合检测 (仅当清洗后仍有 >=2 段时执行)
+        // 3. 尾部结合检测 (清洗后仍有 >=1 段时执行)
         //    时间容差 3ms，轨道必须一致
         constexpr double MERGE_TIME_TOLERANCE = 0.003;
 
-        if ( segments.size() >= 2 ) {
-            // 计算折线尾部的时间和轨道
+        if ( segments.size() >= 1 ) {
+            // 计算尾部的时间和轨道
             const auto& lastSeg   = segments.back();
             double      tailTime  = 0.0;
             int         tailTrack = 0;
@@ -628,7 +650,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                         mergeDeleteEntries.push_back(
                             { entity, nc, std::nullopt });
                         XINFO(
-                            "Polyline merge: removing Note at t={:.3f} "
+                            "Note merge: removing Note at t={:.3f} "
                             "track={}",
                             nc.m_timestamp,
                             nc.m_trackIndex);
@@ -657,7 +679,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
                             XINFO(
-                                "Polyline merge [1-1]: appended Flick from "
+                                "Note merge [1-1]: appended Flick from "
                                 "entity {} as new seg",
                                 static_cast<uint32_t>(entity));
                         } else if ( lastSeg.type == ::MMM::NoteType::FLICK ) {
@@ -672,7 +694,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
                             XINFO(
-                                "Polyline merge [1-2]: extended last "
+                                "Note merge [1-2]: extended last "
                                 "subFlick to Flick end track={}",
                                 flickEnd);
                         }
@@ -700,7 +722,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
                             XINFO(
-                                "Polyline merge [1-1]: appended Hold from "
+                                "Note merge [1-1]: appended Hold from "
                                 "entity {} as new seg",
                                 static_cast<uint32_t>(entity));
                         } else if ( lastSeg.type == ::MMM::NoteType::HOLD ) {
@@ -713,7 +735,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
                             XINFO(
-                                "Polyline merge [1-2]: extended last "
+                                "Note merge [1-2]: extended last "
                                 "subHold to Hold end t={:.3f}",
                                 holdEnd);
                         }
@@ -759,7 +781,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                                 }
                             }
                             XINFO(
-                                "Polyline merge [2-1]: appended {} segs "
+                                "Note merge [2-1]: appended {} segs "
                                 "from Polyline entity {}",
                                 nc.m_subNotes.size(),
                                 static_cast<uint32_t>(entity));
@@ -805,7 +827,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                                 }
                             }
                             XINFO(
-                                "Polyline merge [2-2]: extended tail and "
+                                "Note merge [2-2]: extended tail and "
                                 "appended {} remaining segs from Polyline "
                                 "entity {}",
                                 nc.m_subNotes.size() - 1,
@@ -817,11 +839,12 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             }
         }
 
-        // 4. 根据最终清洗结果进行降级
+        // 4. 根据最终清洗与合并结果进行降级或重构
         if ( segments.empty() ) {
             note.m_type     = ::MMM::NoteType::NOTE;
             note.m_duration = 0.0;
             note.m_dtrack   = 0;
+            note.m_subNotes.clear();
         } else if ( segments.size() == 1 ) {
             auto s            = segments[0];
             note.m_type       = s.type;
@@ -829,11 +852,13 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             note.m_duration   = s.duration;
             note.m_trackIndex = s.trackIndex;
             note.m_dtrack     = s.dtrack;
+            note.m_subNotes.clear();
         } else {
             note.m_subNotes = segments;
             if ( !note.m_subNotes.empty() ) {
                 note.m_timestamp  = note.m_subNotes.front().timestamp;
                 note.m_trackIndex = note.m_subNotes.front().trackIndex;
+                note.m_type       = ::MMM::NoteType::POLYLINE;
             }
         }
     }
