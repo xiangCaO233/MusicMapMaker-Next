@@ -137,6 +137,10 @@ struct SessionContext {
         std::unordered_set<entt::entity> targetEntities;
     } eraserState;
 
+    // --- 同步脏标记 ---
+    bool m_needsNotesSync{ false };    ///< 音响实体有变更，需同步到 BeatMap
+    bool m_needsTimingsSync{ false };  ///< 时间线实体有变更，需同步到 BeatMap
+
     // --- 编辑操作栈 ---
     EditorActionStack          actionStack;        ///< 撤销/重做操作栈
     std::vector<ClipboardItem> clipboard;          ///< 编辑器剪贴板

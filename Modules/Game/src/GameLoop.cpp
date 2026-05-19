@@ -265,6 +265,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             if ( settings.cursorStyle == Config::CursorStyle::Software &&
                  settings.softwareCursorConfig.enableBpmSyncSmokeLife ) {
                 auto& engine = Logic::EditorEngine::instance();
+                std::lock_guard<std::recursive_mutex> lock(
+                    engine.getSessionMutex());
                 if ( auto session = engine.getActiveSession() ) {
                     auto& ctx = session->getContext();
                     if ( ctx.currentBeatmap ) {
@@ -272,7 +274,6 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
                         double bpm  = ctx.currentBeatmap->m_baseMapMetadata
                                           .preference_bpm;
 
-                        // 查找当前时间点的 BPM
                         for ( const auto& t : ctx.currentBeatmap->m_timings ) {
                             if ( t.m_timingEffect == MMM::TimingEffect::BPM ) {
                                 if ( t.m_timestamp <= time ) {

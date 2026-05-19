@@ -311,158 +311,173 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         beatmap->m_noteData.flicks.size(),
         beatmap->m_noteData.polylines.size(),
         beatmap->m_timings.size());
+
+    ctx.m_needsTimingsSync = false;
+    ctx.m_needsNotesSync   = false;
 }
 
 
 void SessionUtils::syncBeatmap(SessionContext& ctx)
 {
     if ( !ctx.currentBeatmap ) return;
+    if ( !ctx.m_needsTimingsSync && !ctx.m_needsNotesSync ) return;
 
-    // 1. 清空原始数据
-    ctx.currentBeatmap->m_allNotes.clear();
-    ctx.currentBeatmap->m_noteData.notes.clear();
-    ctx.currentBeatmap->m_noteData.holds.clear();
-    ctx.currentBeatmap->m_noteData.flicks.clear();
-    ctx.currentBeatmap->m_noteData.polylines.clear();
-    ctx.currentBeatmap->m_timings.clear();
+    std::vector<Timing>                       newTimings;
+    std::vector<std::reference_wrapper<Note>> newAllNotes;
+    NoteData                                  newNoteData;
 
-    // 2. 同步时间线
-    auto tlView = ctx.timelineRegistry.view<TimelineComponent>();
-    std::vector<TimelineComponent> sortedTLs;
-    for ( auto entity : tlView ) {
-        sortedTLs.push_back(tlView.get<TimelineComponent>(entity));
-    }
-    std::sort(
-        sortedTLs.begin(), sortedTLs.end(), [](const auto& a, const auto& b) {
-            return a.m_timestamp < b.m_timestamp;
-        });
-
-    double currentBPM = 120.0;
-    if ( ctx.currentBeatmap &&
-         ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-        currentBPM = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    }
-    for ( const auto& tc : sortedTLs ) {
-        Timing timing;
-        timing.m_timestamp             = tc.m_timestamp * 1000.0;
-        timing.m_timingEffect          = tc.m_effect;
-        timing.m_timingEffectParameter = tc.m_value;
-
-        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-            currentBPM           = tc.m_value;
-            timing.m_bpm         = currentBPM;
-            timing.m_beat_length = 60000.0 / std::max(0.1, timing.m_bpm);
-        } else {
-            timing.m_bpm         = currentBPM;  // 继承当前红线BPM
-            timing.m_beat_length = tc.m_value;
+    if ( ctx.m_needsTimingsSync ) {
+        auto tlView = ctx.timelineRegistry.view<TimelineComponent>();
+        std::vector<TimelineComponent> sortedTLs;
+        for ( auto entity : tlView ) {
+            sortedTLs.push_back(tlView.get<TimelineComponent>(entity));
         }
-        timing.m_metadata = tc.m_metadata;
-        ctx.currentBeatmap->m_timings.push_back(timing);
-    }
+        std::sort(sortedTLs.begin(),
+                  sortedTLs.end(),
+                  [](const auto& a, const auto& b) {
+                      return a.m_timestamp < b.m_timestamp;
+                  });
 
-    // 3. 同步物体
-    auto noteView = ctx.noteRegistry.view<NoteComponent>();
+        double currentBPM = 120.0;
+        if ( ctx.currentBeatmap &&
+             ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
+            currentBPM = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+        }
+        for ( const auto& tc : sortedTLs ) {
+            Timing timing;
+            timing.m_timestamp             = tc.m_timestamp * 1000.0;
+            timing.m_timingEffect          = tc.m_effect;
+            timing.m_timingEffectParameter = tc.m_value;
 
-    // 第一遍：创建所有非折线、非子物件实体
-    for ( auto entity : noteView ) {
-        const auto& nc = noteView.get<NoteComponent>(entity);
-        if ( nc.m_isSubNote ) continue;
-        if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
-
-        if ( nc.m_type == ::MMM::NoteType::NOTE ) {
-            Note n;
-            n.m_type      = ::MMM::NoteType::NOTE;
-            n.m_timestamp = nc.m_timestamp * 1000.0;
-            n.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-            n.m_metadata  = nc.m_metadata;
-            ctx.currentBeatmap->m_noteData.notes.push_back(std::move(n));
-            ctx.currentBeatmap->m_allNotes.push_back(
-                ctx.currentBeatmap->m_noteData.notes.back());
-        } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
-            Hold h;
-            h.m_type      = ::MMM::NoteType::HOLD;
-            h.m_timestamp = nc.m_timestamp * 1000.0;
-            h.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-            h.m_duration  = nc.m_duration * 1000.0;
-            h.m_metadata  = nc.m_metadata;
-            ctx.currentBeatmap->m_noteData.holds.push_back(std::move(h));
-            ctx.currentBeatmap->m_allNotes.push_back(
-                ctx.currentBeatmap->m_noteData.holds.back());
-        } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
-            Flick f;
-            f.m_type      = ::MMM::NoteType::FLICK;
-            f.m_timestamp = nc.m_timestamp * 1000.0;
-            f.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-            f.m_dtrack    = nc.m_dtrack;
-            f.m_metadata  = nc.m_metadata;
-            ctx.currentBeatmap->m_noteData.flicks.push_back(std::move(f));
-            ctx.currentBeatmap->m_allNotes.push_back(
-                ctx.currentBeatmap->m_noteData.flicks.back());
+            if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
+                currentBPM           = tc.m_value;
+                timing.m_bpm         = currentBPM;
+                timing.m_beat_length = 60000.0 / std::max(0.1, timing.m_bpm);
+            } else {
+                timing.m_bpm         = currentBPM;
+                timing.m_beat_length = tc.m_value;
+            }
+            timing.m_metadata = tc.m_metadata;
+            newTimings.push_back(timing);
         }
     }
 
-    // 第二遍：处理 Polyline
-    for ( auto entity : noteView ) {
-        const auto& note_component = noteView.get<NoteComponent>(entity);
-        if ( note_component.m_type != ::MMM::NoteType::POLYLINE ) continue;
+    if ( ctx.m_needsNotesSync ) {
+        auto noteView = ctx.noteRegistry.view<NoteComponent>();
 
-        Polyline p;
-        p.m_type      = ::MMM::NoteType::POLYLINE;
-        p.m_timestamp = note_component.m_timestamp * 1000.0;
-        p.m_track     = static_cast<uint32_t>(note_component.m_trackIndex);
-        p.m_metadata  = note_component.m_metadata;
+        for ( auto entity : noteView ) {
+            const auto& nc = noteView.get<NoteComponent>(entity);
+            if ( nc.m_isSubNote ) continue;
+            if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
 
-        // 直接使用 m_subNotes 向量重建子物件
-        for ( const auto& sub_note : note_component.m_subNotes ) {
-            if ( sub_note.type == ::MMM::NoteType::NOTE ) {
+            if ( nc.m_type == ::MMM::NoteType::NOTE ) {
                 Note n;
                 n.m_type      = ::MMM::NoteType::NOTE;
-                n.m_timestamp = sub_note.timestamp * 1000.0;
-                n.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                n.m_metadata  = sub_note.metadata;
-                ctx.currentBeatmap->m_noteData.notes.push_back(std::move(n));
-                auto& ref = ctx.currentBeatmap->m_noteData.notes.back();
-                p.m_subNotes.push_back(ref);
-                ctx.currentBeatmap->m_allNotes.push_back(ref);
-            } else if ( sub_note.type == ::MMM::NoteType::HOLD ) {
+                n.m_timestamp = nc.m_timestamp * 1000.0;
+                n.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
+                n.m_metadata  = nc.m_metadata;
+                newNoteData.notes.push_back(std::move(n));
+                newAllNotes.push_back(newNoteData.notes.back());
+            } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
                 Hold h;
                 h.m_type      = ::MMM::NoteType::HOLD;
-                h.m_timestamp = sub_note.timestamp * 1000.0;
-                h.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                h.m_duration  = sub_note.duration * 1000.0;
-                h.m_metadata  = sub_note.metadata;
-                ctx.currentBeatmap->m_noteData.holds.push_back(std::move(h));
-                auto& ref = ctx.currentBeatmap->m_noteData.holds.back();
-                p.m_subNotes.push_back(ref);
-                p.m_subHolds.push_back(ref);
-                ctx.currentBeatmap->m_allNotes.push_back(ref);
-            } else if ( sub_note.type == ::MMM::NoteType::FLICK ) {
+                h.m_timestamp = nc.m_timestamp * 1000.0;
+                h.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
+                h.m_duration  = nc.m_duration * 1000.0;
+                h.m_metadata  = nc.m_metadata;
+                newNoteData.holds.push_back(std::move(h));
+                newAllNotes.push_back(newNoteData.holds.back());
+            } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
                 Flick f;
                 f.m_type      = ::MMM::NoteType::FLICK;
-                f.m_timestamp = sub_note.timestamp * 1000.0;
-                f.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                f.m_dtrack    = sub_note.dtrack;
-                f.m_metadata  = sub_note.metadata;
-                ctx.currentBeatmap->m_noteData.flicks.push_back(std::move(f));
-                auto& ref = ctx.currentBeatmap->m_noteData.flicks.back();
-                p.m_subNotes.push_back(ref);
-                p.m_subFlicks.push_back(ref);
-                ctx.currentBeatmap->m_allNotes.push_back(ref);
+                f.m_timestamp = nc.m_timestamp * 1000.0;
+                f.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
+                f.m_dtrack    = nc.m_dtrack;
+                f.m_metadata  = nc.m_metadata;
+                newNoteData.flicks.push_back(std::move(f));
+                newAllNotes.push_back(newNoteData.flicks.back());
             }
         }
 
-        ctx.currentBeatmap->m_noteData.polylines.push_back(std::move(p));
-        ctx.currentBeatmap->m_allNotes.push_back(
-            ctx.currentBeatmap->m_noteData.polylines.back());
+        for ( auto entity : noteView ) {
+            const auto& nc = noteView.get<NoteComponent>(entity);
+            if ( nc.m_type != ::MMM::NoteType::POLYLINE ) continue;
+
+            Polyline p;
+            p.m_type      = ::MMM::NoteType::POLYLINE;
+            p.m_timestamp = nc.m_timestamp * 1000.0;
+            p.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
+            p.m_metadata  = nc.m_metadata;
+
+            for ( const auto& sub_note : nc.m_subNotes ) {
+                if ( sub_note.type == ::MMM::NoteType::NOTE ) {
+                    Note n;
+                    n.m_type      = ::MMM::NoteType::NOTE;
+                    n.m_timestamp = sub_note.timestamp * 1000.0;
+                    n.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
+                    n.m_metadata  = sub_note.metadata;
+                    newNoteData.notes.push_back(std::move(n));
+                    auto& ref = newNoteData.notes.back();
+                    p.m_subNotes.push_back(ref);
+                    newAllNotes.push_back(ref);
+                } else if ( sub_note.type == ::MMM::NoteType::HOLD ) {
+                    Hold h;
+                    h.m_type      = ::MMM::NoteType::HOLD;
+                    h.m_timestamp = sub_note.timestamp * 1000.0;
+                    h.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
+                    h.m_duration  = sub_note.duration * 1000.0;
+                    h.m_metadata  = sub_note.metadata;
+                    newNoteData.holds.push_back(std::move(h));
+                    auto& ref = newNoteData.holds.back();
+                    p.m_subNotes.push_back(ref);
+                    p.m_subHolds.push_back(ref);
+                    newAllNotes.push_back(ref);
+                } else if ( sub_note.type == ::MMM::NoteType::FLICK ) {
+                    Flick f;
+                    f.m_type      = ::MMM::NoteType::FLICK;
+                    f.m_timestamp = sub_note.timestamp * 1000.0;
+                    f.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
+                    f.m_dtrack    = sub_note.dtrack;
+                    f.m_metadata  = sub_note.metadata;
+                    newNoteData.flicks.push_back(std::move(f));
+                    auto& ref = newNoteData.flicks.back();
+                    p.m_subNotes.push_back(ref);
+                    p.m_subFlicks.push_back(ref);
+                    newAllNotes.push_back(ref);
+                }
+            }
+
+            newNoteData.polylines.push_back(std::move(p));
+            newAllNotes.push_back(newNoteData.polylines.back());
+        }
+
+        std::sort(newAllNotes.begin(),
+                  newAllNotes.end(),
+                  [](const std::reference_wrapper<Note>& a,
+                     const std::reference_wrapper<Note>& b) {
+                      return a.get().m_timestamp < b.get().m_timestamp;
+                  });
     }
 
-    // 最后对所有物件按时间排序
-    std::sort(ctx.currentBeatmap->m_allNotes.begin(),
-              ctx.currentBeatmap->m_allNotes.end(),
-              [](const std::reference_wrapper<Note>& a,
-                 const std::reference_wrapper<Note>& b) {
-                  return a.get().m_timestamp < b.get().m_timestamp;
-              });
+    {
+        auto& mutex = EditorEngine::instance().getSessionMutex();
+        std::lock_guard<std::recursive_mutex> lock(mutex);
+
+        if ( ctx.m_needsTimingsSync ) {
+            ctx.currentBeatmap->m_timings.swap(newTimings);
+        }
+        if ( ctx.m_needsNotesSync ) {
+            ctx.currentBeatmap->m_allNotes.swap(newAllNotes);
+            ctx.currentBeatmap->m_noteData.notes.swap(newNoteData.notes);
+            ctx.currentBeatmap->m_noteData.holds.swap(newNoteData.holds);
+            ctx.currentBeatmap->m_noteData.flicks.swap(newNoteData.flicks);
+            ctx.currentBeatmap->m_noteData.polylines.swap(
+                newNoteData.polylines);
+        }
+    }
+
+    ctx.m_needsTimingsSync = false;
+    ctx.m_needsNotesSync   = false;
 }
 
 }  // namespace MMM::Logic

@@ -39,11 +39,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdMirrorSelected> ||
                                std::is_same_v<T,
                                               CmdAlignSelectedToCommonBeats> ||
-                               std::is_same_v<T, CmdStartBrush> ||
-                               std::is_same_v<T, CmdUpdateBrush> ||
                                std::is_same_v<T, CmdEndBrush> ||
-                               std::is_same_v<T, CmdStartErase> ||
-                               std::is_same_v<T, CmdUpdateErase> ||
                                std::is_same_v<T, CmdEndErase> ||
                                std::is_same_v<T, CmdLoadBeatmap> ||
                                std::is_same_v<T, CmdCreateBeatmap> ||
@@ -217,6 +213,8 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
+        m_ctx->m_needsTimingsSync = true;
+        m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
 
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
@@ -247,6 +245,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
+        m_ctx->m_needsTimingsSync = true;
+        m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
         auto savePath = Config::utf8ToPath(cmd.path);
         bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);

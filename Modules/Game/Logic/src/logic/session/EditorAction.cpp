@@ -1,9 +1,9 @@
-#include "logic/session/context/SessionContext.h"
-#include "logic/session/SessionUtils.h"
 #include "logic/session/EditorAction.h"
-#include "logic/BeatmapSession.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "logic/BeatmapSession.h"
+#include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 
 namespace MMM::Logic
 {
@@ -11,8 +11,8 @@ namespace MMM::Logic
 void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
                                        SessionContext&                ctx)
 {
-    ctx.lastActionMessage =
-        fmt::format("{} {}", TR("ui.status.category.action"), action->getName());
+    ctx.lastActionMessage = fmt::format(
+        "{} {}", TR("ui.status.category.action"), action->getName());
     action->execute(ctx);
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();

@@ -44,6 +44,7 @@ void TimelineAction::execute(SessionContext& ctx)
                 m_entity, [&](TimelineComponent& tl) { tl = *m_after; });
         }
     }
+    ctx.m_needsTimingsSync = true;
 }
 
 void TimelineAction::undo(SessionContext& ctx)
@@ -61,6 +62,7 @@ void TimelineAction::undo(SessionContext& ctx)
                 m_entity, [&](TimelineComponent& tl) { tl = *m_before; });
         }
     }
+    ctx.m_needsTimingsSync = true;
 }
 
 void TimelineAction::redo(SessionContext& ctx)
@@ -130,6 +132,7 @@ void NoteAction::execute(SessionContext& ctx)
                                      [&](NoteComponent& n) { n = *m_after; });
         }
     }
+    ctx.m_needsNotesSync = true;
     SessionUtils::rebuildHitEvents(ctx);
 }
 
@@ -150,6 +153,7 @@ void NoteAction::undo(SessionContext& ctx)
                                      [&](NoteComponent& n) { n = *m_before; });
         }
     }
+    ctx.m_needsNotesSync = true;
     SessionUtils::rebuildHitEvents(ctx);
 }
 
@@ -201,6 +205,7 @@ void BatchNoteAction::execute(SessionContext& ctx)
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }
+    ctx.m_needsNotesSync = true;
     SessionUtils::rebuildHitEvents(ctx);
 }
 
@@ -219,6 +224,7 @@ void BatchNoteAction::undo(SessionContext& ctx)
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }
+    ctx.m_needsNotesSync = true;
     SessionUtils::rebuildHitEvents(ctx);
 }
 
