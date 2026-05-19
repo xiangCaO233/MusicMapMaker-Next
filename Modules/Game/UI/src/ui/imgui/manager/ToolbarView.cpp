@@ -3,7 +3,9 @@
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
@@ -287,6 +289,76 @@ void ToolbarView::update(UIManager* sourceManager)
 
         vbox.addSpring();
 
+        // Key 数量快捷设置
+        vbox.addElement(
+            "KeyCountShortcut",
+            Sizing::Fixed(btnSize),
+            Sizing::Fixed(btnSize),
+            [&](Clay_BoundingBox rect, bool) {
+                ImGui::SetCursorScreenPos({ rect.x, rect.y });
+
+                auto& engine = Logic::EditorEngine::instance();
+                std::lock_guard<std::recursive_mutex> sessionLock(
+                    engine.getSessionMutex());
+                auto session = engine.getActiveSession();
+
+                bool hasBeatmap =
+                    session && session->getContext().currentBeatmap;
+                int currentTracks = 4;
+                if ( hasBeatmap ) {
+                    currentTracks =
+                        session->getContext()
+                            .currentBeatmap->m_baseMapMetadata.track_count;
+                }
+
+                if ( !hasBeatmap ) {
+                    ImGui::BeginDisabled();
+                }
+
+                pushBtnStyle(m_showKeyPopup);
+                ImFont* contentFont = skinCfg.getFont("content");
+                if ( contentFont ) ImGui::PushFont(contentFont);
+
+                char keyBuf[16];
+                if ( hasBeatmap ) {
+                    snprintf(keyBuf, sizeof(keyBuf), "%dK", currentTracks);
+                } else {
+                    snprintf(keyBuf, sizeof(keyBuf), "--");
+                }
+
+                if ( ImGui::Button(keyBuf, ImVec2(rect.width, rect.height)) ) {
+                    m_showKeyPopup = !m_showKeyPopup;
+                    if ( m_showKeyPopup ) {
+                        m_showDivisorPopup = false;
+                    }
+                }
+                m_lastKeyBtnY = ImGui::GetItemRectMin().y;
+
+                if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                    float wheel = ImGui::GetIO().MouseWheel;
+                    if ( std::abs(wheel) > 0.1f ) {
+                        int delta = (wheel > 0) ? 1 : -1;
+                        int newTracks =
+                            std::clamp(currentTracks + delta, 1, 32);
+                        if ( newTracks != currentTracks ) {
+                            auto meta = session->getContext()
+                                            .currentBeatmap->m_baseMapMetadata;
+                            meta.track_count = newTracks;
+                            engine.pushCommand(
+                                Logic::CmdUpdateBeatmapMetadata{ meta });
+                        }
+                    }
+                    drawTooltip(TR("ui.settings.beatmap.tracks").data());
+                }
+
+                if ( contentFont ) ImGui::PopFont();
+                ImGui::PopStyleColor(3);
+
+                if ( !hasBeatmap ) {
+                    ImGui::EndDisabled();
+                }
+            });
+
         // 分拍数量设置
         vbox.addElement(
             "BeatDivisor",
@@ -305,6 +377,9 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( ImGui::Button(divisorBuf,
                                    ImVec2(rect.width, rect.height)) ) {
                     m_showDivisorPopup = !m_showDivisorPopup;
+                    if ( m_showDivisorPopup ) {
+                        m_showKeyPopup = false;
+                    }
                 }
                 m_lastBtnY = ImGui::GetItemRectMin().y;
                 if ( ImGui::IsItemHovered() ) {
@@ -435,6 +510,102 @@ void ToolbarView::update(UIManager* sourceManager)
             ImVec2 sz     = ImGui::GetWindowSize();
             m_popupWidth  = sz.x;
             m_popupHeight = sz.y;
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(4);
+    }
+
+    // --- 绘制Key数量设置悬浮窗 ---
+    if ( m_showKeyPopup ) {
+        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
+
+        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        float          viewportTop  = mainViewport->Pos.y;
+        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+        float viewportLeft   = mainViewport->Pos.x;
+
+        // X = 工具栏左边缘往左 4px
+        // Y = 按钮的顶部对齐
+        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
+        float targetY = m_lastKeyBtnY;
+
+        float popupW  = m_keyPopupWidth > 0.0f ? m_keyPopupWidth
+                                               : std::floor(160.0f * dpiScale);
+        float popupH  = m_keyPopupHeight > 0.0f ? m_keyPopupHeight
+                                                : std::floor(120.0f * dpiScale);
+        float padding = std::floor(8.0f * dpiScale);
+
+        targetX = std::max(targetX, viewportLeft + popupW + padding);
+        targetY = std::min(targetY, viewportBottom - popupH - padding);
+        targetY = std::max(targetY, viewportTop + padding);
+
+        ImVec2 popupPos = ImVec2(targetX, targetY);
+
+        ImGui::SetNextWindowViewport(mainViewport->ID);
+        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+        ImGuiWindowFlags popupFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize;
+
+        auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        float winPadding    = std::floor(aesthetics.windowPadding * dpiScale);
+        float winRounding   = std::floor(aesthetics.windowRounding * dpiScale);
+        float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
+        float itemSpacing   = std::floor(aesthetics.itemSpacing * dpiScale);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(winPadding, winPadding));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(itemSpacing, itemSpacing));
+
+        if ( ImGui::Begin("##KeyCountPopup", nullptr, popupFlags) ) {
+            auto& engine = Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            auto session = engine.getActiveSession();
+
+            if ( session && session->getContext().currentBeatmap ) {
+                auto meta =
+                    session->getContext().currentBeatmap->m_baseMapMetadata;
+                int currentTracks = meta.track_count;
+
+                ImGui::TextUnformatted(TR("ui.settings.beatmap.tracks").data());
+                ImGui::Separator();
+
+                ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
+                if ( ImGui::SliderInt(
+                         "##TracksSlider", &currentTracks, 1, 32) ) {
+                    meta.track_count = currentTracks;
+                    engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
+                }
+
+                // 常用 Key 数快速设置按钮
+                const std::vector<int> commonKeys = { 4, 5, 6, 7, 8 };
+                for ( size_t i = 0; i < commonKeys.size(); ++i ) {
+                    if ( i > 0 ) ImGui::SameLine();
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "%dK", commonKeys[i]);
+                    if ( ImGui::Button(buf,
+                                       ImVec2(std::floor(28.0f * dpiScale),
+                                              std::floor(24.0f * dpiScale))) ) {
+                        meta.track_count = commonKeys[i];
+                        engine.pushCommand(
+                            Logic::CmdUpdateBeatmapMetadata{ meta });
+                    }
+                }
+            } else {
+                m_showKeyPopup = false;
+            }
+
+            ImVec2 sz        = ImGui::GetWindowSize();
+            m_keyPopupWidth  = sz.x;
+            m_keyPopupHeight = sz.y;
         }
         ImGui::End();
 
