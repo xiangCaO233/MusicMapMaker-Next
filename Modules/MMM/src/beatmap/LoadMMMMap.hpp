@@ -76,8 +76,10 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 base.value("artist_unicode", "");
             beatMap.m_baseMapMetadata.version = base.value("version", "");
             beatMap.m_baseMapMetadata.author  = base.value("author", "");
-            beatMap.m_baseMapMetadata.main_audio_path = base.value("audio", "");
-            beatMap.m_baseMapMetadata.main_cover_path = base.value("cover", "");
+            beatMap.m_baseMapMetadata.main_audio_path =
+                Config::utf8ToPath(base.value("audio", ""));
+            beatMap.m_baseMapMetadata.main_cover_path =
+                Config::utf8ToPath(base.value("cover", ""));
             beatMap.m_baseMapMetadata.track_count =
                 base.value("track_count", 4);
             beatMap.m_baseMapMetadata.preference_bpm = base.value("bpm", 120.0);

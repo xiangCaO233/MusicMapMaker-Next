@@ -2012,8 +2012,9 @@ void SettingsView::drawBeatmapSettings()
                             if ( ImGui::Selectable(
                                      (res.m_id + "##" + res.m_path).c_str(),
                                      isSelected) ) {
-                                meta.main_audio_path = res.m_path;
-                                changed              = true;
+                                meta.main_audio_path =
+                                    Config::utf8ToPath(res.m_path);
+                                changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
@@ -2092,8 +2093,9 @@ void SettingsView::drawBeatmapSettings()
                             if ( ImGui::Selectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
-                                meta.main_cover_path = imgPath;
-                                changed              = true;
+                                meta.main_cover_path =
+                                    Config::utf8ToPath(imgPath);
+                                changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
