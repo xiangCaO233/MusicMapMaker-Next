@@ -499,8 +499,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             } else {
                 auto editorCfg =
                     Logic::EditorEngine::instance().getEditorConfig();
-                int   direction     = editorCfg.settings.reverseScroll ? -1 : 1;
-                float adjustedWheel = wheel * direction;
+                float adjustedWheel = wheel;
                 float step          = 0.1f;
                 if ( isShiftPressed )
                     step *= editorCfg.settings.scrollSpeedMultiplier;
@@ -511,8 +510,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             }
         } else if ( isAltPressed ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
-            int   direction = editorCfg.settings.reverseScroll ? -1 : 1;
-            float adjustedWheel = wheel * direction;
+            float adjustedWheel = wheel;
 
             static std::unordered_map<std::string, float> wheelAccumulator;
             float& acc = wheelAccumulator[m_cameraId];

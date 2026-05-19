@@ -107,7 +107,8 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 void PlaybackController::handleCommand(const CmdScroll& cmd)
 {
     float wheel = cmd.wheel;
-    if ( m_ctx.lastConfig.settings.reverseScroll ) {
+    if ( m_ctx.lastConfig.settings.reverseScroll &&
+         cmd.cameraId == "Basic2DCanvas" ) {
         wheel = -wheel;
     }
 
