@@ -2,6 +2,7 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/input/MMMInput.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
@@ -99,15 +100,21 @@ VKContext::VKContext()
                 // 持久化配置
                 MMM::Config::AppConfig::instance().save();
 
-                const char* displayNames[] = { "帧率限制: 垂直同步 (VSync)",
-                                               "帧率限制: 2x 刷新率 (2x FPS)",
-                                               "帧率限制: 4x 刷新率 (4x FPS)",
-                                               "帧率限制: 8x 刷新率 (8x FPS)",
-                                               "帧率限制: 无限制 (Unlimited)" };
-                showCenterNotification(displayNames[currentLimit]);
+                const char* displayNames[] = {
+                    TR("ui.settings.software.framelimit.vsync").data(),
+                    TR("ui.settings.software.framelimit.2x").data(),
+                    TR("ui.settings.software.framelimit.4x").data(),
+                    TR("ui.settings.software.framelimit.8x").data(),
+                    TR("ui.settings.software.framelimit.unlimited").data()
+                };
+                std::string title =
+                    TR("ui.settings.software.framelimit").data();
+                std::string notificationMsg =
+                    title + ": " + displayNames[currentLimit];
+                showCenterNotification(notificationMsg);
 
                 XDEBUG("Frame Limit mode toggled by shortcut: {}",
-                       displayNames[currentLimit]);
+                       notificationMsg);
             }
             if ( e.key == MMM::Event::Input::Key::F11 &&
                  e.action == MMM::Event::Input::Action::Press ) {
@@ -117,9 +124,10 @@ VKContext::VKContext()
                 bool isFullscreen =
                     (glfwGetWindowMonitor(
                          m_nativeWindow_ptr->getWindowHandle()) != nullptr);
-                showCenterNotification(isFullscreen
-                                           ? "全屏模式 (Fullscreen Mode)"
-                                           : "窗口化模式 (Windowed Mode)");
+                showCenterNotification(
+                    isFullscreen
+                        ? TR("ui.settings.software.screen.fullscreen").data()
+                        : TR("ui.settings.software.screen.windowed").data());
             }
         });
 

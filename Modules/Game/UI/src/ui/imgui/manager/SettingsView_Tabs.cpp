@@ -187,7 +187,7 @@ void SettingsView::drawSoftwareSettings()
     // Seg 完美垂直对齐！
     const char* allSoftwareLabels[] = {
         TR_CACHE("ui.settings.software.language").data(),
-        "帧数限制",
+        TR_CACHE("ui.settings.software.framelimit").data(),
         TR_CACHE("ui.settings.software.theme").data(),
         TR_CACHE("ui.settings.software.font.ascii").data(),
         TR_CACHE("ui.settings.software.font.cjk").data(),
@@ -317,27 +317,29 @@ void SettingsView::drawSoftwareSettings()
             });
 
         // 2. 帧数限制
-        addSettingItem(*sec,
-                       rowIndex,
-                       "帧数限制",
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int         limit    = (int)settings.frameLimit;
-                           const char* limits[] = { "垂直同步",
-                                                    "2x 刷新率",
-                                                    "4x 刷新率",
-                                                    "8x 刷新率",
-                                                    "无限制" };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##FrameLimitCombo",
-                                             &limit,
-                                             limits,
-                                             IM_ARRAYSIZE(limits)) ) {
-                               settings.frameLimit =
-                                   (Config::FrameLimitPreference)limit;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.framelimit").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         limit    = (int)settings.frameLimit;
+                const char* limits[] = {
+                    TR_CACHE("ui.settings.software.framelimit.vsync").data(),
+                    TR_CACHE("ui.settings.software.framelimit.2x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.4x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.8x").data(),
+                    TR_CACHE("ui.settings.software.framelimit.unlimited").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##FrameLimitCombo",
+                                  &limit,
+                                  limits,
+                                  IM_ARRAYSIZE(limits)) ) {
+                    settings.frameLimit = (Config::FrameLimitPreference)limit;
+                    changed             = true;
+                }
+            });
 
         // 3. UI 主题
         addSettingItem(
@@ -913,7 +915,11 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 int         syncMode    = (int)settings.syncConfig.mode;
-                const char* syncModes[] = { "None", "Integral", "WaterTank" };
+                const char* syncModes[] = {
+                    TR_CACHE("ui.settings.software.sync_mode.none").data(),
+                    TR_CACHE("ui.settings.software.sync_mode.integral").data(),
+                    TR_CACHE("ui.settings.software.sync_mode.watertank").data()
+                };
                 ImGui::SetNextItemWidth(r.width);
                 if ( ImGui::Combo("##SyncMode",
                                   &syncMode,
@@ -1226,50 +1232,58 @@ void SettingsView::drawVisualSettings()
                            changed |= ImGui::SliderFloat(
                                "##NoteScaleY", &visual.noteScaleY, 0.5f, 3.0f);
                        });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.note_fill_mode").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int         noteFillMode = (int)visual.noteFillMode;
-                           const char* fillModes[]  = {
-                               "Stretch", "AspectFit", "AspectFill", "Center"
-                           };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##NoteFillMode",
-                                             &noteFillMode,
-                                             fillModes,
-                                             IM_ARRAYSIZE(fillModes)) ) {
-                               visual.noteFillMode =
-                                   (Config::BackgroundFillMode)noteFillMode;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.note_fill_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         noteFillMode = (int)visual.noteFillMode;
+                const char* fillModes[]  = {
+                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##NoteFillMode",
+                                  &noteFillMode,
+                                  fillModes,
+                                  IM_ARRAYSIZE(fillModes)) ) {
+                    visual.noteFillMode =
+                        (Config::BackgroundFillMode)noteFillMode;
+                    changed = true;
+                }
+            });
     }
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(),
                                true) ) {
         // 采用全局统一最大标签宽度 maxLabelW
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int bgFillMode = (int)visual.background.fillMode;
-                           const char* fillModes[] = {
-                               "Stretch", "AspectFit", "AspectFill", "Center"
-                           };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##BgFillMode",
-                                             &bgFillMode,
-                                             fillModes,
-                                             IM_ARRAYSIZE(fillModes)) ) {
-                               visual.background.fillMode =
-                                   (Config::BackgroundFillMode)bgFillMode;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         bgFillMode  = (int)visual.background.fillMode;
+                const char* fillModes[] = {
+                    TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
+                    TR_CACHE("ui.settings.visual.fill_mode.center").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##BgFillMode",
+                                  &bgFillMode,
+                                  fillModes,
+                                  IM_ARRAYSIZE(fillModes)) ) {
+                    visual.background.fillMode =
+                        (Config::BackgroundFillMode)bgFillMode;
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -2353,27 +2367,33 @@ void SettingsView::drawEditorSettings()
              addHeader(TR_CACHE("ui.settings.editor.sfx").data(), true) ) {
         // 采用全局统一最大标签宽度 maxLabelW
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.sfx_strategy").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int strategy =
-                               (int)settings.sfxConfig.polylineStrategy;
-                           const char* strategies[] = { "Exact",
-                                                        "InternalAsNormal",
-                                                        "OnlyTailExact",
-                                                        "AllAsNormal" };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::Combo("##SfxStrategy",
-                                             &strategy,
-                                             strategies,
-                                             IM_ARRAYSIZE(strategies)) ) {
-                               settings.sfxConfig.polylineStrategy =
-                                   (Config::PolylineSfxStrategy)strategy;
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         strategy = (int)settings.sfxConfig.polylineStrategy;
+                const char* strategies[] = {
+                    TR_CACHE("ui.settings.editor.sfx_strategy.exact").data(),
+                    TR_CACHE(
+                        "ui.settings.editor.sfx_strategy.internal_as_normal")
+                        .data(),
+                    TR_CACHE("ui.settings.editor.sfx_strategy.only_tail_exact")
+                        .data(),
+                    TR_CACHE("ui.settings.editor.sfx_strategy.all_as_normal")
+                        .data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##SfxStrategy",
+                                  &strategy,
+                                  strategies,
+                                  IM_ARRAYSIZE(strategies)) ) {
+                    settings.sfxConfig.polylineStrategy =
+                        (Config::PolylineSfxStrategy)strategy;
+                    changed = true;
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,

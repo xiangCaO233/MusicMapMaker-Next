@@ -332,7 +332,7 @@ struct EditorSettings {
     std::string language{ "zh_cn" };
 
     /// @brief 帧数限制模式偏好
-    FrameLimitPreference frameLimit{ FrameLimitPreference::VSync };
+    FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
@@ -449,8 +449,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.language            = j.value("language", std::string("zh_cn"));
     c.frameLimit =
         j.value("frameLimit",
-                j.value("vsync", false) ? FrameLimitPreference::VSync
-                                        : FrameLimitPreference::Unlimited);
+                j.contains("vsync") ? (j.value("vsync", false)
+                                           ? FrameLimitPreference::VSync
+                                           : FrameLimitPreference::Unlimited)
+                                    : FrameLimitPreference::Refresh2x);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
