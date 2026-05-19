@@ -151,11 +151,7 @@ static bool renderScrollingTreeNode(const std::string& id,
     return open;
 }
 
-enum class TooltipDir
-{
-    Left,
-    Right
-};
+enum class TooltipDir { Left, Right };
 
 /**
  * @brief 绘制标准的、带有审美风格的 Tooltip。
@@ -169,7 +165,7 @@ static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
         auto& aesthetics =
             Config::AppConfig::instance().getEditorSettings().aesthetics;
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-        float winPadding = std::floor(aesthetics.windowPadding * dpiScale);
+        float winPadding  = std::floor(aesthetics.windowPadding * dpiScale);
         float winRounding = std::floor(aesthetics.windowRounding * dpiScale);
 
         ImVec2 pos    = ImGui::GetItemRectMin();
@@ -186,13 +182,15 @@ static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
             pivot  = { 0.0f, 0.0f };
         }
 
+        ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         ImGui::SetNextWindowPos(target, ImGuiCond_Always, pivot);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                             ImVec2(winPadding, winPadding));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
 
-        ImFont* contentFont = Config::SkinManager::instance().getFont("content");
+        ImFont* contentFont =
+            Config::SkinManager::instance().getFont("content");
         if ( contentFont ) ImGui::PushFont(contentFont);
 
         if ( ImGui::BeginTooltip() ) {

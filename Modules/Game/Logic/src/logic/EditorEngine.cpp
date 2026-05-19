@@ -480,9 +480,10 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
             int suffix = 1;
             while ( std::filesystem::exists(finalPath) ) {
                 finalPath = m_currentProject->m_projectRoot /
-                            Config::utf8ToPath(audioPath.stem().string() + "_" +
-                                               std::to_string(suffix++) +
-                                               audioPath.extension().string());
+                            Config::utf8ToPath(
+                                Config::pathToUtf8(audioPath.stem()) + "_" +
+                                std::to_string(suffix++) +
+                                Config::pathToUtf8(audioPath.extension()));
             }
         } else {
             // 已在项目内，转为相对路径
@@ -516,11 +517,11 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
         }
     }
 
-    // 4. 添加到资源列表 (默认为 Effect)
+    // 4. 添加到资源列表
     AudioResource res;
     res.m_id                   = Config::pathToUtf8(finalPath.filename());
     res.m_path                 = relPathUtf8;
-    res.m_type                 = AudioTrackType::Effect;
+    res.m_type                 = cmd.trackType;
     res.m_config.volume        = 0.5f;
     res.m_config.playbackSpeed = 1.0f;
     res.m_config.playbackPitch = 0.0f;
@@ -529,9 +530,11 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     m_currentProject->m_audioResources.push_back(res);
 
     // 5. 立即预加载音效资源
-    auto absFinalPath = m_currentProject->m_projectRoot / finalPath;
-    Audio::AudioManager::instance().preloadSoundEffect(
-        res.m_id, Config::pathToUtf8(absFinalPath), res.m_config.volume);
+    if ( res.m_type == AudioTrackType::Effect ) {
+        auto absFinalPath = m_currentProject->m_projectRoot / finalPath;
+        Audio::AudioManager::instance().preloadSoundEffect(
+            res.m_id, Config::pathToUtf8(absFinalPath), res.m_config.volume);
+    }
 
     // 6. 保存项目配置
     saveProject();
@@ -624,7 +627,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
-        const auto&                         v = std::get<CmdUpdateViewport>(cmd);
+        const auto& v = std::get<CmdUpdateViewport>(cmd);
         std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
         m_lastViewportSizes[v.cameraId] = { v.width, v.height };
     }
@@ -649,7 +652,7 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
 {
     {
         std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
-        auto it = m_syncBuffers.find(cameraId);
+        auto                                it = m_syncBuffers.find(cameraId);
         if ( it != m_syncBuffers.end() ) {
             return it->second;
         }
@@ -745,7 +748,10 @@ void EditorEngine::saveProject()
 
 void EditorEngine::loop()
 {
-    auto lastTime = std::chrono::high_resolution_clock::now();
+    auto lastTime      = std::chrono::high_resolution_clock::now();
+    m_lastUpsTime      = lastTime;
+    m_logicUpdateCount = 0;
+    m_logicUps.store(0.0f, std::memory_order_relaxed);
 
     while ( m_running ) {
         // 动态获取当前的延迟目标
@@ -780,6 +786,17 @@ void EditorEngine::loop()
 
         lastTime  = currentTime;
         double dt = passed.count();
+
+        // 统计逻辑线程实时刷新率 (UPS)
+        m_logicUpdateCount++;
+        std::chrono::duration<double> upsElapsed = currentTime - m_lastUpsTime;
+        if ( upsElapsed.count() >= 0.5 ) {
+            m_logicUps.store(
+                static_cast<float>(m_logicUpdateCount / upsElapsed.count()),
+                std::memory_order_relaxed);
+            m_logicUpdateCount = 0;
+            m_lastUpsTime      = currentTime;
+        }
 
         // 关键修复：使用 shared_ptr 在锁内获取引用。
         // 这样即使 UI 线程在此时 openProject 销毁了原有 Session，
@@ -884,6 +901,52 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
                maps.end());
 
     saveProject();
+}
+
+void EditorEngine::updateBeatmapFilePathInProject(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( !m_currentProject ) return;
+
+    auto absRoot = std::filesystem::absolute(m_currentProject->m_projectRoot);
+    auto absOld  = std::filesystem::absolute(oldPath);
+    auto absNew  = std::filesystem::absolute(newPath);
+
+    std::error_code ec;
+    auto            relOldPath = std::filesystem::relative(absOld, absRoot, ec);
+    auto            relNewPath = std::filesystem::relative(absNew, absRoot, ec);
+
+    std::string relOld =
+        relOldPath.empty() ? "" : Config::pathToUtf8(relOldPath);
+    std::string relNew =
+        relNewPath.empty() ? "" : Config::pathToUtf8(relNewPath);
+
+    bool found = false;
+    for ( auto& entry : m_currentProject->m_beatmaps ) {
+        if ( entry.m_filePath == relOld ) {
+            entry.m_filePath = relNew;
+            try {
+                auto map     = BeatMap::loadFromFile(absNew);
+                entry.m_name = map.m_baseMapMetadata.version;
+                if ( entry.m_name.empty() )
+                    entry.m_name = Config::pathToUtf8(absNew.filename());
+                if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
+                    entry.m_audioTrackId = Config::pathToUtf8(
+                        map.m_baseMapMetadata.main_audio_path.filename());
+                }
+            } catch ( ... ) {
+            }
+            found = true;
+            break;
+        }
+    }
+
+    if ( !found ) {
+        syncProjectWithFile(newPath);
+    } else {
+        saveProject();
+    }
 }
 
 }  // namespace MMM::Logic

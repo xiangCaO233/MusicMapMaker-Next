@@ -136,8 +136,10 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&
          m_currentSnapshot->isPreviewDragging ) {
-        ImGui::SetTooltip(TR("canvas.preview.jump_to"),
-                          m_currentSnapshot->previewHoverTime);
+        ImGui::SetTooltip("%s",
+                          TR_FMT("canvas.preview.jump_to",
+                                 m_currentSnapshot->previewHoverTime)
+                              .c_str());
     }
 
     // --- 跳转时间逻辑 ---
@@ -146,8 +148,9 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         // 这防止了从其他窗口拖拽进入预览区松开时造成的误触跳转。
         if ( ImGui::IsMouseReleased(0) && clickStartedInContent &&
              ImGui::IsWindowFocused() ) {
-            float visualOffset =
-                Config::AppConfig::instance().getVisualConfig().visualOffset;
+            float visualOffset = Config::AppConfig::instance()
+                                     .getVisualConfig()
+                                     .getEffectiveVisualOffset();
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdSeek{
                     m_currentSnapshot->hoveredTime - visualOffset }));

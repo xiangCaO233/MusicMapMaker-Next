@@ -324,7 +324,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         }
                     }
 
-                drawTooltip(TR("ui.toolbar.beat_divisor").data());
+                    drawTooltip(TR("ui.toolbar.beat_divisor").data());
                 }
                 if ( contentFont ) ImGui::PopFont();
                 ImGui::PopStyleColor(3);
@@ -347,12 +347,34 @@ void ToolbarView::update(UIManager* sourceManager)
         // 在 Toolbar 窗口左侧显示悬浮窗
 
         ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
+
+        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        float          viewportTop  = mainViewport->Pos.y;
+        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+        float viewportLeft   = mainViewport->Pos.x;
+
         // X = 工具栏左边缘往左 4px
         // Y = 按钮的顶部对齐
-        ImVec2 popupPos =
-            ImVec2(toolbarPos.x - std::floor(4.0f * dpiScale), m_lastBtnY);
+        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
+        float targetY = m_lastBtnY;
+
+        // 灵活微调 Y 和 X 的起始坐标，确保弹出菜单不会溢出视口边界而被截断
+        float popupW =
+            m_popupWidth > 0.0f ? m_popupWidth : std::floor(160.0f * dpiScale);
+        float popupH  = m_popupHeight > 0.0f ? m_popupHeight
+                                             : std::floor(120.0f * dpiScale);
+        float padding = std::floor(8.0f * dpiScale);
+
+        // 限制 X 以免溢出左侧边界
+        targetX = std::max(targetX, viewportLeft + popupW + padding);
+        // 限制 Y 以免溢出底部与顶部边界
+        targetY = std::min(targetY, viewportBottom - popupH - padding);
+        targetY = std::max(targetY, viewportTop + padding);
+
+        ImVec2 popupPos = ImVec2(targetX, targetY);
 
         // Pivot(1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
+        ImGui::SetNextWindowViewport(mainViewport->ID);
         ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
 
         ImGuiWindowFlags popupFlags =
@@ -360,11 +382,19 @@ void ToolbarView::update(UIManager* sourceManager)
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
             ImGuiWindowFlags_AlwaysAutoResize;
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding,
-                            std::floor(4.0f * dpiScale));
-        ImGui::PushStyleVar(
-            ImGuiStyleVar_WindowPadding,
-            ImVec2(std::floor(8.0f * dpiScale), std::floor(8.0f * dpiScale)));
+        auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        float winPadding    = std::floor(aesthetics.windowPadding * dpiScale);
+        float winRounding   = std::floor(aesthetics.windowRounding * dpiScale);
+        float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
+        float itemSpacing   = std::floor(aesthetics.itemSpacing * dpiScale);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(winPadding, winPadding));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(itemSpacing, itemSpacing));
 
         if ( ImGui::Begin("##BeatDivisorPopup", nullptr, popupFlags) ) {
             auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
@@ -379,10 +409,16 @@ void ToolbarView::update(UIManager* sourceManager)
                 newConfig.settings.beatDivisor = currentDivisor;
                 Logic::EditorEngine::instance().setEditorConfig(newConfig);
             }
+            if ( ImGui::IsItemHovered() ) {
+                Utils::renderTooltip(
+                    TR("ui.settings.editor.beat_divisor_tooltip").data(),
+                    Utils::TooltipDir::Right);
+            }
 
             // 可以加一些常用的快速设置按钮
-            const int commonDivisors[] = { 1, 2, 3, 4, 6, 8, 12, 16 };
-            for ( int i = 0; i < 8; ++i ) {
+            const auto& commonDivisors =
+                Config::SkinManager::instance().getCommonDivisors();
+            for ( size_t i = 0; i < commonDivisors.size(); ++i ) {
                 if ( i > 0 && i % 4 != 0 ) ImGui::SameLine();
                 char buf[16];
                 snprintf(buf, sizeof(buf), "1/%d", commonDivisors[i]);
@@ -394,10 +430,15 @@ void ToolbarView::update(UIManager* sourceManager)
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
             }
+
+            // 实时获取并记录当前帧计算出的真实尺寸，供下一帧定位计算参考，防止视口越界截断
+            ImVec2 sz     = ImGui::GetWindowSize();
+            m_popupWidth  = sz.x;
+            m_popupHeight = sz.y;
         }
         ImGui::End();
 
-        ImGui::PopStyleVar(2);
+        ImGui::PopStyleVar(4);
     }
 }
 

@@ -77,9 +77,16 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
     if ( m_isCalculating ) {
         ImGui::OpenPopup("ProcessingWaveform");
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Appearing,
-                                ImVec2(0.5f, 0.5f));
+        {
+            static bool wasOpen = false;
+            bool        isOpen  = ImGui::IsPopupOpen("ProcessingWaveform");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGui::BeginPopupModal(
                  "ProcessingWaveform", nullptr, ImGuiWindowFlags_None) ) {
             ImGui::Text("%s", TR("ui.waveform.processing.text").data());
@@ -88,12 +95,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
         return;
     }
 
-    float visualOffset =
-        Config::AppConfig::instance().getVisualConfig().visualOffset;
-    double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
-    double totalTime  = audioManager.getTotalTime();
-    double speed      = audioManager.getPlaybackSpeed();
+    float  visualOffset = Config::AppConfig::instance()
+                              .getVisualConfig()
+                              .getEffectiveVisualOffset();
+    double audioTime    = audioManager.getCurrentTime();
+    double visualTime   = audioTime + visualOffset;
+    double totalTime    = audioManager.getTotalTime();
+    double speed        = audioManager.getPlaybackSpeed();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     auto snapshot = Logic::EditorEngine::instance()

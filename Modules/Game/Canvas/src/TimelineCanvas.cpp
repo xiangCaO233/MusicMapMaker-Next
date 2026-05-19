@@ -37,7 +37,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
 
-    UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0);
+    UI::LayoutContext lctx(
+        m_layoutCtx, windowName, true, ImGuiWindowFlags_NoScrollbar);
 
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -88,14 +89,23 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             m_lastOffsetSnapshot = m_currentSnapshot;
             m_lastAppliedYOffset = newYOffset;
 
-            // 1. 绘制垂直音频时间滚动条
+            // 1. 绘制垂直音频时间滚动条及时间点表格按钮
             if ( m_currentSnapshot->hasBeatmap &&
                  m_currentSnapshot->totalTime > 0.0 ) {
                 float time = static_cast<float>(m_currentSnapshot->currentTime);
                 float total = static_cast<float>(m_currentSnapshot->totalTime);
 
-                float  sliderWidth = 20.0f;
-                ImVec2 sliderSize(sliderWidth, size.y);
+                float sliderWidth  = 24.0f;
+                float btnHeight    = 70.0f;
+                float spacing      = ImGui::GetStyle().ItemSpacing.y;
+                float sliderHeight = size.y - btnHeight - spacing;
+                if ( sliderHeight < 20.0f ) {
+                    sliderHeight = size.y;
+                }
+
+                ImGui::BeginGroup();
+
+                ImVec2 sliderSize(sliderWidth, sliderHeight);
                 if ( ImGui::VSliderFloat("##AudioTimeSlider",
                                          sliderSize,
                                          &time,
@@ -104,7 +114,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                          "") ) {
                     float visualOffset = Config::AppConfig::instance()
                                              .getVisualConfig()
-                                             .visualOffset;
+                                             .getEffectiveVisualOffset();
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdSeek{
                             static_cast<double>(time) - visualOffset }));
@@ -114,6 +124,49 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     ImGui::SetTooltip("%.3f / %.3f s", time, total);
                 }
 
+                if ( sliderHeight < size.y ) {
+
+                    auto getVerticalText =
+                        [](const std::string& input) -> std::string {
+                        std::string result;
+                        for ( size_t i = 0; i < input.size(); ) {
+                            size_t        len = 1;
+                            unsigned char c   = input[i];
+                            if ( (c & 0x80) == 0 )
+                                len = 1;
+                            else if ( (c & 0xE0) == 0xC0 )
+                                len = 2;
+                            else if ( (c & 0xF0) == 0xE0 )
+                                len = 3;
+                            else if ( (c & 0xF8) == 0xF0 )
+                                len = 4;
+
+                            if ( !result.empty() ) result += "\n";
+                            result += input.substr(i, len);
+                            i += len;
+                        }
+                        return result;
+                    };
+
+                    std::string verticalLabel = getVerticalText(
+                        TR("ui.timeline.timing_points_table_btn").data());
+                    if ( verticalLabel.empty() || verticalLabel.size() > 100 ) {
+                        verticalLabel = "时\n间\n点";
+                    }
+
+                    if ( ImGui::Button(verticalLabel.c_str(),
+                                       ImVec2(sliderWidth, btnHeight)) ) {
+                        m_isTableWindowOpen = !m_isTableWindowOpen;
+                    }
+                    if ( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip(
+                            "%s",
+                            TR("ui.timeline.timing_points_table_btn_tooltip")
+                                .data());
+                    }
+                }
+
+                ImGui::EndGroup();
                 ImGui::SameLine();
             }
 
@@ -239,6 +292,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 // 5. 渲染弹窗
                 renderEventEditorPopup();
                 renderEventCreationPopup();
+                renderTimingPointsTableWindow();
             }
         }
     }

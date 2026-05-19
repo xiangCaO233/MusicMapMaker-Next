@@ -6,6 +6,20 @@ local f_ascii_bold = "font/ComicShannsMonoNerdFontPropo-Bold.otf"
 local f_cjk_reg    = "font/NotoSansMonoCJKsc-Regular.otf"
 local f_cjk_bold   = "font/NotoSansMonoCJKsc-Bold.otf"
 
+-- 拍线配色与线宽变量化复用
+local c_head       = { 1.0, 1.0, 1.0, 1.0 } -- 白色：1分音 (拍头线)
+local c_half       = { 1.0, 0.0, 0.0, 1.0 } -- 红色：2分音
+local c_third      = { 0.5, 0.0, 0.5, 1.0 } -- 紫色：3分音
+local c_quarter    = { 0.0, 1.0, 1.0, 1.0 } -- 青色：4分音
+local c_sixth      = { 0.0, 1.0, 0.0, 1.0 } -- 绿色：6分音
+local c_eighth     = { 1.0, 0.647, 0.0, 1.0 } -- 橙色：8分音
+local c_twelfth    = { 0.0, 0.0, 1.0, 1.0 } -- 蓝色：12分音
+local c_sixteenth  = { 1.0, 1.0, 0.0, 1.0 } -- 黄色：16分音
+local c_default    = { 0.5, 0.5, 0.5, 1.0 } -- 灰色：默认/其他分拍
+
+-- 常用分拍定义列表
+local divisor_list = { 1, 2, 3, 4, 6, 8, 12, 16 }
+
 local Skin = {
 	meta = {
 		name = "MMM Nightly",
@@ -15,6 +29,9 @@ local Skin = {
 	},
 
 	basePath = ressPath .. "resources/",
+
+	-- 常用分拍列表
+	beat_divisors = divisor_list,
 
 	-- 颜色配置 (R, G, B, A)
 	colors = {
@@ -34,16 +51,15 @@ local Skin = {
 
 		-- 拍线配色与线宽配置
 		beat_lines = {
-			beat_1 = { 1.0, 1.0, 1.0, 1.0 }, -- 拍头线
-			beat_2 = { 1.0, 0.0, 0.0, 1.0 }, -- 2分音
-			beat_3 = { 0.5, 0.0, 0.5, 1.0 }, -- 3分音
-			beat_4 = { 0.0, 1.0, 1.0, 1.0 }, -- 4分音
-			beat_5 = { 0.5, 0.0, 0.0, 1.0 }, -- 5分音 (暗红色)
-			beat_6 = { 0.0, 1.0, 0.0, 1.0 }, -- 6分音
-			beat_8 = { 1.0, 0.647, 0.0, 1.0 }, -- 8分音
-			beat_12 = { 0.0, 0.0, 1.0, 1.0 }, -- 12分音
-			beat_16 = { 1.0, 1.0, 0.0, 1.0 }, -- 16分音
-			default = { 0.5, 0.5, 0.5, 1.0 } -- 默认/其他分拍
+			beat_1 = c_head,
+			beat_2 = c_half,
+			beat_3 = c_third,
+			beat_4 = c_quarter,
+			beat_6 = c_sixth,
+			beat_8 = c_eighth,
+			beat_12 = c_twelfth,
+			beat_16 = c_sixteenth,
+			default = c_default,
 		},
 	},
 

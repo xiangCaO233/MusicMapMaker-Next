@@ -173,8 +173,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             return json::array({ integerBeat + 1, 0, 1 });
 
         // 尝试常见分母拟合，寻找最简约分
-        for ( int den :
-              { 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 192, 1920 } ) {
+        for ( int den : { 1,  2,  3,  4,   6,   8,   12,  16,  24,  32,
+                          48, 64, 96, 192, 288, 384, 480, 768, 960, 1920 } ) {
             double num     = fraction * den;
             double rounded = std::round(num);
             if ( std::abs(num - rounded) < 1e-4 ) {

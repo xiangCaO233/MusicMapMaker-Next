@@ -5,17 +5,17 @@
 #include "event/core/EventBus.h"
 #include "logic/SyncClock.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include "logic/ecs/components/TimelineComponent.h"
-#include <vector>
-#include <unordered_set>
-#include <unordered_map>
-#include <optional>
 #include <memory>
+#include <optional>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -77,9 +77,13 @@ struct SessionContext {
     size_t nextHitIndex{ 0 };         ///< 下一个待触发的视觉打击事件索引
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
-    std::vector<const TimelineComponent*> bpmEvents;    ///< 缓存并排序后的 BPM 事件
-    bool                                  isBpmEventsDirty{ true }; ///< BPM 缓存脏标记
-    double                                lastSnapshotTime{ 0.0 };
+    std::vector<const TimelineComponent*>
+         bpmEvents;                 ///< 缓存并排序后的 BPM 事件
+    bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
+    bool isTransformDirty{ true };  ///< 坐标转换缓存脏标记
+    std::vector<entt::entity>
+           sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
+    double lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌

@@ -28,8 +28,26 @@ Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
     LONG_PTR style = GetWindowLongPtr(m_hwnd, GWL_STYLE);
     style |= WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
     SetWindowLongPtr(m_hwnd, GWL_STYLE, style);
-    SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+    SetWindowPos(m_hwnd,
+                 nullptr,
+                 0,
+                 0,
+                 0,
+                 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+    // 重新从模块资源加载窗口图标，并应用到 HWND 和 Window Class，解决无边框修改
+    // style 后任务栏图标丢失问题
+    HICON hIcon = LoadIcon(GetModuleHandle(nullptr), "IDI_ICON1");
+    if ( !hIcon ) {
+        hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));
+    }
+    if ( hIcon ) {
+        SendMessage(m_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+        SendMessage(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
+        SetClassLongPtr(m_hwnd, GCLP_HICON, (LONG_PTR)hIcon);
+        SetClassLongPtr(m_hwnd, GCLP_HICONSM, (LONG_PTR)hIcon);
+    }
 
     // 方案 1：强制开启阴影（即使是无边框）
     const MARGINS shadow_margin = { 1, 1, 1, 1 };
@@ -65,14 +83,16 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
         reinterpret_cast<Win32WindowAdapter*>(dwRefData);
 
     if ( uMsg == WM_NCCALCSIZE && wParam == TRUE ) {
-        LPNCCALCSIZE_PARAMS params = reinterpret_cast<LPNCCALCSIZE_PARAMS>(lParam);
+        LPNCCALCSIZE_PARAMS params =
+            reinterpret_cast<LPNCCALCSIZE_PARAMS>(lParam);
 
         WINDOWPLACEMENT wp;
         wp.length = sizeof(WINDOWPLACEMENT);
         if ( GetWindowPlacement(hWnd, &wp) && wp.showCmd == SW_SHOWMAXIMIZED ) {
             // 当窗口最大化时，系统会给窗口一个超出屏幕范围的负偏移（通常是边框宽度）
             // 我们需要根据监视器的实际工作区调整它
-            HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+            HMONITOR hMonitor =
+                MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
             MONITORINFO mi;
             mi.cbSize = sizeof(mi);
             if ( GetMonitorInfo(hMonitor, &mi) ) {

@@ -50,6 +50,18 @@ public:
     /// @brief 停止所有正在播放或预定的音效，并重置状态
     void stopAll();
 
+    /// @brief 获取是否正在播放
+    bool isPlaying() const;
+
+    /// @brief 获取是否暂停中
+    bool isPaused() const;
+
+    /// @brief 暂停播放
+    void pause();
+
+    /// @brief 恢复播放
+    void resume();
+
     /// @brief 释放节点回池 (供回调内部调用)
     void releaseNode(std::shared_ptr<ice::SourceNode> node);
 

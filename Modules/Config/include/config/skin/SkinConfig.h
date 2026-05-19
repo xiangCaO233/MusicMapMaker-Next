@@ -90,12 +90,21 @@ struct SkinData {
 
     // 数值配置表
     std::unordered_map<std::string, float> values;
+
+    // 常用分拍列表
+    std::vector<int> commonDivisors;
 };
 
 class SkinManager
 {
 public:
     static SkinManager& instance();
+
+    ///@brief 获取常用分拍列表
+    inline const std::vector<int>& getCommonDivisors() const
+    {
+        return m_data.commonDivisors;
+    }
 
     ///@brief 获取翻译器
     inline Translation::Translator& getTranslator() { return m_translator; }

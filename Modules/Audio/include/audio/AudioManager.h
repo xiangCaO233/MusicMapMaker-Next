@@ -260,6 +260,18 @@ public:
     /// @param volumeFactor 额外音量倍率 (默认 1.0)
     void playSoundEffect(const std::string& key, float volumeFactor = 1.0f);
 
+    /// @brief 获取指定 key 的音效是否正在播放
+    bool isSFXPlaying(const std::string& key) const;
+
+    /// @brief 获取指定 key 的音效是否处于暂停状态
+    bool isSFXPaused(const std::string& key) const;
+
+    /// @brief 暂停指定 key 的音效播放
+    void pauseSoundEffect(const std::string& key);
+
+    /// @brief 恢复指定 key 的音效播放
+    void resumeSoundEffect(const std::string& key);
+
     /// @brief 在指定时间播放音效（预测系统使用）
     /// @param key 标识符
     /// @param targetTime 目标播放时间 (秒)

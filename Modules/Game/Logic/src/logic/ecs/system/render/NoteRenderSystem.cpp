@@ -455,9 +455,19 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     // 3. 绘制 Ticks (动态)
     for ( const auto& seg : cache->getSegments() ) {
-        if ( seg.time < startTime || seg.time > endTime ) continue;
+        if ( seg.effects == 0 ) continue;
 
         float y = judgmentLineY - static_cast<float>(seg.absY - currentAbsY);
+
+        snapshot->timelineElements.push_back({ seg.time,
+                                               y,
+                                               seg.effects,
+                                               seg.bpmEntity,
+                                               seg.scrollEntity,
+                                               seg.bpmValue,
+                                               seg.scrollValue });
+
+        if ( seg.time < startTime || seg.time > endTime ) continue;
 
         glm::vec4 color = { tickCol.r, tickCol.g, tickCol.b, 0.8f };
         if ( (seg.effects & SCROLL_EFFECT_BPM) &&
@@ -470,13 +480,6 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
 
         batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
-        snapshot->timelineElements.push_back({ seg.time,
-                                               y,
-                                               seg.effects,
-                                               seg.bpmEntity,
-                                               seg.scrollEntity,
-                                               seg.bpmValue,
-                                               seg.scrollValue });
     }
 }
 

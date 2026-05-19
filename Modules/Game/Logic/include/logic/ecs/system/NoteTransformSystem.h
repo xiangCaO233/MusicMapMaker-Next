@@ -24,7 +24,8 @@ public:
      */
     static void update(entt::registry& registry,
                        entt::registry& timelineRegistry, double currentTime,
-                       const Config::EditorConfig& config);
+                       const Config::EditorConfig& config,
+                       bool                        forceRebuild = false);
 };
 
 }  // namespace MMM::Logic::System

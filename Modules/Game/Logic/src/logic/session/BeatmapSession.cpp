@@ -182,7 +182,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
         }
 
         // visualTime = currentTime + 视觉偏移
-        m_ctx->visualTime = m_ctx->currentTime + config.visual.visualOffset;
+        m_ctx->visualTime =
+            m_ctx->currentTime + config.visual.getEffectiveVisualOffset();
 
         std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
 
@@ -230,8 +231,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
         }
         m_ctx->hitFXSystem.update(m_ctx->visualTime, triggeredEvents, config);
     } else {
-        m_ctx->visualTime = m_ctx->currentTime + config.visual.visualOffset;
-        m_ctx->syncTimer  = 0.0;
+        m_ctx->visualTime =
+            m_ctx->currentTime + config.visual.getEffectiveVisualOffset();
+        m_ctx->syncTimer = 0.0;
 
         if ( std::abs(m_ctx->visualTime - prevVisualTime) > 0.0001 ) {
             SessionUtils::syncHitIndex(*m_ctx);

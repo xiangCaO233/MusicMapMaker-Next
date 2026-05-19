@@ -6,6 +6,7 @@
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -134,15 +135,14 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::TextUnformatted(titleText);
         float titleEndX = titleX + titleWidth;
 
-        // 4. 帧信息 (FPS) - 靠右对齐到按钮左侧
-        ImGuiIO& io = ImGui::GetIO();
-        char     fpsBuf[128];
-        snprintf(fpsBuf,
-                 sizeof(fpsBuf),
-                 "%.3f ms/frame (%.1f FPS)",
-                 1000.0f / io.Framerate,
-                 io.Framerate);
-        float fpsWidth = ImGui::CalcTextSize(fpsBuf).x;
+        // 4. 帧信息 (FPS & UPS) - 靠右对齐到按钮左侧
+        ImGuiIO&    io       = ImGui::GetIO();
+        float       logicUps = Logic::EditorEngine::instance().getLogicUps();
+        std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
+                                      1000.0f / io.Framerate,
+                                      io.Framerate,
+                                      logicUps);
+        float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         float numberOfButtons  = 3;
         float buttonsAreaWidth = buttonSize * numberOfButtons;
@@ -151,7 +151,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         float fpsGap = std::floor(12.0f * dpiScale);
         float fpsX   = buttonsStartX - fpsGap - fpsWidth;
         ImGui::SetCursorPosX(fpsX);
-        ImGui::TextUnformatted(fpsBuf);
+        ImGui::TextUnformatted(fpsStr.c_str());
         float fpsEndX = fpsX + fpsWidth;
         if ( menuFont ) ImGui::PopFont();
 
@@ -225,9 +225,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_ICONFY_WINDOW });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", TR("ui.window.minimize").data());
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.window.minimize").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::SameLine();
 
@@ -240,9 +243,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", maxTip);
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", maxTip);
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::SameLine();
 
@@ -251,9 +257,12 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_CLOSE_WINDOW });
         }
-        if ( contentFont ) ImGui::PushFont(contentFont);
-        ImGui::SetItemTooltip("%s", TR("ui.window.close").data());
-        if ( contentFont ) ImGui::PopFont();
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            ImGui::SetTooltip("%s", TR("ui.window.close").data());
+            if ( contentFont ) ImGui::PopFont();
+        }
 
         ImGui::PopStyleVar(1);
         ImGui::PopStyleVar(2);

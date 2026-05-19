@@ -21,10 +21,39 @@ bool BeatmapSession::processCommands()
     LogicCommand cmd;
     bool         processed = false;
     while ( m_commandQueue.try_dequeue(cmd) ) {
-        processed = true;
         std::visit(
-            [this](auto&& arg) {
+            [this, &processed](auto&& arg) {
                 using T = std::decay_t<decltype(arg)>;
+                if constexpr ( !std::is_same_v<T, CmdSetMousePosition> &&
+                               !std::is_same_v<T, CmdSetHoveredEntity> ) {
+                    processed = true;
+                }
+                if constexpr ( std::is_same_v<T, CmdStartDrag> ||
+                               std::is_same_v<T, CmdUpdateDrag> ||
+                               std::is_same_v<T, CmdEndDrag> ||
+                               std::is_same_v<T, CmdUndo> ||
+                               std::is_same_v<T, CmdRedo> ||
+                               std::is_same_v<T, CmdPaste> ||
+                               std::is_same_v<T, CmdCut> ||
+                               std::is_same_v<T, CmdDeleteSelected> ||
+                               std::is_same_v<T, CmdMirrorSelected> ||
+                               std::is_same_v<T,
+                                              CmdAlignSelectedToCommonBeats> ||
+                               std::is_same_v<T, CmdStartBrush> ||
+                               std::is_same_v<T, CmdUpdateBrush> ||
+                               std::is_same_v<T, CmdEndBrush> ||
+                               std::is_same_v<T, CmdStartErase> ||
+                               std::is_same_v<T, CmdUpdateErase> ||
+                               std::is_same_v<T, CmdEndErase> ||
+                               std::is_same_v<T, CmdLoadBeatmap> ||
+                               std::is_same_v<T, CmdCreateBeatmap> ||
+                               std::is_same_v<T, CmdRemoveBeatmap> ||
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                               std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                               std::is_same_v<T, CmdCreateTimelineEvent> ) {
+                    m_ctx->isTransformDirty = true;
+                }
 
                 // --- 自动更新操作状态描述 ---
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
@@ -67,6 +96,13 @@ bool BeatmapSession::processCommands()
                         fmt::format("{} {}",
                                     TR("ui.status.category.action"),
                                     TR("ui.edit.mirror"));
+                } else if constexpr ( std::is_same_v<
+                                          T,
+                                          CmdAlignSelectedToCommonBeats> ) {
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {}",
+                                    TR("ui.status.category.action"),
+                                    TR("ui.tools.align_beats"));
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {} {:.3f}s",
@@ -132,17 +168,16 @@ bool BeatmapSession::processCommands()
                     m_interaction->handleCommand(arg);
                 }
                 // --- Action 处理的命令 ---
-                else if constexpr ( std::is_same_v<T, CmdUndo> ||
-                                    std::is_same_v<T, CmdRedo> ||
-                                    std::is_same_v<T, CmdCopy> ||
-                                    std::is_same_v<T, CmdCut> ||
-                                    std::is_same_v<T, CmdPaste> ||
-                                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
-                                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                                    std::is_same_v<T, CmdDeleteSelected> ||
-                                    std::is_same_v<T, CmdMirrorSelected> ||
-                                    std::is_same_v<T,
-                                                   CmdCreateTimelineEvent> ) {
+                else if constexpr (
+                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
+                    std::is_same_v<T, CmdCopy> || std::is_same_v<T, CmdCut> ||
+                    std::is_same_v<T, CmdPaste> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdMirrorSelected> ||
+                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
+                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
                     m_actions->handleCommand(arg);
                 }
             },
@@ -184,7 +219,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
     if ( m_ctx->currentBeatmap ) {
         SessionUtils::syncBeatmap(*m_ctx);
 
-        auto savePath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+        auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+        auto savePath = oldPath;
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
              Config::SaveFormatPreference::ForceMMM ) {
             savePath.replace_extension(".mmm");
@@ -199,7 +235,12 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             return;
         }
         m_ctx->actionStack.markSaved();
-        EditorEngine::instance().syncProjectWithFile(savePath);
+        if ( oldPath != savePath ) {
+            EditorEngine::instance().updateBeatmapFilePathInProject(oldPath,
+                                                                    savePath);
+        } else {
+            EditorEngine::instance().syncProjectWithFile(savePath);
+        }
     }
 }
 
@@ -258,13 +299,19 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 如果音频路径发生变化，重新加载音频
         if ( oldAudio != cmd.baseMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
-            auto audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                                 .parent_path() /
-                             cmd.baseMeta.main_audio_path;
+            std::filesystem::path audioPath;
+            auto* project = EditorEngine::instance().getCurrentProject();
+            if ( project ) {
+                audioPath =
+                    project->m_projectRoot / cmd.baseMeta.main_audio_path;
+            } else {
+                audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
+                                .parent_path() /
+                            cmd.baseMeta.main_audio_path;
+            }
             if ( std::filesystem::exists(audioPath) ) {
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
-                auto* project = EditorEngine::instance().getCurrentProject();
                 if ( project ) {
                     auto fileName = Config::pathToUtf8(
                         cmd.baseMeta.main_audio_path.filename());
@@ -281,14 +328,25 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 }
                 Audio::AudioManager::instance().loadBGM(
                     Config::pathToUtf8(audioPath), config);
+            } else {
+                XERROR(
+                    "BeatmapSession: Audio file does not exist at resolved "
+                    "path: {}",
+                    Config::pathToUtf8(audioPath));
             }
         }
 
         // 如果封面路径发生变化，更新背景图尺寸
         if ( oldCover != cmd.baseMeta.main_cover_path ) {
-            auto bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                              .parent_path() /
-                          cmd.baseMeta.main_cover_path;
+            std::filesystem::path bgPath;
+            auto* project = EditorEngine::instance().getCurrentProject();
+            if ( project ) {
+                bgPath = project->m_projectRoot / cmd.baseMeta.main_cover_path;
+            } else {
+                bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
+                             .parent_path() /
+                         cmd.baseMeta.main_cover_path;
+            }
             if ( std::filesystem::exists(bgPath) ) {
                 int w = 0, h = 0, comp = 0;
                 if ( stbi_info(
@@ -311,9 +369,15 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 if ( std::filesystem::exists(fullEntryPath) &&
                      std::filesystem::equivalent(fullEntryPath,
                                                  cmd.baseMeta.map_path) ) {
-                    entry.m_name = cmd.baseMeta.version;
-                    XINFO("BeatmapSession: Synced name '{}' to project entry",
-                          entry.m_name);
+                    entry.m_name         = cmd.baseMeta.version;
+                    entry.m_audioTrackId = Config::pathToUtf8(
+                        cmd.baseMeta.main_audio_path.filename());
+                    XINFO(
+                        "BeatmapSession: Synced name '{}' and audioTrackId "
+                        "'{}' to project entry",
+                        entry.m_name,
+                        entry.m_audioTrackId);
+                    EditorEngine::instance().saveProject();
                     break;
                 }
             }

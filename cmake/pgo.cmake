@@ -36,16 +36,16 @@
 #    最新 profile 数据即可实现持续优化。
 # ==============================================================================
 
-option(MMM_PGO_INSTRUMENT "Build with PGO instrumentation for profile collection" OFF)
 option(MMM_PGO_USE "Build using PGO profile data" OFF)
 
-if(MMM_PGO_INSTRUMENT AND MMM_PGO_USE)
-    message(FATAL_ERROR
-        "PGO: INSTRUMENT and USE cannot be enabled together.\n"
-        "  Clang forbids -fprofile-instr-use with -fprofile-instr-generate.\n"
-        "  Use TWO separate build directories:\n"
-        "    cmake -B build_instr ... -DMMM_PGO_INSTRUMENT=ON  (collect profiles)\n"
-        "    cmake -B build_opt   ... -DMMM_PGO_USE=ON          (optimized release)")
+if(MMM_PGO_USE)
+    # PGO optimization and instrumentation cannot be used together.
+    # When MMM_PGO_USE is enabled, we force disable instrumentation.
+    set(MMM_PGO_INSTRUMENT OFF CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
+    message(STATUS "PGO: MMM_PGO_USE is enabled. Disabling PGO instrumentation (MMM_PGO_INSTRUMENT=OFF).")
+else()
+    # Enable PGO instrumentation by default to collect profile data.
+    option(MMM_PGO_INSTRUMENT "Build with PGO instrumentation for profile collection" ON)
 endif()
 
 # --- 数据源 (三选一) ---
@@ -176,8 +176,13 @@ endif()
 # =========================================================================
 if(MMM_PGO_INSTRUMENT)
     message(STATUS "PGO: Instrumentation build enabled")
-    add_compile_options("-fprofile-instr-generate")
-    add_link_options("-fprofile-instr-generate")
+    if(WIN32)
+        set(DEFAULT_PGO_PATH "NUL")
+    else()
+        set(DEFAULT_PGO_PATH "/dev/null")
+    endif()
+    add_compile_options("-fprofile-instr-generate=${DEFAULT_PGO_PATH}")
+    add_link_options("-fprofile-instr-generate=${DEFAULT_PGO_PATH}")
     add_compile_definitions(MMM_PGO_INSTRUMENT=1)
 
     if(MMM_PGO_UPLOAD_URL)

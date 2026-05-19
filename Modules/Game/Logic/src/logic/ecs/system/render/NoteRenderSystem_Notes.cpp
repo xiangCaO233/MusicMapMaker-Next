@@ -7,6 +7,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include <algorithm>
 #include <unordered_set>
 
 namespace MMM::Logic::System
@@ -115,19 +116,54 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     return ctx;
 }
 
+static std::vector<entt::entity> getNotesInRange(entt::registry& registry,
+                                                 double          startTime,
+                                                 double          endTime)
+{
+    std::vector<entt::entity> result;
+    const auto**              sortedEntitiesPtr =
+        registry.ctx().find<const std::vector<entt::entity>*>();
+    if ( !sortedEntitiesPtr || !(*sortedEntitiesPtr) ) return result;
+
+    const auto& entities = **sortedEntitiesPtr;
+    size_t      count    = entities.size();
+    if ( count == 0 ) return result;
+
+    double searchStart = startTime - 10.0;
+    if ( searchStart < 0.0 ) searchStart = 0.0;
+
+    auto it = std::lower_bound(
+        entities.begin(),
+        entities.end(),
+        searchStart,
+        [&](entt::entity entity, double val) {
+            return registry.get<const NoteComponent>(entity).m_timestamp < val;
+        });
+
+    for ( auto cur = it; cur != entities.end(); ++cur ) {
+        entt::entity entity = *cur;
+        const auto&  note   = registry.get<const NoteComponent>(entity);
+        if ( note.m_timestamp > endTime ) {
+            break;
+        }
+        result.push_back(entity);
+    }
+    return result;
+}
+
 void NoteRenderSystem::generateNoteHitboxes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx, float judgmentLineY,
     float leftX, float topY, float bottomY, float singleTrackW,
     float renderScaleY, const Config::EditorConfig& config)
 {
-    auto noteView =
-        registry.view<const TransformComponent, const NoteComponent>();
+    auto noteEntities = getNotesInRange(
+        registry, snapshot->visibleTimeStart, snapshot->visibleTimeEnd);
 
     // Pass 1: Body (Lower Priority)
-    for ( auto entity : noteView ) {
-        const auto& transform = noteView.get<const TransformComponent>(entity);
-        const auto& note      = noteView.get<const NoteComponent>(entity);
+    for ( auto entity : noteEntities ) {
+        const auto& transform = registry.get<const TransformComponent>(entity);
+        const auto& note      = registry.get<const NoteComponent>(entity);
 
         double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
         float  screenY =
@@ -190,9 +226,9 @@ void NoteRenderSystem::generateNoteHitboxes(
     }
 
     // Pass 2: Head/End/Arrow (Higher Priority)
-    for ( auto entity : noteView ) {
-        const auto& transform = noteView.get<const TransformComponent>(entity);
-        const auto& note      = noteView.get<const NoteComponent>(entity);
+    for ( auto entity : noteEntities ) {
+        const auto& transform = registry.get<const TransformComponent>(entity);
+        const auto& note      = registry.get<const NoteComponent>(entity);
         double      noteAbsY  = ctx.cache->getAbsY(note.m_timestamp);
         float       screenY =
             judgmentLineY -
@@ -280,10 +316,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
     float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
     float singleTrackW, float renderScaleY)
 {
-    auto                      noteView = registry.view<const NoteComponent>();
+    auto noteEntities = getNotesInRange(
+        registry, snapshot->visibleTimeStart, snapshot->visibleTimeEnd);
     std::vector<entt::entity> visibleEntities;
-    for ( auto entity : noteView ) {
-        const auto& note = noteView.get<const NoteComponent>(entity);
+    for ( auto entity : noteEntities ) {
+        const auto& note = registry.get<const NoteComponent>(entity);
         if ( note.m_isSubNote ) continue;
 
         double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);

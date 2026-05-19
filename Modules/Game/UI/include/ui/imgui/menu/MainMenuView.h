@@ -24,6 +24,7 @@ public:
 
     void update(UIManager* sourceManager);
     void renderMenus(UIManager* sourceManager);
+    void renderOverlapCheckWindow();
     void renderInfoText();
     void handleHotkeys(UIManager* sourceManager);
 
@@ -34,6 +35,15 @@ public:
     }
 
 private:
+    struct OverlapResult {
+        bool        is_definite;
+        double      timestamp;
+        uint32_t    track;
+        std::string note1_desc;
+        std::string note2_desc;
+    };
+
+    void performOverlapScan();
     void openFolderPicker();
     void openPackFilePicker();
     void openExportFilePicker(const std::string& ext);
@@ -47,12 +57,18 @@ private:
     void renderSaveTooltip();
     void startUpdateCheck();
 
-    bool m_openFileMenuNextFrame  = false;
-    bool m_openEditMenuNextFrame  = false;
-    bool m_openHelpMenuNextFrame  = false;
-    bool m_closeFileMenuNextFrame = false;
-    bool m_closeEditMenuNextFrame = false;
-    bool m_closeHelpMenuNextFrame = false;
+    bool m_openFileMenuNextFrame   = false;
+    bool m_openEditMenuNextFrame   = false;
+    bool m_openToolsMenuNextFrame  = false;
+    bool m_openHelpMenuNextFrame   = false;
+    bool m_closeFileMenuNextFrame  = false;
+    bool m_closeEditMenuNextFrame  = false;
+    bool m_closeToolsMenuNextFrame = false;
+    bool m_closeHelpMenuNextFrame  = false;
+
+    bool                       m_showOverlapCheckWindow = false;
+    bool                       m_hasOverlapScan         = false;
+    std::vector<OverlapResult> m_overlapResults;
 
     bool m_showAboutPopup         = false;
     bool m_showUpdatePopup        = false;

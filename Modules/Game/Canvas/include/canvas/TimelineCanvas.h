@@ -63,6 +63,9 @@ private:
     // 渲染创建事件弹窗
     void renderEventCreationPopup();
 
+    // 渲染时间点表格大窗口
+    void renderTimingPointsTableWindow();
+
     void handleRightClick(const ImVec2& size);
 
     std::string                               m_canvasName;
@@ -72,6 +75,7 @@ private:
 
     // 弹窗状态
     bool         m_isPopupOpen{ false };
+    bool         m_isTableWindowOpen{ false };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
@@ -86,6 +90,7 @@ private:
     int    m_createType{ 0 };     // 0: BPM, 1: Scroll
     int    m_createPosType{ 0 };  // 0: Click, 1: Current
     bool   m_isTimeSnapped{ false };
+    bool   m_keepSpeedOnBpmChange{ false };
 
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>

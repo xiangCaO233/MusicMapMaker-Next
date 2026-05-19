@@ -8,10 +8,10 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <shared_mutex>
 
 namespace MMM::Logic
 {
@@ -74,6 +74,15 @@ public:
      * @param mapPath 新保存的谱面文件路径
      */
     void syncProjectWithFile(const std::filesystem::path& mapPath);
+
+    /**
+     * @brief 更新项目内谱面的文件路径关联 (例如将 .imd 强制保存为 .mmm
+     * 后更新关联)
+     * @param oldPath 旧的谱面文件路径
+     * @param newPath 新的谱面文件路径
+     */
+    void updateBeatmapFilePathInProject(const std::filesystem::path& oldPath,
+                                        const std::filesystem::path& newPath);
 
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
@@ -138,6 +147,15 @@ public:
     bool isPlaybackPlaying() const;
 
     /**
+     * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
+     */
+    float getLogicUps() const
+    {
+        return m_logicUps.load(std::memory_order_relaxed);
+    }
+
+
+    /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
      */
     void setEditorConfig(const Config::EditorConfig& config);
@@ -191,6 +209,15 @@ private:
 
     /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
+
+    /// @brief 逻辑线程实时刷新率 (UPS)
+    std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 逻辑线程更新计数器，用于 UPS 计算
+    uint32_t m_logicUpdateCount{ 0 };
+
+    /// @brief 上一次计算 UPS 的时间戳
+    std::chrono::high_resolution_clock::time_point m_lastUpsTime;
 };
 
 }  // namespace MMM::Logic

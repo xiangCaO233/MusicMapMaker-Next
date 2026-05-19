@@ -555,7 +555,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
                                 ImGuiCond_Appearing,
                                 ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize({ 420 * dpiScale, 0 }, ImGuiCond_Appearing);
+        if ( m_openManageModal ) {
+            ImGui::SetNextWindowSize({ 420 * dpiScale, 0 });
+            m_openManageModal = false;
+        }
         if ( ImGui::Begin(windowTitle.c_str(),
                           &showManageModal,
                           ImGuiWindowFlags_NoCollapse) ) {
@@ -664,13 +667,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             // 渲染布局
             // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算
             ImVec2 modalSize = modalLayout.renderInCurrent(
-                ImGui::GetCursorScreenPos(), { 400 * dpiScale, 0 });
+                ImGui::GetCursorScreenPos(),
+                { ImGui::GetContentRegionAvail().x, 0 });
             ImGui::Dummy(modalSize);
 
             // 二次确认弹窗
-            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                    ImGuiCond_Appearing,
-                                    ImVec2(0.5f, 0.5f));
+            {
+                static bool wasOpen = false;
+                bool        isOpen  = ImGui::IsPopupOpen("RemoveTrackConfirm");
+                if ( isOpen && !wasOpen ) {
+                    ImGui::SetNextWindowPos(
+                        ImGui::GetMainViewport()->GetCenter(),
+                        ImGuiCond_Always,
+                        ImVec2(0.5f, 0.5f));
+                }
+                wasOpen = isOpen;
+            }
             if ( ImGui::BeginPopupModal(
                      "RemoveTrackConfirm", nullptr, ImGuiWindowFlags_None) ) {
                 ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());

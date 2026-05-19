@@ -13,9 +13,10 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
-#include <nfd.h>
 #include <filesystem>
+#include <nfd.h>
 
 namespace MMM::UI
 {
@@ -35,20 +36,39 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   CLayBox::DrawFunc widget)
 {
     auto& row = getRow(rowIndex++);
-    // 统一 Padding 为 8px
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
     std::string labelId = "R" + std::to_string(rowIndex) + "_L_" + label;
-    row.addElement(labelId + "_lbl",
-                   Sizing::Fixed(labelWidth),
-                   Sizing::Grow(),
-                   [label](Clay_BoundingBox r, bool) {
-                       float textH  = ImGui::CalcTextSize(label).y;
-                       float offset = (r.height - textH) * 0.5f;
-                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-                       ImGui::Text("%s", label);
-                   });
 
+    // A. Left Box: 【说明标签，弹簧】
+    auto& leftBox = getRow(rowIndex++);
+    leftBox.clear();
+    leftBox.setPadding(0, 0, 0, 0)
+        .setSpacing(0)
+        .setAlignment(Alignment::Center());
+
+    // 1. 说明标签 (采用 Fit 自动匹配内容宽度)
+    leftBox.addElement(labelId + "_lbl",
+                       Sizing::Fit(),
+                       Sizing::Grow(),
+                       [label](Clay_BoundingBox r, bool) {
+                           float textH  = ImGui::CalcTextSize(label).y;
+                           float offset = (r.height - textH) * 0.5f;
+                           ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                           ImGui::Text("%s", label);
+                       });
+
+    // 2. 弹簧 spacer
+    leftBox.addElement(
+        labelId + "_lbl_spring", Sizing::Grow(), Sizing::Grow(), nullptr);
+
+    // 将 Left Box 作为一个具有固定宽度的子 HBox 加入主行
+    row.addLayout((labelId + "_left").c_str(),
+                  leftBox,
+                  Sizing::Fixed(labelWidth),
+                  Sizing::Grow());
+
+    // B. Right Box: 【控件或标签】直接 Grow()
     row.addElement(labelId + "_wgt",
                    Sizing::Grow(),
                    Sizing::Grow(),
@@ -69,16 +89,16 @@ void SettingsView::addRadioSetting(
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
     int& current, bool& changed)
 {
-    // 获取稳定宽度
-    float totalAvailW  = ImGui::GetWindowContentRegionMax().x -
-                         ImGui::GetWindowContentRegionMin().x;
-    float widgetAvailW = std::max(100.0f, totalAvailW - labelWidth - 32.0f);
+    float widgetAvailW =
+        240.0f;  // 统一为标准控件宽度，使得折行布局能完美居右对齐！
 
     auto& row = getRow(rowIndex++);
     row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
 
     std::string labelId = "S" + std::to_string(sectionIndex) + "_R" +
                           std::to_string(rowIndex) + "_L_" + label;
+
+    // 1. 标签
     row.addElement(labelId + "_lbl",
                    Sizing::Fixed(labelWidth),
                    Sizing::Grow(),
@@ -89,6 +109,11 @@ void SettingsView::addRadioSetting(
                        ImGui::Text("%s", label);
                    });
 
+    // 2. 弹簧 spacer
+    row.addElement(
+        labelId + "_spring", Sizing::Grow(), Sizing::Grow(), nullptr);
+
+    // 3. 控件组
     auto& containerVBox = getSection(sectionIndex++);
     containerVBox.clear();
     containerVBox.setSpacing(4).setPadding(0, 0, 0, 0);
@@ -106,7 +131,8 @@ void SettingsView::addRadioSetting(
             currentLineRow->clear();
             currentLineRow->setPadding(0, 0, 0, 0)
                 .setSpacing(12)
-                .setAlignment(Alignment::Start());
+                .setAlignment(
+                    Alignment::Center());  // 垂直居中对齐每一行 RadioButtons！
 
             std::string lineId =
                 labelId + "_line_" + std::to_string(lineCount++);
@@ -135,7 +161,7 @@ void SettingsView::addRadioSetting(
 
     row.addLayout((labelId + "_group").c_str(),
                   containerVBox,
-                  Sizing::Grow(),
+                  Sizing::Fixed(widgetAvailW),  // 统一设为 240px 宽度
                   Sizing::Fit());
 
     parent.addLayout(
@@ -376,8 +402,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result     = NFD_OpenDialogU8(
-                            &outPath, filters, 1, nullptr);
+                        nfdresult_t       result =
+                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredAsciiFont = outPath;
@@ -392,13 +418,13 @@ void SettingsView::drawSoftwareSettings()
                         IGFD::FileDialogConfig config;
                         config.path     = ".";
                         config.fileName = "";
-                        config.flags    = ImGuiFileDialogFlags_Modal |
-                                       ImGuiFileDialogFlags_HideColumnType |
-                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        config.flags =
+                            ImGuiFileDialogFlags_Modal |
+                            ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AsciiFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse")
-                                .data(),
+                            TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
                     }
@@ -460,8 +486,8 @@ void SettingsView::drawSoftwareSettings()
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
-                        nfdresult_t       result     = NFD_OpenDialogU8(
-                            &outPath, filters, 1, nullptr);
+                        nfdresult_t       result =
+                            NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
                         if ( result == NFD_OKAY ) {
                             settings.preferredCjkFont = outPath;
@@ -476,13 +502,13 @@ void SettingsView::drawSoftwareSettings()
                         IGFD::FileDialogConfig config;
                         config.path     = ".";
                         config.fileName = "";
-                        config.flags    = ImGuiFileDialogFlags_Modal |
-                                       ImGuiFileDialogFlags_HideColumnType |
-                                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        config.flags =
+                            ImGuiFileDialogFlags_Modal |
+                            ImGuiFileDialogFlags_HideColumnType |
+                            ImGuiFileDialogFlags_ReadOnlyFileNameField;
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "CjkFontPicker",
-                            TR_CACHE("ui.settings.software.font.browse")
-                                .data(),
+                            TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
                     }
@@ -537,6 +563,17 @@ void SettingsView::drawSoftwareSettings()
             });
 
         // 处理文件选择器结果 (保持在 Clay 之后，因为它们开启新窗口)
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
                                                   ImGuiWindowFlags_NoCollapse,
                                                   { 600, 400 }) ) {
@@ -550,6 +587,17 @@ void SettingsView::drawSoftwareSettings()
             ImGuiFileDialog::Instance()->Close();
         }
 
+        {
+            static bool wasOpen = false;
+            bool        isOpen =
+                ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker");
+            if ( isOpen && !wasOpen ) {
+                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                                        ImGuiCond_Always,
+                                        ImVec2(0.5f, 0.5f));
+            }
+            wasOpen = isOpen;
+        }
         if ( ImGuiFileDialog::Instance()->Display(
                  "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -1347,18 +1395,24 @@ void SettingsView::drawVisualSettings()
                 changed |= ImGui::Checkbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.visual.timeline_zoom").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat("##TimelineZoom",
-                                                         &visual.timelineZoom,
-                                                         0.1f,
-                                                         5.0f,
-                                                         "%.2fx");
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::SliderFloat("##TimelineZoom",
+                                              &visual.timelineZoom,
+                                              0.1f,
+                                              5.0f,
+                                              "%.2fx");
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.visual.timeline_zoom_tooltip").data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.visual.linear_scroll").data(),
@@ -1508,13 +1562,50 @@ void SettingsView::drawProjectSettings()
         std::string projPath = Config::pathToUtf8(project->m_projectRoot);
         float       labelW =
             measureLabelWidth(TR_CACHE("ui.settings.project.path").data()) + 8;
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.project.path").data(),
-                       labelW,
-                       [projPath](Clay_BoundingBox r, bool) {
-                           ImGui::Text("%s", projPath.c_str());
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.project.path").data(),
+            labelW,
+            [projPath](Clay_BoundingBox r, bool) {
+                float textW  = ImGui::CalcTextSize(projPath.c_str()).x;
+                float textH  = ImGui::CalcTextSize(projPath.c_str()).y;
+                float offset = (r.height - textH) * 0.5f;
+
+                if ( textW <= r.width ) {
+                    // 不需要滚动，静态居中渲染
+                    ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                    ImGui::TextUnformatted(projPath.c_str());
+                } else {
+                    // 需要自动滚动（跑马灯效果）
+                    float scrollSpeed = 40.0f;  // 每秒滚动像素数
+                    float maxScroll =
+                        textW - r.width + 30.0f;  // 滚到底部，留点余量
+                    float pauseTime      = 1.5f;  // 起点与终点停顿秒数
+                    float scrollDuration = maxScroll / scrollSpeed;
+                    float totalCycleTime = scrollDuration + pauseTime * 2.0f;
+
+                    float time      = (float)ImGui::GetTime();
+                    float cycleTime = fmodf(time, totalCycleTime);
+
+                    float scrollX = 0.0f;
+                    if ( cycleTime < pauseTime ) {
+                        scrollX = 0.0f;  // 起点停顿
+                    } else if ( cycleTime < pauseTime + scrollDuration ) {
+                        scrollX =
+                            (cycleTime - pauseTime) * scrollSpeed;  // 顺畅滑动
+                    } else {
+                        scrollX = maxScroll;  // 终点停顿
+                    }
+
+                    // 开启裁剪矩形防止文字超出 Widget 区域
+                    ImGui::PushClipRect(
+                        { r.x, r.y }, { r.x + r.width, r.y + r.height }, true);
+                    ImGui::SetCursorScreenPos({ r.x - scrollX, r.y + offset });
+                    ImGui::TextUnformatted(projPath.c_str());
+                    ImGui::PopClipRect();
+                }
+            });
     }
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
@@ -1536,9 +1627,24 @@ void SettingsView::drawBeatmapSettings()
         return;
     }
 
-    auto& beatmap = *session->getContext().currentBeatmap;
-    auto& meta    = beatmap.m_baseMapMetadata;
+    auto&       beatmap = *session->getContext().currentBeatmap;
+    std::string currentPath =
+        Config::pathToUtf8(beatmap.m_baseMapMetadata.map_path);
+    if ( m_lastBeatmapPath != currentPath ) {
+        m_editingMeta     = beatmap.m_baseMapMetadata;
+        m_lastBeatmapPath = currentPath;
+    }
+    auto& meta    = m_editingMeta;
     bool  changed = false;
+
+    bool isImd = false;
+    if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+        auto ext = beatmap.m_baseMapMetadata.map_path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if ( ext == ".imd" ) {
+            isImd = true;
+        }
+    }
 
     m_contentVBox.clear();
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
@@ -1623,21 +1729,28 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
             TR_CACHE("ui.settings.beatmap.mapper").data(),
             TR_CACHE("ui.settings.beatmap.version").data(),
+            TR_CACHE("ui.settings.beatmap.path").data(),
+            TR_CACHE("ui.settings.beatmap.stats").data(),
         };
         float maxLabelW = 0;
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
 
-        auto DrawInput = [&](const char* labelPtr, std::string& valRef) {
+        auto DrawInput = [&](const char*  labelPtr,
+                             std::string& valRef,
+                             bool         enabled = true) {
             addSettingItem(
                 *sec,
                 rowIndex,
                 labelPtr,
                 maxLabelW,
-                [labelPtr, &valRef = valRef, &changed](Clay_BoundingBox r,
-                                                       bool) {
+                [labelPtr, &valRef = valRef, &changed, enabled](
+                    Clay_BoundingBox r, bool) {
                     ImGui::PushID(labelPtr);
+                    if ( !enabled ) {
+                        ImGui::BeginDisabled();
+                    }
                     char buf[256];
                     strncpy(buf, valRef.c_str(), sizeof(buf));
                     buf[sizeof(buf) - 1] = '\0';
@@ -1646,19 +1759,96 @@ void SettingsView::drawBeatmapSettings()
                         valRef  = buf;
                         changed = true;
                     }
+                    if ( !enabled ) {
+                        ImGui::EndDisabled();
+                    }
                     ImGui::PopID();
                 });
         };
 
-        DrawInput(TR_CACHE("ui.settings.beatmap.name").data(), meta.name);
-        DrawInput(TR_CACHE("ui.settings.beatmap.title").data(), meta.title);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.name").data(), meta.name, !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.title").data(), meta.title, !isImd);
         DrawInput(TR_CACHE("ui.settings.beatmap.title_unicode").data(),
-                  meta.title_unicode);
-        DrawInput(TR_CACHE("ui.settings.beatmap.artist").data(), meta.artist);
+                  meta.title_unicode,
+                  !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.artist").data(), meta.artist, !isImd);
         DrawInput(TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
-                  meta.artist_unicode);
-        DrawInput(TR_CACHE("ui.settings.beatmap.mapper").data(), meta.author);
-        DrawInput(TR_CACHE("ui.settings.beatmap.version").data(), meta.version);
+                  meta.artist_unicode,
+                  !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.mapper").data(), meta.author, !isImd);
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.version").data(), meta.version, true);
+
+        std::string relativePathStr = "";
+        std::string absolutePathStr = "";
+        if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+            auto absolutePath =
+                std::filesystem::absolute(beatmap.m_baseMapMetadata.map_path);
+            absolutePathStr = Config::pathToUtf8(absolutePath);
+            if ( project ) {
+                try {
+                    auto relativePath = std::filesystem::relative(
+                        absolutePath, project->m_projectRoot);
+                    relativePathStr = Config::pathToUtf8(relativePath);
+                } catch ( ... ) {
+                    relativePathStr = absolutePathStr;
+                }
+            } else {
+                relativePathStr = absolutePathStr;
+            }
+        }
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.path").data(),
+            maxLabelW,
+            [relativePathStr, absolutePathStr](Clay_BoundingBox r, bool) {
+                ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+                ImVec2 textSize  = ImGui::CalcTextSize(relativePathStr.c_str());
+
+                // 计算滚动位移
+                float offset       = 0.0f;
+                float visibleWidth = r.width;
+
+                if ( textSize.x > visibleWidth ) {
+                    float scrollRange = textSize.x - visibleWidth + 40.0f;
+                    float time        = (float)ImGui::GetTime();
+                    // 平滑往复滚动，两端停顿
+                    float t = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
+                    t       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+                    offset  = t * scrollRange;
+                }
+
+                // 垂直居中计算
+                float textH   = ImGui::GetFontSize();
+                float widgetH = ImGui::GetFrameHeight();
+                float offsetY = (widgetH - textH) * 0.5f;
+
+                // 应用剪切矩形并绘制文本
+                ImGui::PushClipRect(
+                    cursorPos,
+                    ImVec2(cursorPos.x + r.width, cursorPos.y + widgetH),
+                    true);
+
+                // 绘制一个透明的 dummy 控件以接收 hover 状态显示 Tooltip
+                ImGui::SetCursorScreenPos(cursorPos);
+                ImGui::Dummy(ImVec2(r.width, widgetH));
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s", absolutePathStr.c_str());
+                }
+
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(cursorPos.x - offset, cursorPos.y + offsetY),
+                    ImGui::GetColorU32(ImGuiCol_Text),
+                    relativePathStr.c_str());
+
+                ImGui::PopClipRect();
+            });
     }
 
     if ( auto* sec = addHeader(
@@ -1672,6 +1862,10 @@ void SettingsView::drawBeatmapSettings()
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
+
+        if ( isImd ) {
+            ImGui::BeginDisabled();
+        }
 
         addRadioSetting(
             *sec,
@@ -1711,6 +1905,10 @@ void SettingsView::drawBeatmapSettings()
                                changed        = true;
                            }
                        });
+
+        if ( isImd ) {
+            ImGui::EndDisabled();
+        }
     }
 
     if ( auto* sec = addHeader(
@@ -1731,12 +1929,18 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.bpm").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
+                if ( isImd ) {
+                    ImGui::BeginDisabled();
+                }
                 float bpm = (float)meta.preference_bpm;
                 ImGui::SetNextItemWidth(r.width);
                 if ( ImGui::DragFloat(
                          "##BPM", &bpm, 0.1f, -1.0f, 1000.0f, "%.2f") ) {
                     meta.preference_bpm = (double)bpm;
                     changed             = true;
+                }
+                if ( isImd ) {
+                    ImGui::EndDisabled();
                 }
             });
 
@@ -1774,6 +1978,10 @@ void SettingsView::drawBeatmapSettings()
         for ( auto* l : labels )
             maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
         maxLabelW += 8.0f;
+
+        if ( isImd ) {
+            ImGui::BeginDisabled();
+        }
 
         // 音频选择
         addSettingItem(
@@ -1911,6 +2119,10 @@ void SettingsView::drawBeatmapSettings()
                 }
                 if ( coverPushed ) ImGui::PopStyleColor();
             });
+
+        if ( isImd ) {
+            ImGui::EndDisabled();
+        }
     }
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
@@ -2044,19 +2256,25 @@ void SettingsView::drawEditorSettings()
                     "##DisableAccel",
                     &settings.disableScrollAccelerationWhileDrawing);
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::SliderFloat(
-                               "##ScrollMul",
-                               &settings.scrollSpeedMultiplier,
-                               1.0f,
-                               10.0f,
-                               "%.1f");
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::SliderFloat("##ScrollMul",
+                                              &settings.scrollSpeedMultiplier,
+                                              1.0f,
+                                              10.0f,
+                                              "%.1f");
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.editor.scroll_multiplier_tooltip")
+                            .data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -2068,6 +2286,11 @@ void SettingsView::drawEditorSettings()
                 if ( ImGui::SliderInt("##BeatDivisor", &beatDivisor, 1, 64) ) {
                     settings.beatDivisor = beatDivisor;
                     changed              = true;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.editor.beat_divisor_tooltip").data(),
+                        Utils::TooltipDir::Right);
                 }
             });
     }

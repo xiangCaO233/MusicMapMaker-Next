@@ -34,9 +34,16 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     }
 
     // 计算背景图片的绝对路径并获取尺寸
-    ctx.bgSize  = glm::vec2(0.0f);
-    auto bgPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
-                  beatmap->m_baseMapMetadata.main_cover_path;
+    ctx.bgSize = glm::vec2(0.0f);
+    std::filesystem::path bgPath;
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( project ) {
+        bgPath =
+            project->m_projectRoot / beatmap->m_baseMapMetadata.main_cover_path;
+    } else {
+        bgPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
+                 beatmap->m_baseMapMetadata.main_cover_path;
+    }
 
     if ( !beatmap->m_baseMapMetadata.main_cover_path.empty() &&
          std::filesystem::exists(bgPath) ) {
@@ -51,13 +58,18 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值
 
     // 加载音频
-    auto audioPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
-                     beatmap->m_baseMapMetadata.main_audio_path;
+    std::filesystem::path audioPath;
+    if ( project ) {
+        audioPath =
+            project->m_projectRoot / beatmap->m_baseMapMetadata.main_audio_path;
+    } else {
+        audioPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
+                    beatmap->m_baseMapMetadata.main_audio_path;
+    }
     if ( !beatmap->m_baseMapMetadata.main_audio_path.empty() &&
          std::filesystem::exists(audioPath) ) {
         // 查找对应的 AudioResource 配置
         AudioTrackConfig config;
-        auto*            project = EditorEngine::instance().getCurrentProject();
         if ( project ) {
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_id ==
