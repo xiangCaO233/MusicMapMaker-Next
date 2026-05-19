@@ -193,6 +193,7 @@ return {
 	["ui.settings.editor.cursor_system"] = "系统原生",
 	["ui.settings.editor.beat_divisor"] = "全局分拍数设置",
 	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "绘制物件(Shift)时屏蔽滚动加速",
+	["ui.settings.editor.remove_objects_on_polyline_path"] = "移除折线路径上的物件",
 	["ui.settings.editor.selection"] = "框选工具行为",
 	["ui.settings.editor.selection.strict"] = "严格 (完全包含)",
 	["ui.settings.editor.selection.intersection"] = "相交 (部分接触)",

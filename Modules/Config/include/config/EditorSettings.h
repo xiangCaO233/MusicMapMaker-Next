@@ -382,6 +382,9 @@ struct EditorSettings {
     /// @brief 绘制物件(按住Shift)时是否屏蔽滚动加速
     bool disableScrollAccelerationWhileDrawing{ true };
 
+    /// @brief 移除折线路径上的物件
+    bool removeObjectsOnPolylinePath{ false };
+
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
 
@@ -427,6 +430,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "lastFilePickerPath", c.lastFilePickerPath },
                         { "disableScrollAccelerationWhileDrawing",
                           c.disableScrollAccelerationWhileDrawing },
+                        { "removeObjectsOnPolylinePath",
+                          c.removeObjectsOnPolylinePath },
                         { "softwareCursorConfig", c.softwareCursorConfig },
                         { "preferredAsciiFont", c.preferredAsciiFont },
                         { "preferredCjkFont", c.preferredCjkFont },
@@ -470,6 +475,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
     c.disableScrollAccelerationWhileDrawing =
         j.value("disableScrollAccelerationWhileDrawing", true);
+    c.removeObjectsOnPolylinePath =
+        j.value("removeObjectsOnPolylinePath", false);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =

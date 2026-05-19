@@ -839,6 +839,71 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             }
         }
 
+        // 3.5. 移除折线路径上的物件 (如果设置开启)
+        if ( ctx.lastConfig.settings.removeObjectsOnPolylinePath ) {
+            struct Node {
+                int    track;
+                double time;
+            };
+            std::vector<Node> nodes;
+            if ( !segments.empty() ) {
+                nodes.push_back({ segments.front().trackIndex,
+                                  segments.front().timestamp });
+                for ( const auto& s : segments ) {
+                    if ( s.type == ::MMM::NoteType::HOLD ) {
+                        nodes.push_back(
+                            { s.trackIndex, s.timestamp + s.duration });
+                    } else if ( s.type == ::MMM::NoteType::FLICK ) {
+                        nodes.push_back(
+                            { s.trackIndex + s.dtrack, s.timestamp });
+                    }
+                }
+            }
+
+            std::unordered_set<entt::entity> alreadyQueued;
+            for ( const auto& entry : mergeDeleteEntries ) {
+                if ( entry.entity != entt::null ) {
+                    alreadyQueued.insert(entry.entity);
+                }
+            }
+
+            auto noteView = ctx.noteRegistry.view<NoteComponent>();
+            for ( auto entity : noteView ) {
+                const auto& nc = noteView.get<NoteComponent>(entity);
+                if ( nc.m_isSubNote ) continue;
+
+                if ( nc.m_type == ::MMM::NoteType::NOTE ||
+                     nc.m_type == ::MMM::NoteType::HOLD ||
+                     nc.m_type == ::MMM::NoteType::FLICK ) {
+
+                    bool match = false;
+                    for ( const auto& node : nodes ) {
+                        if ( nc.m_trackIndex == node.track &&
+                             std::abs(nc.m_timestamp - node.time) <= 0.003 ) {
+                            match = true;
+                            break;
+                        }
+                    }
+
+                    if ( match ) {
+                        if ( alreadyQueued.find(entity) ==
+                             alreadyQueued.end() ) {
+                            mergeDeleteEntries.push_back(
+                                { entity, nc, std::nullopt });
+                            alreadyQueued.insert(entity);
+                            XINFO(
+                                "Polyline path clean: removing object {} at "
+                                "t={:.3f} "
+                                "track={}",
+                                static_cast<uint32_t>(entity),
+                                nc.m_timestamp,
+                                nc.m_trackIndex);
+                        }
+                    }
+                }
+            }
+        }
+
         // 4. 根据最终清洗与合并结果进行降级或重构
         if ( segments.empty() ) {
             note.m_type     = ::MMM::NoteType::NOTE;
