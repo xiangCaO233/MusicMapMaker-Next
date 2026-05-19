@@ -197,6 +197,22 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowPadding  = j.value("windowPadding", 8.0f);
 }
 
+enum class FrameLimitPreference {
+    VSync,
+    Refresh2x,
+    Refresh4x,
+    Refresh8x,
+    Unlimited
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(FrameLimitPreference,
+                             { { FrameLimitPreference::VSync, "VSync" },
+                               { FrameLimitPreference::Refresh2x, "Refresh2x" },
+                               { FrameLimitPreference::Refresh4x, "Refresh4x" },
+                               { FrameLimitPreference::Refresh8x, "Refresh8x" },
+                               { FrameLimitPreference::Unlimited,
+                                 "Unlimited" } })
+
 enum class UITheme {
     Auto,
     DeepDark,
@@ -315,8 +331,8 @@ struct EditorSettings {
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
-    /// @brief 是否开启垂直同步
-    bool vsync{ false };
+    /// @brief 帧数限制模式偏好
+    FrameLimitPreference frameLimit{ FrameLimitPreference::VSync };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
@@ -394,7 +410,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "scrollSnap", c.scrollSnap },
                         { "recentProjectsLimit", c.recentProjectsLimit },
                         { "language", c.language },
-                        { "vsync", c.vsync },
+                        { "frameLimit", c.frameLimit },
                         { "fontSizeMultiplier", c.fontSizeMultiplier },
                         { "uiScaleMultiplier", c.uiScaleMultiplier },
                         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
@@ -429,9 +445,12 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.beatDivisor     = j.value("beatDivisor", 4);
     c.reverseScroll   = j.value("reverseScroll", false);
     c.scrollSnap      = j.value("scrollSnap", false);
-    c.recentProjectsLimit   = j.value("recentProjectsLimit", 10);
-    c.language              = j.value("language", std::string("zh_cn"));
-    c.vsync                 = j.value("vsync", false);
+    c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
+    c.language            = j.value("language", std::string("zh_cn"));
+    c.frameLimit =
+        j.value("frameLimit",
+                j.value("vsync", false) ? FrameLimitPreference::VSync
+                                        : FrameLimitPreference::Unlimited);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);

@@ -88,6 +88,19 @@ public:
     void ToggleFullscreen();
 
     /**
+     * @brief 显示在窗口正中央的临时通知/Tooltip
+     * @param message 提示消息文本
+     * @param durationSeconds 持续时间 (秒)
+     */
+    void showCenterNotification(const std::string& message,
+                                float              durationSeconds = 1.5f);
+
+    /**
+     * @brief 绘制临时中央通知 (每帧渲染)
+     */
+    void drawCenterNotification();
+
+    /**
      * @brief 设置 ImGui 字体 (供初始化和重载使用)
      */
     void setupFonts();
@@ -128,6 +141,11 @@ public:
 private:
     /// @brief 资源是否已释放
     bool m_isReleased{ false };
+
+    /// @brief 临时中央通知文本
+    std::string m_notificationMessage;
+    /// @brief 临时中央通知过期系统时间戳
+    double m_notificationExpireTime{ 0.0 };
 
 private:
     /// @brief 字体重建请求标志

@@ -187,7 +187,7 @@ void SettingsView::drawSoftwareSettings()
     // Seg 完美垂直对齐！
     const char* allSoftwareLabels[] = {
         TR_CACHE("ui.settings.software.language").data(),
-        TR_CACHE("ui.settings.software.vsync").data(),
+        "帧数限制",
         TR_CACHE("ui.settings.software.theme").data(),
         TR_CACHE("ui.settings.software.font.ascii").data(),
         TR_CACHE("ui.settings.software.font.cjk").data(),
@@ -316,14 +316,27 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
-        // 2. 垂直同步
+        // 2. 帧数限制
         addSettingItem(*sec,
                        rowIndex,
-                       TR_CACHE("ui.settings.software.vsync").data(),
+                       "帧数限制",
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |=
-                               ImGui::Checkbox("##VSync", &settings.vsync);
+                           int         limit    = (int)settings.frameLimit;
+                           const char* limits[] = { "垂直同步",
+                                                    "2x 刷新率",
+                                                    "4x 刷新率",
+                                                    "8x 刷新率",
+                                                    "无限制" };
+                           ImGui::SetNextItemWidth(r.width);
+                           if ( ImGui::Combo("##FrameLimitCombo",
+                                             &limit,
+                                             limits,
+                                             IM_ARRAYSIZE(limits)) ) {
+                               settings.frameLimit =
+                                   (Config::FrameLimitPreference)limit;
+                               changed = true;
+                           }
                        });
 
         // 3. UI 主题

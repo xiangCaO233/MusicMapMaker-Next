@@ -729,8 +729,13 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
 
-    XINFO("EditorEngine: Updated config. VSync: {}",
-          m_editorConfig.settings.vsync ? "ON" : "OFF");
+    const char* limitNames[] = { "VSync",
+                                 "2x Refresh Rate",
+                                 "4x Refresh Rate",
+                                 "8x Refresh Rate",
+                                 "Unlimited" };
+    XINFO("EditorEngine: Updated config. Frame Limit: {}",
+          limitNames[static_cast<int>(m_editorConfig.settings.frameLimit)]);
 
     // 发布配置更新事件，供 UI 层订阅
     Event::EventBus::instance().publish(
@@ -766,14 +771,24 @@ void EditorEngine::loop()
     while ( m_running ) {
         // 动态获取当前的延迟目标
         double targetDt = 0.0;
-        if ( m_editorConfig.settings.vsync ) {
-            int refreshRate =
-                Config::AppConfig::instance().getDeviceRefreshRate();
-            if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
+        int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
+        if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
+
+        switch ( m_editorConfig.settings.frameLimit ) {
+        case Config::FrameLimitPreference::VSync:
             targetDt = 1.0 / static_cast<double>(refreshRate);
-        } else {
-            // 用户要求：关闭垂直同步时，逻辑线程拉满运行，不进行任何 sleep
-            targetDt = 0.0;
+            break;
+        case Config::FrameLimitPreference::Refresh2x:
+            targetDt = 1.0 / static_cast<double>(refreshRate * 2);
+            break;
+        case Config::FrameLimitPreference::Refresh4x:
+            targetDt = 1.0 / static_cast<double>(refreshRate * 4);
+            break;
+        case Config::FrameLimitPreference::Refresh8x:
+            targetDt = 1.0 / static_cast<double>(refreshRate * 8);
+            break;
+        case Config::FrameLimitPreference::Unlimited:
+        default: targetDt = 0.0; break;
         }
 
         auto currentTime = std::chrono::high_resolution_clock::now();
