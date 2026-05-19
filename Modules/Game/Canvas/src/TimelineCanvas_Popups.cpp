@@ -21,8 +21,21 @@ void TimelineCanvas::renderEventEditorPopup()
     }
     wasOpen = isOpen;
 
-    ImGui::SetNextWindowSize(ImVec2(300, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    float windowPaddingVal =
+        std::floor(editorSettings.aesthetics.windowPadding * dpiScale);
+
+    ImGui::SetNextWindowSize(ImVec2(300 * dpiScale, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(windowPaddingVal, windowPaddingVal));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+
     if ( ImGui::BeginPopupModal(
              "TimelineEventEditor", &m_isPopupOpen, ImGuiWindowFlags_None) ) {
         std::string typeTitle =
@@ -86,7 +99,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(3);
 }
 
 void TimelineCanvas::renderEventCreationPopup()
@@ -100,8 +113,20 @@ void TimelineCanvas::renderEventCreationPopup()
     }
     wasOpen = isOpen;
 
-    ImGui::SetNextWindowSize(ImVec2(350, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15, 15));
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    float windowPaddingVal =
+        std::floor(editorSettings.aesthetics.windowPadding * dpiScale);
+
+    ImGui::SetNextWindowSize(ImVec2(350 * dpiScale, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                        ImVec2(windowPaddingVal, windowPaddingVal));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
 
     if ( ImGui::BeginPopupModal("TimelineCreateEvent",
                                 &m_isCreatePopupOpen,
@@ -212,13 +237,34 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(3);
 }
 
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
     if ( !m_isTableWindowOpen ) return;
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    ImVec2 itemSpacing = {
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
     ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
 
@@ -227,6 +273,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
             ImGui::TextDisabled("当前未加载任何谱面");
             ImGui::End();
+            ImGui::PopStyleVar(6);
             return;
         }
 
@@ -259,6 +306,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( ImGui::TreeNode("批量修改工具##BulkTools") ) {
             // 批量偏移
             static double bulkOffsetValue = 0.0;
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("批量时间偏移 (秒):");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
@@ -285,6 +333,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
             // 批量缩放
             static double bulkScaleValue = 1.0;
+            ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted("批量流速缩放倍率:");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(120.0f);
@@ -450,6 +499,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
     }
     ImGui::End();
+
+    ImGui::PopStyleVar(6);
 }
 
 }  // namespace MMM::Canvas

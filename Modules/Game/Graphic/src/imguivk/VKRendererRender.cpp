@@ -7,6 +7,19 @@
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 
+#ifdef _WIN32
+#    define GLFW_EXPOSE_NATIVE_WIN32
+#    include <GLFW/glfw3native.h>
+#    include <dwmapi.h>
+
+#    ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#        define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#    endif
+#    ifndef DWMWCP_ROUND
+#        define DWMWCP_ROUND 2
+#    endif
+#endif
+
 namespace MMM::Graphic
 {
 /**
@@ -229,6 +242,28 @@ void VKRenderer::render(NativeWindow&                  window,
     ImGuiIO& io = ImGui::GetIO();
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         ImGui::UpdatePlatformWindows();
+#ifdef _WIN32
+        // 对所有多视口平台窗口应用 Win32 DWM 圆角和阴影，确保视觉一致性
+        ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+        for ( int i = 0; i < platform_io.Viewports.Size; ++i ) {
+            ImGuiViewport* vp = platform_io.Viewports[i];
+            if ( vp->PlatformHandle ) {
+                GLFWwindow* glfwWin =
+                    static_cast<GLFWwindow*>(vp->PlatformHandle);
+                HWND hwnd = glfwGetWin32Window(glfwWin);
+                if ( hwnd ) {
+                    const MARGINS shadow_margin = { 1, 1, 1, 1 };
+                    DwmExtendFrameIntoClientArea(hwnd, &shadow_margin);
+
+                    DWORD cornerPreference = DWMWCP_ROUND;
+                    DwmSetWindowAttribute(hwnd,
+                                          DWMWA_WINDOW_CORNER_PREFERENCE,
+                                          &cornerPreference,
+                                          sizeof(cornerPreference));
+                }
+            }
+        }
+#endif
         ImGui::RenderPlatformWindowsDefault();
     }
 }
