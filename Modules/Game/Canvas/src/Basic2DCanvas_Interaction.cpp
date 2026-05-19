@@ -152,6 +152,10 @@ void Basic2DCanvasInteraction::handleHotkeys(
 {
     auto& io = ImGui::GetIO();
 
+    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1/2/3
+    // 工具切换键)
+    if ( io.WantTextInput ) return;
+
     // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw) ---
     // 这些是画布特有的，保留在这里
     if ( ImGui::IsKeyPressed(ImGuiKey_1, false) ) {

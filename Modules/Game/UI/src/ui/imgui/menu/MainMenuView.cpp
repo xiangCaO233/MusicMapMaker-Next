@@ -60,6 +60,11 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     bool  hasProject = (project != nullptr);
 
     ImGuiIO& io = ImGui::GetIO();
+
+    // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键处理以防冲突 (如 Ctrl+A
+    // 全选)
+    if ( io.WantTextInput ) return;
+
     // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
 
