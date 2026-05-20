@@ -466,18 +466,21 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
             snapshot->erasingSubIndex = -1;
 
-            // 悬停在 Polyline 的任意子物件时，允许局部高亮红色
-            if ( m_ctx->hoveredEntity != entt::null &&
-                 m_ctx->noteRegistry.all_of<NoteComponent>(
-                     m_ctx->hoveredEntity) ) {
-                const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(
-                    m_ctx->hoveredEntity);
-                if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
-                     !nc.m_subNotes.empty() ) {
-                    if ( m_ctx->hoveredSubIndex >= 0 &&
-                         m_ctx->hoveredSubIndex <
-                             static_cast<int>(nc.m_subNotes.size()) ) {
-                        snapshot->erasingSubIndex = m_ctx->hoveredSubIndex;
+            // Shift 模式下保持 erasingSubIndex = -1，使整个 Polyline 标红
+            if ( !m_ctx->eraserState.isShiftDown ) {
+                // 非 Shift：悬停在 Polyline 的任意子物件时，允许局部高亮红色
+                if ( m_ctx->hoveredEntity != entt::null &&
+                     m_ctx->noteRegistry.all_of<NoteComponent>(
+                         m_ctx->hoveredEntity) ) {
+                    const auto& nc = m_ctx->noteRegistry.get<NoteComponent>(
+                        m_ctx->hoveredEntity);
+                    if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
+                         !nc.m_subNotes.empty() ) {
+                        if ( m_ctx->hoveredSubIndex >= 0 &&
+                             m_ctx->hoveredSubIndex <
+                                 static_cast<int>(nc.m_subNotes.size()) ) {
+                            snapshot->erasingSubIndex = m_ctx->hoveredSubIndex;
+                        }
                     }
                 }
             }

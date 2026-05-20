@@ -133,7 +133,8 @@ struct SessionContext {
 
     // --- 橡皮擦工具状态 ---
     struct EraserState {
-        bool                             isActive{ false };
+        bool isActive{ false };
+        bool isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
         std::unordered_set<entt::entity> targetEntities;
     } eraserState;
 

@@ -172,6 +172,7 @@ struct CmdEndBrush {
  */
 struct CmdStartErase {
     std::string cameraId;
+    bool        isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
 };
 
 /**
@@ -181,6 +182,7 @@ struct CmdUpdateErase {
     std::string cameraId;
     float       mouseX;
     float       mouseY;
+    bool        isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
 };
 
 /**

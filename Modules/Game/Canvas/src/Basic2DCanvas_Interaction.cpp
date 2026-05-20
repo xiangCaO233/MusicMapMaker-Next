@@ -435,13 +435,15 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw &&
          !currentSnapshot->isPlaying ) {
         if ( ImGui::IsMouseClicked(1) && isHovered ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdStartErase{ m_cameraId }));
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
         if ( ImGui::IsMouseDragging(1) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdUpdateErase{
-                    m_cameraId, localMousePos.x, localMousePos.y }));
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateErase{ m_cameraId,
+                                       localMousePos.x,
+                                       localMousePos.y,
+                                       ImGui::GetIO().KeyShift }));
         }
         if ( ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(

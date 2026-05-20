@@ -1025,10 +1025,21 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 
 void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
 {
-    ctx.eraserState.isActive = true;
+    ctx.eraserState.isActive    = true;
+    ctx.eraserState.isShiftDown = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     if ( ctx.hoveredEntity != entt::null ) {
-        ctx.eraserState.targetEntities.insert(ctx.hoveredEntity);
+        entt::entity target = ctx.hoveredEntity;
+        // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
+        if ( cmd.isShiftDown && ctx.noteRegistry.valid(ctx.hoveredEntity) &&
+             ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
+            const auto& nc =
+                ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
+            if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
+                target = nc.m_parentPolyline;
+            }
+        }
+        ctx.eraserState.targetEntities.insert(target);
     }
 }
 
@@ -1036,10 +1047,22 @@ void DrawTool::handleUpdateErase(SessionContext& ctx, const CmdUpdateErase& cmd)
 {
     if ( !ctx.eraserState.isActive ) return;
 
+    ctx.eraserState.isShiftDown = cmd.isShiftDown;
+
     // 每帧只标记当前鼠标正下方的物件，移开就取消
     ctx.eraserState.targetEntities.clear();
     if ( ctx.hoveredEntity != entt::null ) {
-        ctx.eraserState.targetEntities.insert(ctx.hoveredEntity);
+        entt::entity target = ctx.hoveredEntity;
+        // Shift 模式：如果悬停在 Polyline 的子物件上，解析到父 Polyline 实体
+        if ( cmd.isShiftDown && ctx.noteRegistry.valid(ctx.hoveredEntity) &&
+             ctx.noteRegistry.all_of<NoteComponent>(ctx.hoveredEntity) ) {
+            const auto& nc =
+                ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
+            if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
+                target = nc.m_parentPolyline;
+            }
+        }
+        ctx.eraserState.targetEntities.insert(target);
     }
 }
 
@@ -1093,7 +1116,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                 // Polyline，且当前悬停在它上面，则执行“分裂/缩减”而非“直接全部删除”
                 if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
                      !nc.m_subNotes.empty() &&
-                     ctx.eraserState.targetEntities.count(entity) ) {
+                     ctx.eraserState.targetEntities.count(entity) &&
+                     !ctx.eraserState.isShiftDown ) {
                     int k = ctx.hoveredSubIndex;
                     if ( entity == ctx.hoveredEntity && k >= 0 &&
                          k < static_cast<int>(nc.m_subNotes.size()) ) {
@@ -1223,7 +1247,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                     bool handled = false;
 
                     if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
-                         !nc.m_subNotes.empty() ) {
+                         !nc.m_subNotes.empty() &&
+                         !ctx.eraserState.isShiftDown ) {
                         int k = ctx.hoveredSubIndex;
                         if ( entity == ctx.hoveredEntity && k >= 0 &&
                              k < static_cast<int>(nc.m_subNotes.size()) ) {
@@ -1389,7 +1414,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
         }
     }
 
-    ctx.eraserState.isActive = false;
+    ctx.eraserState.isActive    = false;
+    ctx.eraserState.isShiftDown = false;
     ctx.eraserState.targetEntities.clear();
 }
 

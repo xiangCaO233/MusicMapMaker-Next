@@ -170,7 +170,8 @@ void NoteRenderSystem::drawPolylineBody(
                 glm::vec4 finalBodyColor = colorHold;
                 if ( snapshot->erasingEntities.count(entity) &&
                      (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                      snapshot->erasingSubIndex == 0) ) {
+                      snapshot->erasingSubIndex == 0 ||
+                      snapshot->erasingSubIndex == -1) ) {
                     finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
                 }
 
@@ -204,7 +205,8 @@ void NoteRenderSystem::drawPolylineBody(
             glm::vec4 finalBodyColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
@@ -243,7 +245,8 @@ void NoteRenderSystem::drawPolylineBody(
             glm::vec4 finalTransColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalTransColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
@@ -303,7 +306,8 @@ void NoteRenderSystem::drawPolylineNodes(
         glm::vec4 finalNodeColor = colorNode;
         if ( snapshot->erasingEntities.count(entity) &&
              (snapshot->erasingSubIndex == static_cast<int>(i) ||
-              snapshot->erasingSubIndex == 0) ) {
+              snapshot->erasingSubIndex == 0 ||
+              snapshot->erasingSubIndex == -1) ) {
             finalNodeColor = { 1.0f, 0.2f, 0.2f, colorNode.a * 0.5f };
         }
 
@@ -353,7 +357,7 @@ void NoteRenderSystem::drawPolylineHead(
 
     glm::vec4 finalHeadColor = colorHold;
     if ( snapshot->erasingEntities.count(entity) &&
-         snapshot->erasingSubIndex == 0 ) {
+         (snapshot->erasingSubIndex == 0 || snapshot->erasingSubIndex == -1) ) {
         finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
     }
 
@@ -413,7 +417,8 @@ void NoteRenderSystem::drawPolylineDecoration(
             glm::vec4 finalArrowColor = colorArrow;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalArrowColor = { 1.0f, 0.2f, 0.2f, colorArrow.a * 0.5f };
             }
 
@@ -450,7 +455,8 @@ void NoteRenderSystem::drawPolylineDecoration(
             glm::vec4 finalEndColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalEndColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
