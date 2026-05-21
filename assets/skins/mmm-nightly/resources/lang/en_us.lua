@@ -16,7 +16,7 @@ return {
 	["ui.exit.confirm_title"] = "Confirm Exit",
 	["ui.exit.confirm_msg_fmt"] = "Beatmap '{}' has unsaved changes.\nDo you want to save before exiting?",
 	["ui.exit.dont_save"] = "Don't Save",
-	["ui.menu.frame_stats_fmt"] = "FT: {:.3f} ms ({:.1f} FPS) | UPS: {:.1f}",
+	["ui.menu.frame_stats_fmt"] = "FT: {:.2f} ms | FPS: {:.1f} | UPS: {:.1f}",
 
 	["ui.edit"] = "&Edit",
 	["ui.edit.undo"] = "Undo",
@@ -162,7 +162,8 @@ return {
 	["ui.settings.beatmap.mapper"] = "Mapper/Author",
 	["ui.settings.beatmap.version"] = "Difficulty Name",
 	["ui.settings.beatmap.audio"] = "Audio File",
-	["ui.settings.beatmap.cover"] = "Background/Cover",
+	["ui.settings.beatmap.cover"] = "Cover",
+	["ui.settings.beatmap.background"] = "Background",
 	["ui.settings.beatmap.name"] = "Internal Name",
 	["ui.settings.beatmap.title_unicode"] = "Title (Unicode)",
 	["ui.settings.beatmap.artist_unicode"] = "Artist (Unicode)",
@@ -379,6 +380,7 @@ return {
 	["ui.wizard.new_beatmap.cancel"] = "Cancel",
 	["ui.wizard.new_beatmap.select_audio"] = "Select Audio File",
 	["ui.wizard.new_beatmap.select_cover"] = "Select Background Image",
+	["ui.wizard.new_beatmap.select_cover_img"] = "Select Cover Image",
 	["ui.wizard.new_beatmap.audio_not_selected"] = "Please select an audio file first",
 	["ui.wizard.new_beatmap.no_project"] = "Cannot create: Please open or create a project first",
  

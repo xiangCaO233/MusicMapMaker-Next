@@ -80,6 +80,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 Config::utf8ToPath(base.value("audio", ""));
             beatMap.m_baseMapMetadata.main_cover_path =
                 Config::utf8ToPath(base.value("cover", ""));
+            beatMap.m_baseMapMetadata.cover_path =
+                Config::utf8ToPath(base.value("cover_img", ""));
             beatMap.m_baseMapMetadata.track_count =
                 base.value("track_count", 4);
             beatMap.m_baseMapMetadata.preference_bpm = base.value("bpm", 120.0);

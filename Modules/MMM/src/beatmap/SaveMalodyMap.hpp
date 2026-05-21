@@ -61,6 +61,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     meta["version"]    = beatMap.m_baseMapMetadata.version;
     meta["background"] = Config::pathToUtf8(
         beatMap.m_baseMapMetadata.main_cover_path.filename());
+    meta["cover"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path.filename());
     meta["id"] = 0;
 
     /// @brief 获取原始模式，优先从元数据恢复

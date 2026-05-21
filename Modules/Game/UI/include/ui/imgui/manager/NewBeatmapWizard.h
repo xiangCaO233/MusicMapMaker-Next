@@ -23,8 +23,8 @@ private:
     void reset();
     void onAudioSelected(const std::filesystem::path& path);
 
-    bool m_isOpen = false;
-    bool m_shouldOpen = false;
+    bool             m_isOpen     = false;
+    bool             m_shouldOpen = false;
     MMM::BaseMapMeta m_meta;
 
 
@@ -37,11 +37,13 @@ private:
     char m_authorBuf[256]        = { 0 };
     char m_versionBuf[256]       = { 0 };
 
-    double m_bpm = 120.0;
-    int    m_trackCount = 4;
+    double                m_bpm        = 120.0;
+    int                   m_trackCount = 4;
     std::filesystem::path m_selectedAudioPath;
     std::filesystem::path m_selectedCoverPath;
-    double m_audioDuration = 0.0;
+    /// @brief 选中的封面图片路径
+    std::filesystem::path m_selectedCoverImgPath;
+    double                m_audioDuration = 0.0;
 };
 
 }  // namespace MMM::UI

@@ -63,6 +63,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         basemeta.version = meta.value("version", "");
         basemeta.main_cover_path =
             Config::utf8ToPath(meta.value("background", ""));
+        basemeta.cover_path = Config::utf8ToPath(meta.value("cover", ""));
 
         if ( meta.contains("song") ) {
             const auto& song        = meta["song"];

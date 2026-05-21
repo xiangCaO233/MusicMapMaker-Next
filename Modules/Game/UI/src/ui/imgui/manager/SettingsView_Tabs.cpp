@@ -1689,7 +1689,8 @@ void SettingsView::drawBeatmapSettings()
         TR_CACHE("ui.settings.beatmap.tracks").data(),
         TR_CACHE("ui.settings.beatmap.length").data(),
         TR_CACHE("ui.settings.beatmap.audio").data(),
-        TR_CACHE("ui.settings.beatmap.cover").data()
+        TR_CACHE("ui.settings.beatmap.cover").data(),
+        TR_CACHE("ui.settings.beatmap.background").data()
     };
     float maxLabelW = 0;
     for ( auto* l : allBeatmapLabels ) {
@@ -2060,15 +2061,14 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 std::string currentCoverPath =
-                    Config::pathToUtf8(meta.main_cover_path);
+                    Config::pathToUtf8(meta.cover_path);
                 std::string coverPreview = currentCoverPath;
                 if ( project && !coverPreview.empty() ) {
-                    if ( meta.main_cover_path.is_absolute() ) {
+                    if ( meta.cover_path.is_absolute() ) {
                         try {
                             coverPreview =
                                 Config::pathToUtf8(std::filesystem::relative(
-                                    meta.main_cover_path,
-                                    project->m_projectRoot));
+                                    meta.cover_path, project->m_projectRoot));
                         } catch ( ... ) {
                         }
                     }
@@ -2076,7 +2076,7 @@ void SettingsView::drawBeatmapSettings()
 
                 bool coverExists =
                     project && std::filesystem::exists(project->m_projectRoot /
-                                                       meta.main_cover_path);
+                                                       meta.cover_path);
                 bool coverPushed = false;
                 if ( !coverExists && !currentCoverPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -2089,6 +2089,85 @@ void SettingsView::drawBeatmapSettings()
                     if ( coverPushed ) {
                         ImGui::PopStyleColor();
                         coverPushed = false;
+                    }
+                    if ( project ) {
+                        std::vector<std::string> images;
+                        try {
+                            for ( const auto& entry :
+                                  std::filesystem::recursive_directory_iterator(
+                                      project->m_projectRoot) ) {
+                                if ( entry.is_regular_file() ) {
+                                    auto ext = Config::pathToUtf8(
+                                        entry.path().extension());
+                                    std::transform(ext.begin(),
+                                                   ext.end(),
+                                                   ext.begin(),
+                                                   ::tolower);
+                                    if ( ext == ".png" || ext == ".jpg" ||
+                                         ext == ".jpeg" || ext == ".bmp" ) {
+                                        images.push_back(Config::pathToUtf8(
+                                            std::filesystem::relative(
+                                                entry.path(),
+                                                project->m_projectRoot)));
+                                    }
+                                }
+                            }
+                        } catch ( ... ) {
+                        }
+
+                        for ( const auto& imgPath : images ) {
+                            bool isSelected = (currentCoverPath == imgPath);
+                            if ( ImGui::Selectable(
+                                     (imgPath + "##" + imgPath).c_str(),
+                                     isSelected) ) {
+                                meta.cover_path = Config::utf8ToPath(imgPath);
+                                changed         = true;
+                            }
+                            if ( isSelected ) ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if ( coverPushed ) ImGui::PopStyleColor();
+            });
+
+        // 背景选择
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.background").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                std::string currentBgPath =
+                    Config::pathToUtf8(meta.main_cover_path);
+                std::string bgPreview = currentBgPath;
+                if ( project && !bgPreview.empty() ) {
+                    if ( meta.main_cover_path.is_absolute() ) {
+                        try {
+                            bgPreview =
+                                Config::pathToUtf8(std::filesystem::relative(
+                                    meta.main_cover_path,
+                                    project->m_projectRoot));
+                        } catch ( ... ) {
+                        }
+                    }
+                }
+
+                bool bgExists =
+                    project && std::filesystem::exists(project->m_projectRoot /
+                                                       meta.main_cover_path);
+                bool bgPushed = false;
+                if ( !bgExists && !currentBgPath.empty() ) {
+                    ImGui::PushStyleColor(
+                        ImGuiCol_Text, Utils::UIThemeUtils::getWarningColor());
+                    bgPushed = true;
+                }
+
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##BgCombo", bgPreview.c_str()) ) {
+                    if ( bgPushed ) {
+                        ImGui::PopStyleColor();
+                        bgPushed = false;
                     }
                     if ( project ) {
                         std::vector<std::string> images;
@@ -2117,20 +2196,34 @@ void SettingsView::drawBeatmapSettings()
                         }
 
                         for ( const auto& imgPath : images ) {
-                            bool isSelected = (currentCoverPath == imgPath);
+                            bool isSelected = (currentBgPath == imgPath);
                             if ( ImGui::Selectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
-                                meta.main_cover_path =
-                                    Config::utf8ToPath(imgPath);
-                                changed = true;
+                                auto chosenPath = Config::utf8ToPath(imgPath);
+                                meta.main_cover_path = chosenPath;
+                                changed              = true;
+
+                                // Auto set cover if cover is empty and chosen
+                                // background is an image
+                                auto ext = chosenPath.extension().string();
+                                std::transform(ext.begin(),
+                                               ext.end(),
+                                               ext.begin(),
+                                               ::tolower);
+                                if ( ext == ".png" || ext == ".jpg" ||
+                                     ext == ".jpeg" || ext == ".bmp" ) {
+                                    if ( meta.cover_path.empty() ) {
+                                        meta.cover_path = chosenPath;
+                                    }
+                                }
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
                     }
                     ImGui::EndCombo();
                 }
-                if ( coverPushed ) ImGui::PopStyleColor();
+                if ( bgPushed ) ImGui::PopStyleColor();
             });
 
         if ( isImd ) {

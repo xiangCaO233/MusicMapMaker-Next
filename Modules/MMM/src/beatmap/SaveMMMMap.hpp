@@ -40,6 +40,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
     base["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
+    base["cover_img"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path);
     base["track_count"] = beatMap.m_baseMapMetadata.track_count;
     base["bpm"]         = beatMap.m_baseMapMetadata.preference_bpm;
     base["duration"]    = beatMap.m_baseMapMetadata.map_length;

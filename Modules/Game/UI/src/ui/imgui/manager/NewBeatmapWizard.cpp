@@ -123,6 +123,46 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             ImGui::EndCombo();
         }
 
+        // 封面选择 (只可指向图片文件)
+        std::string coverImgPreview =
+            m_selectedCoverImgPath.empty()
+                ? TR("ui.wizard.new_beatmap.select_cover_img").data()
+                : Config::pathToUtf8(m_selectedCoverImgPath);
+
+        if ( ImGui::BeginCombo(
+                 TR("ui.wizard.new_beatmap.select_cover_img").data(),
+                 coverImgPreview.c_str()) ) {
+            // 扫描项目中的图片文件
+            std::vector<std::string> resources;
+            try {
+                for ( const auto& entry :
+                      std::filesystem::recursive_directory_iterator(
+                          project->m_projectRoot) ) {
+                    if ( entry.is_regular_file() ) {
+                        auto ext = Config::pathToUtf8(entry.path().extension());
+                        std::transform(
+                            ext.begin(), ext.end(), ext.begin(), ::tolower);
+                        if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                             ext == ".bmp" ) {
+                            auto rel = std::filesystem::relative(
+                                entry.path(), project->m_projectRoot);
+                            resources.push_back(Config::pathToUtf8(rel));
+                        }
+                    }
+                }
+            } catch ( ... ) {
+            }
+
+            for ( const auto& resPath : resources ) {
+                bool isSelected = (m_selectedCoverImgPath == resPath);
+                if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+                    m_selectedCoverImgPath = resPath;
+                }
+                if ( isSelected ) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+
         // 背景选择
         std::string coverPreview =
             m_selectedCoverPath.empty()
@@ -156,6 +196,19 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 bool isSelected = (m_selectedCoverPath == resPath);
                 if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
                     m_selectedCoverPath = resPath;
+
+                    // If selected bg is an image, and cover is empty,
+                    // automatically set cover to the same
+                    auto ext =
+                        std::filesystem::path(resPath).extension().string();
+                    std::transform(
+                        ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                         ext == ".bmp" ) {
+                        if ( m_selectedCoverImgPath.empty() ) {
+                            m_selectedCoverImgPath = resPath;
+                        }
+                    }
                 }
                 if ( isSelected ) ImGui::SetItemDefaultFocus();
             }
@@ -186,6 +239,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
             m_meta.main_audio_path = m_selectedAudioPath;
             m_meta.main_cover_path = m_selectedCoverPath;
+            m_meta.cover_path      = m_selectedCoverImgPath;
 
             Logic::EditorEngine::instance().pushCommand(
                 Logic::CmdCreateBeatmap{ m_meta });
@@ -242,6 +296,7 @@ void NewBeatmapWizard::reset()
 
     m_selectedAudioPath.clear();
     m_selectedCoverPath.clear();
+    m_selectedCoverImgPath.clear();
     m_audioDuration = 0.0;
 }
 
