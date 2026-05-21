@@ -16,6 +16,9 @@ namespace MMM::Logic
 void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                std::shared_ptr<MMM::BeatMap> beatmap)
 {
+    auto& mutex = EditorEngine::instance().getSessionMutex();
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+
     namespace Utf8 = Config;
 
     ctx.noteRegistry.clear();
