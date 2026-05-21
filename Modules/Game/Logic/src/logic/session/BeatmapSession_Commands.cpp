@@ -299,6 +299,10 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 如果音频路径发生变化，重新加载音频
         if ( oldAudio != cmd.baseMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
+            // 如果当前正在播放，先暂停播放
+            if ( m_ctx->isPlaying ) {
+                m_playback->handleCommand(CmdSetPlayState{ false });
+            }
             std::filesystem::path audioPath;
             auto* project = EditorEngine::instance().getCurrentProject();
             if ( project ) {
