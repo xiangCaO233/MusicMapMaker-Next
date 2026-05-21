@@ -904,6 +904,53 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             }
         }
 
+        // 3.8 对合并/清洗后的最终段再次进行深度清洗与递归简化
+        {
+            bool changed = true;
+            while ( changed ) {
+                changed = false;
+
+                // 1. 过滤所有“零值”段：0长度Hold 或 0位移Flick
+                auto it = std::remove_if(
+                    segments.begin(), segments.end(), [](const auto& s) {
+                        if ( s.type == ::MMM::NoteType::HOLD )
+                            return s.duration < 1e-5;
+                        if ( s.type == ::MMM::NoteType::FLICK )
+                            return s.dtrack == 0;
+                        return false;
+                    });
+                if ( it != segments.end() ) {
+                    segments.erase(it, segments.end());
+                    changed = true;
+                }
+
+                // 2. 合并连续的同类型物件
+                if ( segments.size() > 1 ) {
+                    for ( size_t i = 0; i < segments.size() - 1; ) {
+                        auto& curr = segments[i];
+                        auto& next = segments[i + 1];
+
+                        if ( curr.type == next.type ) {
+                            if ( curr.type == ::MMM::NoteType::HOLD ) {
+                                // 合并长条持续时间
+                                curr.duration += next.duration;
+                                segments.erase(segments.begin() + i + 1);
+                                changed = true;
+                                continue;  // 继续检查合并后的段
+                            } else if ( curr.type == ::MMM::NoteType::FLICK ) {
+                                // 合并滑键位移量
+                                curr.dtrack += next.dtrack;
+                                segments.erase(segments.begin() + i + 1);
+                                changed = true;
+                                continue;
+                            }
+                        }
+                        i++;
+                    }
+                }
+            }
+        }
+
         // 4. 根据最终清洗与合并结果进行降级或重构
         if ( segments.empty() ) {
             note.m_type     = ::MMM::NoteType::NOTE;

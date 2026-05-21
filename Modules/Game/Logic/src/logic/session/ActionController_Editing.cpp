@@ -418,19 +418,38 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         const auto& ic = noteView.get<InteractionComponent>(entity);
         if ( ic.isSelected ) {
             toAlign.insert(entity);
+        }
+    }
 
-            const auto& nc = noteView.get<NoteComponent>(entity);
+    // 闭包扩展：若 parent 在 toAlign 中，则其所有 subNotes 必须都在 toAlign
+    // 中； 若任一 subNote 在 toAlign 中，则其 parent 及其所有 sibling subNotes
+    // 必须都在 toAlign 中。
+    bool expanded = true;
+    while ( expanded ) {
+        expanded = false;
+        std::vector<entt::entity> currentToAlign(toAlign.begin(),
+                                                 toAlign.end());
+        for ( auto entity : currentToAlign ) {
+            if ( !m_ctx.noteRegistry.valid(entity) ||
+                 !m_ctx.noteRegistry.all_of<NoteComponent>(entity) )
+                continue;
+
+            const auto& nc = m_ctx.noteRegistry.get<NoteComponent>(entity);
             if ( nc.m_type == ::MMM::NoteType::POLYLINE ) {
                 for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
                     const auto& subNC =
                         m_ctx.noteRegistry.get<NoteComponent>(subEnt);
                     if ( subNC.m_isSubNote &&
                          subNC.m_parentPolyline == entity ) {
-                        toAlign.insert(subEnt);
+                        if ( toAlign.insert(subEnt).second ) {
+                            expanded = true;
+                        }
                     }
                 }
             } else if ( nc.m_isSubNote && nc.m_parentPolyline != entt::null ) {
-                toAlign.insert(nc.m_parentPolyline);
+                if ( toAlign.insert(nc.m_parentPolyline).second ) {
+                    expanded = true;
+                }
             }
         }
     }
@@ -490,11 +509,15 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
                 }
             }
 
-            std::stable_sort(children.begin(),
-                             children.end(),
-                             [](const ChildInfo& a, const ChildInfo& b) {
-                                 return a.timestamp < b.timestamp;
-                             });
+            std::stable_sort(
+                children.begin(),
+                children.end(),
+                [](const ChildInfo& a, const ChildInfo& b) {
+                    if ( std::abs(a.timestamp - b.timestamp) < 1e-9 ) {
+                        return a.originalSubIndex < b.originalSubIndex;
+                    }
+                    return a.timestamp < b.timestamp;
+                });
 
             std::vector<NoteComponent::SubNote> newSubNotesList;
             newSubNotesList.reserve(newNote.m_subNotes.size());
