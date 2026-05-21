@@ -191,7 +191,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                      !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt ) {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdScroll{
-                            m_name, wheel, ImGui::GetIO().KeyShift }));
+                            m_name, -wheel, ImGui::GetIO().KeyShift }));
                 }
 
                 // 3. 处理右键点击创建事件
