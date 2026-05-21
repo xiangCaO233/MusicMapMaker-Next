@@ -43,6 +43,7 @@ MainMenuView::MainMenuView()
     , m_showAboutPopup(false)
     , m_showUpdatePopup(false)
     , m_showCheckingPopup(false)
+    , m_updatePopupCanceled(false)
     , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
 {
 }
@@ -316,8 +317,9 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
 
 void MainMenuView::startUpdateCheck()
 {
-    m_isSilentCheck     = false;
-    m_showCheckingPopup = true;
+    m_isSilentCheck       = false;
+    m_showCheckingPopup   = true;
+    m_updatePopupCanceled = false;
     m_updateChecker->checkAsync();
 }
 
@@ -565,7 +567,8 @@ void MainMenuView::renderUpdatePopup()
     if ( m_showUpdatePopup ) {
         ImGui::OpenPopup(TR("ui.help.update_found"));
         m_showUpdatePopup = false;
-    } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
+    } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound &&
+                !m_updatePopupCanceled ) {
         if ( !ImGui::IsPopupOpen(TR("ui.help.update_found")) )
             ImGui::OpenPopup(TR("ui.help.update_found"));
     }
@@ -587,7 +590,10 @@ void MainMenuView::renderUpdatePopup()
     if ( ImGui::BeginPopupModal(TR("ui.help.update_found"),
                                 isWorking ? nullptr : &open,
                                 ImGuiWindowFlags_None) ) {
-        if ( !open ) ImGui::CloseCurrentPopup();
+        if ( !open ) {
+            ImGui::CloseCurrentPopup();
+            m_updatePopupCanceled = true;
+        }
         info           = m_updateChecker->getInfo();
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
@@ -695,6 +701,7 @@ void MainMenuView::renderUpdatePopup()
             if ( ImGui::Button(TR("ui.help.cancel").data(),
                                ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
+                m_updatePopupCanceled = true;
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kDownloading ) {
             float textWidth =

@@ -77,6 +77,7 @@ private:
 
     bool m_hasCheckedOnStartup = false;  ///< 是否已完成启动时的自动更新检查
     bool m_isSilentCheck       = false;  ///< 是否为静默检查 (启动时)
+    bool m_updatePopupCanceled = false;  ///< 用户是否取消/关闭了更新弹窗
 
     float       m_saveTooltipTimer   = 0.0f;
     float       m_statusMessageTimer = 0.0f;
