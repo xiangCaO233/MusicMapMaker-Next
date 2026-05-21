@@ -303,6 +303,8 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             if ( m_ctx->isPlaying ) {
                 m_playback->handleCommand(CmdSetPlayState{ false });
             }
+            // 复位画布时间为 0.0
+            m_playback->handleCommand(CmdSeek{ 0.0 });
             std::filesystem::path audioPath;
             auto* project = EditorEngine::instance().getCurrentProject();
             if ( project ) {
