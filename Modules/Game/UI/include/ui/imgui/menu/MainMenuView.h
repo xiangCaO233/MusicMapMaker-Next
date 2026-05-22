@@ -25,6 +25,7 @@ public:
     void update(UIManager* sourceManager);
     void renderMenus(UIManager* sourceManager);
     void renderOverlapCheckWindow();
+    void renderMetadataEditorWindow();
     void renderInfoText();
     void handleHotkeys(UIManager* sourceManager);
 
@@ -66,8 +67,9 @@ private:
     bool m_closeToolsMenuNextFrame = false;
     bool m_closeHelpMenuNextFrame  = false;
 
-    bool                       m_showOverlapCheckWindow = false;
-    bool                       m_hasOverlapScan         = false;
+    bool                       m_showOverlapCheckWindow   = false;
+    bool                       m_showMetadataEditorWindow = false;
+    bool                       m_hasOverlapScan           = false;
     std::vector<OverlapResult> m_overlapResults;
 
     bool m_showAboutPopup         = false;

@@ -39,6 +39,7 @@ MainMenuView::MainMenuView()
     , m_closeToolsMenuNextFrame(false)
     , m_closeHelpMenuNextFrame(false)
     , m_showOverlapCheckWindow(false)
+    , m_showMetadataEditorWindow(false)
     , m_hasOverlapScan(false)
     , m_showAboutPopup(false)
     , m_showUpdatePopup(false)
@@ -1104,6 +1105,10 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             m_showOverlapCheckWindow = !m_showOverlapCheckWindow;
         }
 
+        if ( MenuItemWithFontIcon(ICON_MMM_COG, "谱面额外元数据编辑") ) {
+            m_showMetadataEditorWindow = !m_showMetadataEditorWindow;
+        }
+
         if ( MenuItemWithFontIcon(
                  ICON_MMM_BARS, TR("ui.tools.format"), "Ctrl+F") ) {
             dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
@@ -1121,6 +1126,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderUpdatePopup();
     renderUpdateSuccessPopup();
     renderOverlapCheckWindow();
+    renderMetadataEditorWindow();
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
@@ -1514,6 +1520,746 @@ void MainMenuView::renderOverlapCheckWindow()
                             ImGui::EndTable();
                         }
                     }
+                }
+            }
+        }
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(6);
+}
+
+void MainMenuView::renderMetadataEditorWindow()
+{
+    if ( !m_showMetadataEditorWindow ) return;
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    ImVec2 itemSpacing = {
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+    ImGui::SetNextWindowSize(ImVec2(800.0f * dpiScale, 550.0f * dpiScale),
+                             ImGuiCond_FirstUseEver);
+
+    auto&   skinMgr   = Config::SkinManager::instance();
+    ImFont* titleFont = skinMgr.getFont("title");
+    if ( titleFont ) ImGui::PushFont(titleFont);
+
+    bool opened = ImGui::Begin("谱面额外元数据编辑###MetadataEditorWindow",
+                               &m_showMetadataEditorWindow,
+                               ImGuiWindowFlags_None);
+
+    if ( titleFont ) ImGui::PopFont();
+
+    if ( opened ) {
+        auto& engine = Logic::EditorEngine::instance();
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
+        if ( !session ) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "当前无活动的编辑器会话。");
+        } else {
+            auto beatmap = session->getContext().currentBeatmap;
+            if ( !beatmap ) {
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                                   "当前未加载任何谱面，请先打开或新建谱面。");
+            } else {
+                ImGui::Text("正在编辑谱面: %s (%s)",
+                            beatmap->m_baseMapMetadata.name.c_str(),
+                            beatmap->m_baseMapMetadata.version.c_str());
+                ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f),
+                                   "提示：在此处修改的额外字段会在保存谱面时一"
+                                   "同导出。键入即可开始编辑。");
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                if ( ImGui::BeginTabBar("MetadataTypeTabBar") ) {
+                    // ==================== OSU TAB ====================
+                    if ( ImGui::BeginTabItem("osu! (OSU) 格式元数据") ) {
+                        // Predefined OSU fields
+                        static const std::vector<
+                            std::pair<std::string, std::string>>
+                            OSU_FIELDS = {
+                                { "General::AudioFilename",
+                                  "音频文件名 - 谱面所使用的音频文件路径" },
+                                { "General::AudioLeadIn",
+                                  "音频前导时间 (ms) - "
+                                  "谱面开始播放前的缓冲时间" },
+                                { "General::AudioHash",
+                                  "音频哈希值 - 音频文件的 MD5" },
+                                { "General::PreviewTime",
+                                  "预览开始时间 (ms) - "
+                                  "选歌界面预览音频的起点" },
+                                { "General::Countdown",
+                                  "倒计时样式 - 0=无, 1=普通, 2=快速, 3=极速" },
+                                { "General::SampleSet",
+                                  "默认音效样本组 - Normal, Soft, Drum" },
+                                { "General::StackLeniency",
+                                  "堆叠容差 - 影响连打/重叠物件的错开位移" },
+                                { "General::Mode",
+                                  "游戏模式 - 0=osu!, 1=Taiko, 2=Catch, "
+                                  "3=Mania" },
+                                { "General::LetterboxInBreaks",
+                                  "休息段显示黑边 - 0/1" },
+                                { "General::StoryFireInFront",
+                                  "故事板火花在前 - 0/1" },
+                                { "General::UseSkinSprites",
+                                  "使用皮肤精灵 - 0/1" },
+                                { "General::AlwaysShowPlayfield",
+                                  "总是显示活动区域 - 0/1" },
+                                { "General::OverlayPosition",
+                                  "界面覆盖层位置 - NoChange, Below, Above" },
+                                { "General::SkinPreference", "推荐皮肤名称" },
+                                { "General::EpilepsyWarning",
+                                  "癫痫警告 - 0/1" },
+                                { "General::CountdownOffset",
+                                  "倒计时偏移时间 (ms)" },
+                                { "General::SpecialStyle",
+                                  "特殊样式 - 0/1, mania 中用于 N+1 键位布局" },
+                                { "General::WidescreenStoryboard",
+                                  "宽屏故事板 - 0/1" },
+                                { "General::SamplesMatchPlaybackRate",
+                                  "音效速率跟随播放速度 - 0/1" },
+
+                                { "Editor::Bookmarks",
+                                  "书签 - 逗号分隔的毫秒整型数组" },
+                                { "Editor::DistanceSpacing", "距离间距系数" },
+                                { "Editor::BeatDivisor",
+                                  "节拍细分数 - 例如 4, 8, 12, 16" },
+                                { "Editor::GridSize", "网格大小" },
+                                { "Editor::TimelineZoom", "时间轴缩放倍率" },
+
+                                { "Metadata::Title",
+                                  "歌曲标题 (对应 base 标题)" },
+                                { "Metadata::TitleUnicode",
+                                  "歌曲标题 (原语/Unicode)" },
+                                { "Metadata::Artist",
+                                  "艺术家 (对应 base 艺术家)" },
+                                { "Metadata::ArtistUnicode",
+                                  "艺术家 (原语/Unicode)" },
+                                { "Metadata::Creator", "谱面创作者" },
+                                { "Metadata::Version", "难度版本名" },
+                                { "Metadata::Source",
+                                  "歌曲来源 - 如动漫/游戏名" },
+                                { "Metadata::Tags", "检索标签 - 空格分隔" },
+                                { "Metadata::BeatmapID",
+                                  "谱面唯一 ID (官网分配)" },
+                                { "Metadata::BeatmapSetID",
+                                  "谱面集唯一 ID (官网分配)" },
+
+                                { "Difficulty::HPDrainRate",
+                                  "HP 减少速率 (0-10)" },
+                                { "Difficulty::CircleSize", "键数 / 轨道数" },
+                                { "Difficulty::OverallDifficulty",
+                                  "综合难度 / 判定严准度 (0-10)" },
+                                { "Difficulty::ApproachRate",
+                                  "缩圈速度 / 下落速度 (0-10)" },
+                                { "Difficulty::SliderMultiplier",
+                                  "滑条速度倍率" },
+                                { "Difficulty::SliderTickRate",
+                                  "滑条 Tick 生成率" },
+
+                                { "Events::background",
+                                  "背景图片设置串 - 格式: 0,0,\"文件名\",x,y" },
+                                { "Events::breaks", "休息时间段定义串" }
+                            };
+
+                        auto& props = beatmap->m_metadata
+                                          .map_properties[MapMetadataType::OSU];
+
+                        ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersOuter |
+                            ImGuiTableFlags_Resizable;
+
+                        float footerHeight = 45.0f * dpiScale;
+                        if ( ImGui::BeginTable("OSUMetadataTable",
+                                               4,
+                                               tableFlags,
+                                               ImVec2(0.0f, -footerHeight)) ) {
+                            ImGui::TableSetupColumn(
+                                "键名 (Key)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                220.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "描述 (Description)",
+                                ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(
+                                "数值 (Value)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                250.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "操作 (Action)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                60.0f * dpiScale);
+                            ImGui::TableHeadersRow();
+
+                            // 1. Render predefined fields
+                            for ( const auto& [key, desc] : OSU_FIELDS ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+
+                                bool hasKey = props.contains(key);
+                                if ( !hasKey ) {
+                                    ImGui::PushStyleColor(
+                                        ImGuiCol_Text,
+                                        ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                                }
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( !hasKey ) {
+                                    ImGui::PopStyleColor();
+                                }
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip(
+                                        "双击可以复制该内置键名到剪贴板。");
+                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                        ImGui::SetClipboardText(key.c_str());
+                                    }
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::PushStyleColor(
+                                    ImGuiCol_Text,
+                                    ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+                                ImGui::TextWrapped("%s", desc.c_str());
+                                ImGui::PopStyleColor();
+
+                                ImGui::TableNextColumn();
+                                char valBuf[1024] = { 0 };
+                                if ( hasKey ) {
+                                    std::string currentVal = props.at(key);
+                                    size_t      copyLen    = std::min(
+                                        currentVal.size(), sizeof(valBuf) - 1);
+                                    std::copy(currentVal.begin(),
+                                              currentVal.begin() + copyLen,
+                                              valBuf);
+                                }
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_osu_") + key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( hasKey ) {
+                                    if ( ImGui::Button(
+                                             (std::string("清除##clear_osu_") +
+                                              key)
+                                                 .c_str()) ) {
+                                        props.erase(key);
+                                    }
+                                } else {
+                                    ImGui::TextDisabled("-");
+                                }
+                            }
+
+                            // 2. Render other custom fields
+                            std::vector<std::string> customKeys;
+                            for ( const auto& [k, v] : props ) {
+                                bool isPredefined = false;
+                                for ( const auto& [pk, pd] : OSU_FIELDS ) {
+                                    if ( pk == k ) {
+                                        isPredefined = true;
+                                        break;
+                                    }
+                                }
+                                if ( !isPredefined ) {
+                                    customKeys.push_back(k);
+                                }
+                            }
+
+                            for ( const auto& key : customKeys ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip("这是一个自定义键。");
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextDisabled("自定义键值");
+
+                                ImGui::TableNextColumn();
+                                char        valBuf[1024] = { 0 };
+                                std::string currentVal   = props.at(key);
+                                size_t copyLen = std::min(currentVal.size(),
+                                                          sizeof(valBuf) - 1);
+                                std::copy(currentVal.begin(),
+                                          currentVal.begin() + copyLen,
+                                          valBuf);
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_osu_custom_") +
+                                          key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( ImGui::Button(
+                                         (std::string("删除##del_osu_") + key)
+                                             .c_str()) ) {
+                                    props.erase(key);
+                                }
+                            }
+
+                            ImGui::EndTable();
+                        }
+
+                        // Add new field form
+                        ImGui::Separator();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("新增自定义键名:");
+                        ImGui::SameLine();
+                        static char newOsuKey[128] = "";
+                        ImGui::SetNextItemWidth(200.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_osu_key", newOsuKey, sizeof(newOsuKey));
+
+                        ImGui::SameLine();
+                        ImGui::Text("数值:");
+                        ImGui::SameLine();
+                        static char newOsuVal[256] = "";
+                        ImGui::SetNextItemWidth(250.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_osu_val", newOsuVal, sizeof(newOsuVal));
+
+                        ImGui::SameLine();
+                        if ( ImGui::Button("添加##add_osu_field") ) {
+                            std::string nk = newOsuKey;
+                            if ( !nk.empty() ) {
+                                props[nk]    = newOsuVal;
+                                newOsuKey[0] = '\0';
+                                newOsuVal[0] = '\0';
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+                    // ==================== MALODY TAB ====================
+                    if ( ImGui::BeginTabItem("Malody (MALODY) 格式元数据") ) {
+                        static const std::vector<
+                            std::pair<std::string, std::string>>
+                            MALODY_FIELDS = {
+                                { "id", "谱面 ID" },
+                                { "preview",
+                                  "音频预览时间戳 (ms) - 选歌界面试听起点" },
+                                { "mode",
+                                  "游戏模式 - 0=Key, 1=Catch, 2=Pad, 3=Taiko, "
+                                  "4=Ring, 5=Slide, 6=Live, 7=Cube" },
+                                { "$ver", "文件格式版本" },
+                                { "aimode", "AI 辅助模式配置" },
+                                { "mode_ext", "模式额外扩展配置 (JSON 串)" },
+                                { "extra", "额外顶层扩展配置 (JSON 串)" },
+                                { "initialDelay",
+                                  "初始节拍延迟 / 时间戳首点 (ms)" },
+                                { "audioOffset", "音频时间偏移 (ms)" }
+                            };
+
+                        auto& props =
+                            beatmap->m_metadata
+                                .map_properties[MapMetadataType::MALODY];
+
+                        ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersOuter |
+                            ImGuiTableFlags_Resizable;
+
+                        float footerHeight = 45.0f * dpiScale;
+                        if ( ImGui::BeginTable("MalodyMetadataTable",
+                                               4,
+                                               tableFlags,
+                                               ImVec2(0.0f, -footerHeight)) ) {
+                            ImGui::TableSetupColumn(
+                                "键名 (Key)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                220.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "描述 (Description)",
+                                ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(
+                                "数值 (Value)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                250.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "操作 (Action)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                60.0f * dpiScale);
+                            ImGui::TableHeadersRow();
+
+                            // 1. Render predefined fields
+                            for ( const auto& [key, desc] : MALODY_FIELDS ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+
+                                bool hasKey = props.contains(key);
+                                if ( !hasKey ) {
+                                    ImGui::PushStyleColor(
+                                        ImGuiCol_Text,
+                                        ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                                }
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( !hasKey ) {
+                                    ImGui::PopStyleColor();
+                                }
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip(
+                                        "双击可以复制该内置键名到剪贴板。");
+                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                        ImGui::SetClipboardText(key.c_str());
+                                    }
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::PushStyleColor(
+                                    ImGuiCol_Text,
+                                    ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+                                ImGui::TextWrapped("%s", desc.c_str());
+                                ImGui::PopStyleColor();
+
+                                ImGui::TableNextColumn();
+                                char valBuf[1024] = { 0 };
+                                if ( hasKey ) {
+                                    std::string currentVal = props.at(key);
+                                    size_t      copyLen    = std::min(
+                                        currentVal.size(), sizeof(valBuf) - 1);
+                                    std::copy(currentVal.begin(),
+                                              currentVal.begin() + copyLen,
+                                              valBuf);
+                                }
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_mld_") + key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( hasKey ) {
+                                    if ( ImGui::Button(
+                                             (std::string("清除##clear_mld_") +
+                                              key)
+                                                 .c_str()) ) {
+                                        props.erase(key);
+                                    }
+                                } else {
+                                    ImGui::TextDisabled("-");
+                                }
+                            }
+
+                            // 2. Render other custom fields
+                            std::vector<std::string> customKeys;
+                            for ( const auto& [k, v] : props ) {
+                                bool isPredefined = false;
+                                for ( const auto& [pk, pd] : MALODY_FIELDS ) {
+                                    if ( pk == k ) {
+                                        isPredefined = true;
+                                        break;
+                                    }
+                                }
+                                if ( !isPredefined ) {
+                                    customKeys.push_back(k);
+                                }
+                            }
+
+                            for ( const auto& key : customKeys ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip("这是一个自定义键。");
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextDisabled("自定义键值");
+
+                                ImGui::TableNextColumn();
+                                char        valBuf[1024] = { 0 };
+                                std::string currentVal   = props.at(key);
+                                size_t copyLen = std::min(currentVal.size(),
+                                                          sizeof(valBuf) - 1);
+                                std::copy(currentVal.begin(),
+                                          currentVal.begin() + copyLen,
+                                          valBuf);
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_mld_custom_") +
+                                          key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( ImGui::Button(
+                                         (std::string("删除##del_mld_") + key)
+                                             .c_str()) ) {
+                                    props.erase(key);
+                                }
+                            }
+
+                            ImGui::EndTable();
+                        }
+
+                        // Add new field form
+                        ImGui::Separator();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("新增自定义键名:");
+                        ImGui::SameLine();
+                        static char newMldKey[128] = "";
+                        ImGui::SetNextItemWidth(200.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_mld_key", newMldKey, sizeof(newMldKey));
+
+                        ImGui::SameLine();
+                        ImGui::Text("数值:");
+                        ImGui::SameLine();
+                        static char newMldVal[256] = "";
+                        ImGui::SetNextItemWidth(250.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_mld_val", newMldVal, sizeof(newMldVal));
+
+                        ImGui::SameLine();
+                        if ( ImGui::Button("添加##add_mld_field") ) {
+                            std::string nk = newMldKey;
+                            if ( !nk.empty() ) {
+                                props[nk]    = newMldVal;
+                                newMldKey[0] = '\0';
+                                newMldVal[0] = '\0';
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+                    // ==================== RM TAB ====================
+                    if ( ImGui::BeginTabItem("RM (RM) 格式元数据") ) {
+                        static const std::vector<
+                            std::pair<std::string, std::string>>
+                            RM_FIELDS = { { "Parameter", "全局额外参考参数" } };
+
+                        auto& props = beatmap->m_metadata
+                                          .map_properties[MapMetadataType::RM];
+
+                        ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersOuter |
+                            ImGuiTableFlags_Resizable;
+
+                        float footerHeight = 45.0f * dpiScale;
+                        if ( ImGui::BeginTable("RMMetadataTable",
+                                               4,
+                                               tableFlags,
+                                               ImVec2(0.0f, -footerHeight)) ) {
+                            ImGui::TableSetupColumn(
+                                "键名 (Key)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                220.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "描述 (Description)",
+                                ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(
+                                "数值 (Value)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                250.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "操作 (Action)",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                60.0f * dpiScale);
+                            ImGui::TableHeadersRow();
+
+                            // 1. Render predefined fields
+                            for ( const auto& [key, desc] : RM_FIELDS ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+
+                                bool hasKey = props.contains(key);
+                                if ( !hasKey ) {
+                                    ImGui::PushStyleColor(
+                                        ImGuiCol_Text,
+                                        ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+                                }
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( !hasKey ) {
+                                    ImGui::PopStyleColor();
+                                }
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip(
+                                        "双击可以复制该内置键名到剪贴板。");
+                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                        ImGui::SetClipboardText(key.c_str());
+                                    }
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::PushStyleColor(
+                                    ImGuiCol_Text,
+                                    ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+                                ImGui::TextWrapped("%s", desc.c_str());
+                                ImGui::PopStyleColor();
+
+                                ImGui::TableNextColumn();
+                                char valBuf[1024] = { 0 };
+                                if ( hasKey ) {
+                                    std::string currentVal = props.at(key);
+                                    size_t      copyLen    = std::min(
+                                        currentVal.size(), sizeof(valBuf) - 1);
+                                    std::copy(currentVal.begin(),
+                                              currentVal.begin() + copyLen,
+                                              valBuf);
+                                }
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_rm_") + key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( hasKey ) {
+                                    if ( ImGui::Button(
+                                             (std::string("清除##clear_rm_") +
+                                              key)
+                                                 .c_str()) ) {
+                                        props.erase(key);
+                                    }
+                                } else {
+                                    ImGui::TextDisabled("-");
+                                }
+                            }
+
+                            // 2. Render other custom fields
+                            std::vector<std::string> customKeys;
+                            for ( const auto& [k, v] : props ) {
+                                bool isPredefined = false;
+                                for ( const auto& [pk, pd] : RM_FIELDS ) {
+                                    if ( pk == k ) {
+                                        isPredefined = true;
+                                        break;
+                                    }
+                                }
+                                if ( !isPredefined ) {
+                                    customKeys.push_back(k);
+                                }
+                            }
+
+                            for ( const auto& key : customKeys ) {
+                                ImGui::TableNextRow();
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(key.c_str());
+                                if ( ImGui::IsItemHovered() ) {
+                                    ImGui::SetTooltip("这是一个自定义键。");
+                                }
+
+                                ImGui::TableNextColumn();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextDisabled("自定义键值");
+
+                                ImGui::TableNextColumn();
+                                char        valBuf[1024] = { 0 };
+                                std::string currentVal   = props.at(key);
+                                size_t copyLen = std::min(currentVal.size(),
+                                                          sizeof(valBuf) - 1);
+                                std::copy(currentVal.begin(),
+                                          currentVal.begin() + copyLen,
+                                          valBuf);
+
+                                ImGui::SetNextItemWidth(-1.0f);
+                                if ( ImGui::InputText(
+                                         (std::string("##val_rm_custom_") + key)
+                                             .c_str(),
+                                         valBuf,
+                                         sizeof(valBuf)) ) {
+                                    props[key] = valBuf;
+                                }
+
+                                ImGui::TableNextColumn();
+                                if ( ImGui::Button(
+                                         (std::string("删除##del_rm_") + key)
+                                             .c_str()) ) {
+                                    props.erase(key);
+                                }
+                            }
+
+                            ImGui::EndTable();
+                        }
+
+                        // Add new field form
+                        ImGui::Separator();
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::Text("新增自定义键名:");
+                        ImGui::SameLine();
+                        static char newRmKey[128] = "";
+                        ImGui::SetNextItemWidth(200.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_rm_key", newRmKey, sizeof(newRmKey));
+
+                        ImGui::SameLine();
+                        ImGui::Text("数值:");
+                        ImGui::SameLine();
+                        static char newRmVal[256] = "";
+                        ImGui::SetNextItemWidth(250.0f * dpiScale);
+                        ImGui::InputText(
+                            "##new_rm_val", newRmVal, sizeof(newRmVal));
+
+                        ImGui::SameLine();
+                        if ( ImGui::Button("添加##add_rm_field") ) {
+                            std::string nk = newRmKey;
+                            if ( !nk.empty() ) {
+                                props[nk]   = newRmVal;
+                                newRmKey[0] = '\0';
+                                newRmVal[0] = '\0';
+                            }
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+                    ImGui::EndTabBar();
                 }
             }
         }
