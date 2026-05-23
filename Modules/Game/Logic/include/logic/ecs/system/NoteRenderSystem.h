@@ -53,8 +53,9 @@ private:
     // --- 内部逻辑拆分方法 ---
 
     static void generateTimelineSnapshot(
-        RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
-        float viewportWidth, float viewportHeight, float judgmentLineY,
+        const entt::registry& timelineRegistry, RenderSnapshot* snapshot,
+        Batcher& batcher, double currentTime, float viewportWidth,
+        float viewportHeight, float judgmentLineY,
         const Config::EditorConfig& config, const ScrollCache* cache);
 
     static void generatePreviewSnapshot(

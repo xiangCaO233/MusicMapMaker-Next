@@ -85,7 +85,8 @@ void NoteRenderSystem::generateSnapshot(
     // 正常生成基础布局
     if ( cameraId == "Timeline" ) {
         batcher.setScissor(0, 0, viewportWidth, viewportHeight);
-        NoteRenderSystem::generateTimelineSnapshot(snapshot,
+        NoteRenderSystem::generateTimelineSnapshot(timelineRegistry,
+                                                   snapshot,
                                                    batcher,
                                                    renderTime,
                                                    viewportWidth,
@@ -418,8 +419,9 @@ void NoteRenderSystem::renderMarqueeBox(
 }
 
 void NoteRenderSystem::generateTimelineSnapshot(
-    RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
-    float viewportWidth, float viewportHeight, float judgmentLineY,
+    const entt::registry& timelineRegistry, RenderSnapshot* snapshot,
+    Batcher& batcher, double currentTime, float viewportWidth,
+    float viewportHeight, float judgmentLineY,
     const Config::EditorConfig& config, const ScrollCache* cache)
 {
     if ( !snapshot->hasBeatmap ) return;
@@ -453,19 +455,35 @@ void NoteRenderSystem::generateTimelineSnapshot(
         static_cast<uint32_t>(snapshot->vertices.size());
     snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
 
-    // 3. 绘制 Ticks (动态)
+    // 3. 收集所有时间点组件以生成交互元素列表，防止同时间戳的事件被 ScrollCache
+    // 吞掉
+    auto tlView = timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tc = tlView.get<const TimelineComponent>(entity);
+        double      t  = tc.m_timestamp;
+        float       y =
+            judgmentLineY - static_cast<float>(cache->getAbsY(t) - currentAbsY);
+
+        TimelineInteractiveElement el;
+        el.time = t;
+        el.y    = y;
+        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
+            el.effects   = SCROLL_EFFECT_BPM;
+            el.bpmEntity = entity;
+            el.bpmValue  = tc.m_value;
+        } else {
+            el.effects      = SCROLL_EFFECT_SCROLL;
+            el.scrollEntity = entity;
+            el.scrollValue  = tc.m_value;
+        }
+        snapshot->timelineElements.push_back(el);
+    }
+
+    // 4. 绘制 Ticks (动态)
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
 
         float y = judgmentLineY - static_cast<float>(seg.absY - currentAbsY);
-
-        snapshot->timelineElements.push_back({ seg.time,
-                                               y,
-                                               seg.effects,
-                                               seg.bpmEntity,
-                                               seg.scrollEntity,
-                                               seg.bpmValue,
-                                               seg.scrollValue });
 
         if ( seg.time < startTime || seg.time > endTime ) continue;
 
