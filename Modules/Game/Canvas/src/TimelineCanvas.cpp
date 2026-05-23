@@ -231,7 +231,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                             ImGui::PushStyleColor(
                                 ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-                            std::string id = fmt::format("BPM_{}", el.time);
+                            std::string id = fmt::format(
+                                "BPM_{}_{}",
+                                el.time,
+                                static_cast<uint32_t>(el.bpmEntity));
                             if ( ImGui::Button(
                                      (std::string(UI::ICON_MMM_COG) + "##" + id)
                                          .c_str(),
@@ -261,7 +264,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                             ImGui::PushStyleColor(
                                 ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.2f, 1.0f));
-                            std::string id = fmt::format("SCROLL_{}", el.time);
+                            std::string id = fmt::format(
+                                "SCROLL_{}_{}",
+                                el.time,
+                                static_cast<uint32_t>(el.scrollEntity));
                             if ( ImGui::Button(
                                      (std::string(UI::ICON_MMM_COG) + "##" + id)
                                          .c_str(),
