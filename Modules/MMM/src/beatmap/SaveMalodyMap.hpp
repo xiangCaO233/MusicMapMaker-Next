@@ -263,18 +263,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     double currentScroll = -1.0;  // 哨兵值，确保首个 BPM 点必定输出
 
-    auto isMalodyEffect = [](const Timing& t, const std::string& effect) {
-        if ( auto it = t.m_metadata.timing_properties.find(
-                 TimingMetadataType::MALODY);
-             it != t.m_metadata.timing_properties.end() ) {
-            if ( auto effectIt = it->second.find("effect");
-                 effectIt != it->second.end() ) {
-                return effectIt->second == "\"" + effect + "\"";
-            }
-        }
-        return false;
-    };
-
     // 对计时点排序：相同时间戳时红线(BPM)必须在绿线(SCROLL)之前
     // 确保 scroll=1.0 重置在绿线的 scroll=0.01 覆盖之前输出
     std::vector<const Timing*> sortedTimings;
@@ -346,11 +334,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 ej["beat"] = timeToBeat(t.m_timestamp);
             }
 
-            if ( t.m_timingEffect == TimingEffect::SCROLL &&
-                 t.m_timingEffectParameter < 0 &&
-                 !isMalodyEffect(t, "scroll") ) {
-                ej["scroll"] = -100.0 / t.m_timingEffectParameter;
-            } else if ( t.m_timingEffect == TimingEffect::SCROLL ) {
+            if ( t.m_timingEffect == TimingEffect::SCROLL ) {
                 ej["scroll"] = t.m_timingEffectParameter;
             } else if ( t.m_timingEffect == TimingEffect::JUMP ) {
                 ej["jump"] = t.m_timingEffectParameter;

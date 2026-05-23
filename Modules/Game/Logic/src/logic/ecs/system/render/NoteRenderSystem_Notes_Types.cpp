@@ -47,9 +47,11 @@ void NoteRenderSystem::renderTap(Batcher&                           batcher,
 void NoteRenderSystem::renderHold(Batcher&                           batcher,
                                   const ::MMM::Logic::NoteComponent& note,
                                   const Config::EditorConfig&        config,
-                                  RenderSnapshot* snapshot, float x, float y,
-                                  float w, float h, float visualH,
-                                  float singleTrackW, glm::vec4 color,
+                                  RenderSnapshot* snapshot, float x, float w,
+                                  float h, float singleTrackW,
+                                  glm::vec4 color, const ScrollCache* cache,
+                                  double currentAbsY, float judgmentLineY,
+                                  float renderScaleY,
                                   HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
@@ -61,10 +63,28 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
     float endX  = x + (w - endSize.x) * 0.5f;
     float bodyX = x + (w - bodySize.x) * 0.5f;
 
+    float headY = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                      note.m_timestamp, currentAbsY, note.m_timestamp)) *
+                                      renderScaleY;
+    float endY = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                     note.m_timestamp + note.m_duration,
+                                     currentAbsY, note.m_timestamp)) *
+                                     renderScaleY;
+
     // 1. Body
     if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldBody ) {
         batcher.setTexture(TextureID::HoldBodyVertical);
-        batcher.pushQuad(bodyX, y, bodySize.x, visualH, color);
+        float sy = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                       note.m_timestamp, currentAbsY, note.m_timestamp)) *
+                                       renderScaleY;
+        float ey = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                       note.m_timestamp + note.m_duration, currentAbsY, note.m_timestamp + note.m_duration)) *
+                                       renderScaleY;
+        batcher.pushFreeQuad({ bodyX, sy },
+                             { bodyX + bodySize.x, sy },
+                             { bodyX + bodySize.x, ey },
+                             { bodyX, ey },
+                             color);
     }
 
     // 2. Head
@@ -72,7 +92,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
         batcher.setTexture(TextureID::Note);
         batcher.pushFilledQuad(
             headX,
-            y + headSize.y * 0.5f,
+            headY + headSize.y * 0.5f,
             headSize.x,
             headSize.y,
             { getTexAspect(snapshot, TextureID::Note), 1.0f },
@@ -85,7 +105,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
         batcher.setTexture(TextureID::HoldEnd);
         batcher.pushFilledQuad(
             endX,
-            y - visualH + endSize.y * 0.5f,
+            endY + endSize.y * 0.5f,
             endSize.x,
             endSize.y,
             { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },

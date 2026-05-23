@@ -161,7 +161,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().scrollEntity = entry.entity;
             newSegments.back().scrollValue  = tl->m_value;
             if ( enableEffects ) {
-                if ( isMalodyEffect(*tl, "scroll") ) {
+                if ( hasMalodyMetadata(*tl) ) {
                     currentScrollMult = tl->m_value;
                 } else if ( tl->m_value < -1e-6 ) {
                     currentScrollMult = -100.0 / tl->m_value;
@@ -370,6 +370,31 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
     }
 
     return ranges;
+}
+
+std::vector<std::pair<double, double>> ScrollCache::getTimeSlices(
+    double startTime, double endTime) const
+{
+    std::vector<std::pair<double, double>> slices;
+    if ( startTime >= endTime ) return slices;
+
+    auto it = std::upper_bound(
+        m_segments.begin(),
+        m_segments.end(),
+        startTime,
+        [](double val, const ScrollSegment& seg) { return val < seg.time; });
+
+    double current = startTime;
+    while ( current < endTime ) {
+        double nextTime = (it != m_segments.end()) ? it->time : endTime;
+        if ( nextTime > endTime ) nextTime = endTime;
+        if ( nextTime > current ) {
+            slices.emplace_back(current, nextTime);
+        }
+        current = nextTime;
+        if ( it != m_segments.end() ) ++it;
+    }
+    return slices;
 }
 
 }  // namespace MMM::Logic::System

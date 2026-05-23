@@ -104,6 +104,7 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     if ( !cachePtr || !(*cachePtr) ) return ctx;
     ctx.cache       = *cachePtr;
     ctx.currentAbsY = ctx.cache->getAbsY(currentTime);
+    ctx.currentTime = currentTime;
 
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
     if ( itBase == snapshot->uvMap.end() ) return ctx;
@@ -205,20 +206,26 @@ void NoteRenderSystem::generateNoteHitboxes(
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
 
+        double displayDeltaStart = ctx.cache->getDisplayDelta(
+            note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
+        double displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, note.m_timestamp + note.m_duration);
+            
+        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double padDelta = ctx.noteH / static_cast<double>(renderScaleY);
+        
+        if ( !NoteRenderSystem::isCarrierVisible(note.m_timestamp, note.m_timestamp + note.m_duration,
+                                                 ctx.currentTime, displayDeltaStart, displayDeltaEnd,
+                                                 maxDelta + padDelta, minDelta - padDelta) ) {
+            continue;
+        }
+
         float screenY =
             judgmentLineY -
-            static_cast<float>(ctx.cache->getDisplayDelta(
-                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
-                renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
-
-        float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
-        float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
-        if ( minY > bottomY || maxY < topY ) continue;
+            static_cast<float>(displayDeltaStart) * renderScaleY;
+            
+        float visualH = static_cast<float>(displayDeltaStart - displayDeltaEnd) * renderScaleY;
 
         if ( !note.m_isSubNote ) {
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
@@ -372,23 +379,21 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const auto& note = registry.get<const NoteComponent>(entity);
         if ( note.m_isSubNote ) continue;
 
-        float screenY =
-            judgmentLineY -
-            static_cast<float>(ctx.cache->getDisplayDelta(
-                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
-                renderScaleY;
+        double displayDeltaStart = ctx.cache->getDisplayDelta(
+            note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
+        double displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, note.m_timestamp + note.m_duration);
+            
+        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double padDelta = ctx.noteH / static_cast<double>(renderScaleY);
 
         if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
-            const auto& transform =
-                registry.get<const TransformComponent>(entity);
-            float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                                note.m_timestamp + note.m_duration,
-                                ctx.cache->getAbsY(note.m_timestamp),
-                                note.m_timestamp)) *
-                            renderScaleY;
-            float minY    = std::min(screenY, screenY - visualH) - ctx.noteH;
-            float maxY    = std::max(screenY, screenY - visualH) + ctx.noteH;
-            if ( minY > bottomY || maxY < topY ) continue;
+            if ( !NoteRenderSystem::isCarrierVisible(note.m_timestamp, note.m_timestamp + note.m_duration,
+                                                     ctx.currentTime, displayDeltaStart, displayDeltaEnd,
+                                                     maxDelta + padDelta, minDelta - padDelta) ) {
+                continue;
+            }
         }
 
         visibleEntities.push_back(entity);
@@ -474,12 +479,14 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 config,
                 snapshot,
                 trackX + (singleTrackW - ctx.noteW) * 0.5f,
-                screenY,
                 ctx.noteW,
                 ctx.noteH,
-                visualH,
                 singleTrackW,
-                curColorHold);
+                curColorHold,
+                ctx.cache,
+                ctx.currentAbsY,
+                judgmentLineY,
+                renderScaleY);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
                 batcher,
@@ -500,6 +507,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              config,
                                              snapshot,
                                              ctx.currentAbsY,
+                                             ctx.currentTime,
                                              judgmentLineY,
                                              leftX,
                                              rightX,
@@ -580,12 +588,14 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 config,
                 snapshot,
                 trackX + (singleTrackW - ctx.noteW) * 0.5f,
-                screenY,
                 ctx.noteW,
                 ctx.noteH,
-                visualH,
                 singleTrackW,
                 ctx.colorHold,
+                ctx.cache,
+                ctx.currentAbsY,
+                judgmentLineY,
+                renderScaleY,
                 glowPart);
         else if ( note.m_type == ::MMM::NoteType::FLICK )
             NoteRenderSystem::renderFlick(
@@ -608,6 +618,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              config,
                                              snapshot,
                                              ctx.currentAbsY,
+                                             ctx.currentTime,
                                              judgmentLineY,
                                              leftX,
                                              rightX,
@@ -667,22 +678,19 @@ void NoteRenderSystem::renderBrushPreview(
                                     ctx.baseAspect,
                                     color);
     } else if ( brush.type == ::MMM::NoteType::HOLD ) {
-        double endAbsY = ctx.cache->getAbsY(brush.time + brush.duration);
-        float  visualH = static_cast<float>((endAbsY - noteAbsY) *
-                                            ctx.cache->getHsAt(brush.time)) *
-                         renderScaleY;
-
         NoteRenderSystem::renderHold(batcher,
                                      tempNote,
                                      config,
                                      snapshot,
                                      trackX + (singleTrackW - ctx.noteW) * 0.5f,
-                                     screenY,
                                      ctx.noteW,
                                      ctx.noteH,
-                                     visualH,
                                      singleTrackW,
-                                     color);
+                                     color,
+                                     ctx.cache,
+                                     ctx.currentAbsY,
+                                     judgmentLineY,
+                                     renderScaleY);
     } else if ( brush.type == ::MMM::NoteType::FLICK ) {
         NoteRenderSystem::renderFlick(
             batcher,
@@ -714,6 +722,7 @@ void NoteRenderSystem::renderBrushPreview(
             config,
             snapshot,
             ctx.currentAbsY,
+            ctx.currentTime,
             judgmentLineY,
             leftX,
             rightX,

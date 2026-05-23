@@ -78,19 +78,54 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-/// @brief 将存储值转换成编辑器显示值
-double getDisplayValue(::MMM::TimingEffect effect, double rawValue)
+/// @brief 判断当前活动谱面是否以 Malody 语义存储时间线
+bool isActiveBeatmapMalody()
 {
-    if ( effect == ::MMM::TimingEffect::SCROLL && rawValue < -1e-6 ) {
+    if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
+        if ( auto beatmap = session->getContext().currentBeatmap ) {
+            return beatmap->m_metadata.map_properties.contains(
+                ::MMM::MapMetadataType::MALODY);
+        }
+    }
+    return false;
+}
+
+/// @brief 判断指定时间线实体是否以 Malody 语义存储流速值
+bool isMalodyTimelineEntity(entt::entity entity)
+{
+    if ( entity == entt::null ) {
+        return isActiveBeatmapMalody();
+    }
+
+    if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
+        auto& registry = session->getContext().timelineRegistry;
+        if ( registry.valid(entity) &&
+             registry.all_of<Logic::TimelineComponent>(entity) ) {
+            const auto& tl = registry.get<Logic::TimelineComponent>(entity);
+            return tl.m_metadata.timing_properties.contains(
+                ::MMM::TimingMetadataType::MALODY);
+        }
+    }
+    return isActiveBeatmapMalody();
+}
+
+/// @brief 将存储值转换成编辑器显示值
+double getDisplayValue(::MMM::TimingEffect effect, double rawValue,
+                       entt::entity entity = entt::null)
+{
+    if ( effect == ::MMM::TimingEffect::SCROLL &&
+         !isMalodyTimelineEntity(entity) && rawValue < -1e-6 ) {
         return -100.0 / rawValue;
     }
     return rawValue;
 }
 
 /// @brief 将编辑器显示值转换成存储值
-double getStoredValue(::MMM::TimingEffect effect, double displayValue)
+double getStoredValue(::MMM::TimingEffect effect, double displayValue,
+                      entt::entity entity = entt::null)
 {
-    if ( effect == ::MMM::TimingEffect::SCROLL && displayValue > 1e-6 ) {
+    if ( effect == ::MMM::TimingEffect::SCROLL &&
+         !isMalodyTimelineEntity(entity) && displayValue > 1e-6 ) {
         return -100.0 / displayValue;
     }
     return displayValue;
@@ -188,7 +223,8 @@ void TimelineCanvas::renderEventEditorPopup()
 
         if ( ImGui::Button(TR("ui.timeline.event_editor.apply").data(),
                            ImVec2(80, 0)) ) {
-            double finalValue = getStoredValue(editEffect, m_editValue);
+            double finalValue =
+                getStoredValue(editEffect, m_editValue, m_editingEntity);
 
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
@@ -379,7 +415,10 @@ void TimelineCanvas::renderEventCreationPopup()
                 }
                 double scrollSpeed = refBpm / m_createValue;
                 double finalScrollValue =
-                    scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed) : -100.0;
+                    isActiveBeatmapMalody()
+                        ? scrollSpeed
+                        : (scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed)
+                                              : -100.0);
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdCreateTimelineEvent{ m_createTimeManual,
                                                    ::MMM::TimingEffect::SCROLL,
@@ -460,10 +499,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
         ImGui::SameLine();
         if ( ImGui::Button("添加流速 (SV)") ) {
+            double defaultScroll = isActiveBeatmapMalody() ? 1.0 : -100.0;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::SCROLL,
-                                               -100.0 }));
+                                               defaultScroll }));
             m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
             m_lastCreatedTimingHighlightUntil =
@@ -530,12 +570,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                  std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
                 for ( const auto& el : elements ) {
                     if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
-                        double dispScroll = (el.scrollValue < -1e-6)
-                                                ? (-100.0 / el.scrollValue)
-                                                : el.scrollValue;
-                        double newDisp    = dispScroll * bulkScaleValue;
+                        double dispScroll =
+                            getDisplayValue(::MMM::TimingEffect::SCROLL,
+                                            el.scrollValue,
+                                            el.scrollEntity);
+                        double newDisp = dispScroll * bulkScaleValue;
                         double newVal =
-                            newDisp > 1e-6 ? (-100.0 / newDisp) : -100.0;
+                            getStoredValue(::MMM::TimingEffect::SCROLL,
+                                           newDisp,
+                                           el.scrollEntity);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{
@@ -621,8 +664,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // Column 3: 数值
                     ImGui::TableSetColumnIndex(3);
-                    double vVal =
-                        getDisplayValue(effect, getElementRawValue(el));
+                    entt::entity ent = getElementEntity(el);
+                    double       vVal =
+                        getDisplayValue(effect, getElementRawValue(el), ent);
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string vId = fmt::format("##V_{}", displayIdx);
                     ImGui::InputDouble(
@@ -632,8 +676,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
                         effect == ::MMM::TimingEffect::BPM ? "%.2f" : "%.4f");
                     if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                        entt::entity ent        = getElementEntity(el);
-                        double       finalValue = getStoredValue(effect, vVal);
+                        double finalValue = getStoredValue(effect, vVal, ent);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{

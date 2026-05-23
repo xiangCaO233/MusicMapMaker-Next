@@ -80,6 +80,10 @@ public:
     std::vector<std::pair<double, double>> getTimeRangesForAbsYWindow(
         double minAbsY, double maxAbsY) const;
 
+    /// @brief 获取从 startTime 到 endTime 被 ScrollSegment 边界切割后的所有时间子区间
+    std::vector<std::pair<double, double>> getTimeSlices(double startTime,
+                                                         double endTime) const;
+
     /// @brief 获取所有分段信息 (只读)
     const std::vector<ScrollSegment>& getSegments() const { return m_segments; }
 

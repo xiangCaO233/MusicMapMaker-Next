@@ -171,12 +171,33 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "\n";
 
     ofs << "[TimingPoints]\n";
-    // Timings are not const qualified in their to_osu_description? We might
-    // need to copy or cast. Let's check Timing.h
+    /// @brief 判断时间线是否来自 Malody 语义
+    auto hasMalodyTimingMetadata = [](const Timing& timing) {
+        return timing.m_metadata.timing_properties.contains(
+            TimingMetadataType::MALODY);
+    };
+
     for ( auto& timing_const : beatMap.m_timings ) {
         Timing timing =
             timing_const;  // create a mutable copy to call to_osu_description()
-        XINFO("写出OSU Timing 时bpm=[{}]", timing_const.m_bpm);
+
+        if ( timing.m_timingEffect == TimingEffect::JUMP ||
+             timing.m_timingEffect == TimingEffect::HS ) {
+            continue;
+        }
+
+        if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
+            if ( hasMalodyTimingMetadata(timing) ) {
+                if ( timing.m_timingEffectParameter <= 0.0 ) {
+                    continue;
+                }
+                timing.m_beat_length =
+                    -100.0 / std::max(1e-9, timing.m_timingEffectParameter);
+            } else if ( timing.m_beat_length >= 0.0 ) {
+                continue;
+            }
+        }
+
         ofs << timing.to_osu_description() << "\n";
     }
     ofs << "\n";
