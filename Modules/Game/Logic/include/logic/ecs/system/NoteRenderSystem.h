@@ -4,6 +4,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include <entt/entt.hpp>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -133,22 +134,19 @@ private:
         entt::registry& registry, RenderSnapshot* snapshot, double currentTime,
         float singleTrackW, const Config::EditorConfig& config);
 
-    static void generateNoteHitboxes(entt::registry&          registry,
-                                     RenderSnapshot*          snapshot,
-                                     const NoteRenderContext& ctx,
-                                     float judgmentLineY, float leftX,
-                                     float topY, float bottomY,
-                                     float singleTrackW, float renderScaleY,
-                                     const Config::EditorConfig& config);
+    static void generateNoteHitboxes(
+        entt::registry& registry, RenderSnapshot* snapshot,
+        const NoteRenderContext&         ctx,
+        const std::vector<entt::entity>& noteEntities, float judgmentLineY,
+        float leftX, float topY, float bottomY, float singleTrackW,
+        float renderScaleY, const Config::EditorConfig& config);
 
-    static void renderNoteBaseLayer(entt::registry&             registry,
-                                    RenderSnapshot*             snapshot,
-                                    const NoteRenderContext&    ctx,
-                                    const Config::EditorConfig& config,
-                                    Batcher& batcher, float currentTime,
-                                    float judgmentLineY, float leftX,
-                                    float rightX, float topY, float bottomY,
-                                    float singleTrackW, float renderScaleY);
+    static void renderNoteBaseLayer(
+        entt::registry& registry, RenderSnapshot* snapshot,
+        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        const std::vector<entt::entity>& noteEntities, Batcher& batcher,
+        float currentTime, float judgmentLineY, float leftX, float rightX,
+        float topY, float bottomY, float singleTrackW, float renderScaleY);
 
     static void renderNoteGlowLayer(
         entt::registry& registry, RenderSnapshot* snapshot,

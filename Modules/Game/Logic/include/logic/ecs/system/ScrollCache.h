@@ -3,6 +3,7 @@
 #include "config/EditorConfig.h"
 #include <cstdint>
 #include <entt/entt.hpp>
+#include <utility>
 #include <vector>
 
 namespace MMM::Logic
@@ -67,6 +68,17 @@ public:
     /// @brief 获取从当前卷轴位置到目标时间的显示偏移
     double getDisplayDelta(double t, double currentAbsY,
                            double anchorTime) const;
+
+    /// @brief 是否存在 Jump 效果，存在时可见物件集合不再是连续时间区间
+    bool hasJumpEffects() const;
+
+    /// @brief 获取指定时间范围附近 Jump 的最大影响秒数
+    double getMaxJumpSecondsInRange(double startTime, double endTime,
+                                    double padding = 0.0) const;
+
+    /// @brief 获取给定绝对 Y 可视窗口对应的所有时间区间
+    std::vector<std::pair<double, double>> getTimeRangesForAbsYWindow(
+        double minAbsY, double maxAbsY) const;
 
     /// @brief 获取所有分段信息 (只读)
     const std::vector<ScrollSegment>& getSegments() const { return m_segments; }

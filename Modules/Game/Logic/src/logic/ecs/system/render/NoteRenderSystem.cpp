@@ -436,9 +436,11 @@ void NoteRenderSystem::generateTimelineSnapshot(
     auto  tickCol = skin.getColor("timeline.tick");
 
     double currentAbsY = cache->getAbsY(currentTime);
-    double startTime =
+    double timeA =
         cache->getTime(currentAbsY - (viewportHeight - judgmentLineY));
-    double endTime = cache->getTime(currentAbsY + judgmentLineY);
+    double timeB     = cache->getTime(currentAbsY + judgmentLineY);
+    double startTime = std::min(timeA, timeB);
+    double endTime   = std::max(timeA, timeB);
 
     float paddingX = 30.0f;
     float lineW    = viewportWidth - paddingX * 2.0f;

@@ -223,7 +223,8 @@ double ScrollCache::getTime(double absY) const
 
         double nextAbsY = seg.absY;
         if ( i + 1 < m_segments.size() ) {
-            nextAbsY = m_segments[i + 1].absY;
+            nextAbsY =
+                seg.absY + (m_segments[i + 1].time - seg.time) * seg.speed;
         } else {
             nextAbsY = seg.absY + seg.speed;
         }
@@ -275,6 +276,93 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
                                     double anchorTime) const
 {
     return (getAbsY(t) - currentAbsY) * getHsAt(anchorTime);
+}
+
+bool ScrollCache::hasJumpEffects() const
+{
+    return std::any_of(
+        m_segments.begin(), m_segments.end(), [](const ScrollSegment& seg) {
+            return (seg.effects & SCROLL_EFFECT_JUMP) != 0;
+        });
+}
+
+double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,
+                                             double padding) const
+{
+    if ( startTime > endTime ) {
+        std::swap(startTime, endTime);
+    }
+
+    const double queryStart = startTime - padding;
+    const double queryEnd   = endTime + padding;
+    double       maxJump    = 0.0;
+
+    for ( const auto& seg : m_segments ) {
+        if ( seg.time < queryStart ) continue;
+        if ( seg.time > queryEnd ) break;
+        if ( (seg.effects & SCROLL_EFFECT_JUMP) == 0 ) continue;
+        maxJump = std::max(maxJump, std::abs(seg.jumpValue) / 1000.0);
+    }
+
+    return maxJump;
+}
+
+std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
+    double minAbsY, double maxAbsY) const
+{
+    std::vector<std::pair<double, double>> ranges;
+    if ( m_segments.empty() ) return ranges;
+
+    if ( minAbsY > maxAbsY ) {
+        std::swap(minAbsY, maxAbsY);
+    }
+
+    auto appendRange = [&](double startTime, double endTime) {
+        if ( startTime > endTime ) {
+            std::swap(startTime, endTime);
+        }
+        if ( endTime < startTime - 1e-9 ) return;
+
+        if ( !ranges.empty() && startTime <= ranges.back().second + 1e-6 ) {
+            ranges.back().second = std::max(ranges.back().second, endTime);
+            return;
+        }
+
+        ranges.emplace_back(startTime, endTime);
+    };
+
+    for ( size_t i = 0; i < m_segments.size(); ++i ) {
+        const auto& seg = m_segments[i];
+        if ( std::abs(seg.speed) < 1e-9 ) continue;
+
+        const bool hasNext      = i + 1 < m_segments.size();
+        double     t0           = seg.time + (minAbsY - seg.absY) / seg.speed;
+        double     t1           = seg.time + (maxAbsY - seg.absY) / seg.speed;
+        double     overlapStart = std::min(t0, t1);
+        double     overlapEnd   = std::max(t0, t1);
+
+        if ( hasNext ) {
+            double segEndTime = m_segments[i + 1].time;
+            double segEndAbsY = seg.absY + (segEndTime - seg.time) * seg.speed;
+            double segMinAbsY = std::min(seg.absY, segEndAbsY);
+            double segMaxAbsY = std::max(seg.absY, segEndAbsY);
+
+            if ( segMaxAbsY < minAbsY - 1e-6 || segMinAbsY > maxAbsY + 1e-6 ) {
+                continue;
+            }
+
+            overlapStart = std::max(overlapStart, seg.time);
+            overlapEnd   = std::min(overlapEnd, segEndTime);
+        } else {
+            overlapStart = std::max(overlapStart, seg.time);
+        }
+
+        if ( overlapEnd >= overlapStart - 1e-9 ) {
+            appendRange(overlapStart, overlapEnd);
+        }
+    }
+
+    return ranges;
 }
 
 }  // namespace MMM::Logic::System

@@ -13,6 +13,10 @@
 namespace MMM::Logic::System
 {
 
+static std::vector<entt::entity> getNotesInRange(
+    entt::registry& registry, const ScrollCache* cache, double currentAbsY,
+    float judgmentLineY, float topY, float bottomY, float renderScaleY);
+
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
@@ -26,10 +30,19 @@ void NoteRenderSystem::renderNotes(
             registry, snapshot, currentTime, singleTrackW, config);
     if ( !ctx.cache ) return;
 
+    auto noteEntities = getNotesInRange(registry,
+                                        ctx.cache,
+                                        ctx.currentAbsY,
+                                        judgmentLineY,
+                                        topY,
+                                        bottomY,
+                                        renderScaleY);
+
     // 2. 生成碰撞盒并获取可见实体
     NoteRenderSystem::generateNoteHitboxes(registry,
                                            snapshot,
                                            ctx,
+                                           noteEntities,
                                            judgmentLineY,
                                            leftX,
                                            topY,
@@ -43,6 +56,7 @@ void NoteRenderSystem::renderNotes(
                                           snapshot,
                                           ctx,
                                           config,
+                                          noteEntities,
                                           batcher,
                                           (float)currentTime,
                                           judgmentLineY,
@@ -116,9 +130,9 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     return ctx;
 }
 
-static std::vector<entt::entity> getNotesInRange(entt::registry& registry,
-                                                 double          startTime,
-                                                 double          endTime)
+static std::vector<entt::entity> getNotesInRange(
+    entt::registry& registry, const ScrollCache* cache, double currentAbsY,
+    float judgmentLineY, float topY, float bottomY, float renderScaleY)
 {
     std::vector<entt::entity> result;
     const auto**              sortedEntitiesPtr =
@@ -127,39 +141,65 @@ static std::vector<entt::entity> getNotesInRange(entt::registry& registry,
 
     const auto& entities = **sortedEntitiesPtr;
     size_t      count    = entities.size();
-    if ( count == 0 ) return result;
-
-    double searchStart = startTime - 10.0;
-    if ( searchStart < 0.0 ) searchStart = 0.0;
-
-    auto it = std::lower_bound(
-        entities.begin(),
-        entities.end(),
-        searchStart,
-        [&](entt::entity entity, double val) {
-            return registry.get<const NoteComponent>(entity).m_timestamp < val;
-        });
-
-    for ( auto cur = it; cur != entities.end(); ++cur ) {
-        entt::entity entity = *cur;
-        const auto&  note   = registry.get<const NoteComponent>(entity);
-        if ( note.m_timestamp > endTime ) {
-            break;
-        }
-        result.push_back(entity);
+    if ( count == 0 || !cache || std::abs(renderScaleY) < 1e-6f ) {
+        return result;
     }
+
+    double topAbsY = currentAbsY +
+                     (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
+                                          static_cast<double>(renderScaleY);
+    auto   timeRanges = cache->getTimeRangesForAbsYWindow(
+        std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
+
+    std::vector<std::pair<double, double>> scanRanges;
+    scanRanges.reserve(timeRanges.size());
+    for ( const auto& [rangeStart, rangeEnd] : timeRanges ) {
+        double scanStart = std::max(0.0, rangeStart - 10.0);
+        if ( rangeEnd < scanStart ) continue;
+
+        if ( !scanRanges.empty() &&
+             scanStart <= scanRanges.back().second + 1e-6 ) {
+            scanRanges.back().second =
+                std::max(scanRanges.back().second, rangeEnd);
+            continue;
+        }
+        scanRanges.emplace_back(scanStart, rangeEnd);
+    }
+
+    for ( const auto& [rangeStart, rangeEnd] : scanRanges ) {
+        auto it = std::lower_bound(
+            entities.begin(),
+            entities.end(),
+            rangeStart,
+            [&](entt::entity entity, double val) {
+                return registry.get<const NoteComponent>(entity).m_timestamp <
+                       val;
+            });
+
+        for ( auto cur = it; cur != entities.end(); ++cur ) {
+            entt::entity entity = *cur;
+            const auto&  note   = registry.get<const NoteComponent>(entity);
+            if ( note.m_timestamp > rangeEnd ) {
+                break;
+            }
+
+            if ( result.empty() || result.back() != entity ) {
+                result.push_back(entity);
+            }
+        }
+    }
+
     return result;
 }
 
 void NoteRenderSystem::generateNoteHitboxes(
     entt::registry& registry, RenderSnapshot* snapshot,
-    const NoteRenderSystem::NoteRenderContext& ctx, float judgmentLineY,
+    const NoteRenderSystem::NoteRenderContext& ctx,
+    const std::vector<entt::entity>& noteEntities, float judgmentLineY,
     float leftX, float topY, float bottomY, float singleTrackW,
     float renderScaleY, const Config::EditorConfig& config)
 {
-    auto noteEntities = getNotesInRange(
-        registry, snapshot->visibleTimeStart, snapshot->visibleTimeEnd);
-
     // Pass 1: Body (Lower Priority)
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
@@ -322,12 +362,11 @@ void NoteRenderSystem::generateNoteHitboxes(
 void NoteRenderSystem::renderNoteBaseLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
-    const Config::EditorConfig& config, Batcher& batcher, float currentTime,
-    float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
-    float singleTrackW, float renderScaleY)
+    const Config::EditorConfig&                config,
+    const std::vector<entt::entity>& noteEntities, Batcher& batcher,
+    float currentTime, float judgmentLineY, float leftX, float rightX,
+    float topY, float bottomY, float singleTrackW, float renderScaleY)
 {
-    auto noteEntities = getNotesInRange(
-        registry, snapshot->visibleTimeStart, snapshot->visibleTimeEnd);
     std::vector<entt::entity> visibleEntities;
     for ( auto entity : noteEntities ) {
         const auto& note = registry.get<const NoteComponent>(entity);
