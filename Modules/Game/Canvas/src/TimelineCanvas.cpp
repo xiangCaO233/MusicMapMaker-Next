@@ -13,9 +13,23 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <string_view>
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief Timeline 画布齿轮按钮的类型信息
+struct TimelineGearInfo {
+    uint32_t     mask;
+    entt::entity Logic::TimelineInteractiveElement::* entity;
+    double Logic::TimelineInteractiveElement::* value;
+    const char*                                 label;
+    const char*                                 editType;
+    ImVec4                                      color;
+    float                                       xRatio;
+};
+}  // namespace
 
 TimelineCanvas::TimelineCanvas(
     const std::string& name, uint32_t w, uint32_t h,
@@ -223,71 +237,84 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     bool  isNear = std::abs(localMouseY - mappedY) < proximity;
 
                     if ( isNear && isFocused ) {
-                        // BPM 齿轮 (左侧)
-                        if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
-                            ImVec2 pos(canvasPos.x + padding,
+                        const TimelineGearInfo gears[] = {
+                            { Logic::System::SCROLL_EFFECT_BPM,
+                              &Logic::TimelineInteractiveElement::bpmEntity,
+                              &Logic::TimelineInteractiveElement::bpmValue,
+                              "BPM",
+                              "BPM",
+                              ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+                              0.0f },
+                            { Logic::System::SCROLL_EFFECT_SCROLL,
+                              &Logic::TimelineInteractiveElement::scrollEntity,
+                              &Logic::TimelineInteractiveElement::scrollValue,
+                              "Scroll",
+                              "Scroll",
+                              ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
+                              1.0f },
+                            { Logic::System::SCROLL_EFFECT_JUMP,
+                              &Logic::TimelineInteractiveElement::jumpEntity,
+                              &Logic::TimelineInteractiveElement::jumpValue,
+                              "Jump",
+                              "Jump",
+                              ImVec4(0.2f, 0.45f, 1.0f, 1.0f),
+                              0.33f },
+                            { Logic::System::SCROLL_EFFECT_HS,
+                              &Logic::TimelineInteractiveElement::hsEntity,
+                              &Logic::TimelineInteractiveElement::hsValue,
+                              "HS",
+                              "HS",
+                              ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
+                              0.66f },
+                        };
+
+                        for ( const auto& gear : gears ) {
+                            if ( (el.effects & gear.mask) == 0 ) continue;
+
+                            float x = canvasPos.x + padding;
+                            if ( gear.xRatio >= 0.99f ) {
+                                x = canvasPos.x + size.x - iconSize - padding;
+                            } else if ( gear.xRatio > 0.0f ) {
+                                x = canvasPos.x + padding +
+                                    (size.x - iconSize - 2.0f * padding) *
+                                        gear.xRatio;
+                            }
+
+                            ImVec2 pos(x,
                                        canvasPos.y + mappedY - iconSize * 0.5f);
                             ImGui::SetCursorScreenPos(pos);
 
-                            ImGui::PushStyleColor(
-                                ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
-                            std::string id = fmt::format(
-                                "BPM_{}_{}",
-                                el.time,
-                                static_cast<uint32_t>(el.bpmEntity));
+                            ImGui::PushStyleColor(ImGuiCol_Text, gear.color);
+                            auto        entity = el.*(gear.entity);
+                            std::string id =
+                                fmt::format("{}_{}_{}",
+                                            gear.label,
+                                            el.time,
+                                            static_cast<uint32_t>(entity));
                             if ( ImGui::Button(
                                      (std::string(UI::ICON_MMM_COG) + "##" + id)
                                          .c_str(),
                                      ImVec2(iconSize, iconSize)) ) {
-                                XINFO("BPM gear clicked at time: {}", el.time);
-                                m_editingEntity = el.bpmEntity;
-                                m_editTime      = el.time;
-                                m_editValue     = el.bpmValue;
-                                m_editType      = "BPM";
-                                m_isPopupOpen   = true;
-                                ImGui::OpenPopup("TimelineEventEditor");
-                            }
-                            ImGui::PopStyleColor();
-
-                            if ( ImGui::IsItemHovered() ) {
-                                ImGui::SetTooltip("BPM Event: %.3f s", el.time);
-                            }
-                        }
-
-                        // Scroll 齿轮 (右侧)
-                        if ( el.effects &
-                             Logic::System::SCROLL_EFFECT_SCROLL ) {
-                            ImVec2 pos(
-                                canvasPos.x + size.x - iconSize - padding,
-                                canvasPos.y + mappedY - iconSize * 0.5f);
-                            ImGui::SetCursorScreenPos(pos);
-
-                            ImGui::PushStyleColor(
-                                ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.2f, 1.0f));
-                            std::string id = fmt::format(
-                                "SCROLL_{}_{}",
-                                el.time,
-                                static_cast<uint32_t>(el.scrollEntity));
-                            if ( ImGui::Button(
-                                     (std::string(UI::ICON_MMM_COG) + "##" + id)
-                                         .c_str(),
-                                     ImVec2(iconSize, iconSize)) ) {
-                                XINFO("Scroll gear clicked at time: {}",
+                                XINFO("{} gear clicked at time: {}",
+                                      gear.label,
                                       el.time);
-                                m_editingEntity = el.scrollEntity;
+                                m_editingEntity = entity;
                                 m_editTime      = el.time;
-                                m_editValue   = (el.scrollValue < -1e-6)
-                                                    ? (-100.0 / el.scrollValue)
-                                                    : el.scrollValue;
-                                m_editType    = "Scroll";
+                                m_editValue     = el.*(gear.value);
+                                if ( std::string_view(gear.editType) ==
+                                         "Scroll" &&
+                                     m_editValue < -1e-6 ) {
+                                    m_editValue = -100.0 / m_editValue;
+                                }
+                                m_editType    = gear.editType;
                                 m_isPopupOpen = true;
                                 ImGui::OpenPopup("TimelineEventEditor");
                             }
                             ImGui::PopStyleColor();
 
                             if ( ImGui::IsItemHovered() ) {
-                                ImGui::SetTooltip("Scroll Event: %.3f s",
-                                                  el.time);
+                                ImGui::SetTooltip(
+                                    "%s Event: %.3f s", gear.label, el.time);
                             }
                         }
                     }

@@ -273,9 +273,10 @@ void NoteRenderSystem::drawBeatLines(
                 }
 
                 auto [color, width] = getBeatLineConfig(denominator);
-                double absY         = cache->getAbsY(t);
-                float y = judgmentLineY -
-                          static_cast<float>(absY - currentAbsY) * renderScaleY;
+                float y =
+                    judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                        t, currentAbsY, t)) *
+                                        renderScaleY;
 
                 if ( y >= topY && y <= bottomY ) {
                     if ( batcher.snapshot->isSnapped &&
@@ -322,38 +323,26 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
 
     double currentAbsY = cache->getAbsY(currentTime);
     if ( std::abs(renderScaleY) < 1e-6f ) return;
-    double topAbsY = currentAbsY +
-                     (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
-                                             static_cast<double>(renderScaleY);
-    auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
-        std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
-
     batcher.setTexture(TextureID::None);
 
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
-        float y = judgmentLineY -
-                  static_cast<float>(seg.absY - currentAbsY) * renderScaleY;
+        float y = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                      seg.time, currentAbsY, seg.time)) *
+                                      renderScaleY;
 
         if ( y >= topY && y <= bottomY ) {
-            bool isVisibleTime = false;
-            for ( const auto& [startTime, endTime] : visibleRanges ) {
-                if ( seg.time >= startTime - 1e-6 &&
-                     seg.time <= endTime + 1e-6 ) {
-                    isVisibleTime = true;
-                    break;
-                }
-            }
-            if ( !isVisibleTime ) continue;
-
             glm::vec4 color = { 1.0f, 1.0f, 1.0f, 0.5f };
             if ( (seg.effects & SCROLL_EFFECT_BPM) &&
                  (seg.effects & SCROLL_EFFECT_SCROLL) ) {
                 color = { 1.0f, 0.5f, 0.0f, 0.8f };
             } else if ( seg.effects & SCROLL_EFFECT_BPM ) {
                 color = { 1.0f, 0.2f, 0.2f, 0.8f };
+            } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
+                color = { 0.2f, 0.45f, 1.0f, 0.8f };
+            } else if ( seg.effects & SCROLL_EFFECT_HS ) {
+                color = { 1.0f, 0.85f, 0.2f, 0.8f };
             } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
                 color = { 0.2f, 1.0f, 0.2f, 0.8f };
             }

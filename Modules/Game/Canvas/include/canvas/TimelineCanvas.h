@@ -79,7 +79,7 @@ private:
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };
-    std::string  m_editType;  // "BPM" or "Scroll"
+    std::string  m_editType;  ///< @brief 编辑中的 Timing 类型名称
 
     // 创建弹窗状态
     bool   m_isCreatePopupOpen{ false };
@@ -87,15 +87,15 @@ private:
     double m_createTimeSnapped{ 0.0 };
     double m_createTimeManual{ 0.0 };
     double m_createValue{ 120.0 };
-    int    m_createType{ 0 };     // 0: BPM, 1: Scroll
+    int    m_createType{ 0 };     ///< @brief 0: BPM, 1: Scroll, 2: Jump, 3: HS
     int    m_createPosType{ 0 };  // 0: Click, 1: Current
     bool   m_isTimeSnapped{ false };
     bool   m_keepSpeedOnBpmChange{ false };
 
     /// @brief 最近一次新建 Timing 的目标时间（秒），用于表格高亮定位
     double m_lastCreatedTimingTime{ -1.0 };
-    /// @brief 最近一次新建 Timing 的类型，true 为 BPM，false 为 SV
-    bool m_lastCreatedTimingIsBpm{ true };
+    /// @brief 最近一次新建 Timing 的类型
+    ::MMM::TimingEffect m_lastCreatedTimingEffect{ ::MMM::TimingEffect::BPM };
     /// @brief 最近一次新建 Timing 的高亮截止时间（ImGui 时间）
     double m_lastCreatedTimingHighlightUntil{ 0.0 };
 

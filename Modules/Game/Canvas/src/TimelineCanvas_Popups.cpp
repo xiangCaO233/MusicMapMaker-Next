@@ -13,6 +13,112 @@ namespace
 {
 /// @brief 新建 Timing 行的高亮持续时间（秒）
 constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
+
+/// @brief 从交互元素中提取主 Timing 类型
+::MMM::TimingEffect getElementEffect(
+    const Logic::TimelineInteractiveElement& el)
+{
+    if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+        return ::MMM::TimingEffect::BPM;
+    }
+    if ( el.effects & Logic::System::SCROLL_EFFECT_JUMP ) {
+        return ::MMM::TimingEffect::JUMP;
+    }
+    if ( el.effects & Logic::System::SCROLL_EFFECT_HS ) {
+        return ::MMM::TimingEffect::HS;
+    }
+    return ::MMM::TimingEffect::SCROLL;
+}
+
+/// @brief 获取 Timing 类型对应实体
+entt::entity getElementEntity(const Logic::TimelineInteractiveElement& el)
+{
+    switch ( getElementEffect(el) ) {
+    case ::MMM::TimingEffect::BPM: return el.bpmEntity;
+    case ::MMM::TimingEffect::JUMP: return el.jumpEntity;
+    case ::MMM::TimingEffect::HS: return el.hsEntity;
+    case ::MMM::TimingEffect::SCROLL: return el.scrollEntity;
+    }
+    return entt::null;
+}
+
+/// @brief 获取 Timing 类型对应原始值
+double getElementRawValue(const Logic::TimelineInteractiveElement& el)
+{
+    switch ( getElementEffect(el) ) {
+    case ::MMM::TimingEffect::BPM: return el.bpmValue;
+    case ::MMM::TimingEffect::JUMP: return el.jumpValue;
+    case ::MMM::TimingEffect::HS: return el.hsValue;
+    case ::MMM::TimingEffect::SCROLL: return el.scrollValue;
+    }
+    return 0.0;
+}
+
+/// @brief 获取 Timeline UI 中展示用的类型文本
+const char* getEffectLabel(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return "BPM";
+    case ::MMM::TimingEffect::SCROLL: return "流速 (SV)";
+    case ::MMM::TimingEffect::JUMP: return "Jump";
+    case ::MMM::TimingEffect::HS: return "HS";
+    }
+    return "Timing";
+}
+
+/// @brief 获取 Timeline UI 中展示用的类型颜色
+ImVec4 getEffectColor(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
+    case ::MMM::TimingEffect::SCROLL: return ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+    case ::MMM::TimingEffect::JUMP: return ImVec4(0.35f, 0.6f, 1.0f, 1.0f);
+    case ::MMM::TimingEffect::HS: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
+    }
+    return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+/// @brief 将存储值转换成编辑器显示值
+double getDisplayValue(::MMM::TimingEffect effect, double rawValue)
+{
+    if ( effect == ::MMM::TimingEffect::SCROLL && rawValue < -1e-6 ) {
+        return -100.0 / rawValue;
+    }
+    return rawValue;
+}
+
+/// @brief 将编辑器显示值转换成存储值
+double getStoredValue(::MMM::TimingEffect effect, double displayValue)
+{
+    if ( effect == ::MMM::TimingEffect::SCROLL && displayValue > 1e-6 ) {
+        return -100.0 / displayValue;
+    }
+    return displayValue;
+}
+
+/// @brief 从创建弹窗索引获取 Timing 类型
+::MMM::TimingEffect getCreateEffect(int createType)
+{
+    switch ( createType ) {
+    case 0: return ::MMM::TimingEffect::BPM;
+    case 2: return ::MMM::TimingEffect::JUMP;
+    case 3: return ::MMM::TimingEffect::HS;
+    case 1:
+    default: return ::MMM::TimingEffect::SCROLL;
+    }
+}
+
+/// @brief 获取创建弹窗默认参数
+double getDefaultCreateValue(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 120.0;
+    case ::MMM::TimingEffect::SCROLL: return 1.0;
+    case ::MMM::TimingEffect::JUMP: return 1000.0;
+    case ::MMM::TimingEffect::HS: return 1.0;
+    }
+    return 1.0;
+}
 }  // namespace
 
 void TimelineCanvas::renderEventEditorPopup()
@@ -43,9 +149,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
     if ( ImGui::BeginPopupModal(
              "TimelineEventEditor", &m_isPopupOpen, ImGuiWindowFlags_None) ) {
-        std::string typeTitle =
-            (m_editType == "BPM") ? TR("ui.timeline.event_type.bpm").data()
-                                  : TR("ui.timeline.event_type.scroll").data();
+        std::string typeTitle = m_editType;
 
         ImGui::Text(
             "%s", TR_FMT("ui.timeline.event_editor.title", typeTitle).c_str());
@@ -55,9 +159,21 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         ImGui::InputDouble("##Time", &m_editTime, 0.001, 0.01, "%.3f");
 
-        if ( m_editType == "BPM" ) {
+        ::MMM::TimingEffect editEffect =
+            (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
+            : (m_editType == "Jump") ? ::MMM::TimingEffect::JUMP
+            : (m_editType == "HS")   ? ::MMM::TimingEffect::HS
+                                     : ::MMM::TimingEffect::SCROLL;
+
+        if ( editEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             ImGui::InputDouble("##Value", &m_editValue, 0.1, 1.0, "%.2f");
+        } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
+            ImGui::TextUnformatted("Jump (ms)");
+            ImGui::InputDouble("##Value", &m_editValue, 1.0, 10.0, "%.3f");
+        } else if ( editEffect == ::MMM::TimingEffect::HS ) {
+            ImGui::TextUnformatted("HS");
+            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.4f");
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
@@ -72,12 +188,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
         if ( ImGui::Button(TR("ui.timeline.event_editor.apply").data(),
                            ImVec2(80, 0)) ) {
-            double finalValue = m_editValue;
-            if ( m_editType == "Scroll" ) {
-                if ( m_editValue > 1e-6 ) {
-                    finalValue = -100.0 / m_editValue;
-                }
-            }
+            double finalValue = getStoredValue(editEffect, m_editValue);
 
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
@@ -190,22 +301,46 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.type").data());
         if ( ImGui::RadioButton("BPM", &m_createType, 0) ) {
-            m_createValue = 120.0;
+            m_createValue =
+                getDefaultCreateValue(getCreateEffect(m_createType));
         }
 
         wrapToNextLineIfNoSpace(getRadioButtonWidth("Scroll"));
 
         if ( ImGui::RadioButton("Scroll", &m_createType, 1) ) {
-            m_createValue = 1.0;
+            m_createValue =
+                getDefaultCreateValue(getCreateEffect(m_createType));
+        }
+
+        wrapToNextLineIfNoSpace(getRadioButtonWidth("Jump"));
+
+        if ( ImGui::RadioButton("Jump", &m_createType, 2) ) {
+            m_createValue =
+                getDefaultCreateValue(getCreateEffect(m_createType));
+        }
+
+        wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
+
+        if ( ImGui::RadioButton("HS", &m_createType, 3) ) {
+            m_createValue =
+                getDefaultCreateValue(getCreateEffect(m_createType));
         }
 
         ImGui::Spacing();
-        if ( m_createType == 0 ) {
+        ::MMM::TimingEffect createEffect = getCreateEffect(m_createType);
+        if ( createEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
             ImGui::InputDouble("##BPMValue", &m_createValue, 0.1, 1.0, "%.2f");
             ImGui::Spacing();
             ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
                             &m_keepSpeedOnBpmChange);
+        } else if ( createEffect == ::MMM::TimingEffect::JUMP ) {
+            ImGui::TextUnformatted("Jump (ms)");
+            ImGui::InputDouble(
+                "##JumpValue", &m_createValue, 1.0, 10.0, "%.3f");
+        } else if ( createEffect == ::MMM::TimingEffect::HS ) {
+            ImGui::TextUnformatted("HS");
+            ImGui::InputDouble("##HSValue", &m_createValue, 0.01, 0.1, "%.4f");
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
@@ -221,21 +356,14 @@ void TimelineCanvas::renderEventCreationPopup()
 
         if ( ImGui::Button(TR("ui.timeline.event_creator.create").data(),
                            ImVec2(100, 0)) ) {
-            ::MMM::TimingEffect type       = (m_createType == 0)
-                                                 ? ::MMM::TimingEffect::BPM
-                                                 : ::MMM::TimingEffect::SCROLL;
-            double              finalValue = m_createValue;
-            if ( type == ::MMM::TimingEffect::SCROLL ) {
-                if ( m_createValue > 1e-6 ) {
-                    finalValue = -100.0 / m_createValue;
-                }
-            }
+            ::MMM::TimingEffect type = getCreateEffect(m_createType);
+            double finalValue        = getStoredValue(type, m_createValue);
 
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     m_createTimeManual, type, finalValue }));
-            m_lastCreatedTimingTime  = m_createTimeManual;
-            m_lastCreatedTimingIsBpm = (type == ::MMM::TimingEffect::BPM);
+            m_lastCreatedTimingTime   = m_createTimeManual;
+            m_lastCreatedTimingEffect = type;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
@@ -325,8 +453,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::BPM,
                                                120.0 }));
-            m_lastCreatedTimingTime  = m_currentSnapshot->currentTime;
-            m_lastCreatedTimingIsBpm = true;
+            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::BPM;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
@@ -336,8 +464,30 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::SCROLL,
                                                -100.0 }));
-            m_lastCreatedTimingTime  = m_currentSnapshot->currentTime;
-            m_lastCreatedTimingIsBpm = false;
+            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button("添加 Jump") ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
+                                               ::MMM::TimingEffect::JUMP,
+                                               1000.0 }));
+            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::JUMP;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button("添加 HS") ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
+                                               ::MMM::TimingEffect::HS,
+                                               1.0 }));
+            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::HS;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
@@ -358,14 +508,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             if ( ImGui::Button("应用时间偏移") &&
                  std::abs(bulkOffsetValue) > 1e-6 ) {
                 for ( const auto& el : elements ) {
-                    entt::entity ent =
-                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
-                            ? el.bpmEntity
-                            : el.scrollEntity;
-                    double rawVal =
-                        (el.effects & Logic::System::SCROLL_EFFECT_BPM)
-                            ? el.bpmValue
-                            : el.scrollValue;
+                    entt::entity ent    = getElementEntity(el);
+                    double       rawVal = getElementRawValue(el);
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
                             ent, el.time + bulkOffsetValue, rawVal }));
@@ -433,14 +577,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             while ( clipper.Step() ) {
                 for ( int idx = clipper.DisplayStart; idx < clipper.DisplayEnd;
                       ++idx ) {
-                    const auto& el         = elements[idx];
-                    int         displayIdx = idx + 1;
-                    bool        isBpm =
-                        (el.effects & Logic::System::SCROLL_EFFECT_BPM);
-                    bool isRecentlyCreated =
+                    const auto&         el         = elements[idx];
+                    int                 displayIdx = idx + 1;
+                    ::MMM::TimingEffect effect     = getElementEffect(el);
+                    bool                isRecentlyCreated =
                         (ImGui::GetTime() <=
                          m_lastCreatedTimingHighlightUntil) &&
-                        (isBpm == m_lastCreatedTimingIsBpm) &&
+                        (effect == m_lastCreatedTimingEffect) &&
                         (std::abs(el.time - m_lastCreatedTimingTime) <= 1e-6);
 
                     ImGui::TableNextRow();
@@ -461,14 +604,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     std::string tId = fmt::format("##T_{}", displayIdx);
                     ImGui::InputDouble(tId.c_str(), &tVal, 0.001, 0.01, "%.3f");
                     if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                        entt::entity ent =
-                            (el.effects & Logic::System::SCROLL_EFFECT_BPM)
-                                ? el.bpmEntity
-                                : el.scrollEntity;
-                        double rawVal =
-                            (el.effects & Logic::System::SCROLL_EFFECT_BPM)
-                                ? el.bpmValue
-                                : el.scrollValue;
+                        entt::entity ent    = getElementEntity(el);
+                        double       rawVal = getElementRawValue(el);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{
@@ -477,40 +614,26 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // Column 2: 类型
                     ImGui::TableSetColumnIndex(2);
-                    if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
-                        ImGui::PushStyleColor(ImGuiCol_Text,
-                                              ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                        ImGui::TextUnformatted("BPM");
-                        ImGui::PopStyleColor();
-                    } else {
-                        ImGui::PushStyleColor(ImGuiCol_Text,
-                                              ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-                        ImGui::TextUnformatted("流速 (SV)");
-                        ImGui::PopStyleColor();
-                    }
+                    ImGui::PushStyleColor(ImGuiCol_Text,
+                                          getEffectColor(effect));
+                    ImGui::TextUnformatted(getEffectLabel(effect));
+                    ImGui::PopStyleColor();
 
                     // Column 3: 数值
                     ImGui::TableSetColumnIndex(3);
-                    double vVal = isBpm ? el.bpmValue
-                                        : ((el.scrollValue < -1e-6)
-                                               ? (-100.0 / el.scrollValue)
-                                               : el.scrollValue);
+                    double vVal =
+                        getDisplayValue(effect, getElementRawValue(el));
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string vId = fmt::format("##V_{}", displayIdx);
-                    ImGui::InputDouble(vId.c_str(),
-                                       &vVal,
-                                       isBpm ? 0.1 : 0.01,
-                                       isBpm ? 1.0 : 0.1,
-                                       isBpm ? "%.2f" : "%.4f");
+                    ImGui::InputDouble(
+                        vId.c_str(),
+                        &vVal,
+                        effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
+                        effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
+                        effect == ::MMM::TimingEffect::BPM ? "%.2f" : "%.4f");
                     if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                        entt::entity ent =
-                            isBpm ? el.bpmEntity : el.scrollEntity;
-                        double finalValue = vVal;
-                        if ( !isBpm ) {
-                            if ( vVal > 1e-6 ) {
-                                finalValue = -100.0 / vVal;
-                            }
-                        }
+                        entt::entity ent        = getElementEntity(el);
+                        double       finalValue = getStoredValue(effect, vVal);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{
@@ -532,8 +655,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     ImGui::SameLine();
                     std::string delId = fmt::format("删除##Del_{}", displayIdx);
                     if ( ImGui::Button(delId.c_str()) ) {
-                        entt::entity ent =
-                            isBpm ? el.bpmEntity : el.scrollEntity;
+                        entt::entity ent = getElementEntity(el);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdDeleteTimelineEvent{ ent }));

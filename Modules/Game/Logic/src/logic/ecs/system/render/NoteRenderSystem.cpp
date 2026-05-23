@@ -498,12 +498,12 @@ void NoteRenderSystem::generateTimelineSnapshot(
             color = { 1.0f, 0.5f, 0.0f, 0.8f };
         } else if ( seg.effects & SCROLL_EFFECT_BPM ) {
             color = { 1.0f, 0.2f, 0.2f, 0.8f };
+        } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
+            color = { 0.2f, 0.45f, 1.0f, 0.8f };
+        } else if ( seg.effects & SCROLL_EFFECT_HS ) {
+            color = { 1.0f, 0.85f, 0.2f, 0.8f };
         } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
             color = { 0.2f, 1.0f, 0.2f, 0.8f };
-        } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
-            color = { 1.0f, 0.9f, 0.2f, 0.8f };
-        } else if ( seg.effects & SCROLL_EFFECT_HS ) {
-            color = { 0.2f, 0.8f, 1.0f, 0.8f };
         }
 
         batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
