@@ -471,10 +471,18 @@ void NoteRenderSystem::generateTimelineSnapshot(
             el.effects   = SCROLL_EFFECT_BPM;
             el.bpmEntity = entity;
             el.bpmValue  = tc.m_value;
-        } else {
+        } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
             el.effects      = SCROLL_EFFECT_SCROLL;
             el.scrollEntity = entity;
             el.scrollValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
+            el.effects    = SCROLL_EFFECT_JUMP;
+            el.jumpEntity = entity;
+            el.jumpValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
+            el.effects  = SCROLL_EFFECT_HS;
+            el.hsEntity = entity;
+            el.hsValue  = tc.m_value;
         }
         snapshot->timelineElements.push_back(el);
     }

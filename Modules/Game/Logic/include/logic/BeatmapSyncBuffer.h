@@ -71,8 +71,12 @@ struct TimelineInteractiveElement {
     uint32_t     effects;
     entt::entity bpmEntity{ entt::null };
     entt::entity scrollEntity{ entt::null };
+    entt::entity jumpEntity{ entt::null };  /// @brief Jump 效果实体
+    entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
     double       bpmValue{ 0.0 };
     double       scrollValue{ 0.0 };
+    double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
+    double       hsValue{ 1.0 };    /// @brief HS 原始参数
 };
 
 /**
@@ -264,8 +268,8 @@ struct RenderSnapshot {
         isPreviewDragging      = false;
         brush.isActive         = false;
         erasingEntities.clear();
-        erasingSubIndex   = -1;
-        hasBeatmap        = false;
+        erasingSubIndex = -1;
+        hasBeatmap      = false;
         beatmapName.clear();
         isDirty = false;
         lastActionMessage.clear();

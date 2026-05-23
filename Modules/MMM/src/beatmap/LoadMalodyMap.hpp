@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -115,11 +116,12 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 2. 收集原始时间事件
     struct RawEvent {
-        double beat;
-        double bpm    = -1.0;
-        double scroll = -1.0;
-        json   raw;
-        bool   isBpm = false;
+        double       beat;
+        double       bpm   = -1.0;
+        double       value = 0.0;
+        json         raw;
+        TimingEffect effect{ TimingEffect::BPM };
+        bool         isBpm = false;
     };
     std::vector<RawEvent> rawEvents;
 
@@ -142,21 +144,28 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     }
     if ( fileData.contains("effect") ) {
         for ( const auto& e : fileData["effect"] ) {
-            // 跳过不包含 scroll 字段的效果（如 sign），避免产生虚假 SCROLL
-            // 计时点
-            if ( !e.contains("scroll") ) continue;
-            RawEvent ev;
-            ev.beat   = beatToDouble(e.value("beat", json::array()));
-            ev.scroll = e.value("scroll", 1.0);
-            ev.isBpm  = false;
-            ev.raw    = e;
-            rawEvents.push_back(ev);
+            auto pushEffect = [&](const char* key, TimingEffect effect) {
+                if ( !e.contains(key) ) return;
+                RawEvent ev;
+                ev.beat   = beatToDouble(e.value("beat", json::array()));
+                ev.value  = e.value(key, 0.0);
+                ev.effect = effect;
+                ev.isBpm  = false;
+                ev.raw    = e;
+                rawEvents.push_back(ev);
+            };
+            pushEffect("scroll", TimingEffect::SCROLL);
+            pushEffect("jump", TimingEffect::JUMP);
+            pushEffect("hs", TimingEffect::HS);
         }
     }
-    std::sort(
-        rawEvents.begin(),
-        rawEvents.end(),
-        [](const RawEvent& a, const RawEvent& b) { return a.beat < b.beat; });
+    std::sort(rawEvents.begin(),
+              rawEvents.end(),
+              [](const RawEvent& a, const RawEvent& b) {
+                  if ( std::abs(a.beat - b.beat) > 1e-9 )
+                      return a.beat < b.beat;
+                  return a.isBpm && !b.isBpm;
+              });
 
     // 2.3 获取模式信息
     int malodyMode = 0;
@@ -379,23 +388,23 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            timing.m_timingEffect = TimingEffect::SCROLL;
-            timing.m_bpm          = currentBpm;
-            // 内部统一使用 Osu 风格存储 SCROLL (负值 = -100 / multiplier)
-            if ( ev.scroll > 0 ) {
-                timing.m_timingEffectParameter = -100.0 / ev.scroll;
-            } else {
-                timing.m_timingEffectParameter = ev.scroll;
-            }
-            timing.m_beat_length = timing.m_timingEffectParameter;
+            timing.m_timingEffect          = ev.effect;
+            timing.m_bpm                   = currentBpm;
+            timing.m_timingEffectParameter = ev.value;
+            timing.m_beat_length           = timing.m_timingEffectParameter;
         }
 
         auto& malody_timing_props =
             timing.m_metadata.timing_properties[TimingMetadataType::MALODY];
         for ( auto it = ev.raw.begin(); it != ev.raw.end(); ++it ) {
-            if ( it.key() != "bpm" && it.key() != "scroll" ) {
+            if ( it.key() != "bpm" && it.key() != "scroll" &&
+                 it.key() != "jump" && it.key() != "hs" ) {
                 malody_timing_props[it.key()] = it.value().dump();
             }
+        }
+        if ( !ev.isBpm ) {
+            malody_timing_props["effect"] =
+                "\"" + timingEffectToString(ev.effect) + "\"";
         }
         if ( beatMap.m_baseMapMetadata.preference_bpm <= 0.0 &&
              timing.m_timingEffect == TimingEffect::BPM ) {

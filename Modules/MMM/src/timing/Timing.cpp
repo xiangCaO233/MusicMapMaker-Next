@@ -8,6 +8,25 @@
 namespace MMM
 {
 
+std::string timingEffectToString(TimingEffect effect)
+{
+    switch ( effect ) {
+    case TimingEffect::BPM: return "bpm";
+    case TimingEffect::SCROLL: return "scroll";
+    case TimingEffect::JUMP: return "jump";
+    case TimingEffect::HS: return "hs";
+    }
+    return "scroll";
+}
+
+TimingEffect timingEffectFromString(const std::string& effect)
+{
+    if ( effect == "bpm" ) return TimingEffect::BPM;
+    if ( effect == "jump" ) return TimingEffect::JUMP;
+    if ( effect == "hs" ) return TimingEffect::HS;
+    return TimingEffect::SCROLL;
+}
+
 /// @brief 从osu的字符串读取
 void Timing::from_osu_description(std::vector<std::string>& description)
 {
@@ -114,6 +133,11 @@ std::string Timing::to_osu_description()
         oss << std::fixed << std::setprecision(12) << m_beat_length << ",";
         break;
     }
+    case TimingEffect::JUMP:
+    case TimingEffect::HS: {
+        oss << std::fixed << std::setprecision(12) << m_beat_length << ",";
+        break;
+    }
     }
 
     // 节拍
@@ -143,7 +167,7 @@ std::string Timing::to_osu_description()
         oss << "50" << ",";
     }
     // 是否为非继承时间点 (0=继承/绿线, 1=非继承/红线)
-    oss << (m_timingEffect == TimingEffect::SCROLL ? "0" : "1") << ",";
+    oss << (m_timingEffect == TimingEffect::BPM ? "1" : "0") << ",";
     // 效果
     if ( auto it = osutiming_prop.find("effect"); it != osutiming_prop.end() ) {
         oss << it->second << ",";

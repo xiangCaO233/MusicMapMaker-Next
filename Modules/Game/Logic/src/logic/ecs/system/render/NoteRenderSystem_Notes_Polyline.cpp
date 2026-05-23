@@ -144,11 +144,11 @@ void NoteRenderSystem::drawPolylineBody(
             continue;
         }
 
-        const auto& sub          = note.m_subNotes[i];
-        double      subStartAbsY = cache->getAbsY(sub.timestamp);
+        const auto& sub = note.m_subNotes[i];
         float       subStartY =
-            judgmentLineY -
-            static_cast<float>(subStartAbsY - currentAbsY) * renderScaleY;
+            judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                sub.timestamp, currentAbsY, sub.timestamp)) *
+                                renderScaleY;
 
         float subEndTrack = (float)sub.trackIndex;
         float subEndY     = subStartY;
@@ -193,10 +193,11 @@ void NoteRenderSystem::drawPolylineBody(
                 }
             }
         } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 ) {
-            double subEndAbsY = cache->getAbsY(sub.timestamp + sub.duration);
             subEndY =
                 judgmentLineY -
-                static_cast<float>(subEndAbsY - currentAbsY) * renderScaleY;
+                static_cast<float>(cache->getDisplayDelta(
+                    sub.timestamp + sub.duration, currentAbsY, sub.timestamp)) *
+                    renderScaleY;
             glm::vec2 bodySize = getDrawSize(
                 snapshot, TextureID::HoldBodyVertical, noteW, noteH);
             float bodyX = leftX + sub.trackIndex * singleTrackW +
@@ -230,11 +231,12 @@ void NoteRenderSystem::drawPolylineBody(
 
         // 过渡 Body (连接当前子物件末尾到下一个子物件开头)
         if ( i + 1 < note.m_subNotes.size() ) {
-            const auto& next          = note.m_subNotes[i + 1];
-            double      nextStartAbsY = cache->getAbsY(next.timestamp);
+            const auto& next = note.m_subNotes[i + 1];
             float       nextStartY =
                 judgmentLineY -
-                static_cast<float>(nextStartAbsY - currentAbsY) * renderScaleY;
+                static_cast<float>(cache->getDisplayDelta(
+                    next.timestamp, currentAbsY, next.timestamp)) *
+                    renderScaleY;
             glm::vec2 bodySize = getDrawSize(
                 snapshot, TextureID::HoldBodyVertical, noteW, noteH);
             float curBodyX  = leftX + subEndTrack * singleTrackW +
@@ -293,11 +295,11 @@ void NoteRenderSystem::drawPolylineNodes(
             continue;
         }
 
-        const auto& sub          = note.m_subNotes[i];
-        double      subStartAbsY = cache->getAbsY(sub.timestamp);
+        const auto& sub = note.m_subNotes[i];
         float       subStartY =
-            judgmentLineY -
-            static_cast<float>(subStartAbsY - currentAbsY) * renderScaleY;
+            judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                sub.timestamp, currentAbsY, sub.timestamp)) *
+                                renderScaleY;
         glm::vec2 nodeSize =
             getDrawSize(snapshot, TextureID::Node, noteW, noteH);
         float nodeX = leftX + sub.trackIndex * singleTrackW +
@@ -347,10 +349,11 @@ void NoteRenderSystem::drawPolylineHead(
 
     if ( note.m_subNotes.empty() ) return;
 
-    const auto& first      = note.m_subNotes[0];
-    double      fStartAbsY = cache->getAbsY(first.timestamp);
-    float fStartY = judgmentLineY -
-                    static_cast<float>(fStartAbsY - currentAbsY) * renderScaleY;
+    const auto& first = note.m_subNotes[0];
+    float       fStartY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            first.timestamp, currentAbsY, first.timestamp)) *
+                            renderScaleY;
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
     float     headX    = leftX + first.trackIndex * singleTrackW +
                          (singleTrackW - headSize.x) * 0.5f;
@@ -400,9 +403,10 @@ void NoteRenderSystem::drawPolylineDecoration(
 
     if ( !isLastGlow ) return;
 
-    double lStartAbsY = cache->getAbsY(last.timestamp);
-    float lStartY = judgmentLineY -
-                    static_cast<float>(lStartAbsY - currentAbsY) * renderScaleY;
+    float lStartY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            last.timestamp, currentAbsY, last.timestamp)) *
+                            renderScaleY;
 
     if ( last.type == ::MMM::NoteType::FLICK ) {
         if ( glowPart == HoverPart::None ||
@@ -443,10 +447,12 @@ void NoteRenderSystem::drawPolylineDecoration(
         }
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
         if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd ) {
-            double subEndAbsY = cache->getAbsY(last.timestamp + last.duration);
-            float  subEndY =
-                judgmentLineY -
-                static_cast<float>(subEndAbsY - currentAbsY) * renderScaleY;
+            float subEndY =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    last.timestamp + last.duration,
+                                    currentAbsY,
+                                    last.timestamp)) *
+                                    renderScaleY;
             glm::vec2 endSize =
                 getDrawSize(snapshot, TextureID::HoldEnd, noteW, noteH);
             float endX = leftX + last.trackIndex * singleTrackW +

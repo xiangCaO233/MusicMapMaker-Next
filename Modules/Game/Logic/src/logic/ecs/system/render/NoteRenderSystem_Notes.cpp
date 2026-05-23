@@ -165,11 +165,16 @@ void NoteRenderSystem::generateNoteHitboxes(
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
 
-        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
-        float  screenY =
+        float screenY =
             judgmentLineY -
-            static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY;
-        float visualH = transform.m_size.y * renderScaleY;
+            static_cast<float>(ctx.cache->getDisplayDelta(
+                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
+                renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
 
         float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
         float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
@@ -229,11 +234,16 @@ void NoteRenderSystem::generateNoteHitboxes(
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
-        double      noteAbsY  = ctx.cache->getAbsY(note.m_timestamp);
         float       screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
-        float visualH = transform.m_size.y * renderScaleY;
+            static_cast<float>(ctx.cache->getDisplayDelta(
+                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
+                renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
 
         float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
         float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
@@ -323,15 +333,20 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const auto& note = registry.get<const NoteComponent>(entity);
         if ( note.m_isSubNote ) continue;
 
-        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
-        float  screenY =
+        float screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
+            static_cast<float>(ctx.cache->getDisplayDelta(
+                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
+                renderScaleY;
 
         if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
             const auto& transform =
                 registry.get<const TransformComponent>(entity);
-            float visualH = transform.m_size.y * renderScaleY;
+            float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                                note.m_timestamp + note.m_duration,
+                                ctx.cache->getAbsY(note.m_timestamp),
+                                note.m_timestamp)) *
+                            renderScaleY;
             float minY    = std::min(screenY, screenY - visualH) - ctx.noteH;
             float maxY    = std::max(screenY, screenY - visualH) + ctx.noteH;
             if ( minY > bottomY || maxY < topY ) continue;
@@ -364,11 +379,16 @@ void NoteRenderSystem::renderNoteBaseLayer(
             isSelected = ic->isSelected;
         }
 
-        double noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
-        float  screenY =
+        float screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
-        float visualH = transform.m_size.y * renderScaleY;
+            static_cast<float>(ctx.cache->getDisplayDelta(
+                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
+                renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用 Alpha 与 选中高亮
@@ -488,12 +508,17 @@ void NoteRenderSystem::renderNoteGlowLayer(
     for ( auto entity : hoveredEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
-        const auto& ic       = registry.get<const InteractionComponent>(entity);
-        double      noteAbsY = ctx.cache->getAbsY(note.m_timestamp);
+        const auto& ic = registry.get<const InteractionComponent>(entity);
         float       screenY =
             judgmentLineY -
-            (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
-        float     visualH  = transform.m_size.y * renderScaleY;
+            static_cast<float>(ctx.cache->getDisplayDelta(
+                note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
+                renderScaleY;
+        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
+                                 note.m_timestamp + note.m_duration,
+                                 ctx.cache->getAbsY(note.m_timestamp),
+                                 note.m_timestamp)) *
+                             renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -572,8 +597,9 @@ void NoteRenderSystem::renderBrushPreview(
 
     double noteAbsY = ctx.cache->getAbsY(brush.time);
     float  screenY =
-        judgmentLineY -
-        (static_cast<float>(noteAbsY - ctx.currentAbsY) * renderScaleY);
+        judgmentLineY - static_cast<float>(ctx.cache->getDisplayDelta(
+                            brush.time, ctx.currentAbsY, brush.time)) *
+                            renderScaleY;
 
     float trackX = leftX + brush.track * singleTrackW;
 
@@ -603,7 +629,9 @@ void NoteRenderSystem::renderBrushPreview(
                                     color);
     } else if ( brush.type == ::MMM::NoteType::HOLD ) {
         double endAbsY = ctx.cache->getAbsY(brush.time + brush.duration);
-        float  visualH = static_cast<float>(endAbsY - noteAbsY) * renderScaleY;
+        float  visualH = static_cast<float>((endAbsY - noteAbsY) *
+                                            ctx.cache->getHsAt(brush.time)) *
+                         renderScaleY;
 
         NoteRenderSystem::renderHold(batcher,
                                      tempNote,

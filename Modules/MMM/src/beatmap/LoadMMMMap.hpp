@@ -117,12 +117,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
     if ( root.contains("timing") ) {
         for ( const auto& tJson : root["timing"] ) {
             Timing t;
-            t.m_timestamp             = tJson.value("timestamp", 0.0);
-            t.m_bpm                   = tJson.value("bpm", 120.0);
-            t.m_beat_length           = tJson.value("beat_length", 500.0);
-            t.m_timingEffect          = tJson.value("effect", "bpm") == "bpm"
-                                            ? TimingEffect::BPM
-                                            : TimingEffect::SCROLL;
+            t.m_timestamp   = tJson.value("timestamp", 0.0);
+            t.m_bpm         = tJson.value("bpm", 120.0);
+            t.m_beat_length = tJson.value("beat_length", 500.0);
+            t.m_timingEffect =
+                timingEffectFromString(tJson.value("effect", "bpm"));
             t.m_timingEffectParameter = tJson.value("param", 0.0);
 
             if ( tJson.contains("extra") ) {

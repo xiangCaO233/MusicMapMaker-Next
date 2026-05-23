@@ -14,7 +14,7 @@ struct TimelineComponent {
     /// @brief 触发时间戳 (秒)
     double m_timestamp{ 0.0 };
 
-    /// @brief 效果类型 (BPM 或 SCROLL 变速)
+    /// @brief 效果类型 (BPM、SCROLL、JUMP 或 HS)
     ::MMM::TimingEffect m_effect{ ::MMM::TimingEffect::SCROLL };
 
     /// @brief 效果参数 (如 BPM 值 或 流速倍率/基础流速)

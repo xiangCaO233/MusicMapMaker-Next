@@ -5,11 +5,31 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace MMM::Logic::System
 {
 
-void ScrollCache::rebuild(const entt::registry& timelineRegistry,
+static bool isMalodyEffect(const TimelineComponent& tl, const std::string& name)
+{
+    if ( auto it = tl.m_metadata.timing_properties.find(
+             ::MMM::TimingMetadataType::MALODY);
+         it != tl.m_metadata.timing_properties.end() ) {
+        if ( auto effectIt = it->second.find("effect");
+             effectIt != it->second.end() ) {
+            return effectIt->second == "\"" + name + "\"";
+        }
+    }
+    return false;
+}
+
+static bool hasMalodyMetadata(const TimelineComponent& tl)
+{
+    return tl.m_metadata.timing_properties.contains(
+        ::MMM::TimingMetadataType::MALODY);
+}
+
+void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                           const Config::EditorConfig& config)
 {
     m_rebuildScratch.clear();
@@ -108,11 +128,14 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry,
 
     // osu! 关键：SV 跨 BPM 红线继承，不重置。仅绿线显式修改 ScrollSpeed。
     double currentScrollMult = 1.0;
+    double currentHs         = 1.0;
     double lastTime = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
     double currentAbsY = 0.0;
 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
     newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
+    newSegments.back().hs      = currentHs;
+    newSegments.back().hsValue = currentHs;
 
     for ( const auto& entry : m_rebuildScratch ) {
         const auto* tl = entry.component;
@@ -128,24 +151,41 @@ void ScrollCache::rebuild(const entt::registry& timelineRegistry,
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
             currentBPM                   = tl->m_value;
-            // 完整版 osu! 逻辑：红线 (Uninherited) 必须将 SV 重置为 1.0
-            currentScrollMult = 1.0;
+            if ( !hasMalodyMetadata(*tl) ) {
+                // osu! 红线会重置 SV；Malody 的 BPM 不改变 effect 状态。
+                currentScrollMult = 1.0;
+            }
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
             newSegments.back().scrollEntity = entry.entity;
             newSegments.back().scrollValue  = tl->m_value;
-            if ( tl->m_value < -1e-6 ) {
+            if ( isMalodyEffect(*tl, "scroll") ) {
+                currentScrollMult = tl->m_value;
+            } else if ( tl->m_value < -1e-6 ) {
                 currentScrollMult = -100.0 / tl->m_value;
             } else if ( tl->m_value >= 0 ) {
                 currentScrollMult = tl->m_value;
             } else {
                 currentScrollMult = 1.0;
             }
-            if ( currentScrollMult > 10000.0 ) currentScrollMult = 10000.0;
+            currentScrollMult =
+                std::clamp(currentScrollMult, -10000.0, 10000.0);
+        } else if ( tl->m_effect == ::MMM::TimingEffect::JUMP ) {
+            newSegments.back().effects |= SCROLL_EFFECT_JUMP;
+            newSegments.back().jumpEntity = entry.entity;
+            newSegments.back().jumpValue  = tl->m_value;
+            currentAbsY += (tl->m_value / 1000.0) * currentSpeed;
+            newSegments.back().absY = currentAbsY;
+        } else if ( tl->m_effect == ::MMM::TimingEffect::HS ) {
+            newSegments.back().effects |= SCROLL_EFFECT_HS;
+            newSegments.back().hsEntity = entry.entity;
+            newSegments.back().hsValue  = tl->m_value;
+            currentHs                   = tl->m_value;
         }
 
         currentSpeed             = calcSpeed(currentBPM, currentScrollMult);
         newSegments.back().speed = currentSpeed;
+        newSegments.back().hs    = currentHs;
     }
 
     m_segments = std::move(newSegments);
@@ -177,20 +217,30 @@ double ScrollCache::getTime(double absY) const
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
-    auto it = std::lower_bound(
-        m_segments.begin(),
-        m_segments.end(),
-        absY,
-        [](const ScrollSegment& seg, double val) { return seg.absY < val; });
+    for ( size_t i = 0; i < m_segments.size(); ++i ) {
+        const auto& seg = m_segments[i];
+        if ( std::abs(seg.speed) < 1e-6 ) continue;
 
-    if ( it == m_segments.begin() ) {
-        if ( std::abs(m_segments[0].speed) < 1e-6 ) return m_segments[0].time;
-        return m_segments[0].time +
-               (absY - m_segments[0].absY) / m_segments[0].speed;
+        double nextAbsY = seg.absY;
+        if ( i + 1 < m_segments.size() ) {
+            nextAbsY = m_segments[i + 1].absY;
+        } else {
+            nextAbsY = seg.absY + seg.speed;
+        }
+
+        const double minY = std::min(seg.absY, nextAbsY);
+        const double maxY = std::max(seg.absY, nextAbsY);
+        if ( absY >= minY - 1e-6 && absY <= maxY + 1e-6 ) {
+            return seg.time + (absY - seg.absY) / seg.speed;
+        }
     }
-    --it;
-    if ( std::abs(it->speed) < 1e-6 ) return it->time;
-    return it->time + (absY - it->absY) / it->speed;
+
+    const auto& first = m_segments.front();
+    const auto& last  = m_segments.back();
+    const auto& edge =
+        std::abs(absY - first.absY) < std::abs(absY - last.absY) ? first : last;
+    if ( std::abs(edge.speed) < 1e-6 ) return edge.time;
+    return edge.time + (absY - edge.absY) / edge.speed;
 }
 
 double ScrollCache::getSpeedAt(double t) const
@@ -207,5 +257,24 @@ double ScrollCache::getSpeedAt(double t) const
     return it->speed;
 }
 
+double ScrollCache::getHsAt(double t) const
+{
+    if ( m_segments.empty() ) return 1.0;
+    auto it = std::upper_bound(
+        m_segments.begin(),
+        m_segments.end(),
+        t,
+        [](double val, const ScrollSegment& seg) { return val < seg.time; });
+
+    if ( it == m_segments.begin() ) return m_segments[0].hs;
+    --it;
+    return it->hs;
+}
+
+double ScrollCache::getDisplayDelta(double t, double currentAbsY,
+                                    double anchorTime) const
+{
+    return (getAbsY(t) - currentAbsY) * getHsAt(anchorTime);
+}
 
 }  // namespace MMM::Logic::System

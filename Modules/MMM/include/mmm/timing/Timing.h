@@ -1,16 +1,27 @@
 #pragma once
 
 #include "mmm/Metadata.h"
+#include <string>
 #include <vector>
 
 namespace MMM
 {
 enum class TimingEffect {
-    // bpm效果
+    /// @brief bpm效果
     BPM,
-    // scroll效果
+    /// @brief scroll效果
     SCROLL,
+    /// @brief Malody jump瞬移效果
+    JUMP,
+    /// @brief Malody hs音符速度效果
+    HS,
 };
+
+/// @brief 将时间线效果类型转换为持久化字符串
+std::string timingEffectToString(TimingEffect effect);
+
+/// @brief 从持久化字符串解析时间线效果类型
+TimingEffect timingEffectFromString(const std::string& effect);
 
 class Timing
 {

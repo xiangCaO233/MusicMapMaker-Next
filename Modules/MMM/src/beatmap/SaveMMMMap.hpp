@@ -77,9 +77,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         t["timestamp"]   = timing.m_timestamp;
         t["bpm"]         = timing.m_bpm;
         t["beat_length"] = timing.m_beat_length;
-        t["effect"] =
-            timing.m_timingEffect == TimingEffect::BPM ? "bpm" : "scroll";
-        t["param"] = timing.m_timingEffectParameter;
+        t["effect"]      = timingEffectToString(timing.m_timingEffect);
+        t["param"]       = timing.m_timingEffectParameter;
 
         auto& tExtra = t["extra"];
         tExtra       = json::array();
