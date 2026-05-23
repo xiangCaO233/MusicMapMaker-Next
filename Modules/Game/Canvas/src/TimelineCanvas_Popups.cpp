@@ -9,6 +9,11 @@
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief 新建 Timing 行的高亮持续时间（秒）
+constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
+}  // namespace
 
 void TimelineCanvas::renderEventEditorPopup()
 {
@@ -229,6 +234,10 @@ void TimelineCanvas::renderEventCreationPopup()
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     m_createTimeManual, type, finalValue }));
+            m_lastCreatedTimingTime  = m_createTimeManual;
+            m_lastCreatedTimingIsBpm = (type == ::MMM::TimingEffect::BPM);
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
             if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
                 double refBpm = 120.0;
@@ -316,6 +325,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::BPM,
                                                120.0 }));
+            m_lastCreatedTimingTime  = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingIsBpm = true;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
         if ( ImGui::Button("添加流速 (SV)") ) {
@@ -323,6 +336,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::SCROLL,
                                                -100.0 }));
+            m_lastCreatedTimingTime  = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingIsBpm = false;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
 
         ImGui::Separator();
@@ -418,8 +435,19 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                       ++idx ) {
                     const auto& el         = elements[idx];
                     int         displayIdx = idx + 1;
+                    bool        isBpm =
+                        (el.effects & Logic::System::SCROLL_EFFECT_BPM);
+                    bool isRecentlyCreated =
+                        (ImGui::GetTime() <=
+                         m_lastCreatedTimingHighlightUntil) &&
+                        (isBpm == m_lastCreatedTimingIsBpm) &&
+                        (std::abs(el.time - m_lastCreatedTimingTime) <= 1e-6);
 
                     ImGui::TableNextRow();
+                    if ( isRecentlyCreated ) {
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                               IM_COL32(255, 245, 170, 95));
+                    }
 
                     // Column 0: 序号
                     ImGui::TableSetColumnIndex(0);
@@ -431,13 +459,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     double tVal = el.time;
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string tId = fmt::format("##T_{}", displayIdx);
-                    if ( ImGui::InputDouble(
-                             tId.c_str(),
-                             &tVal,
-                             0.001,
-                             0.01,
-                             "%.3f",
-                             ImGuiInputTextFlags_EnterReturnsTrue) ) {
+                    ImGui::InputDouble(tId.c_str(), &tVal, 0.001, 0.01, "%.3f");
+                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                         entt::entity ent =
                             (el.effects & Logic::System::SCROLL_EFFECT_BPM)
                                 ? el.bpmEntity
@@ -468,21 +491,18 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // Column 3: 数值
                     ImGui::TableSetColumnIndex(3);
-                    bool isBpm =
-                        (el.effects & Logic::System::SCROLL_EFFECT_BPM);
                     double vVal = isBpm ? el.bpmValue
                                         : ((el.scrollValue < -1e-6)
                                                ? (-100.0 / el.scrollValue)
                                                : el.scrollValue);
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string vId = fmt::format("##V_{}", displayIdx);
-                    if ( ImGui::InputDouble(
-                             vId.c_str(),
-                             &vVal,
-                             isBpm ? 0.1 : 0.01,
-                             isBpm ? 1.0 : 0.1,
-                             isBpm ? "%.2f" : "%.4f",
-                             ImGuiInputTextFlags_EnterReturnsTrue) ) {
+                    ImGui::InputDouble(vId.c_str(),
+                                       &vVal,
+                                       isBpm ? 0.1 : 0.01,
+                                       isBpm ? 1.0 : 0.1,
+                                       isBpm ? "%.2f" : "%.4f");
+                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                         entt::entity ent =
                             isBpm ? el.bpmEntity : el.scrollEntity;
                         double finalValue = vVal;

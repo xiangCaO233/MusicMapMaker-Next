@@ -92,6 +92,13 @@ private:
     bool   m_isTimeSnapped{ false };
     bool   m_keepSpeedOnBpmChange{ false };
 
+    /// @brief 最近一次新建 Timing 的目标时间（秒），用于表格高亮定位
+    double m_lastCreatedTimingTime{ -1.0 };
+    /// @brief 最近一次新建 Timing 的类型，true 为 BPM，false 为 SV
+    bool m_lastCreatedTimingIsBpm{ true };
+    /// @brief 最近一次新建 Timing 的高亮截止时间（ImGui 时间）
+    double m_lastCreatedTimingHighlightUntil{ 0.0 };
+
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>
         m_shaderSourceCache;
