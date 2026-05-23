@@ -68,6 +68,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     const double BASE_SPEED      = 500.0;
     const auto&  visualConfig    = config.visual;
     const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
+    const bool   enableEffects   = !isLinearMapping;
     const double timelineZoom    = visualConfig.timelineZoom;
     m_lastZoom                   = timelineZoom;
 
@@ -151,7 +152,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
             currentBPM                   = tl->m_value;
-            if ( !hasMalodyMetadata(*tl) ) {
+            if ( enableEffects && !hasMalodyMetadata(*tl) ) {
                 // osu! 红线会重置 SV；Malody 的 BPM 不改变 effect 状态。
                 currentScrollMult = 1.0;
             }
@@ -159,28 +160,34 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
             newSegments.back().scrollEntity = entry.entity;
             newSegments.back().scrollValue  = tl->m_value;
-            if ( isMalodyEffect(*tl, "scroll") ) {
-                currentScrollMult = tl->m_value;
-            } else if ( tl->m_value < -1e-6 ) {
-                currentScrollMult = -100.0 / tl->m_value;
-            } else if ( tl->m_value >= 0 ) {
-                currentScrollMult = tl->m_value;
-            } else {
-                currentScrollMult = 1.0;
+            if ( enableEffects ) {
+                if ( isMalodyEffect(*tl, "scroll") ) {
+                    currentScrollMult = tl->m_value;
+                } else if ( tl->m_value < -1e-6 ) {
+                    currentScrollMult = -100.0 / tl->m_value;
+                } else if ( tl->m_value >= 0 ) {
+                    currentScrollMult = tl->m_value;
+                } else {
+                    currentScrollMult = 1.0;
+                }
+                currentScrollMult =
+                    std::clamp(currentScrollMult, -10000.0, 10000.0);
             }
-            currentScrollMult =
-                std::clamp(currentScrollMult, -10000.0, 10000.0);
         } else if ( tl->m_effect == ::MMM::TimingEffect::JUMP ) {
             newSegments.back().effects |= SCROLL_EFFECT_JUMP;
             newSegments.back().jumpEntity = entry.entity;
             newSegments.back().jumpValue  = tl->m_value;
-            currentAbsY += (tl->m_value / 1000.0) * currentSpeed;
-            newSegments.back().absY = currentAbsY;
+            if ( enableEffects ) {
+                currentAbsY += (tl->m_value / 1000.0) * currentSpeed;
+                newSegments.back().absY = currentAbsY;
+            }
         } else if ( tl->m_effect == ::MMM::TimingEffect::HS ) {
             newSegments.back().effects |= SCROLL_EFFECT_HS;
             newSegments.back().hsEntity = entry.entity;
             newSegments.back().hsValue  = tl->m_value;
-            currentHs                   = tl->m_value;
+            if ( enableEffects ) {
+                currentHs = tl->m_value;
+            }
         }
 
         currentSpeed             = calcSpeed(currentBPM, currentScrollMult);

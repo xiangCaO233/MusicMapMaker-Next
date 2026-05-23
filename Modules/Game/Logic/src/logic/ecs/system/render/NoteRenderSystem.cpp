@@ -436,11 +436,6 @@ void NoteRenderSystem::generateTimelineSnapshot(
     auto  tickCol = skin.getColor("timeline.tick");
 
     double currentAbsY = cache->getAbsY(currentTime);
-    double timeA =
-        cache->getTime(currentAbsY - (viewportHeight - judgmentLineY));
-    double timeB     = cache->getTime(currentAbsY + judgmentLineY);
-    double startTime = std::min(timeA, timeB);
-    double endTime   = std::max(timeA, timeB);
 
     float paddingX = 30.0f;
     float lineW    = viewportWidth - paddingX * 2.0f;
@@ -463,8 +458,8 @@ void NoteRenderSystem::generateTimelineSnapshot(
     for ( auto entity : tlView ) {
         const auto& tc = tlView.get<const TimelineComponent>(entity);
         double      t  = tc.m_timestamp;
-        float       y =
-            judgmentLineY - static_cast<float>(cache->getAbsY(t) - currentAbsY);
+        float y = judgmentLineY -
+                  static_cast<float>(cache->getDisplayDelta(t, currentAbsY, t));
 
         TimelineInteractiveElement el;
         el.time = t;
@@ -493,9 +488,9 @@ void NoteRenderSystem::generateTimelineSnapshot(
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
 
-        float y = judgmentLineY - static_cast<float>(seg.absY - currentAbsY);
-
-        if ( seg.time < startTime || seg.time > endTime ) continue;
+        float y = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                      seg.time, currentAbsY, seg.time));
+        if ( y < 0.0f || y > viewportHeight ) continue;
 
         glm::vec4 color = { tickCol.r, tickCol.g, tickCol.b, 0.8f };
         if ( (seg.effects & SCROLL_EFFECT_BPM) &&
@@ -505,6 +500,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
             color = { 1.0f, 0.2f, 0.2f, 0.8f };
         } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
             color = { 0.2f, 1.0f, 0.2f, 0.8f };
+        } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
+            color = { 1.0f, 0.9f, 0.2f, 0.8f };
+        } else if ( seg.effects & SCROLL_EFFECT_HS ) {
+            color = { 0.2f, 0.8f, 1.0f, 0.8f };
         }
 
         batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
