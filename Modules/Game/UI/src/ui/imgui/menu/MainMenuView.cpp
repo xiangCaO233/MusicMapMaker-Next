@@ -12,6 +12,7 @@
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
@@ -40,6 +41,7 @@ MainMenuView::MainMenuView()
     , m_closeHelpMenuNextFrame(false)
     , m_showOverlapCheckWindow(false)
     , m_showMetadataEditorWindow(false)
+    , m_showNoteMetadataEditorWindow(false)
     , m_hasOverlapScan(false)
     , m_showAboutPopup(false)
     , m_showUpdatePopup(false)
@@ -1067,6 +1069,31 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                  ICON_MMM_SELECT_ALL, TR("ui.edit.select_all"), "Ctrl+A") ) {
             dispatchCommand(Logic::CmdSelectAll{});
         }
+        {
+            bool hasSelection = false;
+            auto engine       = &Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine->getSessionMutex());
+            auto session = engine->getActiveSession();
+            if ( session ) {
+                auto selView =
+                    session->getContext()
+                        .noteRegistry.view<const Logic::InteractionComponent>();
+                for ( auto e : selView ) {
+                    if ( selView.get<const Logic::InteractionComponent>(e)
+                             .isSelected ) {
+                        hasSelection = true;
+                        break;
+                    }
+                }
+            }
+            if ( MenuItemWithFontIcon(ICON_MMM_COG,
+                                      TR("ui.edit.note_metadata"),
+                                      nullptr,
+                                      hasSelection) ) {
+                m_showNoteMetadataEditorWindow = true;
+            }
+        }
         ImGui::Separator();
         bool playing      = Logic::EditorEngine::instance().isPlaybackPlaying();
         const char* pIcon = playing ? ICON_MMM_PAUSE : ICON_MMM_PLAY;
@@ -1127,6 +1154,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderUpdateSuccessPopup();
     renderOverlapCheckWindow();
     renderMetadataEditorWindow();
+    renderNoteMetadataEditorWindow();
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
@@ -2261,6 +2289,703 @@ void MainMenuView::renderMetadataEditorWindow()
 
                     ImGui::EndTabBar();
                 }
+            }
+        }
+    }
+    ImGui::End();
+
+    ImGui::PopStyleVar(6);
+}
+
+void MainMenuView::renderNoteMetadataEditorWindow()
+{
+    if ( !m_showNoteMetadataEditorWindow ) return;
+
+    struct InputBuffer {
+        char key[128] = "";
+        char val[256] = "";
+    };
+    static std::unordered_map<std::string, InputBuffer> inputBuffers;
+    static bool                                         lastShowState = false;
+    if ( m_showNoteMetadataEditorWindow && !lastShowState ) {
+        inputBuffers.clear();
+    }
+    lastShowState = m_showNoteMetadataEditorWindow;
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float windowRound =
+        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
+    float frameRound =
+        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
+    ImVec2 itemSpacing = {
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale),
+        std::floor(editorSettings.aesthetics.itemSpacing * dpiScale)
+    };
+
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_WindowPadding,
+        ImVec2(std::floor(editorSettings.aesthetics.windowPadding * dpiScale),
+               std::floor(editorSettings.aesthetics.windowPadding * dpiScale)));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+    ImGui::SetNextWindowSize(ImVec2(750.0f * dpiScale, 500.0f * dpiScale),
+                             ImGuiCond_FirstUseEver);
+
+    auto&   skinMgr   = Config::SkinManager::instance();
+    ImFont* titleFont = skinMgr.getFont("title");
+    if ( titleFont ) ImGui::PushFont(titleFont);
+
+    bool opened = ImGui::Begin(TR("ui.edit.note_metadata.title").data(),
+                               &m_showNoteMetadataEditorWindow,
+                               ImGuiWindowFlags_None);
+
+    if ( titleFont ) ImGui::PopFont();
+
+    if ( opened ) {
+        auto& engine = Logic::EditorEngine::instance();
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
+        if ( !session ) {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "%s",
+                               TR("ui.tools.no_active_session").data());
+        } else {
+            // --- 收集选中物件 ---
+            struct SelectedNote {
+                entt::entity entity;
+                double       timestamp;
+            };
+            std::vector<SelectedNote> selectedNotes;
+            auto& registry = session->getContextMutable().noteRegistry;
+
+            auto view = registry.view<const Logic::NoteComponent,
+                                      const Logic::InteractionComponent>();
+            for ( auto e : view ) {
+                const auto& interaction =
+                    view.get<const Logic::InteractionComponent>(e);
+                if ( interaction.isSelected ) {
+                    const auto& nc = view.get<const Logic::NoteComponent>(e);
+                    selectedNotes.push_back({ e, nc.m_timestamp });
+                }
+            }
+
+            if ( selectedNotes.empty() ) {
+                ImGui::TextColored(
+                    ImVec4(1.0f, 0.6f, 0.2f, 1.0f),
+                    "%s",
+                    TR("ui.edit.note_metadata.no_selection").data());
+            } else {
+                // --- 按元数据指纹分组 ---
+                // 将 note_properties 序列化为字符串作为分组键
+                auto serializeMetadata =
+                    [](const ::MMM::NoteMetadata& meta) -> std::string {
+                    std::string result;
+                    // 按 NoteMetadataType 排序遍历
+                    for ( int typeIdx = 0; typeIdx < 3; ++typeIdx ) {
+                        auto metaType =
+                            static_cast<::MMM::NoteMetadataType>(typeIdx);
+                        auto it = meta.note_properties.find(metaType);
+                        if ( it == meta.note_properties.end() ) continue;
+                        if ( it->second.empty() ) continue;
+                        result += std::to_string(typeIdx) + "{";
+                        // 收集并排序 key
+                        std::vector<std::string> keys;
+                        for ( const auto& [k, v] : it->second ) {
+                            keys.push_back(k);
+                        }
+                        std::sort(keys.begin(), keys.end());
+                        for ( const auto& k : keys ) {
+                            result += k + "=" + it->second.at(k) + ";";
+                        }
+                        result += "}";
+                    }
+                    return result;
+                };
+
+                struct MetadataGroup {
+                    std::vector<entt::entity> entities;
+                    double                    minTime;
+                    double                    maxTime;
+                };
+                std::map<std::string, MetadataGroup> groups;
+
+                for ( const auto& sn : selectedNotes ) {
+                    auto& nc = registry.get<Logic::NoteComponent>(sn.entity);
+                    std::string fingerprint = serializeMetadata(nc.m_metadata);
+                    auto&       group       = groups[fingerprint];
+                    group.entities.push_back(sn.entity);
+                    if ( group.entities.size() == 1 ) {
+                        group.minTime = sn.timestamp;
+                        group.maxTime = sn.timestamp;
+                    } else {
+                        group.minTime = std::min(group.minTime, sn.timestamp);
+                        group.maxTime = std::max(group.maxTime, sn.timestamp);
+                    }
+                }
+
+                // --- 摘要信息 ---
+                std::string summaryStr = TR_FMT("ui.edit.note_metadata.summary",
+                                                selectedNotes.size(),
+                                                groups.size());
+                ImGui::TextUnformatted(summaryStr.c_str());
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                // --- 各组的编辑区域 ---
+                ImGui::BeginChild("NoteMetaGroups",
+                                  ImVec2(0, 0),
+                                  ImGuiChildFlags_None,
+                                  ImGuiWindowFlags_None);
+
+                int groupIdx = 0;
+                for ( auto& [fingerprint, group] : groups ) {
+                    ++groupIdx;
+                    std::string headerStr =
+                        TR_FMT("ui.edit.note_metadata.group_header",
+                               groupIdx,
+                               group.entities.size(),
+                               group.minTime,
+                               group.maxTime);
+
+                    ImGui::PushID(groupIdx);
+
+                    bool headerOpen = ImGui::CollapsingHeader(
+                        headerStr.c_str(),
+                        groups.size() == 1 ? ImGuiTreeNodeFlags_DefaultOpen
+                                           : ImGuiTreeNodeFlags_None);
+
+                    if ( headerOpen ) {
+                        // 取第一个实体作为代表
+                        auto  firstEntity = group.entities.front();
+                        auto& firstNc =
+                            registry.get<Logic::NoteComponent>(firstEntity);
+
+                        if ( ImGui::BeginTabBar(
+                                 fmt::format("MetaTabBar_{}", groupIdx)
+                                     .c_str()) ) {
+                            // --- OSU 标签页 ---
+                            if ( ImGui::BeginTabItem("OSU") ) {
+                                auto metaType = ::MMM::NoteMetadataType::OSU;
+                                auto it =
+                                    firstNc.m_metadata.note_properties.find(
+                                        metaType);
+                                static const decltype(firstNc.m_metadata
+                                                          .note_properties)::
+                                    mapped_type emptyMap;
+                                const auto&     refProps =
+                                    (it !=
+                                     firstNc.m_metadata.note_properties.end())
+                                        ? it->second
+                                        : emptyMap;
+
+                                ImGuiTableFlags tableFlags =
+                                    ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_BordersOuter |
+                                    ImGuiTableFlags_Resizable;
+
+                                if ( ImGui::BeginTable(
+                                         fmt::format("NoteMetaTable_OSU_{}",
+                                                     groupIdx)
+                                             .c_str(),
+                                         3,
+                                         tableFlags,
+                                         ImVec2(0.0f, 0.0f)) ) {
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.key_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        220.0f * dpiScale);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.value_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthStretch);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.action_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        60.0f * dpiScale);
+                                    ImGui::TableHeadersRow();
+
+                                    std::vector<std::string> keys;
+                                    for ( const auto& [k, v] : refProps ) {
+                                        keys.push_back(k);
+                                    }
+                                    std::sort(keys.begin(), keys.end());
+
+                                    for ( const auto& key : keys ) {
+                                        ImGui::TableNextRow();
+                                        ImGui::TableNextColumn();
+                                        ImGui::AlignTextToFramePadding();
+                                        ImGui::TextUnformatted(key.c_str());
+
+                                        ImGui::TableNextColumn();
+                                        char        valBuf[1024] = { 0 };
+                                        std::string currentVal =
+                                            refProps.at(key);
+                                        size_t copyLen =
+                                            std::min(currentVal.size(),
+                                                     sizeof(valBuf) - 1);
+                                        std::copy(currentVal.begin(),
+                                                  currentVal.begin() + copyLen,
+                                                  valBuf);
+
+                                        ImGui::SetNextItemWidth(-1.0f);
+                                        if ( ImGui::InputText(
+                                                 fmt::format("##nm_osu_{}_{}",
+                                                             groupIdx,
+                                                             key)
+                                                     .c_str(),
+                                                 valBuf,
+                                                 sizeof(valBuf)) ) {
+                                            // 写回所有同组实体
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                nc.m_metadata
+                                                    .note_properties[metaType]
+                                                                    [key] =
+                                                    valBuf;
+                                            }
+                                        }
+
+                                        ImGui::TableNextColumn();
+                                        if ( ImGui::Button(
+                                                 fmt::format(
+                                                     "{}##clr_osu_{}_{}",
+                                                     TR("ui.edit.note_"
+                                                        "metadata.clear_"
+                                                        "btn")
+                                                         .data(),
+                                                     groupIdx,
+                                                     key)
+                                                     .c_str()) ) {
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                auto& m = nc.m_metadata
+                                                              .note_properties
+                                                                  [metaType];
+                                                m.erase(key);
+                                                if ( m.empty() ) {
+                                                    nc.m_metadata
+                                                        .note_properties.erase(
+                                                            metaType);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ImGui::EndTable();
+                                }
+
+                                // 新增字段
+                                ImGui::Separator();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_key").data());
+                                ImGui::SameLine();
+                                std::string bufKey =
+                                    fmt::format("{}_{}",
+                                                groupIdx,
+                                                static_cast<int>(metaType));
+                                auto& buf = inputBuffers[bufKey];
+                                ImGui::SetNextItemWidth(150.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmk_osu_{}", groupIdx)
+                                        .c_str(),
+                                    buf.key,
+                                    sizeof(buf.key));
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_value")
+                                        .data());
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(200.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmv_osu_{}", groupIdx)
+                                        .c_str(),
+                                    buf.val,
+                                    sizeof(buf.val));
+                                ImGui::SameLine();
+                                if ( ImGui::Button(
+                                         fmt::format("{}##nma_osu_{}",
+                                                     TR("ui.edit.note_metadata."
+                                                        "add_btn")
+                                                         .data(),
+                                                     groupIdx)
+                                             .c_str()) ) {
+                                    std::string nk = buf.key;
+                                    if ( !nk.empty() ) {
+                                        for ( auto e : group.entities ) {
+                                            auto& nc =
+                                                registry
+                                                    .get<Logic::NoteComponent>(
+                                                        e);
+                                            nc.m_metadata
+                                                .note_properties[metaType][nk] =
+                                                buf.val;
+                                        }
+                                        buf.key[0] = '\0';
+                                        buf.val[0] = '\0';
+                                    }
+                                }
+
+                                ImGui::EndTabItem();
+                            }
+
+                            // --- MALODY 标签页 ---
+                            if ( ImGui::BeginTabItem("MALODY") ) {
+                                auto metaType = ::MMM::NoteMetadataType::MALODY;
+                                auto it =
+                                    firstNc.m_metadata.note_properties.find(
+                                        metaType);
+                                static const decltype(firstNc.m_metadata
+                                                          .note_properties)::
+                                    mapped_type emptyMap;
+                                const auto&     refProps =
+                                    (it !=
+                                     firstNc.m_metadata.note_properties.end())
+                                        ? it->second
+                                        : emptyMap;
+
+                                ImGuiTableFlags tableFlags =
+                                    ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_BordersOuter |
+                                    ImGuiTableFlags_Resizable;
+
+                                if ( ImGui::BeginTable(
+                                         fmt::format("NoteMetaTable_MLD_{}",
+                                                     groupIdx)
+                                             .c_str(),
+                                         3,
+                                         tableFlags,
+                                         ImVec2(0.0f, 0.0f)) ) {
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.key_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        220.0f * dpiScale);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.value_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthStretch);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.action_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        60.0f * dpiScale);
+                                    ImGui::TableHeadersRow();
+
+                                    std::vector<std::string> keys;
+                                    for ( const auto& [k, v] : refProps ) {
+                                        keys.push_back(k);
+                                    }
+                                    std::sort(keys.begin(), keys.end());
+
+                                    for ( const auto& key : keys ) {
+                                        ImGui::TableNextRow();
+                                        ImGui::TableNextColumn();
+                                        ImGui::AlignTextToFramePadding();
+                                        ImGui::TextUnformatted(key.c_str());
+
+                                        ImGui::TableNextColumn();
+                                        char        valBuf[1024] = { 0 };
+                                        std::string currentVal =
+                                            refProps.at(key);
+                                        size_t copyLen =
+                                            std::min(currentVal.size(),
+                                                     sizeof(valBuf) - 1);
+                                        std::copy(currentVal.begin(),
+                                                  currentVal.begin() + copyLen,
+                                                  valBuf);
+
+                                        ImGui::SetNextItemWidth(-1.0f);
+                                        if ( ImGui::InputText(
+                                                 fmt::format("##nm_mld_{}_{}",
+                                                             groupIdx,
+                                                             key)
+                                                     .c_str(),
+                                                 valBuf,
+                                                 sizeof(valBuf)) ) {
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                nc.m_metadata
+                                                    .note_properties[metaType]
+                                                                    [key] =
+                                                    valBuf;
+                                            }
+                                        }
+
+                                        ImGui::TableNextColumn();
+                                        if ( ImGui::Button(
+                                                 fmt::format(
+                                                     "{}##clr_mld_{}_{}",
+                                                     TR("ui.edit.note_"
+                                                        "metadata.clear_"
+                                                        "btn")
+                                                         .data(),
+                                                     groupIdx,
+                                                     key)
+                                                     .c_str()) ) {
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                auto& m = nc.m_metadata
+                                                              .note_properties
+                                                                  [metaType];
+                                                m.erase(key);
+                                                if ( m.empty() ) {
+                                                    nc.m_metadata
+                                                        .note_properties.erase(
+                                                            metaType);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ImGui::EndTable();
+                                }
+
+                                // 新增字段
+                                ImGui::Separator();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_key").data());
+                                ImGui::SameLine();
+                                std::string bufKey =
+                                    fmt::format("{}_{}",
+                                                groupIdx,
+                                                static_cast<int>(metaType));
+                                auto& buf = inputBuffers[bufKey];
+                                ImGui::SetNextItemWidth(150.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmk_mld_{}", groupIdx)
+                                        .c_str(),
+                                    buf.key,
+                                    sizeof(buf.key));
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_value")
+                                        .data());
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(200.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmv_mld_{}", groupIdx)
+                                        .c_str(),
+                                    buf.val,
+                                    sizeof(buf.val));
+                                ImGui::SameLine();
+                                if ( ImGui::Button(
+                                         fmt::format("{}##nma_mld_{}",
+                                                     TR("ui.edit.note_metadata."
+                                                        "add_btn")
+                                                         .data(),
+                                                     groupIdx)
+                                             .c_str()) ) {
+                                    std::string nk = buf.key;
+                                    if ( !nk.empty() ) {
+                                        for ( auto e : group.entities ) {
+                                            auto& nc =
+                                                registry
+                                                    .get<Logic::NoteComponent>(
+                                                        e);
+                                            nc.m_metadata
+                                                .note_properties[metaType][nk] =
+                                                buf.val;
+                                        }
+                                        buf.key[0] = '\0';
+                                        buf.val[0] = '\0';
+                                    }
+                                }
+
+                                ImGui::EndTabItem();
+                            }
+
+                            // --- RM 标签页 ---
+                            if ( ImGui::BeginTabItem("RM") ) {
+                                auto metaType = ::MMM::NoteMetadataType::RM;
+                                auto it =
+                                    firstNc.m_metadata.note_properties.find(
+                                        metaType);
+                                static const decltype(firstNc.m_metadata
+                                                          .note_properties)::
+                                    mapped_type emptyMap;
+                                const auto&     refProps =
+                                    (it !=
+                                     firstNc.m_metadata.note_properties.end())
+                                        ? it->second
+                                        : emptyMap;
+
+                                ImGuiTableFlags tableFlags =
+                                    ImGuiTableFlags_RowBg |
+                                    ImGuiTableFlags_BordersOuter |
+                                    ImGuiTableFlags_Resizable;
+
+                                if ( ImGui::BeginTable(
+                                         fmt::format("NoteMetaTable_RM_{}",
+                                                     groupIdx)
+                                             .c_str(),
+                                         3,
+                                         tableFlags,
+                                         ImVec2(0.0f, 0.0f)) ) {
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.key_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        220.0f * dpiScale);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.value_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthStretch);
+                                    ImGui::TableSetupColumn(
+                                        TR("ui.edit.note_metadata.action_col")
+                                            .data(),
+                                        ImGuiTableColumnFlags_WidthFixed,
+                                        60.0f * dpiScale);
+                                    ImGui::TableHeadersRow();
+
+                                    std::vector<std::string> keys;
+                                    for ( const auto& [k, v] : refProps ) {
+                                        keys.push_back(k);
+                                    }
+                                    std::sort(keys.begin(), keys.end());
+
+                                    for ( const auto& key : keys ) {
+                                        ImGui::TableNextRow();
+                                        ImGui::TableNextColumn();
+                                        ImGui::AlignTextToFramePadding();
+                                        ImGui::TextUnformatted(key.c_str());
+
+                                        ImGui::TableNextColumn();
+                                        char        valBuf[1024] = { 0 };
+                                        std::string currentVal =
+                                            refProps.at(key);
+                                        size_t copyLen =
+                                            std::min(currentVal.size(),
+                                                     sizeof(valBuf) - 1);
+                                        std::copy(currentVal.begin(),
+                                                  currentVal.begin() + copyLen,
+                                                  valBuf);
+
+                                        ImGui::SetNextItemWidth(-1.0f);
+                                        if ( ImGui::InputText(
+                                                 fmt::format("##nm_rm_{}_{}",
+                                                             groupIdx,
+                                                             key)
+                                                     .c_str(),
+                                                 valBuf,
+                                                 sizeof(valBuf)) ) {
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                nc.m_metadata
+                                                    .note_properties[metaType]
+                                                                    [key] =
+                                                    valBuf;
+                                            }
+                                        }
+
+                                        ImGui::TableNextColumn();
+                                        if ( ImGui::Button(
+                                                 fmt::format(
+                                                     "{}##clr_rm_{}_{}",
+                                                     TR("ui.edit.note_"
+                                                        "metadata.clear_"
+                                                        "btn")
+                                                         .data(),
+                                                     groupIdx,
+                                                     key)
+                                                     .c_str()) ) {
+                                            for ( auto e : group.entities ) {
+                                                auto& nc = registry.get<
+                                                    Logic::NoteComponent>(e);
+                                                auto& m = nc.m_metadata
+                                                              .note_properties
+                                                                  [metaType];
+                                                m.erase(key);
+                                                if ( m.empty() ) {
+                                                    nc.m_metadata
+                                                        .note_properties.erase(
+                                                            metaType);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ImGui::EndTable();
+                                }
+
+                                // 新增字段
+                                ImGui::Separator();
+                                ImGui::AlignTextToFramePadding();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_key").data());
+                                ImGui::SameLine();
+                                std::string bufKey =
+                                    fmt::format("{}_{}",
+                                                groupIdx,
+                                                static_cast<int>(metaType));
+                                auto& buf = inputBuffers[bufKey];
+                                ImGui::SetNextItemWidth(150.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmk_rm_{}", groupIdx)
+                                        .c_str(),
+                                    buf.key,
+                                    sizeof(buf.key));
+                                ImGui::SameLine();
+                                ImGui::TextUnformatted(
+                                    TR("ui.edit.note_metadata.add_value")
+                                        .data());
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(200.0f * dpiScale);
+                                ImGui::InputText(
+                                    fmt::format("##nmv_rm_{}", groupIdx)
+                                        .c_str(),
+                                    buf.val,
+                                    sizeof(buf.val));
+                                ImGui::SameLine();
+                                if ( ImGui::Button(
+                                         fmt::format("{}##nma_rm_{}",
+                                                     TR("ui.edit.note_metadata."
+                                                        "add_btn")
+                                                         .data(),
+                                                     groupIdx)
+                                             .c_str()) ) {
+                                    std::string nk = buf.key;
+                                    if ( !nk.empty() ) {
+                                        for ( auto e : group.entities ) {
+                                            auto& nc =
+                                                registry
+                                                    .get<Logic::NoteComponent>(
+                                                        e);
+                                            nc.m_metadata
+                                                .note_properties[metaType][nk] =
+                                                buf.val;
+                                        }
+                                        buf.key[0] = '\0';
+                                        buf.val[0] = '\0';
+                                    }
+                                }
+
+                                ImGui::EndTabItem();
+                            }
+
+                            ImGui::EndTabBar();
+                        }
+                    }
+
+                    ImGui::PopID();
+
+                    if ( groupIdx < static_cast<int>(groups.size()) ) {
+                        ImGui::Spacing();
+                    }
+                }
+
+                ImGui::EndChild();
             }
         }
     }
