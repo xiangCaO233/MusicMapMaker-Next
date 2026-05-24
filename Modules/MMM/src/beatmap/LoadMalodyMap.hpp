@@ -116,14 +116,27 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 2. 收集原始时间事件
     struct RawEvent {
-        double       beat;
-        double       bpm   = -1.0;
-        double       value = 0.0;
-        json         raw;
+        /// @brief Malody beat position.
+        double beat;
+        /// @brief BPM value for timing events.
+        double bpm = -1.0;
+        /// @brief Effect value for non-BPM events.
+        double value = 0.0;
+        /// @brief Original JSON object for round-trip metadata.
+        json raw;
+        /// @brief Internal timing effect type.
         TimingEffect effect{ TimingEffect::BPM };
-        bool         isBpm = false;
+        /// @brief Whether this event comes from the Malody time section.
+        bool isBpm = false;
+    };
+    struct BpmEvent {
+        /// @brief Malody beat position.
+        double beat;
+        /// @brief BPM value active from this beat.
+        double bpm;
     };
     std::vector<RawEvent> rawEvents;
+    std::vector<BpmEvent> bpmEvents;
 
     double time0Delay = 0.0;
     if ( fileData.contains("time") && fileData["time"].is_array() &&
@@ -140,6 +153,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             ev.raw   = t;
 
             rawEvents.push_back(ev);
+            bpmEvents.push_back({ ev.beat, ev.bpm });
         }
     }
     if ( fileData.contains("effect") ) {
@@ -166,6 +180,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                       return a.beat < b.beat;
                   return a.isBpm && !b.isBpm;
               });
+    std::sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const BpmEvent& a, const BpmEvent& b) { return a.beat < b.beat; });
 
     // 2.3 获取模式信息
     int malodyMode = 0;
@@ -284,29 +302,35 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 3. 辅助函数：计算绝对时间 (ms)
     double audioOffset        = 0.0;
     bool   hasSoundNoteOffset = false;
-    auto   getAbsTime         = [&](double beat) {
-        double curBpm =
+    auto   getInitialBpm      = [&]() {
+        double initialBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
+        if ( !bpmEvents.empty() && bpmEvents.front().beat <= 0.0 ) {
+            initialBpm = bpmEvents.front().bpm;
+        }
+        return initialBpm;
+    };
+    auto getBpmAtBeat = [&](double beat) {
+        double curBpm = getInitialBpm();
+        for ( const auto& ev : bpmEvents ) {
+            if ( ev.beat > beat + 1e-9 ) break;
+            curBpm = ev.bpm;
+        }
+        return curBpm;
+    };
+    auto getAbsTime = [&](double beat) {
+        double curBpm = getInitialBpm();
 
         double lastB = 0.0;
         double lastT = 0.0;  // 默认 0.0 对应 beat 0
 
-        if ( !rawEvents.empty() ) {
-            // Malody 的 delay 实际上是第一个 timing 点的时间戳
-            lastB = rawEvents[0].beat;
-            lastT = 0.0;
-            if ( rawEvents[0].isBpm ) {
-                curBpm = rawEvents[0].bpm;
-            }
-        }
-
-        for ( const auto& ev : rawEvents ) {
+        for ( const auto& ev : bpmEvents ) {
             if ( ev.beat > beat + 1e-9 ) break;
             if ( ev.beat > lastB ) {
                 lastT += (ev.beat - lastB) * (60000.0 / curBpm);
                 lastB = ev.beat;
             }
-            if ( ev.isBpm ) curBpm = ev.bpm;
+            curBpm = ev.bpm;
         }
         lastT += (beat - lastB) * (60000.0 / curBpm);
         return lastT;
@@ -360,26 +384,11 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
           Config::pathToUtf8(basemeta.main_audio_path));
 
     // 4. 处理时间线点 (Timing Points)
-    double currentBpm =
-        basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
-
-    double lastProcessedBeat = 0.0;
-    double lastProcessedTime = 0.0;
-
-    if ( !rawEvents.empty() ) {
-        lastProcessedBeat = rawEvents[0].beat;
-        lastProcessedTime = 0.0;
-        if ( rawEvents[0].isBpm ) currentBpm = rawEvents[0].bpm;
-    }
+    double currentBpm = getInitialBpm();
 
     for ( auto& ev : rawEvents ) {
-        double duration =
-            (ev.beat - lastProcessedBeat) * (60000.0 / currentBpm);
-        lastProcessedTime += duration;
-        lastProcessedBeat = ev.beat;
-
         Timing timing;
-        timing.m_timestamp = lastProcessedTime - audioOffset;
+        timing.m_timestamp = getAbsTime(ev.beat) - audioOffset;
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -388,6 +397,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
+            currentBpm                     = getBpmAtBeat(ev.beat);
             timing.m_timingEffect          = ev.effect;
             timing.m_bpm                   = currentBpm;
             timing.m_timingEffectParameter = ev.value;
