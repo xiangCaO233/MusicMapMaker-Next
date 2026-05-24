@@ -1,5 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "ui/imgui/menu/MainMenuView.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -1502,7 +1503,9 @@ void MainMenuView::renderOverlapCheckWindow()
 
                                     // 2. Time
                                     ImGui::TableNextColumn();
-                                    ImGui::Text("%.3f s", r.timestamp);
+                                    const auto timeText =
+                                        Canvas::formatCanvasTime(r.timestamp);
+                                    ImGui::TextUnformatted(timeText.c_str());
 
                                     // 3. Track
                                     ImGui::TableNextColumn();
@@ -1537,10 +1540,13 @@ void MainMenuView::renderOverlapCheckWindow()
                                     }
                                     ImGui::PopStyleColor(2);
                                     if ( ImGui::IsItemHovered() ) {
+                                        const auto timeText =
+                                            Canvas::formatCanvasTime(
+                                                r.timestamp);
                                         ImGui::SetTooltip(
                                             "%s",
                                             TR_FMT("canvas.preview.jump_to",
-                                                   r.timestamp)
+                                                   timeText)
                                                 .c_str());
                                     }
                                 }
@@ -2446,12 +2452,16 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                 int groupIdx = 0;
                 for ( auto& [fingerprint, group] : groups ) {
                     ++groupIdx;
+                    const auto minTimeText =
+                        Canvas::formatCanvasTime(group.minTime);
+                    const auto maxTimeText =
+                        Canvas::formatCanvasTime(group.maxTime);
                     std::string headerStr =
                         TR_FMT("ui.edit.note_metadata.group_header",
                                groupIdx,
                                group.entities.size(),
-                               group.minTime,
-                               group.maxTime);
+                               minTimeText,
+                               maxTimeText);
 
                     ImGui::PushID(groupIdx);
 

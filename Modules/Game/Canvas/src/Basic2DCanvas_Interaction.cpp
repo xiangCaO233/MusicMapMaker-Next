@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -255,9 +256,10 @@ void Basic2DCanvasInteraction::handleInteractions(
 
                 if ( currentSnapshot->hoverInspect.show ) {
                     const auto& inspect = currentSnapshot->hoverInspect;
-                    auto drawPoint = [](const char*                  labelKey,
-                                        const Logic::HoverBeatPoint& point,
-                                        bool showTrack) {
+                    auto drawPoint = [currentSnapshot](
+                                         const char*                  labelKey,
+                                         const Logic::HoverBeatPoint& point,
+                                         bool showTrack) {
                         if ( !point.show ) return;
                         const auto label = TR(labelKey);
                         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
@@ -267,11 +269,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            point.beatIndex,
                                            point.numerator,
                                            point.denominator);
+                        const auto timeText =
+                            formatCanvasTime(point.time, currentSnapshot);
                         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                           "%s %s: %.3f s",
+                                           "%s %s: %s",
                                            label.data(),
                                            TR("ui.canvas.note_time").data(),
-                                           point.time);
+                                           timeText.c_str());
                         if ( showTrack ) {
                             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                                                "%s %s: %d",
@@ -325,11 +329,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                     }
 
                     if ( inspect.showDuration ) {
+                        const auto durationText =
+                            formatCanvasDuration(inspect.duration);
                         ImGui::TextColored(
                             ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                            "%s: %.3f s",
+                            "%s: %s",
                             TR("ui.canvas.hover.duration").data(),
-                            inspect.duration);
+                            durationText.c_str());
                     }
                     if ( inspect.showDtrack ) {
                         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
@@ -399,10 +405,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
 
                 if ( currentSnapshot->isSnapped ) {
+                    const auto timeText = formatCanvasTime(
+                        currentSnapshot->snappedTime, currentSnapshot);
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                                       "%s: %.3f s",
+                                       "%s: %s",
                                        TR("ui.canvas.snap").data(),
-                                       currentSnapshot->snappedTime);
+                                       timeText.c_str());
 
                     if ( currentSnapshot->snappedNumerator == 1 &&
                          currentSnapshot->snappedDenominator == 1 ) {
@@ -418,9 +426,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            currentSnapshot->snappedDenominator);
                     }
                 } else {
-                    ImGui::Text("%s: %.3f s",
+                    const auto timeText = formatCanvasTime(
+                        currentSnapshot->hoveredTime, currentSnapshot);
+                    ImGui::Text("%s: %s",
                                 TR("ui.canvas.time").data(),
-                                currentSnapshot->hoveredTime);
+                                timeText.c_str());
                 }
 
                 if ( currentSnapshot->hoveredBeatIndex > 0 ) {

@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -207,6 +208,7 @@ void SettingsView::drawSoftwareSettings()
         TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
         TR_CACHE("ui.settings.software.picker_style").data(),
         TR_CACHE("ui.settings.software.save_format").data(),
+        TR_CACHE("ui.settings.software.time_format").data(),
         TR_CACHE("ui.settings.software.recent_limit").data(),
         TR_CACHE("ui.settings.software.sync_mode").data(),
         TR_CACHE("ui.settings.software.sync_factor").data(),
@@ -891,6 +893,31 @@ void SettingsView::drawSoftwareSettings()
                 (int)Config::SaveFormatPreference::ForceMMM } },
             (int&)settings.saveFormatPreference,
             changed);
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.time_format").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int         timeFormat    = (int)settings.timeFormatPreference;
+                const char* timeFormats[] = {
+                    TR_CACHE("ui.settings.software.time_format.clock").data(),
+                    TR_CACHE("ui.settings.software.time_format.seconds").data(),
+                    TR_CACHE("ui.settings.software.time_format.milliseconds")
+                        .data(),
+                    TR_CACHE("ui.settings.software.time_format.beat").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##TimeFormat",
+                                  &timeFormat,
+                                  timeFormats,
+                                  IM_ARRAYSIZE(timeFormats)) ) {
+                    settings.timeFormatPreference =
+                        (Config::TimeFormatPreference)timeFormat;
+                    changed = true;
+                }
+            });
 
         // 最近项目上限
         addSettingItem(*sec,
@@ -1988,12 +2015,10 @@ void SettingsView::drawBeatmapSettings()
                        TR_CACHE("ui.settings.beatmap.length").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           ImGui::BeginDisabled();
-                           double length = meta.map_length;
-                           ImGui::SetNextItemWidth(r.width);
-                           ImGui::InputDouble(
-                               "##Length", &length, 0, 0, "%.3f s");
-                           ImGui::EndDisabled();
+                           const auto lengthText =
+                               Canvas::formatCanvasDuration(meta.map_length);
+                           ImGui::SetCursorScreenPos({ r.x, r.y });
+                           ImGui::TextUnformatted(lengthText.c_str());
                        });
     }
 

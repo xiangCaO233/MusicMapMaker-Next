@@ -30,7 +30,7 @@ return {
 	["ui.edit.note_metadata"] = "编辑元数据",
 	["ui.edit.note_metadata.title"] = "编辑选中物件元数据###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "已选中 {} 个物件，分为 {} 组",
-	["ui.edit.note_metadata.group_header"] = "组 {} ({} 个物件, {:.3f}s ~ {:.3f}s)",
+	["ui.edit.note_metadata.group_header"] = "组 {} ({} 个物件, {} ~ {})",
 	["ui.edit.note_metadata.no_selection"] = "当前未选中任何物件",
 	["ui.edit.note_metadata.no_metadata"] = "该组物件无任何额外元数据",
 	["ui.edit.note_metadata.add_key"] = "新增键名:",
@@ -112,6 +112,11 @@ return {
 	["ui.settings.software.save_format"] = "Ctrl+S 保存为",
 	["ui.settings.software.save_format.original"] = "保存原始文件格式",
 	["ui.settings.software.save_format.force_mmm"] = "强制保存为 .mmm",
+	["ui.settings.software.time_format"] = "画布时间格式",
+	["ui.settings.software.time_format.clock"] = "时:分:秒.毫秒",
+	["ui.settings.software.time_format.seconds"] = "秒 (三位小数)",
+	["ui.settings.software.time_format.milliseconds"] = "纯毫秒",
+	["ui.settings.software.time_format.beat"] = "拍号 + 分拍位",
 	["ui.settings.software.cursor_params"] = "内置光标参数",
 	["ui.settings.software.cursor_size"] = "光标头大小",
 	["ui.settings.software.trail_size"] = "拖尾基础大小",
@@ -419,7 +424,7 @@ return {
 	["ui.wizard.new_beatmap.audio_not_selected"] = "请先选择音频文件",
 	["ui.wizard.new_beatmap.no_project"] = "无法创建：请先打开或创建一个项目",
  
-	["canvas.preview.jump_to"] = "跳转至: {:.3f} s",
+	["canvas.preview.jump_to"] = "跳转至: {}",
 	["tips.welcome"] = "欢迎使用MusicMapMaker!",
  
 	-- 时间线事件编辑器

@@ -299,6 +299,23 @@ NLOHMANN_JSON_SERIALIZE_ENUM(SaveFormatPreference,
                                  { SaveFormatPreference::ForceMMM, "ForceMMM" },
                              })
 
+/// @brief 画布时间戳显示格式偏好
+enum class TimeFormatPreference {
+    Clock,         ///< 时:分:秒.毫秒
+    Seconds,       ///< 秒，保留三位小数
+    Milliseconds,  ///< 纯毫秒
+    Beat           ///< 拍号 + 分拍位
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(TimeFormatPreference,
+                             {
+                                 { TimeFormatPreference::Clock, "Clock" },
+                                 { TimeFormatPreference::Seconds, "Seconds" },
+                                 { TimeFormatPreference::Milliseconds,
+                                   "Milliseconds" },
+                                 { TimeFormatPreference::Beat, "Beat" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -373,6 +390,9 @@ struct EditorSettings {
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
+    /// @brief 画布时间戳显示格式偏好
+    TimeFormatPreference timeFormatPreference{ TimeFormatPreference::Seconds };
+
     /// @brief 上次打开文件的路径 (用于文件对话框记忆)
     std::string lastFilePickerPath{ "." };
 
@@ -427,6 +447,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "marqueeThickness", c.marqueeThickness },
                         { "marqueeRounding", c.marqueeRounding },
                         { "saveFormatPreference", c.saveFormatPreference },
+                        { "timeFormatPreference", c.timeFormatPreference },
                         { "lastFilePickerPath", c.lastFilePickerPath },
                         { "disableScrollAccelerationWhileDrawing",
                           c.disableScrollAccelerationWhileDrawing },
@@ -472,6 +493,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
     c.saveFormatPreference =
         j.value("saveFormatPreference", SaveFormatPreference::Original);
+    c.timeFormatPreference =
+        j.value("timeFormatPreference", TimeFormatPreference::Seconds);
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
     c.disableScrollAccelerationWhileDrawing =
         j.value("disableScrollAccelerationWhileDrawing", true);

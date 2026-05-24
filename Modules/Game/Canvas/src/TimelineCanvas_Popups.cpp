@@ -1,4 +1,6 @@
+#include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
+#include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
@@ -10,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace MMM::Canvas
@@ -207,6 +210,36 @@ double getDefaultCreateValue(::MMM::TimingEffect effect)
     }
     return 1.0;
 }
+
+/// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
+bool drawTimeEditor(const char* id, double& value,
+                    const Logic::RenderSnapshot* snapshot)
+{
+    auto preference =
+        Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
+    if ( preference == Config::TimeFormatPreference::Seconds ) {
+        ImGui::InputDouble(id, &value, 0.001, 0.01, "%.3f");
+        return ImGui::IsItemDeactivatedAfterEdit();
+    }
+
+    std::string label = formatCanvasTime(value, snapshot) + "##" + id;
+    if ( ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f)) ) {
+        ImGui::OpenPopup(id);
+    }
+    if ( ImGui::IsItemHovered() ) {
+        const auto timeText = formatCanvasTime(value, snapshot);
+        ImGui::SetTooltip("%s", timeText.c_str());
+    }
+
+    bool changed = false;
+    if ( ImGui::BeginPopup(id) ) {
+        ImGui::SetNextItemWidth(180.0f);
+        ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.3f");
+        changed = ImGui::IsItemDeactivatedAfterEdit();
+        ImGui::EndPopup();
+    }
+    return changed;
+}
 }  // namespace
 
 void TimelineCanvas::renderEventEditorPopup()
@@ -245,7 +278,7 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::Spacing();
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
-        ImGui::InputDouble("##Time", &m_editTime, 0.001, 0.01, "%.3f");
+        drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
 
         ::MMM::TimingEffect editEffect =
             (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
@@ -381,8 +414,7 @@ void TimelineCanvas::renderEventCreationPopup()
         }
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
-        ImGui::InputDouble(
-            "##CreateTime", &m_createTimeManual, 0.001, 0.01, "%.3f");
+        drawTimeEditor("##CreateTime", m_createTimeManual, m_currentSnapshot);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -695,8 +727,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     double tVal = el.time;
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string tId = fmt::format("##T_{}", displayIdx);
-                    ImGui::InputDouble(tId.c_str(), &tVal, 0.001, 0.01, "%.3f");
-                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    if ( drawTimeEditor(
+                             tId.c_str(), tVal, m_currentSnapshot) ) {
                         entt::entity ent    = getElementEntity(el);
                         double       rawVal = getElementRawValue(el);
                         Event::EventBus::instance().publish(

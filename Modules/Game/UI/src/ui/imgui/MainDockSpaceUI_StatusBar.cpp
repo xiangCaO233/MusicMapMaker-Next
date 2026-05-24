@@ -1,3 +1,4 @@
+#include "canvas/TimeFormatUtils.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -9,7 +10,6 @@
 #include "mmm/timing/Timing.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include <cmath>
-#include <fmt/format.h>
 
 namespace
 {
@@ -133,23 +133,18 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         if ( syncBuffer ) {
             auto snapshot = syncBuffer->getReadingSnapshot();
             if ( snapshot ) {
-                auto formatTime = [](double seconds) {
-                    int totalMillis =
-                        static_cast<int>(std::round(seconds * 1000.0));
-                    int ms = std::abs(totalMillis % 1000);
-                    int s  = std::abs((totalMillis / 1000) % 60);
-                    int m  = (totalMillis / 60000);
-                    return fmt::format("{:02d}:{:02d}.{:03d}", m, s, ms);
-                };
-
                 // 判定线时间 (常驻)
+                const auto currentTimeText =
+                    Canvas::formatCanvasTime(snapshot->currentTime, snapshot);
                 ImGui::SetCursorPosY(offsetY);
                 ImGui::Text("%s: %s",
                             TR("ui.canvas.time").data(),
-                            formatTime(snapshot->currentTime).c_str());
+                            currentTimeText.c_str());
 
                 // 鼠标位置时间 (仅在主画布悬浮时显示)
                 if ( snapshot->isHoveringCanvas ) {
+                    const auto hoveredTimeText = Canvas::formatCanvasTime(
+                        snapshot->hoveredTime, snapshot);
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
@@ -157,7 +152,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::Text("%s: %s",
                                 TR("ui.status.mouse_time").data(),
-                                formatTime(snapshot->hoveredTime).c_str());
+                                hoveredTimeText.c_str());
                 }
 
                 // 物件数量与最大连击数统计 (仅在谱面打开时显示)

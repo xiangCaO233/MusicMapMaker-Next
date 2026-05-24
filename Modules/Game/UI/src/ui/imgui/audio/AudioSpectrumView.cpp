@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -402,7 +403,9 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
             double hoverAudioTime  = hoverVisualTime - visualOffset;
 
-            ImGui::SetTooltip("%.3fs", hoverAudioTime);
+            const auto timeText =
+                Canvas::formatCanvasTime(hoverVisualTime, snapshot);
+            ImGui::SetTooltip("%s", timeText.c_str());
 
             // 绘制悬停绿色竖线
             float hoverLineX = groupMin.x + relX * avail.x;

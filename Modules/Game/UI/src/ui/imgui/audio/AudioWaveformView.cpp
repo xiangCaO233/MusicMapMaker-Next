@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -366,7 +367,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
-                ImGui::SetTooltip("%.3fs", hoverAudioTime);
+                const auto timeText =
+                    Canvas::formatCanvasTime(hoverVisualTime, snapshot);
+                ImGui::SetTooltip("%s", timeText.c_str());
 
                 if ( ImGui::IsItemActive() ) {
                     ImVec2 mousePos = ImGui::GetMousePos();

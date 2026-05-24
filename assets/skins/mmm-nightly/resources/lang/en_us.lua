@@ -31,7 +31,7 @@ return {
 	["ui.edit.note_metadata"] = "Edit Metadata",
 	["ui.edit.note_metadata.title"] = "Edit Selected Note Metadata###NoteMetadataEditor",
 	["ui.edit.note_metadata.summary"] = "{} object(s) selected, {} group(s)",
-	["ui.edit.note_metadata.group_header"] = "Group {} ({} object(s), {:.3f}s ~ {:.3f}s)",
+	["ui.edit.note_metadata.group_header"] = "Group {} ({} object(s), {} ~ {})",
 	["ui.edit.note_metadata.no_selection"] = "No objects selected",
 	["ui.edit.note_metadata.no_metadata"] = "No extra metadata in this group",
 	["ui.edit.note_metadata.add_key"] = "New Key:",
@@ -112,6 +112,14 @@ return {
 	["ui.settings.software.sync_factor"] = "Integral Tracking Factor",
 	["ui.settings.software.sync_buffer"] = "WaterTank Buffer",
 	["ui.settings.software.sync_interval"] = "Sync Interval",
+	["ui.settings.software.save_format"] = "Ctrl+S Save As",
+	["ui.settings.software.save_format.original"] = "Keep original format",
+	["ui.settings.software.save_format.force_mmm"] = "Force .mmm",
+	["ui.settings.software.time_format"] = "Canvas Time Format",
+	["ui.settings.software.time_format.clock"] = "HH:MM:SS.mmm",
+	["ui.settings.software.time_format.seconds"] = "Seconds (3 decimals)",
+	["ui.settings.software.time_format.milliseconds"] = "Milliseconds",
+	["ui.settings.software.time_format.beat"] = "Beat + Fraction",
 	["ui.settings.software.cursor_params"] = "Internal Cursor Parameters",
 	["ui.settings.software.cursor_size"] = "Cursor Head Size",
 	["ui.settings.software.trail_size"] = "Trail Base Size",
@@ -412,7 +420,7 @@ return {
 	["ui.wizard.new_beatmap.audio_not_selected"] = "Please select an audio file first",
 	["ui.wizard.new_beatmap.no_project"] = "Cannot create: Please open or create a project first",
  
-	["canvas.preview.jump_to"] = "Jump to: {:.3f} s",
+	["canvas.preview.jump_to"] = "Jump to: {}",
 	["tips.welcome"] = "Welcome to MusicMapMaker!",
  
 	-- Timeline Event Editor

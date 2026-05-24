@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -12,6 +13,44 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <stb_image.h>
+
+#include <cmath>
+#include <cstdint>
+#include <fmt/format.h>
+
+namespace
+{
+/// @brief 格式化无快照上下文的状态栏时间文本。
+std::string formatStatusTime(double timeSeconds)
+{
+    auto preference = MMM::Config::AppConfig::instance()
+                          .getEditorSettings()
+                          .timeFormatPreference;
+    switch ( preference ) {
+    case MMM::Config::TimeFormatPreference::Clock: {
+        bool    negative = timeSeconds < 0.0;
+        double  absTime  = std::abs(timeSeconds);
+        auto    totalMs  = static_cast<int64_t>(std::llround(absTime * 1000.0));
+        int64_t ms       = totalMs % 1000;
+        int64_t seconds  = (totalMs / 1000) % 60;
+        int64_t minutes  = (totalMs / 60000) % 60;
+        int64_t hours    = totalMs / 3600000;
+        return fmt::format("{}{:02}:{:02}:{:02}.{:03}",
+                           negative ? "-" : "",
+                           hours,
+                           minutes,
+                           seconds,
+                           ms);
+    }
+    case MMM::Config::TimeFormatPreference::Milliseconds:
+        return fmt::format(
+            "{} ms", static_cast<int64_t>(std::llround(timeSeconds * 1000.0)));
+    case MMM::Config::TimeFormatPreference::Beat:
+    case MMM::Config::TimeFormatPreference::Seconds:
+    default: return fmt::format("{:.3f} s", timeSeconds);
+    }
+}
+}  // namespace
 
 namespace MMM::Logic
 {
@@ -100,11 +139,12 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.category.action"),
                                     TR("ui.tools.align_beats"));
                 } else if constexpr ( std::is_same_v<T, CmdSeek> ) {
+                    const auto timeText = formatStatusTime(arg.time);
                     m_ctx->lastActionMessage =
-                        fmt::format("{} {} {:.3f}s",
+                        fmt::format("{} {} {}",
                                     TR("ui.status.category.playback"),
                                     TR("ui.status.playback.seek"),
-                                    arg.time);
+                                    timeText);
                 } else if constexpr ( std::is_same_v<T, CmdSetPlaybackSpeed> ) {
                     m_ctx->lastActionMessage =
                         fmt::format("{} {}: {:.2f}x",

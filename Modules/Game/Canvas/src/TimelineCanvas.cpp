@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
@@ -133,7 +134,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 }
 
                 if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%.3f / %.3f s", time, total);
+                    const auto timeText =
+                        formatCanvasTimePair(static_cast<double>(time),
+                                             static_cast<double>(total),
+                                             m_currentSnapshot);
+                    ImGui::SetTooltip("%s", timeText.c_str());
                 }
 
                 ImGui::EndGroup();
@@ -292,8 +297,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             ImGui::PopStyleColor();
 
                             if ( ImGui::IsItemHovered() ) {
-                                ImGui::SetTooltip(
-                                    "%s Event: %.3f s", gear.label, el.time);
+                                const auto timeText = formatCanvasTime(
+                                    el.time, m_currentSnapshot);
+                                ImGui::SetTooltip("%s Event: %s",
+                                                  gear.label,
+                                                  timeText.c_str());
                             }
                         }
                     }
