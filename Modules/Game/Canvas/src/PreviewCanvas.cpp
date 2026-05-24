@@ -17,6 +17,7 @@
 #include "ui/UIManager.h"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <utility>
@@ -124,14 +125,37 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent &&
                       ImGui::IsWindowFocused();
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
-                                    .mouseX         = localMousePos.x,
-                                    .mouseY         = localMousePos.y,
-                                    .viewportWidth  = ImGui::GetWindowWidth(),
-                                    .viewportHeight = ImGui::GetWindowHeight(),
-                                    .isHovering     = isHovered,
-                                    .isDragging     = isDragging }));
+    float viewportWidth  = ImGui::GetWindowWidth();
+    float viewportHeight = ImGui::GetWindowHeight();
+
+    constexpr float mouseEpsilon = 0.1f;
+    bool            shouldSendMouse =
+        !m_lastMouseCommand.valid ||
+        std::abs(m_lastMouseCommand.pos.x - localMousePos.x) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.pos.y - localMousePos.y) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportWidth - viewportWidth) >
+            mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportHeight - viewportHeight) >
+            mouseEpsilon ||
+        m_lastMouseCommand.isHovering != isHovered ||
+        m_lastMouseCommand.isDragging != isDragging;
+
+    if ( shouldSendMouse ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                        .mouseX         = localMousePos.x,
+                                        .mouseY         = localMousePos.y,
+                                        .viewportWidth  = viewportWidth,
+                                        .viewportHeight = viewportHeight,
+                                        .isHovering     = isHovered,
+                                        .isDragging     = isDragging }));
+        m_lastMouseCommand.valid         = true;
+        m_lastMouseCommand.pos           = { localMousePos.x, localMousePos.y };
+        m_lastMouseCommand.viewportWidth = viewportWidth;
+        m_lastMouseCommand.viewportHeight = viewportHeight;
+        m_lastMouseCommand.isHovering     = isHovered;
+        m_lastMouseCommand.isDragging     = isDragging;
+    }
 
     // --- 拖拽提示：告知用户松手时跳转的位置 ---
     if ( isDragging && m_currentSnapshot &&

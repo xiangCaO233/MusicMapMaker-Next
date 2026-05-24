@@ -5,6 +5,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace MMM::Logic::System
@@ -43,6 +44,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     if ( m_rebuildScratch.empty() ) {
         m_segments.clear();
+        m_absYRangeIndex.clear();
         isDirty = false;
         return;
     }
@@ -194,7 +196,43 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     }
 
     m_segments = std::move(newSegments);
-    isDirty    = false;
+    rebuildAbsYRangeIndex();
+    isDirty = false;
+}
+
+std::pair<double, double> ScrollCache::getSegmentAbsYRange(
+    std::size_t index) const
+{
+    const auto& seg      = m_segments[index];
+    double      nextAbsY = seg.absY + seg.speed;
+    if ( index + 1 < m_segments.size() ) {
+        nextAbsY = m_segments[index + 1].absY;
+    }
+    return { std::min(seg.absY, nextAbsY), std::max(seg.absY, nextAbsY) };
+}
+
+void ScrollCache::rebuildAbsYRangeIndex()
+{
+    m_absYRangeIndex.clear();
+    m_absYRangeIndex.reserve(m_segments.size());
+
+    for ( std::size_t i = 0; i < m_segments.size(); ++i ) {
+        const auto& seg = m_segments[i];
+        if ( std::abs(seg.speed) < 1e-9 ) continue;
+
+        auto [minAbsY, maxAbsY] = getSegmentAbsYRange(i);
+        m_absYRangeIndex.push_back({ minAbsY, maxAbsY, i });
+    }
+
+    std::stable_sort(m_absYRangeIndex.begin(),
+                     m_absYRangeIndex.end(),
+                     [](const AbsYRangeEntry& a, const AbsYRangeEntry& b) {
+                         if ( std::abs(a.minAbsY - b.minAbsY) > 1e-9 )
+                             return a.minAbsY < b.minAbsY;
+                         if ( std::abs(a.maxAbsY - b.maxAbsY) > 1e-9 )
+                             return a.maxAbsY < b.maxAbsY;
+                         return a.segmentIndex < b.segmentIndex;
+                     });
 }
 
 double ScrollCache::getAbsY(double t) const
@@ -222,23 +260,26 @@ double ScrollCache::getTime(double absY) const
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
-    for ( size_t i = 0; i < m_segments.size(); ++i ) {
-        const auto& seg = m_segments[i];
-        if ( std::abs(seg.speed) < 1e-6 ) continue;
+    constexpr double EPS       = 1e-6;
+    std::size_t      bestIndex = std::numeric_limits<std::size_t>::max();
+    auto             endIt =
+        std::upper_bound(m_absYRangeIndex.begin(),
+                         m_absYRangeIndex.end(),
+                         absY + EPS,
+                         [](double value, const AbsYRangeEntry& entry) {
+                             return value < entry.minAbsY;
+                         });
 
-        double nextAbsY = seg.absY;
-        if ( i + 1 < m_segments.size() ) {
-            nextAbsY =
-                seg.absY + (m_segments[i + 1].time - seg.time) * seg.speed;
-        } else {
-            nextAbsY = seg.absY + seg.speed;
+    for ( auto it = m_absYRangeIndex.begin(); it != endIt; ++it ) {
+        if ( it->maxAbsY < absY - EPS ) continue;
+        if ( it->segmentIndex < bestIndex ) {
+            bestIndex = it->segmentIndex;
         }
+    }
 
-        const double minY = std::min(seg.absY, nextAbsY);
-        const double maxY = std::max(seg.absY, nextAbsY);
-        if ( absY >= minY - 1e-6 && absY <= maxY + 1e-6 ) {
-            return seg.time + (absY - seg.absY) / seg.speed;
-        }
+    if ( bestIndex != std::numeric_limits<std::size_t>::max() ) {
+        const auto& seg = m_segments[bestIndex];
+        return seg.time + (absY - seg.absY) / seg.speed;
     }
 
     const auto& first = m_segments.front();
@@ -280,7 +321,28 @@ double ScrollCache::getHsAt(double t) const
 double ScrollCache::getDisplayDelta(double t, double currentAbsY,
                                     double anchorTime) const
 {
-    return (getAbsY(t) - currentAbsY) * getHsAt(anchorTime);
+    const double DEFAULT_SPEED = 500.0 * m_lastZoom;
+    if ( m_segments.empty() ) {
+        return (t * DEFAULT_SPEED - currentAbsY);
+    }
+
+    auto it = std::upper_bound(
+        m_segments.begin(),
+        m_segments.end(),
+        t,
+        [](double val, const ScrollSegment& seg) { return val < seg.time; });
+
+    const ScrollSegment* seg = nullptr;
+    if ( it == m_segments.begin() ) {
+        seg = &m_segments.front();
+    } else {
+        seg = &(*std::prev(it));
+    }
+
+    double absY = seg->absY + (t - seg->time) * seg->speed;
+    double hs =
+        (std::abs(t - anchorTime) <= 1e-9) ? seg->hs : getHsAt(anchorTime);
+    return (absY - currentAbsY) * hs;
 }
 
 bool ScrollCache::hasJumpEffects() const
@@ -336,7 +398,26 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
         ranges.emplace_back(startTime, endTime);
     };
 
-    for ( size_t i = 0; i < m_segments.size(); ++i ) {
+    std::vector<std::size_t> candidateIndices;
+    auto                     rangeEndIt =
+        std::upper_bound(m_absYRangeIndex.begin(),
+                         m_absYRangeIndex.end(),
+                         maxAbsY + 1e-6,
+                         [](double value, const AbsYRangeEntry& entry) {
+                             return value < entry.minAbsY;
+                         });
+
+    for ( auto it = m_absYRangeIndex.begin(); it != rangeEndIt; ++it ) {
+        if ( it->maxAbsY < minAbsY - 1e-6 ) continue;
+        candidateIndices.push_back(it->segmentIndex);
+    }
+
+    std::sort(candidateIndices.begin(), candidateIndices.end());
+    candidateIndices.erase(
+        std::unique(candidateIndices.begin(), candidateIndices.end()),
+        candidateIndices.end());
+
+    for ( std::size_t i : candidateIndices ) {
         const auto& seg = m_segments[i];
         if ( std::abs(seg.speed) < 1e-9 ) continue;
 

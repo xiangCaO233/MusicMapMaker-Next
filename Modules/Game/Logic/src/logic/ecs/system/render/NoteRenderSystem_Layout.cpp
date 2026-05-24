@@ -7,7 +7,10 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <numeric>
+#include <vector>
 
 #include "logic/ecs/system/HitFXSystem.h"
 
@@ -210,6 +213,22 @@ void NoteRenderSystem::drawBeatLines(
 
     batcher.setTexture(TextureID::None);
 
+    float visibleTop    = std::min(topY, bottomY);
+    float visibleBottom = std::max(topY, bottomY);
+    int   rowCount      = std::max(
+        1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
+    std::vector<uint8_t> occupiedRows(static_cast<size_t>(rowCount), 0);
+    int                  occupiedRowCount = 0;
+    auto                 occupyRow        = [&](float y) {
+        if ( y < visibleTop || y > visibleBottom ) return false;
+        int row = static_cast<int>(std::floor(y - visibleTop));
+        row     = std::clamp(row, 0, rowCount - 1);
+        if ( occupiedRows[static_cast<size_t>(row)] != 0 ) return false;
+        occupiedRows[static_cast<size_t>(row)] = 1;
+        ++occupiedRowCount;
+        return true;
+    };
+
     auto& skin        = Config::SkinManager::instance();
     float globalAlpha = config.visual.beatLineAlpha;
     auto  getBeatLineConfig =
@@ -278,7 +297,7 @@ void NoteRenderSystem::drawBeatLines(
                                         t, currentAbsY, t)) *
                                         renderScaleY;
 
-                if ( y >= topY && y <= bottomY ) {
+                if ( y >= visibleTop && y <= visibleBottom && occupyRow(y) ) {
                     if ( batcher.snapshot->isSnapped &&
                          std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
                         glm::vec4 glowCol = color;
@@ -303,6 +322,7 @@ void NoteRenderSystem::drawBeatLines(
                     }
                     batcher.pushQuad(
                         leftX, y + width * 0.5f, trackAreaW, width, color);
+                    if ( occupiedRowCount >= rowCount ) return;
                 }
                 stepOffset++;
                 t = bpmTime + stepOffset * stepDuration;
@@ -325,14 +345,30 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
     if ( std::abs(renderScaleY) < 1e-6f ) return;
     batcher.setTexture(TextureID::None);
 
+    float visibleTop    = std::min(topY, bottomY);
+    float visibleBottom = std::max(topY, bottomY);
+    int   rowCount      = std::max(
+        1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
+    std::vector<uint8_t> occupiedRows(static_cast<size_t>(rowCount), 0);
+    int                  occupiedRowCount = 0;
+    auto                 occupyRow        = [&](float y) {
+        if ( y < visibleTop || y > visibleBottom ) return false;
+        int row = static_cast<int>(std::floor(y - visibleTop));
+        row     = std::clamp(row, 0, rowCount - 1);
+        if ( occupiedRows[static_cast<size_t>(row)] != 0 ) return false;
+        occupiedRows[static_cast<size_t>(row)] = 1;
+        ++occupiedRowCount;
+        return true;
+    };
+
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
-        float y = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                      seg.time, currentAbsY, seg.time)) *
-                                      renderScaleY;
+        float y = judgmentLineY -
+                  static_cast<float>((seg.absY - currentAbsY) * seg.hs) *
+                      renderScaleY;
 
-        if ( y >= topY && y <= bottomY ) {
+        if ( occupyRow(y) ) {
             glm::vec4 color = { 1.0f, 1.0f, 1.0f, 0.5f };
             if ( (seg.effects & SCROLL_EFFECT_BPM) &&
                  (seg.effects & SCROLL_EFFECT_SCROLL) ) {
@@ -348,6 +384,7 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
             }
 
             batcher.pushQuad(leftX, y + 1.0f, trackAreaW, 2.0f, color);
+            if ( occupiedRowCount >= rowCount ) return;
         }
     }
 }

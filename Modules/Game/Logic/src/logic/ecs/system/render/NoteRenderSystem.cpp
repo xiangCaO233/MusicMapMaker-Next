@@ -10,6 +10,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <numeric>
 
 #include "logic/ecs/system/HitFXSystem.h"
@@ -38,8 +39,10 @@ void NoteRenderSystem::generateSnapshot(
     registry.ctx().erase<const ScrollCache*>();
     registry.ctx().emplace<const ScrollCache*>(cache);
 
-    // 拷贝缓存段供 UI 线程计算时间映射
-    snapshot->scrollSegments = cache->getSegments();
+    // Timeline 右键创建事件需要完整映射；其他画布只在播放亚帧插值时需要。
+    if ( cameraId == "Timeline" || snapshot->isPlaying ) {
+        snapshot->scrollSegments = cache->getSegments();
+    }
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
@@ -561,37 +564,6 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
     }
 
-    // 4. 收集所有时间点组件以生成交互元素列表，防止同时间戳的事件被 ScrollCache
-    // 吞掉
-    for ( auto entity : tlView ) {
-        const auto& tc = tlView.get<const TimelineComponent>(entity);
-        double      t  = tc.m_timestamp;
-        float y = judgmentLineY -
-                  static_cast<float>(cache->getDisplayDelta(t, currentAbsY, t));
-
-        TimelineInteractiveElement el;
-        el.time = t;
-        el.y    = y;
-        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
-            el.effects   = SCROLL_EFFECT_BPM;
-            el.bpmEntity = entity;
-            el.bpmValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
-            el.effects      = SCROLL_EFFECT_SCROLL;
-            el.scrollEntity = entity;
-            el.scrollValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
-            el.effects    = SCROLL_EFFECT_JUMP;
-            el.jumpEntity = entity;
-            el.jumpValue  = tc.m_value;
-        } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
-            el.effects  = SCROLL_EFFECT_HS;
-            el.hsEntity = entity;
-            el.hsValue  = tc.m_value;
-        }
-        snapshot->timelineElements.push_back(el);
-    }
-
     // 5. 绘制 Timing 事件为普通 Note 形状
     float noteW = lineW;
     float noteH = noteW * 0.36f;
@@ -602,12 +574,64 @@ void NoteRenderSystem::generateTimelineSnapshot(
     }
     float noteX = paddingX;
 
+    const float interactionMargin = 24.0f;
+    int         interactionRows   = std::max(
+        1,
+        static_cast<int>(std::ceil(viewportHeight + interactionMargin * 2.0f)) +
+            1);
+    std::vector<uint8_t> occupiedInteractionRows(
+        static_cast<size_t>(interactionRows), 0);
+    auto occupyInteractionRow = [&](float y) {
+        if ( y < -interactionMargin ||
+             y > viewportHeight + interactionMargin ) {
+            return false;
+        }
+        int row = static_cast<int>(std::floor(y + interactionMargin));
+        row     = std::clamp(row, 0, interactionRows - 1);
+        if ( occupiedInteractionRows[static_cast<size_t>(row)] != 0 ) {
+            return false;
+        }
+        occupiedInteractionRows[static_cast<size_t>(row)] = 1;
+        return true;
+    };
+
+    int markerRows =
+        std::max(1, static_cast<int>(std::ceil(viewportHeight)) + 1);
+    std::vector<uint8_t> occupiedMarkerRows(static_cast<size_t>(markerRows), 0);
+    auto                 occupyMarkerRow = [&](float y) {
+        if ( y < 0.0f || y > viewportHeight ) return false;
+        int row = static_cast<int>(std::floor(y));
+        row     = std::clamp(row, 0, markerRows - 1);
+        if ( occupiedMarkerRows[static_cast<size_t>(row)] != 0 ) {
+            return false;
+        }
+        occupiedMarkerRows[static_cast<size_t>(row)] = 1;
+        return true;
+    };
+
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
 
-        float y = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                      seg.time, currentAbsY, seg.time));
-        if ( y < 0.0f || y > viewportHeight ) continue;
+        float y = judgmentLineY -
+                  static_cast<float>((seg.absY - currentAbsY) * seg.hs);
+
+        if ( occupyInteractionRow(y) ) {
+            TimelineInteractiveElement el;
+            el.time         = seg.time;
+            el.y            = y;
+            el.effects      = seg.effects;
+            el.bpmEntity    = seg.bpmEntity;
+            el.scrollEntity = seg.scrollEntity;
+            el.jumpEntity   = seg.jumpEntity;
+            el.hsEntity     = seg.hsEntity;
+            el.bpmValue     = seg.bpmValue;
+            el.scrollValue  = seg.scrollValue;
+            el.jumpValue    = seg.jumpValue;
+            el.hsValue      = seg.hsValue;
+            snapshot->timelineElements.push_back(el);
+        }
+
+        if ( !occupyMarkerRow(y) ) continue;
 
         glm::vec4 color = { tickCol.r, tickCol.g, tickCol.b, 0.8f };
         if ( (seg.effects & SCROLL_EFFECT_BPM) &&

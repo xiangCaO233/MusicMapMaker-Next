@@ -203,6 +203,11 @@ private:
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
 
+    /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
+    std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
+        Config::FrameLimitPreference::Refresh2x
+    };
+
     /// @brief 各摄像机独立的图集 UV 映射表 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
         m_cameraUVMaps;

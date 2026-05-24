@@ -386,9 +386,17 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
 
+    /// @brief Count Malody effect events moved to beat 0 for runtime use.
+    std::size_t clampedNegativeEffectCount = 0;
+
     for ( auto& ev : rawEvents ) {
         Timing timing;
-        timing.m_timestamp = getAbsTime(ev.beat) - audioOffset;
+        double runtimeBeat = ev.beat;
+        if ( !ev.isBpm && runtimeBeat < 0.0 ) {
+            runtimeBeat = 0.0;
+            ++clampedNegativeEffectCount;
+        }
+        timing.m_timestamp = getAbsTime(runtimeBeat) - audioOffset;
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -397,7 +405,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            currentBpm                     = getBpmAtBeat(ev.beat);
+            currentBpm                     = getBpmAtBeat(runtimeBeat);
             timing.m_timingEffect          = ev.effect;
             timing.m_bpm                   = currentBpm;
             timing.m_timingEffectParameter = ev.value;
@@ -421,6 +429,11 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
         }
         beatMap.m_timings.push_back(timing);
+    }
+
+    if ( clampedNegativeEffectCount > 0 ) {
+        XINFO("已将 {} 个负 beat Malody effect 运行时位置收束到 beat 0",
+              clampedNegativeEffectCount);
     }
 
     if ( beatMap.m_timings.empty() ) {

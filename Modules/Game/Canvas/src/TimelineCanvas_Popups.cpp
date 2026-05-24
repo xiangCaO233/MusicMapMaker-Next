@@ -4,8 +4,13 @@
 #include "imgui.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
+#include <cmath>
+#include <mutex>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -76,6 +81,54 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::HS: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
     }
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+/// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
+std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
+{
+    std::vector<Logic::TimelineInteractiveElement> elements;
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) return elements;
+
+    auto& registry = session->getContext().timelineRegistry;
+    auto  view     = registry.view<const Logic::TimelineComponent>();
+    elements.reserve(view.size());
+
+    for ( auto entity : view ) {
+        const auto& tc = view.get<const Logic::TimelineComponent>(entity);
+        Logic::TimelineInteractiveElement el;
+        el.time = tc.m_timestamp;
+        el.y    = 0.0f;
+
+        if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
+            el.effects   = Logic::System::SCROLL_EFFECT_BPM;
+            el.bpmEntity = entity;
+            el.bpmValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
+            el.effects      = Logic::System::SCROLL_EFFECT_SCROLL;
+            el.scrollEntity = entity;
+            el.scrollValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::JUMP ) {
+            el.effects    = Logic::System::SCROLL_EFFECT_JUMP;
+            el.jumpEntity = entity;
+            el.jumpValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
+            el.effects  = Logic::System::SCROLL_EFFECT_HS;
+            el.hsEntity = entity;
+            el.hsValue  = tc.m_value;
+        }
+
+        elements.push_back(el);
+    }
+
+    std::stable_sort(
+        elements.begin(), elements.end(), [](const auto& a, const auto& b) {
+            if ( std::abs(a.time - b.time) > 1e-6 ) return a.time < b.time;
+            return a.effects < b.effects;
+        });
+    return elements;
 }
 
 /// @brief 判断当前活动谱面是否以 Malody 语义存储时间线
@@ -478,10 +531,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             return;
         }
 
-        auto elements = m_currentSnapshot->timelineElements;
-        std::sort(elements.begin(),
-                  elements.end(),
-                  [](const auto& a, const auto& b) { return a.time < b.time; });
+        auto elements = collectTimelineElements();
 
         // 顶层工具栏
         ImGui::AlignTextToFramePadding();

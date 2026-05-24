@@ -36,6 +36,8 @@ EditorEngine::EditorEngine()
 {
     // 从全局配置初始化本地缓存
     m_editorConfig = Config::AppConfig::instance().getEditorConfig();
+    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+                                 std::memory_order_relaxed);
 
     // 默认创建一个 Session
     m_activeSession = std::make_unique<BeatmapSession>();
@@ -336,6 +338,8 @@ void EditorEngine::start()
 
     // 从全局配置同步到本地缓存
     m_editorConfig = Config::AppConfig::instance().getEditorConfig();
+    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+                                 std::memory_order_relaxed);
 
     m_running = true;
 
@@ -723,6 +727,8 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     m_editorConfig                = config;
     m_editorConfig.recentProjects = globalRecent;
+    m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
+                                 std::memory_order_relaxed);
 
     // 同步回全局 AppConfig 实例
     Config::AppConfig::instance().getEditorConfig() = m_editorConfig;
@@ -774,7 +780,9 @@ void EditorEngine::loop()
         int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
         if ( refreshRate <= 0 ) refreshRate = 60;  // 兜底
 
-        switch ( m_editorConfig.settings.frameLimit ) {
+        Config::FrameLimitPreference frameLimit =
+            m_frameLimitPreference.load(std::memory_order_relaxed);
+        switch ( frameLimit ) {
         case Config::FrameLimitPreference::VSync:
             targetDt = 1.0 / static_cast<double>(refreshRate);
             break;

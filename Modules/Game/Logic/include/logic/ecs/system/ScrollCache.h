@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/EditorConfig.h"
+#include <cstddef>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <utility>
@@ -80,7 +81,8 @@ public:
     std::vector<std::pair<double, double>> getTimeRangesForAbsYWindow(
         double minAbsY, double maxAbsY) const;
 
-    /// @brief 获取从 startTime 到 endTime 被 ScrollSegment 边界切割后的所有时间子区间
+    /// @brief 获取从 startTime 到 endTime 被 ScrollSegment
+    /// 边界切割后的所有时间子区间
     std::vector<std::pair<double, double>> getTimeSlices(double startTime,
                                                          double endTime) const;
 
@@ -100,6 +102,25 @@ private:
         const TimelineComponent* component;
     };
     std::vector<TimingEntry> m_rebuildScratch;
+
+    /// @brief 单个滚动段覆盖的 AbsY 区间索引项。
+    struct AbsYRangeEntry {
+        /// @brief 区间下界。
+        double minAbsY{ 0.0 };
+        /// @brief 区间上界。
+        double maxAbsY{ 0.0 };
+        /// @brief 对应的 m_segments 下标。
+        std::size_t segmentIndex{ 0 };
+    };
+
+    /// @brief 按 AbsY 下界排序的滚动段区间索引。
+    std::vector<AbsYRangeEntry> m_absYRangeIndex;
+
+    /// @brief 重建 AbsY 区间索引。
+    void rebuildAbsYRangeIndex();
+
+    /// @brief 获取指定滚动段覆盖的 AbsY 区间。
+    std::pair<double, double> getSegmentAbsYRange(std::size_t index) const;
 };
 
 }  // namespace MMM::Logic::System

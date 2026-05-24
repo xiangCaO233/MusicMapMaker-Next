@@ -8,7 +8,6 @@
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <imgui.h>
@@ -26,14 +25,6 @@ void ToolbarView::update(UIManager* sourceManager)
 
     // 从逻辑引擎同步当前工具状态
     m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
-
-    // 1. 获取图标字体尺寸以计算固定宽度
-    ImFont* toolFont = skinCfg.getFont("side_bar");
-
-    float fontSize = 18.0f;
-    if ( toolFont ) {
-        fontSize = toolFont->LegacySize;
-    }
 
     // 样式锁定
     auto& aesthetics =
@@ -83,335 +74,223 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
-        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
-        if ( auto f = skinCfg.getFont("pure_icons") ) ImGui::PushFont(f);
+        bool pushedIconFont = false;
+        if ( auto f = skinCfg.getFont("pure_icons") ) {
+            ImGui::PushFont(f);
+            pushedIconFont = true;
+        }
 
-        CLayVBox vbox;
-        vbox.setPadding(0, 0, 0, 0)
-            .setSpacing(std::floor(aesthetics.itemSpacing * dpiScale));
+        const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
+        auto&       engine      = Logic::EditorEngine::instance();
+        const auto& editorCfg   = engine.getEditorConfig();
 
-        // 1. 移动工具
-        vbox.addElement("MoveTool",
-                        Sizing::Fixed(btnSize),
-                        Sizing::Fixed(btnSize),
-                        [&](Clay_BoundingBox rect, bool) {
-                            ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                            drawToolButton(ICON_MMM_HAND,
-                                           Logic::EditTool::Move,
-                                           TR("ui.toolbar.move"),
-                                           rect.width);
-                        });
+        auto advanceItem = [&]() {
+            if ( itemSpacing > 0.0f ) {
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + itemSpacing);
+            }
+        };
 
-        // 2. 矩形选取工具
-        vbox.addElement("MarqueeTool",
-                        Sizing::Fixed(btnSize),
-                        Sizing::Fixed(btnSize),
-                        [&](Clay_BoundingBox rect, bool) {
-                            ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                            drawToolButton(ICON_MMM_SQUARE_SELECT,
-                                           Logic::EditTool::Marquee,
-                                           TR("ui.toolbar.marquee"),
-                                           rect.width);
-                        });
+        auto drawToggleButton = [&](const char* icon,
+                                    bool        active,
+                                    const char* tooltip,
+                                    auto        applyChange) {
+            pushBtnStyle(active);
+            if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+                auto newConfig = editorCfg;
+                applyChange(newConfig);
+                engine.setEditorConfig(newConfig);
+            }
+            drawTooltip(tooltip);
+            ImGui::PopStyleColor(3);
+            advanceItem();
+        };
 
-        // 3. 绘制工具
-        vbox.addElement("DrawTool",
-                        Sizing::Fixed(btnSize),
-                        Sizing::Fixed(btnSize),
-                        [&](Clay_BoundingBox rect, bool) {
-                            ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                            drawToolButton(ICON_MMM_PEN,
-                                           Logic::EditTool::Draw,
-                                           TR("ui.toolbar.draw"),
-                                           rect.width);
-                        });
+        drawToolButton(ICON_MMM_HAND,
+                       Logic::EditTool::Move,
+                       TR("ui.toolbar.move"),
+                       btnSize);
+        advanceItem();
+        drawToolButton(ICON_MMM_SQUARE_SELECT,
+                       Logic::EditTool::Marquee,
+                       TR("ui.toolbar.marquee"),
+                       btnSize);
+        advanceItem();
+        drawToolButton(ICON_MMM_PEN,
+                       Logic::EditTool::Draw,
+                       TR("ui.toolbar.draw"),
+                       btnSize);
+        advanceItem();
 
-        // 分隔线
-        vbox.addElement(
-            "GroupSeparator",
-            Sizing::Grow(),
-            Sizing::Fixed(2.0f * dpiScale),
-            [&](Clay_BoundingBox r, bool) {
-                ImVec2 pMin = { r.x + 4.0f * dpiScale, r.y + r.height * 0.5f };
-                ImVec2 pMax = { r.x + r.width - 4.0f * dpiScale,
-                                r.y + r.height * 0.5f };
-                ImGui::GetWindowDrawList()->AddLine(
-                    pMin, pMax, IM_COL32(100, 100, 100, 150), 1.0f * dpiScale);
-            });
+        ImVec2 sepPos = ImGui::GetCursorScreenPos();
+        float  sepH   = 2.0f * dpiScale;
+        ImGui::GetWindowDrawList()->AddLine(
+            { sepPos.x + 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
+            { sepPos.x + btnSize - 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
+            IM_COL32(100, 100, 100, 150),
+            1.0f * dpiScale);
+        ImGui::Dummy(ImVec2(btnSize, sepH));
+        advanceItem();
 
-        // 鼠标滚动翻转
-        vbox.addElement(
-            "ReverseScroll",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isReverse = editorCfg.settings.reverseScroll;
-                pushBtnStyle(isReverse);
-                if ( ImGui::Button(ICON_MMM_ARROWS_UP_DOWN,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                   = editorCfg;
-                    newConfig.settings.reverseScroll = !isReverse;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
+        drawToggleButton(ICON_MMM_ARROWS_UP_DOWN,
+                         editorCfg.settings.reverseScroll,
+                         TR("ui.toolbar.reverse_scroll").data(),
+                         [](Config::EditorConfig& config) {
+                             config.settings.reverseScroll =
+                                 !config.settings.reverseScroll;
+                         });
+
+        drawToggleButton(ICON_MMM_MAGNET,
+                         editorCfg.settings.scrollSnap,
+                         TR("ui.toolbar.scroll_snap").data(),
+                         [](Config::EditorConfig& config) {
+                             config.settings.scrollSnap =
+                                 !config.settings.scrollSnap;
+                         });
+
+        drawToggleButton(ICON_MMM_ARROW_DOWN,
+                         editorCfg.settings.snapFloor,
+                         TR("ui.toolbar.snap_floor").data(),
+                         [](Config::EditorConfig& config) {
+                             config.settings.snapFloor =
+                                 !config.settings.snapFloor;
+                         });
+
+        drawToggleButton(ICON_MMM_EYE,
+                         !editorCfg.visual.enableLinearScrollMapping,
+                         TR("ui.toolbar.scroll_timing_mapping").data(),
+                         [](Config::EditorConfig& config) {
+                             config.visual.enableLinearScrollMapping =
+                                 !config.visual.enableLinearScrollMapping;
+                         });
+
+        drawToggleButton(ICON_MMM_BARS,
+                         editorCfg.visual.drawBeatLines,
+                         TR("ui.toolbar.draw_beat_lines").data(),
+                         [](Config::EditorConfig& config) {
+                             config.visual.drawBeatLines =
+                                 !config.visual.drawBeatLines;
+                         });
+
+        drawToggleButton(ICON_MMM_STOP,
+                         editorCfg.settings.stopPlaybackOnScroll,
+                         TR("ui.toolbar.stop_on_scroll").data(),
+                         [](Config::EditorConfig& config) {
+                             config.settings.stopPlaybackOnScroll =
+                                 !config.settings.stopPlaybackOnScroll;
+                         });
+
+        drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
+                         editorCfg.visual.enableHitEffects,
+                         TR("ui.toolbar.hit_effects").data(),
+                         [](Config::EditorConfig& config) {
+                             config.visual.enableHitEffects =
+                                 !config.visual.enableHitEffects;
+                         });
+
+        float bottomButtonsH = btnSize * 2.0f + itemSpacing;
+        float bottomStartY = ImGui::GetCursorPosY() +
+                             ImGui::GetContentRegionAvail().y - bottomButtonsH;
+        if ( bottomStartY > ImGui::GetCursorPosY() ) {
+            ImGui::SetCursorPosY(bottomStartY);
+        }
+
+        {
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            auto session = engine.getActiveSession();
+
+            bool hasBeatmap = session && session->getContext().currentBeatmap;
+            int  currentTracks = 4;
+            if ( hasBeatmap ) {
+                currentTracks =
+                    session->getContext()
+                        .currentBeatmap->m_baseMapMetadata.track_count;
+            }
+
+            if ( !hasBeatmap ) {
+                ImGui::BeginDisabled();
+            }
+
+            pushBtnStyle(m_showKeyPopup);
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+
+            char keyBuf[16];
+            if ( hasBeatmap ) {
+                snprintf(keyBuf, sizeof(keyBuf), "%dK", currentTracks);
+            } else {
+                snprintf(keyBuf, sizeof(keyBuf), "--");
+            }
+
+            if ( ImGui::Button(keyBuf, ImVec2(btnSize, btnSize)) ) {
+                m_showKeyPopup = !m_showKeyPopup;
+                if ( m_showKeyPopup ) {
+                    m_showDivisorPopup = false;
                 }
-                drawTooltip(TR("ui.toolbar.reverse_scroll").data());
-                ImGui::PopStyleColor(3);
-            });
+            }
+            m_lastKeyBtnY = ImGui::GetItemRectMin().y;
 
-        // 滚动磁吸
-        vbox.addElement(
-            "ScrollSnap",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isScrollSnap = editorCfg.settings.scrollSnap;
-                pushBtnStyle(isScrollSnap);
-                if ( ImGui::Button(ICON_MMM_MAGNET,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                = editorCfg;
-                    newConfig.settings.scrollSnap = !isScrollSnap;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.scroll_snap").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        // 吸附向下取整
-        vbox.addElement(
-            "SnapFloor",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isSnapFloor = editorCfg.settings.snapFloor;
-                pushBtnStyle(isSnapFloor);
-                if ( ImGui::Button(ICON_MMM_ARROW_DOWN,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig               = editorCfg;
-                    newConfig.settings.snapFloor = !isSnapFloor;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.snap_floor").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        // 磁吸映射开关
-        vbox.addElement(
-            "TimingMap",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isTimingMapped =
-                    !editorCfg.visual.enableLinearScrollMapping;
-                pushBtnStyle(isTimingMapped);
-                if ( ImGui::Button(ICON_MMM_EYE,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                             = editorCfg;
-                    newConfig.visual.enableLinearScrollMapping = isTimingMapped;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.scroll_timing_mapping").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        // 分拍线显示
-        vbox.addElement(
-            "BeatLines",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isDrawBeatLines = editorCfg.visual.drawBeatLines;
-                pushBtnStyle(isDrawBeatLines);
-                if ( ImGui::Button(ICON_MMM_BARS,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                 = editorCfg;
-                    newConfig.visual.drawBeatLines = !isDrawBeatLines;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.draw_beat_lines").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        // 停止播放开关
-        vbox.addElement(
-            "StopOnScroll",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isStopOnScroll = editorCfg.settings.stopPlaybackOnScroll;
-                pushBtnStyle(isStopOnScroll);
-                if ( ImGui::Button(ICON_MMM_STOP,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                          = editorCfg;
-                    newConfig.settings.stopPlaybackOnScroll = !isStopOnScroll;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.stop_on_scroll").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        // 视觉特效
-        vbox.addElement(
-            "VisualEffects",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                bool isHitEffects = editorCfg.visual.enableHitEffects;
-                pushBtnStyle(isHitEffects);
-                if ( ImGui::Button(ICON_MMM_VISUAL_EFFECTS,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    auto newConfig                    = editorCfg;
-                    newConfig.visual.enableHitEffects = !isHitEffects;
-                    Logic::EditorEngine::instance().setEditorConfig(newConfig);
-                }
-                drawTooltip(TR("ui.toolbar.hit_effects").data());
-                ImGui::PopStyleColor(3);
-            });
-
-        vbox.addSpring();
-
-        // Key 数量快捷设置
-        vbox.addElement(
-            "KeyCountShortcut",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-
-                auto& engine = Logic::EditorEngine::instance();
-                std::lock_guard<std::recursive_mutex> sessionLock(
-                    engine.getSessionMutex());
-                auto session = engine.getActiveSession();
-
-                bool hasBeatmap =
-                    session && session->getContext().currentBeatmap;
-                int currentTracks = 4;
-                if ( hasBeatmap ) {
-                    currentTracks =
-                        session->getContext()
-                            .currentBeatmap->m_baseMapMetadata.track_count;
-                }
-
-                if ( !hasBeatmap ) {
-                    ImGui::BeginDisabled();
-                }
-
-                pushBtnStyle(m_showKeyPopup);
-                ImFont* contentFont = skinCfg.getFont("content");
-                if ( contentFont ) ImGui::PushFont(contentFont);
-
-                char keyBuf[16];
-                if ( hasBeatmap ) {
-                    snprintf(keyBuf, sizeof(keyBuf), "%dK", currentTracks);
-                } else {
-                    snprintf(keyBuf, sizeof(keyBuf), "--");
-                }
-
-                if ( ImGui::Button(keyBuf, ImVec2(rect.width, rect.height)) ) {
-                    m_showKeyPopup = !m_showKeyPopup;
-                    if ( m_showKeyPopup ) {
-                        m_showDivisorPopup = false;
+            if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                float wheel = ImGui::GetIO().MouseWheel;
+                if ( std::abs(wheel) > 0.1f ) {
+                    int delta     = (wheel > 0) ? 1 : -1;
+                    int newTracks = std::clamp(currentTracks + delta, 1, 32);
+                    if ( newTracks != currentTracks ) {
+                        auto meta = session->getContext()
+                                        .currentBeatmap->m_baseMapMetadata;
+                        meta.track_count = newTracks;
+                        engine.pushCommand(
+                            Logic::CmdUpdateBeatmapMetadata{ meta });
                     }
                 }
-                m_lastKeyBtnY = ImGui::GetItemRectMin().y;
+                drawTooltip(TR("ui.settings.beatmap.tracks").data());
+            }
 
-                if ( hasBeatmap && ImGui::IsItemHovered() ) {
-                    float wheel = ImGui::GetIO().MouseWheel;
-                    if ( std::abs(wheel) > 0.1f ) {
-                        int delta = (wheel > 0) ? 1 : -1;
-                        int newTracks =
-                            std::clamp(currentTracks + delta, 1, 32);
-                        if ( newTracks != currentTracks ) {
-                            auto meta = session->getContext()
-                                            .currentBeatmap->m_baseMapMetadata;
-                            meta.track_count = newTracks;
-                            engine.pushCommand(
-                                Logic::CmdUpdateBeatmapMetadata{ meta });
-                        }
-                    }
-                    drawTooltip(TR("ui.settings.beatmap.tracks").data());
+            if ( contentFont ) ImGui::PopFont();
+            ImGui::PopStyleColor(3);
+
+            if ( !hasBeatmap ) {
+                ImGui::EndDisabled();
+            }
+        }
+        advanceItem();
+
+        {
+            int currentDivisor = editorCfg.settings.beatDivisor;
+            pushBtnStyle(m_showDivisorPopup);
+            ImFont* contentFont = skinCfg.getFont("content");
+            if ( contentFont ) ImGui::PushFont(contentFont);
+            char divisorBuf[16];
+            snprintf(divisorBuf, sizeof(divisorBuf), "%d", currentDivisor);
+            if ( ImGui::Button(divisorBuf, ImVec2(btnSize, btnSize)) ) {
+                m_showDivisorPopup = !m_showDivisorPopup;
+                if ( m_showDivisorPopup ) {
+                    m_showKeyPopup = false;
                 }
-
-                if ( contentFont ) ImGui::PopFont();
-                ImGui::PopStyleColor(3);
-
-                if ( !hasBeatmap ) {
-                    ImGui::EndDisabled();
-                }
-            });
-
-        // 分拍数量设置
-        vbox.addElement(
-            "BeatDivisor",
-            Sizing::Fixed(btnSize),
-            Sizing::Fixed(btnSize),
-            [&](Clay_BoundingBox rect, bool) {
-                ImGui::SetCursorScreenPos({ rect.x, rect.y });
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                int currentDivisor = editorCfg.settings.beatDivisor;
-                pushBtnStyle(m_showDivisorPopup);
-                ImFont* contentFont = skinCfg.getFont("content");
-                if ( contentFont ) ImGui::PushFont(contentFont);
-                char divisorBuf[16];
-                snprintf(divisorBuf, sizeof(divisorBuf), "%d", currentDivisor);
-                if ( ImGui::Button(divisorBuf,
-                                   ImVec2(rect.width, rect.height)) ) {
-                    m_showDivisorPopup = !m_showDivisorPopup;
-                    if ( m_showDivisorPopup ) {
-                        m_showKeyPopup = false;
+            }
+            m_lastBtnY = ImGui::GetItemRectMin().y;
+            if ( ImGui::IsItemHovered() ) {
+                float wheel = ImGui::GetIO().MouseWheel;
+                if ( std::abs(wheel) > 0.1f ) {
+                    int delta = (wheel > 0) ? 1 : -1;
+                    if ( ImGui::GetIO().KeyShift )
+                        delta *= static_cast<int>(
+                            editorCfg.settings.scrollSpeedMultiplier);
+                    int newDivisor = std::clamp(currentDivisor + delta, 1, 64);
+                    if ( newDivisor != currentDivisor ) {
+                        auto newConfig                 = editorCfg;
+                        newConfig.settings.beatDivisor = newDivisor;
+                        engine.setEditorConfig(newConfig);
                     }
                 }
-                m_lastBtnY = ImGui::GetItemRectMin().y;
-                if ( ImGui::IsItemHovered() ) {
-                    float wheel = ImGui::GetIO().MouseWheel;
-                    if ( std::abs(wheel) > 0.1f ) {
-                        int delta = (wheel > 0) ? 1 : -1;
-                        if ( ImGui::GetIO().KeyShift )
-                            delta *= static_cast<int>(
-                                editorCfg.settings.scrollSpeedMultiplier);
-                        int newDivisor =
-                            std::clamp(currentDivisor + delta, 1, 64);
-                        if ( newDivisor != currentDivisor ) {
-                            auto newConfig                 = editorCfg;
-                            newConfig.settings.beatDivisor = newDivisor;
-                            Logic::EditorEngine::instance().setEditorConfig(
-                                newConfig);
-                        }
-                    }
 
-                    drawTooltip(TR("ui.toolbar.beat_divisor").data());
-                }
-                if ( contentFont ) ImGui::PopFont();
-                ImGui::PopStyleColor(3);
-            });
+                drawTooltip(TR("ui.toolbar.beat_divisor").data());
+            }
+            if ( contentFont ) ImGui::PopFont();
+            ImGui::PopStyleColor(3);
+        }
 
-        ImVec2 startPos = ImGui::GetCursorScreenPos();
-        float  availH   = ImGui::GetContentRegionAvail().y;
-        float  availW   = ImGui::GetContentRegionAvail().x;
-        ImVec2 sz       = vbox.renderInCurrent(startPos, { availW, availH });
-        ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
-
-        if ( toolFont ) ImGui::PopFont();
+        if ( pushedIconFont ) ImGui::PopFont();
     }
     ImGui::End();
     ImGui::PopStyleVar(5);

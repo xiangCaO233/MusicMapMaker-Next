@@ -154,6 +154,57 @@ static std::vector<entt::entity> getNotesInRange(
         return result;
     }
 
+    auto getCarrierEnd = [&](const NoteComponent& note) {
+        double carrierEnd = note.m_timestamp + std::max(0.0, note.m_duration);
+        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( const auto& sub : note.m_subNotes ) {
+                carrierEnd = std::max(
+                    carrierEnd, sub.timestamp + std::max(0.0, sub.duration));
+            }
+        }
+        return carrierEnd;
+    };
+
+    if ( cache->getSegments().size() > 2048 &&
+         cache->getSegments().size() > count ) {
+        result.reserve(count);
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double padDelta = 128.0 / static_cast<double>(std::abs(renderScaleY));
+
+        for ( auto entity : entities ) {
+            const auto& note = registry.get<const NoteComponent>(entity);
+            if ( note.m_isSubNote ) continue;
+
+            double minDisplayDelta = cache->getDisplayDelta(
+                note.m_timestamp, currentAbsY, note.m_timestamp);
+            double maxDisplayDelta = minDisplayDelta;
+
+            auto includeTime = [&](double time) {
+                double displayDelta =
+                    cache->getDisplayDelta(time, currentAbsY, time);
+                minDisplayDelta = std::min(minDisplayDelta, displayDelta);
+                maxDisplayDelta = std::max(maxDisplayDelta, displayDelta);
+            };
+
+            includeTime(note.m_timestamp + std::max(0.0, note.m_duration));
+            if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+                for ( const auto& sub : note.m_subNotes ) {
+                    includeTime(sub.timestamp);
+                    includeTime(sub.timestamp + std::max(0.0, sub.duration));
+                }
+            }
+
+            if ( maxDisplayDelta >= minDelta - padDelta &&
+                 minDisplayDelta <= maxDelta + padDelta ) {
+                result.push_back(entity);
+            }
+        }
+        return result;
+    }
+
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
@@ -187,16 +238,6 @@ static std::vector<entt::entity> getNotesInRange(
         if ( seen.insert(entity).second ) {
             result.push_back(entity);
         }
-    };
-    auto getCarrierEnd = [&](const NoteComponent& note) {
-        double carrierEnd = note.m_timestamp + std::max(0.0, note.m_duration);
-        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( const auto& sub : note.m_subNotes ) {
-                carrierEnd = std::max(
-                    carrierEnd, sub.timestamp + std::max(0.0, sub.duration));
-            }
-        }
-        return carrierEnd;
     };
 
     for ( const auto& [rangeStart, rangeEnd] : scanRanges ) {

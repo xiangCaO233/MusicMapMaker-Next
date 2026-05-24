@@ -70,6 +70,22 @@ protected:
                           uint32_t                frameIndex) override;
 
 private:
+    /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
+    struct LastMouseCommand {
+        /// @brief 是否已经记录过一次鼠标命令。
+        bool valid{ false };
+        /// @brief 上一次发送的本地鼠标坐标。
+        glm::vec2 pos{ 0.0f, 0.0f };
+        /// @brief 上一次发送的视口宽度。
+        float viewportWidth{ 0.0f };
+        /// @brief 上一次发送的视口高度。
+        float viewportHeight{ 0.0f };
+        /// @brief 上一次发送的窗口悬浮状态。
+        bool isHovering{ false };
+        /// @brief 上一次发送的鼠标拖拽状态。
+        bool isDragging{ false };
+    };
+
     /// @brief 画布名称 (对应翻译和 ID)
     std::string m_canvasName;
 
@@ -106,6 +122,9 @@ private:
 
     /// @brief 上一次应用偏移的快照指针
     Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+
+    /// @brief 上一次发送给逻辑线程的鼠标状态。
+    LastMouseCommand m_lastMouseCommand;
 };
 
 }  // namespace MMM::Canvas

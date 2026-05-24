@@ -1,6 +1,8 @@
 #pragma once
 
 #include "event/core/EventBus.h"
+#include <cstdint>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <string>
 #include <vector>
@@ -35,6 +37,22 @@ private:
         glm::vec2                pos;
     };
 
+    /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
+    struct LastMouseCommand {
+        /// @brief 是否已经记录过一次鼠标命令。
+        bool valid{ false };
+        /// @brief 上一次发送的本地鼠标坐标。
+        glm::vec2 pos{ 0.0f, 0.0f };
+        /// @brief 上一次发送的视口宽度。
+        float viewportWidth{ 0.0f };
+        /// @brief 上一次发送的视口高度。
+        float viewportHeight{ 0.0f };
+        /// @brief 上一次发送的窗口悬浮状态。
+        bool isHovering{ false };
+        /// @brief 上一次发送的鼠标拖拽状态。
+        bool isDragging{ false };
+    };
+
     std::string              m_canvasName;
     std::string              m_cameraId;
     std::vector<PendingDrop> m_pendingDrops;
@@ -53,6 +71,16 @@ private:
     int m_hoverLayerIndex{ 0 };
     /// @brief 当前鼠标下可切换的悬浮候选层数量。
     int m_hoverLayerCount{ 0 };
+    /// @brief 上一次发送给逻辑线程的鼠标状态。
+    LastMouseCommand m_lastMouseCommand;
+    /// @brief 上一次发送给逻辑线程的悬浮实体。
+    entt::entity m_lastHoveredEntity{ entt::null };
+    /// @brief 上一次发送给逻辑线程的悬浮部位。
+    uint8_t m_lastHoveredPart{ 0 };
+    /// @brief 上一次发送给逻辑线程的悬浮子索引。
+    int m_lastHoveredSubIndex{ -1 };
+    /// @brief 是否已经发送过悬浮状态。
+    bool m_hasLastHovered{ false };
 };
 
 }  // namespace MMM::Canvas

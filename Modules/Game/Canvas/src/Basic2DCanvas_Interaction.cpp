@@ -17,6 +17,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 
@@ -195,14 +196,34 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
-                                    .mouseX         = localMousePos.x,
-                                    .mouseY         = localMousePos.y,
-                                    .viewportWidth  = targetWidth,
-                                    .viewportHeight = targetHeight,
-                                    .isHovering     = isHovered,
-                                    .isDragging     = isDragging }));
+    constexpr float mouseEpsilon = 0.1f;
+    bool            shouldSendMouse =
+        !m_lastMouseCommand.valid ||
+        std::abs(m_lastMouseCommand.pos.x - localMousePos.x) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.pos.y - localMousePos.y) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportWidth - targetWidth) >
+            mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportHeight - targetHeight) >
+            mouseEpsilon ||
+        m_lastMouseCommand.isHovering != isHovered ||
+        m_lastMouseCommand.isDragging != isDragging;
+
+    if ( shouldSendMouse ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                        .mouseX         = localMousePos.x,
+                                        .mouseY         = localMousePos.y,
+                                        .viewportWidth  = targetWidth,
+                                        .viewportHeight = targetHeight,
+                                        .isHovering     = isHovered,
+                                        .isDragging     = isDragging }));
+        m_lastMouseCommand.valid         = true;
+        m_lastMouseCommand.pos           = { localMousePos.x, localMousePos.y };
+        m_lastMouseCommand.viewportWidth = targetWidth;
+        m_lastMouseCommand.viewportHeight = targetHeight;
+        m_lastMouseCommand.isHovering     = isHovered;
+        m_lastMouseCommand.isDragging     = isDragging;
+    }
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&
@@ -447,17 +468,20 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     std::vector<HoverCandidate> candidates;
     std::string                 layerSignature;
-    for ( auto it = currentSnapshot->hitboxes.rbegin();
-          it != currentSnapshot->hitboxes.rend();
-          ++it ) {
-        if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
-             localMousePos.y >= it->y && localMousePos.y <= it->y + it->h ) {
-            candidates.push_back({ it->entity, it->part, it->subIndex });
-            layerSignature +=
-                std::to_string(
-                    static_cast<uint32_t>(entt::to_integral(it->entity))) +
-                ":" + std::to_string(static_cast<uint32_t>(it->part)) + ":" +
-                std::to_string(it->subIndex) + ";";
+    if ( isHovered ) {
+        for ( auto it = currentSnapshot->hitboxes.rbegin();
+              it != currentSnapshot->hitboxes.rend();
+              ++it ) {
+            if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
+                 localMousePos.y >= it->y &&
+                 localMousePos.y <= it->y + it->h ) {
+                candidates.push_back({ it->entity, it->part, it->subIndex });
+                layerSignature +=
+                    std::to_string(
+                        static_cast<uint32_t>(entt::to_integral(it->entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(it->part)) +
+                    ":" + std::to_string(it->subIndex) + ";";
+            }
         }
     }
 
@@ -493,9 +517,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredSubIndex       = candidate.subIndex;
     }
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
-            hoveredEntity, hoveredPart, hoveredSubIndex }));
+    bool shouldSendHover = !m_hasLastHovered ||
+                           m_lastHoveredEntity != hoveredEntity ||
+                           m_lastHoveredPart != hoveredPart ||
+                           m_lastHoveredSubIndex != hoveredSubIndex;
+    if ( shouldSendHover ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
+                hoveredEntity, hoveredPart, hoveredSubIndex }));
+        m_hasLastHovered      = true;
+        m_lastHoveredEntity   = hoveredEntity;
+        m_lastHoveredPart     = hoveredPart;
+        m_lastHoveredSubIndex = hoveredSubIndex;
+    }
 
     if ( ImGui::IsMouseClicked(0) ) {
         if ( isHovered ) {

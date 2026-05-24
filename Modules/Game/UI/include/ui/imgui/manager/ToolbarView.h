@@ -18,6 +18,8 @@ public:
     ToolbarView(const std::string& name);
     ~ToolbarView() override = default;
 
+    /// @brief 绘制工具栏主界面。
+    /// @param sourceManager 当前 UI 管理器。
     void update(UIManager* sourceManager) override;
 
 private:
