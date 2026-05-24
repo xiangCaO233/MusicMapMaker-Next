@@ -1143,13 +1143,13 @@ void EditorEngine::scanProjectDirectory()
             XINFO("Directory Listener: Discovered new audio file: {}",
                   filename);
         } else {
-            // 已有音频，可能需要根据最近的谱面关系更新 m_type
-            auto newType = (mainAudioPaths.count(relAudioPath) > 0)
-                               ? AudioTrackType::Main
-                               : AudioTrackType::Effect;
-            if ( res.m_type != newType ) {
-                res.m_type = newType;
-                changed    = true;
+            // 已有音频，如果被谱面引用为主音轨，则强制设为主音轨
+            // 如果未被引用，保持其原有的类型（尊重用户的显式配置）
+            if ( mainAudioPaths.count(relAudioPath) > 0 ) {
+                if ( res.m_type != AudioTrackType::Main ) {
+                    res.m_type = AudioTrackType::Main;
+                    changed    = true;
+                }
             }
         }
         newAudioResources.push_back(res);
