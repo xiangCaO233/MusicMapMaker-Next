@@ -170,8 +170,6 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 } else {
                     currentScrollMult = 1.0;
                 }
-                currentScrollMult =
-                    std::clamp(currentScrollMult, -10000.0, 10000.0);
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::JUMP ) {
             newSegments.back().effects |= SCROLL_EFFECT_JUMP;
