@@ -47,6 +47,12 @@ private:
 
     float m_speedTooltipTimer{ 0.0f };
     float m_speedTooltipValue{ 1.0f };
+    /// @brief 当前鼠标下所有悬浮候选层的签名，用于检测是否切换到其他物件集合。
+    std::string m_hoverLayerSignature;
+    /// @brief 当前生效的悬浮候选层索引。
+    int m_hoverLayerIndex{ 0 };
+    /// @brief 当前鼠标下可切换的悬浮候选层数量。
+    int m_hoverLayerCount{ 0 };
 };
 
 }  // namespace MMM::Canvas

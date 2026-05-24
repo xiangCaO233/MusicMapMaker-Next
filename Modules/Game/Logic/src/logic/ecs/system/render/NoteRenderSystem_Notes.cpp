@@ -8,6 +8,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace MMM::Logic::System
@@ -168,7 +169,42 @@ static std::vector<entt::entity> getNotesInRange(
         scanRanges.emplace_back(scanStart, rangeEnd);
     }
 
+    std::unordered_set<entt::entity> seen;
+    auto                             addEntity = [&](entt::entity entity) {
+        if ( seen.insert(entity).second ) {
+            result.push_back(entity);
+        }
+    };
+    auto getCarrierEnd = [&](const NoteComponent& note) {
+        double carrierEnd = note.m_timestamp + std::max(0.0, note.m_duration);
+        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( const auto& sub : note.m_subNotes ) {
+                carrierEnd = std::max(
+                    carrierEnd, sub.timestamp + std::max(0.0, sub.duration));
+            }
+        }
+        return carrierEnd;
+    };
+
     for ( const auto& [rangeStart, rangeEnd] : scanRanges ) {
+        auto startIt = std::lower_bound(
+            entities.begin(),
+            entities.end(),
+            rangeStart,
+            [&](entt::entity entity, double val) {
+                return registry.get<const NoteComponent>(entity).m_timestamp <
+                       val;
+            });
+
+        for ( auto cur = entities.begin(); cur != startIt; ++cur ) {
+            entt::entity entity = *cur;
+            const auto&  note   = registry.get<const NoteComponent>(entity);
+            if ( note.m_isSubNote ) continue;
+            if ( getCarrierEnd(note) >= rangeStart ) {
+                addEntity(entity);
+            }
+        }
+
         auto it = std::lower_bound(
             entities.begin(),
             entities.end(),
@@ -185,9 +221,8 @@ static std::vector<entt::entity> getNotesInRange(
                 break;
             }
 
-            if ( result.empty() || result.back() != entity ) {
-                result.push_back(entity);
-            }
+            if ( note.m_isSubNote ) continue;
+            addEntity(entity);
         }
     }
 
@@ -208,24 +243,34 @@ void NoteRenderSystem::generateNoteHitboxes(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd = ctx.cache->getDisplayDelta(
-            note.m_timestamp + note.m_duration, ctx.currentAbsY, note.m_timestamp + note.m_duration);
-            
-        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double displayDeltaEnd =
+            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
+                                       ctx.currentAbsY,
+                                       note.m_timestamp + note.m_duration);
+
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         double padDelta = ctx.noteH / static_cast<double>(renderScaleY);
-        
-        if ( !NoteRenderSystem::isCarrierVisible(note.m_timestamp, note.m_timestamp + note.m_duration,
-                                                 ctx.currentTime, displayDeltaStart, displayDeltaEnd,
-                                                 maxDelta + padDelta, minDelta - padDelta) ) {
+
+        if ( !NoteRenderSystem::isCarrierVisible(
+                 note.m_timestamp,
+                 note.m_timestamp + note.m_duration,
+                 ctx.currentTime,
+                 displayDeltaStart,
+                 displayDeltaEnd,
+                 maxDelta + padDelta,
+                 minDelta - padDelta) ) {
             continue;
         }
 
-        float screenY =
-            judgmentLineY -
-            static_cast<float>(displayDeltaStart) * renderScaleY;
-            
-        float visualH = static_cast<float>(displayDeltaStart - displayDeltaEnd) * renderScaleY;
+        float screenY = judgmentLineY -
+                        static_cast<float>(displayDeltaStart) * renderScaleY;
+
+        float visualH =
+            static_cast<float>(displayDeltaStart - displayDeltaEnd) *
+            renderScaleY;
 
         if ( !note.m_isSubNote ) {
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
@@ -253,7 +298,7 @@ void NoteRenderSystem::generateNoteHitboxes(
                                                drawW,
                                                drawH });
             } else if ( note.m_type == ::MMM::NoteType::HOLD &&
-                        visualH > ctx.noteH * 0.1f ) {
+                        std::abs(visualH) > ctx.noteH * 0.1f ) {
                 float bodyW  = ctx.noteW;
                 auto  itBody = snapshot->uvMap.find(
                     static_cast<uint32_t>(TextureID::HoldBodyVertical));
@@ -265,14 +310,16 @@ void NoteRenderSystem::generateNoteHitboxes(
 
                 float bodyX = leftX + note.m_trackIndex * singleTrackW +
                               (singleTrackW - bodyW) * 0.5f;
+                float bodyY = std::min(screenY, screenY + visualH);
+                float bodyH = std::abs(visualH);
 
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                -1,
                                                bodyX,
-                                               screenY - visualH,
+                                               bodyY,
                                                bodyW,
-                                               visualH });
+                                               bodyH });
             }
         }
     }
@@ -286,14 +333,15 @@ void NoteRenderSystem::generateNoteHitboxes(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float endY =
+            judgmentLineY - static_cast<float>(ctx.cache->getDisplayDelta(
+                                note.m_timestamp + note.m_duration,
+                                ctx.currentAbsY,
+                                note.m_timestamp)) *
+                                renderScaleY;
 
-        float minY = std::min(screenY, screenY - visualH) - ctx.noteH;
-        float maxY = std::max(screenY, screenY - visualH) + ctx.noteH;
+        float minY = std::min(screenY, endY) - ctx.noteH;
+        float maxY = std::max(screenY, endY) + ctx.noteH;
         if ( minY > bottomY || maxY < topY ) continue;
 
         float headX = leftX + note.m_trackIndex * singleTrackW +
@@ -358,7 +406,7 @@ void NoteRenderSystem::generateNoteHitboxes(
                       -1,
                       leftX + note.m_trackIndex * singleTrackW +
                           (singleTrackW - endW) * 0.5f,
-                      screenY - visualH - endH * 0.5f,
+                      endY - endH * 0.5f,
                       endW,
                       endH });
             }
@@ -381,17 +429,26 @@ void NoteRenderSystem::renderNoteBaseLayer(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd = ctx.cache->getDisplayDelta(
-            note.m_timestamp + note.m_duration, ctx.currentAbsY, note.m_timestamp + note.m_duration);
-            
-        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double displayDeltaEnd =
+            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
+                                       ctx.currentAbsY,
+                                       note.m_timestamp + note.m_duration);
+
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         double padDelta = ctx.noteH / static_cast<double>(renderScaleY);
 
         if ( note.m_type != ::MMM::NoteType::POLYLINE ) {
-            if ( !NoteRenderSystem::isCarrierVisible(note.m_timestamp, note.m_timestamp + note.m_duration,
-                                                     ctx.currentTime, displayDeltaStart, displayDeltaEnd,
-                                                     maxDelta + padDelta, minDelta - padDelta) ) {
+            if ( !NoteRenderSystem::isCarrierVisible(
+                     note.m_timestamp,
+                     note.m_timestamp + note.m_duration,
+                     ctx.currentTime,
+                     displayDeltaStart,
+                     displayDeltaEnd,
+                     maxDelta + padDelta,
+                     minDelta - padDelta) ) {
                 continue;
             }
         }

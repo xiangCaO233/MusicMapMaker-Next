@@ -3,6 +3,9 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace MMM::Logic::System
 {
 
@@ -37,11 +40,11 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 void NoteRenderSystem::renderPolyline(
     const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
     const Config::EditorConfig& config, RenderSnapshot* snapshot,
-    double currentAbsY, double currentTime, float judgmentLineY, float leftX, float rightX,
-    float topY, float bottomY, float singleTrackW, float renderScaleY,
-    glm::vec4 colorHold, glm::vec4 colorNode, glm::vec4 colorArrow,
-    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-    int glowSubIndex)
+    double currentAbsY, double currentTime, float judgmentLineY, float leftX,
+    float rightX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY, glm::vec4 colorHold, glm::vec4 colorNode,
+    glm::vec4 colorArrow, entt::entity entity, bool generateHitboxes,
+    HoverPart glowPart, int glowSubIndex)
 {
     if ( !cache ) return;
 
@@ -141,9 +144,10 @@ void NoteRenderSystem::renderPolyline(
 void NoteRenderSystem::drawPolylineBody(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, double currentTime,
-    float topY, float bottomY, float noteW, float noteH, glm::vec4 colorHold, 
-    entt::entity entity, bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
+    HoverPart glowPart, int glowSubIndex)
 {
     if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::HoldBody )
@@ -157,21 +161,32 @@ void NoteRenderSystem::drawPolylineBody(
         }
 
         const auto& sub = note.m_subNotes[i];
-        
-        double displayDeltaStart = cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
-        double displayDeltaEnd = cache->getDisplayDelta(sub.timestamp + sub.duration, currentAbsY, sub.timestamp + sub.duration);
-        
-        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+
+        double displayDeltaStart =
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+        double displayDeltaEnd =
+            cache->getDisplayDelta(sub.timestamp + sub.duration,
+                                   currentAbsY,
+                                   sub.timestamp + sub.duration);
+
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         double padDelta = noteH / static_cast<double>(renderScaleY);
 
-        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp, sub.timestamp + sub.duration,
-                                                 currentTime, displayDeltaStart, displayDeltaEnd,
-                                                 maxDelta + padDelta, minDelta - padDelta) ) {
+        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
+                                                 sub.timestamp + sub.duration,
+                                                 currentTime,
+                                                 displayDeltaStart,
+                                                 displayDeltaEnd,
+                                                 maxDelta + padDelta,
+                                                 minDelta - padDelta) ) {
             continue;
         }
 
-        float subStartY = judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
+        float subStartY = judgmentLineY -
+                          static_cast<float>(displayDeltaStart) * renderScaleY;
 
         float subEndTrack = (float)sub.trackIndex;
         float subEndY     = subStartY;
@@ -235,12 +250,16 @@ void NoteRenderSystem::drawPolylineBody(
             }
 
             batcher.setTexture(TextureID::HoldBodyVertical);
-            float sy = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                           sub.timestamp, currentAbsY, sub.timestamp)) *
-                                           renderScaleY;
-            float ey = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                           sub.timestamp + sub.duration, currentAbsY, sub.timestamp + sub.duration)) *
-                                           renderScaleY;
+            float sy = judgmentLineY -
+                       static_cast<float>(cache->getDisplayDelta(
+                           sub.timestamp, currentAbsY, sub.timestamp)) *
+                           renderScaleY;
+            float ey =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    sub.timestamp + sub.duration,
+                                    currentAbsY,
+                                    sub.timestamp + sub.duration)) *
+                                    renderScaleY;
             batcher.pushFreeQuad({ bodyX, sy },
                                  { bodyX + bodySize.x, sy },
                                  { bodyX + bodySize.x, ey },
@@ -248,13 +267,15 @@ void NoteRenderSystem::drawPolylineBody(
                                  finalBodyColor);
 
             if ( generateHitboxes && entity != entt::null ) {
+                float hitY = std::min(subStartY, subEndY);
+                float hitH = std::abs(subStartY - subEndY);
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                static_cast<int>(i),
                                                bodyX,
-                                               subEndY,
+                                               hitY,
                                                bodySize.x,
-                                               subStartY - subEndY });
+                                               hitH });
             }
         }
 
@@ -282,17 +303,19 @@ void NoteRenderSystem::drawPolylineBody(
             }
 
             batcher.setTexture(TextureID::HoldBodyVertical);
-            
-            double tStart = sub.timestamp + sub.duration;
-            double tEnd = next.timestamp;
 
-            float sy = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                           tStart, currentAbsY, tStart)) *
-                                           renderScaleY;
-            float ey = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                           tEnd, currentAbsY, tEnd)) *
-                                           renderScaleY;
-            
+            double tStart = sub.timestamp + sub.duration;
+            double tEnd   = next.timestamp;
+
+            float sy =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    tStart, currentAbsY, tStart)) *
+                                    renderScaleY;
+            float ey =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    tEnd, currentAbsY, tEnd)) *
+                                    renderScaleY;
+
             float x1 = curBodyX;
             float x2 = nextBodyX;
 
@@ -322,10 +345,11 @@ void NoteRenderSystem::drawPolylineBody(
 void NoteRenderSystem::drawPolylineNodes(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, double currentTime,
-    float topY, float bottomY, float noteW, float noteH, glm::vec4 colorNode,
-    const Config::EditorConfig& config, entt::entity entity,
-    bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorNode, const Config::EditorConfig& config,
+    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
+    int glowSubIndex)
 {
     if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::PolylineNode )
@@ -339,20 +363,28 @@ void NoteRenderSystem::drawPolylineNodes(
         }
 
         const auto& sub = note.m_subNotes[i];
-        double displayDeltaStart = cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+        double      displayDeltaStart =
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
         double displayDeltaEnd = displayDeltaStart;
 
-        double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-        double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         double padDelta = noteH / static_cast<double>(renderScaleY);
 
-        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp, sub.timestamp,
-                                                 currentTime, displayDeltaStart, displayDeltaEnd,
-                                                 maxDelta + padDelta, minDelta - padDelta) ) {
+        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
+                                                 sub.timestamp,
+                                                 currentTime,
+                                                 displayDeltaStart,
+                                                 displayDeltaEnd,
+                                                 maxDelta + padDelta,
+                                                 minDelta - padDelta) ) {
             continue;
         }
 
-        float subStartY = judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
+        float subStartY = judgmentLineY -
+                          static_cast<float>(displayDeltaStart) * renderScaleY;
         glm::vec2 nodeSize =
             getDrawSize(snapshot, TextureID::Node, noteW, noteH);
         float nodeX = leftX + sub.trackIndex * singleTrackW +
@@ -391,10 +423,11 @@ void NoteRenderSystem::drawPolylineNodes(
 void NoteRenderSystem::drawPolylineHead(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, double currentTime,
-    float topY, float bottomY, float noteW, float noteH, glm::vec4 colorHold,
-    const Config::EditorConfig& config, entt::entity entity,
-    bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHold, const Config::EditorConfig& config,
+    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
+    int glowSubIndex)
 {
     if ( glowPart != HoverPart::None &&
          !(glowPart == HoverPart::PolylineNode && glowSubIndex == 0) )
@@ -404,20 +437,28 @@ void NoteRenderSystem::drawPolylineHead(
 
     const auto& firstSub = note.m_subNotes.front();
 
-    double displayDeltaStart = cache->getDisplayDelta(firstSub.timestamp, currentAbsY, firstSub.timestamp);
+    double displayDeltaStart = cache->getDisplayDelta(
+        firstSub.timestamp, currentAbsY, firstSub.timestamp);
     double displayDeltaEnd = displayDeltaStart;
 
-    double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+    double maxDelta =
+        (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double minDelta =
+        (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
     double padDelta = noteH / static_cast<double>(renderScaleY);
 
-    if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp, firstSub.timestamp,
-                                             currentTime, displayDeltaStart, displayDeltaEnd,
-                                             maxDelta + padDelta, minDelta - padDelta) ) {
+    if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp,
+                                             firstSub.timestamp,
+                                             currentTime,
+                                             displayDeltaStart,
+                                             displayDeltaEnd,
+                                             maxDelta + padDelta,
+                                             minDelta - padDelta) ) {
         return;
     }
 
-    float headY = judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
+    float headY =
+        judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
     float     headX    = leftX + firstSub.trackIndex * singleTrackW +
                          (singleTrackW - headSize.x) * 0.5f;
@@ -451,11 +492,11 @@ void NoteRenderSystem::drawPolylineHead(
 void NoteRenderSystem::drawPolylineDecoration(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, double currentTime,
-    float topY, float bottomY, float noteW, float noteH, glm::vec4 colorHold,
-    glm::vec4 colorArrow, const Config::EditorConfig& config,
-    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-    int glowSubIndex)
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHold, glm::vec4 colorArrow,
+    const Config::EditorConfig& config, entt::entity entity,
+    bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
 {
     if ( note.m_subNotes.empty() ) return;
 
@@ -472,14 +513,21 @@ void NoteRenderSystem::drawPolylineDecoration(
     if ( last.type == ::MMM::NoteType::HOLD ) {
         targetTime = last.timestamp + last.duration;
     }
-    double displayDelta = cache->getDisplayDelta(targetTime, currentAbsY, targetTime);
-    double maxDelta = (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double minDelta = (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+    double displayDelta =
+        cache->getDisplayDelta(targetTime, currentAbsY, targetTime);
+    double maxDelta =
+        (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double minDelta =
+        (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
     double padDelta = noteH / static_cast<double>(renderScaleY);
 
-    if ( !NoteRenderSystem::isCarrierVisible(targetTime, targetTime,
-                                             currentTime, displayDelta, displayDelta,
-                                             maxDelta + padDelta, minDelta - padDelta) ) {
+    if ( !NoteRenderSystem::isCarrierVisible(targetTime,
+                                             targetTime,
+                                             currentTime,
+                                             displayDelta,
+                                             displayDelta,
+                                             maxDelta + padDelta,
+                                             minDelta - padDelta) ) {
         return;
     }
 

@@ -259,6 +259,106 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                     m_ctx->previewHoverTime    = snapshot->hoveredTime;
                 }
 
+                auto makeBeatPoint = [&](double time, int32_t track) {
+                    HoverBeatPoint point;
+                    point.show  = true;
+                    point.time  = time;
+                    point.track = track;
+
+                    const TimelineComponent* activeBpm = nullptr;
+                    for ( const auto& bpmEv : bpmEvents ) {
+                        if ( bpmEv->m_timestamp <= time + 1e-4 ) {
+                            activeBpm = bpmEv;
+                        } else {
+                            break;
+                        }
+                    }
+                    if ( !activeBpm ) return point;
+
+                    double bpmVal = activeBpm->m_value;
+                    if ( bpmVal <= 0.0 ) {
+                        bpmVal = 120.0;
+                        if ( m_ctx->currentBeatmap &&
+                             m_ctx->currentBeatmap->m_baseMapMetadata
+                                     .preference_bpm > 0.0 ) {
+                            bpmVal = m_ctx->currentBeatmap->m_baseMapMetadata
+                                         .preference_bpm;
+                        }
+                    }
+
+                    double           beatDuration   = 60.0 / bpmVal;
+                    static const int denominators[] = { 1,  2,  3,  4,  5,  6,
+                                                        7,  8,  9,  10, 11, 12,
+                                                        13, 14, 15, 16, 24, 32,
+                                                        48, 64, 96, 128 };
+                    int              bestNum        = 0;
+                    int              bestDen        = 1;
+                    double           bestScore      = 1e9;
+                    for ( int den : denominators ) {
+                        double stepDuration = beatDuration / den;
+                        double relative     = time - activeBpm->m_timestamp;
+                        double steps = std::round(relative / stepDuration);
+                        double fitTime =
+                            activeBpm->m_timestamp + steps * stepDuration;
+                        double error = std::abs(time - fitTime);
+
+                        int64_t totalSteps = static_cast<int64_t>(steps);
+                        int     beatIndex  = totalSteps % den;
+                        if ( beatIndex < 0 ) beatIndex += den;
+
+                        int finalNum = 1;
+                        int finalDen = 1;
+                        if ( beatIndex != 0 ) {
+                            int common = std::gcd(beatIndex, den);
+                            finalNum   = beatIndex / common;
+                            finalDen   = den / common;
+                        }
+
+                        double score = error + (double)finalDen * 0.0002;
+                        if ( score < bestScore ) {
+                            bestScore = score;
+                            bestNum   = finalNum;
+                            bestDen   = finalDen;
+                        }
+                    }
+
+                    int64_t totalBeatsPrefix = 0;
+                    for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+                        const auto* bpmEv = bpmEvents[i];
+                        if ( !bpmEv || bpmEv == activeBpm ) break;
+
+                        double nextTime = (i + 1 < bpmEvents.size())
+                                              ? bpmEvents[i + 1]->m_timestamp
+                                              : activeBpm->m_timestamp;
+                        double dur      = nextTime - bpmEv->m_timestamp;
+                        if ( dur < 0 ) dur = 0;
+
+                        double bVal = bpmEv->m_value;
+                        if ( bVal <= 0.0 ) {
+                            bVal = 120.0;
+                            if ( m_ctx->currentBeatmap &&
+                                 m_ctx->currentBeatmap->m_baseMapMetadata
+                                         .preference_bpm > 0.0 ) {
+                                bVal = m_ctx->currentBeatmap->m_baseMapMetadata
+                                           .preference_bpm;
+                            }
+                        }
+                        totalBeatsPrefix += static_cast<int64_t>(
+                            std::round(dur / (60.0 / bVal)));
+                    }
+
+                    double rel = time - activeBpm->m_timestamp;
+                    if ( rel < 0 ) rel = 0;
+                    int64_t beatsInActive = static_cast<int64_t>(
+                        std::floor(rel / beatDuration + 1e-6));
+
+                    point.beatIndex =
+                        static_cast<int>(totalBeatsPrefix + beatsInActive + 1);
+                    point.numerator   = bestNum;
+                    point.denominator = bestDen;
+                    return point;
+                };
+
                 // --- 智能拟合：计算当前悬停物件的最简分拍 ---
                 auto interView =
                     m_ctx->noteRegistry.view<InteractionComponent>();
@@ -270,125 +370,141 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                  entity) ) {
                             const auto& note =
                                 m_ctx->noteRegistry.get<NoteComponent>(entity);
-                            double noteTime = note.m_timestamp;
+                            auto hoveredPart =
+                                static_cast<HoverPart>(inter.hoveredPart);
 
-                            // 寻找该音符所在的 BPM 区段
-                            const TimelineComponent* activeBpm = nullptr;
-                            for ( const auto& bpmEv : bpmEvents ) {
-                                if ( bpmEv->m_timestamp <= noteTime + 1e-4 ) {
-                                    activeBpm = bpmEv;
+                            HoverInspectInfo inspect;
+                            inspect.show = true;
+
+                            auto setLegacyPoint =
+                                [&](const HoverBeatPoint& point) {
+                                    if ( !point.show ) return;
+                                    snapshot->hoveredNoteNumerator =
+                                        point.numerator;
+                                    snapshot->hoveredNoteDenominator =
+                                        point.denominator;
+                                    snapshot->hoveredNoteBeatIndex =
+                                        point.beatIndex;
+                                    snapshot->hoveredNoteTime  = point.time;
+                                    snapshot->hoveredNoteTrack = point.track;
+                                };
+
+                            if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                                 inter.hoveredSubIndex >= 0 &&
+                                 inter.hoveredSubIndex <
+                                     static_cast<int>(
+                                         note.m_subNotes.size()) ) {
+                                const auto& sub =
+                                    note.m_subNotes[inter.hoveredSubIndex];
+                                inspect.track = sub.trackIndex;
+                                if ( hoveredPart == HoverPart::PolylineNode ) {
+                                    inspect.kind =
+                                        (inter.hoveredSubIndex == 0)
+                                            ? HoverInspectKind::PolylineHead
+                                            : HoverInspectKind::PolylineNode;
+                                    inspect.body = makeBeatPoint(
+                                        sub.timestamp, sub.trackIndex);
+                                    inspect.showTrack = true;
+                                } else if ( hoveredPart == HoverPart::HoldEnd &&
+                                            sub.type ==
+                                                ::MMM::NoteType::HOLD ) {
+                                    inspect.kind =
+                                        HoverInspectKind::PolylineHoldEnd;
+                                    inspect.head = makeBeatPoint(
+                                        sub.timestamp, sub.trackIndex);
+                                    inspect.end = makeBeatPoint(
+                                        sub.timestamp + sub.duration,
+                                        sub.trackIndex);
+                                    inspect.showDuration = true;
+                                    inspect.duration     = sub.duration;
+                                    inspect.showTrack    = true;
+                                } else if ( hoveredPart ==
+                                                HoverPart::FlickArrow &&
+                                            sub.type ==
+                                                ::MMM::NoteType::FLICK ) {
+                                    inspect.kind =
+                                        HoverInspectKind::PolylineFlickEnd;
+                                    inspect.end = makeBeatPoint(
+                                        sub.timestamp,
+                                        sub.trackIndex + sub.dtrack);
+                                    inspect.showDtrack = true;
+                                    inspect.dtrack     = sub.dtrack;
+                                    inspect.showTrack  = true;
+                                    inspect.track = sub.trackIndex + sub.dtrack;
+                                } else if ( sub.type ==
+                                            ::MMM::NoteType::FLICK ) {
+                                    inspect.kind =
+                                        HoverInspectKind::PolylineFlickBody;
+                                    inspect.body = makeBeatPoint(
+                                        sub.timestamp, sub.trackIndex);
+                                    inspect.showDtrack = true;
+                                    inspect.dtrack     = sub.dtrack;
                                 } else {
-                                    break;
+                                    inspect.kind =
+                                        HoverInspectKind::PolylineHoldBody;
+                                    inspect.showDuration = true;
+                                    inspect.duration     = sub.duration;
+                                    inspect.showTrack    = true;
                                 }
+                            } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+                                inspect.duration = note.m_duration;
+                                inspect.track    = note.m_trackIndex;
+                                if ( hoveredPart == HoverPart::HoldEnd ) {
+                                    inspect.kind = HoverInspectKind::HoldEnd;
+                                    inspect.head = makeBeatPoint(
+                                        note.m_timestamp, note.m_trackIndex);
+                                    inspect.end = makeBeatPoint(
+                                        note.m_timestamp + note.m_duration,
+                                        note.m_trackIndex);
+                                } else if ( hoveredPart ==
+                                            HoverPart::HoldBody ) {
+                                    inspect.kind = HoverInspectKind::HoldBody;
+                                } else {
+                                    inspect.kind = HoverInspectKind::HoldHead;
+                                    inspect.head = makeBeatPoint(
+                                        note.m_timestamp, note.m_trackIndex);
+                                }
+                                inspect.showDuration = true;
+                                inspect.showTrack    = true;
+                            } else if ( note.m_type ==
+                                        ::MMM::NoteType::FLICK ) {
+                                inspect.dtrack = note.m_dtrack;
+                                if ( hoveredPart == HoverPart::FlickArrow ) {
+                                    inspect.kind = HoverInspectKind::FlickEnd;
+                                    inspect.end  = makeBeatPoint(
+                                        note.m_timestamp,
+                                        note.m_trackIndex + note.m_dtrack);
+                                    inspect.track =
+                                        note.m_trackIndex + note.m_dtrack;
+                                    inspect.showTrack = true;
+                                } else if ( hoveredPart ==
+                                            HoverPart::HoldBody ) {
+                                    inspect.kind = HoverInspectKind::FlickBody;
+                                    inspect.body = makeBeatPoint(
+                                        note.m_timestamp, note.m_trackIndex);
+                                } else {
+                                    inspect.kind = HoverInspectKind::FlickHead;
+                                    inspect.head = makeBeatPoint(
+                                        note.m_timestamp, note.m_trackIndex);
+                                    inspect.track     = note.m_trackIndex;
+                                    inspect.showTrack = true;
+                                }
+                                inspect.showDtrack = true;
+                            } else {
+                                inspect.kind = HoverInspectKind::Note;
+                                inspect.head = makeBeatPoint(note.m_timestamp,
+                                                             note.m_trackIndex);
+                                inspect.track     = note.m_trackIndex;
+                                inspect.showTrack = true;
                             }
 
-                            if ( activeBpm ) {
-                                double bpmVal = activeBpm->m_value;
-                                if ( bpmVal <= 0.0 ) {
-                                    bpmVal = 120.0;
-                                    if ( m_ctx->currentBeatmap &&
-                                         m_ctx->currentBeatmap
-                                                 ->m_baseMapMetadata
-                                                 .preference_bpm > 0.0 ) {
-                                        bpmVal = m_ctx->currentBeatmap
-                                                     ->m_baseMapMetadata
-                                                     .preference_bpm;
-                                    }
-                                }
-                                double beatDuration = 60.0 / bpmVal;
-
-                                // 尝试多个常用分母，找到误差最小且分母最小的拟合
-                                static const int denominators[] = {
-                                    1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11,
-                                    12, 13, 14, 15, 16, 24, 32, 48, 64, 96, 128
-                                };
-                                int    bestNum   = 0;
-                                int    bestDen   = 1;
-                                double bestScore = 1e9;
-                                for ( int den : denominators ) {
-                                    double stepDuration = beatDuration / den;
-                                    double relative =
-                                        noteTime - activeBpm->m_timestamp;
-                                    double steps =
-                                        std::round(relative / stepDuration);
-                                    double fitTime = activeBpm->m_timestamp +
-                                                     steps * stepDuration;
-                                    double error = std::abs(noteTime - fitTime);
-
-                                    // 提取该分母下的分拍位
-                                    int64_t totalSteps =
-                                        static_cast<int64_t>(steps);
-                                    int beatIndex = totalSteps % den;
-                                    if ( beatIndex < 0 ) beatIndex += den;
-
-                                    // 计算约分后的最简分母，用于权重计算
-                                    int finalNum, finalDen;
-                                    if ( beatIndex == 0 ) {
-                                        finalNum = 1;
-                                        finalDen = 1;
-                                    } else {
-                                        int common = std::gcd(beatIndex, den);
-                                        finalNum   = beatIndex / common;
-                                        finalDen   = den / common;
-                                    }
-
-                                    // --- 核心评分逻辑 ---
-                                    // 目标：平衡“误差”与“分母复杂度”
-                                    // 惩罚项：每个分母单位增加 0.2ms
-                                    // 的“虚拟误差” 这样 3/5 (即使误差 3ms)
-                                    // 也会击败 77/128 (误差 0.5ms) 因为 3/5
-                                    // 的分母代价是 5*0.2 = 1ms，总分 4ms 而
-                                    // 77/128 的分母代价是 128*0.2
-                                    // = 25.6ms，总分 26.1ms
-                                    double score =
-                                        error + (double)finalDen * 0.0002;
-
-                                    if ( score < bestScore ) {
-                                        bestScore = score;
-                                        bestNum   = finalNum;
-                                        bestDen   = finalDen;
-                                    }
-                                }
-                                snapshot->hoveredNoteNumerator   = bestNum;
-                                snapshot->hoveredNoteDenominator = bestDen;
-                                snapshot->hoveredNoteTime        = noteTime;
-
-                                // --- 计算物件的详细拍序 (Total Beat Index) ---
-                                int64_t totalBeatsPrefix = 0;
-                                for ( size_t i = 0; i < bpmEvents.size();
-                                      ++i ) {
-                                    const auto* bpmEv = bpmEvents[i];
-                                    if ( !bpmEv || bpmEv == activeBpm ) break;
-
-                                    double nextTime =
-                                        (i + 1 < bpmEvents.size())
-                                            ? bpmEvents[i + 1]->m_timestamp
-                                            : activeBpm->m_timestamp;
-                                    double dur = nextTime - bpmEv->m_timestamp;
-                                    if ( dur < 0 ) dur = 0;
-
-                                    double bVal = bpmEv->m_value;
-                                    if ( bVal <= 0.0 ) {
-                                        bVal = 120.0;
-                                        if ( m_ctx->currentBeatmap &&
-                                             m_ctx->currentBeatmap
-                                                     ->m_baseMapMetadata
-                                                     .preference_bpm > 0.0 ) {
-                                            bVal = m_ctx->currentBeatmap
-                                                       ->m_baseMapMetadata
-                                                       .preference_bpm;
-                                        }
-                                    }
-                                    totalBeatsPrefix += static_cast<int64_t>(
-                                        std::round(dur / (60.0 / bVal)));
-                                }
-                                double rel = noteTime - activeBpm->m_timestamp;
-                                if ( rel < 0 ) rel = 0;
-                                int64_t beatsInActive = static_cast<int64_t>(
-                                    std::floor(rel / beatDuration + 1e-6));
-                                snapshot->hoveredNoteBeatIndex =
-                                    static_cast<int>(totalBeatsPrefix +
-                                                     beatsInActive + 1);
+                            snapshot->hoverInspect = inspect;
+                            if ( inspect.head.show ) {
+                                setLegacyPoint(inspect.head);
+                            } else if ( inspect.body.show ) {
+                                setLegacyPoint(inspect.body);
+                            } else if ( inspect.end.show ) {
+                                setLegacyPoint(inspect.end);
                             }
                         }
                         break;  // 只处理一个悬停物体

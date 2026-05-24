@@ -47,6 +47,63 @@ enum class HoverPart : uint8_t {
     PolylineNode
 };
 
+enum class HoverInspectKind : uint8_t {
+    None = 0,
+    Note,
+    HoldHead,
+    HoldBody,
+    HoldEnd,
+    FlickHead,
+    FlickBody,
+    FlickEnd,
+    PolylineHead,
+    PolylineNode,
+    PolylineHoldBody,
+    PolylineHoldEnd,
+    PolylineFlickBody,
+    PolylineFlickEnd
+};
+
+struct HoverBeatPoint {
+    /// @brief 是否显示该部位的拍位与时间信息
+    bool show{ false };
+    /// @brief 部位所在拍号
+    int beatIndex{ 0 };
+    /// @brief 部位所在分拍分子
+    int numerator{ 0 };
+    /// @brief 部位所在分拍分母
+    int denominator{ 1 };
+    /// @brief 部位精确时间戳，单位秒
+    double time{ 0.0 };
+    /// @brief 部位所在轨道
+    int32_t track{ 0 };
+};
+
+struct HoverInspectInfo {
+    /// @brief 是否显示结构化悬浮检视信息
+    bool show{ false };
+    /// @brief 当前悬浮部位类型
+    HoverInspectKind kind{ HoverInspectKind::None };
+    /// @brief Head 部位信息
+    HoverBeatPoint head;
+    /// @brief Body 部位信息
+    HoverBeatPoint body;
+    /// @brief End 部位信息
+    HoverBeatPoint end;
+    /// @brief 是否显示持续时间
+    bool showDuration{ false };
+    /// @brief 持续时间，单位秒
+    double duration{ 0.0 };
+    /// @brief 是否显示滑动轨道数
+    bool showDtrack{ false };
+    /// @brief Flick 滑动轨道数
+    int32_t dtrack{ 0 };
+    /// @brief 是否显示轨道位置
+    bool showTrack{ false };
+    /// @brief 当前部位轨道位置
+    int32_t track{ 0 };
+};
+
 /**
  * @brief 碰撞拾取包围盒
  */
@@ -137,10 +194,13 @@ struct RenderSnapshot {
     int     hoveredNoteNumerator{ 0 };
     int     hoveredNoteDenominator{ 1 };
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
+    int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
             0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
+    /// @brief 当前悬浮物件的结构化检视信息
+    HoverInspectInfo hoverInspect;
 
     bool   isPreviewHovered{ false };
     float  previewHoverY{ 0.0f };
@@ -262,6 +322,8 @@ struct RenderSnapshot {
         hoveredBeatIndex       = 0;
         hoveredNoteBeatIndex   = 0;
         hoveredNoteTime        = 0.0;
+        hoveredNoteTrack       = 0;
+        hoverInspect           = HoverInspectInfo{};
         isPreviewHovered       = false;
         previewHoverY          = 0.0f;
         previewHoverTime       = 0.0;

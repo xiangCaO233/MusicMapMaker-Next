@@ -17,6 +17,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 
 namespace MMM::Canvas
@@ -221,7 +222,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                  currentSnapshot->currentTool != Logic::EditTool::Marquee);
 
             if ( currentSnapshot->isSnapped || isEditTool ||
-                 currentSnapshot->hoveredNoteNumerator > 0 ) {
+                 currentSnapshot->hoverInspect.show ) {
                 ImGui::SetNextWindowPos(
                     ImVec2(mousePos.x + 15, mousePos.y + 15));
                 ImGui::SetNextWindowBgAlpha(0.7f);
@@ -231,23 +232,115 @@ void Basic2DCanvasInteraction::handleInteractions(
 
                 ImGui::BeginTooltip();
 
-                if ( currentSnapshot->hoveredNoteNumerator > 0 ) {
-                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                       "%s: %d + %d/%d",
-                                       TR("ui.canvas.note_fraction").data(),
-                                       currentSnapshot->hoveredNoteBeatIndex,
-                                       currentSnapshot->hoveredNoteNumerator,
-                                       currentSnapshot->hoveredNoteDenominator);
-                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                       "%s: %.3f s",
-                                       TR("ui.canvas.note_time").data(),
-                                       currentSnapshot->hoveredNoteTime);
+                if ( currentSnapshot->hoverInspect.show ) {
+                    const auto& inspect = currentSnapshot->hoverInspect;
+                    auto drawPoint = [](const char*                  labelKey,
+                                        const Logic::HoverBeatPoint& point,
+                                        bool showTrack) {
+                        if ( !point.show ) return;
+                        const auto label = TR(labelKey);
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s %s: %d + %d/%d",
+                                           label.data(),
+                                           TR("ui.canvas.note_fraction").data(),
+                                           point.beatIndex,
+                                           point.numerator,
+                                           point.denominator);
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s %s: %.3f s",
+                                           label.data(),
+                                           TR("ui.canvas.note_time").data(),
+                                           point.time);
+                        if ( showTrack ) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                               "%s %s: %d",
+                                               label.data(),
+                                               TR("ui.canvas.track").data(),
+                                               point.track + 1);
+                        }
+                    };
 
-                    // 计算鼠标当前所在的非 PolylineNode 唯一物件包围框个数
+                    switch ( inspect.kind ) {
+                    case Logic::HoverInspectKind::Note:
+                        drawPoint("ui.canvas.hover.note",
+                                  inspect.head,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::HoldHead:
+                        drawPoint("ui.canvas.hover.head", inspect.head, true);
+                        break;
+                    case Logic::HoverInspectKind::HoldEnd:
+                    case Logic::HoverInspectKind::PolylineHoldEnd:
+                        drawPoint(
+                            "ui.canvas.hover.hold_end", inspect.end, true);
+                        break;
+                    case Logic::HoverInspectKind::FlickHead:
+                        drawPoint(
+                            "ui.canvas.hover.flick_head", inspect.head, true);
+                        break;
+                    case Logic::HoverInspectKind::FlickBody:
+                    case Logic::HoverInspectKind::PolylineFlickBody:
+                        drawPoint(
+                            "ui.canvas.hover.flick_body", inspect.body, false);
+                        break;
+                    case Logic::HoverInspectKind::FlickEnd:
+                    case Logic::HoverInspectKind::PolylineFlickEnd:
+                        drawPoint(
+                            "ui.canvas.hover.flick_end", inspect.end, true);
+                        break;
+                    case Logic::HoverInspectKind::PolylineHead:
+                        drawPoint("ui.canvas.hover.polyline_head",
+                                  inspect.body,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::PolylineNode:
+                        drawPoint("ui.canvas.hover.polyline_node",
+                                  inspect.body,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::HoldBody:
+                    case Logic::HoverInspectKind::PolylineHoldBody:
+                    case Logic::HoverInspectKind::None: break;
+                    }
+
+                    if ( inspect.showDuration ) {
+                        ImGui::TextColored(
+                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                            "%s: %.3f s",
+                            TR("ui.canvas.hover.duration").data(),
+                            inspect.duration);
+                    }
+                    if ( inspect.showDtrack ) {
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s: %d",
+                                           TR("ui.canvas.hover.dtrack").data(),
+                                           inspect.dtrack);
+                    }
+                    if ( inspect.showTrack &&
+                         (inspect.kind == Logic::HoverInspectKind::HoldBody ||
+                          inspect.kind ==
+                              Logic::HoverInspectKind::PolylineHoldBody) ) {
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s: %d",
+                                           TR("ui.canvas.track").data(),
+                                           inspect.track + 1);
+                    }
+
+                    // 计算鼠标当前所在的唯一物件包围框个数
                     std::vector<entt::entity> hoveredEntities;
+                    bool                      includeBodyHitboxes =
+                        inspect.kind == Logic::HoverInspectKind::HoldBody ||
+                        inspect.kind ==
+                            Logic::HoverInspectKind::PolylineHoldBody ||
+                        inspect.kind == Logic::HoverInspectKind::FlickBody ||
+                        inspect.kind ==
+                            Logic::HoverInspectKind::PolylineFlickBody;
                     for ( const auto& hb : currentSnapshot->hitboxes ) {
-                        if ( hb.part != Logic::HoverPart::PolylineNode &&
-                             hb.entity != entt::null ) {
+                        if ( hb.entity != entt::null ) {
+                            if ( !includeBodyHitboxes &&
+                                 hb.part == Logic::HoverPart::HoldBody ) {
+                                continue;
+                            }
                             if ( localMousePos.x >= hb.x &&
                                  localMousePos.x <= hb.x + hb.w &&
                                  localMousePos.y >= hb.y &&
@@ -327,6 +420,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                                    "%s: %d",
                                    TR("ui.canvas.beat_divisor").data(),
                                    currentSnapshot->currentBeatDivisor);
+                if ( m_hoverLayerCount > 1 ) {
+                    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                                       "%s: %d/%d  %s",
+                                       TR("ui.canvas.hover.layer").data(),
+                                       m_hoverLayerIndex + 1,
+                                       m_hoverLayerCount,
+                                       TR("ui.canvas.hover.layer_hint").data());
+                }
 
                 ImGui::EndTooltip();
                 ImGui::PopStyleVar(2);
@@ -338,16 +439,58 @@ void Basic2DCanvasInteraction::handleInteractions(
     uint8_t      hoveredPart     = 0;
     int          hoveredSubIndex = -1;
 
+    struct HoverCandidate {
+        entt::entity     entity{ entt::null };
+        Logic::HoverPart part{ Logic::HoverPart::None };
+        int              subIndex{ -1 };
+    };
+
+    std::vector<HoverCandidate> candidates;
+    std::string                 layerSignature;
     for ( auto it = currentSnapshot->hitboxes.rbegin();
           it != currentSnapshot->hitboxes.rend();
           ++it ) {
         if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
              localMousePos.y >= it->y && localMousePos.y <= it->y + it->h ) {
-            hoveredEntity   = it->entity;
-            hoveredPart     = static_cast<uint8_t>(it->part);
-            hoveredSubIndex = it->subIndex;
-            break;
+            candidates.push_back({ it->entity, it->part, it->subIndex });
+            layerSignature +=
+                std::to_string(
+                    static_cast<uint32_t>(entt::to_integral(it->entity))) +
+                ":" + std::to_string(static_cast<uint32_t>(it->part)) + ":" +
+                std::to_string(it->subIndex) + ";";
         }
+    }
+
+    if ( layerSignature != m_hoverLayerSignature ) {
+        m_hoverLayerSignature = layerSignature;
+        m_hoverLayerIndex     = 0;
+    }
+
+    m_hoverLayerCount = static_cast<int>(candidates.size());
+    if ( candidates.empty() ) {
+        m_hoverLayerIndex = 0;
+    } else {
+        if ( m_hoverLayerIndex >= m_hoverLayerCount ) {
+            m_hoverLayerIndex = m_hoverLayerCount - 1;
+        }
+
+        if ( m_hoverLayerCount > 1 && isHovered &&
+             !ImGui::GetIO().WantTextInput ) {
+            if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+                m_hoverLayerIndex = (m_hoverLayerIndex + 1) % m_hoverLayerCount;
+            } else if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+                m_hoverLayerIndex =
+                    (m_hoverLayerIndex + m_hoverLayerCount - 1) %
+                    m_hoverLayerCount;
+            }
+        }
+
+        const auto& candidate = candidates[m_hoverLayerIndex];
+        hoveredEntity         = candidate.entity;
+        hoveredPart           = static_cast<uint8_t>(candidate.part);
+        hoveredSubIndex       = candidate.subIndex;
     }
 
     Event::EventBus::instance().publish(

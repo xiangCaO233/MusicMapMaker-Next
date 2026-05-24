@@ -261,6 +261,9 @@ void NoteRenderSystem::generateSnapshot(
                                       viewportHeight * 1.5f,
                                       singleTrackW,
                                       renderScaleY);
+        if ( cameraId == "Basic2DCanvas" && config.visual.debugDrawHitboxes ) {
+            NoteRenderSystem::debugRenderHitboxes(batcher, snapshot);
+        }
     }
 
     for ( const auto& box : snapshot->marqueeBoxes ) {
@@ -586,6 +589,37 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                             trackAreaW,
                                             singleTrackW,
                                             renderScaleY);
+    }
+}
+
+void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
+                                           RenderSnapshot* snapshot)
+{
+    if ( !snapshot ) return;
+
+    batcher.setTexture(TextureID::None);
+    for ( const auto& hb : snapshot->hitboxes ) {
+        if ( hb.entity == entt::null || hb.w <= 0.0f || hb.h <= 0.0f ) continue;
+
+        glm::vec4 color{ 0.2f, 0.9f, 1.0f, 0.8f };
+        switch ( hb.part ) {
+        case HoverPart::Head: color = { 0.25f, 1.0f, 0.25f, 0.85f }; break;
+        case HoverPart::HoldBody: color = { 0.0f, 0.8f, 1.0f, 0.75f }; break;
+        case HoverPart::HoldEnd: color = { 1.0f, 0.65f, 0.1f, 0.85f }; break;
+        case HoverPart::FlickArrow: color = { 1.0f, 0.25f, 1.0f, 0.85f }; break;
+        case HoverPart::PolylineNode:
+            color = { 1.0f, 1.0f, 0.15f, 0.85f };
+            break;
+        case HoverPart::None: color = { 1.0f, 1.0f, 1.0f, 0.45f }; break;
+        }
+
+        batcher.pushQuad(hb.x,
+                         hb.y + hb.h,
+                         hb.w,
+                         hb.h,
+                         { color.r, color.g, color.b, 0.08f });
+        batcher.pushStrokeRect(
+            hb.x, hb.y, hb.x + hb.w, hb.y + hb.h, 2.0f, color);
     }
 }
 

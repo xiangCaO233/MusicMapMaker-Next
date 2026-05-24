@@ -163,6 +163,8 @@ struct VisualConfig {
     bool drawBeatLines{ true };
     /// @brief 是否启用打击特效动画
     bool enableHitEffects{ true };
+    /// @brief 是否绘制音符悬浮拾取包围盒，主要用于调试交互命中区域。
+    bool debugDrawHitboxes{ false };
 };
 
 inline void to_json(nlohmann::json& j, const VisualConfig& c)
@@ -182,7 +184,8 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
                         { "snapThreshold", c.snapThreshold },
                         { "beatLineAlpha", c.beatLineAlpha },
                         { "drawBeatLines", c.drawBeatLines },
-                        { "enableHitEffects", c.enableHitEffects } };
+                        { "enableHitEffects", c.enableHitEffects },
+                        { "debugDrawHitboxes", c.debugDrawHitboxes } };
 }
 
 inline void from_json(const nlohmann::json& j, VisualConfig& c)
@@ -202,6 +205,7 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
     c.drawBeatLines             = j.value("drawBeatLines", true);
     c.enableHitEffects          = j.value("enableHitEffects", true);
+    c.debugDrawHitboxes         = j.value("debugDrawHitboxes", false);
 }
 
 }  // namespace MMM::Config

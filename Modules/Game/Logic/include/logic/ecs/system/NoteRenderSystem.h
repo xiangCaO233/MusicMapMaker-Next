@@ -161,11 +161,10 @@ private:
 
     static void renderHold(Batcher& batcher, const NoteComponent& note,
                            const Config::EditorConfig& config,
-                           RenderSnapshot* snapshot, float x, float w,
-                           float h, float singleTrackW,
-                           glm::vec4 color, const ScrollCache* cache,
-                           double currentAbsY, float judgmentLineY,
-                           float renderScaleY,
+                           RenderSnapshot* snapshot, float x, float w, float h,
+                           float singleTrackW, glm::vec4 color,
+                           const ScrollCache* cache, double currentAbsY,
+                           float judgmentLineY, float renderScaleY,
                            HoverPart glowPart = HoverPart::None);
 
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
@@ -178,30 +177,35 @@ private:
     static void renderPolyline(
         const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
         const Config::EditorConfig& config, RenderSnapshot* snapshot,
-        double currentAbsY, double currentTime, float judgmentLineY, float leftX, float rightX,
-        float topY, float bottomY, float singleTrackW, float renderScaleY,
-        glm::vec4 colorHold, glm::vec4 colorNode, glm::vec4 colorArrow,
+        double currentAbsY, double currentTime, float judgmentLineY,
+        float leftX, float rightX, float topY, float bottomY,
+        float singleTrackW, float renderScaleY, glm::vec4 colorHold,
+        glm::vec4 colorNode, glm::vec4 colorArrow,
         entt::entity entity = entt::null, bool generateHitboxes = false,
         HoverPart glowPart = HoverPart::None, int glowSubIndex = -1);
 
+    /// @brief 绘制当前快照中的音符拾取包围盒，辅助排查悬浮命中区域。
     static void debugRenderHitboxes(Batcher& batcher, RenderSnapshot* snapshot);
 
     static void drawPolylineBody(Batcher& batcher, const NoteComponent& note,
                                  const ScrollCache* cache,
                                  RenderSnapshot* snapshot, float judgmentLineY,
                                  float leftX, float singleTrackW,
-                                 float renderScaleY, double currentAbsY, double currentTime,
-                                 float topY, float bottomY,
+                                 float renderScaleY, double currentAbsY,
+                                 double currentTime, float topY, float bottomY,
                                  float noteW, float noteH, glm::vec4 colorHold,
                                  entt::entity entity, bool generateHitboxes,
                                  HoverPart glowPart, int glowSubIndex);
 
-    static bool isCarrierVisible(double startOffset, double endOffset, double currentTime,
-                                 double displayDeltaStart, double displayDeltaEnd,
-                                 double maxDelta, double minDelta)
+    static bool isCarrierVisible(double startOffset, double endOffset,
+                                 double currentTime, double displayDeltaStart,
+                                 double displayDeltaEnd, double maxDelta,
+                                 double minDelta)
     {
-        bool timeInRange = (startOffset <= currentTime + 0.1) && (endOffset >= currentTime - 0.1);
-        bool spatialInRange = (displayDeltaStart <= maxDelta) && (displayDeltaEnd >= minDelta);
+        bool timeInRange = (startOffset <= currentTime + 0.1) &&
+                           (endOffset >= currentTime - 0.1);
+        bool spatialInRange =
+            (displayDeltaStart <= maxDelta) && (displayDeltaEnd >= minDelta);
         return timeInRange || spatialInRange;
     }
 
@@ -209,8 +213,8 @@ private:
                                   const ScrollCache* cache,
                                   RenderSnapshot* snapshot, float judgmentLineY,
                                   float leftX, float singleTrackW,
-                                  float renderScaleY, double currentAbsY, double currentTime,
-                                  float topY, float bottomY,
+                                  float renderScaleY, double currentAbsY,
+                                  double currentTime, float topY, float bottomY,
                                   float noteW, float noteH, glm::vec4 colorNode,
                                   const Config::EditorConfig& config,
                                   entt::entity entity, bool generateHitboxes,
@@ -220,8 +224,8 @@ private:
                                  const ScrollCache* cache,
                                  RenderSnapshot* snapshot, float judgmentLineY,
                                  float leftX, float singleTrackW,
-                                 float renderScaleY, double currentAbsY, double currentTime,
-                                 float topY, float bottomY,
+                                 float renderScaleY, double currentAbsY,
+                                 double currentTime, float topY, float bottomY,
                                  float noteW, float noteH, glm::vec4 colorHold,
                                  const Config::EditorConfig& config,
                                  entt::entity entity, bool generateHitboxes,
@@ -230,11 +234,11 @@ private:
     static void drawPolylineDecoration(
         Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
         RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-        float singleTrackW, float renderScaleY, double currentAbsY, double currentTime,
-        float topY, float bottomY, float noteW, float noteH, glm::vec4 colorHold,
-        glm::vec4 colorArrow, const Config::EditorConfig& config,
-        entt::entity entity, bool generateHitboxes, HoverPart glowPart,
-        int glowSubIndex);
+        float singleTrackW, float renderScaleY, double currentAbsY,
+        double currentTime, float topY, float bottomY, float noteW, float noteH,
+        glm::vec4 colorHold, glm::vec4 colorArrow,
+        const Config::EditorConfig& config, entt::entity entity,
+        bool generateHitboxes, HoverPart glowPart, int glowSubIndex);
 
     static void renderMarqueeBox(Batcher& batcher,
                                  const RenderSnapshot::MarqueeBoxSnapshot& box,

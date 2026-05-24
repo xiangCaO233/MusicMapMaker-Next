@@ -1011,6 +1011,7 @@ void SettingsView::drawVisualSettings()
         TR_CACHE("ui.settings.visual.note_scale_x").data(),
         TR_CACHE("ui.settings.visual.note_scale_y").data(),
         TR_CACHE("ui.settings.visual.note_fill_mode").data(),
+        TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
         TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
         TR_CACHE("ui.settings.visual.bg_opaque").data(),
         TR_CACHE("ui.settings.visual.bg_darken").data(),
@@ -1254,6 +1255,15 @@ void SettingsView::drawVisualSettings()
                         (Config::BackgroundFillMode)noteFillMode;
                     changed = true;
                 }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                changed |= ImGui::Checkbox("##DebugDrawHitboxes",
+                                           &visual.debugDrawHitboxes);
             });
     }
 
