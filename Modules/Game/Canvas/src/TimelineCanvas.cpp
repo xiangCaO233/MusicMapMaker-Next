@@ -113,12 +113,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 float total = static_cast<float>(m_currentSnapshot->totalTime);
 
                 float sliderWidth  = 24.0f;
-                float btnHeight    = 70.0f;
-                float spacing      = ImGui::GetStyle().ItemSpacing.y;
-                float sliderHeight = size.y - btnHeight - spacing;
-                if ( sliderHeight < 20.0f ) {
-                    sliderHeight = size.y;
-                }
+                float sliderHeight = size.y;
 
                 ImGui::BeginGroup();
 
@@ -139,48 +134,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
                 if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip("%.3f / %.3f s", time, total);
-                }
-
-                if ( sliderHeight < size.y ) {
-
-                    auto getVerticalText =
-                        [](const std::string& input) -> std::string {
-                        std::string result;
-                        for ( size_t i = 0; i < input.size(); ) {
-                            size_t        len = 1;
-                            unsigned char c   = input[i];
-                            if ( (c & 0x80) == 0 )
-                                len = 1;
-                            else if ( (c & 0xE0) == 0xC0 )
-                                len = 2;
-                            else if ( (c & 0xF0) == 0xE0 )
-                                len = 3;
-                            else if ( (c & 0xF8) == 0xF0 )
-                                len = 4;
-
-                            if ( !result.empty() ) result += "\n";
-                            result += input.substr(i, len);
-                            i += len;
-                        }
-                        return result;
-                    };
-
-                    std::string verticalLabel = getVerticalText(
-                        TR("ui.timeline.timing_points_table_btn").data());
-                    if ( verticalLabel.empty() || verticalLabel.size() > 100 ) {
-                        verticalLabel = "时\n间\n点";
-                    }
-
-                    if ( ImGui::Button(verticalLabel.c_str(),
-                                       ImVec2(sliderWidth, btnHeight)) ) {
-                        m_isTableWindowOpen = !m_isTableWindowOpen;
-                    }
-                    if ( ImGui::IsItemHovered() ) {
-                        ImGui::SetTooltip(
-                            "%s",
-                            TR("ui.timeline.timing_points_table_btn_tooltip")
-                                .data());
-                    }
                 }
 
                 ImGui::EndGroup();
@@ -348,7 +301,29 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::PopStyleColor(2);
                 ImGui::PopStyleVar();
 
+                // 绘制右上角时间点面板汉堡按钮
+                ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f, canvasPos.y + 10.0f);
+                ImGui::SetCursorScreenPos(menuBtnPos);
+
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.18f, 0.22f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.28f, 0.32f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.38f, 0.42f, 1.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
+                if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {
+                    m_isTableWindowOpen = !m_isTableWindowOpen;
+                }
+                ImGui::PopStyleVar();
+                ImGui::PopStyleColor(3);
+
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.timeline.timing_points_table_btn_tooltip")
+                            .data());
+                }
+
                 // 5. 渲染弹窗
+
                 renderEventEditorPopup();
                 renderEventCreationPopup();
                 renderTimingPointsTableWindow();
