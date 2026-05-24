@@ -13,6 +13,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <numeric>
 
 namespace MMM::Logic
@@ -32,11 +33,30 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                              m_ctx->noteRegistry.get<const NoteComponent>(b)
                                  .m_timestamp;
                   });
+        m_ctx->sortedNoteMaxEndPrefix.clear();
+        m_ctx->sortedNoteMaxEndPrefix.reserve(m_ctx->sortedNoteEntities.size());
+        double maxEndTime = 0.0;
+        for ( auto entity : m_ctx->sortedNoteEntities ) {
+            const auto& note =
+                m_ctx->noteRegistry.get<const NoteComponent>(entity);
+            double noteEnd = note.m_timestamp + std::max(0.0, note.m_duration);
+            if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+                for ( const auto& sub : note.m_subNotes ) {
+                    noteEnd = std::max(
+                        noteEnd, sub.timestamp + std::max(0.0, sub.duration));
+                }
+            }
+            maxEndTime = std::max(maxEndTime, noteEnd);
+            m_ctx->sortedNoteMaxEndPrefix.push_back(maxEndTime);
+        }
     }
 
     m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
     m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
         &m_ctx->sortedNoteEntities);
+    m_ctx->noteRegistry.ctx().erase<const std::vector<double>*>();
+    m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
+        &m_ctx->sortedNoteMaxEndPrefix);
 
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
     // 注意：物理位置更新应基于逻辑时间 m_ctx->currentTime

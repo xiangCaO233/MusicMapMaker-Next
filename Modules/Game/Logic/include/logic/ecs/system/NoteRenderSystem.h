@@ -147,7 +147,8 @@ private:
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
-        float topY, float bottomY, float singleTrackW, float renderScaleY);
+        float topY, float bottomY, float singleTrackW, float renderScaleY,
+        bool generateHitboxes);
 
     static void renderNoteGlowLayer(
         entt::registry& registry, RenderSnapshot* snapshot,

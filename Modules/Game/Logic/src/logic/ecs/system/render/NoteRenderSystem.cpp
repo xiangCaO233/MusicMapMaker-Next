@@ -10,6 +10,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 
 #include "logic/ecs/system/HitFXSystem.h"
 
@@ -441,7 +442,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
     double currentAbsY = cache->getAbsY(currentTime);
 
     float paddingX = 30.0f;
-    float lineW    = viewportWidth - paddingX * 2.0f;
+    float lineW    = std::max(1.0f, viewportWidth - paddingX * 2.0f);
 
     // 2. 绘制当前时间红线 (静态)
     batcher.pushQuad(paddingX,
@@ -455,9 +456,113 @@ void NoteRenderSystem::generateTimelineSnapshot(
         static_cast<uint32_t>(snapshot->vertices.size());
     snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
 
-    // 3. 收集所有时间点组件以生成交互元素列表，防止同时间戳的事件被 ScrollCache
-    // 吞掉
+    auto getBeatLineConfig = [&](int denominator) {
+        if ( denominator <= 0 ) denominator = 1;
+        std::string   key = "beat_lines.beat_" + std::to_string(denominator);
+        Config::Color c   = skin.getColor(key);
+        if ( c.r == 1.0f && c.g == 0.0f && c.b == 1.0f && c.a == 1.0f ) {
+            c   = skin.getColor("beat_lines.default");
+            key = "beat_lines_width.default";
+        } else {
+            key = "beat_lines_width.beat_" + std::to_string(denominator);
+        }
+
+        float width =
+            skin.getValue(key, skin.getValue("beat_lines_width.default", 2.0f));
+        return std::pair{
+            glm::vec4(c.r, c.g, c.b, c.a * config.visual.beatLineAlpha), width
+        };
+    };
+
+    // 3. 绘制 Timeline 自身的分拍线
+    std::vector<const TimelineComponent*> bpmEvents;
     auto tlView = timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tl = tlView.get<const TimelineComponent>(entity);
+        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+            bpmEvents.push_back(&tl);
+        }
+    }
+
+    std::stable_sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const TimelineComponent* a, const TimelineComponent* b) {
+            return a->m_timestamp < b->m_timestamp;
+        });
+
+    int beatDivisor = config.settings.beatDivisor;
+    if ( beatDivisor <= 0 ) beatDivisor = 4;
+
+    if ( !bpmEvents.empty() ) {
+        double topAbsY       = currentAbsY + judgmentLineY;
+        double bottomAbsY    = currentAbsY + judgmentLineY - viewportHeight;
+        auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
+            std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
+
+        batcher.setTexture(TextureID::None);
+        for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+            const auto* currentBPM = bpmEvents[i];
+            double      bpmTime    = currentBPM->m_timestamp;
+            double      bpmVal     = currentBPM->m_value;
+            if ( bpmVal <= 0.0 ) {
+                bpmVal = 120.0;
+                if ( auto session =
+                         EditorEngine::instance().getActiveSession() ) {
+                    if ( auto beatmap = session->getContext().currentBeatmap ) {
+                        if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
+                            bpmVal = beatmap->m_baseMapMetadata.preference_bpm;
+                        }
+                    }
+                }
+            }
+            if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+
+            double nextBpmTime  = (i + 1 < bpmEvents.size())
+                                      ? bpmEvents[i + 1]->m_timestamp
+                                      : std::numeric_limits<double>::infinity();
+            double beatDuration = 60.0 / bpmVal;
+            double stepDuration = beatDuration / beatDivisor;
+
+            for ( const auto& [startTime, endTime] : visibleRanges ) {
+                if ( nextBpmTime <= startTime || bpmTime >= endTime ) continue;
+
+                double  startCalcTime = std::max(bpmTime, startTime);
+                int64_t stepOffset    = 0;
+                if ( startCalcTime > bpmTime ) {
+                    stepOffset = static_cast<int64_t>(std::ceil(
+                        (startCalcTime - bpmTime) / stepDuration - 1e-4));
+                }
+
+                double t = bpmTime + stepOffset * stepDuration;
+                while ( t < nextBpmTime && t <= endTime ) {
+                    int beatIndex   = stepOffset % beatDivisor;
+                    int denominator = 1;
+                    if ( beatIndex != 0 ) {
+                        int gcd     = std::gcd(beatIndex, beatDivisor);
+                        denominator = beatDivisor / gcd;
+                    }
+
+                    auto [color, width] = getBeatLineConfig(denominator);
+                    float y = judgmentLineY -
+                              static_cast<float>(
+                                  cache->getDisplayDelta(t, currentAbsY, t));
+                    if ( y >= 0.0f && y <= viewportHeight ) {
+                        color.a *= 0.75f;
+                        batcher.setTexture(TextureID::None);
+                        batcher.pushQuad(
+                            paddingX, y + width * 0.5f, lineW, width, color);
+                    }
+
+                    stepOffset++;
+                    t = bpmTime + stepOffset * stepDuration;
+                }
+            }
+        }
+    }
+
+    // 4. 收集所有时间点组件以生成交互元素列表，防止同时间戳的事件被 ScrollCache
+    // 吞掉
     for ( auto entity : tlView ) {
         const auto& tc = tlView.get<const TimelineComponent>(entity);
         double      t  = tc.m_timestamp;
@@ -487,7 +592,16 @@ void NoteRenderSystem::generateTimelineSnapshot(
         snapshot->timelineElements.push_back(el);
     }
 
-    // 4. 绘制 Ticks (动态)
+    // 5. 绘制 Timing 事件为普通 Note 形状
+    float noteW = lineW;
+    float noteH = noteW * 0.36f;
+    if ( auto uvIt =
+             snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
+         uvIt != snapshot->uvMap.end() && uvIt->second.w > 0.0f ) {
+        noteH = noteW * (uvIt->second.w / uvIt->second.z);
+    }
+    float noteX = paddingX;
+
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
 
@@ -509,7 +623,14 @@ void NoteRenderSystem::generateTimelineSnapshot(
             color = { 0.2f, 1.0f, 0.2f, 0.8f };
         }
 
-        batcher.pushQuad(paddingX, y + 1.0f, lineW, 2.0f, color);
+        batcher.setTexture(TextureID::Note);
+        batcher.pushFilledQuad(noteX,
+                               y + noteH * 0.5f,
+                               noteW,
+                               noteH,
+                               { 1.0f, 1.0f },
+                               config.visual.noteFillMode,
+                               color);
     }
 }
 

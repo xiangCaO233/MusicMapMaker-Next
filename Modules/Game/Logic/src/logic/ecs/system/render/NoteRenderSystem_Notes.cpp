@@ -39,18 +39,22 @@ void NoteRenderSystem::renderNotes(
                                         bottomY,
                                         renderScaleY);
 
+    bool shouldGenerateHitboxes = cameraId == "Basic2DCanvas";
+
     // 2. 生成碰撞盒并获取可见实体
-    NoteRenderSystem::generateNoteHitboxes(registry,
-                                           snapshot,
-                                           ctx,
-                                           noteEntities,
-                                           judgmentLineY,
-                                           leftX,
-                                           topY,
-                                           bottomY,
-                                           singleTrackW,
-                                           renderScaleY,
-                                           config);
+    if ( shouldGenerateHitboxes ) {
+        NoteRenderSystem::generateNoteHitboxes(registry,
+                                               snapshot,
+                                               ctx,
+                                               noteEntities,
+                                               judgmentLineY,
+                                               leftX,
+                                               topY,
+                                               bottomY,
+                                               singleTrackW,
+                                               renderScaleY,
+                                               config);
+    }
 
     // 3. 基础层渲染
     NoteRenderSystem::renderNoteBaseLayer(registry,
@@ -66,7 +70,8 @@ void NoteRenderSystem::renderNotes(
                                           topY,
                                           bottomY,
                                           singleTrackW,
-                                          renderScaleY);
+                                          renderScaleY,
+                                          shouldGenerateHitboxes);
 
     // 4. 发光层渲染
     NoteRenderSystem::renderNoteGlowLayer(registry,
@@ -140,6 +145,8 @@ static std::vector<entt::entity> getNotesInRange(
     const auto**              sortedEntitiesPtr =
         registry.ctx().find<const std::vector<entt::entity>*>();
     if ( !sortedEntitiesPtr || !(*sortedEntitiesPtr) ) return result;
+    const auto** maxEndPrefixPtr =
+        registry.ctx().find<const std::vector<double>*>();
 
     const auto& entities = **sortedEntitiesPtr;
     size_t      count    = entities.size();
@@ -169,6 +176,12 @@ static std::vector<entt::entity> getNotesInRange(
         scanRanges.emplace_back(scanStart, rangeEnd);
     }
 
+    const std::vector<double>* maxEndPrefix =
+        (maxEndPrefixPtr && *maxEndPrefixPtr &&
+         (*maxEndPrefixPtr)->size() == entities.size())
+            ? *maxEndPrefixPtr
+            : nullptr;
+
     std::unordered_set<entt::entity> seen;
     auto                             addEntity = [&](entt::entity entity) {
         if ( seen.insert(entity).second ) {
@@ -196,7 +209,17 @@ static std::vector<entt::entity> getNotesInRange(
                        val;
             });
 
-        for ( auto cur = entities.begin(); cur != startIt; ++cur ) {
+        auto historyBegin = entities.begin();
+        if ( maxEndPrefix && startIt != entities.begin() ) {
+            auto prefixSearchEnd =
+                maxEndPrefix->begin() + (startIt - entities.begin());
+            auto prefixIt = std::lower_bound(
+                maxEndPrefix->begin(), prefixSearchEnd, rangeStart);
+            historyBegin =
+                entities.begin() + (prefixIt - maxEndPrefix->begin());
+        }
+
+        for ( auto cur = historyBegin; cur != startIt; ++cur ) {
             entt::entity entity = *cur;
             const auto&  note   = registry.get<const NoteComponent>(entity);
             if ( note.m_isSubNote ) continue;
@@ -420,7 +443,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
     const Config::EditorConfig&                config,
     const std::vector<entt::entity>& noteEntities, Batcher& batcher,
     float currentTime, float judgmentLineY, float leftX, float rightX,
-    float topY, float bottomY, float singleTrackW, float renderScaleY)
+    float topY, float bottomY, float singleTrackW, float renderScaleY,
+    bool generateHitboxes)
 {
     std::vector<entt::entity> visibleEntities;
     for ( auto entity : noteEntities ) {
@@ -576,7 +600,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              curColorNode,
                                              curColorArrow,
                                              entity,
-                                             true);
+                                             generateHitboxes);
     }
     batcher.flush();
 }

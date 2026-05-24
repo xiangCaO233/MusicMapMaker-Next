@@ -302,12 +302,16 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::PopStyleVar();
 
                 // 绘制右上角时间点面板汉堡按钮
-                ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f, canvasPos.y + 10.0f);
+                ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f,
+                                           canvasPos.y + 10.0f);
                 ImGui::SetCursorScreenPos(menuBtnPos);
 
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.18f, 0.22f, 0.85f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.28f, 0.32f, 0.95f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.35f, 0.38f, 0.42f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button,
+                                      ImVec4(0.15f, 0.18f, 0.22f, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                                      ImVec4(0.25f, 0.28f, 0.32f, 0.95f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+                                      ImVec4(0.35f, 0.38f, 0.42f, 1.0f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
                 if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {
                     m_isTableWindowOpen = !m_isTableWindowOpen;
@@ -404,6 +408,35 @@ void TimelineCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                     vk::Device&         logicalDevice,
                                     vk::CommandPool& cmdPool, vk::Queue& queue)
 {
+    m_textureAtlas = std::make_unique<Graphic::VKTextureAtlas>(
+        physicalDevice, logicalDevice, cmdPool, queue);
+
+    unsigned char white[] = { 255, 255, 255, 255, 255, 255, 255, 255,
+                              255, 255, 255, 255, 255, 255, 255, 255 };
+    m_textureAtlas->addTexture(
+        static_cast<uint32_t>(Logic::TextureID::None), white, 2, 2);
+
+    auto& skin           = Config::SkinManager::instance();
+    auto  notePath       = skin.getAssetPath("note.note");
+    bool  hasNoteTexture = false;
+    if ( !notePath.empty() ) {
+        m_textureAtlas->addTexture(
+            static_cast<uint32_t>(Logic::TextureID::Note), notePath);
+        hasNoteTexture = true;
+    }
+
+    m_textureAtlas->build(1024);
+
+    m_atlasUVs.clear();
+    m_atlasUVs[static_cast<uint32_t>(Logic::TextureID::None)] =
+        m_textureAtlas->getUV(static_cast<uint32_t>(Logic::TextureID::None));
+    if ( hasNoteTexture ) {
+        m_atlasUVs[static_cast<uint32_t>(Logic::TextureID::Note)] =
+            m_textureAtlas->getUV(
+                static_cast<uint32_t>(Logic::TextureID::Note));
+    }
+
+    Logic::EditorEngine::instance().setAtlasUVMap(m_canvasName, m_atlasUVs);
 }
 
 void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
@@ -414,12 +447,25 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 {
     if ( !m_currentSnapshot ) return;
 
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+    }
+
     vk::DescriptorSet lastBound = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
 
     for ( const auto& cmd : m_currentSnapshot->cmds ) {
-        // Timeline 目前主要用纯色，使用 defaultDescriptor
-        vk::DescriptorSet tex = defaultDescriptor;
+        vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
+                                    ? atlasDescriptor
+                                    : defaultDescriptor;
+        if ( tex == VK_NULL_HANDLE ) {
+            tex = defaultDescriptor;
+        }
 
         if ( tex != lastBound ) {
             cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,

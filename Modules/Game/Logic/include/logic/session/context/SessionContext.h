@@ -82,7 +82,9 @@ struct SessionContext {
     bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
     bool isTransformDirty{ true };  ///< 坐标转换缓存脏标记
     std::vector<entt::entity>
-           sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
+        sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
+    std::vector<double>
+           sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
     double lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>

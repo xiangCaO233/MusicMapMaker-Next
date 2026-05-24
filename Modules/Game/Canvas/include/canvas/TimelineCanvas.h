@@ -1,5 +1,6 @@
 #pragma once
 
+#include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "ui/IRenderableView.h"
 #include <entt/entt.hpp>
@@ -102,6 +103,11 @@ private:
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>
         m_shaderSourceCache;
+
+    /// @brief Timeline 使用的轻量纹理图集。
+    std::unique_ptr<Graphic::VKTextureAtlas> m_textureAtlas{ nullptr };
+    /// @brief Timeline 图集 UV 缓存，用于同步给逻辑线程。
+    std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
 
     /// @brief 上一次应用到动态顶点上的 Y 偏移量
     float m_lastAppliedYOffset{ 0.0f };
