@@ -203,12 +203,16 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 std::pair<double, double> ScrollCache::getSegmentAbsYRange(
     std::size_t index) const
 {
-    const auto& seg      = m_segments[index];
-    double      nextAbsY = seg.absY + seg.speed;
+    const auto& seg = m_segments[index];
     if ( index + 1 < m_segments.size() ) {
-        nextAbsY = m_segments[index + 1].absY;
+        double nextAbsY = m_segments[index + 1].absY;
+        return { std::min(seg.absY, nextAbsY), std::max(seg.absY, nextAbsY) };
     }
-    return { std::min(seg.absY, nextAbsY), std::max(seg.absY, nextAbsY) };
+
+    if ( seg.speed >= 0.0 ) {
+        return { seg.absY, std::numeric_limits<double>::infinity() };
+    }
+    return { -std::numeric_limits<double>::infinity(), seg.absY };
 }
 
 void ScrollCache::rebuildAbsYRangeIndex()
