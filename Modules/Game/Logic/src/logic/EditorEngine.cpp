@@ -26,6 +26,31 @@
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief 获取会话当前谱面主音轨的稳定比较键。
+std::string getMainAudioSyncKey(const SessionContext& ctx,
+                                const Project*        project)
+{
+    if ( !ctx.currentBeatmap ||
+         ctx.currentBeatmap->m_baseMapMetadata.main_audio_path.empty() ) {
+        return "";
+    }
+
+    std::filesystem::path audioPath =
+        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
+    if ( project && audioPath.is_relative() ) {
+        audioPath = project->m_projectRoot / audioPath;
+    } else if ( !project && audioPath.is_relative() ) {
+        audioPath =
+            ctx.currentBeatmap->m_baseMapMetadata.map_path.parent_path() /
+            audioPath;
+    }
+
+    return Config::pathToUtf8(audioPath.lexically_normal());
+}
+}  // namespace
+
 EditorEngine& EditorEngine::instance()
 {
     static EditorEngine instance;
@@ -725,6 +750,61 @@ bool EditorEngine::isPlaybackPlaying() const
     return false;
 }
 
+void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
+{
+    m_syncSameMainAudioCanvases.store(enabled, std::memory_order_relaxed);
+    if ( enabled ) {
+        syncSameMainAudioCanvases();
+    }
+}
+
+void EditorEngine::syncSameMainAudioCanvases()
+{
+    if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    int32_t activeIndex = m_activeSessionIndex.load(std::memory_order_relaxed);
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(m_sessions.size()) ||
+         !m_sessions[activeIndex].session ) {
+        return;
+    }
+
+    auto&      activeCtx = m_sessions[activeIndex].session->getContext();
+    const auto activeKey =
+        getMainAudioSyncKey(activeCtx, m_currentProject.get());
+    if ( activeKey.empty() ) {
+        return;
+    }
+
+    for ( int32_t i = 0; i < static_cast<int32_t>(m_sessions.size()); ++i ) {
+        if ( i == activeIndex || !m_sessions[i].session ) {
+            continue;
+        }
+
+        auto& ctx = m_sessions[i].session->getContextMutable();
+        if ( getMainAudioSyncKey(ctx, m_currentProject.get()) != activeKey ) {
+            continue;
+        }
+
+        ctx.currentTime           = activeCtx.currentTime;
+        ctx.visualTime            = activeCtx.visualTime;
+        ctx.isPlaying             = false;
+        ctx.lastAudioPos          = 0.0;
+        ctx.lastAudioSysTime      = 0.0;
+        ctx.hasInitialAudioOffset = false;
+        ctx.playStartSysTime =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        ctx.playStartVisualTime = ctx.currentTime;
+        ctx.syncClock.reset(ctx.currentTime);
+        ctx.hitFXSystem.clearActiveEffects();
+    }
+}
+
 int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     const std::string&            displayName,
                                     bool isLogoPlaceholder)
@@ -860,12 +940,34 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         // 1. 如果旧会话正在播放，先暂停它
         int32_t currentActive =
             m_activeSessionIndex.load(std::memory_order_relaxed);
+        double      syncedCurrentTime    = 0.0;
+        bool        shouldSyncTargetTime = false;
+        std::string oldMainAudioKey;
         if ( currentActive >= 0 &&
              currentActive < static_cast<int32_t>(m_sessions.size()) ) {
             auto& oldSession = m_sessions[currentActive].session;
             if ( oldSession ) {
-                oldSession->pushCommand(CmdSetPlayState{ false });
+                auto& oldCtx = oldSession->getContextMutable();
+                oldMainAudioKey =
+                    getMainAudioSyncKey(oldCtx, m_currentProject.get());
+                if ( oldCtx.isPlaying ) {
+                    oldCtx.currentTime =
+                        Audio::AudioManager::instance().getCurrentTime();
+                    oldCtx.visualTime =
+                        oldCtx.currentTime +
+                        m_editorConfig.visual.getEffectiveVisualOffset();
+                    oldCtx.isPlaying = false;
+                }
+                syncedCurrentTime = oldCtx.currentTime;
             }
+        }
+
+        if ( m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) &&
+             !oldMainAudioKey.empty() && m_sessions[index].session ) {
+            const auto& targetCtx = m_sessions[index].session->getContext();
+            shouldSyncTargetTime =
+                getMainAudioSyncKey(targetCtx, m_currentProject.get()) ==
+                oldMainAudioKey;
         }
 
         m_activeSessionIndex.store(index, std::memory_order_relaxed);
@@ -879,7 +981,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             // 停止当前所有播放
             Audio::AudioManager::instance().stop();
 
-            auto& ctx = activeSession->getContext();
+            auto& ctx = activeSession->getContextMutable();
+            if ( shouldSyncTargetTime ) {
+                ctx.currentTime = syncedCurrentTime;
+            }
             if ( ctx.currentBeatmap && !m_sessions[index].isLogoPlaceholder ) {
                 auto*                 project = getCurrentProject();
                 std::filesystem::path audioPath;
@@ -918,8 +1023,29 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 }
             }
 
-            // 同步进度到音频管理器
-            Audio::AudioManager::instance().seek(ctx.visualTime);
+            double totalTime = Audio::AudioManager::instance().getTotalTime();
+            double minTime = -m_editorConfig.visual.getEffectiveVisualOffset();
+            if ( minTime > totalTime ) {
+                minTime = totalTime;
+            }
+            ctx.currentTime  = std::clamp(ctx.currentTime, minTime, totalTime);
+            ctx.visualTime   = ctx.currentTime +
+                               m_editorConfig.visual.getEffectiveVisualOffset();
+            ctx.isPlaying    = false;
+            ctx.lastAudioPos = 0.0;
+            ctx.lastAudioSysTime      = 0.0;
+            ctx.hasInitialAudioOffset = false;
+            ctx.playStartSysTime =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            ctx.playStartVisualTime = ctx.currentTime;
+            ctx.syncClock.reset(ctx.currentTime);
+            ctx.hitFXSystem.clearActiveEffects();
+
+            // 同步进度到音频管理器。这里必须使用逻辑播放时间，
+            // visualTime 包含视觉偏移，会导致切换画布时跳到错误位置。
+            Audio::AudioManager::instance().seek(ctx.currentTime);
 
             std::shared_lock<std::shared_mutex> bufLock(m_buffersMutex);
             for ( const auto& [cid, size] : m_lastViewportSizes ) {
@@ -1087,6 +1213,7 @@ void EditorEngine::loop()
             for ( auto& session : sessionsSnapshot ) {
                 session->update(dt, m_editorConfig);
             }
+            syncSameMainAudioCanvases();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

@@ -105,6 +105,19 @@ void ToolbarView::update(UIManager* sourceManager)
             advanceItem();
         };
 
+        auto drawRuntimeToggleButton = [&](const char* icon,
+                                           bool        active,
+                                           const char* tooltip,
+                                           auto        applyChange) {
+            pushBtnStyle(active);
+            if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+                applyChange(!active);
+            }
+            drawTooltip(tooltip);
+            ImGui::PopStyleColor(3);
+            advanceItem();
+        };
+
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
                        TR("ui.toolbar.move"),
@@ -186,6 +199,14 @@ void ToolbarView::update(UIManager* sourceManager)
                              config.visual.enableHitEffects =
                                  !config.visual.enableHitEffects;
                          });
+
+        drawRuntimeToggleButton(
+            ICON_MMM_LINK,
+            engine.isSyncSameMainAudioCanvasesEnabled(),
+            TR("ui.toolbar.sync_same_main_audio").data(),
+            [&engine](bool enabled) {
+                engine.setSyncSameMainAudioCanvases(enabled);
+            });
 
         float bottomButtonsH = btnSize * 2.0f + itemSpacing;
         float bottomStartY = ImGui::GetCursorPosY() +

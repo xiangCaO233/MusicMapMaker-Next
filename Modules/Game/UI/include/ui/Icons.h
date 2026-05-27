@@ -30,6 +30,7 @@ constexpr const char* ICON_MMM_BOOK   = "\xef\x80\xad";  ///< \uf02d book
 constexpr const char* ICON_MMM_PLUS   = "\xef\x81\xa7";  ///< \uf067 plus
 constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
+constexpr const char* ICON_MMM_LINK = "\xef\x83\x81";  ///< \uf0c1 link
 
 // --- Playback Icons ---
 constexpr const char* ICON_MMM_PLAY  = "\xef\x81\x8b";  ///< \uf04b play

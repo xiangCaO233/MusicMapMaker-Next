@@ -371,6 +371,7 @@ return {
 	["ui.toolbar.stop_on_scroll"] = "播放时滚动则停止播放",
 	["ui.toolbar.hit_sfx"] = "开启/关闭打击音效",
 	["ui.toolbar.hit_effects"] = "开启/关闭打击特效动画",
+	["ui.toolbar.sync_same_main_audio"] = "同步同主音轨画布时间",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "时间",

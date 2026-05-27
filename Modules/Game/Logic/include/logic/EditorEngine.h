@@ -119,10 +119,9 @@ public:
      * @param isLogoPlaceholder 是否为初始 Logo 画布
      * @return 新 Session 在 m_sessions 中的索引
      */
-    int32_t createSession(
-        std::shared_ptr<MMM::BeatMap> beatmap = nullptr,
-        const std::string&           displayName     = "",
-        bool                         isLogoPlaceholder = false);
+    int32_t createSession(std::shared_ptr<MMM::BeatMap> beatmap     = nullptr,
+                          const std::string&            displayName = "",
+                          bool isLogoPlaceholder                    = false);
 
     /**
      * @brief 关闭指定索引的画布 Session
@@ -159,8 +158,7 @@ public:
     const SessionEntry* getSessionEntry(int32_t index) const
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        if ( index >= 0 &&
-             index < static_cast<int32_t>(m_sessions.size()) ) {
+        if ( index >= 0 && index < static_cast<int32_t>(m_sessions.size()) ) {
             return &m_sessions[index];
         }
         return nullptr;
@@ -182,8 +180,7 @@ public:
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
         int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-        if ( idx >= 0 &&
-             idx < static_cast<int32_t>(m_sessions.size()) ) {
+        if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
             return m_sessions[idx].session;
         }
         return nullptr;
@@ -196,8 +193,7 @@ public:
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
         int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-        if ( idx >= 0 &&
-             idx < static_cast<int32_t>(m_sessions.size()) ) {
+        if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
             return m_sessions[idx].cameraId;
         }
         return "";
@@ -257,6 +253,14 @@ public:
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
+    /// @brief 设置同主音轨多画布时间同步开关。
+    void setSyncSameMainAudioCanvases(bool enabled);
+
+    /// @brief 获取同主音轨多画布时间同步开关。
+    bool isSyncSameMainAudioCanvasesEnabled() const
+    {
+        return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
+    }
 
     /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
@@ -278,6 +282,9 @@ private:
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
      */
     void scanProjectDirectory();
+
+    /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
+    void syncSameMainAudioCanvases();
 
     /// @brief 逻辑线程
     std::thread m_thread;
@@ -331,6 +338,9 @@ private:
 
     /// @brief 逻辑线程实时刷新率 (UPS)
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 是否强制同步使用同一主音轨的画布时间。
+    std::atomic<bool> m_syncSameMainAudioCanvases{ false };
 
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
     uint32_t m_logicUpdateCount{ 0 };

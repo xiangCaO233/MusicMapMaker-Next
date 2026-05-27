@@ -367,6 +367,7 @@ return {
 	["ui.toolbar.stop_on_scroll"] = "Stop playback on scroll",
 	["ui.toolbar.hit_sfx"] = "Enable/Disable hit sound effects",
 	["ui.toolbar.hit_effects"] = "Enable/Disable hit visual effects",
+	["ui.toolbar.sync_same_main_audio"] = "Sync canvases using the same main audio",
 
 	-- Canvas / 主画布
 	["ui.canvas.time"] = "Time",
