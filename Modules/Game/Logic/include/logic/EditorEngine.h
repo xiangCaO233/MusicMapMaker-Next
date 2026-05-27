@@ -331,6 +331,9 @@ private:
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
 
+    /// @brief 当前全局编辑工具。
+    std::atomic<EditTool> m_currentTool{ EditTool::Move };
+
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
     std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
         Config::FrameLimitPreference::Refresh2x

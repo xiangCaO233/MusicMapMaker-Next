@@ -764,6 +764,20 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         return;
     }
 
+    // 编辑工具是全局状态，所有画布保持一致
+    if ( std::holds_alternative<CmdChangeTool>(cmd) ) {
+        auto tool = std::get<CmdChangeTool>(cmd).tool;
+        m_currentTool.store(tool, std::memory_order_relaxed);
+
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        for ( auto& entry : m_sessions ) {
+            if ( entry.session ) {
+                entry.session->pushCommand(LogicCommand(CmdChangeTool{ tool }));
+            }
+        }
+        return;
+    }
+
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
@@ -834,12 +848,7 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
 
 EditTool EditorEngine::getCurrentTool() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
-        return m_sessions[idx].session->getContext().currentTool;
-    }
-    return EditTool::Move;
+    return m_currentTool.load(std::memory_order_relaxed);
 }
 
 bool EditorEngine::isPlaybackPlaying() const
@@ -925,6 +934,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                         : displayName;
                 m_sessions[i].session->pushCommand(
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+                m_sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
+                    m_currentTool.load(std::memory_order_relaxed) }));
                 m_sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_activeSessionIndex.store(i, std::memory_order_relaxed);
@@ -961,6 +972,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     // 推送初始配置
     newSession->pushCommand(
         LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+    newSession->pushCommand(LogicCommand(
+        CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
 
     // 如果有谱面，加载它
     if ( beatmap ) {
@@ -1133,6 +1146,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             ctx.currentTime  = std::clamp(ctx.currentTime, minTime, totalTime);
             ctx.visualTime   = ctx.currentTime +
                                m_editorConfig.visual.getEffectiveVisualOffset();
+            ctx.currentTool  = m_currentTool.load(std::memory_order_relaxed);
             ctx.isPlaying    = false;
             ctx.lastAudioPos = 0.0;
             ctx.lastAudioSysTime      = 0.0;
