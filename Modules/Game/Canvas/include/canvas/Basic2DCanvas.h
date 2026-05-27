@@ -46,6 +46,15 @@ public:
     /// @brief 获取窗口是否打开，用于拦截未保存的关闭
     bool isOpen() const override;
 
+    /// @brief 请求关闭画布，复用未保存确认弹窗拦截 dirty 状态
+    void requestClose();
+
+    /// @brief 消费用户取消关闭操作的标记
+    bool consumeCloseCancelled();
+
+    /// @brief 请求下一次显示时停靠到主编辑区
+    void requestDockToCenter();
+
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
 
@@ -133,6 +142,15 @@ private:
 
     /// @brief 是否显示保存确认弹窗
     bool m_showSaveConfirm{ false };
+
+    /// @brief 上一次关闭请求是否被用户取消
+    bool m_closeCancelled{ false };
+
+    /// @brief 用户是否已经确认关闭并允许跳过 dirty 拦截
+    bool m_closeConfirmed{ false };
+
+    /// @brief 是否需要在下一次 Begin 前停靠到主编辑区
+    bool m_shouldDockToCenter{ false };
 
 private:
     void updateBackgroundTexture();

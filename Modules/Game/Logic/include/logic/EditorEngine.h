@@ -65,6 +65,18 @@ public:
      */
     void openProject(const std::filesystem::path& projectPath);
 
+    /// @brief 请求打开项目，必要时先等待 UI 关闭当前谱面画布
+    void requestOpenProject(const std::filesystem::path& projectPath);
+
+    /// @brief 是否存在等待旧谱面画布关闭后再打开的项目
+    bool hasPendingProjectSwitch() const;
+
+    /// @brief 完成旧谱面画布关闭流程，并排队打开挂起项目
+    void completePendingProjectSwitch();
+
+    /// @brief 取消挂起的项目切换请求
+    void cancelPendingProjectSwitch();
+
     /**
      * @brief 获取当前项目
      */
@@ -303,6 +315,9 @@ private:
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
     void syncSameMainAudioCanvases();
 
+    /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
+    bool needsCanvasCloseBeforeProjectOpen() const;
+
     /// @brief 逻辑线程
     std::thread m_thread;
 
@@ -347,10 +362,16 @@ private:
     /// 无交叉，防止死锁）
     mutable std::shared_mutex m_buffersMutex;
 
-    /// @brief 待处理的项目路径（由 EventBus 回调写入，由逻辑线程消费）
+    /// @brief 已确认可由逻辑线程直接打开的项目路径
     std::filesystem::path m_pendingProjectPath;
 
-    /// @brief 保护 m_pendingProjectPath 的轻量级锁
+    /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径
+    std::filesystem::path m_requestedProjectPath;
+
+    /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径
+    std::filesystem::path m_pendingProjectSwitchPath;
+
+    /// @brief 保护项目打开请求路径的轻量级锁
     mutable std::mutex m_pendingMutex;
 
     /// @brief 保护编辑器级剪贴板的轻量级锁。

@@ -72,11 +72,13 @@ class LayoutContext final
 {
 
 public:
+    /// @brief 创建布局上下文并开始 ImGui 窗口
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
                   const std::string&              iwindow_name,
                   bool                            custom_window_flags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
-                  bool*            p_open      = nullptr)
+                  bool* p_open = nullptr, ImGuiID dockId = 0,
+                  ImGuiCond dockCond = ImGuiCond_Always)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
 
@@ -110,6 +112,10 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
         ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+        if ( dockId != 0 ) {
+            ImGui::SetNextWindowDockID(dockId, dockCond);
+        }
 
         if ( custom_window_flags ) {
             ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);

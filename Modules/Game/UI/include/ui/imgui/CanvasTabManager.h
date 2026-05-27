@@ -3,6 +3,12 @@
 #include "ui/IUIView.h"
 #include <string>
 #include <unordered_set>
+#include <vector>
+
+namespace MMM::Logic
+{
+struct SessionEntry;
+}
 
 namespace MMM::UI
 {
@@ -29,8 +35,16 @@ public:
     void* getActualInstance() override { return this; }
 
 private:
+    /// @brief 驱动挂起项目切换时的逐画布关闭流程
+    void handlePendingProjectSwitch(
+        UIManager*                              sourceManager,
+        const std::vector<Logic::SessionEntry>& entries);
+
     /// @brief 已初始化画布的 cameraId 集合
     std::unordered_set<std::string> m_initializedCanvases;
+
+    /// @brief 项目切换关闭流程中当前等待关闭的画布 cameraId
+    std::string m_projectSwitchClosingCanvas;
 };
 
 }  // namespace MMM::UI

@@ -108,8 +108,7 @@ EditorEngine::EditorEngine()
     // 永久卡死。 正确做法：将路径存入队列，在逻辑线程 loop() 里境外处理。
     Event::EventBus::instance().subscribe<Event::OpenProjectEvent>(
         [this](const Event::OpenProjectEvent& e) {
-            std::lock_guard<std::mutex> lk(m_pendingMutex);
-            m_pendingProjectPath = e.m_projectPath;
+            requestOpenProject(e.m_projectPath);
         });
 
     // 订阅逻辑指令事件
@@ -130,6 +129,58 @@ EditorEngine::EditorEngine()
 EditorEngine::~EditorEngine()
 {
     stop();
+}
+
+void EditorEngine::requestOpenProject(const std::filesystem::path& projectPath)
+{
+    if ( projectPath.empty() ) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(m_pendingMutex);
+    m_pendingProjectPath.clear();
+    if ( !m_pendingProjectSwitchPath.empty() ) {
+        m_requestedProjectPath.clear();
+        m_pendingProjectSwitchPath = projectPath;
+    } else {
+        m_requestedProjectPath = projectPath;
+    }
+}
+
+bool EditorEngine::hasPendingProjectSwitch() const
+{
+    std::lock_guard<std::mutex> lk(m_pendingMutex);
+    return !m_pendingProjectSwitchPath.empty();
+}
+
+void EditorEngine::completePendingProjectSwitch()
+{
+    std::lock_guard<std::mutex> lk(m_pendingMutex);
+    if ( m_pendingProjectSwitchPath.empty() ) {
+        return;
+    }
+
+    m_pendingProjectPath = m_pendingProjectSwitchPath;
+    m_pendingProjectSwitchPath.clear();
+}
+
+void EditorEngine::cancelPendingProjectSwitch()
+{
+    std::lock_guard<std::mutex> lk(m_pendingMutex);
+    m_pendingProjectPath.clear();
+    m_requestedProjectPath.clear();
+    m_pendingProjectSwitchPath.clear();
+}
+
+bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    for ( const auto& entry : m_sessions ) {
+        if ( !entry.isLogoPlaceholder ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void EditorEngine::openProject(const std::filesystem::path& projectPath)
@@ -1302,9 +1353,30 @@ void EditorEngine::loop()
         // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
         // 交叉）
         std::filesystem::path pendingPath;
+        std::filesystem::path requestedPath;
         {
             std::lock_guard<std::mutex> lk(m_pendingMutex);
-            if ( !m_pendingProjectPath.empty() ) {
+            if ( !m_requestedProjectPath.empty() ) {
+                requestedPath = m_requestedProjectPath;
+                m_requestedProjectPath.clear();
+            }
+        }
+        if ( !requestedPath.empty() ) {
+            if ( needsCanvasCloseBeforeProjectOpen() ) {
+                std::lock_guard<std::mutex> lk(m_pendingMutex);
+                m_pendingProjectPath.clear();
+                m_pendingProjectSwitchPath = requestedPath;
+                XINFO(
+                    "Project open deferred until current beatmap canvases "
+                    "close: {}",
+                    Config::pathToUtf8(requestedPath));
+            } else {
+                pendingPath = requestedPath;
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lk(m_pendingMutex);
+            if ( pendingPath.empty() && !m_pendingProjectPath.empty() ) {
                 pendingPath = m_pendingProjectPath;
                 m_pendingProjectPath.clear();
             }

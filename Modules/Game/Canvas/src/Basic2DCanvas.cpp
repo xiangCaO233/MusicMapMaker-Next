@@ -8,6 +8,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -40,7 +41,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     // 1. 检查保存确认拦截
     if ( !m_isOpen ) {
-        if ( m_currentSnapshot && m_currentSnapshot->isDirty ) {
+        if ( !m_closeConfirmed && m_currentSnapshot &&
+             m_currentSnapshot->isDirty ) {
             m_isOpen          = true;
             m_showSaveConfirm = true;
         }
@@ -55,34 +57,38 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    bool  showClose = true;
-    auto& engine    = Logic::EditorEngine::instance();
-    if ( engine.getSessionCount() == 1 ) {
-        const auto* entry = engine.getSessionEntry(0);
-        if ( entry && entry->isLogoPlaceholder ) {
-            showClose = false;
+    auto& engine           = Logic::EditorEngine::instance();
+    bool  showClose        = engine.getSessionCount() > 1;
+    auto  findSessionIndex = [this, &engine]() -> int32_t {
+        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
+            const auto* entry = engine.getSessionEntry(i);
+            if ( entry && entry->cameraId == m_cameraId ) {
+                return i;
+            }
         }
-    }
+        return -1;
+    };
 
+    ImGuiID dockId =
+        m_shouldDockToCenter ? UI::MainDockSpaceUI::getCenterDockId() : 0;
     std::string       windowName = fmt::format("{}###{}", title, m_canvasName);
-    UI::LayoutContext lctx(m_layoutCtx, windowName);
-    RenderContext     rctx(this,
-                           m_canvasName.c_str(),
-                           m_targetWidth,
-                           m_targetHeight,
-                           showClose ? &m_isOpen : nullptr);
+    UI::LayoutContext lctx(m_layoutCtx,
+                           windowName,
+                           false,
+                           ImGuiWindowFlags_NoTitleBar,
+                           showClose ? &m_isOpen : nullptr,
+                           dockId,
+                           ImGuiCond_Always);
+    if ( m_shouldDockToCenter && ImGui::IsWindowDocked() ) {
+        m_shouldDockToCenter = false;
+    }
+    RenderContext rctx(
+        this, m_canvasName.c_str(), m_targetWidth, m_targetHeight, nullptr);
 
     // 检查是否聚焦该窗口，若是，同步给 EditorEngine 设为活动 Session
     if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
         int32_t activeIdx = engine.getActiveSessionIndex();
-        int32_t myIdx     = -1;
-        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
-            const auto* entry = engine.getSessionEntry(i);
-            if ( entry && entry->cameraId == m_cameraId ) {
-                myIdx = i;
-                break;
-            }
-        }
+        int32_t myIdx     = findSessionIndex();
         if ( myIdx != -1 && myIdx != activeIdx ) {
             engine.setActiveSessionIndex(myIdx);
             XINFO(
@@ -186,28 +192,53 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
         if ( ImGui::Button(TR("ui.file.save").data(),
                            ImVec2(120 * dpiScale, 0)) ) {
+            int32_t myIdx = findSessionIndex();
+            if ( myIdx != -1 ) {
+                engine.setActiveSessionIndex(myIdx);
+            }
             // 保存谱面
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdSaveBeatmap{}));
-            m_isOpen          = false;  // 触发关闭流程
+            m_closeConfirmed  = true;
+            m_isOpen          = false;
             m_showSaveConfirm = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.exit.dont_save").data(),
                            ImVec2(120 * dpiScale, 0)) ) {
-            m_isOpen          = false;  // 不保存，直接触发关闭流程
+            m_closeConfirmed  = true;
+            m_isOpen          = false;
             m_showSaveConfirm = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.help.cancel").data(),
                            ImVec2(120 * dpiScale, 0)) ) {
+            m_isOpen          = true;
             m_showSaveConfirm = false;
+            m_closeCancelled  = true;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
+}
+
+void Basic2DCanvas::requestClose()
+{
+    m_closeCancelled = false;
+    m_closeConfirmed = false;
+    m_isOpen         = false;
+}
+
+bool Basic2DCanvas::consumeCloseCancelled()
+{
+    return std::exchange(m_closeCancelled, false);
+}
+
+void Basic2DCanvas::requestDockToCenter()
+{
+    m_shouldDockToCenter = true;
 }
 
 bool Basic2DCanvas::isDirty() const
@@ -217,7 +248,8 @@ bool Basic2DCanvas::isDirty() const
 
 bool Basic2DCanvas::isOpen() const
 {
-    if ( !m_isOpen && m_currentSnapshot && m_currentSnapshot->isDirty ) {
+    if ( !m_isOpen && !m_closeConfirmed && m_currentSnapshot &&
+         m_currentSnapshot->isDirty ) {
         return true;
     }
     return m_isOpen;

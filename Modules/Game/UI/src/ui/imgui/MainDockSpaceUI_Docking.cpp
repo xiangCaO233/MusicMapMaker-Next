@@ -118,6 +118,13 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGui::DockBuilderFinish(dockspace_id);
     }
 
+    if ( ImGuiDockNode* centerNode =
+             ImGui::DockBuilderGetCentralNode(dockspace_id) ) {
+        MainDockSpaceUI::setCenterDockId(centerNode->ID);
+    } else {
+        MainDockSpaceUI::setCenterDockId(0);
+    }
+
     ImGui::End();
     ImGui::PopStyleColor(1);
     ImGui::PopStyleVar(6);
