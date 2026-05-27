@@ -108,7 +108,8 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 {
     float wheel = cmd.wheel;
     if ( m_ctx.lastConfig.settings.reverseScroll &&
-         (cmd.cameraId == "Basic2DCanvas" || cmd.cameraId == "Timeline") ) {
+         (SessionUtils::isMainCanvasCameraId(cmd.cameraId) ||
+          cmd.cameraId == "Timeline") ) {
         wheel = -wheel;
     }
 

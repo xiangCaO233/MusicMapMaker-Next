@@ -146,9 +146,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             double currentAbsY = cache->getAbsY(m_ctx->visualTime);
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             double scale = snapshot->renderScaleY;
-            if ( cameraId != "Basic2DCanvas" && std::abs(scale) > 0.0001f ) {
+            if ( !SessionUtils::isMainCanvasCameraId(cameraId) &&
+                 std::abs(scale) > 0.0001f ) {
                 if ( std::abs(scale) < 1e-6 ) scale = 1.0;
-            } else if ( cameraId == "Basic2DCanvas" ) {
+            } else if ( SessionUtils::isMainCanvasCameraId(cameraId) ) {
                 scale = 1.0;
             }
 
@@ -202,12 +203,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 float renderScaleY = 1.0f;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
                 if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
-                    float previewMainHeight = 1000.0f;
-                    auto  itMainPreview = m_ctx->cameras.find("Basic2DCanvas");
-                    if ( itMainPreview != m_ctx->cameras.end() ) {
-                        previewMainHeight =
-                            itMainPreview->second.viewportHeight;
-                    }
+                    const auto* mainCamera =
+                        SessionUtils::findMainCanvasCamera(m_ctx->cameras);
+                    float previewMainHeight =
+                        mainCamera ? mainCamera->viewportHeight : 1000.0f;
 
                     float mainEffectiveH = (config.visual.trackLayout.bottom -
                                             config.visual.trackLayout.top) *
@@ -552,11 +551,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                 double currentAbsY = cache->getAbsY(m_ctx->visualTime);
                 double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
 
-                float mainViewportHeight = 1000.0f;
-                auto  itMain             = m_ctx->cameras.find("Basic2DCanvas");
-                if ( itMain != m_ctx->cameras.end() ) {
-                    mainViewportHeight = itMain->second.viewportHeight;
-                }
+                const auto* mainCamera =
+                    SessionUtils::findMainCanvasCamera(m_ctx->cameras);
+                float mainViewportHeight =
+                    mainCamera ? mainCamera->viewportHeight : 1000.0f;
 
                 float mainEffectiveH = (config.visual.trackLayout.bottom -
                                         config.visual.trackLayout.top) *
@@ -585,9 +583,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // 获取主视口高度用于预览区比例对齐
         float finalMainHeight =
             camera.viewportHeight;  // 默认为当前视口高度，防止除以 0 或比例错乱
-        auto itMainFinal = m_ctx->cameras.find("Basic2DCanvas");
-        if ( itMainFinal != m_ctx->cameras.end() ) {
-            finalMainHeight = itMainFinal->second.viewportHeight;
+        const auto* mainCameraFinal =
+            SessionUtils::findMainCanvasCamera(m_ctx->cameras);
+        if ( mainCameraFinal ) {
+            finalMainHeight = mainCameraFinal->viewportHeight;
         }
 
         snapshot->trackCount = m_ctx->trackCount;

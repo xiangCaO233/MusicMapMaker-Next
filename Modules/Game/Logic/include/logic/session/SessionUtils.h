@@ -7,6 +7,13 @@
 namespace MMM::Logic::SessionUtils
 {
 
+/// @brief 判断给定视口是否为主编辑画布。
+bool isMainCanvasCameraId(const std::string& cameraId);
+
+/// @brief 在视口表中查找当前会话的主编辑画布。
+const CameraInfo* findMainCanvasCamera(
+    const std::unordered_map<std::string, CameraInfo>& cameras);
+
 /// @brief 磁吸计算结果数据结构
 struct SnapResult {
     bool   isSnapped{ false };  ///< 是否触发了磁吸

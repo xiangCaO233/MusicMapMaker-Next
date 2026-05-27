@@ -104,14 +104,14 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
     float renderScaleY = 1.0f;
     if ( cmd.cameraId == "Preview" ) {
-        auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != ctx.cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : it->second.viewportHeight;
-        float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
-        float ty           = ctx.lastConfig.visual.previewConfig.margin.top;
+        const auto* mainCamera =
+            SessionUtils::findMainCanvasCamera(ctx.cameras);
+        float mainViewportHeight =
+            mainCamera ? mainCamera->viewportHeight : it->second.viewportHeight;
+        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
         float by           = it->second.viewportHeight -
                              ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;

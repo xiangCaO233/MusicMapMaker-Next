@@ -6,6 +6,7 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -26,9 +27,11 @@ void NoteRenderSystem::generateSnapshot(
     int32_t trackCount, const Config::EditorConfig& config,
     float mainViewportHeight, HitFXSystem* hitFXSystem)
 {
-    // 核心同步：如果预览区正在拖拽，主画布（Basic2DCanvas）渲染的时间应该是预览区当前的悬停时间
+    const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
+
+    // 核心同步：如果预览区正在拖拽，主画布渲染的时间应该是预览区当前的悬停时间
     double renderTime = currentTime;
-    if ( cameraId == "Basic2DCanvas" && snapshot->isPreviewDragging ) {
+    if ( isMainCanvas && snapshot->isPreviewDragging ) {
         renderTime = snapshot->previewHoverTime;
     }
 
@@ -54,11 +57,10 @@ void NoteRenderSystem::generateSnapshot(
     // 因此，我们在设置 staticVertexCount
     // 之前生成它的顶点，但将其命令延迟到最后插入。
     uint32_t fxCmdStart = static_cast<uint32_t>(snapshot->cmds.size());
-    if ( hitFXSystem &&
-         (cameraId == "Basic2DCanvas" || cameraId == "Preview") ) {
+    if ( hitFXSystem && (isMainCanvas || cameraId == "Preview") ) {
         // 提前计算轨道参数
         float tempLX = 0, tempRX = 0;
-        if ( cameraId == "Basic2DCanvas" ) {
+        if ( isMainCanvas ) {
             tempLX = viewportWidth * config.visual.trackLayout.left;
             tempRX = viewportWidth * config.visual.trackLayout.right;
         } else {
@@ -265,7 +267,7 @@ void NoteRenderSystem::generateSnapshot(
                                       viewportHeight * 1.5f,
                                       singleTrackW,
                                       renderScaleY);
-        if ( cameraId == "Basic2DCanvas" && config.visual.debugDrawHitboxes ) {
+        if ( isMainCanvas && config.visual.debugDrawHitboxes ) {
             NoteRenderSystem::debugRenderHitboxes(batcher, snapshot);
         }
     }

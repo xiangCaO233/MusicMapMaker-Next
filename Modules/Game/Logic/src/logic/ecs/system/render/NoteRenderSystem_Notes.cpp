@@ -7,6 +7,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/session/SessionUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
@@ -39,7 +40,7 @@ void NoteRenderSystem::renderNotes(
                                         bottomY,
                                         renderScaleY);
 
-    bool shouldGenerateHitboxes = cameraId == "Basic2DCanvas";
+    bool shouldGenerateHitboxes = SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
     if ( shouldGenerateHitboxes ) {

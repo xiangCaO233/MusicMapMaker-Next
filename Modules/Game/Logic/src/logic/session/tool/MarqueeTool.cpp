@@ -2,6 +2,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 
 namespace MMM::Logic
@@ -36,9 +37,10 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
 
             float renderScaleY = 1.0f;
             if ( cmd.cameraId == "Preview" ) {
-                auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-                float mainViewportHeight = itMain != ctx.cameras.end()
-                                               ? itMain->second.viewportHeight
+                const auto* mainCamera =
+                    SessionUtils::findMainCanvasCamera(ctx.cameras);
+                float mainViewportHeight = mainCamera
+                                               ? mainCamera->viewportHeight
                                                : it->second.viewportHeight;
 
                 float mainEffectiveH =
@@ -92,9 +94,10 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
 
             float renderScaleY = 1.0f;
             if ( currentBox.cameraId == "Preview" ) {
-                auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-                float mainViewportHeight = itMain != ctx.cameras.end()
-                                               ? itMain->second.viewportHeight
+                const auto* mainCamera =
+                    SessionUtils::findMainCanvasCamera(ctx.cameras);
+                float mainViewportHeight = mainCamera
+                                               ? mainCamera->viewportHeight
                                                : it->second.viewportHeight;
 
                 float mainEffectiveH =
@@ -158,25 +161,25 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
 
     float renderScaleY = 1.0f;
     if ( cmd.cameraId == "Preview" ) {
-        auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != ctx.cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : it->second.viewportHeight;
-        float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
-        float ty           = ctx.lastConfig.visual.previewConfig.margin.top;
+        const auto* mainCamera =
+            SessionUtils::findMainCanvasCamera(ctx.cameras);
+        float mainViewportHeight =
+            mainCamera ? mainCamera->viewportHeight : it->second.viewportHeight;
+        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
         float by           = it->second.viewportHeight -
                              ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                ctx.lastConfig.visual.previewConfig.areaRatio);
-            } else {
-                renderScaleY = 1.0f;
-            }
+        renderScaleY =
+            previewDrawH /
+            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+    } else {
+        renderScaleY = 1.0f;
+    }
 
-            double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double currentAbsY = cache->getAbsY(ctx.visualTime);
     double targetAbsY =
         currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
     double clickTime = cache->getTime(targetAbsY);

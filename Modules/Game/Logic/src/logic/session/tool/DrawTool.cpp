@@ -68,10 +68,10 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 处理预览区缩放
     float renderScaleY = 1.0f;
     if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
-        auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != ctx.cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : itCamera->second.viewportHeight;
+        const auto* mainCamera =
+            SessionUtils::findMainCanvasCamera(ctx.cameras);
+        float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
+                                              : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
                                     ctx.lastConfig.visual.trackLayout.top) *
                                    mainViewportHeight;
@@ -294,10 +294,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
     float renderScaleY = 1.0f;
     if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
-        auto  itMain             = ctx.cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != ctx.cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : itCamera->second.viewportHeight;
+        const auto* mainCamera =
+            SessionUtils::findMainCanvasCamera(ctx.cameras);
+        float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
+                                              : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
                                     ctx.lastConfig.visual.trackLayout.top) *
                                    mainViewportHeight;

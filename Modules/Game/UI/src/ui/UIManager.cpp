@@ -98,10 +98,18 @@ void UIManager::onUpdateUI()
     // 派发 ImGui 事件 (每帧仅 1 次)
     DispatchGlobalUIEvents();
 
-    // 按注册顺序更新ui
-    for ( const auto& name : m_uiSequence ) {
+    // 按注册顺序更新本帧开始前已存在的 UI。
+    // update() 过程中可能注册新视图，使用索引和名称副本避免迭代器失效。
+    const size_t initialViewCount = m_uiSequence.size();
+    for ( size_t i = 0; i < initialViewCount && i < m_uiSequence.size(); ++i ) {
+        const std::string name = m_uiSequence[i];
+        auto              it   = m_uiviews.find(name);
+        if ( it == m_uiviews.end() ) {
+            continue;
+        }
+
         // 内部触发 ImGui 渲染和画笔收集
-        m_uiviews[name]->update(this);
+        it->second->update(this);
     }
 }
 

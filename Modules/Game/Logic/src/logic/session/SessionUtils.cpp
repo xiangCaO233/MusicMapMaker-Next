@@ -1,14 +1,38 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <numeric>
 
 namespace MMM::Logic::SessionUtils
 {
+
+bool isMainCanvasCameraId(const std::string& cameraId)
+{
+    return cameraId != "Preview" && cameraId != "PreviewCanvas" &&
+           cameraId != "Timeline" && cameraId != "AudioWaveform" &&
+           cameraId != "AudioSpectrum";
+}
+
+const CameraInfo* findMainCanvasCamera(
+    const std::unordered_map<std::string, CameraInfo>& cameras)
+{
+    auto itLegacy = cameras.find("Basic2DCanvas");
+    if ( itLegacy != cameras.end() ) {
+        return &itLegacy->second;
+    }
+
+    for ( const auto& [cameraId, camera] : cameras ) {
+        if ( isMainCanvasCameraId(cameraId) ) {
+            return &camera;
+        }
+    }
+
+    return nullptr;
+}
 
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
@@ -34,10 +58,9 @@ SnapResult getSnapResult(
 
     float renderScaleY = 1.0f;
     if ( camera.id == "Preview" || camera.id == "PreviewCanvas" ) {
-        auto  itMain             = cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : camera.viewportHeight;
+        const auto* mainCamera = findMainCanvasCamera(cameras);
+        float       mainViewportHeight =
+            mainCamera ? mainCamera->viewportHeight : camera.viewportHeight;
 
         float mainEffectiveH =
             (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
@@ -62,7 +85,7 @@ SnapResult getSnapResult(
         if ( rawTime < bpmTime && i > 0 ) continue;
         if ( rawTime > nextBpmTime ) continue;
 
-        double      bVal = bpmVal;
+        double bVal = bpmVal;
         if ( bVal <= 0.0 ) {
             bVal = 120.0;
             // 获取全局活动 Session 里的 Beatmap 预设 BPM
@@ -77,7 +100,7 @@ SnapResult getSnapResult(
         double beatDuration = 60.0 / bVal;
         double stepDuration = beatDuration / beatDivisor;
 
-        double relativeTime    = rawTime - bpmTime;
+        double relativeTime = rawTime - bpmTime;
         double stepCount;
         if ( config.settings.snapFloor ) {
             stepCount = std::floor(relativeTime / stepDuration + 1e-6);
@@ -92,7 +115,8 @@ SnapResult getSnapResult(
         float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
-        if ( config.settings.scrollSnap || std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
+        if ( config.settings.scrollSnap ||
+             std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
             result.isSnapped   = true;
             result.snappedTime = nearestStepTime;
 
