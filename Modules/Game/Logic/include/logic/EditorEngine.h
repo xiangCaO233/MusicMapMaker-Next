@@ -3,6 +3,7 @@
 #include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include <atomic>
 #include <filesystem>
@@ -109,6 +110,22 @@ public:
 
     /// @brief 从项目中移除谱面
     void handleRemoveBeatmap(const CmdRemoveBeatmap& cmd);
+
+    /// @brief 更新编辑器级剪贴板。
+    void setClipboard(std::vector<ClipboardItem> items,
+                      const SessionContext* sourceContext, bool isCut);
+
+    /// @brief 获取编辑器级剪贴板副本。
+    std::vector<ClipboardItem> getClipboard() const;
+
+    /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
+    bool isClipboardCutFrom(const SessionContext* context) const;
+
+    /// @brief 若剪贴板为其他会话剪切内容，则删除源会话原物件。
+    void consumeCrossSessionCutClipboard(const SessionContext* pasteContext);
+
+    /// @brief 将当前剪切剪贴板标记为已消费。
+    void markCutClipboardConsumed();
 
     // ========== 多 Session 管理 API ==========
 
@@ -332,6 +349,18 @@ private:
 
     /// @brief 保护 m_pendingProjectPath 的轻量级锁
     mutable std::mutex m_pendingMutex;
+
+    /// @brief 保护编辑器级剪贴板的轻量级锁。
+    mutable std::mutex m_clipboardMutex;
+
+    /// @brief 编辑器级共享剪贴板。
+    std::vector<ClipboardItem> m_clipboard;
+
+    /// @brief 当前剪贴板是否来自剪切操作。
+    bool m_clipboardIsCut{ false };
+
+    /// @brief 剪切来源会话上下文，仅用于身份比较，不负责生命周期。
+    const SessionContext* m_clipboardSourceContext{ nullptr };
 
     /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;

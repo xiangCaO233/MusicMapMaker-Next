@@ -46,6 +46,7 @@ void ActionController::handleCommand(const CmdCopy& cmd)
             m_ctx.clipboard.push_back({ note });
         }
     }
+    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, false);
     XINFO("Copied {} items to clipboard", m_ctx.clipboard.size());
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
@@ -64,6 +65,7 @@ void ActionController::handleCommand(const CmdCut& cmd)
             ic.isCut = true;
         }
     }
+    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, true);
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
                                           TR("ui.status.clipboard.cut"),
@@ -205,22 +207,31 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
 
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
-    if ( m_ctx.clipboard.empty() ) return;
+    auto clipboard = EditorEngine::instance().getClipboard();
+    if ( clipboard.empty() ) {
+        clipboard = m_ctx.clipboard;
+    }
+    if ( clipboard.empty() ) return;
 
     // 计算基准点 (目前取所有选中音符的最小时间)
-    double minTime = m_ctx.clipboard[0].note.m_timestamp;
-    for ( const auto& item : m_ctx.clipboard ) {
+    double minTime = clipboard[0].note.m_timestamp;
+    for ( const auto& item : clipboard ) {
         minTime = std::min(minTime, item.note.m_timestamp);
     }
 
     std::vector<BatchNoteAction::Entry> entries;
 
     // 1. 如果之前有 Cut，需要删除那些 Cut 的物件
-    auto view = m_ctx.noteRegistry.view<InteractionComponent>();
-    for ( auto entity : view ) {
-        auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
-        if ( ic.isCut ) {
-            if ( m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+    auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
+    bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
+    if ( isLocalCut ) {
+        for ( auto entity : view ) {
+            auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
+            if ( ic.isCut ) {
+                if ( !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                    continue;
+                }
+
                 auto oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
                 entries.push_back({ entity, oldNote, std::nullopt });
 
@@ -239,6 +250,11 @@ void ActionController::handleCommand(const CmdPaste& cmd)
                 }
             }
         }
+    } else {
+        EditorEngine::instance().consumeCrossSessionCutClipboard(&m_ctx);
+        for ( auto entity : view ) {
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
+        }
     }
 
     // 2. 粘贴到当前视觉时间 (判定线)
@@ -249,7 +265,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
     double timeOffset = pasteTime - minTime;
 
-    for ( const auto& item : m_ctx.clipboard ) {
+    for ( const auto& item : clipboard ) {
         auto newNote        = item.note;
         newNote.m_timestamp = item.note.m_timestamp + timeOffset;
 
@@ -270,6 +286,9 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     // 清除剪切状态
     for ( auto entity : view ) {
         m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
+    }
+    if ( isLocalCut ) {
+        EditorEngine::instance().markCutClipboardConsumed();
     }
 }
 

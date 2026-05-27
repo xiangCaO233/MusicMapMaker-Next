@@ -10,6 +10,8 @@
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/session/NoteAction.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <chrono>
@@ -577,6 +579,106 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     saveProject();
 
     XINFO("Successfully imported audio: {} as ID: {}", relPathUtf8, res.m_id);
+}
+
+/// @brief 更新编辑器级剪贴板。
+void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
+                                const SessionContext* sourceContext, bool isCut)
+{
+    std::lock_guard<std::mutex> lock(m_clipboardMutex);
+    m_clipboard              = std::move(items);
+    m_clipboardSourceContext = sourceContext;
+    m_clipboardIsCut         = isCut && !m_clipboard.empty();
+}
+
+/// @brief 获取编辑器级剪贴板副本。
+std::vector<ClipboardItem> EditorEngine::getClipboard() const
+{
+    std::lock_guard<std::mutex> lock(m_clipboardMutex);
+    return m_clipboard;
+}
+
+/// @brief 判断当前剪贴板是否为指定会话的剪切内容。
+bool EditorEngine::isClipboardCutFrom(const SessionContext* context) const
+{
+    std::lock_guard<std::mutex> lock(m_clipboardMutex);
+    return m_clipboardIsCut && m_clipboardSourceContext == context;
+}
+
+/// @brief 若剪贴板为其他会话剪切内容，则删除源会话原物件。
+void EditorEngine::consumeCrossSessionCutClipboard(
+    const SessionContext* pasteContext)
+{
+    const SessionContext* sourceContext = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_clipboardMutex);
+        if ( !m_clipboardIsCut || !m_clipboardSourceContext ||
+             m_clipboardSourceContext == pasteContext ) {
+            return;
+        }
+        sourceContext = m_clipboardSourceContext;
+    }
+
+    std::lock_guard<std::recursive_mutex> sessionLock(m_sessionMutex);
+    for ( const auto& entry : m_sessions ) {
+        if ( !entry.session ) {
+            continue;
+        }
+
+        auto& sourceCtx = entry.session->getContextMutable();
+        if ( &sourceCtx != sourceContext ) {
+            continue;
+        }
+
+        std::vector<BatchNoteAction::Entry> entries;
+        auto view = sourceCtx.noteRegistry.view<InteractionComponent>();
+        for ( auto entity : view ) {
+            auto& ic = sourceCtx.noteRegistry.get<InteractionComponent>(entity);
+            if ( !ic.isCut ||
+                 !sourceCtx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                continue;
+            }
+
+            auto oldNote = sourceCtx.noteRegistry.get<NoteComponent>(entity);
+            entries.push_back({ entity, oldNote, std::nullopt });
+
+            if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
+                 !oldNote.m_subNotes.empty() ) {
+                for ( auto subEnt :
+                      sourceCtx.noteRegistry.view<NoteComponent>() ) {
+                    const auto& subNC =
+                        sourceCtx.noteRegistry.get<NoteComponent>(subEnt);
+                    if ( subNC.m_isSubNote &&
+                         subNC.m_parentPolyline == entity ) {
+                        entries.push_back({ subEnt, subNC, std::nullopt });
+                    }
+                }
+            }
+        }
+
+        if ( !entries.empty() ) {
+            auto action = std::make_unique<BatchNoteAction>(
+                std::move(entries), "Cut Across Canvas");
+            sourceCtx.actionStack.pushAndExecute(std::move(action), sourceCtx);
+        }
+
+        for ( auto entity : view ) {
+            sourceCtx.noteRegistry.get<InteractionComponent>(entity).isCut =
+                false;
+        }
+        markCutClipboardConsumed();
+        return;
+    }
+
+    markCutClipboardConsumed();
+}
+
+/// @brief 将当前剪切剪贴板标记为已消费。
+void EditorEngine::markCutClipboardConsumed()
+{
+    std::lock_guard<std::mutex> lock(m_clipboardMutex);
+    m_clipboardIsCut         = false;
+    m_clipboardSourceContext = nullptr;
 }
 
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
