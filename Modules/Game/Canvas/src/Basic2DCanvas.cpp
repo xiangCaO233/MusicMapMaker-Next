@@ -156,9 +156,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         m_lastAppliedYOffset = 0.0f;
     }
 
-    // 交互统一交给 Interaction 处理
-    m_interaction->update(
-        sourceManager, m_currentSnapshot, m_logicalWidth, m_logicalHeight);
+    // 仅当当前画布是活动画布时才处理交互，防止后台画布发送干扰指令
+    if ( engine.getActiveCameraId() == m_cameraId ) {
+        m_interaction->update(
+            sourceManager, m_currentSnapshot, m_logicalWidth, m_logicalHeight);
+    }
 
     // --- 渲染保存确认弹窗 ---
     if ( m_showSaveConfirm ) {
