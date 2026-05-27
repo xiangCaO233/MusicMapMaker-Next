@@ -43,6 +43,9 @@ public:
     // 接口实现
     void update(UI::UIManager* sourceManager) override;
 
+    /// @brief 获取窗口是否打开，用于拦截未保存的关闭
+    bool isOpen() const override;
+
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
 
@@ -127,6 +130,9 @@ private:
 
     /// @brief 上一次应用偏移的快照指针 (用于检测快照是否更新)
     Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+
+    /// @brief 是否显示保存确认弹窗
+    bool m_showSaveConfirm{ false };
 
 private:
     void updateBackgroundTexture();

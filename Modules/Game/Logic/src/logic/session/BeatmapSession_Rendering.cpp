@@ -96,6 +96,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
+        // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
+        // Session 覆盖
+        if ( (cameraId == "Preview" || cameraId == "Timeline") &&
+             EditorEngine::instance().getActiveSession().get() != this ) {
+            continue;
+        }
+
         // 从 EditorEngine 获取该 Camera 专属的缓冲
         auto syncBuffer = EditorEngine::instance().getSyncBuffer(cameraId);
         if ( !syncBuffer ) continue;

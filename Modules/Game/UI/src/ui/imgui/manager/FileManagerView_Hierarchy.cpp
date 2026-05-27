@@ -133,8 +133,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                     auto loadedBeatmap =
                                         std::make_shared<MMM::BeatMap>(
                                             MMM::BeatMap::loadFromFile(p));
-                                    engine.pushCommand(
-                                        Logic::CmdLoadBeatmap{ loadedBeatmap });
+                                    engine.createSession(loadedBeatmap,
+                                                         bm.m_name);
                                     break;
                                 }
                             }

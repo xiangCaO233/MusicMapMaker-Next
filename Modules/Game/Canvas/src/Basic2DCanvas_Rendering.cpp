@@ -31,12 +31,12 @@ void Basic2DCanvas::updateBackgroundTexture()
              !m_loadedBgPath.empty() &&
              std::filesystem::exists(Config::utf8ToPath(m_loadedBgPath)) ) {
             try {
-                m_bgTexture =
-                    std::make_unique<Graphic::VKTexture>(Config::utf8ToPath(m_loadedBgPath),
-                                                         m_physicalDevice,
-                                                         m_logicalDevice,
-                                                         m_cmdPool,
-                                                         m_queue);
+                m_bgTexture = std::make_unique<Graphic::VKTexture>(
+                    Config::utf8ToPath(m_loadedBgPath),
+                    m_physicalDevice,
+                    m_logicalDevice,
+                    m_cmdPool,
+                    m_queue);
                 XINFO("Loaded background texture: {}", m_loadedBgPath);
             } catch ( const std::exception& e ) {
                 XERROR("Failed to load background texture: {}", e.what());
@@ -227,7 +227,7 @@ std::vector<std::string> Basic2DCanvas::getShaderSources(
         m_shaderSourceCache[shader_name] = result;
         return result;
     } else {
-        XERROR("无法获取画布{}的{}着色器配置", m_canvasName, shader_name);
+        XERROR("无法获取画布{}的{}着色器配置", "Basic2DCanvas", shader_name);
         return {};
     }
 }

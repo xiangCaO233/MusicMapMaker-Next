@@ -113,6 +113,8 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGui::DockBuilderDockWindow("Basic2DCanvas", dock_id_center);
         ImGui::DockBuilderDockWindow("PreviewWindow", dock_id_preview);
 
+        MainDockSpaceUI::setCenterDockId(dock_id_center);
+
         ImGui::DockBuilderFinish(dockspace_id);
     }
 

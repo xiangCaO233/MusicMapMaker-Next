@@ -35,6 +35,16 @@ void UIManager::registerView(const std::string&       name,
     m_uiviews[name] = std::move(view);
 }
 
+/// @brief 注销并销毁视图
+void UIManager::unregisterView(const std::string& name)
+{
+    m_uiviews.erase(name);
+    std::erase(m_uiSequence, name);
+    std::erase(m_renderableUiSequence, name);
+    std::erase(m_textureLoaderSequence, name);
+    XINFO("Unregistered [{}] UIView", name);
+}
+
 /// @brief 清理所有ui
 void UIManager::clearAllViews()
 {

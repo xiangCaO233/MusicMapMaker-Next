@@ -28,6 +28,9 @@ public:
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
 
+    /// @brief 注销并销毁视图
+    void unregisterView(const std::string& name);
+
     /// @brief 清理所有ui
     void clearAllViews();
 
@@ -40,8 +43,8 @@ public:
             if constexpr ( std::is_same_v<T, IUIView> ) {
                 return raw;
             } else {
-                // 核心修复：由于项目禁用了 RTTI 且使用了虚继承 (virtual public IUIView)，
-                // 编译器禁止从 IUIView* 直接 static_cast 到派生类。
+                // 核心修复：由于项目禁用了 RTTI 且使用了虚继承 (virtual public
+                // IUIView)， 编译器禁止从 IUIView* 直接 static_cast 到派生类。
                 // 我们通过 getActualInstance() 虚函数获取校正后的指针，
                 // 然后通过 void* 桥接进行 static_cast。
                 return static_cast<T*>(raw->getActualInstance());

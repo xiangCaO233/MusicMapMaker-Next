@@ -24,6 +24,7 @@ add_library(UI STATIC
     src/ui/imgui/audio/AudioWaveformView.cpp
     src/ui/imgui/audio/AudioSpectrumView.cpp
     src/ui/imgui/DebugWindowUI.cpp
+    src/ui/imgui/CanvasTabManager.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp
 )

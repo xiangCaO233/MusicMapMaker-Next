@@ -138,8 +138,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                     try {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(p));
-                        Logic::EditorEngine::instance().pushCommand(
-                            Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        Logic::EditorEngine::instance().createSession(
+                            loadedBeatmap, Config::pathToUtf8(p.filename()));
                     } catch ( const std::exception& e ) {
                         XERROR("Failed to load dropped beatmap: {}", e.what());
                     }

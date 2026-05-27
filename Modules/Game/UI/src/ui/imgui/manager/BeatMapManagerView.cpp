@@ -87,8 +87,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                                      beatmap.m_filePath.c_str()));
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(fullPath));
-                        engine.pushCommand(
-                            Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        engine.createSession(loadedBeatmap, beatmap.m_name);
                     });
 
                 bool hovered  = ImGui::IsItemHovered();

@@ -511,6 +511,14 @@ const SkinData::CanvasConfig& SkinManager::getCanvasConfig(
          canvas_config_it != m_data.canvas_configs.end() ) {
         return canvas_config_it->second;
     }
+    // Fallback to "Basic2DCanvas" if not found
+    if ( canvasName != "Basic2DCanvas" ) {
+        if ( auto canvas_config_it =
+                 m_data.canvas_configs.find("Basic2DCanvas");
+             canvas_config_it != m_data.canvas_configs.end() ) {
+            return canvas_config_it->second;
+        }
+    }
     XERROR("CanvasConfig key not found: " + canvasName);
     return m_data.null_canvas_config;
 }

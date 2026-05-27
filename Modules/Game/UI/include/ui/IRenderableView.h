@@ -48,7 +48,7 @@ public:
     {
     public:
         RenderContext(IRenderableView* view, const char* window_title,
-                      int width, int height)
+                      int width, int height, bool* p_open = nullptr)
             : m_view(view), m_width(width), m_height(height)
         {
             // 1. 在 Begin 之前设置窗口大小
@@ -66,7 +66,7 @@ public:
             ImFont* titleFont = skinMgr.getFont("title");
             if ( titleFont ) ImGui::PushFont(titleFont);
 
-            ImGui::Begin(window_title);
+            ImGui::Begin(window_title, p_open);
 
             // Begin 后立即弹出，确保后续内容使用默认字体
             if ( titleFont ) ImGui::PopFont();

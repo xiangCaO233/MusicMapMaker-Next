@@ -2,9 +2,11 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include <algorithm>
 #include <chrono>
@@ -36,6 +38,14 @@ Basic2DCanvas::~Basic2DCanvas() {}
 
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
+    // 1. 检查保存确认拦截
+    if ( !m_isOpen ) {
+        if ( m_currentSnapshot && m_currentSnapshot->isDirty ) {
+            m_isOpen          = true;
+            m_showSaveConfirm = true;
+        }
+    }
+
     std::string title = TR("canvas.editor").pStr;
     if ( m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
          !m_currentSnapshot->beatmapName.empty() ) {
@@ -44,10 +54,44 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             title += " *";
         }
     }
+
+    bool  showClose = true;
+    auto& engine    = Logic::EditorEngine::instance();
+    if ( engine.getSessionCount() == 1 ) {
+        const auto* entry = engine.getSessionEntry(0);
+        if ( entry && entry->isLogoPlaceholder ) {
+            showClose = false;
+        }
+    }
+
     std::string       windowName = fmt::format("{}###{}", title, m_canvasName);
     UI::LayoutContext lctx(m_layoutCtx, windowName);
-    RenderContext     rctx(
-        this, m_canvasName.c_str(), m_targetWidth, m_targetHeight);
+    RenderContext     rctx(this,
+                           m_canvasName.c_str(),
+                           m_targetWidth,
+                           m_targetHeight,
+                           showClose ? &m_isOpen : nullptr);
+
+    // 检查是否聚焦该窗口，若是，同步给 EditorEngine 设为活动 Session
+    if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
+        int32_t activeIdx = engine.getActiveSessionIndex();
+        int32_t myIdx     = -1;
+        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
+            const auto* entry = engine.getSessionEntry(i);
+            if ( entry && entry->cameraId == m_cameraId ) {
+                myIdx = i;
+                break;
+            }
+        }
+        if ( myIdx != -1 && myIdx != activeIdx ) {
+            engine.setActiveSessionIndex(myIdx);
+            XINFO(
+                "Basic2DCanvas: Focus switched active session to index {} "
+                "(cameraId={})",
+                myIdx,
+                m_cameraId);
+        }
+    }
 
     // 拉取快照
     if ( m_syncBuffer ) {
@@ -115,11 +159,66 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 交互统一交给 Interaction 处理
     m_interaction->update(
         sourceManager, m_currentSnapshot, m_logicalWidth, m_logicalHeight);
+
+    // --- 渲染保存确认弹窗 ---
+    if ( m_showSaveConfirm ) {
+        ImGui::OpenPopup("Save Confirmation###SaveConfirmModal");
+    }
+
+    // 强制设置弹窗显示位置在屏幕中央
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+    if ( ImGui::BeginPopupModal("Save Confirmation###SaveConfirmModal",
+                                nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+        std::string mapName =
+            m_currentSnapshot ? m_currentSnapshot->beatmapName : "Unknown";
+        ImGui::Text("%s", TR_FMT("ui.exit.confirm_msg_fmt", mapName).c_str());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+
+        if ( ImGui::Button(TR("ui.file.save").data(),
+                           ImVec2(120 * dpiScale, 0)) ) {
+            // 保存谱面
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSaveBeatmap{}));
+            m_isOpen          = false;  // 触发关闭流程
+            m_showSaveConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.exit.dont_save").data(),
+                           ImVec2(120 * dpiScale, 0)) ) {
+            m_isOpen          = false;  // 不保存，直接触发关闭流程
+            m_showSaveConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.help.cancel").data(),
+                           ImVec2(120 * dpiScale, 0)) ) {
+            m_showSaveConfirm = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 bool Basic2DCanvas::isDirty() const
 {
     return true;
+}
+
+bool Basic2DCanvas::isOpen() const
+{
+    if ( !m_isOpen && m_currentSnapshot && m_currentSnapshot->isDirty ) {
+        return true;
+    }
+    return m_isOpen;
 }
 
 void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,

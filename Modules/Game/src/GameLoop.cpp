@@ -19,6 +19,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/DebugWindowUI.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -90,10 +91,11 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 
     auto& engine = Logic::EditorEngine::instance();
 
-    m_uiManager.registerView(
-        "Basic2DCanvas",
-        std::make_unique<Canvas::Basic2DCanvas>(
-            "Basic2DCanvas", 200, 200, engine.getSyncBuffer("Basic2DCanvas")));
+    m_uiManager.registerView("CanvasTabManager",
+                             std::make_unique<UI::CanvasTabManager>());
+
+    // 默认创建一个初始 Logo 占位画布
+    engine.createSession(nullptr, TR("canvas.welcome").pStr, true);
 
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(

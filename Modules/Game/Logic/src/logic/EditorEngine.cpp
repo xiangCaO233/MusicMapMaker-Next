@@ -39,15 +39,38 @@ EditorEngine::EditorEngine()
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
 
-    // 默认创建一个 Session
-    m_activeSession = std::make_unique<BeatmapSession>();
+    // 不在此处创建初始 Session，改由 GameLoop 通过 createSession() 创建 Logo
+    // 画布
 
-    // 订阅画布尺寸改变事件
+    // 订阅画布尺寸改变事件 — 路由到拥有该 cameraId 的 Session
     Event::EventBus::instance().subscribe<Event::CanvasResizeEvent>(
         [this](const Event::CanvasResizeEvent& e) {
-            pushCommand(CmdUpdateViewport{ e.canvasName,
-                                           static_cast<float>(e.newSize.x),
-                                           static_cast<float>(e.newSize.y) });
+            // 视口更新指令需要分发到拥有该 cameraId 的 Session
+            CmdUpdateViewport cmd{ e.canvasName,
+                                   static_cast<float>(e.newSize.x),
+                                   static_cast<float>(e.newSize.y) };
+            // 缓存视口尺寸
+            {
+                std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
+                m_lastViewportSizes[cmd.cameraId] = { cmd.width, cmd.height };
+            }
+            // 推送到拥有该 camera 的 session
+            std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+            for ( auto& entry : m_sessions ) {
+                if ( entry.cameraId == e.canvasName ) {
+                    entry.session->pushCommand(LogicCommand(cmd));
+                    break;
+                }
+            }
+            // 也推送给共享视口 (Preview, Timeline 等)
+            if ( e.canvasName == "Preview" || e.canvasName == "Timeline" ) {
+                int32_t idx =
+                    m_activeSessionIndex.load(std::memory_order_relaxed);
+                if ( idx >= 0 &&
+                     idx < static_cast<int32_t>(m_sessions.size()) ) {
+                    m_sessions[idx].session->pushCommand(LogicCommand(cmd));
+                }
+            }
         });
 
     // 订阅打开项目事件
@@ -285,48 +308,23 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     // 启动文件夹监听器实时监控项目目录
     startDirectoryWatcher(actualProjectPath);
 
-    // 关键修正：在将新 Session 设为激活前，先同步历史视口尺寸
-    // 逻辑线程必须知道画布宽高，否则无法生成几何体
-    auto newSession = std::make_shared<BeatmapSession>();
-    {
-        std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
-        // 重要：不再调用 m_syncBuffers.clear()！
-        // 核心原因是 UI 线程的组件（如 TimelineCanvas）持有这些 Buffer 的
-        // shared_ptr。 如果清空并重新创建，UI 和逻辑线程将指向不同的 Buffer
-        // 对象，导致画面永不更新。
-        for ( const auto& [cid, size] : m_lastViewportSizes ) {
-            newSession->pushCommand(CmdUpdateViewport{ cid, size.x, size.y });
-        }
-    }
-
     // 记录到最近打开列表
     Config::AppConfig::instance().addRecentProject(
-        Config::pathToUtf8(actualProjectPath));  // UTF-8 编码路径
+        Config::pathToUtf8(actualProjectPath));
 
-    {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        m_activeSession = newSession;
-    }
-
-    // 设置初始配置
-    pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
-
-    // 如果指定了谱面路径，则加载它；否则清空
+    // 如果指定了谱面路径，则通过 createSession 加载它
     if ( !targetBeatmapPath.empty() ) {
         XINFO("Auto loading beatmap: {}",
               Config::pathToUtf8(targetBeatmapPath));
         try {
             auto map = std::make_shared<BeatMap>(
                 BeatMap::loadFromFile(targetBeatmapPath));
-            pushCommand(CmdLoadBeatmap{ map });
+            createSession(map, map->m_baseMapMetadata.name);
         } catch ( const std::exception& e ) {
             XERROR("Failed to auto load beatmap {}: {}",
                    Config::pathToUtf8(targetBeatmapPath),
                    e.what());
-            pushCommand(CmdLoadBeatmap{ nullptr });
         }
-    } else {
-        pushCommand(CmdLoadBeatmap{ nullptr });
     }
 }
 
@@ -451,8 +449,8 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     // 保存项目文件
     saveProject();
 
-    // 6. 立即加载这个新谱面
-    pushCommand(CmdLoadBeatmap{ newBeatmap });
+    // 6. 立即在新画布中加载这个新谱面
+    createSession(newBeatmap, meta.name);
 }
 
 void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
@@ -646,17 +644,23 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         m_lastViewportSizes[v.cameraId] = { v.width, v.height };
     }
 
+    // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    if ( m_activeSession ) {
-        m_activeSession->pushCommand(std::move(cmd));
+    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
+    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
+        m_sessions[idx].session->pushCommand(std::move(cmd));
     }
 }
 
 bool EditorEngine::hasUnsavedChanges() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    if ( m_activeSession ) {
-        return m_activeSession->getContext().actionStack.isDirty();
+    // 检查所有 Session 是否有未保存的修改
+    for ( const auto& entry : m_sessions ) {
+        if ( entry.session &&
+             entry.session->getContext().actionStack.isDirty() ) {
+            return true;
+        }
     }
     return false;
 }
@@ -704,8 +708,9 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
 EditTool EditorEngine::getCurrentTool() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    if ( m_activeSession ) {
-        return m_activeSession->getContext().currentTool;
+    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
+    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
+        return m_sessions[idx].session->getContext().currentTool;
     }
     return EditTool::Move;
 }
@@ -713,10 +718,218 @@ EditTool EditorEngine::getCurrentTool() const
 bool EditorEngine::isPlaybackPlaying() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    if ( m_activeSession ) {
-        return m_activeSession->getContext().isPlaying;
+    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
+    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
+        return m_sessions[idx].session->getContext().isPlaying;
     }
     return false;
+}
+
+int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
+                                    const std::string&            displayName,
+                                    bool isLogoPlaceholder)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+
+    // 检查是否可以复用 Logo 占位画布
+    if ( !isLogoPlaceholder && beatmap ) {
+        for ( int32_t i = 0; i < static_cast<int32_t>(m_sessions.size());
+              ++i ) {
+            if ( m_sessions[i].isLogoPlaceholder ) {
+                // 复用此画布：加载谱面到它的 Session
+                m_sessions[i].isLogoPlaceholder = false;
+                m_sessions[i].displayName =
+                    displayName.empty() ? beatmap->m_baseMapMetadata.name
+                                        : displayName;
+                m_sessions[i].session->pushCommand(
+                    LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+                m_sessions[i].session->pushCommand(
+                    LogicCommand(CmdLoadBeatmap{ beatmap }));
+                m_activeSessionIndex.store(i, std::memory_order_relaxed);
+
+                XINFO("Reused Logo canvas {} for beatmap: {}",
+                      m_sessions[i].cameraId,
+                      m_sessions[i].displayName);
+                return i;
+            }
+        }
+    }
+
+    // 生成唯一 cameraId
+    std::string cameraId = "Canvas_" + std::to_string(m_nextCanvasId++);
+
+    // 创建新 Session
+    auto newSession = std::make_shared<BeatmapSession>();
+
+    // 同步历史视口尺寸
+    {
+        std::shared_lock<std::shared_mutex> bufLock(m_buffersMutex);
+        for ( const auto& [cid, size] : m_lastViewportSizes ) {
+            // 将共享视口 (Preview, Timeline) 的尺寸同步给新 Session
+            if ( cid == "Preview" || cid == "Timeline" ) {
+                newSession->pushCommand(
+                    CmdUpdateViewport{ cid, size.x, size.y });
+            }
+        }
+    }
+
+    // 预注册该画布的 SyncBuffer
+    getSyncBuffer(cameraId);
+
+    // 推送初始配置
+    newSession->pushCommand(
+        LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+
+    // 如果有谱面，加载它
+    if ( beatmap ) {
+        newSession->pushCommand(LogicCommand(CmdLoadBeatmap{ beatmap }));
+    }
+
+    // 添加到 Session 列表
+    SessionEntry entry;
+    entry.session  = newSession;
+    entry.cameraId = cameraId;
+    entry.displayName =
+        displayName.empty()
+            ? (beatmap ? beatmap->m_baseMapMetadata.name : "New Canvas")
+            : displayName;
+    entry.isLogoPlaceholder = isLogoPlaceholder;
+    m_sessions.push_back(std::move(entry));
+
+    int32_t newIndex = static_cast<int32_t>(m_sessions.size()) - 1;
+    m_activeSessionIndex.store(newIndex, std::memory_order_relaxed);
+
+    XINFO("Created Session #{} cameraId={} name={} (logo={})",
+          newIndex,
+          cameraId,
+          m_sessions[newIndex].displayName,
+          isLogoPlaceholder);
+
+    return newIndex;
+}
+
+void EditorEngine::closeSession(int32_t index)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+
+    if ( index < 0 || index >= static_cast<int32_t>(m_sessions.size()) ) {
+        XWARN("closeSession: invalid index {}", index);
+        return;
+    }
+
+    std::string cameraId = m_sessions[index].cameraId;
+    XINFO("Closing Session #{} cameraId={}", index, cameraId);
+
+    // 移除 Session
+    m_sessions.erase(m_sessions.begin() + index);
+
+    // 清理对应的 SyncBuffer
+    {
+        std::unique_lock<std::shared_mutex> bufLock(m_buffersMutex);
+        m_syncBuffers.erase(cameraId);
+        m_cameraUVMaps.erase(cameraId);
+        m_lastViewportSizes.erase(cameraId);
+    }
+
+    // 修正活跃索引
+    int32_t currentActive =
+        m_activeSessionIndex.load(std::memory_order_relaxed);
+    if ( m_sessions.empty() ) {
+        m_activeSessionIndex.store(-1, std::memory_order_relaxed);
+    } else if ( currentActive >= static_cast<int32_t>(m_sessions.size()) ) {
+        m_activeSessionIndex.store(static_cast<int32_t>(m_sessions.size()) - 1,
+                                   std::memory_order_relaxed);
+    } else if ( currentActive == index ) {
+        // 关闭的是当前活跃的，切换到前一个或第一个
+        int32_t newActive = std::max(0, index - 1);
+        if ( newActive >= static_cast<int32_t>(m_sessions.size()) ) {
+            newActive = static_cast<int32_t>(m_sessions.size()) - 1;
+        }
+        m_activeSessionIndex.store(newActive, std::memory_order_relaxed);
+    } else if ( currentActive > index ) {
+        // 关闭的在活跃的前面，索引需要减一
+        m_activeSessionIndex.store(currentActive - 1,
+                                   std::memory_order_relaxed);
+    }
+}
+
+void EditorEngine::setActiveSessionIndex(int32_t index)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    if ( index >= 0 && index < static_cast<int32_t>(m_sessions.size()) ) {
+        // 1. 如果旧会话正在播放，先暂停它
+        int32_t currentActive =
+            m_activeSessionIndex.load(std::memory_order_relaxed);
+        if ( currentActive >= 0 &&
+             currentActive < static_cast<int32_t>(m_sessions.size()) ) {
+            auto& oldSession = m_sessions[currentActive].session;
+            if ( oldSession ) {
+                oldSession->pushCommand(CmdSetPlayState{ false });
+            }
+        }
+
+        m_activeSessionIndex.store(index, std::memory_order_relaxed);
+        XINFO("Switched active session to #{} cameraId={}",
+              index,
+              m_sessions[index].cameraId);
+
+        // 2. 加载新激活会话的音频资源并同步播放进度
+        auto& activeSession = m_sessions[index].session;
+        if ( activeSession ) {
+            // 停止当前所有播放
+            Audio::AudioManager::instance().stop();
+
+            auto& ctx = activeSession->getContext();
+            if ( ctx.currentBeatmap && !m_sessions[index].isLogoPlaceholder ) {
+                auto*                 project = getCurrentProject();
+                std::filesystem::path audioPath;
+                if ( project ) {
+                    audioPath =
+                        project->m_projectRoot /
+                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
+                } else {
+                    audioPath =
+                        ctx.currentBeatmap->m_baseMapMetadata.map_path
+                            .parent_path() /
+                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
+                }
+
+                if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
+                          .empty() &&
+                     std::filesystem::exists(audioPath) ) {
+                    AudioTrackConfig config;
+                    if ( project ) {
+                        for ( const auto& res : project->m_audioResources ) {
+                            if ( res.m_id ==
+                                     Config::pathToUtf8(
+                                         ctx.currentBeatmap->m_baseMapMetadata
+                                             .main_audio_path.filename()) ||
+                                 res.m_path ==
+                                     Config::pathToUtf8(
+                                         ctx.currentBeatmap->m_baseMapMetadata
+                                             .main_audio_path) ) {
+                                config = res.m_config;
+                                break;
+                            }
+                        }
+                    }
+                    Audio::AudioManager::instance().loadBGM(
+                        Config::pathToUtf8(audioPath), config);
+                }
+            }
+
+            // 同步进度到音频管理器
+            Audio::AudioManager::instance().seek(ctx.visualTime);
+
+            std::shared_lock<std::shared_mutex> bufLock(m_buffersMutex);
+            for ( const auto& [cid, size] : m_lastViewportSizes ) {
+                if ( cid == "Preview" || cid == "Timeline" ) {
+                    activeSession->pushCommand(
+                        CmdUpdateViewport{ cid, size.x, size.y });
+                }
+            }
+        }
+    }
 }
 
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
@@ -733,7 +946,16 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // 同步回全局 AppConfig 实例
     Config::AppConfig::instance().getEditorConfig() = m_editorConfig;
 
-    pushCommand(CmdUpdateEditorConfig{ m_editorConfig });
+    // 向所有 Session 广播配置变更
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        for ( auto& entry : m_sessions ) {
+            if ( entry.session ) {
+                entry.session->pushCommand(
+                    LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+            }
+        }
+    }
 
     const char* limitNames[] = { "VSync",
                                  "2x Refresh Rate",
@@ -832,9 +1054,9 @@ void EditorEngine::loop()
         }
 
         // 关键修复：使用 shared_ptr 在锁内获取引用。
-        // 这样即使 UI 线程在此时 openProject 销毁了原有 Session，
-        // 逻辑线程持有的这个共享引用也能保证 session 在 update
-        // 期间一直有效，避免 Use-After-Free 导致的死锁或崩溃。
+        // 这样即使 UI 线程在此时 closeSession 销毁了某个 Session，
+        // 逻辑线程持有的共享引用也能保证 session 在 update
+        // 期间一直有效。
         // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
         // 交叉）
         std::filesystem::path pendingPath;
@@ -849,14 +1071,22 @@ void EditorEngine::loop()
             openProject(pendingPath);
         }
 
-        std::shared_ptr<BeatmapSession> session;
+        // 多 Session 轮询更新
+        std::vector<std::shared_ptr<BeatmapSession>> sessionsSnapshot;
         {
             std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-            session = m_activeSession;
+            sessionsSnapshot.reserve(m_sessions.size());
+            for ( const auto& entry : m_sessions ) {
+                if ( entry.session ) {
+                    sessionsSnapshot.push_back(entry.session);
+                }
+            }
         }
 
-        if ( session ) {
-            session->update(dt, m_editorConfig);
+        if ( !sessionsSnapshot.empty() ) {
+            for ( auto& session : sessionsSnapshot ) {
+                session->update(dt, m_editorConfig);
+            }
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }

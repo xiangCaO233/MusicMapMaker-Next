@@ -172,8 +172,11 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     double totalTime    = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    std::string activeCameraId =
+        Logic::EditorEngine::instance().getActiveCameraId();
     auto snapshot = Logic::EditorEngine::instance()
-                        .getSyncBuffer("Basic2DCanvas")
+                        .getSyncBuffer(activeCameraId.empty() ? "Basic2DCanvas"
+                                                              : activeCameraId)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
@@ -432,8 +435,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                 auto session =
                     Logic::EditorEngine::instance().getActiveSession();
                 if ( session ) {
+                    std::string activeCameraId =
+                        Logic::EditorEngine::instance().getActiveCameraId();
                     auto snapshot = Logic::EditorEngine::instance()
-                                        .getSyncBuffer("Basic2DCanvas")
+                                        .getSyncBuffer(activeCameraId.empty()
+                                                           ? "Basic2DCanvas"
+                                                           : activeCameraId)
                                         ->getReadingSnapshot();
                     if ( snapshot && snapshot->hasBeatmap ) {
                         double offsetStart =
@@ -486,9 +493,13 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         // 绘制主画布可见范围包围框
         auto session = Logic::EditorEngine::instance().getActiveSession();
         if ( session ) {
-            auto snapshot = Logic::EditorEngine::instance()
-                                .getSyncBuffer("Basic2DCanvas")
-                                ->getReadingSnapshot();
+            std::string activeCameraId =
+                Logic::EditorEngine::instance().getActiveCameraId();
+            auto snapshot =
+                Logic::EditorEngine::instance()
+                    .getSyncBuffer(activeCameraId.empty() ? "Basic2DCanvas"
+                                                          : activeCameraId)
+                    ->getReadingSnapshot();
             if ( snapshot && snapshot->hasBeatmap ) {
                 float viewRange = static_cast<float>(viewEnd - viewStart);
                 if ( viewRange > 0.001f ) {

@@ -12,14 +12,28 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 namespace MMM::Logic
 {
+
+/// @brief 多画布 Session 条目，绑定 Session 与其对应画布的 cameraId
+struct SessionEntry {
+    /// @brief 逻辑会话
+    std::shared_ptr<BeatmapSession> session;
+    /// @brief 该画布对应的主 cameraId（如 "Canvas_0", "Canvas_1"...）
+    std::string cameraId;
+    /// @brief 显示名称（谱面名或默认标签）
+    std::string displayName;
+    /// @brief 是否为初始 Logo 占位画布（尚未加载谱面）
+    bool isLogoPlaceholder{ false };
+};
 
 /**
  * @brief 编辑器逻辑引擎 (全局单例)
  *
  * 负责管理后台逻辑线程的生命周期，以及分发指令给当前活动的 BeatmapSession。
+ * 支持多画布并行编辑，每个画布对应一个独立的 SessionEntry。
  */
 class EditorEngine
 {
@@ -96,13 +110,97 @@ public:
     /// @brief 从项目中移除谱面
     void handleRemoveBeatmap(const CmdRemoveBeatmap& cmd);
 
+    // ========== 多 Session 管理 API ==========
+
     /**
-     * @brief 获取当前激活的谱面会话
+     * @brief 创建新的画布 Session
+     * @param beatmap 要加载的谱面（可为 nullptr 表示空白占位）
+     * @param displayName 显示名称
+     * @param isLogoPlaceholder 是否为初始 Logo 画布
+     * @return 新 Session 在 m_sessions 中的索引
+     */
+    int32_t createSession(
+        std::shared_ptr<MMM::BeatMap> beatmap = nullptr,
+        const std::string&           displayName     = "",
+        bool                         isLogoPlaceholder = false);
+
+    /**
+     * @brief 关闭指定索引的画布 Session
+     * @param index 要关闭的 Session 索引
+     */
+    void closeSession(int32_t index);
+
+    /**
+     * @brief 设置当前活跃（前台）的 Session 索引
+     * @param index 目标 Session 索引
+     */
+    void setActiveSessionIndex(int32_t index);
+
+    /**
+     * @brief 获取当前活跃 Session 索引
+     */
+    int32_t getActiveSessionIndex() const
+    {
+        return m_activeSessionIndex.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief 获取 Session 总数
+     */
+    int32_t getSessionCount() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        return static_cast<int32_t>(m_sessions.size());
+    }
+
+    /**
+     * @brief 获取指定索引的 SessionEntry (只读)
+     */
+    const SessionEntry* getSessionEntry(int32_t index) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        if ( index >= 0 &&
+             index < static_cast<int32_t>(m_sessions.size()) ) {
+            return &m_sessions[index];
+        }
+        return nullptr;
+    }
+
+    /**
+     * @brief 获取所有 Session 条目的只读快照
+     */
+    std::vector<SessionEntry> getSessionEntries() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        return m_sessions;
+    }
+
+    /**
+     * @brief 获取当前激活的谱面会话 (兼容旧接口)
      */
     std::shared_ptr<BeatmapSession> getActiveSession()
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        return m_activeSession;
+        int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
+        if ( idx >= 0 &&
+             idx < static_cast<int32_t>(m_sessions.size()) ) {
+            return m_sessions[idx].session;
+        }
+        return nullptr;
+    }
+
+    /**
+     * @brief 获取当前激活画布的 cameraId
+     */
+    std::string getActiveCameraId() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
+        if ( idx >= 0 &&
+             idx < static_cast<int32_t>(m_sessions.size()) ) {
+            return m_sessions[idx].cameraId;
+        }
+        return "";
     }
 
     /**
@@ -187,8 +285,14 @@ private:
     /// @brief 线程运行标志
     std::atomic<bool> m_running{ false };
 
-    /// @brief 当前激活的谱面会话 (ECS 核心)
-    std::shared_ptr<BeatmapSession> m_activeSession;
+    /// @brief 所有打开的画布 Session 列表
+    std::vector<SessionEntry> m_sessions;
+
+    /// @brief 当前活跃（前台）的 Session 索引 (-1 表示无)
+    std::atomic<int32_t> m_activeSessionIndex{ -1 };
+
+    /// @brief 全局递增的画布 ID 计数器，用于生成唯一 cameraId
+    int32_t m_nextCanvasId{ 0 };
 
     /// @brief 当前打开的项目
     std::unique_ptr<Project> m_currentProject;

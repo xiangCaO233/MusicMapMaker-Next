@@ -1,19 +1,26 @@
 #pragma once
 
-#include "ui/ITextureLoader.h"
-#include "ui/imgui/manager/ToolbarView.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
-#include <memory>
+#include "ui/ITextureLoader.h"
+#include "ui/imgui/manager/ToolbarView.h"
+#include "ui/imgui/menu/MainMenuView.h"
 #include <functional>
+#include <memory>
 
 
 namespace MMM::UI
 {
 class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
+public:
+    static ImGuiID getCenterDockId() { return s_centerDockId; }
+    static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
+
+private:
+    static inline ImGuiID s_centerDockId{ 0 };
+
 public:
     MainDockSpaceUI(const std::string& name)
         : IUIView(name), ITextureLoader(name)
@@ -22,7 +29,8 @@ public:
         Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
             [&](Event::GLFWNativeEvent e) {
                 if ( e.hasStateChange &&
-                     e.type == Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
+                     e.type ==
+                         Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
                     m_isMaximized = e.isMaximized;
                 }
             });

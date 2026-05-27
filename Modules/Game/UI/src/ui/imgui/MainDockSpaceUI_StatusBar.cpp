@@ -128,8 +128,10 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
 
-        auto& engine     = Logic::EditorEngine::instance();
-        auto  syncBuffer = engine.getSyncBuffer("Basic2DCanvas");
+        auto&       engine         = Logic::EditorEngine::instance();
+        std::string activeCameraId = engine.getActiveCameraId();
+        auto        syncBuffer     = engine.getSyncBuffer(
+            activeCameraId.empty() ? "Basic2DCanvas" : activeCameraId);
         if ( syncBuffer ) {
             auto snapshot = syncBuffer->getReadingSnapshot();
             if ( snapshot ) {
