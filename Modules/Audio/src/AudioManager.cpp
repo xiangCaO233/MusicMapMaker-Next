@@ -190,6 +190,39 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     return true;
 }
 
+void AudioManager::unloadBGM()
+{
+    if ( !m_bgmSource && !m_bgmTrack && !m_stretcher && !m_mainEQ ) {
+        return;
+    }
+
+    stop();
+
+    if ( m_mainMixer ) {
+        if ( m_stretcher ) {
+            m_mainMixer->remove_source(m_stretcher);
+        } else if ( m_bgmSource ) {
+            m_mainMixer->remove_source(m_bgmSource);
+        }
+    }
+
+    if ( m_preStretcherMixer ) {
+        if ( m_mainEQ ) {
+            m_preStretcherMixer->remove_source(m_mainEQ);
+        } else if ( m_bgmSource ) {
+            m_preStretcherMixer->remove_source(m_bgmSource);
+        }
+    }
+
+    m_mainEQ.reset();
+    m_mainEQPreset = EQPreset::None;
+    m_stretcher.reset();
+    m_bgmSource.reset();
+    m_bgmTrack.reset();
+    m_status = PlaybackStatus::Stopped;
+    XINFO("BGM unloaded.");
+}
+
 void AudioManager::play()
 {
     if ( m_bgmSource ) {

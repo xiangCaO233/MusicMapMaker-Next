@@ -14,6 +14,7 @@
 #include "logic/session/NoteAction.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,53 @@ namespace MMM::Logic
 namespace
 {
 /// @brief 获取会话当前谱面主音轨的稳定比较键。
+/// @brief Normalize a project-relative UTF-8 path for stable exclusion checks.
+std::string normalizeProjectRelativePath(const std::string& path)
+{
+    if ( path.empty() ) return "";
+    return Config::pathToUtf8(Config::utf8ToPath(path).lexically_normal());
+}
+
+/// @brief Return true if the normalized path exists in an exclusion list.
+bool containsExcludedPath(const std::vector<std::string>& excludedPaths,
+                          const std::string&              path)
+{
+    std::string normalized = normalizeProjectRelativePath(path);
+    return std::any_of(
+        excludedPaths.begin(),
+        excludedPaths.end(),
+        [&](const std::string& excluded) {
+            return normalizeProjectRelativePath(excluded) == normalized;
+        });
+}
+
+/// @brief Add a normalized path to an exclusion list if it is absent.
+void addExcludedPath(std::vector<std::string>& excludedPaths,
+                     const std::string&        path)
+{
+    std::string normalized = normalizeProjectRelativePath(path);
+    if ( normalized.empty() ||
+         containsExcludedPath(excludedPaths, normalized) ) {
+        return;
+    }
+    excludedPaths.push_back(normalized);
+}
+
+/// @brief Remove a normalized path from an exclusion list.
+void removeExcludedPath(std::vector<std::string>& excludedPaths,
+                        const std::string&        path)
+{
+    std::string normalized = normalizeProjectRelativePath(path);
+    excludedPaths.erase(
+        std::remove_if(
+            excludedPaths.begin(),
+            excludedPaths.end(),
+            [&](const std::string& excluded) {
+                return normalizeProjectRelativePath(excluded) == normalized;
+            }),
+        excludedPaths.end());
+}
+
 std::string getMainAudioSyncKey(const SessionContext& ctx,
                                 const Project*        project)
 {
@@ -139,6 +187,9 @@ void EditorEngine::requestOpenProject(const std::filesystem::path& projectPath)
 
     std::lock_guard<std::mutex> lk(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_requestedProjectClose = false;
+    m_pendingProjectClose   = false;
+    m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
         m_pendingProjectSwitchPath = projectPath;
@@ -147,18 +198,33 @@ void EditorEngine::requestOpenProject(const std::filesystem::path& projectPath)
     }
 }
 
+void EditorEngine::requestCloseProject()
+{
+    std::lock_guard<std::mutex> lk(m_pendingMutex);
+    m_pendingProjectPath.clear();
+    m_requestedProjectPath.clear();
+    m_pendingProjectSwitchPath.clear();
+    m_requestedProjectClose = true;
+    m_pendingProjectClose   = false;
+    m_projectCloseReady     = false;
+}
+
 bool EditorEngine::hasPendingProjectSwitch() const
 {
     std::lock_guard<std::mutex> lk(m_pendingMutex);
-    return !m_pendingProjectSwitchPath.empty();
+    return !m_pendingProjectSwitchPath.empty() || m_pendingProjectClose;
 }
 
 void EditorEngine::completePendingProjectSwitch()
 {
     std::lock_guard<std::mutex> lk(m_pendingMutex);
-    if ( m_pendingProjectSwitchPath.empty() ) {
+    if ( m_pendingProjectClose ) {
+        m_pendingProjectClose = false;
+        m_projectCloseReady   = true;
         return;
     }
+
+    if ( m_pendingProjectSwitchPath.empty() ) return;
 
     m_pendingProjectPath = m_pendingProjectSwitchPath;
     m_pendingProjectSwitchPath.clear();
@@ -170,6 +236,9 @@ void EditorEngine::cancelPendingProjectSwitch()
     m_pendingProjectPath.clear();
     m_requestedProjectPath.clear();
     m_pendingProjectSwitchPath.clear();
+    m_requestedProjectClose = false;
+    m_pendingProjectClose   = false;
+    m_projectCloseReady     = false;
 }
 
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
@@ -206,6 +275,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     XINFO("Opening project at: {}", Config::pathToUtf8(actualProjectPath));
 
+    closeProject();
 
     auto newProject                = std::make_unique<Project>();
     newProject->m_projectRoot      = actualProjectPath;
@@ -321,6 +391,10 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
             Project loadedProject  = j.get<Project>();
             newProject->m_metadata = loadedProject.m_metadata;
             newProject->m_settings = loadedProject.m_settings;
+            newProject->m_excludedBeatmapPaths =
+                loadedProject.m_excludedBeatmapPaths;
+            newProject->m_excludedAudioPaths =
+                loadedProject.m_excludedAudioPaths;
 
             // 合并资源配置并应用到音频引擎
             for ( auto& res : newProject->m_audioResources ) {
@@ -348,6 +422,24 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     }
 
     // 自动持久化扫描结果 (标记此目录为项目)
+    newProject->m_beatmaps.erase(
+        std::remove_if(newProject->m_beatmaps.begin(),
+                       newProject->m_beatmaps.end(),
+                       [&](const Project::BeatmapEntry& entry) {
+                           return containsExcludedPath(
+                               newProject->m_excludedBeatmapPaths,
+                               entry.m_filePath);
+                       }),
+        newProject->m_beatmaps.end());
+    newProject->m_audioResources.erase(
+        std::remove_if(newProject->m_audioResources.begin(),
+                       newProject->m_audioResources.end(),
+                       [&](const AudioResource& res) {
+                           return containsExcludedPath(
+                               newProject->m_excludedAudioPaths, res.m_path);
+                       }),
+        newProject->m_audioResources.end());
+
     try {
         std::ofstream  file(projectFile);
         nlohmann::json j = *newProject;
@@ -404,6 +496,35 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                    e.what());
         }
     }
+}
+
+void EditorEngine::closeProject()
+{
+    std::unique_ptr<Project> closedProject;
+    std::string              projectTitle;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        if ( !m_currentProject ) {
+            return;
+        }
+        projectTitle  = m_currentProject->m_metadata.m_title;
+        closedProject = std::move(m_currentProject);
+    }
+
+    stopDirectoryWatcher();
+
+    auto& audio = Audio::AudioManager::instance();
+    audio.stop();
+    audio.clearAllScheduledSoundEffects();
+    audio.unloadBGM();
+
+    for ( const auto& res : closedProject->m_audioResources ) {
+        if ( res.m_type == AudioTrackType::Effect ) {
+            audio.unloadSoundEffect(res.m_id);
+        }
+    }
+
+    XINFO("Project '{}' closed.", projectTitle);
 }
 
 void EditorEngine::start()
@@ -505,6 +626,8 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     entry.m_filePath = Config::pathToUtf8(
         std::filesystem::relative(mapPath, m_currentProject->m_projectRoot));
     entry.m_audioTrackId = Config::pathToUtf8(meta.main_audio_path.filename());
+    removeExcludedPath(m_currentProject->m_excludedBeatmapPaths,
+                       entry.m_filePath);
     m_currentProject->m_beatmaps.push_back(entry);
 
     // 5. 如果音频资源不在列表中，添加进去
@@ -521,6 +644,7 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
         res.m_path = Config::pathToUtf8(meta.main_audio_path);
         res.m_type = AudioTrackType::Main;
         res.m_config.volume = 0.5f;
+        removeExcludedPath(m_currentProject->m_excludedAudioPaths, res.m_path);
         m_currentProject->m_audioResources.push_back(res);
     }
 
@@ -600,6 +724,7 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 
     // 3. 检查是否已经在列表中
     std::string relPathUtf8 = Config::pathToUtf8(finalPath);
+    removeExcludedPath(m_currentProject->m_excludedAudioPaths, relPathUtf8);
     for ( const auto& res : m_currentProject->m_audioResources ) {
         if ( res.m_path == relPathUtf8 ) {
             XWARN("Audio already exists in project: {}", relPathUtf8);
@@ -749,6 +874,10 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
         return;
     }
 
+    std::string relMapPath =
+        Config::pathToUtf8(std::filesystem::relative(absMapPath, absRoot));
+    removeExcludedPath(m_currentProject->m_excludedBeatmapPaths, relMapPath);
+
     // 检查是否已经存在
     for ( const auto& entry : m_currentProject->m_beatmaps ) {
         auto entryPath = absRoot / Config::utf8ToPath(entry.m_filePath);
@@ -767,8 +896,7 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
         if ( entry.m_name.empty() )
             entry.m_name = Config::pathToUtf8(absMapPath.filename());
 
-        entry.m_filePath =
-            Config::pathToUtf8(std::filesystem::relative(absMapPath, absRoot));
+        entry.m_filePath = relMapPath;
 
         if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
             entry.m_audioTrackId = Config::pathToUtf8(
@@ -1354,17 +1482,37 @@ void EditorEngine::loop()
         // 交叉）
         std::filesystem::path pendingPath;
         std::filesystem::path requestedPath;
+        bool                  requestedClose = false;
+        bool                  closeReady     = false;
         {
             std::lock_guard<std::mutex> lk(m_pendingMutex);
+            if ( m_requestedProjectClose ) {
+                requestedClose          = true;
+                m_requestedProjectClose = false;
+            }
             if ( !m_requestedProjectPath.empty() ) {
                 requestedPath = m_requestedProjectPath;
                 m_requestedProjectPath.clear();
+            }
+        }
+        if ( requestedClose ) {
+            if ( needsCanvasCloseBeforeProjectOpen() ) {
+                std::lock_guard<std::mutex> lk(m_pendingMutex);
+                m_pendingProjectPath.clear();
+                m_pendingProjectSwitchPath.clear();
+                m_pendingProjectClose = true;
+                XINFO(
+                    "Project close deferred until current beatmap canvases "
+                    "close.");
+            } else {
+                closeReady = true;
             }
         }
         if ( !requestedPath.empty() ) {
             if ( needsCanvasCloseBeforeProjectOpen() ) {
                 std::lock_guard<std::mutex> lk(m_pendingMutex);
                 m_pendingProjectPath.clear();
+                m_pendingProjectClose      = false;
                 m_pendingProjectSwitchPath = requestedPath;
                 XINFO(
                     "Project open deferred until current beatmap canvases "
@@ -1376,10 +1524,17 @@ void EditorEngine::loop()
         }
         {
             std::lock_guard<std::mutex> lk(m_pendingMutex);
+            if ( m_projectCloseReady ) {
+                closeReady          = true;
+                m_projectCloseReady = false;
+            }
             if ( pendingPath.empty() && !m_pendingProjectPath.empty() ) {
                 pendingPath = m_pendingProjectPath;
                 m_pendingProjectPath.clear();
             }
+        }
+        if ( closeReady ) {
+            closeProject();
         }
         if ( !pendingPath.empty() ) {
             openProject(pendingPath);
@@ -1467,13 +1622,24 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 
     XINFO("Removing audio resource from project: {}", cmd.id);
 
-    auto& resources = m_currentProject->m_audioResources;
+    std::string removedPath;
+    auto&       resources = m_currentProject->m_audioResources;
     resources.erase(std::remove_if(resources.begin(),
                                    resources.end(),
                                    [&](const AudioResource& res) {
-                                       return res.m_id == cmd.id;
+                                       if ( res.m_id != cmd.id ) {
+                                           return false;
+                                       }
+                                       removedPath = res.m_path;
+                                       if ( res.m_type ==
+                                            AudioTrackType::Effect ) {
+                                           Audio::AudioManager::instance()
+                                               .unloadSoundEffect(res.m_id);
+                                       }
+                                       return true;
                                    }),
                     resources.end());
+    addExcludedPath(m_currentProject->m_excludedAudioPaths, removedPath);
 
     // 同时清理谱面对该音轨的引用
     for ( auto& map : m_currentProject->m_beatmaps ) {
@@ -1491,6 +1657,8 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     if ( !m_currentProject ) return;
 
     XINFO("Removing beatmap from project list: {}", cmd.filePath);
+
+    addExcludedPath(m_currentProject->m_excludedBeatmapPaths, cmd.filePath);
 
     auto& maps = m_currentProject->m_beatmaps;
     maps.erase(std::remove_if(maps.begin(),

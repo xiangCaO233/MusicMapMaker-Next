@@ -9,6 +9,7 @@ return {
 	["ui.file.open_pro"] = "打开项目",
 	["ui.file.open_recent"] = "最近打开",
 	["ui.file.no_recent"] = "无最近记录",
+	["ui.file.close_pro"] = "关闭项目",
 	["ui.file.save"] = "保存",
 	["ui.file.save_as"] = "另存为...",
 	["ui.file.pack"] = "打包",

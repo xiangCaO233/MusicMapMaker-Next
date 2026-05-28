@@ -68,13 +68,17 @@ public:
     /// @brief 请求打开项目，必要时先等待 UI 关闭当前谱面画布
     void requestOpenProject(const std::filesystem::path& projectPath);
 
-    /// @brief 是否存在等待旧谱面画布关闭后再打开的项目
+    /// @brief Request closing the current project after dirty canvases confirm
+    /// saving.
+    void requestCloseProject();
+
+    /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
     bool hasPendingProjectSwitch() const;
 
-    /// @brief 完成旧谱面画布关闭流程，并排队打开挂起项目
+    /// @brief 完成旧谱面画布关闭流程，并排队执行挂起的项目打开或关闭。
     void completePendingProjectSwitch();
 
-    /// @brief 取消挂起的项目切换请求
+    /// @brief 取消挂起的项目打开或关闭请求。
     void cancelPendingProjectSwitch();
 
     /**
@@ -312,6 +316,10 @@ private:
      */
     void scanProjectDirectory();
 
+    /// @brief Clear the currently opened project and unload project audio
+    /// state.
+    void closeProject();
+
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
     void syncSameMainAudioCanvases();
 
@@ -370,6 +378,18 @@ private:
 
     /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径
     std::filesystem::path m_pendingProjectSwitchPath;
+
+    /// @brief Whether a project close was requested and waits for logic-thread
+    /// routing.
+    bool m_requestedProjectClose{ false };
+
+    /// @brief Whether the UI is closing old beatmap canvases before closing
+    /// project.
+    bool m_pendingProjectClose{ false };
+
+    /// @brief Whether all dirty-close prompts finished and project cleanup can
+    /// run.
+    bool m_projectCloseReady{ false };
 
     /// @brief 保护项目打开请求路径的轻量级锁
     mutable std::mutex m_pendingMutex;

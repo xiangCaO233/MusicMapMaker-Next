@@ -9,6 +9,7 @@ return {
 	["ui.file.open_pro"] = "Open Project",
 	["ui.file.open_recent"] = "Open Recent",
 	["ui.file.no_recent"] = "No Recent Items",
+	["ui.file.close_pro"] = "Close Project",
 	["ui.file.save"] = "Save",
 	["ui.file.save_as"] = "Save As...",
 	["ui.file.pack"] = "Pack",

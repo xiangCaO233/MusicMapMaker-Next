@@ -1012,6 +1012,13 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             }
             ImGui::EndMenu();
         }
+
+        if ( MenuItemWithFontIcon(ICON_MMM_CLOSE,
+                                  TR("ui.file.close_pro"),
+                                  nullptr,
+                                  hasProject) ) {
+            Logic::EditorEngine::instance().requestCloseProject();
+        }
         ImGui::Separator();
 
         if ( MenuItemWithFontIcon(
