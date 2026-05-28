@@ -72,6 +72,10 @@ public:
                            uint32_t           frameIndex) override;
 
 private:
+    /// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
+    /// @param view 即将被销毁的 UI 视图。
+    void waitForGpuBeforeDestroyView(IUIView& view);
+
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
 

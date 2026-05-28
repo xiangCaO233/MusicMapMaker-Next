@@ -4,6 +4,7 @@
 #include "event/input/translators/UniversalCodepoint.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
 #include "event/ui/iwindow/UIWindowMouseEvent.h"
+#include "graphic/imguivk/VKContext.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "ui/IRenderableView.h"
@@ -38,7 +39,12 @@ void UIManager::registerView(const std::string&       name,
 /// @brief 注销并销毁视图
 void UIManager::unregisterView(const std::string& name)
 {
-    m_uiviews.erase(name);
+    /// @brief 即将被注销的视图迭代器。
+    auto viewIt = m_uiviews.find(name);
+    if ( viewIt != m_uiviews.end() ) {
+        waitForGpuBeforeDestroyView(*viewIt->second);
+        m_uiviews.erase(viewIt);
+    }
     std::erase(m_uiSequence, name);
     std::erase(m_renderableUiSequence, name);
     std::erase(m_textureLoaderSequence, name);
@@ -48,6 +54,10 @@ void UIManager::unregisterView(const std::string& name)
 /// @brief 清理所有ui
 void UIManager::clearAllViews()
 {
+    /// @brief 当前仍注册在 UIManager 内的视图条目。
+    for ( auto& entry : m_uiviews ) {
+        waitForGpuBeforeDestroyView(*entry.second);
+    }
     m_uiviews.clear();
 }
 
@@ -88,7 +98,12 @@ void UIManager::onUpdateUI()
     }
 
     for ( const auto& name : toRemove ) {
-        m_uiviews.erase(name);
+        /// @brief 当前待销毁视图的迭代器。
+        auto viewIt = m_uiviews.find(name);
+        if ( viewIt != m_uiviews.end() ) {
+            waitForGpuBeforeDestroyView(*viewIt->second);
+            m_uiviews.erase(viewIt);
+        }
         std::erase(m_uiSequence, name);
         // 同时也从纹理加载器和可渲染序列中移除（如果存在）
         std::erase(m_renderableUiSequence, name);
@@ -219,6 +234,27 @@ void UIManager::DispatchGlobalUIEvents()
             }
         }
     }
+}
+
+/// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
+void UIManager::waitForGpuBeforeDestroyView(IUIView& view)
+{
+    /// @brief 目标视图是否持有可能被命令缓冲引用的 Vulkan 资源。
+    bool ownsGpuResources = view.renderable() || view.asTextureLoader();
+    if ( !ownsGpuResources ) {
+        return;
+    }
+
+    /// @brief 当前 Vulkan 上下文查询结果。
+    auto contextResult = Graphic::VKContext::get();
+    if ( !contextResult ) {
+        XWARN("UIManager: skip GPU idle wait before destroying [{}]: {}",
+              view.m_name,
+              contextResult.error());
+        return;
+    }
+
+    (void)contextResult->get().getLogicalDevice().waitIdle();
 }
 
 }  // namespace MMM::UI
