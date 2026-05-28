@@ -21,6 +21,60 @@
 
 namespace
 {
+/// @brief Resolve a stored metadata path through the current project if
+/// present.
+std::filesystem::path resolveCurrentProjectPath(
+    const std::filesystem::path& path)
+{
+    if ( path.empty() || path.is_absolute() ) {
+        return path.lexically_normal();
+    }
+
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( project ) {
+        return (project->m_projectRoot / path).lexically_normal();
+    }
+    return path.lexically_normal();
+}
+
+/// @brief Store a filesystem path as a project-relative metadata path when
+/// possible.
+std::filesystem::path makeCurrentProjectRelativePath(
+    const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+    if ( path.is_relative() ) return path.lexically_normal();
+
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return path.lexically_normal();
+
+    std::error_code ec;
+    auto root = std::filesystem::absolute(project->m_projectRoot, ec);
+    if ( ec ) return path.filename();
+
+    auto relativePath = std::filesystem::relative(path, root, ec);
+    if ( !ec && !relativePath.empty() ) {
+        return relativePath.lexically_normal();
+    }
+    return path.filename();
+}
+
+/// @brief Normalize long-lived beatmap metadata paths for project storage.
+void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
+{
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) return;
+
+    meta.map_path = makeCurrentProjectRelativePath(
+        resolveCurrentProjectPath(meta.map_path));
+    meta.main_audio_path = makeCurrentProjectRelativePath(
+        resolveCurrentProjectPath(meta.main_audio_path));
+    meta.main_cover_path = makeCurrentProjectRelativePath(
+        resolveCurrentProjectPath(meta.main_cover_path));
+    meta.cover_path = makeCurrentProjectRelativePath(
+        resolveCurrentProjectPath(meta.cover_path));
+}
+
 /// @brief 格式化无快照上下文的状态栏时间文本。
 std::string formatStatusTime(double timeSeconds)
 {
@@ -259,12 +313,10 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         SessionUtils::syncBeatmap(*m_ctx);
 
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
-        auto savePath = oldPath;
+        auto savePath = resolveCurrentProjectPath(oldPath);
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
              Config::SaveFormatPreference::ForceMMM ) {
             savePath.replace_extension(".mmm");
-            // 更新元数据中的路径，确保之后的一致性
-            m_ctx->currentBeatmap->m_baseMapMetadata.map_path = savePath;
         }
 
         bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
@@ -273,10 +325,12 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
                    Config::pathToUtf8(savePath));
             return;
         }
+        auto storedSavePath = makeCurrentProjectRelativePath(savePath);
+        m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
         m_ctx->actionStack.markSaved();
-        if ( oldPath != savePath ) {
-            EditorEngine::instance().updateBeatmapFilePathInProject(oldPath,
-                                                                    savePath);
+        if ( oldPath != storedSavePath ) {
+            EditorEngine::instance().updateBeatmapFilePathInProject(
+                oldPath, storedSavePath);
         } else {
             EditorEngine::instance().syncProjectWithFile(savePath);
         }
@@ -289,13 +343,14 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         m_ctx->m_needsTimingsSync = true;
         m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
-        auto savePath = Config::utf8ToPath(cmd.path);
+        auto savePath = resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
         bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
             return;
         }
-        m_ctx->currentBeatmap->m_baseMapMetadata.map_path = savePath;
+        m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
+            makeCurrentProjectRelativePath(savePath);
         m_ctx->actionStack.markSaved();
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
@@ -315,17 +370,19 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
         auto oldBPM   = m_ctx->currentBeatmap->m_baseMapMetadata.preference_bpm;
         auto oldTrack = m_ctx->currentBeatmap->m_baseMapMetadata.track_count;
+        auto updatedMeta = cmd.baseMeta;
+        normalizeCurrentProjectMetadataPaths(updatedMeta);
 
-        m_ctx->currentBeatmap->m_baseMapMetadata = cmd.baseMeta;
+        m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
         XINFO("BeatmapSession: Metadata updated for {}",
               m_ctx->currentBeatmap->m_baseMapMetadata.name);
 
         // 同步轨道数到上下文，确保渲染实时更新
-        m_ctx->trackCount = cmd.baseMeta.track_count;
+        m_ctx->trackCount = updatedMeta.track_count;
 
         // 如果关键渲染参数发生变化，刷新 ScrollCache
-        if ( oldBPM != cmd.baseMeta.preference_bpm ||
-             oldTrack != cmd.baseMeta.track_count ) {
+        if ( oldBPM != updatedMeta.preference_bpm ||
+             oldTrack != updatedMeta.track_count ) {
             XINFO(
                 "BeatmapSession: Critical metadata changed, dirtying "
                 "ScrollCache...");
@@ -338,7 +395,7 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         }
 
         // 如果音频路径发生变化，重新加载音频
-        if ( oldAudio != cmd.baseMeta.main_audio_path ) {
+        if ( oldAudio != updatedMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
             // 如果当前正在播放，先暂停播放
             if ( m_ctx->isPlaying ) {
@@ -350,20 +407,20 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             auto* project = EditorEngine::instance().getCurrentProject();
             if ( project ) {
                 audioPath =
-                    project->m_projectRoot / cmd.baseMeta.main_audio_path;
+                    project->m_projectRoot / updatedMeta.main_audio_path;
             } else {
                 audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
                                 .parent_path() /
-                            cmd.baseMeta.main_audio_path;
+                            updatedMeta.main_audio_path;
             }
             if ( std::filesystem::exists(audioPath) ) {
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
                 if ( project ) {
                     auto fileName = Config::pathToUtf8(
-                        cmd.baseMeta.main_audio_path.filename());
+                        updatedMeta.main_audio_path.filename());
                     auto fullPathStr =
-                        Config::pathToUtf8(cmd.baseMeta.main_audio_path);
+                        Config::pathToUtf8(updatedMeta.main_audio_path);
 
                     for ( const auto& res : project->m_audioResources ) {
                         if ( res.m_id == fileName ||
@@ -384,15 +441,15 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         }
 
         // 如果封面路径发生变化，更新背景图尺寸
-        if ( oldCover != cmd.baseMeta.main_cover_path ) {
+        if ( oldCover != updatedMeta.main_cover_path ) {
             std::filesystem::path bgPath;
             auto* project = EditorEngine::instance().getCurrentProject();
             if ( project ) {
-                bgPath = project->m_projectRoot / cmd.baseMeta.main_cover_path;
+                bgPath = project->m_projectRoot / updatedMeta.main_cover_path;
             } else {
                 bgPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
                              .parent_path() /
-                         cmd.baseMeta.main_cover_path;
+                         updatedMeta.main_cover_path;
             }
             if ( std::filesystem::exists(bgPath) ) {
                 int w = 0, h = 0, comp = 0;
@@ -413,12 +470,15 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 auto fullEntryPath = project->m_projectRoot /
                                      Config::utf8ToPath(entry.m_filePath);
 
-                if ( std::filesystem::exists(fullEntryPath) &&
-                     std::filesystem::equivalent(fullEntryPath,
-                                                 cmd.baseMeta.map_path) ) {
-                    entry.m_name         = cmd.baseMeta.version;
+                auto updatedMapPath =
+                    resolveCurrentProjectPath(updatedMeta.map_path);
+                std::error_code pathEc;
+                if ( std::filesystem::exists(fullEntryPath, pathEc) &&
+                     std::filesystem::equivalent(
+                         fullEntryPath, updatedMapPath, pathEc) ) {
+                    entry.m_name         = updatedMeta.version;
                     entry.m_audioTrackId = Config::pathToUtf8(
-                        cmd.baseMeta.main_audio_path.filename());
+                        updatedMeta.main_audio_path.filename());
                     XINFO(
                         "BeatmapSession: Synced name '{}' and audioTrackId "
                         "'{}' to project entry",

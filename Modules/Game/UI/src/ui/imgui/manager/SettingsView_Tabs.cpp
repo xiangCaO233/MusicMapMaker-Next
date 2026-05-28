@@ -1694,6 +1694,26 @@ void SettingsView::drawBeatmapSettings()
     auto& meta    = m_editingMeta;
     bool  changed = false;
 
+    auto resolveProjectPath = [&](const std::filesystem::path& path) {
+        if ( path.empty() || path.is_absolute() || !project ) {
+            return path.lexically_normal();
+        }
+        return (project->m_projectRoot / path).lexically_normal();
+    };
+
+    auto displayProjectPath = [&](const std::filesystem::path& path) {
+        if ( path.empty() ) return std::string{};
+        if ( !project || path.is_relative() ) return Config::pathToUtf8(path);
+
+        std::error_code ec;
+        auto            relativePath =
+            std::filesystem::relative(path, project->m_projectRoot, ec);
+        if ( !ec && !relativePath.empty() ) {
+            return Config::pathToUtf8(relativePath);
+        }
+        return Config::pathToUtf8(path);
+    };
+
     bool isImd = false;
     if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
         auto ext = beatmap.m_baseMapMetadata.map_path.extension().string();
@@ -1857,16 +1877,11 @@ void SettingsView::drawBeatmapSettings()
         std::string absolutePathStr = "";
         if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
             auto absolutePath =
-                std::filesystem::absolute(beatmap.m_baseMapMetadata.map_path);
+                resolveProjectPath(beatmap.m_baseMapMetadata.map_path);
             absolutePathStr = Config::pathToUtf8(absolutePath);
             if ( project ) {
-                try {
-                    auto relativePath = std::filesystem::relative(
-                        absolutePath, project->m_projectRoot);
-                    relativePathStr = Config::pathToUtf8(relativePath);
-                } catch ( ... ) {
-                    relativePathStr = absolutePathStr;
-                }
+                relativePathStr =
+                    displayProjectPath(beatmap.m_baseMapMetadata.map_path);
             } else {
                 relativePathStr = absolutePathStr;
             }
@@ -2038,23 +2053,12 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 std::string currentAudioPath =
-                    Config::pathToUtf8(meta.main_audio_path);
+                    displayProjectPath(meta.main_audio_path);
                 std::string audioPreview = currentAudioPath;
-                if ( project && !audioPreview.empty() ) {
-                    if ( meta.main_audio_path.is_absolute() ) {
-                        try {
-                            audioPreview =
-                                Config::pathToUtf8(std::filesystem::relative(
-                                    meta.main_audio_path,
-                                    project->m_projectRoot));
-                        } catch ( ... ) {
-                        }
-                    }
-                }
 
                 bool audioExists =
-                    project && std::filesystem::exists(project->m_projectRoot /
-                                                       meta.main_audio_path);
+                    project && std::filesystem::exists(
+                                   resolveProjectPath(meta.main_audio_path));
                 bool audioPushed = false;
                 if ( !audioExists && !currentAudioPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -2096,22 +2100,12 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 std::string currentCoverPath =
-                    Config::pathToUtf8(meta.cover_path);
+                    displayProjectPath(meta.cover_path);
                 std::string coverPreview = currentCoverPath;
-                if ( project && !coverPreview.empty() ) {
-                    if ( meta.cover_path.is_absolute() ) {
-                        try {
-                            coverPreview =
-                                Config::pathToUtf8(std::filesystem::relative(
-                                    meta.cover_path, project->m_projectRoot));
-                        } catch ( ... ) {
-                        }
-                    }
-                }
 
                 bool coverExists =
-                    project && std::filesystem::exists(project->m_projectRoot /
-                                                       meta.cover_path);
+                    project && std::filesystem::exists(
+                                   resolveProjectPath(meta.cover_path));
                 bool coverPushed = false;
                 if ( !coverExists && !currentCoverPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -2174,23 +2168,12 @@ void SettingsView::drawBeatmapSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 std::string currentBgPath =
-                    Config::pathToUtf8(meta.main_cover_path);
+                    displayProjectPath(meta.main_cover_path);
                 std::string bgPreview = currentBgPath;
-                if ( project && !bgPreview.empty() ) {
-                    if ( meta.main_cover_path.is_absolute() ) {
-                        try {
-                            bgPreview =
-                                Config::pathToUtf8(std::filesystem::relative(
-                                    meta.main_cover_path,
-                                    project->m_projectRoot));
-                        } catch ( ... ) {
-                        }
-                    }
-                }
 
                 bool bgExists =
-                    project && std::filesystem::exists(project->m_projectRoot /
-                                                       meta.main_cover_path);
+                    project && std::filesystem::exists(
+                                   resolveProjectPath(meta.main_cover_path));
                 bool bgPushed = false;
                 if ( !bgExists && !currentBgPath.empty() ) {
                     ImGui::PushStyleColor(

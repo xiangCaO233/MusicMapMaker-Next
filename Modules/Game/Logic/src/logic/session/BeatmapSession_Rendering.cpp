@@ -14,6 +14,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <filesystem>
 #include <numeric>
 
 namespace MMM::Logic
@@ -127,10 +128,18 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         snapshot->lastActionMessage = m_ctx->lastActionMessage;
 
         if ( m_ctx->currentBeatmap ) {
-            auto bgPath =
-                m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                    .parent_path() /
-                m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
+            std::filesystem::path bgPath;
+            auto* project = EditorEngine::instance().getCurrentProject();
+            if ( project ) {
+                bgPath =
+                    project->m_projectRoot /
+                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
+            } else {
+                bgPath =
+                    m_ctx->currentBeatmap->m_baseMapMetadata.map_path
+                        .parent_path() /
+                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
+            }
             snapshot->backgroundPath = Config::pathToUtf8(bgPath);
             snapshot->bgSize         = m_ctx->bgSize;
             snapshot->beatmapName =
