@@ -90,14 +90,14 @@ std::filesystem::path resolveProjectPath(const Project&               project,
 }
 
 /// @brief Convert a filesystem path into a stable project-relative path.
-std::filesystem::path makeProjectRelativePath(const Project&               project,
+std::filesystem::path makeProjectRelativePath(const Project& project,
                                               const std::filesystem::path& path)
 {
     if ( path.empty() ) return {};
     if ( path.is_relative() ) return path.lexically_normal();
 
     std::error_code ec;
-    auto root = std::filesystem::absolute(project.m_projectRoot, ec);
+    auto            root = std::filesystem::absolute(project.m_projectRoot, ec);
     if ( ec ) return path.filename();
 
     auto relativePath = std::filesystem::relative(path, root, ec);
@@ -107,12 +107,12 @@ std::filesystem::path makeProjectRelativePath(const Project&               proje
     return path.filename();
 }
 
+// clang-format off
 /// @brief Resolve a metadata resource path before storing it relative to a project.
+// clang-format on
 std::filesystem::path resolveMetadataResourcePath(
-    const Project&               project,
-    const std::filesystem::path& mapDirectory,
-    const std::filesystem::path& path,
-    bool                         preferProjectRoot)
+    const Project& project, const std::filesystem::path& mapDirectory,
+    const std::filesystem::path& path, bool preferProjectRoot)
 {
     if ( path.empty() || path.is_absolute() ) {
         return path.lexically_normal();
@@ -135,7 +135,9 @@ std::filesystem::path resolveMetadataResourcePath(
     return mapPath;
 }
 
+// clang-format off
 /// @brief Normalize long-lived beatmap metadata paths to project-relative paths.
+// clang-format on
 void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
                                              const Project& project)
 {
@@ -216,8 +218,12 @@ EditorEngine::EditorEngine()
                 m_lastViewportSizes[cmd.cameraId] = { cmd.width, cmd.height };
             }
             // 推送到拥有该 camera 的 session
-            std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-            for ( auto& entry : m_sessions ) {
+            /// @brief 保护本次画布尺寸事件路由期间的会话列表访问。
+            std::lock_guard<std::recursive_mutex> lock(
+                m_sessionRegistry.mutex());
+            /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            for ( auto& entry : sessions ) {
                 if ( entry.cameraId == e.canvasName ) {
                     entry.session->pushCommand(LogicCommand(cmd));
                     break;
@@ -225,11 +231,10 @@ EditorEngine::EditorEngine()
             }
             // 也推送给共享视口 (Preview, Timeline 等)
             if ( e.canvasName == "Preview" || e.canvasName == "Timeline" ) {
-                int32_t idx =
-                    m_activeSessionIndex.load(std::memory_order_relaxed);
-                if ( idx >= 0 &&
-                     idx < static_cast<int32_t>(m_sessions.size()) ) {
-                    m_sessions[idx].session->pushCommand(LogicCommand(cmd));
+                /// @brief 当前活跃 Session 索引快照。
+                int32_t idx = m_sessionRegistry.activeIndex();
+                if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
+                    sessions[idx].session->pushCommand(LogicCommand(cmd));
                 }
             }
         });
@@ -329,14 +334,7 @@ void EditorEngine::cancelPendingProjectSwitch()
 
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-
-    for ( const auto& entry : m_sessions ) {
-        if ( !entry.isLogoPlaceholder ) {
-            return true;
-        }
-    }
-    return false;
+    return m_sessionRegistry.hasNonLogoSession();
 }
 
 void EditorEngine::openProject(const std::filesystem::path& projectPath)
@@ -547,7 +545,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     // 更新当前项目单例状态
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
         m_currentProject = std::move(newProject);
     }
 
@@ -590,7 +588,7 @@ void EditorEngine::closeProject()
     std::unique_ptr<Project> closedProject;
     std::string              projectTitle;
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
         if ( !m_currentProject ) {
             return;
         }
@@ -646,7 +644,7 @@ void EditorEngine::stop()
 
 void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) {
         XERROR("Cannot create beatmap: No project opened.");
         return;
@@ -738,7 +736,7 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 
 void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) {
         XERROR("Cannot import audio: No project opened.");
         return;
@@ -866,8 +864,12 @@ void EditorEngine::consumeCrossSessionCutClipboard(
         m_clipboard.getCrossSessionCutSource(pasteContext);
     if ( !sourceContext ) return;
 
-    std::lock_guard<std::recursive_mutex> sessionLock(m_sessionMutex);
-    for ( const auto& entry : m_sessions ) {
+    /// @brief 保护跨 Session 剪切消费期间的会话列表访问。
+    std::lock_guard<std::recursive_mutex> sessionLock(
+        m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( const auto& entry : sessions ) {
         if ( !entry.session ) {
             continue;
         }
@@ -928,7 +930,7 @@ void EditorEngine::markCutClipboardConsumed()
 
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     // 检查路径是否在项目根目录下
@@ -1018,8 +1020,10 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         auto tool = std::get<CmdChangeTool>(cmd).tool;
         m_currentTool.store(tool, std::memory_order_relaxed);
 
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        for ( auto& entry : m_sessions ) {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 entry.session->pushCommand(LogicCommand(CmdChangeTool{ tool }));
             }
@@ -1035,18 +1039,23 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     }
 
     // 分发到当前活跃 Session
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
-        m_sessions[idx].session->pushCommand(std::move(cmd));
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    /// @brief 当前活跃 Session 索引快照。
+    int32_t idx = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
+        sessions[idx].session->pushCommand(std::move(cmd));
     }
 }
 
 bool EditorEngine::hasUnsavedChanges() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     // 检查所有 Session 是否有未保存的修改
-    for ( const auto& entry : m_sessions ) {
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( const auto& entry : sessions ) {
         if ( entry.session &&
              entry.session->getContext().actionStack.isDirty() ) {
             return true;
@@ -1102,10 +1111,13 @@ EditTool EditorEngine::getCurrentTool() const
 
 bool EditorEngine::isPlaybackPlaying() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-    if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
-        return m_sessions[idx].session->getContext().isPlaying;
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    /// @brief 当前活跃 Session 索引快照。
+    int32_t idx = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
+        return sessions[idx].session->getContext().isPlaying;
     }
     return false;
 }
@@ -1124,27 +1136,30 @@ void EditorEngine::syncSameMainAudioCanvases()
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    int32_t activeIndex = m_activeSessionIndex.load(std::memory_order_relaxed);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    /// @brief 当前活跃 Session 索引快照。
+    int32_t activeIndex = m_sessionRegistry.activeIndex();
     if ( activeIndex < 0 ||
-         activeIndex >= static_cast<int32_t>(m_sessions.size()) ||
-         !m_sessions[activeIndex].session ) {
+         activeIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[activeIndex].session ) {
         return;
     }
 
-    auto&      activeCtx = m_sessions[activeIndex].session->getContext();
+    auto&      activeCtx = sessions[activeIndex].session->getContext();
     const auto activeKey =
         getMainAudioSyncKey(activeCtx, m_currentProject.get());
     if ( activeKey.empty() ) {
         return;
     }
 
-    for ( int32_t i = 0; i < static_cast<int32_t>(m_sessions.size()); ++i ) {
-        if ( i == activeIndex || !m_sessions[i].session ) {
+    for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
+        if ( i == activeIndex || !sessions[i].session ) {
             continue;
         }
 
-        auto& ctx = m_sessions[i].session->getContextMutable();
+        auto& ctx = sessions[i].session->getContextMutable();
         if ( getMainAudioSyncKey(ctx, m_currentProject.get()) != activeKey ) {
             continue;
         }
@@ -1169,7 +1184,9 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     const std::string&            displayName,
                                     bool isLogoPlaceholder)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
 
     if ( m_currentProject && beatmap ) {
         normalizeBeatmapMetadataPathsForProject(*beatmap, *m_currentProject);
@@ -1177,34 +1194,35 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 
     // 检查是否可以复用 Logo 占位画布
     if ( !isLogoPlaceholder && beatmap ) {
-        for ( int32_t i = 0; i < static_cast<int32_t>(m_sessions.size());
-              ++i ) {
-            if ( m_sessions[i].isLogoPlaceholder ) {
+        for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
+            if ( sessions[i].isLogoPlaceholder ) {
                 // 复用此画布：加载谱面到它的 Session
-                m_sessions[i].isLogoPlaceholder = false;
-                m_sessions[i].displayName =
-                    displayName.empty() ? beatmap->m_baseMapMetadata.name
-                                        : displayName;
-                m_sessions[i].session->pushCommand(
+                sessions[i].isLogoPlaceholder = false;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].session->pushCommand(
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
-                m_sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
+                sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
                     m_currentTool.load(std::memory_order_relaxed) }));
-                m_sessions[i].session->pushCommand(
+                sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
-                m_activeSessionIndex.store(i, std::memory_order_relaxed);
+                m_sessionRegistry.setActiveIndex(i);
 
                 XINFO("Reused Logo canvas {} for beatmap: {}",
-                      m_sessions[i].cameraId,
-                      m_sessions[i].displayName);
+                      sessions[i].cameraId,
+                      sessions[i].displayName);
                 return i;
             }
         }
     }
 
     // 生成唯一 cameraId
-    std::string cameraId = "Canvas_" + std::to_string(m_nextCanvasId++);
+    /// @brief 新 Session 对应的唯一画布 cameraId。
+    std::string cameraId = m_sessionRegistry.createNextCameraId();
 
     // 创建新 Session
+    /// @brief 新创建的谱面逻辑 Session。
     auto newSession = std::make_shared<BeatmapSession>();
 
     // 同步历史视口尺寸
@@ -1234,6 +1252,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     }
 
     // 添加到 Session 列表
+    /// @brief 即将注册到会话列表的新 Session 条目。
     SessionEntry entry;
     entry.session  = newSession;
     entry.cameraId = cameraId;
@@ -1242,15 +1261,13 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
             ? (beatmap ? beatmap->m_baseMapMetadata.name : "New Canvas")
             : displayName;
     entry.isLogoPlaceholder = isLogoPlaceholder;
-    m_sessions.push_back(std::move(entry));
-
-    int32_t newIndex = static_cast<int32_t>(m_sessions.size()) - 1;
-    m_activeSessionIndex.store(newIndex, std::memory_order_relaxed);
+    /// @brief 新 Session 在注册表中的索引。
+    int32_t newIndex = m_sessionRegistry.append(std::move(entry));
 
     XINFO("Created Session #{} cameraId={} name={} (logo={})",
           newIndex,
           cameraId,
-          m_sessions[newIndex].displayName,
+          sessions[newIndex].displayName,
           isLogoPlaceholder);
 
     return newIndex;
@@ -1258,18 +1275,21 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 
 void EditorEngine::closeSession(int32_t index)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
 
-    if ( index < 0 || index >= static_cast<int32_t>(m_sessions.size()) ) {
+    if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         XWARN("closeSession: invalid index {}", index);
         return;
     }
 
-    std::string cameraId = m_sessions[index].cameraId;
+    /// @brief 被关闭 Session 对应的 cameraId 快照。
+    std::string cameraId = sessions[index].cameraId;
     XINFO("Closing Session #{} cameraId={}", index, cameraId);
 
     // 移除 Session
-    m_sessions.erase(m_sessions.begin() + index);
+    m_sessionRegistry.erase(index);
 
     // 清理对应的 SyncBuffer
     {
@@ -1280,40 +1300,32 @@ void EditorEngine::closeSession(int32_t index)
     }
 
     // 修正活跃索引
-    int32_t currentActive =
-        m_activeSessionIndex.load(std::memory_order_relaxed);
-    if ( m_sessions.empty() ) {
-        m_activeSessionIndex.store(-1, std::memory_order_relaxed);
-    } else if ( currentActive >= static_cast<int32_t>(m_sessions.size()) ) {
-        m_activeSessionIndex.store(static_cast<int32_t>(m_sessions.size()) - 1,
-                                   std::memory_order_relaxed);
-    } else if ( currentActive == index ) {
+    // 该职责已收敛到 SessionRegistry::erase()。
+    {
         // 关闭的是当前活跃的，切换到前一个或第一个
-        int32_t newActive = std::max(0, index - 1);
-        if ( newActive >= static_cast<int32_t>(m_sessions.size()) ) {
-            newActive = static_cast<int32_t>(m_sessions.size()) - 1;
-        }
-        m_activeSessionIndex.store(newActive, std::memory_order_relaxed);
-    } else if ( currentActive > index ) {
         // 关闭的在活跃的前面，索引需要减一
-        m_activeSessionIndex.store(currentActive - 1,
-                                   std::memory_order_relaxed);
     }
+    // 关闭的是当前活跃的，切换到前一个或第一个
+    // 该分支已收敛到 SessionRegistry::normalizeActiveIndexAfterErase()。
+    // 关闭的在活跃的前面，索引需要减一
+    // 该分支已收敛到 SessionRegistry::normalizeActiveIndexAfterErase()。
 }
 
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-    if ( index >= 0 && index < static_cast<int32_t>(m_sessions.size()) ) {
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
         // 1. 如果旧会话正在播放，先暂停它
-        int32_t currentActive =
-            m_activeSessionIndex.load(std::memory_order_relaxed);
+        /// @brief 切换前的活跃 Session 索引快照。
+        int32_t     currentActive        = m_sessionRegistry.activeIndex();
         double      syncedCurrentTime    = 0.0;
         bool        shouldSyncTargetTime = false;
         std::string oldMainAudioKey;
         if ( currentActive >= 0 &&
-             currentActive < static_cast<int32_t>(m_sessions.size()) ) {
-            auto& oldSession = m_sessions[currentActive].session;
+             currentActive < static_cast<int32_t>(sessions.size()) ) {
+            auto& oldSession = sessions[currentActive].session;
             if ( oldSession ) {
                 auto& oldCtx = oldSession->getContextMutable();
                 oldMainAudioKey =
@@ -1331,20 +1343,20 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         }
 
         if ( m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) &&
-             !oldMainAudioKey.empty() && m_sessions[index].session ) {
-            const auto& targetCtx = m_sessions[index].session->getContext();
+             !oldMainAudioKey.empty() && sessions[index].session ) {
+            const auto& targetCtx = sessions[index].session->getContext();
             shouldSyncTargetTime =
                 getMainAudioSyncKey(targetCtx, m_currentProject.get()) ==
                 oldMainAudioKey;
         }
 
-        m_activeSessionIndex.store(index, std::memory_order_relaxed);
+        m_sessionRegistry.setActiveIndex(index);
         XINFO("Switched active session to #{} cameraId={}",
               index,
-              m_sessions[index].cameraId);
+              sessions[index].cameraId);
 
         // 2. 加载新激活会话的音频资源并同步播放进度
-        auto& activeSession = m_sessions[index].session;
+        auto& activeSession = sessions[index].session;
         if ( activeSession ) {
             // 停止当前所有播放
             Audio::AudioManager::instance().stop();
@@ -1353,7 +1365,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             if ( shouldSyncTargetTime ) {
                 ctx.currentTime = syncedCurrentTime;
             }
-            if ( ctx.currentBeatmap && !m_sessions[index].isLogoPlaceholder ) {
+            if ( ctx.currentBeatmap && !sessions[index].isLogoPlaceholder ) {
                 auto*                 project = getCurrentProject();
                 std::filesystem::path audioPath;
                 if ( project ) {
@@ -1443,8 +1455,10 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     // 向所有 Session 广播配置变更
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        for ( auto& entry : m_sessions ) {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 entry.session->pushCommand(
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
@@ -1467,7 +1481,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
 void EditorEngine::saveProject()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     std::filesystem::path projectFile =
@@ -1615,16 +1629,9 @@ void EditorEngine::loop()
         }
 
         // 多 Session 轮询更新
-        std::vector<std::shared_ptr<BeatmapSession>> sessionsSnapshot;
-        {
-            std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-            sessionsSnapshot.reserve(m_sessions.size());
-            for ( const auto& entry : m_sessions ) {
-                if ( entry.session ) {
-                    sessionsSnapshot.push_back(entry.session);
-                }
-            }
-        }
+        /// @brief 当前所有有效 Session 指针快照，避免更新时持有注册表锁。
+        std::vector<std::shared_ptr<BeatmapSession>> sessionsSnapshot =
+            m_sessionRegistry.sessionSnapshot();
 
         if ( !sessionsSnapshot.empty() ) {
             for ( auto& session : sessionsSnapshot ) {
@@ -1661,7 +1668,7 @@ void EditorEngine::loop()
 
 void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     XINFO("Updating audio resource type: {} -> {}",
@@ -1691,7 +1698,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 
 void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     XINFO("Removing audio resource from project: {}", cmd.id);
@@ -1727,7 +1734,7 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 
 void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     XINFO("Removing beatmap from project list: {}", cmd.filePath);
@@ -1748,7 +1755,7 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 void EditorEngine::updateBeatmapFilePathInProject(
     const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     auto absRoot = std::filesystem::absolute(m_currentProject->m_projectRoot);
@@ -1770,9 +1777,8 @@ void EditorEngine::updateBeatmapFilePathInProject(
         if ( entry.m_filePath == relOld ) {
             entry.m_filePath = relNew;
             try {
-                auto map     = BeatMap::loadFromFile(absNew);
-                normalizeBeatmapMetadataPathsForProject(map,
-                                                        *m_currentProject);
+                auto map = BeatMap::loadFromFile(absNew);
+                normalizeBeatmapMetadataPathsForProject(map, *m_currentProject);
                 entry.m_name = map.m_baseMapMetadata.version;
                 if ( entry.m_name.empty() )
                     entry.m_name = Config::pathToUtf8(absNew.filename());
@@ -1796,7 +1802,7 @@ void EditorEngine::updateBeatmapFilePathInProject(
 
 void EditorEngine::scanProjectDirectory()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     if ( !m_currentProject ) return;
 
     auto actualProjectPath = m_currentProject->m_projectRoot;
