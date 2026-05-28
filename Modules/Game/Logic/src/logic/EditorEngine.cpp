@@ -369,84 +369,29 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                    Config::pathToUtf8(actualProjectPath));
         }
 
-        const auto& mapFiles   = directoryScan.m_beatmapFiles;
-        const auto& audioFiles = directoryScan.m_audioFiles;
-
         // 记录哪些音频被识别为主音轨
-        std::unordered_set<std::string> mainAudioPaths;
-
         // 1. 处理谱面并识别主音轨
-        for ( const auto& mapPath : mapFiles ) {
-            auto relMapPath = Config::pathToUtf8(
-                std::filesystem::relative(mapPath, actualProjectPath));
-            auto filename = Config::pathToUtf8(mapPath.filename());
-
-            Project::BeatmapEntry mapEntry;
-            mapEntry.m_name     = filename;
-            mapEntry.m_filePath = relMapPath;
-
-            // 预加载谱面以获取其定义的主音频路径
-            try {
-                auto tempMap = BeatMap::loadFromFile(mapPath);
-                normalizeBeatmapMetadataPathsForProject(tempMap, *newProject);
-                if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
-                    // 获取相对于项目根目录的音频路径
-                    auto absAudioPath =
-                        newProject->m_projectRoot /
-                        tempMap.m_baseMapMetadata.main_audio_path;
-                    auto relAudioPath = Config::pathToUtf8(
-                        tempMap.m_baseMapMetadata.main_audio_path);
-
-                    mapEntry.m_audioTrackId =
-                        Config::pathToUtf8(absAudioPath.filename());
-                    mainAudioPaths.insert(relAudioPath);
-                }
-            } catch ( ... ) {
-                XWARN("Failed to probe main audio for beatmap: {}", filename);
-            }
-
-            newProject->m_beatmaps.push_back(mapEntry);
-            XINFO("Found beatmap: {}", filename);
-        }
-
+        // 预加载谱面以获取其定义的主音频路径
+        // 获取相对于项目根目录的音频路径
         // 2. 处理所有音频资源
-        for ( const auto& audioPath : audioFiles ) {
-            auto relAudioPath = Config::pathToUtf8(
-                std::filesystem::relative(audioPath, actualProjectPath));
-            auto filename = Config::pathToUtf8(audioPath.filename());
-
-            AudioResource res;
-            res.m_id   = filename;
-            res.m_path = relAudioPath;
-            // 如果该音频在任意一个谱面中被引用为主音轨，则标记为 Main，否则为
-            // Effect
-            res.m_type          = (mainAudioPaths.count(relAudioPath) > 0)
-                                      ? AudioTrackType::Main
-                                      : AudioTrackType::Effect;
-            res.m_config.volume = 0.5f;
-            res.m_config.playbackSpeed = 1.0f;
-            res.m_config.playbackPitch = 0.0f;
-            res.m_config.muted         = false;
-            res.m_config.eqEnabled     = false;
-            res.m_config.eqPreset      = 0;
-
-            newProject->m_audioResources.push_back(res);
-            XINFO("Found {} audio resource: {}",
-                  (res.m_type == AudioTrackType::Main ? "Main" : "Effect"),
-                  filename);
-        }
-
+        // 如果该音频在任意一个谱面中被引用为主音轨，则标记为 Main，否则为
+        // Effect
         // 3. 兜底逻辑：如果没有任何 Main
         // 音轨但有音频，且有谱面没关联音轨，关联第一个
-        if ( mainAudioPaths.empty() && !newProject->m_audioResources.empty() ) {
-            newProject->m_audioResources.front().m_type = AudioTrackType::Main;
-            for ( auto& map : newProject->m_beatmaps ) {
-                if ( map.m_audioTrackId.empty() ) {
-                    map.m_audioTrackId =
-                        newProject->m_audioResources.front().m_id;
-                }
-            }
-        }
+        // clang-format off
+#if 0
+            // 预加载谱面以获取其定义的主音频路径
+                    // 获取相对于项目根目录的音频路径
+        // 2. 处理所有音频资源
+            // 如果该音频在任意一个谱面中被引用为主音轨，则标记为 Main，否则为
+            // Effect
+        // 3. 兜底逻辑：如果没有任何 Main
+        // 音轨但有音频，且有谱面没关联音轨，关联第一个
+#endif
+        // clang-format on
+        /// @brief ProjectResourceService 接管扫描结果到项目资源列表的构建。
+        m_projectResourceService.buildInitialResources(*newProject,
+                                                       directoryScan);
 
     } catch ( const std::exception& e ) {
         XERROR("Error while scanning project directory: {}", e.what());
@@ -493,23 +438,8 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     }
 
     // 自动持久化扫描结果 (标记此目录为项目)
-    newProject->m_beatmaps.erase(
-        std::remove_if(newProject->m_beatmaps.begin(),
-                       newProject->m_beatmaps.end(),
-                       [&](const Project::BeatmapEntry& entry) {
-                           return containsExcludedPath(
-                               newProject->m_excludedBeatmapPaths,
-                               entry.m_filePath);
-                       }),
-        newProject->m_beatmaps.end());
-    newProject->m_audioResources.erase(
-        std::remove_if(newProject->m_audioResources.begin(),
-                       newProject->m_audioResources.end(),
-                       [&](const AudioResource& res) {
-                           return containsExcludedPath(
-                               newProject->m_excludedAudioPaths, res.m_path);
-                       }),
-        newProject->m_audioResources.end());
+    /// @brief ProjectResourceService 接管按排除列表过滤扫描资源的逻辑。
+    m_projectResourceService.applyExcludedResources(*newProject);
 
     try {
         std::ofstream  file(projectFile);
@@ -1774,170 +1704,59 @@ void EditorEngine::scanProjectDirectory()
     auto actualProjectPath = m_currentProject->m_projectRoot;
 
     // 收集当前目录下的所有有效文件
-    std::vector<std::filesystem::path> mapFiles;
-    std::vector<std::filesystem::path> audioFiles;
+    /// @brief 当前项目目录扫描结果。
+    ProjectDirectoryScanner::ScanResult directoryScan;
 
     try {
-        auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+        directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
         if ( !directoryScan.m_success ) {
             return;  // 防御可能的文件系统并发读写冲突
         }
-        mapFiles   = std::move(directoryScan.m_beatmapFiles);
-        audioFiles = std::move(directoryScan.m_audioFiles);
     } catch ( ... ) {
         return;  // 防御可能的文件系统并发读写冲突
     }
 
-    bool changed = false;
-
     // 1. 同步谱面文件列表
-    std::vector<Project::BeatmapEntry> newBeatmaps;
-    std::unordered_set<std::string>    mainAudioPaths;
-
-    for ( const auto& mapPath : mapFiles ) {
-        auto relMapPath = Config::pathToUtf8(
-            std::filesystem::relative(mapPath, actualProjectPath));
-        auto filename = Config::pathToUtf8(mapPath.filename());
-        if ( containsExcludedPath(m_currentProject->m_excludedBeatmapPaths,
-                                  relMapPath) ) {
-            continue;
-        }
-
-        // 查找是否已经存在该谱面 entry
-        Project::BeatmapEntry mapEntry;
-        bool                  exists = false;
-        for ( const auto& entry : m_currentProject->m_beatmaps ) {
-            if ( entry.m_filePath == relMapPath ) {
-                mapEntry = entry;
-                exists   = true;
-                break;
-            }
-        }
-
-        if ( !exists ) {
-            // 新发现的谱面
-            mapEntry.m_name     = filename;
-            mapEntry.m_filePath = relMapPath;
-            try {
-                auto tempMap = BeatMap::loadFromFile(mapPath);
-                normalizeBeatmapMetadataPathsForProject(tempMap,
-                                                        *m_currentProject);
-                if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
-                    auto absAudioPath =
-                        m_currentProject->m_projectRoot /
-                        tempMap.m_baseMapMetadata.main_audio_path;
-                    auto relAudioPath = Config::pathToUtf8(
-                        tempMap.m_baseMapMetadata.main_audio_path);
-                    mapEntry.m_audioTrackId =
-                        Config::pathToUtf8(absAudioPath.filename());
-                    mainAudioPaths.insert(relAudioPath);
-                }
-            } catch ( ... ) {
-            }
-            changed = true;
-            XINFO("Directory Listener: Discovered new beatmap: {}", filename);
-        } else {
-            // 已有谱面，收集其主音轨引用
-            if ( !mapEntry.m_audioTrackId.empty() ) {
-                try {
-                    auto tempMap = BeatMap::loadFromFile(mapPath);
-                    normalizeBeatmapMetadataPathsForProject(tempMap,
-                                                            *m_currentProject);
-                    if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
-                        auto absAudioPath =
-                            m_currentProject->m_projectRoot /
-                            tempMap.m_baseMapMetadata.main_audio_path;
-                        auto relAudioPath = Config::pathToUtf8(
-                            tempMap.m_baseMapMetadata.main_audio_path);
-                        mainAudioPaths.insert(relAudioPath);
-                    }
-                } catch ( ... ) {
-                }
-            }
-        }
-        newBeatmaps.push_back(mapEntry);
-    }
-
+    // 查找是否已经存在该谱面 entry
+    // 新发现的谱面
+    // 已有谱面，收集其主音轨引用
     // 如果有任何谱面被删除了
-    if ( newBeatmaps.size() != m_currentProject->m_beatmaps.size() ) {
-        changed = true;
-        XINFO(
-            "Directory Listener: Some beatmaps were removed from the "
-            "directory.");
-    }
-    m_currentProject->m_beatmaps = newBeatmaps;
-
     // 2. 同步音频资源列表
-    std::vector<AudioResource> newAudioResources;
-    for ( const auto& audioPath : audioFiles ) {
-        auto relAudioPath = Config::pathToUtf8(
-            std::filesystem::relative(audioPath, actualProjectPath));
-        auto filename = Config::pathToUtf8(audioPath.filename());
-        if ( containsExcludedPath(m_currentProject->m_excludedAudioPaths,
-                                  relAudioPath) ) {
-            continue;
-        }
-
+    // 查找是否已经存在该音频资源
+    // 新加入的音频
+    // 已有音频，如果被谱面引用为主音轨，则强制设为主音轨
+    // 如果未被引用，保持其原有的类型（尊重用户的显式配置）
+    // 如果有任何音频被删除了
+    // clang-format off
+#if 0
+        // 查找是否已经存在该谱面 entry
+            // 新发现的谱面
+            // 已有谱面，收集其主音轨引用
+    // 如果有任何谱面被删除了
+    // 2. 同步音频资源列表
         // 查找是否已经存在该音频资源
-        AudioResource res;
-        bool          exists = false;
-        for ( const auto& existingRes : m_currentProject->m_audioResources ) {
-            if ( existingRes.m_path == relAudioPath ) {
-                res    = existingRes;
-                exists = true;
-                break;
-            }
-        }
-
-        if ( !exists ) {
             // 新加入的音频
-            res.m_id            = filename;
-            res.m_path          = relAudioPath;
-            res.m_type          = (mainAudioPaths.count(relAudioPath) > 0)
-                                      ? AudioTrackType::Main
-                                      : AudioTrackType::Effect;
-            res.m_config.volume = 0.5f;
-            res.m_config.playbackSpeed = 1.0f;
-            res.m_config.playbackPitch = 0.0f;
-            res.m_config.muted         = false;
-            res.m_config.eqEnabled     = false;
-            res.m_config.eqPreset      = 0;
-
             // 自动加载音效
-            if ( res.m_type == AudioTrackType::Effect ) {
-                Audio::AudioManager::instance().preloadSoundEffect(
-                    res.m_id,
-                    Config::pathToUtf8(audioPath),
-                    res.m_config.volume);
-            }
-            changed = true;
-            XINFO("Directory Listener: Discovered new audio file: {}",
-                  filename);
-        } else {
             // 已有音频，如果被谱面引用为主音轨，则强制设为主音轨
             // 如果未被引用，保持其原有的类型（尊重用户的显式配置）
-            if ( mainAudioPaths.count(relAudioPath) > 0 ) {
-                if ( res.m_type != AudioTrackType::Main ) {
-                    res.m_type = AudioTrackType::Main;
-                    changed    = true;
-                }
-            }
-        }
-        newAudioResources.push_back(res);
-    }
-
     // 如果有任何音频被删除了
-    if ( newAudioResources.size() !=
-         m_currentProject->m_audioResources.size() ) {
-        changed = true;
-        XINFO(
-            "Directory Listener: Some audio files were removed from the "
-            "directory.");
+    // 如果有任何文件发现/删除/更新，保存项目配置
+#endif
+    // clang-format on
+    /// @brief 当前目录资源同步结果。
+    auto syncResult = m_projectResourceService.syncDirectoryResources(
+        *m_currentProject, directoryScan);
+
+    // 自动加载音效
+    for ( const auto& res : syncResult.m_effectResourcesToPreload ) {
+        /// @brief 新音效资源的项目内绝对路径。
+        auto absAudioPath = actualProjectPath / Config::utf8ToPath(res.m_path);
+        Audio::AudioManager::instance().preloadSoundEffect(
+            res.m_id, Config::pathToUtf8(absAudioPath), res.m_config.volume);
     }
-    m_currentProject->m_audioResources = newAudioResources;
 
     // 如果有任何文件发现/删除/更新，保存项目配置
-    if ( changed ) {
+    if ( syncResult.m_changed ) {
         saveProject();
     }
 }

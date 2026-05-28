@@ -6,6 +6,7 @@
 #include "logic/EditorClipboard.h"
 #include "logic/ProjectDirectoryScanner.h"
 #include "logic/ProjectDirectoryWatcher.h"
+#include "logic/ProjectResourceService.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
@@ -369,6 +370,9 @@ private:
 
     /// @brief 监听当前项目目录中的文件系统变更。
     ProjectDirectoryWatcher m_projectDirectoryWatcher;
+
+    /// @brief 根据项目目录扫描结果构建和同步项目资源。
+    ProjectResourceService m_projectResourceService;
 
     /// @brief 所有的同步缓冲区 (Key 为 CameraID)
     /// @brief 该职责已收敛到 RenderSyncRegistry 内部同步缓冲区表。
