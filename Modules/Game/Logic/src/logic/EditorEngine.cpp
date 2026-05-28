@@ -842,39 +842,29 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
                                 const SessionContext* sourceContext, bool isCut)
 {
-    std::lock_guard<std::mutex> lock(m_clipboardMutex);
-    m_clipboard              = std::move(items);
-    m_clipboardSourceContext = sourceContext;
-    m_clipboardIsCut         = isCut && !m_clipboard.empty();
+    m_clipboard.set(std::move(items), sourceContext, isCut);
 }
 
 /// @brief 获取编辑器级剪贴板副本。
 std::vector<ClipboardItem> EditorEngine::getClipboard() const
 {
-    std::lock_guard<std::mutex> lock(m_clipboardMutex);
-    return m_clipboard;
+    return m_clipboard.get();
 }
 
 /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
 bool EditorEngine::isClipboardCutFrom(const SessionContext* context) const
 {
-    std::lock_guard<std::mutex> lock(m_clipboardMutex);
-    return m_clipboardIsCut && m_clipboardSourceContext == context;
+    return m_clipboard.isCutFrom(context);
 }
 
 /// @brief 若剪贴板为其他会话剪切内容，则删除源会话原物件。
 void EditorEngine::consumeCrossSessionCutClipboard(
     const SessionContext* pasteContext)
 {
-    const SessionContext* sourceContext = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(m_clipboardMutex);
-        if ( !m_clipboardIsCut || !m_clipboardSourceContext ||
-             m_clipboardSourceContext == pasteContext ) {
-            return;
-        }
-        sourceContext = m_clipboardSourceContext;
-    }
+    /// @brief 跨 Session 剪切的来源上下文，仅用于在 Session 列表中定位源会话。
+    const SessionContext* sourceContext =
+        m_clipboard.getCrossSessionCutSource(pasteContext);
+    if ( !sourceContext ) return;
 
     std::lock_guard<std::recursive_mutex> sessionLock(m_sessionMutex);
     for ( const auto& entry : m_sessions ) {
@@ -933,9 +923,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
 /// @brief 将当前剪切剪贴板标记为已消费。
 void EditorEngine::markCutClipboardConsumed()
 {
-    std::lock_guard<std::mutex> lock(m_clipboardMutex);
-    m_clipboardIsCut         = false;
-    m_clipboardSourceContext = nullptr;
+    m_clipboard.markCutConsumed();
 }
 
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)

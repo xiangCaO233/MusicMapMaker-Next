@@ -3,6 +3,7 @@
 #include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorClipboard.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include <atomic>
@@ -395,16 +396,18 @@ private:
     mutable std::mutex m_pendingMutex;
 
     /// @brief 保护编辑器级剪贴板的轻量级锁。
-    mutable std::mutex m_clipboardMutex;
+    /// @brief 该职责已收敛到 EditorClipboard 内部锁。
 
     /// @brief 编辑器级共享剪贴板。
-    std::vector<ClipboardItem> m_clipboard;
+    /// @brief 该职责已收敛到 EditorClipboard 内部条目列表。
 
     /// @brief 当前剪贴板是否来自剪切操作。
-    bool m_clipboardIsCut{ false };
+    /// @brief 该职责已收敛到 EditorClipboard 内部剪切状态。
 
     /// @brief 剪切来源会话上下文，仅用于身份比较，不负责生命周期。
-    const SessionContext* m_clipboardSourceContext{ nullptr };
+    /// @brief 该职责已收敛到 EditorClipboard 内部来源上下文。
+    /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
+    EditorClipboard m_clipboard;
 
     /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
     std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
