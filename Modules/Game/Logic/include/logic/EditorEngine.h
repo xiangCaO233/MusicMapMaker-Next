@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
+#include "logic/ProjectDirectoryScanner.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
@@ -77,8 +78,7 @@ public:
     /// @brief 请求打开项目，必要时先等待 UI 关闭当前谱面画布
     void requestOpenProject(const std::filesystem::path& projectPath);
 
-    /// @brief Request closing the current project after dirty canvases confirm
-    /// saving.
+    /// @brief 请求关闭当前项目，并在关闭前等待脏谱面画布确认保存。
     void requestCloseProject();
 
     /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
@@ -329,8 +329,7 @@ private:
      */
     void scanProjectDirectory();
 
-    /// @brief Clear the currently opened project and unload project audio
-    /// state.
+    /// @brief 清理当前已打开的项目并卸载项目音频状态。
     void closeProject();
 
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
@@ -363,6 +362,9 @@ private:
 
     /// @brief 当前打开的项目
     std::unique_ptr<Project> m_currentProject;
+
+    /// @brief 扫描当前项目目录中的谱面和音频文件。
+    ProjectDirectoryScanner m_projectDirectoryScanner;
 
     /// @brief 所有的同步缓冲区 (Key 为 CameraID)
     /// @brief 该职责已收敛到 RenderSyncRegistry 内部同步缓冲区表。
@@ -406,16 +408,13 @@ private:
     /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径
     std::filesystem::path m_pendingProjectSwitchPath;
 
-    /// @brief Whether a project close was requested and waits for logic-thread
-    /// routing.
+    /// @brief 是否已有项目关闭请求正在等待逻辑线程分发。
     bool m_requestedProjectClose{ false };
 
-    /// @brief Whether the UI is closing old beatmap canvases before closing
-    /// project.
+    /// @brief UI 是否正在项目关闭前逐个关闭旧谱面画布。
     bool m_pendingProjectClose{ false };
 
-    /// @brief Whether all dirty-close prompts finished and project cleanup can
-    /// run.
+    /// @brief 所有脏谱面关闭提示是否已完成，项目清理是否可以执行。
     bool m_projectCloseReady{ false };
 
     /// @brief 保护项目打开请求路径的轻量级锁

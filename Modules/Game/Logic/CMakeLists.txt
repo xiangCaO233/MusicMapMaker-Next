@@ -17,6 +17,7 @@ add_library(Logic STATIC
 	src/logic/EditorClipboard.cpp
 	src/logic/SessionRegistry.cpp
 	src/logic/RenderSyncRegistry.cpp
+	src/logic/ProjectDirectoryScanner.cpp
 	src/logic/EditorEngine.cpp
 	src/logic/BeatmapSyncBuffer.cpp
 	src/logic/ecs/system/render/NoteRenderSystem.cpp

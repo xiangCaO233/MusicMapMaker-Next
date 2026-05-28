@@ -367,22 +367,14 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 
     // 扫描文件系统
     try {
-        std::vector<std::filesystem::path> mapFiles;
-        std::vector<std::filesystem::path> audioFiles;
-
-        for ( const auto& entry : std::filesystem::recursive_directory_iterator(
-                  actualProjectPath) ) {
-            if ( !entry.is_regular_file() ) continue;
-
-            auto ext = Config::pathToUtf8(entry.path().extension());
-            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
-                 ext == ".mmm" ) {
-                mapFiles.push_back(entry.path());
-            } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
-                        ext == ".flac" ) {
-                audioFiles.push_back(entry.path());
-            }
+        auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+        if ( !directoryScan.m_success ) {
+            XERROR("Error while scanning project directory: {}",
+                   Config::pathToUtf8(actualProjectPath));
         }
+
+        const auto& mapFiles   = directoryScan.m_beatmapFiles;
+        const auto& audioFiles = directoryScan.m_audioFiles;
 
         // 记录哪些音频被识别为主音轨
         std::unordered_set<std::string> mainAudioPaths;
@@ -1791,21 +1783,12 @@ void EditorEngine::scanProjectDirectory()
     std::vector<std::filesystem::path> audioFiles;
 
     try {
-        if ( !std::filesystem::exists(actualProjectPath) ) return;
-
-        for ( const auto& entry : std::filesystem::recursive_directory_iterator(
-                  actualProjectPath) ) {
-            if ( !entry.is_regular_file() ) continue;
-
-            auto ext = Config::pathToUtf8(entry.path().extension());
-            if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
-                 ext == ".mmm" ) {
-                mapFiles.push_back(entry.path());
-            } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
-                        ext == ".flac" ) {
-                audioFiles.push_back(entry.path());
-            }
+        auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+        if ( !directoryScan.m_success ) {
+            return;  // 防御可能的文件系统并发读写冲突
         }
+        mapFiles   = std::move(directoryScan.m_beatmapFiles);
+        audioFiles = std::move(directoryScan.m_audioFiles);
     } catch ( ... ) {
         return;  // 防御可能的文件系统并发读写冲突
     }
