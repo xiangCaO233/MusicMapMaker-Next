@@ -6,12 +6,15 @@
 #include "mmmversion.h"
 
 #include <chrono>
-#include <curl/curl.h>
 #include <filesystem>
 #include <string>
 #include <thread>
 
 #include <cstdlib>
+
+#ifdef MMM_PGO_INSTRUMENT
+#    include <curl/curl.h>
+#endif
 
 // LLVM compiler-rt 提供的 PGO 运行时函数 (通过 -fprofile-instr-generate 链接)
 #ifdef MMM_PGO_INSTRUMENT
@@ -60,6 +63,7 @@ static EarlyPGOInitializer g_earlyPGOInit;
 namespace MMM::Main
 {
 
+#ifdef MMM_PGO_INSTRUMENT
 namespace
 {
 
@@ -82,13 +86,13 @@ std::string buildProfilePath()
 /// @brief 确定上传 URL: 环境变量 > 编译期 > 空(不上传)
 std::string resolveUploadUrl()
 {
-#ifdef MMM_PGO_UPLOAD_URL
+#    ifdef MMM_PGO_UPLOAD_URL
     const char* envUrl = std::getenv("MMM_PGO_UPLOAD_URL");
     if ( envUrl && envUrl[0] != '\0' ) return envUrl;
     return MMM_PGO_UPLOAD_URL;
-#else
+#    else
     return {};
-#endif
+#    endif
 }
 
 /// @brief 在独立线程中通过 curl multipart POST 上传 profile 文件
@@ -146,6 +150,7 @@ void uploadProfileAsync(const std::string& filePath)
 }
 
 }  // namespace
+#endif
 
 // =============================================================================
 //  Public API
@@ -163,8 +168,6 @@ void initPGOProfiler()
     std::filesystem::remove("default.profraw", ec);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
-#else
-    (void)s_profilePath;
 #endif
 }
 
