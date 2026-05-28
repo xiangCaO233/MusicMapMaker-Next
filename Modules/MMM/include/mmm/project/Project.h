@@ -74,14 +74,14 @@ public:
     /// @brief 序列化项目配置。
     friend void to_json(nlohmann::json& j, const Project& p)
     {
-        j = nlohmann::json{ { "m_metadata", p.m_metadata },
-                            { "m_settings", p.m_settings },
-                            { "m_audioResources", p.m_audioResources },
-                            { "m_beatmaps", p.m_beatmaps },
-                            { "m_excludedBeatmapPaths",
-                              p.m_excludedBeatmapPaths },
-                            { "m_excludedAudioPaths",
-                              p.m_excludedAudioPaths } };
+        j = nlohmann::json{
+            { "m_metadata", p.m_metadata },
+            { "m_settings", p.m_settings },
+            { "m_audioResources", p.m_audioResources },
+            { "m_beatmaps", p.m_beatmaps },
+            { "m_excludedBeatmapPaths", p.m_excludedBeatmapPaths },
+            { "m_excludedAudioPaths", p.m_excludedAudioPaths }
+        };
     }
 
     /// @brief 反序列化项目配置，并兼容旧项目文件中缺失的排除列表。
@@ -91,8 +91,8 @@ public:
         j.at("m_settings").get_to(p.m_settings);
         j.at("m_audioResources").get_to(p.m_audioResources);
         j.at("m_beatmaps").get_to(p.m_beatmaps);
-        p.m_excludedBeatmapPaths = j.value(
-            "m_excludedBeatmapPaths", std::vector<std::string>{});
+        p.m_excludedBeatmapPaths =
+            j.value("m_excludedBeatmapPaths", std::vector<std::string>{});
         p.m_excludedAudioPaths =
             j.value("m_excludedAudioPaths", std::vector<std::string>{});
     }

@@ -16,6 +16,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <fmt/format.h>
 
 namespace

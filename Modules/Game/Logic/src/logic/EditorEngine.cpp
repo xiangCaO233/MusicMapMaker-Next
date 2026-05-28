@@ -15,6 +15,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -44,12 +45,12 @@ bool containsExcludedPath(const std::vector<std::string>& excludedPaths,
                           const std::string&              path)
 {
     std::string normalized = normalizeProjectRelativePath(path);
-    return std::any_of(
-        excludedPaths.begin(),
-        excludedPaths.end(),
-        [&](const std::string& excluded) {
-            return normalizeProjectRelativePath(excluded) == normalized;
-        });
+    return std::any_of(excludedPaths.begin(),
+                       excludedPaths.end(),
+                       [&](const std::string& excluded) {
+                           return normalizeProjectRelativePath(excluded) ==
+                                  normalized;
+                       });
 }
 
 /// @brief Add a normalized path to an exclusion list if it is absent.
@@ -69,14 +70,99 @@ void removeExcludedPath(std::vector<std::string>& excludedPaths,
                         const std::string&        path)
 {
     std::string normalized = normalizeProjectRelativePath(path);
-    excludedPaths.erase(
-        std::remove_if(
-            excludedPaths.begin(),
-            excludedPaths.end(),
-            [&](const std::string& excluded) {
-                return normalizeProjectRelativePath(excluded) == normalized;
-            }),
-        excludedPaths.end());
+    excludedPaths.erase(std::remove_if(excludedPaths.begin(),
+                                       excludedPaths.end(),
+                                       [&](const std::string& excluded) {
+                                           return normalizeProjectRelativePath(
+                                                      excluded) == normalized;
+                                       }),
+                        excludedPaths.end());
+}
+
+/// @brief Resolve a stored project-relative path to a filesystem path.
+std::filesystem::path resolveProjectPath(const Project&               project,
+                                         const std::filesystem::path& path)
+{
+    if ( path.empty() || path.is_absolute() ) {
+        return path.lexically_normal();
+    }
+    return (project.m_projectRoot / path).lexically_normal();
+}
+
+/// @brief Convert a filesystem path into a stable project-relative path.
+std::filesystem::path makeProjectRelativePath(const Project&               project,
+                                              const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+    if ( path.is_relative() ) return path.lexically_normal();
+
+    std::error_code ec;
+    auto root = std::filesystem::absolute(project.m_projectRoot, ec);
+    if ( ec ) return path.filename();
+
+    auto relativePath = std::filesystem::relative(path, root, ec);
+    if ( !ec && !relativePath.empty() ) {
+        return relativePath.lexically_normal();
+    }
+    return path.filename();
+}
+
+/// @brief Resolve a metadata resource path before storing it relative to a project.
+std::filesystem::path resolveMetadataResourcePath(
+    const Project&               project,
+    const std::filesystem::path& mapDirectory,
+    const std::filesystem::path& path,
+    bool                         preferProjectRoot)
+{
+    if ( path.empty() || path.is_absolute() ) {
+        return path.lexically_normal();
+    }
+
+    auto projectPath = resolveProjectPath(project, path);
+    auto mapPath     = (mapDirectory / path).lexically_normal();
+
+    std::error_code ec;
+    if ( preferProjectRoot ) {
+        if ( std::filesystem::exists(projectPath, ec) ) return projectPath;
+        ec.clear();
+        if ( std::filesystem::exists(mapPath, ec) ) return mapPath;
+        return projectPath;
+    }
+
+    if ( std::filesystem::exists(mapPath, ec) ) return mapPath;
+    ec.clear();
+    if ( std::filesystem::exists(projectPath, ec) ) return projectPath;
+    return mapPath;
+}
+
+/// @brief Normalize long-lived beatmap metadata paths to project-relative paths.
+void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
+                                             const Project& project)
+{
+    auto& meta = beatMap.m_baseMapMetadata;
+    if ( meta.map_path.empty() ) return;
+
+    auto absoluteMapPath = resolveProjectPath(project, meta.map_path);
+    auto mapDirectory    = absoluteMapPath.parent_path();
+    auto mapExtension    = Config::pathToUtf8(absoluteMapPath.extension());
+    std::transform(mapExtension.begin(),
+                   mapExtension.end(),
+                   mapExtension.begin(),
+                   ::tolower);
+    bool preferProjectRoot = (mapExtension == ".mmm");
+
+    meta.map_path = makeProjectRelativePath(project, absoluteMapPath);
+
+    auto normalizeResourcePath = [&](std::filesystem::path& path) {
+        if ( path.empty() ) return;
+        auto resolved = resolveMetadataResourcePath(
+            project, mapDirectory, path, preferProjectRoot);
+        path = makeProjectRelativePath(project, resolved);
+    };
+
+    normalizeResourcePath(meta.main_audio_path);
+    normalizeResourcePath(meta.main_cover_path);
+    normalizeResourcePath(meta.cover_path);
 }
 
 std::string getMainAudioSyncKey(const SessionContext& ctx,
@@ -244,6 +330,7 @@ void EditorEngine::cancelPendingProjectSwitch()
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+
     for ( const auto& entry : m_sessions ) {
         if ( !entry.isLogoPlaceholder ) {
             return true;
@@ -317,14 +404,14 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
             // 预加载谱面以获取其定义的主音频路径
             try {
                 auto tempMap = BeatMap::loadFromFile(mapPath);
+                normalizeBeatmapMetadataPathsForProject(tempMap, *newProject);
                 if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
                     // 获取相对于项目根目录的音频路径
                     auto absAudioPath =
-                        mapPath.parent_path() /
+                        newProject->m_projectRoot /
                         tempMap.m_baseMapMetadata.main_audio_path;
-                    auto relAudioPath =
-                        Config::pathToUtf8(std::filesystem::relative(
-                            absAudioPath, actualProjectPath));
+                    auto relAudioPath = Config::pathToUtf8(
+                        tempMap.m_baseMapMetadata.main_audio_path);
 
                     mapEntry.m_audioTrackId =
                         Config::pathToUtf8(absAudioPath.filename());
@@ -591,21 +678,15 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
                                      std::to_string(suffix++) + ".mmm");
     }
 
-    meta.map_path = mapPath;
+    meta.map_path = makeProjectRelativePath(*m_currentProject, mapPath);
 
     // 处理音频资源路径 (如果是绝对路径，尝试转为相对路径)
-    auto processPath = [&](std::filesystem::path& p) {
-        if ( p.empty() ) return;
-        if ( p.is_absolute() ) {
-            try {
-                p = std::filesystem::relative(p,
-                                              m_currentProject->m_projectRoot);
-            } catch ( ... ) {
-            }
-        }
-    };
-    processPath(meta.main_audio_path);
-    processPath(meta.main_cover_path);
+    meta.main_audio_path =
+        makeProjectRelativePath(*m_currentProject, meta.main_audio_path);
+    meta.main_cover_path =
+        makeProjectRelativePath(*m_currentProject, meta.main_cover_path);
+    meta.cover_path =
+        makeProjectRelativePath(*m_currentProject, meta.cover_path);
 
     // 2. 创建 BeatMap 对象
     auto newBeatmap               = std::make_shared<MMM::BeatMap>();
@@ -890,6 +971,7 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     // 添加到项目列表
     try {
         auto map = BeatMap::loadFromFile(absMapPath);
+        normalizeBeatmapMetadataPathsForProject(map, *m_currentProject);
 
         Project::BeatmapEntry entry;
         entry.m_name = map.m_baseMapMetadata.version;
@@ -1100,6 +1182,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     bool isLogoPlaceholder)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
+
+    if ( m_currentProject && beatmap ) {
+        normalizeBeatmapMetadataPathsForProject(*beatmap, *m_currentProject);
+    }
 
     // 检查是否可以复用 Logo 占位画布
     if ( !isLogoPlaceholder && beatmap ) {
@@ -1624,21 +1710,21 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 
     std::string removedPath;
     auto&       resources = m_currentProject->m_audioResources;
-    resources.erase(std::remove_if(resources.begin(),
-                                   resources.end(),
-                                   [&](const AudioResource& res) {
-                                       if ( res.m_id != cmd.id ) {
-                                           return false;
-                                       }
-                                       removedPath = res.m_path;
-                                       if ( res.m_type ==
-                                            AudioTrackType::Effect ) {
-                                           Audio::AudioManager::instance()
-                                               .unloadSoundEffect(res.m_id);
-                                       }
-                                       return true;
-                                   }),
-                    resources.end());
+    resources.erase(
+        std::remove_if(
+            resources.begin(),
+            resources.end(),
+            [&](const AudioResource& res) {
+                if ( res.m_id != cmd.id ) {
+                    return false;
+                }
+                removedPath = res.m_path;
+                if ( res.m_type == AudioTrackType::Effect ) {
+                    Audio::AudioManager::instance().unloadSoundEffect(res.m_id);
+                }
+                return true;
+            }),
+        resources.end());
     addExcludedPath(m_currentProject->m_excludedAudioPaths, removedPath);
 
     // 同时清理谱面对该音轨的引用
@@ -1678,17 +1764,18 @@ void EditorEngine::updateBeatmapFilePathInProject(
     if ( !m_currentProject ) return;
 
     auto absRoot = std::filesystem::absolute(m_currentProject->m_projectRoot);
-    auto absOld  = std::filesystem::absolute(oldPath);
-    auto absNew  = std::filesystem::absolute(newPath);
+    auto absOld  = resolveProjectPath(*m_currentProject, oldPath);
+    auto absNew  = resolveProjectPath(*m_currentProject, newPath);
 
-    std::error_code ec;
-    auto            relOldPath = std::filesystem::relative(absOld, absRoot, ec);
-    auto            relNewPath = std::filesystem::relative(absNew, absRoot, ec);
+    std::error_code oldEc;
+    std::error_code newEc;
+    auto relOldPath = std::filesystem::relative(absOld, absRoot, oldEc);
+    auto relNewPath = std::filesystem::relative(absNew, absRoot, newEc);
 
     std::string relOld =
-        relOldPath.empty() ? "" : Config::pathToUtf8(relOldPath);
+        (oldEc || relOldPath.empty()) ? "" : Config::pathToUtf8(relOldPath);
     std::string relNew =
-        relNewPath.empty() ? "" : Config::pathToUtf8(relNewPath);
+        (newEc || relNewPath.empty()) ? "" : Config::pathToUtf8(relNewPath);
 
     bool found = false;
     for ( auto& entry : m_currentProject->m_beatmaps ) {
@@ -1696,6 +1783,8 @@ void EditorEngine::updateBeatmapFilePathInProject(
             entry.m_filePath = relNew;
             try {
                 auto map     = BeatMap::loadFromFile(absNew);
+                normalizeBeatmapMetadataPathsForProject(map,
+                                                        *m_currentProject);
                 entry.m_name = map.m_baseMapMetadata.version;
                 if ( entry.m_name.empty() )
                     entry.m_name = Config::pathToUtf8(absNew.filename());
@@ -1758,6 +1847,10 @@ void EditorEngine::scanProjectDirectory()
         auto relMapPath = Config::pathToUtf8(
             std::filesystem::relative(mapPath, actualProjectPath));
         auto filename = Config::pathToUtf8(mapPath.filename());
+        if ( containsExcludedPath(m_currentProject->m_excludedBeatmapPaths,
+                                  relMapPath) ) {
+            continue;
+        }
 
         // 查找是否已经存在该谱面 entry
         Project::BeatmapEntry mapEntry;
@@ -1776,13 +1869,14 @@ void EditorEngine::scanProjectDirectory()
             mapEntry.m_filePath = relMapPath;
             try {
                 auto tempMap = BeatMap::loadFromFile(mapPath);
+                normalizeBeatmapMetadataPathsForProject(tempMap,
+                                                        *m_currentProject);
                 if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
                     auto absAudioPath =
-                        mapPath.parent_path() /
+                        m_currentProject->m_projectRoot /
                         tempMap.m_baseMapMetadata.main_audio_path;
-                    auto relAudioPath =
-                        Config::pathToUtf8(std::filesystem::relative(
-                            absAudioPath, actualProjectPath));
+                    auto relAudioPath = Config::pathToUtf8(
+                        tempMap.m_baseMapMetadata.main_audio_path);
                     mapEntry.m_audioTrackId =
                         Config::pathToUtf8(absAudioPath.filename());
                     mainAudioPaths.insert(relAudioPath);
@@ -1796,13 +1890,14 @@ void EditorEngine::scanProjectDirectory()
             if ( !mapEntry.m_audioTrackId.empty() ) {
                 try {
                     auto tempMap = BeatMap::loadFromFile(mapPath);
+                    normalizeBeatmapMetadataPathsForProject(tempMap,
+                                                            *m_currentProject);
                     if ( !tempMap.m_baseMapMetadata.main_audio_path.empty() ) {
                         auto absAudioPath =
-                            mapPath.parent_path() /
+                            m_currentProject->m_projectRoot /
                             tempMap.m_baseMapMetadata.main_audio_path;
-                        auto relAudioPath =
-                            Config::pathToUtf8(std::filesystem::relative(
-                                absAudioPath, actualProjectPath));
+                        auto relAudioPath = Config::pathToUtf8(
+                            tempMap.m_baseMapMetadata.main_audio_path);
                         mainAudioPaths.insert(relAudioPath);
                     }
                 } catch ( ... ) {
@@ -1827,6 +1922,10 @@ void EditorEngine::scanProjectDirectory()
         auto relAudioPath = Config::pathToUtf8(
             std::filesystem::relative(audioPath, actualProjectPath));
         auto filename = Config::pathToUtf8(audioPath.filename());
+        if ( containsExcludedPath(m_currentProject->m_excludedAudioPaths,
+                                  relAudioPath) ) {
+            continue;
+        }
 
         // 查找是否已经存在该音频资源
         AudioResource res;

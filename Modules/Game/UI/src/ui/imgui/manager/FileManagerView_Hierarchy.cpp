@@ -128,16 +128,29 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                         if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
                              ext == ".mmm" ) {
                             publishToggleEvent(SideBarTab::BeatMapExplorer);
+                            bool        foundBeatmap = false;
+                            std::string displayName =
+                                Config::pathToUtf8(p.filename());
                             for ( const auto& bm : project->m_beatmaps ) {
                                 if ( bm.m_filePath == relPath ) {
-                                    auto loadedBeatmap =
-                                        std::make_shared<MMM::BeatMap>(
-                                            MMM::BeatMap::loadFromFile(p));
-                                    engine.createSession(loadedBeatmap,
-                                                         bm.m_name);
+                                    foundBeatmap = true;
+                                    displayName  = bm.m_name;
                                     break;
                                 }
                             }
+                            if ( !foundBeatmap ) {
+                                engine.syncProjectWithFile(p);
+                                for ( const auto& bm : project->m_beatmaps ) {
+                                    if ( bm.m_filePath == relPath ) {
+                                        displayName = bm.m_name;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                                MMM::BeatMap::loadFromFile(p));
+                            engine.createSession(loadedBeatmap, displayName);
                         } else if ( ext == ".mp3" || ext == ".wav" ||
                                     ext == ".ogg" || ext == ".flac" ) {
                             publishToggleEvent(SideBarTab::AudioExplorer);
