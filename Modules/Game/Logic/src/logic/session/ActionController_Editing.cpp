@@ -21,6 +21,36 @@
 namespace MMM::Logic
 {
 
+/// @brief 获取当前会话可用于轨道镜像的轨道数量。
+int getMirrorTrackCount(const SessionContext& ctx)
+{
+    if ( ctx.currentBeatmap &&
+         ctx.currentBeatmap->m_baseMapMetadata.track_count > 0 ) {
+        return ctx.currentBeatmap->m_baseMapMetadata.track_count;
+    }
+    return ctx.trackCount;
+}
+
+/// @brief 对单个 NoteComponent 应用轨道镜像变换。
+void mirrorNoteComponent(NoteComponent& note, int trackCount)
+{
+    if ( trackCount <= 0 ) return;
+
+    note.m_trackIndex = (trackCount - 1) - note.m_trackIndex;
+    if ( note.m_type == ::MMM::NoteType::FLICK ) {
+        note.m_dtrack = -note.m_dtrack;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( auto& sub : note.m_subNotes ) {
+            sub.trackIndex = (trackCount - 1) - sub.trackIndex;
+            if ( sub.type == ::MMM::NoteType::FLICK ) {
+                sub.dtrack = -sub.dtrack;
+            }
+        }
+    }
+}
+
 // --- Editing Handlers ---
 
 void ActionController::handleCommand(const CmdUndo& cmd)
@@ -135,7 +165,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
 void ActionController::handleCommand(const CmdMirrorSelected& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
-    int trackCount = m_ctx.currentBeatmap->m_baseMapMetadata.track_count;
+    int trackCount = getMirrorTrackCount(m_ctx);
 
     std::vector<BatchNoteAction::Entry> entries;
     std::unordered_set<entt::entity>    toMirror;
@@ -171,21 +201,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
         const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
         auto        newNote = oldNote;
 
-        // 镜像主轨道索引
-        newNote.m_trackIndex = (trackCount - 1) - oldNote.m_trackIndex;
-        if ( oldNote.m_type == ::MMM::NoteType::FLICK ) {
-            newNote.m_dtrack = -oldNote.m_dtrack;
-        }
-
-        // 如果是 Polyline，还需要镜像其内部缓存的 subNotes 列表
-        if ( oldNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( auto& sub : newNote.m_subNotes ) {
-                sub.trackIndex = (trackCount - 1) - sub.trackIndex;
-                if ( sub.type == ::MMM::NoteType::FLICK ) {
-                    sub.dtrack = -sub.dtrack;
-                }
-            }
-        }
+        mirrorNoteComponent(newNote, trackCount);
 
         entries.push_back({ entity, oldNote, newNote });
     }
@@ -265,6 +281,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
     double timeOffset = pasteTime - minTime;
 
+    int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
     for ( const auto& item : clipboard ) {
         auto newNote        = item.note;
         newNote.m_timestamp = item.note.m_timestamp + timeOffset;
@@ -276,11 +293,15 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
         }
 
+        if ( cmd.m_mirrored ) {
+            mirrorNoteComponent(newNote, mirrorTrackCount);
+        }
+
         entries.push_back({ entt::null, std::nullopt, newNote });
     }
 
-    auto action =
-        std::make_unique<BatchNoteAction>(std::move(entries), "Paste");
+    auto action = std::make_unique<BatchNoteAction>(
+        std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
 
     // 清除剪切状态

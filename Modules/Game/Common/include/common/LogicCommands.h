@@ -252,6 +252,8 @@ struct CmdCopy {
  * @brief 粘贴指令
  */
 struct CmdPaste {
+    /// @brief 是否在粘贴出的物件上立即应用轨道镜像。
+    bool m_mirrored{ false };
 };
 
 /**

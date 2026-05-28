@@ -241,6 +241,8 @@ std::string BatchNoteAction::getName() const
         nameKey = "ui.status.action.delete_selected";
     else if ( m_name == "Paste" )
         nameKey = "ui.status.action.paste";
+    else if ( m_name == "Mirror Paste" )
+        nameKey = "ui.edit.mirror_paste";
     else if ( m_name == "Align Selected" )
         nameKey = "ui.tools.align_beats";
 
