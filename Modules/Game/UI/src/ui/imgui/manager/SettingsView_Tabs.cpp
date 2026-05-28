@@ -1035,6 +1035,7 @@ void SettingsView::drawVisualSettings()
         TR_CACHE("ui.settings.visual.layout_box_width").data(),
         TR_CACHE("ui.settings.visual.judgeline_pos").data(),
         TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
+        TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
         TR_CACHE("ui.settings.visual.note_scale_x").data(),
         TR_CACHE("ui.settings.visual.note_scale_y").data(),
         TR_CACHE("ui.settings.visual.note_fill_mode").data(),
@@ -1235,6 +1236,16 @@ void SettingsView::drawVisualSettings()
                 ImGui::SetNextItemWidth(r.width);
                 changed |= ImGui::SliderFloat(
                     "##BeatLineAlpha", &visual.beatLineAlpha, 0.0f, 1.0f);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                changed |=
+                    ImGui::Checkbox("##BeatLineBeforeFirstTiming",
+                                    &visual.drawBeatLinesBeforeFirstTiming);
             });
     }
 

@@ -159,6 +159,8 @@ struct VisualConfig {
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度
     float beatLineAlpha{ 1.0f };
+    /// @brief 是否绘制第一个 BPM 红线前的分拍线
+    bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
     bool drawBeatLines{ true };
     /// @brief 是否启用打击特效动画
@@ -169,23 +171,25 @@ struct VisualConfig {
 
 inline void to_json(nlohmann::json& j, const VisualConfig& c)
 {
-    j = nlohmann::json{ { "trackLayout", c.trackLayout },
-                        { "background", c.background },
-                        { "previewConfig", c.previewConfig },
-                        { "trackBoxLineWidth", c.trackBoxLineWidth },
-                        { "judgeline_pos", c.judgeline_pos },
-                        { "noteScaleX", c.noteScaleX },
-                        { "noteScaleY", c.noteScaleY },
-                        { "noteFillMode", c.noteFillMode },
-                        { "visualOffset", c.visualOffset },
-                        { "timelineZoom", c.timelineZoom },
-                        { "enableLinearScrollMapping",
-                          c.enableLinearScrollMapping },
-                        { "snapThreshold", c.snapThreshold },
-                        { "beatLineAlpha", c.beatLineAlpha },
-                        { "drawBeatLines", c.drawBeatLines },
-                        { "enableHitEffects", c.enableHitEffects },
-                        { "debugDrawHitboxes", c.debugDrawHitboxes } };
+    j = nlohmann::json{
+        { "trackLayout", c.trackLayout },
+        { "background", c.background },
+        { "previewConfig", c.previewConfig },
+        { "trackBoxLineWidth", c.trackBoxLineWidth },
+        { "judgeline_pos", c.judgeline_pos },
+        { "noteScaleX", c.noteScaleX },
+        { "noteScaleY", c.noteScaleY },
+        { "noteFillMode", c.noteFillMode },
+        { "visualOffset", c.visualOffset },
+        { "timelineZoom", c.timelineZoom },
+        { "enableLinearScrollMapping", c.enableLinearScrollMapping },
+        { "snapThreshold", c.snapThreshold },
+        { "beatLineAlpha", c.beatLineAlpha },
+        { "drawBeatLinesBeforeFirstTiming", c.drawBeatLinesBeforeFirstTiming },
+        { "drawBeatLines", c.drawBeatLines },
+        { "enableHitEffects", c.enableHitEffects },
+        { "debugDrawHitboxes", c.debugDrawHitboxes }
+    };
 }
 
 inline void from_json(const nlohmann::json& j, VisualConfig& c)
@@ -204,8 +208,10 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
     c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
     c.drawBeatLines             = j.value("drawBeatLines", true);
-    c.enableHitEffects          = j.value("enableHitEffects", true);
-    c.debugDrawHitboxes         = j.value("debugDrawHitboxes", false);
+    c.drawBeatLinesBeforeFirstTiming =
+        j.value("drawBeatLinesBeforeFirstTiming", true);
+    c.enableHitEffects  = j.value("enableHitEffects", true);
+    c.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
 }
 
 }  // namespace MMM::Config

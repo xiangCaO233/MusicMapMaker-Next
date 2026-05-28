@@ -145,6 +145,7 @@ return {
 	["ui.settings.visual.judgeline_width"] = "判定线线宽",
 	["ui.settings.visual.beat_line"] = "分拍线",
 	["ui.settings.visual.beat_line_alpha"] = "分拍线透明度",
+	["ui.settings.visual.beat_line_before_first_timing"] = "首个红线前分拍线",
 	["ui.settings.visual.note"] = "物件渲染",
 	["ui.settings.visual.note_scale_x"] = "物件横向缩放",
 	["ui.settings.visual.note_scale_y"] = "物件纵向缩放",
@@ -417,7 +418,7 @@ return {
 	["ui.tools.each_other"] = "彼此",
 	["ui.tools.align_beats"] = "对齐至常用分拍",
 	["ui.tools.format"] = "对齐常用分拍",
- 
+
 	["ui.wizard.new_beatmap.title"] = "新建谱面向导",
 	["ui.wizard.new_beatmap.create"] = "立即创建",
 	["ui.wizard.new_beatmap.cancel"] = "取消",
@@ -426,10 +427,10 @@ return {
 	["ui.wizard.new_beatmap.select_cover_img"] = "选择封面图片",
 	["ui.wizard.new_beatmap.audio_not_selected"] = "请先选择音频文件",
 	["ui.wizard.new_beatmap.no_project"] = "无法创建：请先打开或创建一个项目",
- 
+
 	["canvas.preview.jump_to"] = "跳转至: {}",
 	["tips.welcome"] = "欢迎使用MusicMapMaker!",
- 
+
 	-- 时间线事件编辑器
 	["ui.timeline.event_editor.title"] = "{} 事件详情",
 	["ui.timeline.event_editor.timestamp"] = "时间戳 (秒)",

@@ -142,6 +142,7 @@ return {
 	["ui.settings.visual.judgeline_width"] = "Judge Line Width",
 	["ui.settings.visual.beat_line"] = "Beat Line",
 	["ui.settings.visual.beat_line_alpha"] = "Beat Line Alpha",
+	["ui.settings.visual.beat_line_before_first_timing"] = "Before First Timing Line",
 	["ui.settings.visual.note"] = "Note Rendering",
 	["ui.settings.visual.note_scale_x"] = "Note Horizontal Scale",
 	["ui.settings.visual.note_scale_y"] = "Note Vertical Scale",
@@ -413,7 +414,7 @@ return {
 	["ui.tools.each_other"] = "each other",
 	["ui.tools.align_beats"] = "Align Selected to Common Beats",
 	["ui.tools.format"] = "Format Beats",
- 
+
 	["ui.wizard.new_beatmap.title"] = "New Beatmap Wizard",
 	["ui.wizard.new_beatmap.create"] = "Create Now",
 	["ui.wizard.new_beatmap.cancel"] = "Cancel",
@@ -422,10 +423,10 @@ return {
 	["ui.wizard.new_beatmap.select_cover_img"] = "Select Cover Image",
 	["ui.wizard.new_beatmap.audio_not_selected"] = "Please select an audio file first",
 	["ui.wizard.new_beatmap.no_project"] = "Cannot create: Please open or create a project first",
- 
+
 	["canvas.preview.jump_to"] = "Jump to: {}",
 	["tips.welcome"] = "Welcome to MusicMapMaker!",
- 
+
 	-- Timeline Event Editor
 	["ui.timeline.event_editor.title"] = "{} Event Details",
 	["ui.timeline.event_editor.timestamp"] = "Timestamp (s)",

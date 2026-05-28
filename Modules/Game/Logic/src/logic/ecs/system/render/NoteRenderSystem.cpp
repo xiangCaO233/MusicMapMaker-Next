@@ -530,18 +530,31 @@ void NoteRenderSystem::generateTimelineSnapshot(
             double stepDuration = beatDuration / beatDivisor;
 
             for ( const auto& [startTime, endTime] : visibleRanges ) {
-                if ( nextBpmTime <= startTime || bpmTime >= endTime ) continue;
+                if ( nextBpmTime <= startTime ) continue;
+                double segmentStartTime = bpmTime;
+                if ( i == 0 && config.visual.drawBeatLinesBeforeFirstTiming ) {
+                    segmentStartTime = startTime;
+                }
+                if ( segmentStartTime >= endTime ) continue;
 
-                double  startCalcTime = std::max(bpmTime, startTime);
+                double  startCalcTime = std::max(segmentStartTime, startTime);
                 int64_t stepOffset    = 0;
                 if ( startCalcTime > bpmTime ) {
                     stepOffset = static_cast<int64_t>(std::ceil(
                         (startCalcTime - bpmTime) / stepDuration - 1e-4));
+                } else if ( startCalcTime < bpmTime ) {
+                    stepOffset = static_cast<int64_t>(std::floor(
+                        (startCalcTime - bpmTime) / stepDuration + 1e-4));
                 }
 
                 double t = bpmTime + stepOffset * stepDuration;
+                while ( t < startCalcTime - 1e-4 ) {
+                    stepOffset++;
+                    t = bpmTime + stepOffset * stepDuration;
+                }
                 while ( t < nextBpmTime && t <= endTime ) {
-                    int beatIndex   = stepOffset % beatDivisor;
+                    int beatIndex = static_cast<int>(stepOffset % beatDivisor);
+                    if ( beatIndex < 0 ) beatIndex += beatDivisor;
                     int denominator = 1;
                     if ( beatIndex != 0 ) {
                         int gcd     = std::gcd(beatIndex, beatDivisor);
