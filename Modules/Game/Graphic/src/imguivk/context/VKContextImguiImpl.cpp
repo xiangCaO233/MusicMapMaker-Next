@@ -154,7 +154,8 @@ void VKContext::setupFonts()
                 });
             if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
-            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredAsciiFont)) ) {
+            } else if ( std::filesystem::exists(
+                            Config::utf8ToPath(settings.preferredAsciiFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 asciiFontPath = settings.preferredAsciiFont;
             }
@@ -170,7 +171,8 @@ void VKContext::setupFonts()
                 });
             if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
-            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredCjkFont)) ) {
+            } else if ( std::filesystem::exists(
+                            Config::utf8ToPath(settings.preferredCjkFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 cjkFontPath = settings.preferredCjkFont;
             }
@@ -323,14 +325,13 @@ void VKContext::updateFontScales()
 
 void VKContext::requestFontRebuild()
 {
-    m_fontRebuildRequested.store(true);
+    m_fontRebuildRequested.store(true, std::memory_order_release);
 }
 
 void VKContext::checkAndRebuildFonts()
 {
-    if ( m_fontRebuildRequested.load() ) {
+    if ( m_fontRebuildRequested.exchange(false, std::memory_order_acq_rel) ) {
         rebuildFonts();
-        m_fontRebuildRequested.store(false);
     }
 }
 

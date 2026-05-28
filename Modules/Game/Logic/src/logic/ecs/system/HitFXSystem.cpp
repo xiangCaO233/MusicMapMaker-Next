@@ -102,6 +102,9 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
     m_trackActiveEffects[ev.trackIndex] = newEffect;
 }
 
+/// @brief 更新打击特效状态。
+/// @warning 逻辑热路径：每个 Session update
+/// 执行；只处理本帧事件和当前活跃特效表。
 void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
                          const Config::EditorConfig& config)
 {
@@ -141,6 +144,8 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
     }
 }
 
+/// @brief 生成打击特效的渲染指令。
+/// @warning 渲染热路径：快照生成阶段执行；只遍历当前活跃特效表并追加几何。
 void HitFXSystem::generateSnapshot(Batcher& batcher, double visualTime,
                                    const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,

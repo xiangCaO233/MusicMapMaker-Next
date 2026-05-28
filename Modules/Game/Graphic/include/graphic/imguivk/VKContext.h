@@ -8,6 +8,7 @@
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "imgui_impl_vulkan.h"
+#include <atomic>
 #include <expected>
 #include <memory>
 #include <unordered_map>
@@ -97,6 +98,9 @@ public:
 
     /**
      * @brief 绘制临时中央通知 (每帧渲染)
+     * @warning
+     * 热路径：渲染循环每帧执行；禁止文件系统访问、阻塞等待和异常处理。
+
      */
     void drawCenterNotification();
 
@@ -117,11 +121,18 @@ public:
 
     /**
      * @brief 请求在下一帧开始前进行字体重建 (线程安全)
+     * @warning
+     * 原子：设置跨
+     * UI/渲染边界的字体重建请求；只发布布尔脏位，不同步字体资源本身。
+
      */
     void requestFontRebuild();
 
     /**
      * @brief 检查并执行字体重建 (由主循环在 NewFrame 前调用)
+     *
+     * @warning 热路径/原子：渲染循环每帧调用一次；原子 exchange
+     * 不可避免，用于低频字体重建请求消耗。
      */
     void checkAndRebuildFonts();
 
@@ -149,6 +160,8 @@ private:
 
 private:
     /// @brief 字体重建请求标志
+    /// @warning
+    /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
     std::atomic<bool> m_fontRebuildRequested{ false };
 
 private:

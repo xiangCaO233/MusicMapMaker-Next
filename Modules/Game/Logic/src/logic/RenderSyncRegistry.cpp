@@ -5,6 +5,8 @@ namespace MMM::Logic
 {
 
 /// @brief 获取或创建指定画布的同步缓冲区。
+/// @warning 逻辑热路径/共享指针：shared_ptr 拷贝用于跨 UI
+/// 关闭路径延长缓冲区生命周期，避免锁外发布快照时悬垂。
 std::shared_ptr<BeatmapSyncBuffer> RenderSyncRegistry::getSyncBuffer(
     const std::string& cameraId)
 {

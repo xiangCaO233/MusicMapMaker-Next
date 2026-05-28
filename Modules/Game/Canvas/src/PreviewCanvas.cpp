@@ -37,6 +37,9 @@ PreviewCanvas::PreviewCanvas(
     m_targetHeight = h;
 }
 
+/// @brief 更新预览画布 ImGui 窗口和鼠标交互。
+/// @warning
+/// 热路径：主渲染线程每帧执行；只发送变化后的鼠标命令，避免每帧重复事件。
 void PreviewCanvas::update(UI::UIManager* sourceManager)
 {
     // 预览窗口专用 ID：###PreviewWindow
@@ -361,6 +364,8 @@ const std::vector<uint32_t>& PreviewCanvas::getIndices() const
     return empty;
 }
 
+/// @brief 录制预览画布离屏绘制命令。
+/// @warning 热路径：每帧命令录制时执行；只遍历快照命令列表并复用 descriptor。
 void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,

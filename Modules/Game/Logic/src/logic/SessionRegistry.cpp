@@ -23,12 +23,14 @@ std::string SessionRegistry::createNextCameraId()
 }
 
 /// @brief 获取当前活跃 Session 索引。
+/// @warning 逻辑/UI 热路径原子：只读取活跃索引脏状态，使用 relaxed。
 int32_t SessionRegistry::activeIndex() const
 {
     return m_activeIndex.load(std::memory_order_relaxed);
 }
 
 /// @brief 设置当前活跃 Session 索引。
+/// @warning 逻辑/UI 热路径原子：只写入活跃索引脏状态，使用 relaxed。
 void SessionRegistry::setActiveIndex(int32_t index)
 {
     m_activeIndex.store(index, std::memory_order_relaxed);
@@ -109,6 +111,8 @@ std::string SessionRegistry::activeCameraId() const
 }
 
 /// @brief 获取当前所有有效 Session 指针快照。
+/// @warning 逻辑热路径/共享指针：shared_ptr 拷贝用于延长会话生命周期，避免锁外
+/// update 时被 UI 线程关闭释放。
 std::vector<std::shared_ptr<BeatmapSession>>
 SessionRegistry::sessionSnapshot() const
 {

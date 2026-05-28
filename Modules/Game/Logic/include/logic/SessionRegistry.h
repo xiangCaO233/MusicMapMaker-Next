@@ -59,10 +59,12 @@ public:
 
     /// @brief 获取当前活跃 Session 索引。
     /// @return 当前活跃 Session 索引，-1 表示没有活跃 Session。
+    /// @warning 逻辑/UI 热路径原子：只读取活跃索引脏状态，使用 relaxed。
     int32_t activeIndex() const;
 
     /// @brief 设置当前活跃 Session 索引。
     /// @param index 目标活跃 Session 索引。
+    /// @warning 逻辑/UI 热路径原子：只写入活跃索引脏状态，使用 relaxed。
     void setActiveIndex(int32_t index);
 
     /// @brief 获取 Session 总数。
@@ -98,6 +100,9 @@ public:
 
     /// @brief 获取当前所有有效 Session 指针快照。
     /// @return 当前注册的非空 BeatmapSession 指针列表。
+    /// @warning 逻辑热路径/共享指针：逻辑循环每次 update 前调用；shared_ptr
+    /// 拷贝用于保证会话在锁外更新期间不被 UI
+    /// 关闭销毁，不能替换为裸引用，除非先引入延迟销毁队列。
     std::vector<std::shared_ptr<BeatmapSession>> sessionSnapshot() const;
 
     /// @brief 查找第一个 Logo 占位 Session。
@@ -140,6 +145,8 @@ private:
     std::vector<SessionEntry> m_entries;
 
     /// @brief 当前活跃画布 Session 索引，-1 表示没有活跃 Session。
+    /// @warning 逻辑/UI 热路径原子：UI
+    /// 聚焦和逻辑路由都会读取；只保存索引脏状态，使用 relaxed 访问。
     std::atomic<int32_t> m_activeIndex{ -1 };
 
     /// @brief 全局递增的画布 ID 计数器，用于生成唯一 cameraId。

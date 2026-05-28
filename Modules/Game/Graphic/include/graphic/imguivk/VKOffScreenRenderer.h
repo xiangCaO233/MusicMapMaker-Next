@@ -41,6 +41,9 @@ public:
     }
 
     /// @brief 录制gpu指令
+    /// @warning 热路径：每个可渲染 UI
+    /// 视图在每帧命令录制阶段执行；禁止文件系统访问、完整排序、try/catch
+    /// 和共享指针所有权复制。
     void recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIndex);
 
     /// @brief 重建帧缓冲
@@ -51,9 +54,11 @@ public:
                              size_t maxVertexCount = 81920);
 
     /// @brief 外部确认是否需要重建
+    /// @warning 热路径/原子：渲染准备阶段每帧轮询；resize
+    /// 回调可能写入，只读取脏位和消抖时间，不承载资源同步。
     inline bool needReCreateFrameBuffer() const
     {
-        if ( !m_need_reCreate.load() ) return false;
+        if ( !m_need_reCreate.load(std::memory_order_relaxed) ) return false;
 
         // 核心消抖判断：当前时间 - 最后请求时间 > 阈值
         auto now = std::chrono::steady_clock::now();
@@ -80,6 +85,9 @@ protected:
     const std::chrono::milliseconds m_debounceThreshold{ 150 };
 
     // UI 只设置目标，不改实际尺寸
+    /// @brief UI 只设置目标，不改实际尺寸
+    /// @warning 热路径/原子：ImGui update
+    /// 期间可能每帧调用；只有尺寸变化时才写入重建脏位。
     inline void setTargetSize(uint32_t logicalW, uint32_t logicalH,
                               float dpiScale)
     {
@@ -96,7 +104,7 @@ protected:
             m_logicalHeight   = logicalH;
             m_lastRequestTime = std::chrono::steady_clock::now();
             // 标记为“有变更待处理”
-            m_need_reCreate.store(true);
+            m_need_reCreate.store(true, std::memory_order_relaxed);
         }
     }
 
@@ -138,6 +146,8 @@ protected:
     }
 
     /// @brief 是否需要重建
+    /// @warning 热路径/原子：渲染准备阶段读取、UI 尺寸变化写入；仅为离屏
+    /// framebuffer 脏位。
     std::atomic<bool> m_need_reCreate{ true };
 
     /**
@@ -214,7 +224,7 @@ private:
     vk::Framebuffer m_glowFramebuffer{ VK_NULL_HANDLE },
         m_pingFramebuffer{ VK_NULL_HANDLE },
         m_pongFramebuffer{ VK_NULL_HANDLE };
-    vk::Sampler       m_glowSampler{ VK_NULL_HANDLE };
+    vk::Sampler                    m_glowSampler{ VK_NULL_HANDLE };
     std::vector<vk::DescriptorSet> m_pingDescriptorSets;
     std::vector<vk::DescriptorSet> m_pongDescriptorSets;
     std::vector<vk::DescriptorSet> m_glowDescriptorSets;

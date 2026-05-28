@@ -37,6 +37,8 @@ Basic2DCanvas::Basic2DCanvas(
 
 Basic2DCanvas::~Basic2DCanvas() {}
 
+/// @brief 更新画布 ImGui 窗口和交互状态。
+/// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     // 1. 检查保存确认拦截
@@ -106,7 +108,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     if ( m_currentSnapshot ) {
         // 更新背景纹理
-        updateBackgroundTexture();
+        /// @brief 仅在快照路径变化时同步背景纹理，避免热路径每帧访问文件系统。
+        if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
+            updateBackgroundTexture();
+        }
 
         // --- 亚帧时间补偿 (直接修改动态顶点 Y 坐标) ---
         // 当播放中时，逻辑线程生成快照的时刻 (snapshotSysTime) 与 UI

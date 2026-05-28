@@ -6,6 +6,7 @@
 #include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace MMM::Graphic
@@ -47,6 +48,7 @@ public:
 
     ~VKRenderer();
 
+    // clang-format off
     /**
      * @brief 执行单帧渲染
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
@@ -54,8 +56,10 @@ public:
      * @param window 原生窗口
      * @param 图形用户接口钩子列表
      */
-    void render(NativeWindow&                  window,
-                std::vector<IGraphicUserHook*> uiManagers);
+    /// @warning 热路径：主线程每帧执行；Fence/Acquire/Present 不可中断。
+    /// 禁止文件系统访问、完整 ECS 遍历、完整排序和每帧堆分配。
+    // clang-format on
+    void render(NativeWindow& window, std::span<IGraphicUserHook*> uiManagers);
 
     void triggerRecreate(NativeWindow& window);
 

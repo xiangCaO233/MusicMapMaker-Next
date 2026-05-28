@@ -72,20 +72,30 @@ public:
     void destroyFramebuffers();
 
     /// @brief 设置重建标志
-    void markDirty() { m_needsRecreate = true; }
+    /// @warning
+    /// 热路径/原子：窗口回调和渲染帧都会访问该标志；仅传递布尔脏状态，使用
+    /// relaxed 避免 seq_cst 栅栏成本。
+    void markDirty() { m_needsRecreate.store(true, std::memory_order_relaxed); }
 
     /// @brief 获取并重置标志（通常在重建完成后调用）
+    /// @warning
+    /// 热路径/原子：交换链重建完成后调用；仅消费本地脏状态，不承载跨线程数据发布。
     bool checkAndResetDirty()
     {
-        if ( m_needsRecreate ) {
-            m_needsRecreate = false;
+        if ( m_needsRecreate.load(std::memory_order_relaxed) ) {
+            m_needsRecreate.store(false, std::memory_order_relaxed);
             return true;
         }
         return false;
     }
 
     /// @brief 直接提供判断
-    inline bool needsRecreate() const { return m_needsRecreate.load(); }
+    /// @warning 热路径/原子：每帧渲染入口读取；不可移除，因为 resize
+    /// 回调会异步标记交换链重建。
+    inline bool needsRecreate() const
+    {
+        return m_needsRecreate.load(std::memory_order_relaxed);
+    }
 
     /**
      * @brief 高效重建交换链
@@ -126,6 +136,8 @@ private:
     std::vector<ImageBuffer> m_vkImageBuffers;
 
     /// @brief 是否需要重建
+    /// @warning 热路径/原子：渲染循环每帧读取，resize
+    /// 回调写入；只表示脏位，禁止承载资源生命周期同步。
     std::atomic<bool> m_needsRecreate{ false };
 
     // 提取出的公共初始化逻辑

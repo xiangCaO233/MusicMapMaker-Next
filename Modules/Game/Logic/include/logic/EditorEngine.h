@@ -238,6 +238,10 @@ public:
 
     /**
      * @brief 获取指定摄像机/画布的同步缓冲区
+     * @warning
+     * 逻辑热路径/共享指针：返回 shared_ptr
+     * 是为了保证画布关闭并擦除注册表时，本次快照发布仍持有缓冲区生命周期。
+
      */
     std::shared_ptr<BeatmapSyncBuffer> getSyncBuffer(
         const std::string& cameraId);
@@ -267,6 +271,8 @@ public:
 
     /**
      * @brief 获取当前工具类型
+     * @warning 逻辑/UI
+     * 热路径原子：只读取工具枚举状态，使用 relaxed。
      */
     EditTool getCurrentTool() const;
 
@@ -277,16 +283,22 @@ public:
 
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
+
      */
+    /// @warning UI 热路径/原子：状态栏可每帧读取；只用于统计展示，使用
+    /// relaxed。
     float getLogicUps() const
     {
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
     /// @brief 设置同主音轨多画布时间同步开关。
+    /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
     void setSyncSameMainAudioCanvases(bool enabled);
 
     /// @brief 获取同主音轨多画布时间同步开关。
+    /// @warning 逻辑热路径/原子：逻辑循环同步判断读取；只表示开关状态，使用
+    /// relaxed。
     bool isSyncSameMainAudioCanvasesEnabled() const
     {
         return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
@@ -305,6 +317,10 @@ public:
 private:
     /**
      * @brief 逻辑线程的主循环
+     * @warning
+     * 逻辑热路径：独立逻辑线程按 UPS 频率执行；禁止每 update 文件系统操作、完整
+     * entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+
      */
     void loop();
 
@@ -318,6 +334,8 @@ private:
     void closeProject();
 
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
+    /// @warning 逻辑热路径/原子：每次 Session update
+    /// 后可能执行；只读取同步开关并遍历当前会话列表。
     void syncSameMainAudioCanvases();
 
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
@@ -327,6 +345,8 @@ private:
     std::thread m_thread;
 
     /// @brief 线程运行标志
+    /// @warning 逻辑热路径/原子：loop 每次迭代读取、stop
+    /// 写入；需要跨线程停止信号，使用 acquire/release。
     std::atomic<bool> m_running{ false };
 
     /// @brief 所有打开的画布 Session 列表
@@ -355,9 +375,13 @@ private:
     Config::EditorConfig m_editorConfig;
 
     /// @brief 当前全局编辑工具。
+    /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
+    /// 读取；只传递枚举状态，使用 relaxed。
     std::atomic<EditTool> m_currentTool{ EditTool::Move };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
+    /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用
+    /// relaxed 降低栅栏成本。
     std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
         Config::FrameLimitPreference::Refresh2x
     };
@@ -415,9 +439,13 @@ private:
     /// @brief 该职责已收敛到 RenderSyncRegistry 内部视口尺寸缓存。
 
     /// @brief 逻辑线程实时刷新率 (UPS)
+    /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
+    /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
 
     /// @brief 是否强制同步使用同一主音轨的画布时间。
+    /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
+    /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ false };
 
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
@@ -445,9 +473,12 @@ private:
     std::thread m_watcherThread;
 
     /// @brief 监听线程运行标志
+    /// @warning 文件监听线程原子：仅用于启动/停止监听线程，不属于渲染热路径。
     std::atomic<bool> m_watcherRunning{ false };
 
     /// @brief 是否有未处理的文件系统变更挂起
+    /// @warning 逻辑热路径/原子：loop 每次迭代 exchange；不可避免，用于把
+    /// watcher 线程的文件系统事件去抖后转入低频扫描。
     std::atomic<bool> m_directoryChangedPending{ false };
 
 #ifdef _WIN32

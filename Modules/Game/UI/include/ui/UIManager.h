@@ -58,6 +58,8 @@ public:
     void DispatchGlobalUIEvents();
 
     /// @brief 准备资源
+    /// @warning 热路径：渲染循环每帧在 ImGui NewFrame
+    /// 前执行；只允许检查脏位，重建/重载必须由低频标志触发。
     void onPrepareResources(vk::PhysicalDevice&   physicalDevice,
                             vk::Device&           logicalDevice,
                             Graphic::VKSwapchain& swapchain,
@@ -65,15 +67,20 @@ public:
                             vk::Queue&            queue) override;
 
     /// @brief 更新ui
+    /// @warning 热路径：渲染循环每帧执行；禁止文件系统访问、完整 ECS
+    /// 遍历、完整排序和共享指针所有权复制。
     void onUpdateUI() override;
 
     /// @brief 录制所有离屏渲染指令
+    /// @warning 热路径：每帧命令录制阶段执行；只遍历已注册的可渲染视图序列。
     void onRecordOffscreen(vk::CommandBuffer& cmd,
                            uint32_t           frameIndex) override;
 
 private:
     /// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
     /// @param view 即将被销毁的 UI 视图。
+    /// @warning 不可中断操作：可能调用
+    /// vkDeviceWaitIdle；只能在视图销毁等低频路径执行，严禁放入每帧路径。
     void waitForGpuBeforeDestroyView(IUIView& view);
 
     /// @brief 所有ui接口

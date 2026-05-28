@@ -39,6 +39,9 @@ public:
     /// @brief 获取或创建指定画布的同步缓冲区。
     /// @param cameraId 目标画布 cameraId。
     /// @return 指定画布对应的 BeatmapSyncBuffer。
+    /// @warning 逻辑热路径/共享指针：逻辑线程发布快照时会复制
+    /// shared_ptr，以保证 UI
+    /// 关闭画布并擦除注册表时缓冲区不会在本次发布中析构；若要改为引用，必须先实现延迟销毁。
     std::shared_ptr<BeatmapSyncBuffer> getSyncBuffer(
         const std::string& cameraId);
 

@@ -41,6 +41,9 @@ public:
     ~Basic2DCanvas() override;
 
     // 接口实现
+    /// @brief 更新画布 ImGui 窗口和交互状态。
+    /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS
+    /// 遍历、完整排序和共享指针所有权复制。
     void update(UI::UIManager* sourceManager) override;
 
     /// @brief 获取窗口是否打开，用于拦截未保存的关闭
@@ -85,12 +88,17 @@ protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;
     const std::vector<uint32_t>& getIndices() const override;
+    /// @warning
+    /// 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并绑定已存在的
+    /// descriptor。
     void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                           vk::PipelineLayout      pipelineLayout,
                           vk::DescriptorSetLayout setLayout,
                           vk::DescriptorSet       defaultDescriptor,
                           uint32_t                frameIndex) override;
 
+    /// @warning 热路径：启用发光时每帧离屏命令录制执行；只允许遍历 glow
+    /// 命令列表。
     void onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
                           vk::PipelineLayout      pipelineLayout,
                           vk::DescriptorSetLayout setLayout,
@@ -105,6 +113,8 @@ private:
     std::string m_cameraId;
 
     /// @brief 同步缓冲区
+    /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update
+    /// 中不得复制该 shared_ptr。
     std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
 
     /// @brief 当前正在使用的渲染快照
@@ -153,6 +163,9 @@ private:
     bool m_shouldDockToCenter{ false };
 
 private:
+    /// @brief 当快照背景路径变化时加载或清理背景纹理。
+    /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
+    /// GPU；只能在背景路径变化时调用，严禁每帧执行。
     void updateBackgroundTexture();
 };
 

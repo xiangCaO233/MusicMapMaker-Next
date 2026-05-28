@@ -176,31 +176,17 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
 
 void NoteRenderSystem::drawBeatLines(
     Batcher& batcher, float viewportHeight, float judgmentLineY,
-    const Config::EditorConfig& config, const entt::registry& timelineRegistry,
-    double currentTime, const ScrollCache* cache, float leftX, float topY,
-    float bottomY, float trackAreaW, float renderScaleY)
+    const Config::EditorConfig&                  config,
+    const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
+    const ScrollCache* cache, float leftX, float topY, float bottomY,
+    float trackAreaW, float renderScaleY)
 {
     if ( !cache ) return;
 
     int beatDivisor = config.settings.beatDivisor;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
-        }
-    }
     if ( bpmEvents.empty() ) return;
-
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
 
     double currentAbsY = cache->getAbsY(currentTime);
     if ( std::abs(renderScaleY) < 1e-6f ) return;

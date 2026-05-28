@@ -287,7 +287,7 @@ void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)
     auto app =
         reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(window));
     app->m_lastResizeTime = std::chrono::steady_clock::now();
-    app->m_resizePending  = true;
+    app->m_resizePending.store(true, std::memory_order_relaxed);
 }
 
 void NativeWindow::GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,

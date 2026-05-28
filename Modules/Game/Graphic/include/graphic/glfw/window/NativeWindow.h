@@ -35,9 +35,12 @@ public:
      */
     void ToggleFullscreen();
 
+    /// @brief 判断窗口尺寸是否完成消抖并需要重建交换链。
+    /// @warning 热路径/原子：渲染循环每帧读取 resize 标志；GLFW framebuffer
+    /// 回调写入，只传递脏状态，使用 relaxed 避免额外同步成本。
     inline bool shouldRecreate() const
     {
-        if ( !m_resizePending ) return false;
+        if ( !m_resizePending.load(std::memory_order_relaxed) ) return false;
 
         // 如果距离最后一次 resize 事件已经过去了 200ms，认为拖动已停止
         auto now      = std::chrono::steady_clock::now();
@@ -46,7 +49,7 @@ public:
                             .count();
 
         if ( duration > 200 ) {
-            m_resizePending = false;
+            m_resizePending.store(false, std::memory_order_relaxed);
             return true;
         }
         return false;
@@ -62,12 +65,15 @@ public:
 private:
     GLFWwindow*                           m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
-    mutable std::atomic<bool>             m_resizePending{ false };
-    static double                         s_lastMouseX;
-    static double                         s_lastMouseY;
-    static bool                           s_firstMouse;
-    int m_backupPos[2]  = { 100, 100 };   // 默认备份位置
-    int m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
+    /// @brief 是否有待消抖的窗口尺寸变化。
+    /// @warning 热路径/原子：由 GLFW 回调写入、渲染循环读取；只表示 resize
+    /// 脏位，不同步其他数据。
+    mutable std::atomic<bool> m_resizePending{ false };
+    static double             s_lastMouseX;
+    static double             s_lastMouseY;
+    static bool               s_firstMouse;
+    int                       m_backupPos[2]  = { 100, 100 };   // 默认备份位置
+    int                       m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
 
 #ifdef _WIN32
     std::unique_ptr<Win32WindowAdapter>

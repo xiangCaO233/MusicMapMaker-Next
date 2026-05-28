@@ -62,6 +62,7 @@ void UIManager::clearAllViews()
 }
 
 /// @brief 准备资源
+/// @warning 热路径：每帧渲染准备阶段执行；重建和纹理重载只能由低频脏位触发。
 void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
                                    vk::Device&           logicalDevice,
                                    Graphic::VKSwapchain& swapchain,
@@ -87,6 +88,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 }
 
 /// @brief 更新ui
+/// @warning 热路径：每帧 ImGui 更新阶段执行；禁止在此加入文件系统扫描、完整 ECS
+/// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
     // 清理已关闭的 IUIView
@@ -129,6 +132,8 @@ void UIManager::onUpdateUI()
 }
 
 /// @brief 录制所有离屏渲染指令
+/// @warning
+/// 热路径：每帧命令录制阶段执行；只允许遍历可渲染视图序列并委托录制命令。
 void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 {
     for ( const auto& name : m_renderableUiSequence ) {
@@ -237,6 +242,8 @@ void UIManager::DispatchGlobalUIEvents()
 }
 
 /// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
+/// @warning 不可中断操作：可能调用
+/// vkDeviceWaitIdle；只能在视图销毁低频路径执行。
 void UIManager::waitForGpuBeforeDestroyView(IUIView& view)
 {
     /// @brief 目标视图是否持有可能被命令缓冲引用的 Vulkan 资源。

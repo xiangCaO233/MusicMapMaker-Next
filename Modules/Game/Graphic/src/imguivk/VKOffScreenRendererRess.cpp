@@ -495,7 +495,7 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_height = creationH;
 
     m_lastAllocatedCount = maxVertexCount;
-    m_need_reCreate.store(false);
+    m_need_reCreate.store(false, std::memory_order_relaxed);
 
     XDEBUG(
         "VKOffScreenRenderer recreate successfully[{}x{}]", m_width, m_height);

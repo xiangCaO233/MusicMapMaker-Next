@@ -31,6 +31,9 @@ public:
     ~PreviewCanvas() override = default;
 
     // 接口实现
+    /// @brief 更新预览画布 ImGui 窗口和鼠标交互。
+    /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS
+    /// 遍历、完整排序和共享指针所有权复制。
     void update(UI::UIManager* sourceManager) override;
 
     ///@brief 是否需要重新记录命令 (根据快照更新状态)
@@ -63,6 +66,8 @@ protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;
     const std::vector<uint32_t>& getIndices() const override;
+    /// @warning 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并复用
+    /// descriptor。
     void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                           vk::PipelineLayout      pipelineLayout,
                           vk::DescriptorSetLayout setLayout,
@@ -93,6 +98,8 @@ private:
     const std::string m_cameraId{ "Preview" };
 
     /// @brief 同步缓冲区
+    /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update
+    /// 中不得复制该 shared_ptr。
     std::shared_ptr<Logic::BeatmapSyncBuffer> m_syncBuffer;
 
     /// @brief 当前正在使用的渲染快照

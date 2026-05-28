@@ -30,6 +30,7 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/SearchView.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include <array>
 #include <chrono>
 #include <nfd.h>
 #include <thread>
@@ -121,6 +122,7 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 
 GameLoop::~GameLoop() {}
 
+// clang-format off
 /**
  * @brief 启动游戏循环
  *
@@ -130,6 +132,9 @@ GameLoop::~GameLoop() {}
  * @param window 窗口上下文
  * @return int 退出代码 (0 表示正常退出)
  */
+/// @warning 热路径：进入 while 后主线程逐帧执行渲染。
+/// 循环体禁止文件系统访问、完整 ECS 遍历、完整排序和每帧堆分配。
+// clang-format on
 int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 {
     // 初始化窗口
@@ -298,9 +303,11 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 
             // 3.2 执行渲染
             context.checkAndRebuildFonts();
-            context.getRenderer().render(
-                window,
-                std::vector<Graphic::IGraphicUserHook*>{ &m_uiManager });
+            /// @brief 本帧渲染用户钩子列表，使用栈上数组避免热路径内分配。
+            std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{
+                &m_uiManager
+            };
+            context.getRenderer().render(window, graphicUserHooks);
         }
 
         // 停止逻辑线程

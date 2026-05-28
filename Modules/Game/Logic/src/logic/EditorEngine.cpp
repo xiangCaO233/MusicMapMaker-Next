@@ -612,7 +612,7 @@ void EditorEngine::closeProject()
 
 void EditorEngine::start()
 {
-    if ( m_running ) {
+    if ( m_running.load(std::memory_order_acquire) ) {
         return;
     }
 
@@ -621,7 +621,7 @@ void EditorEngine::start()
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
 
-    m_running = true;
+    m_running.store(true, std::memory_order_release);
 
     m_thread = std::thread(&EditorEngine::loop, this);
     XINFO("EditorEngine logic thread started.");
@@ -631,8 +631,7 @@ void EditorEngine::stop()
 {
     stopDirectoryWatcher();
 
-    if ( m_running ) {
-        m_running = false;
+    if ( m_running.exchange(false, std::memory_order_acq_rel) ) {
         if ( m_thread.joinable() ) {
             m_thread.join();
         }
@@ -1062,6 +1061,9 @@ bool EditorEngine::hasUnsavedChanges() const
     return false;
 }
 
+/// @brief 获取指定摄像机/画布的同步缓冲区。
+/// @warning 逻辑热路径/共享指针：返回 shared_ptr
+/// 用于保证本次快照发布期间缓冲区不被 UI 关闭路径释放。
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {
@@ -1076,6 +1078,8 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
     return m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
 
+/// @brief 获取当前工具类型。
+/// @warning 逻辑/UI 热路径原子：只读取工具枚举状态，使用 relaxed。
 EditTool EditorEngine::getCurrentTool() const
 {
     return m_currentTool.load(std::memory_order_relaxed);
@@ -1094,6 +1098,8 @@ bool EditorEngine::isPlaybackPlaying() const
     return false;
 }
 
+/// @brief 设置同主音轨多画布时间同步开关。
+/// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
 {
     m_syncSameMainAudioCanvases.store(enabled, std::memory_order_relaxed);
@@ -1102,6 +1108,9 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
     }
 }
 
+/// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
+/// @warning 逻辑热路径/原子：每次 Session update 后可能执行；开关读取使用
+/// relaxed，后续只遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvases()
 {
     if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
@@ -1463,6 +1472,9 @@ void EditorEngine::saveProject()
     }
 }
 
+/// @brief 逻辑线程的主循环。
+/// @warning 逻辑热路径：按配置 UPS 频率执行；禁止每 update 文件系统操作、完整
+/// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
 void EditorEngine::loop()
 {
     auto lastTime      = std::chrono::high_resolution_clock::now();
@@ -1470,7 +1482,7 @@ void EditorEngine::loop()
     m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
 
-    while ( m_running ) {
+    while ( m_running.load(std::memory_order_acquire) ) {
         // 动态获取当前的延迟目标
         double targetDt = 0.0;
         int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
@@ -1595,6 +1607,8 @@ void EditorEngine::loop()
 
         // 多 Session 轮询更新
         /// @brief 当前所有有效 Session 指针快照，避免更新时持有注册表锁。
+        /// @warning 逻辑热路径/共享指针：这里的 shared_ptr
+        /// 拷贝用于保证会话在锁外 update 期间不被 UI 线程关闭释放。
         std::vector<std::shared_ptr<BeatmapSession>> sessionsSnapshot =
             m_sessionRegistry.sessionSnapshot();
 
