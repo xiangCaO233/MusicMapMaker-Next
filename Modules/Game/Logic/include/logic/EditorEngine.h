@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
+#include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
@@ -247,8 +248,7 @@ public:
     void setAtlasUVMap(const std::string&                             cameraId,
                        const std::unordered_map<uint32_t, glm::vec4>& uvMap)
     {
-        std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
-        m_cameraUVMaps[cameraId] = uvMap;
+        m_renderSyncRegistry.setAtlasUVMap(cameraId, uvMap);
     }
 
     /**
@@ -345,8 +345,7 @@ private:
     std::unique_ptr<Project> m_currentProject;
 
     /// @brief 所有的同步缓冲区 (Key 为 CameraID)
-    std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
-        m_syncBuffers;
+    /// @brief 该职责已收敛到 RenderSyncRegistry 内部同步缓冲区表。
 
     /// @brief 保护会话和缓冲区的递归锁
     /// @brief 该职责已拆分：会话由 SessionRegistry::mutex() 保护，缓冲区由
@@ -364,13 +363,15 @@ private:
     };
 
     /// @brief 各摄像机独立的图集 UV 映射表 (受 m_buffersMutex 保护)
-    std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
-        m_cameraUVMaps;
+    /// @brief 该职责已收敛到 RenderSyncRegistry 内部图集 UV 映射表。
 
     /// @brief 保护 m_syncBuffers 和 m_cameraUVMaps 的独立锁（与 m_sessionMutex
     /// 无交叉，防止死锁）
     /// @brief m_sessionMutex 已迁移为 SessionRegistry::mutex()。
-    mutable std::shared_mutex m_buffersMutex;
+    /// @brief 该职责已收敛到 RenderSyncRegistry 内部共享锁。
+
+    /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
+    RenderSyncRegistry m_renderSyncRegistry;
 
     /// @brief 已确认可由逻辑线程直接打开的项目路径
     std::filesystem::path m_pendingProjectPath;
@@ -411,7 +412,7 @@ private:
     EditorClipboard m_clipboard;
 
     /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
-    std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
+    /// @brief 该职责已收敛到 RenderSyncRegistry 内部视口尺寸缓存。
 
     /// @brief 逻辑线程实时刷新率 (UPS)
     std::atomic<float> m_logicUps{ 0.0f };

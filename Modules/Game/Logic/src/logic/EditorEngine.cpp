@@ -213,10 +213,8 @@ EditorEngine::EditorEngine()
                                    static_cast<float>(e.newSize.x),
                                    static_cast<float>(e.newSize.y) };
             // 缓存视口尺寸
-            {
-                std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
-                m_lastViewportSizes[cmd.cameraId] = { cmd.width, cmd.height };
-            }
+            m_renderSyncRegistry.cacheViewportSize(cmd.cameraId,
+                                                   { cmd.width, cmd.height });
             // 推送到拥有该 camera 的 session
             /// @brief 保护本次画布尺寸事件路由期间的会话列表访问。
             std::lock_guard<std::recursive_mutex> lock(
@@ -1034,8 +1032,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
-        std::unique_lock<std::shared_mutex> lk(m_buffersMutex);
-        m_lastViewportSizes[v.cameraId] = { v.width, v.height };
+        m_renderSyncRegistry.cacheViewportSize(v.cameraId,
+                                               { v.width, v.height });
     }
 
     // 分发到当前活跃 Session
@@ -1067,41 +1065,15 @@ bool EditorEngine::hasUnsavedChanges() const
 std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {
-    {
-        std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
-        auto                                it = m_syncBuffers.find(cameraId);
-        if ( it != m_syncBuffers.end() ) {
-            return it->second;
-        }
-    }
-
-    std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
-    if ( m_syncBuffers.find(cameraId) == m_syncBuffers.end() ) {
-        m_syncBuffers[cameraId] = std::make_shared<BeatmapSyncBuffer>();
-    }
-    return m_syncBuffers[cameraId];
+    return m_renderSyncRegistry.getSyncBuffer(cameraId);
 }
 
 const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
     const std::string& cameraId) const
 {
-    std::shared_lock<std::shared_mutex> lock(m_buffersMutex);
-
-    auto it = m_cameraUVMaps.find(cameraId);
-    if ( it != m_cameraUVMaps.end() ) {
-        return it->second;
-    }
-
     // 回退到默认图集 (Basic2DCanvas)
-    if ( cameraId != "Basic2DCanvas" ) {
-        auto itMain = m_cameraUVMaps.find("Basic2DCanvas");
-        if ( itMain != m_cameraUVMaps.end() ) {
-            return itMain->second;
-        }
-    }
-
-    static const std::unordered_map<uint32_t, glm::vec4> emptyMap;
-    return emptyMap;
+    // 该回退逻辑已收敛到 RenderSyncRegistry::getAtlasUVMap()。
+    return m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
 
 EditTool EditorEngine::getCurrentTool() const
@@ -1226,15 +1198,13 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     auto newSession = std::make_shared<BeatmapSession>();
 
     // 同步历史视口尺寸
-    {
-        std::shared_lock<std::shared_mutex> bufLock(m_buffersMutex);
-        for ( const auto& [cid, size] : m_lastViewportSizes ) {
+    /// @brief 当前共享视口尺寸快照，用于初始化新 Session 的共享视口。
+    auto sharedViewportSizes = m_renderSyncRegistry.getSharedViewportSizes();
+    for ( const auto& [cid, size] : sharedViewportSizes ) {
+        {
             // 将共享视口 (Preview, Timeline) 的尺寸同步给新 Session
-            if ( cid == "Preview" || cid == "Timeline" ) {
-                newSession->pushCommand(
-                    CmdUpdateViewport{ cid, size.x, size.y });
-            }
         }
+        newSession->pushCommand(CmdUpdateViewport{ cid, size.x, size.y });
     }
 
     // 预注册该画布的 SyncBuffer
@@ -1292,12 +1262,7 @@ void EditorEngine::closeSession(int32_t index)
     m_sessionRegistry.erase(index);
 
     // 清理对应的 SyncBuffer
-    {
-        std::unique_lock<std::shared_mutex> bufLock(m_buffersMutex);
-        m_syncBuffers.erase(cameraId);
-        m_cameraUVMaps.erase(cameraId);
-        m_lastViewportSizes.erase(cameraId);
-    }
+    m_renderSyncRegistry.eraseCamera(cameraId);
 
     // 修正活跃索引
     // 该职责已收敛到 SessionRegistry::erase()。
@@ -1428,12 +1393,12 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             // visualTime 包含视觉偏移，会导致切换画布时跳到错误位置。
             Audio::AudioManager::instance().seek(ctx.currentTime);
 
-            std::shared_lock<std::shared_mutex> bufLock(m_buffersMutex);
-            for ( const auto& [cid, size] : m_lastViewportSizes ) {
-                if ( cid == "Preview" || cid == "Timeline" ) {
-                    activeSession->pushCommand(
-                        CmdUpdateViewport{ cid, size.x, size.y });
-                }
+            /// @brief 当前共享视口尺寸快照，用于刷新切换后的活跃 Session。
+            auto sharedViewportSizes =
+                m_renderSyncRegistry.getSharedViewportSizes();
+            for ( const auto& [cid, size] : sharedViewportSizes ) {
+                activeSession->pushCommand(
+                    CmdUpdateViewport{ cid, size.x, size.y });
             }
         }
     }
