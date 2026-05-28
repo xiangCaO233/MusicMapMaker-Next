@@ -5,6 +5,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
 #include "logic/ProjectDirectoryScanner.h"
+#include "logic/ProjectDirectoryWatcher.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
@@ -366,6 +367,9 @@ private:
     /// @brief 扫描当前项目目录中的谱面和音频文件。
     ProjectDirectoryScanner m_projectDirectoryScanner;
 
+    /// @brief 监听当前项目目录中的文件系统变更。
+    ProjectDirectoryWatcher m_projectDirectoryWatcher;
+
     /// @brief 所有的同步缓冲区 (Key 为 CameraID)
     /// @brief 该职责已收敛到 RenderSyncRegistry 内部同步缓冲区表。
 
@@ -456,39 +460,42 @@ private:
     /**
      * @brief 启动文件夹监听器
      */
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::start。
     void startDirectoryWatcher(const std::filesystem::path& path);
 
     /**
      * @brief 停止文件夹监听器
      */
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::stop。
     void stopDirectoryWatcher();
 
     /**
      * @brief 文件夹监听线程的主循环
      */
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::watcherThreadLoop。
     void watcherThreadLoop(std::filesystem::path watchPath);
 
     /// @brief 文件夹监听线程
-    std::thread m_watcherThread;
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_thread。
 
     /// @brief 监听线程运行标志
     /// @warning 文件监听线程原子：仅用于启动/停止监听线程，不属于渲染热路径。
-    std::atomic<bool> m_watcherRunning{ false };
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_running。
 
     /// @brief 是否有未处理的文件系统变更挂起
     /// @warning 逻辑热路径/原子：loop 每次迭代 exchange；不可避免，用于把
     /// watcher 线程的文件系统事件去抖后转入低频扫描。
-    std::atomic<bool> m_directoryChangedPending{ false };
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_changePending。
 
 #ifdef _WIN32
     /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW
-    void* m_watcherDirHandle{ nullptr };
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_directoryHandle。
     /// @brief Win32 退出事件句柄，用于安全退出监听线程
-    void* m_watcherExitEvent{ nullptr };
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_exitEvent。
 #endif
 
     /// @brief 保护目录句柄的独立锁
-    mutable std::mutex m_watcherMutex;
+    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_mutex。
 };
 
 }  // namespace MMM::Logic

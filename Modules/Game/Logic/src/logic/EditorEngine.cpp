@@ -20,10 +20,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
-#ifdef _WIN32
-#    define WIN32_LEAN_AND_MEAN
-#    include <windows.h>
-#endif
 
 #include <unordered_set>
 
@@ -1616,8 +1612,7 @@ void EditorEngine::loop()
         static auto lastChangeTime = std::chrono::high_resolution_clock::now();
         static bool hasPendingChange = false;
 
-        if ( m_directoryChangedPending.exchange(false,
-                                                std::memory_order_acq_rel) ) {
+        if ( m_projectDirectoryWatcher.consumeChangePending() ) {
             hasPendingChange = true;
             lastChangeTime   = std::chrono::high_resolution_clock::now();
         }
@@ -1947,144 +1942,51 @@ void EditorEngine::scanProjectDirectory()
     }
 }
 
+/// @brief 启动文件夹监听器。
+/// @param path 需要递归监听的项目目录路径。
 void EditorEngine::startDirectoryWatcher(const std::filesystem::path& path)
 {
-    stopDirectoryWatcher();
-
-    std::lock_guard<std::mutex> lk(m_watcherMutex);
-    m_watcherRunning          = true;
-    m_directoryChangedPending = false;
-#ifdef _WIN32
-    m_watcherExitEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-#endif
-    m_watcherThread = std::thread(&EditorEngine::watcherThreadLoop, this, path);
-    XINFO("Directory Watcher: Started monitoring directory: {}",
-          Config::pathToUtf8(path));
+    m_projectDirectoryWatcher.start(path);
 }
 
+/// @brief 停止文件夹监听器。
 void EditorEngine::stopDirectoryWatcher()
 {
     {
-        std::lock_guard<std::mutex> lk(m_watcherMutex);
-        if ( !m_watcherRunning ) return;
-        m_watcherRunning = false;
-#ifdef _WIN32
-        if ( m_watcherExitEvent &&
-             m_watcherExitEvent != INVALID_HANDLE_VALUE ) {
+        {
             // 触发退出事件，使 ReadDirectoryChangesW 阻塞立刻解除并退出
-            SetEvent(static_cast<HANDLE>(m_watcherExitEvent));
         }
-#endif
     }
-
-    if ( m_watcherThread.joinable() ) {
-        m_watcherThread.join();
-    }
+    m_projectDirectoryWatcher.stop();
 
     // 在线程完全退出并 Join 之后，再安全地在主线程清理句柄，防止重叠 I/O
     // 并发冲突
-    {
-        std::lock_guard<std::mutex> lk(m_watcherMutex);
-#ifdef _WIN32
-        if ( m_watcherDirHandle &&
-             m_watcherDirHandle != INVALID_HANDLE_VALUE ) {
-            CloseHandle(static_cast<HANDLE>(m_watcherDirHandle));
-            m_watcherDirHandle = INVALID_HANDLE_VALUE;
-        }
-        if ( m_watcherExitEvent &&
-             m_watcherExitEvent != INVALID_HANDLE_VALUE ) {
-            CloseHandle(static_cast<HANDLE>(m_watcherExitEvent));
-            m_watcherExitEvent = nullptr;
-        }
-#endif
-    }
-    XINFO("Directory Watcher: Stopped monitoring.");
 }
 
+/// @brief 文件夹监听线程的主循环。
+/// @param watchPath 需要递归监听的项目目录路径。
 void EditorEngine::watcherThreadLoop(std::filesystem::path watchPath)
 {
-#ifdef _WIN32
-    std::wstring wpath = watchPath.wstring();
-    HANDLE       hDir =
-        CreateFileW(wpath.c_str(),
-                    FILE_LIST_DIRECTORY,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    NULL,
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS |
-                        FILE_FLAG_OVERLAPPED,  // 使用重叠 I/O 开启非阻塞模式
-                    NULL);
+    /// @brief ProjectDirectoryWatcher
+    /// 已接管实际线程循环，此处仅保留迁移前的行为注释。
+    (void)watchPath;
 
-    if ( hDir == INVALID_HANDLE_VALUE ) {
-        XERROR("Directory Watcher: Failed to open directory for monitoring: {}",
-               Config::pathToUtf8(watchPath));
-        m_watcherRunning = false;
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lk(m_watcherMutex);
-        m_watcherDirHandle = hDir;
-    }
-
+    // 使用重叠 I/O 开启非阻塞模式
     // 创建重叠 I/O 事件
-    HANDLE hChangeEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
-    if ( !hChangeEvent ) {
-        m_watcherRunning = false;
-        return;
-    }
-
-    alignas(DWORD) BYTE buffer[4096];
-
-    OVERLAPPED overlapped = {};
-    overlapped.hEvent     = hChangeEvent;
-
-    HANDLE waitHandles[2] = { static_cast<HANDLE>(m_watcherExitEvent),
-                              hChangeEvent };
-
-    while ( m_watcherRunning ) {
-        ResetEvent(hChangeEvent);
-
-        DWORD bytesReturned = 0;
-        BOOL  success = ReadDirectoryChangesW(hDir,
-                                              buffer,
-                                              sizeof(buffer),
-                                              TRUE,  // 递归监听子目录
-                                              FILE_NOTIFY_CHANGE_FILE_NAME |
-                                                  FILE_NOTIFY_CHANGE_DIR_NAME |
-                                                  FILE_NOTIFY_CHANGE_LAST_WRITE,
-                                              &bytesReturned,
-                                              &overlapped,
-                                              NULL);
-
-        if ( !success && GetLastError() != ERROR_IO_PENDING ) {
-            break;
-        }
-
+    // 递归监听子目录
+    {
         // 等待退出事件或变更事件
-        DWORD waitResult =
-            WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
-
-        if ( waitResult == WAIT_OBJECT_0 ) {
+        {
             // 收到退出事件，主动取消挂起的 I/O 并退出循环
-            CancelIoEx(hDir, &overlapped);
-            break;
-        } else if ( waitResult == WAIT_OBJECT_0 + 1 ) {
             // 成功监听到文件系统事件，通知主逻辑线程挂起变更
-            m_directoryChangedPending.store(true, std::memory_order_release);
-        } else {
             // 发生错误
-            break;
         }
     }
-
-    CloseHandle(hChangeEvent);
-#else
+    // 等待退出事件或变更事件
+    // 收到退出事件，主动取消挂起的 I/O 并退出循环
+    // 成功监听到文件系统事件，通知主逻辑线程挂起变更
+    // 发生错误
     // 非 Windows 平台的模拟实现或备用监听
-    while ( m_watcherRunning ) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
-#endif
 }
 
 }  // namespace MMM::Logic
