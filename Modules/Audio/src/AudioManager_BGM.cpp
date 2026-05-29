@@ -96,6 +96,7 @@ bool AudioManager::loadBGM(const std::string&      filePath,
     m_mainTrackMuted  = config.muted;
 
     m_bgmTrack     = track;
+    m_bgmPath      = filePath;
     m_bgmSource    = std::make_shared<ice::SourceNode>(track);
     float finalVol = (m_globalMuted || m_bgmGainMuted)
                          ? 0.0f
@@ -170,6 +171,7 @@ void AudioManager::unloadBGM()
     m_stretcher.reset();
     m_bgmSource.reset();
     m_bgmTrack.reset();
+    m_bgmPath.clear();
     m_status = PlaybackStatus::Stopped;
     XINFO("BGM unloaded.");
 }
@@ -179,6 +181,13 @@ void AudioManager::unloadBGM()
 std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
 {
     return m_bgmTrack;
+}
+
+/// @brief 获取当前加载的 BGM 文件路径。
+/// @return 当前 BGM 文件路径；未加载时返回空字符串。
+const std::string& AudioManager::getLoadedBGMPath() const
+{
+    return m_bgmPath;
 }
 
 /// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。

@@ -86,6 +86,7 @@ void AudioManager::shutdown()
     ice::SDLPlayer::quit_backend();
 
     m_bgmTrack.reset();
+    m_bgmPath.clear();
     m_bgmSource.reset();
     m_stretcher.reset();
     m_mainMixer.reset();

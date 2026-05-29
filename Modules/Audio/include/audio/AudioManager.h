@@ -318,6 +318,10 @@ public:
     /// @brief 获取当前加载的 BGM 轨道数据 (用于可视化)
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 
+    /// @brief 获取当前加载的 BGM 文件路径。
+    /// @return 当前 BGM 文件路径；未加载时返回空字符串。
+    const std::string& getLoadedBGMPath() const;
+
     /// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。
     /// @param filePath 音频文件绝对路径。
     /// @return 加载成功时返回音频轨道；失败时返回空指针。
@@ -344,6 +348,9 @@ private:
 
     /// @brief 当前加载的主音轨数据。
     std::shared_ptr<ice::AudioTrack> m_bgmTrack;
+
+    /// @brief 当前加载的主音轨文件路径。
+    std::string m_bgmPath;
 
     /// @brief 当前主音轨播放源节点。
     std::shared_ptr<ice::SourceNode> m_bgmSource;

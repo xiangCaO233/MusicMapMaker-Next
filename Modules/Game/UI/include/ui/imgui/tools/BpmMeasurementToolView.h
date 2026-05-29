@@ -1,10 +1,13 @@
 #pragma once
 
 #include "graphic/imguivk/VKTexture.h"
+#include "mmm/project/AudioResource.h"
 #include "ui/ITextureLoader.h"
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -106,8 +109,24 @@ private:
     /// @brief 绘制右侧测量参数面板。
     void renderControlPanel();
 
+    /// @brief 绘制试听播放、暂停、进度和倍速控制。
+    /// @warning UI
+    /// 热路径：每帧执行；只读取播放状态和处理用户输入，文件检查仅在按钮触发后发生。
+    void renderPlaybackControls();
+
     /// @brief 绘制左侧波形和频谱面板。
     void renderAnalysisPanel();
+
+    /// @brief 播放时让分析视图自动跟随播放指针。
+    /// @warning UI
+    /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
+    void followPlaybackIfNeeded();
+
+    /// @brief 更新波形绘制用的画布时间缓存。
+    /// @param canvasOffset 画布时间相对音频采样时间的偏移，单位为秒。
+    /// @warning UI
+    /// 热路径：波形图每帧查询；仅在画布偏移或波形缓存变化时重建时间数组。
+    void updateWaveCanvasTimes(double canvasOffset);
 
     /// @brief 绘制波形图。
     /// @param size 绘制区域尺寸。
@@ -117,7 +136,7 @@ private:
     /// @param size 绘制区域尺寸。
     void renderSpectrumImage(const ImVec2& size);
 
-    /// @brief 在指定矩形区域叠加拍线和黄色拍框。
+    /// @brief 在指定矩形区域叠加拍线、黄色拍框和首拍红色覆盖框。
     /// @param drawList 目标 ImGui 绘制列表。
     /// @param rectMin 绘制区域左上角。
     /// @param rectMax 绘制区域右下角。
@@ -126,6 +145,53 @@ private:
     void drawBeatMarkers(ImDrawList& drawList, const ImVec2& rectMin,
                          const ImVec2& rectMax, double viewStart,
                          double viewEnd) const;
+
+    /// @brief 在指定矩形区域叠加分拍线。
+    /// @param drawList 目标 ImGui 绘制列表。
+    /// @param rectMin 绘制区域左上角。
+    /// @param rectMax 绘制区域右下角。
+    /// @param viewStart 当前视图起始时间，单位为秒。
+    /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @warning UI
+    /// 热路径：波形图和频谱图每帧执行；按当前视野增量绘制分拍线，不得加入音频解码或文件访问。
+    void drawBeatSubdivisionLines(ImDrawList& drawList, const ImVec2& rectMin,
+                                  const ImVec2& rectMax, double viewStart,
+                                  double viewEnd) const;
+
+    /// @brief 在指定矩形区域叠加当前音频播放指针。
+    /// @param drawList 目标 ImGui 绘制列表。
+    /// @param rectMin 绘制区域左上角。
+    /// @param rectMax 绘制区域右下角。
+    /// @param viewStart 当前视图起始时间，单位为秒。
+    /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @warning UI
+    /// 热路径：波形图和频谱图每帧执行；只读取当前播放路径、播放时间并绘制播放指针。
+    void drawPlaybackCursor(ImDrawList& drawList, const ImVec2& rectMin,
+                            const ImVec2& rectMax, double viewStart,
+                            double viewEnd) const;
+
+    /// @brief 处理整拍线顶部三角手柄的拖拽，反向调整第一拍位置。
+    /// @param rectMin 交互区域左上角。
+    /// @param rectMax 交互区域右下角。
+    /// @param viewStart 当前视图起始时间，单位为秒。
+    /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
+    /// @warning UI
+    /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
+    void handleBeatMarkerDrag(const ImVec2& rectMin, const ImVec2& rectMax,
+                              double viewStart, double viewEnd, int ownerId);
+
+    /// @brief 处理播放指针顶部三角手柄的拖拽跳转。
+    /// @param rectMin 交互区域左上角。
+    /// @param rectMax 交互区域右下角。
+    /// @param viewStart 当前视图起始时间，单位为秒。
+    /// @param viewEnd 当前视图结束时间，单位为秒。
+    /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
+    /// @warning UI
+    /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
+    void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
+                                  double viewStart, double viewEnd,
+                                  int ownerId);
 
     /// @brief 处理分析视图的滚轮缩放和鼠标拖动平移。
     /// @param rectMin 交互区域左上角。
@@ -139,6 +205,44 @@ private:
 
     /// @brief 请求重新分析当前选择的音频轨道。
     void requestAnalyzeSelectedTrack();
+
+    /// @brief 查找当前选中的音频资源。
+    /// @return 成功时返回音频资源副本，否则返回空。
+    std::optional<AudioResource> selectedAudioResource() const;
+
+    /// @brief 确保当前选中音轨已加载到播放图。
+    /// @return 加载成功或已经加载时返回 true。
+    bool loadSelectedTrackForPlayback();
+
+    /// @brief 判断播放图当前加载的是否为选中音轨。
+    /// @return 当前加载音轨与选中音轨路径一致时返回 true。
+    /// @warning UI
+    /// 热路径：每帧读取播放路径；不得在此加入文件存在性检查或音频加载。
+    bool isSelectedTrackLoadedForPlayback() const;
+
+    /// @brief 应用 BPM 工具的本地试听倍速。
+    /// @param speed 目标倍速。
+    void applyPlaybackSpeed(double speed);
+
+    /// @brief 获取当前配置下的视觉偏移，单位为秒。
+    /// @return 音频时间转换为视觉时间时需要叠加的偏移。
+    double playbackVisualOffset() const;
+
+    /// @brief 获取当前音频对应的 BPM 工具画布时间轴总长度。
+    /// @return 画布时间轴上可显示的最大时间。
+    double playbackCanvasDuration() const;
+
+    /// @brief 跳转到指定音频时间并同步活动主画布。
+    /// @param audioTime 目标音频时间，单位为秒。
+    void seekPlaybackToAudioTime(double audioTime);
+
+    /// @brief 跳转到指定 BPM 工具画布时间并同步活动主画布。
+    /// @param canvasTime 目标画布时间，单位为秒。
+    void seekPlaybackToCanvasTime(double canvasTime);
+
+    /// @brief 切换试听和活动主画布的播放状态。
+    /// @param shouldPlay true 表示播放，false 表示暂停。
+    void setPlaybackState(bool shouldPlay);
 
     /// @brief 停止并等待当前后台分析任务。
     /// @warning
@@ -182,6 +286,9 @@ private:
     /// @brief 波形采样点时间缓存，单位为秒。
     std::vector<double> m_waveTimes;
 
+    /// @brief 波形采样点的画布时间缓存，单位为秒。
+    std::vector<double> m_waveCanvasTimes;
+
     /// @brief 波形下包络缓存。
     std::vector<double> m_waveMin;
 
@@ -197,7 +304,10 @@ private:
     /// @brief 当前音频总时长，单位为秒。
     double m_duration{ 0.0 };
 
-    /// @brief 当前视图中心时间，单位为秒。
+    /// @brief 当前波形画布时间缓存使用的偏移。
+    double m_waveCanvasTimesOffset{ std::numeric_limits<double>::quiet_NaN() };
+
+    /// @brief 当前视图中心画布时间，单位为秒。
     double m_viewCenter{ 0.0 };
 
     /// @brief 当前视图半宽时间，单位为秒。
@@ -209,14 +319,41 @@ private:
     /// @brief 单拍时长，单位为秒。
     double m_beatLengthSeconds{ 0.5 };
 
-    /// @brief 首拍位置，单位为秒。
+    /// @brief 首拍位置，使用 BPM 工具画布时间，单位为秒。
     double m_firstBeatTime{ 0.0 };
 
     /// @brief 黄色拍框宽度，单位为毫秒。
     double m_markerWidthMs{ 80.0 };
 
+    /// @brief 分拍线切分数量。
+    int m_beatDivisor{ 4 };
+
+    /// @brief BPM 工具本地试听播放倍速，不写回项目音轨配置。
+    double m_playbackSpeed{ 1.0 };
+
     /// @brief 当前是否正在拖动分析视图时间轴。
     bool m_isTimelinePanning{ false };
+
+    /// @brief 当前是否正在拖动播放指针手柄。
+    bool m_isPlaybackCursorDragging{ false };
+
+    /// @brief 当前播放指针拖拽所属的视图标识，0 表示无拖拽。
+    int m_playbackCursorDragOwner{ 0 };
+
+    /// @brief 是否存在待鼠标松开时应用的播放跳转。
+    bool m_hasPendingPlaybackSeek{ false };
+
+    /// @brief 播放指针拖拽预览的目标画布时间，单位为秒。
+    double m_pendingPlaybackSeekCanvasTime{ 0.0 };
+
+    /// @brief 当前是否正在拖动整拍线手柄。
+    bool m_isBeatMarkerDragging{ false };
+
+    /// @brief 当前整拍线拖拽所属的视图标识，0 表示无拖拽。
+    int m_beatMarkerDragOwner{ 0 };
+
+    /// @brief 当前正在拖动的整拍索引。
+    int64_t m_draggedBeatIndex{ 0 };
 
     /// @brief 波形缓存时间分辨率，单位为点/秒。
     double m_wavePointsPerSecond{ 200.0 };
