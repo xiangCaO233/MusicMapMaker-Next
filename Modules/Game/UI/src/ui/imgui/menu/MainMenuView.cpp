@@ -118,7 +118,10 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
             dispatchCommand(Logic::CmdCopy{});
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-            dispatchCommand(Logic::CmdPaste{ io.KeyShift });
+            dispatchCommand(Logic::CmdPaste{ io.KeyShift,
+                                             Config::AppConfig::instance()
+                                                 .getEditorSettings()
+                                                 .selectPastedObjects });
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
             dispatchCommand(Logic::CmdCut{});
@@ -355,12 +358,18 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
-            dispatchCommand(Logic::CmdPaste{});
+            dispatchCommand(Logic::CmdPaste{ false,
+                                             Config::AppConfig::instance()
+                                                 .getEditorSettings()
+                                                 .selectPastedObjects });
         }
         if ( MenuItemWithFontIcon(ICON_MMM_MIRROR,
                                   TR("ui.edit.mirror_paste"),
                                   "Ctrl+Shift+V") ) {
-            dispatchCommand(Logic::CmdPaste{ true });
+            dispatchCommand(Logic::CmdPaste{ true,
+                                             Config::AppConfig::instance()
+                                                 .getEditorSettings()
+                                                 .selectPastedObjects });
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_MIRROR, TR("ui.edit.mirror"), "Ctrl+M") ) {

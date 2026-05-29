@@ -405,6 +405,9 @@ struct EditorSettings {
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 
+    /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
+    bool selectPastedObjects{ false };
+
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
 
@@ -453,6 +456,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                           c.disableScrollAccelerationWhileDrawing },
                         { "removeObjectsOnPolylinePath",
                           c.removeObjectsOnPolylinePath },
+                        { "selectPastedObjects", c.selectPastedObjects },
                         { "softwareCursorConfig", c.softwareCursorConfig },
                         { "preferredAsciiFont", c.preferredAsciiFont },
                         { "preferredCjkFont", c.preferredCjkFont },
@@ -500,6 +504,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("disableScrollAccelerationWhileDrawing", true);
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
+    c.selectPastedObjects = j.value("selectPastedObjects", false);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =

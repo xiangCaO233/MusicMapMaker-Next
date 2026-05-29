@@ -236,6 +236,11 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 
     std::vector<BatchNoteAction::Entry> entries;
+    /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
+    std::vector<entt::entity> pastedEntities;
+    pastedEntities.reserve(clipboard.size());
+    /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
+    const bool selectPastedObjects = cmd.m_selectPastedObjects;
 
     // 1. 如果之前有 Cut，需要删除那些 Cut 的物件
     auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
@@ -297,12 +302,38 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             mirrorNoteComponent(newNote, mirrorTrackCount);
         }
 
-        entries.push_back({ entt::null, std::nullopt, newNote });
+        /// @brief 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
+        entt::entity pastedEntity = m_ctx.noteRegistry.create();
+        pastedEntities.push_back(pastedEntity);
+        entries.push_back({ pastedEntity, std::nullopt, newNote });
     }
 
     auto action = std::make_unique<BatchNoteAction>(
         std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+
+    if ( selectPastedObjects ) {
+        m_ctx.isSelecting         = false;
+        m_ctx.hasMarqueeSelection = false;
+        m_ctx.marqueeIsAdditive   = false;
+        m_ctx.marqueeBoxes.clear();
+        // 先清空所有旧选择，再只选中本次粘贴创建出的实体。
+        for ( auto entity : m_ctx.noteRegistry.view<InteractionComponent>() ) {
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
+                false;
+        }
+
+        for ( auto entity : pastedEntities ) {
+            if ( !m_ctx.noteRegistry.valid(entity) ||
+                 !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) )
+                continue;
+
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
+                true;
+        }
+
+        m_ctx.isTransformDirty = true;
+    }
 
     // 清除剪切状态
     for ( auto entity : view ) {

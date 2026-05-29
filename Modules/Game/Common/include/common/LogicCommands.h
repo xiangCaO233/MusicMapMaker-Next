@@ -254,6 +254,9 @@ struct CmdCopy {
 struct CmdPaste {
     /// @brief 是否在粘贴出的物件上立即应用轨道镜像。
     bool m_mirrored{ false };
+
+    /// @brief 是否在粘贴后清空旧选择并选中新粘贴出的物件。
+    bool m_selectPastedObjects{ false };
 };
 
 /**

@@ -41,6 +41,7 @@ void SettingsView::drawEditorSettings()
         TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
             .data(),
         TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path").data(),
+        TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
         TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
         TR_CACHE("ui.settings.editor.beat_divisor").data(),
         TR_CACHE("ui.settings.editor.selection").data(),
@@ -167,6 +168,15 @@ void SettingsView::drawEditorSettings()
                 changed |=
                     ImGui::Checkbox("##RemoveObjectsOnPolylinePath",
                                     &settings.removeObjectsOnPolylinePath);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                changed |= ImGui::Checkbox("##SelectPastedObjects",
+                                           &settings.selectPastedObjects);
             });
         addSettingItem(
             *sec,
