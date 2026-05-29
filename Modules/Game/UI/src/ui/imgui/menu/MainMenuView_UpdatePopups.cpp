@@ -25,6 +25,8 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
@@ -87,6 +89,7 @@ void MainMenuView::renderHelpMenu(UIManager* sourceManager)
 }
 
 /// @brief 渲染关于弹窗。
+/// @warning UI 每帧调用路径；仅在用户点击外部链接时触发系统浏览器打开。
 void MainMenuView::renderAboutPopup()
 {
     if ( m_showAboutPopup ) {
@@ -105,14 +108,63 @@ void MainMenuView::renderAboutPopup()
         wasOpen = isOpen;
     }
 
-    if ( ImGui::BeginPopupModal(
-             TR("ui.help.about_title"), nullptr, ImGuiWindowFlags_None) ) {
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    /// @brief 当前窗口内容缩放倍率，用于将全局审美配置换算为实际像素。
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    /// @brief 当前 ImGui 主视口，用于按可见工作区限制关于弹窗尺寸。
+    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    /// @brief 关于弹窗与主视口边缘保留的最小空隙。
+    const float aboutWindowMargin = 32.0f * dpiScale;
+    /// @brief 关于弹窗的目标尺寸，按当前内容预留足够高度避免鸣谢区被裁切。
+    const ImVec2 desiredAboutWindowSize{ 680.0f * dpiScale, 520.0f * dpiScale };
+    /// @brief 关于弹窗允许占用的最大尺寸，防止小窗口或高 DPI 下完全越界。
+    const ImVec2 availableAboutWindowSize{
+        std::max(360.0f * dpiScale,
+                 mainViewport->WorkSize.x - aboutWindowMargin),
+        std::max(360.0f * dpiScale,
+                 mainViewport->WorkSize.y - aboutWindowMargin),
+    };
+    /// @brief 本次弹出实际应用的尺寸，优先满足内容完整展示。
+    const ImVec2 aboutWindowSize{
+        std::min(desiredAboutWindowSize.x, availableAboutWindowSize.x),
+        std::min(desiredAboutWindowSize.y, availableAboutWindowSize.y),
+    };
+    /// @brief 编辑器全局审美配置，关于弹窗也必须遵循同一套窗口样式。
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    /// @brief 全局窗口圆角的 DPI 后像素值。
+    float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
+    /// @brief 全局控件圆角的 DPI 后像素值。
+    float frameRound = std::floor(aesthetics.frameRounding * dpiScale);
+    /// @brief 全局窗口内边距的 DPI 后像素值。
+    ImVec2 windowPadding{ std::floor(aesthetics.windowPadding * dpiScale),
+                          std::floor(aesthetics.windowPadding * dpiScale) };
+    /// @brief 全局控件间距的 DPI 后像素值。
+    ImVec2 itemSpacing{ std::floor(aesthetics.itemSpacing * dpiScale),
+                        std::floor(aesthetics.itemSpacing * dpiScale) };
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                            ImVec2(8.0f * dpiScale, 12.0f * dpiScale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+    /// @brief 标题字体仅用于 ImGui 窗口标题栏，Begin 后立即恢复内容字体。
+    ImFont* windowTitleFont = Config::SkinManager::instance().getFont("title");
+    /// @brief 关于弹窗窗口标志，禁用历史尺寸缓存并根据内容自动调整窗口大小。
+    const ImGuiWindowFlags aboutPopupFlags =
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::SetNextWindowSize(aboutWindowSize, ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(aboutWindowSize,
+                                        availableAboutWindowSize);
+    if ( windowTitleFont ) ImGui::PushFont(windowTitleFont);
+    /// @brief 关于弹窗是否已成功开始渲染。
+    bool popupOpen = ImGui::BeginPopupModal(
+        TR("ui.help.about_title"), nullptr, aboutPopupFlags);
+    if ( windowTitleFont ) ImGui::PopFont();
+
+    if ( popupOpen ) {
 
         // --- Logo & Title ---
         ImFont* titleFont = Config::SkinManager::instance().getFont("menu");
@@ -170,6 +222,177 @@ void MainMenuView::renderAboutPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // --- Special Thanks ---
+        /// @brief 特别鸣谢标题文本。
+        const char* thanksTitle = TR("ui.help.special_thanks").data();
+        /// @brief 特别鸣谢用户名称文本。
+        const char* thanksName = TR("ui.help.special_thanks_bassor").data();
+        /// @brief 特别鸣谢标题文本宽度。
+        float thanksTitleWidth = ImGui::CalcTextSize(thanksTitle).x;
+        /// @brief 特别鸣谢用户名称文本宽度。
+        float nameWidth = ImGui::CalcTextSize(thanksName).x;
+        /// @brief 特别鸣谢标题和用户名称之间的间距。
+        float titleGap = ImGui::GetStyle().ItemSpacing.x;
+        /// @brief 特别鸣谢标题行的总宽度，用于居中排版。
+        float thanksHeaderWidth = thanksTitleWidth + titleGap + nameWidth;
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - thanksHeaderWidth) *
+                             0.5f);
+        ImGui::TextUnformatted(thanksTitle);
+        ImGui::SameLine(0.0f, titleGap);
+
+        /// @brief 特别鸣谢姓名链接色，点击打开用户主页，悬停提示联系方式。
+        ImVec4 linkColor(0.35f, 0.65f, 1.0f, 1.0f);
+        /// @brief Bassor 用户主页地址，点击姓名链接时交给系统默认浏览器打开。
+        constexpr const char* bassorProfileUrl =
+            "https://malody.mugzone.net/player/1676762";
+        ImGui::TextColored(linkColor, "%s", thanksName);
+        /// @brief 特别鸣谢链接文本的左上角坐标，用于绘制下划线。
+        ImVec2 linkMin = ImGui::GetItemRectMin();
+        /// @brief 特别鸣谢链接文本的右下角坐标，用于绘制下划线。
+        ImVec2 linkMax = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddLine(ImVec2(linkMin.x, linkMax.y + 1.0f),
+                                            ImVec2(linkMax.x, linkMax.y + 1.0f),
+                                            ImGui::GetColorU32(linkColor),
+                                            std::max(1.0f, dpiScale));
+        if ( ImGui::IsItemClicked(ImGuiMouseButton_Left) ) {
+            MMM::Network::UpdateChecker::openUrlInBrowser(bassorProfileUrl);
+        }
+        if ( ImGui::IsItemHovered() ) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            ImGui::SetTooltip(
+                "%s", TR("ui.help.special_thanks_bassor_contact").data());
+        }
+
+        /// @brief 特别鸣谢说明文本的最大换行宽度。
+        float thanksTextWidth =
+            std::min(420.0f * dpiScale, ImGui::GetContentRegionAvail().x);
+        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - thanksTextWidth) *
+                             0.5f);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + thanksTextWidth);
+        ImGui::PushStyleColor(ImGuiCol_Text,
+                              ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::TextWrapped("%s",
+                           TR("ui.help.special_thanks_bassor_desc").data());
+        ImGui::PopStyleColor();
+        ImGui::PopTextWrapPos();
+
+        ImGui::Spacing();
+
+        /// @brief Mizar 用户主页地址，点击姓名链接时交给系统默认浏览器打开。
+        constexpr const char* mizarProfileUrl =
+            "https://space.bilibili.com/102030000";
+        /// @brief 鸣谢名单中姓名之间使用的本地化分隔符。
+        const char* thanksSeparator =
+            TR("ui.help.special_thanks_separator").data();
+        /// @brief 长期测试鸣谢分组标题。
+        const char* longTermTestingTitle =
+            TR("ui.help.special_thanks_long_term_testing").data();
+        /// @brief 谱面支持鸣谢分组标题。
+        const char* beatmapSupportTitle =
+            TR("ui.help.special_thanks_beatmap_support").data();
+        /// @brief Mizar 鸣谢用户名称文本。
+        const char* mizarName = TR("ui.help.special_thanks_mizar").data();
+        /// @brief 凌云归故里鸣谢用户名称文本。
+        const char* lingyunName = TR("ui.help.special_thanks_lingyun").data();
+        /// @brief 修罗7 鸣谢用户名称文本。
+        const char* xiuluoName = TR("ui.help.special_thanks_xiuluo7").data();
+        /// @brief Mzメ 夜明けの未来ˇ 鸣谢用户名称文本。
+        const char* mzYoakeName = TR("ui.help.special_thanks_mz_yoake").data();
+
+        /// @brief 渲染可点击的鸣谢姓名链接。
+        /// @param labelName 要显示的鸣谢姓名。
+        /// @param tooltipText 鼠标悬停时显示的联系方式。
+        /// @param profileUrl 点击姓名后打开的用户主页。
+        auto renderThanksLink = [&](const char* labelName,
+                                    const char* tooltipText,
+                                    const char* profileUrl) {
+            ImGui::TextColored(linkColor, "%s", labelName);
+            /// @brief 当前姓名链接文本的左上角坐标，用于绘制下划线。
+            ImVec2 currentLinkMin = ImGui::GetItemRectMin();
+            /// @brief 当前姓名链接文本的右下角坐标，用于绘制下划线。
+            ImVec2 currentLinkMax = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(currentLinkMin.x, currentLinkMax.y + 1.0f),
+                ImVec2(currentLinkMax.x, currentLinkMax.y + 1.0f),
+                ImGui::GetColorU32(linkColor),
+                std::max(1.0f, dpiScale));
+            if ( ImGui::IsItemClicked(ImGuiMouseButton_Left) ) {
+                MMM::Network::UpdateChecker::openUrlInBrowser(profileUrl);
+            }
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip("%s", tooltipText);
+            }
+        };
+
+        /// @brief 渲染没有额外联系方式或主页的鸣谢姓名。
+        /// @param labelName 要显示的鸣谢姓名。
+        auto renderPlainThanksName = [](const char* labelName) {
+            ImGui::TextUnformatted(labelName);
+        };
+
+        /// @brief 在同一行中追加姓名分隔符。
+        auto renderThanksSeparator = [&]() {
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextUnformatted(thanksSeparator);
+            ImGui::SameLine(0.0f, 0.0f);
+        };
+
+        /// @brief 渲染鸣谢分组表格中的左侧分组标题。
+        /// @param groupTitle 要显示的分组标题。
+        auto renderThanksGroupTitle = [](const char* groupTitle) {
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextUnformatted(groupTitle);
+            ImGui::PopStyleColor();
+        };
+
+        if ( ImGui::BeginTable("SpecialThanksRows",
+                               2,
+                               ImGuiTableFlags_SizingFixedFit |
+                                   ImGuiTableFlags_NoSavedSettings) ) {
+            ImGui::TableSetupColumn(
+                "Role", ImGuiTableColumnFlags_WidthFixed, 96.0f * dpiScale);
+            ImGui::TableSetupColumn("Names",
+                                    ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            renderThanksGroupTitle(longTermTestingTitle);
+            ImGui::TableNextColumn();
+            renderThanksLink(mizarName,
+                             TR("ui.help.special_thanks_mizar_contact").data(),
+                             mizarProfileUrl);
+            renderThanksSeparator();
+            renderPlainThanksName(lingyunName);
+            renderThanksSeparator();
+            renderThanksLink(thanksName,
+                             TR("ui.help.special_thanks_bassor_contact").data(),
+                             bassorProfileUrl);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            renderThanksGroupTitle(beatmapSupportTitle);
+            ImGui::TableNextColumn();
+            renderPlainThanksName(xiuluoName);
+            renderThanksSeparator();
+            renderThanksLink(mizarName,
+                             TR("ui.help.special_thanks_mizar_contact").data(),
+                             mizarProfileUrl);
+            renderThanksSeparator();
+            renderThanksLink(thanksName,
+                             TR("ui.help.special_thanks_bassor_contact").data(),
+                             bassorProfileUrl);
+            renderThanksSeparator();
+            renderPlainThanksName(mzYoakeName);
+
+            ImGui::EndTable();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         // --- Copyright ---
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -190,9 +413,9 @@ void MainMenuView::renderAboutPopup()
             ImGui::CloseCurrentPopup();
         }
 
-        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
+    ImGui::PopStyleVar(7);
 }
 
 /// @brief 渲染更新检查中的状态弹窗。
