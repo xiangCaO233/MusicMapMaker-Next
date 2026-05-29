@@ -58,6 +58,17 @@ else()
 	else()
 		message(STATUS "Compiler is GCC. Disable LTO.")
 		add_compile_options("-ftime-report")
+
+		# GCC -O2/-O3 默认启用 strict aliasing，而 Vulkan-Hpp 的句柄类型
+		# 和内部类型转换在该模式下可能触发未定义行为，导致渲染数据丢失。
+		add_compile_options("-fno-strict-aliasing")
+
+		# 与 Clang 对齐：分离函数/数据节以支持链接器死代码消除
+		add_compile_options("-ffunction-sections")
+		add_compile_options("-fdata-sections")
+		if(NOT WIN32)
+			add_link_options("-Wl,--gc-sections")
+		endif()
 	endif()
 endif()
 
@@ -100,7 +111,7 @@ macro(add_gcc_debug_extract TARGET_NAME)
 				-D OBJCOPY="${CMAKE_OBJCOPY}"
 				-D STRIP_EXE="${CMAKE_STRIP}"
 				-D CONFIG="$<CONFIG>"
-				-P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GccExtractDebug.cmake"
+				-P "${CMAKE_SOURCE_DIR}/cmake/GccExtractDebug.cmake"
 			COMMENT "GCC: extracting debug to .dbg for ${TARGET_NAME}"
 		)
 		message(STATUS
