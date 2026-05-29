@@ -46,6 +46,14 @@ public:
                         vk::Device& logicalDevice, vk::CommandPool& cmdPool,
                         vk::Queue& queue) override;
 
+    /// @brief 获取时间点批量编辑表格窗口是否打开。
+    /// @return 表格窗口当前是否打开。
+    bool isTimingPointsTableOpen() const { return m_isTableWindowOpen; }
+
+    /// @brief 设置时间点批量编辑表格窗口打开状态。
+    /// @param open 是否打开表格窗口。
+    void setTimingPointsTableOpen(bool open) { m_isTableWindowOpen = open; }
+
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;

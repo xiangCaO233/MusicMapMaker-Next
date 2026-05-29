@@ -126,6 +126,29 @@ std::string getMainAudioSyncKey(const SessionContext& ctx,
 
     return Config::pathToUtf8(audioPath.lexically_normal());
 }
+
+/// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
+std::string editToolToWorkspaceName(EditTool tool)
+{
+    switch ( tool ) {
+    case EditTool::Marquee: return "Marquee";
+    case EditTool::Draw: return "Draw";
+    case EditTool::Move:
+    default: return "Move";
+    }
+}
+
+/// @brief 将项目工作区中的稳定文本转换为编辑工具枚举。
+EditTool workspaceNameToEditTool(const std::string& name)
+{
+    if ( name == "Marquee" ) {
+        return EditTool::Marquee;
+    }
+    if ( name == "Draw" ) {
+        return EditTool::Draw;
+    }
+    return EditTool::Move;
+}
 }  // namespace
 
 EditorEngine& EditorEngine::instance()
@@ -204,6 +227,213 @@ bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
     return m_sessionRegistry.hasNonLogoSession();
 }
 
+void EditorEngine::captureProjectWorkspaceState()
+{
+    auto* project = ProjectController::instance().currentProject();
+    if ( !project ) {
+        return;
+    }
+
+    auto& workspace = project->m_settings.m_workspace;
+    workspace.m_openBeatmaps.clear();
+    workspace.m_activeBeatmapPath.clear();
+    workspace.m_activePlaybackTime = 0.0;
+    workspace.m_activeEditTool =
+        editToolToWorkspaceName(m_currentTool.load(std::memory_order_relaxed));
+
+    /// @brief 保护工作区状态捕获期间的会话列表访问。
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
+    const auto  activeIndex = m_sessionRegistry.activeIndex();
+
+    for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
+        const auto& entry = sessions[i];
+        if ( entry.isLogoPlaceholder || !entry.session ) {
+            continue;
+        }
+
+        const auto& ctx = entry.session->getContext();
+        if ( !ctx.currentBeatmap ) {
+            continue;
+        }
+
+        auto absoluteMapPath = resolveProjectPath(
+            *project, ctx.currentBeatmap->m_baseMapMetadata.map_path);
+        auto relativeMapPath =
+            makeProjectRelativePath(*project, absoluteMapPath);
+
+        ProjectWorkspaceBeatmapState beatmapState;
+        beatmapState.m_filePath     = Config::pathToUtf8(relativeMapPath);
+        beatmapState.m_cameraId     = entry.cameraId;
+        beatmapState.m_displayName  = entry.displayName;
+        beatmapState.m_playbackTime = ctx.currentTime;
+        if ( i == activeIndex && ctx.isPlaying ) {
+            beatmapState.m_playbackTime =
+                Audio::AudioManager::instance().getCurrentTime();
+        }
+        workspace.m_openBeatmaps.push_back(beatmapState);
+
+        if ( i == activeIndex ) {
+            workspace.m_activeBeatmapPath  = beatmapState.m_filePath;
+            workspace.m_activePlaybackTime = beatmapState.m_playbackTime;
+            project->m_settings.m_lastOpenedBeatmap = entry.displayName;
+
+            auto audioPath =
+                ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
+            auto audioPathUtf8 = Config::pathToUtf8(audioPath);
+            auto audioIdUtf8   = Config::pathToUtf8(audioPath.filename());
+            for ( auto& resource : project->m_audioResources ) {
+                if ( resource.m_path != audioPathUtf8 &&
+                     resource.m_id != audioIdUtf8 ) {
+                    continue;
+                }
+
+                auto& audio              = Audio::AudioManager::instance();
+                resource.m_config.volume = audio.getMainTrackVolume();
+                resource.m_config.muted  = audio.isMainTrackMuted();
+                resource.m_config.playbackSpeed =
+                    static_cast<float>(audio.getPlaybackSpeed());
+                resource.m_config.playbackPitch =
+                    static_cast<float>(audio.getPlaybackPitch());
+                resource.m_config.eqEnabled = audio.isMainTrackEQEnabled();
+                resource.m_config.eqPreset =
+                    static_cast<int>(audio.getMainTrackEQPreset());
+                resource.m_config.eqBandGains.clear();
+                resource.m_config.eqBandQs.clear();
+
+                const size_t bandCount = audio.getMainTrackEQBandCount();
+                resource.m_config.eqBandGains.reserve(bandCount);
+                resource.m_config.eqBandQs.reserve(bandCount);
+                for ( size_t band = 0; band < bandCount; ++band ) {
+                    resource.m_config.eqBandGains.push_back(
+                        audio.getMainTrackEQBandGain(band));
+                    resource.m_config.eqBandQs.push_back(
+                        audio.getMainTrackEQBandQ(band));
+                }
+                break;
+            }
+        }
+    }
+}
+
+void EditorEngine::restoreProjectWorkspace(
+    const std::filesystem::path& explicitBeatmapPath)
+{
+    if ( !explicitBeatmapPath.empty() ) {
+        return;
+    }
+
+    auto* project = ProjectController::instance().currentProject();
+    if ( !project ) {
+        return;
+    }
+
+    std::vector<ProjectWorkspaceBeatmapState> beatmaps =
+        project->m_settings.m_workspace.m_openBeatmaps;
+    if ( beatmaps.empty() &&
+         !project->m_settings.m_lastOpenedBeatmap.empty() ) {
+        for ( const auto& entry : project->m_beatmaps ) {
+            if ( entry.m_name != project->m_settings.m_lastOpenedBeatmap ) {
+                continue;
+            }
+
+            ProjectWorkspaceBeatmapState state;
+            state.m_filePath    = entry.m_filePath;
+            state.m_displayName = entry.m_name;
+            beatmaps.push_back(state);
+            break;
+        }
+    }
+
+    if ( beatmaps.empty() ) {
+        return;
+    }
+
+    m_currentTool.store(workspaceNameToEditTool(
+                            project->m_settings.m_workspace.m_activeEditTool),
+                        std::memory_order_relaxed);
+
+    bool hasSavedCameraId =
+        std::any_of(beatmaps.begin(), beatmaps.end(), [](const auto& state) {
+            return !state.m_cameraId.empty();
+        });
+    const std::string firstWorkspaceCameraId = beatmaps.front().m_cameraId;
+    if ( hasSavedCameraId && !firstWorkspaceCameraId.empty() ) {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( int32_t i = static_cast<int32_t>(sessions.size()) - 1; i >= 0;
+              --i ) {
+            if ( !sessions[i].isLogoPlaceholder ) {
+                continue;
+            }
+
+            const std::string logoCameraId = sessions[i].cameraId;
+            bool shouldKeepLogo = logoCameraId == firstWorkspaceCameraId;
+            if ( shouldKeepLogo ) {
+                continue;
+            }
+
+            m_sessionRegistry.erase(i);
+            m_renderSyncRegistry.eraseCamera(logoCameraId);
+        }
+    }
+
+    const std::string& activePath =
+        project->m_settings.m_workspace.m_activeBeatmapPath;
+    int32_t fallbackActiveIndex = -1;
+    int32_t restoredActiveIndex = -1;
+
+    for ( const auto& state : beatmaps ) {
+        if ( state.m_filePath.empty() ) {
+            continue;
+        }
+
+        auto mapPath =
+            resolveProjectPath(*project, Config::utf8ToPath(state.m_filePath));
+        std::error_code existsError;
+        if ( !std::filesystem::exists(mapPath, existsError) ) {
+            XWARN("Workspace restore skipped missing beatmap: {}",
+                  Config::pathToUtf8(mapPath));
+            continue;
+        }
+
+        auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(mapPath));
+        std::string displayName = state.m_displayName.empty()
+                                      ? map->m_baseMapMetadata.name
+                                      : state.m_displayName;
+        int32_t     index       = createSession(map,
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
+        fallbackActiveIndex     = index;
+
+        std::shared_ptr<BeatmapSession> restoredSession;
+        {
+            std::lock_guard<std::recursive_mutex> lock(
+                m_sessionRegistry.mutex());
+            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
+                restoredSession = sessions[index].session;
+            }
+        }
+
+        if ( restoredSession ) {
+            restoredSession->pushCommand(
+                LogicCommand(CmdSeek{ state.m_playbackTime }));
+        }
+
+        if ( state.m_filePath == activePath ) {
+            restoredActiveIndex = index;
+        }
+    }
+
+    if ( restoredActiveIndex < 0 ) {
+        restoredActiveIndex = fallbackActiveIndex;
+    }
+    m_pendingWorkspaceActiveIndex = restoredActiveIndex;
+}
+
 void EditorEngine::openProject(const std::filesystem::path& projectPath)
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
@@ -228,6 +458,13 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     auto openResult = ProjectController::instance().openProject(projectPath);
     if ( !openResult.m_opened ) {
         return;
+    }
+    m_pendingWorkspaceActiveIndex = -1;
+    if ( auto* project = ProjectController::instance().currentProject() ) {
+        m_currentTool.store(
+            workspaceNameToEditTool(
+                project->m_settings.m_workspace.m_activeEditTool),
+            std::memory_order_relaxed);
     }
 
     for ( const auto& preload : openResult.m_effectPreloads ) {
@@ -254,11 +491,15 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                    Config::pathToUtf8(openResult.m_targetBeatmapPath),
                    e.what());
         }
+    } else {
+        restoreProjectWorkspace(openResult.m_targetBeatmapPath);
     }
 }
 
 void EditorEngine::closeProject()
 {
+    ProjectController::instance().saveProject();
+
     /// @brief 项目控制器关闭当前项目后的结果。
     auto closeResult = ProjectController::instance().closeProject();
     if ( !closeResult.m_closed || !closeResult.m_project ) {
@@ -481,6 +722,10 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     if ( std::holds_alternative<CmdChangeTool>(cmd) ) {
         auto tool = std::get<CmdChangeTool>(cmd).tool;
         m_currentTool.store(tool, std::memory_order_relaxed);
+        if ( auto* project = ProjectController::instance().currentProject() ) {
+            project->m_settings.m_workspace.m_activeEditTool =
+                editToolToWorkspaceName(tool);
+        }
 
         std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
         /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
@@ -627,11 +872,19 @@ void EditorEngine::syncSameMainAudioCanvases()
 
 int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     const std::string&            displayName,
-                                    bool isLogoPlaceholder)
+                                    bool               isLogoPlaceholder,
+                                    const std::string& preferredCameraId,
+                                    bool               restoreDockFromWorkspace)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions      = m_sessionRegistry.entriesUnsafe();
+    auto  cameraIdInUse = [&](const std::string& cameraId) {
+        return std::any_of(
+            sessions.begin(), sessions.end(), [&](const SessionEntry& entry) {
+                return entry.cameraId == cameraId;
+            });
+    };
 
     /// @brief 当前项目指针快照，用于规范化新会话谱面中的项目相对路径。
     const auto* currentProject = ProjectController::instance().currentProject();
@@ -643,11 +896,19 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     if ( !isLogoPlaceholder && beatmap ) {
         for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
             if ( sessions[i].isLogoPlaceholder ) {
+                if ( !preferredCameraId.empty() &&
+                     sessions[i].cameraId != preferredCameraId ) {
+                    continue;
+                }
                 // 复用此画布：加载谱面到它的 Session
-                sessions[i].isLogoPlaceholder = false;
+                sessions[i].isLogoPlaceholder        = false;
+                sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
                 sessions[i].displayName = displayName.empty()
                                               ? beatmap->m_baseMapMetadata.name
                                               : displayName;
+                if ( !preferredCameraId.empty() ) {
+                    m_sessionRegistry.reserveCameraId(preferredCameraId);
+                }
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
@@ -666,7 +927,13 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 
     // 生成唯一 cameraId
     /// @brief 新 Session 对应的唯一画布 cameraId。
-    std::string cameraId = m_sessionRegistry.createNextCameraId();
+    std::string cameraId;
+    if ( !preferredCameraId.empty() && !cameraIdInUse(preferredCameraId) ) {
+        cameraId = preferredCameraId;
+        m_sessionRegistry.reserveCameraId(cameraId);
+    } else {
+        cameraId = m_sessionRegistry.createNextCameraId();
+    }
 
     // 创建新 Session
     /// @brief 新创建的谱面逻辑 Session。
@@ -705,7 +972,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         displayName.empty()
             ? (beatmap ? beatmap->m_baseMapMetadata.name : "New Canvas")
             : displayName;
-    entry.isLogoPlaceholder = isLogoPlaceholder;
+    entry.isLogoPlaceholder        = isLogoPlaceholder;
+    entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
     int32_t newIndex = m_sessionRegistry.append(std::move(entry));
 
@@ -718,7 +986,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     return newIndex;
 }
 
-void EditorEngine::closeSession(int32_t index)
+void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
@@ -738,6 +1006,10 @@ void EditorEngine::closeSession(int32_t index)
 
     // 清理对应的 SyncBuffer
     m_renderSyncRegistry.eraseCamera(cameraId);
+
+    if ( updateWorkspace ) {
+        captureProjectWorkspaceState();
+    }
 }
 
 void EditorEngine::setActiveSessionIndex(int32_t index)
@@ -913,6 +1185,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 void EditorEngine::saveProject()
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    captureProjectWorkspaceState();
     ProjectController::instance().saveProject();
 }
 
@@ -1011,6 +1284,11 @@ void EditorEngine::loop()
         if ( !sessionsSnapshot.empty() ) {
             for ( auto& session : sessionsSnapshot ) {
                 session->update(dt, m_editorConfig);
+            }
+            if ( m_pendingWorkspaceActiveIndex >= 0 ) {
+                int32_t activeIndex           = m_pendingWorkspaceActiveIndex;
+                m_pendingWorkspaceActiveIndex = -1;
+                setActiveSessionIndex(activeIndex);
             }
             syncSameMainAudioCanvases();
         } else {

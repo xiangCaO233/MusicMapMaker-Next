@@ -571,8 +571,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
     ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
 
-    if ( ImGui::Begin(TR("ui.timeline.timing_points_table.title").data(),
-                      &m_isTableWindowOpen) ) {
+    std::string windowTitle =
+        std::string(TR("ui.timeline.timing_points_table.title").data()) +
+        "###TimingPointsTableWindow";
+    if ( ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen) ) {
         if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
             ImGui::TextDisabled("当前未加载任何谱面");
             ImGui::End();

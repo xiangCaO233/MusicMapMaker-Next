@@ -158,7 +158,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                   project->m_audioResources ) {
                                 if ( audio.m_path == relPath ) {
                                     std::string viewName =
-                                        "TrackController_" + audio.m_id;
+                                        AudioTrackControllerUI::makeViewName(
+                                            audio.m_id);
                                     if ( !sourceManager
                                               ->getView<AudioTrackControllerUI>(
                                                   viewName) ) {

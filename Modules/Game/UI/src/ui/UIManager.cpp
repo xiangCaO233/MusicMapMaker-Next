@@ -1,19 +1,350 @@
 #include "ui/UIManager.h"
+#include "canvas/TimelineCanvas.h"
+#include "config/Utf8Path.h"
+#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/input/translators/ImGuiTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
 #include "event/ui/iwindow/UIWindowMouseEvent.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/FloatingManagerUI.h"
+#include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/imgui/audio/AudioWaveformView.h"
+#include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <vector>
 
 namespace MMM::UI
 {
+
+namespace
+{
+/// @brief 主音轨波形窗口的稳定 UIManager 视图名。
+constexpr const char* AUDIO_WAVEFORM_VIEW_NAME = "AudioWaveform";
+
+/// @brief 主音轨频谱窗口的稳定 UIManager 视图名。
+constexpr const char* AUDIO_SPECTRUM_VIEW_NAME = "AudioSpectrum";
+
+/// @brief BPM 测量工具窗口的稳定 UIManager 视图名。
+constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
+
+/// @brief 判断视图名是否是项目工作区动态视图。
+/// @param name UIManager 中注册的视图名。
+/// @return 需要随项目切换清理的动态视图返回 true。
+bool isProjectWorkspaceDynamicView(const std::string& name)
+{
+    return name.rfind("TrackController_", 0) == 0 ||
+           name == AUDIO_WAVEFORM_VIEW_NAME ||
+           name == AUDIO_SPECTRUM_VIEW_NAME ||
+           name == BPM_MEASUREMENT_TOOL_VIEW_NAME;
+}
+
+/// @brief 查询项目或皮肤中是否仍存在工作区保存的音轨。
+/// @param project 当前项目。
+/// @param trackId 音轨 ID。
+/// @param type 传入工作区保存类型，找到项目资源时会被实际类型覆盖。
+/// @param trackName 传入工作区保存名称，找到项目资源时会被实际名称覆盖。
+/// @return 音轨存在时返回 true。
+bool resolveWorkspaceAudioTrack(const Project&                     project,
+                                const std::string&                 trackId,
+                                AudioTrackControllerUI::TrackType& type,
+                                std::string&                       trackName)
+{
+    for ( const auto& resource : project.m_audioResources ) {
+        if ( resource.m_id == trackId ) {
+            type      = resource.m_type == AudioTrackType::Main
+                            ? AudioTrackControllerUI::TrackType::Main
+                            : AudioTrackControllerUI::TrackType::Effect;
+            trackName = resource.m_id;
+            return true;
+        }
+    }
+
+    if ( type == AudioTrackControllerUI::TrackType::Effect ) {
+        auto& skinData = Config::SkinManager::instance().getData();
+        if ( skinData.audioPaths.contains(trackId) ) {
+            if ( trackName.empty() ) {
+                trackName = trackId;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+}  // namespace
+
+void UIManager::setNativeWindow(Graphic::NativeWindow* window)
+{
+    m_nativeWindow = window;
+}
+
+void UIManager::captureProjectWorkspaceState()
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        return;
+    }
+
+    auto& workspace = project->m_settings.m_workspace;
+    captureProjectWorkspaceViews(workspace);
+
+    size_t      iniSize = 0;
+    const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
+    if ( iniData && iniSize > 0 ) {
+        workspace.m_imguiIniData.assign(iniData, iniSize);
+    }
+
+    if ( m_nativeWindow ) {
+        auto& windowState = workspace.m_mainWindow;
+        m_nativeWindow->getWindowPlacement(windowState.m_x,
+                                           windowState.m_y,
+                                           windowState.m_width,
+                                           windowState.m_height,
+                                           windowState.m_maximized);
+        windowState.m_valid = true;
+    }
+}
+
+void UIManager::applyNoProjectDefaultWorkspace()
+{
+    if ( auto* sideBar = getView<SideBarUI>("SideBarUI") ) {
+        sideBar->setActiveTab(SideBarTab::FileExplorer);
+    }
+    if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
+        sideBarManager->restoreSubViewState(
+            TabToSubViewId(SideBarTab::FileExplorer), true);
+    }
+}
+
+void UIManager::syncProjectWorkspaceState()
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        if ( !m_workspaceProjectPath.empty() ) {
+            clearProjectWorkspaceViews();
+        }
+        m_workspaceProjectPath.clear();
+        m_workspaceProjectInstance = nullptr;
+        if ( !m_noProjectWorkspaceDefaultApplied ) {
+            applyNoProjectDefaultWorkspace();
+            m_noProjectWorkspaceDefaultApplied = true;
+        }
+        return;
+    }
+
+    m_noProjectWorkspaceDefaultApplied = false;
+    std::string projectPath = Config::pathToUtf8(project->m_projectRoot);
+    if ( projectPath != m_workspaceProjectPath ||
+         project != m_workspaceProjectInstance ) {
+        m_workspaceProjectPath     = projectPath;
+        m_workspaceProjectInstance = project;
+        clearProjectWorkspaceViews();
+
+        const auto& workspace = project->m_settings.m_workspace;
+        if ( !workspace.m_imguiIniData.empty() ) {
+            ImGui::LoadIniSettingsFromMemory(workspace.m_imguiIniData.data(),
+                                             workspace.m_imguiIniData.size());
+            MainDockSpaceUI::markProjectWorkspaceLayoutLoaded();
+        }
+
+        if ( m_nativeWindow && workspace.m_mainWindow.m_valid ) {
+            const auto& windowState = workspace.m_mainWindow;
+            m_nativeWindow->applyWindowPlacement(windowState.m_x,
+                                                 windowState.m_y,
+                                                 windowState.m_width,
+                                                 windowState.m_height,
+                                                 windowState.m_maximized);
+        }
+
+        restoreProjectWorkspaceViews(workspace);
+
+        m_nextWorkspaceCaptureTime = ImGui::GetTime() + 0.5;
+    }
+
+    double now = ImGui::GetTime();
+    if ( now >= m_nextWorkspaceCaptureTime ) {
+        captureProjectWorkspaceState();
+        m_nextWorkspaceCaptureTime = now + 2.0;
+    }
+}
+
+void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
+{
+    workspace.m_audioControllers.clear();
+    workspace.m_audioWaveformOpen      = false;
+    workspace.m_audioSpectrumOpen      = false;
+    workspace.m_bpmMeasurementToolOpen = false;
+    workspace.m_bpmMeasurementAudioTrackId.clear();
+    workspace.m_timingPointsTableOpen  = false;
+    workspace.m_overlapCheckOpen       = false;
+    workspace.m_metadataEditorOpen     = false;
+    workspace.m_noteMetadataEditorOpen = false;
+
+    for ( const auto& name : m_uiSequence ) {
+        auto viewIt = m_uiviews.find(name);
+        if ( viewIt == m_uiviews.end() || !viewIt->second->isOpen() ) {
+            continue;
+        }
+
+        if ( name.rfind("TrackController_", 0) == 0 ) {
+            auto* controller = getView<AudioTrackControllerUI>(name);
+            if ( !controller ) {
+                continue;
+            }
+
+            ProjectWorkspaceAudioControllerState controllerState;
+            controllerState.m_trackId   = controller->getTrackId();
+            controllerState.m_trackName = controller->getTrackName();
+            controllerState.m_trackType =
+                AudioTrackControllerUI::trackTypeToWorkspaceName(
+                    controller->getTrackType());
+            workspace.m_audioControllers.push_back(controllerState);
+            continue;
+        }
+
+        if ( name == AUDIO_WAVEFORM_VIEW_NAME ) {
+            workspace.m_audioWaveformOpen = true;
+        } else if ( name == AUDIO_SPECTRUM_VIEW_NAME ) {
+            workspace.m_audioSpectrumOpen = true;
+        } else if ( name == BPM_MEASUREMENT_TOOL_VIEW_NAME ) {
+            auto* tool = getView<BpmMeasurementToolView>(name);
+            if ( tool ) {
+                workspace.m_bpmMeasurementToolOpen = true;
+                workspace.m_bpmMeasurementAudioTrackId =
+                    tool->getSelectedAudioTrackId();
+            }
+        }
+    }
+
+    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+        workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
+    }
+
+    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
+        workspace.m_overlapCheckOpen =
+            mainDock->m_mainMenuview.isOverlapCheckWindowOpen();
+        workspace.m_metadataEditorOpen =
+            mainDock->m_mainMenuview.isMetadataEditorWindowOpen();
+        workspace.m_noteMetadataEditorOpen =
+            mainDock->m_mainMenuview.isNoteMetadataEditorWindowOpen();
+    }
+
+    /// 侧边栏页签由 SideBarUI 在真实切换事件发生时立即写入项目配置。
+    /// 这里的周期性捕获只负责窗口布局和动态窗口，避免用临时 UI 状态覆盖项目值。
+}
+
+void UIManager::restoreProjectWorkspaceViews(
+    const ProjectWorkspaceState& workspace)
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        return;
+    }
+
+    SideBarTab sideBarTab =
+        SideBarUI::workspaceNameToTab(workspace.m_sidebarActiveTab);
+    if ( auto* sideBar = getView<SideBarUI>("SideBarUI") ) {
+        sideBar->setActiveTab(sideBarTab);
+    }
+    if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
+        sideBarManager->restoreSubViewState(sideBarTab == SideBarTab::None
+                                                ? std::string{}
+                                                : TabToSubViewId(sideBarTab),
+                                            sideBarTab != SideBarTab::None);
+    }
+
+    for ( const auto& controllerState : workspace.m_audioControllers ) {
+        if ( controllerState.m_trackId.empty() ) {
+            continue;
+        }
+
+        auto trackType = AudioTrackControllerUI::workspaceNameToTrackType(
+            controllerState.m_trackType);
+        std::string trackName = controllerState.m_trackName.empty()
+                                    ? controllerState.m_trackId
+                                    : controllerState.m_trackName;
+        if ( !resolveWorkspaceAudioTrack(
+                 *project, controllerState.m_trackId, trackType, trackName) ) {
+            continue;
+        }
+
+        std::string viewName =
+            AudioTrackControllerUI::makeViewName(controllerState.m_trackId);
+        if ( getView<AudioTrackControllerUI>(viewName) ) {
+            continue;
+        }
+
+        registerView(viewName,
+                     std::make_unique<AudioTrackControllerUI>(
+                         controllerState.m_trackId, trackName, trackType));
+    }
+
+    if ( workspace.m_audioWaveformOpen &&
+         !getView<AudioWaveformView>(AUDIO_WAVEFORM_VIEW_NAME) ) {
+        registerView(AUDIO_WAVEFORM_VIEW_NAME,
+                     std::make_unique<AudioWaveformView>(
+                         TR("ui.audio_manager.waveform_title").data()));
+    }
+
+    if ( workspace.m_audioSpectrumOpen &&
+         !getView<AudioSpectrumView>(AUDIO_SPECTRUM_VIEW_NAME) ) {
+        registerView(AUDIO_SPECTRUM_VIEW_NAME,
+                     std::make_unique<AudioSpectrumView>(
+                         TR("ui.audio_manager.spectrum_title").data()));
+    }
+
+    if ( workspace.m_bpmMeasurementToolOpen ) {
+        auto* bpmTool =
+            getView<BpmMeasurementToolView>(BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        if ( !bpmTool ) {
+            auto toolView = std::make_unique<BpmMeasurementToolView>(
+                TR("ui.tools.bpm_measure").data());
+            bpmTool = toolView.get();
+            registerView(BPM_MEASUREMENT_TOOL_VIEW_NAME, std::move(toolView));
+        }
+        if ( bpmTool ) {
+            bpmTool->openWithAudioTrack(workspace.m_bpmMeasurementAudioTrackId);
+        }
+    }
+
+    if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
+        timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
+    }
+
+    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
+        mainDock->m_mainMenuview.setOverlapCheckWindowOpen(
+            workspace.m_overlapCheckOpen);
+        mainDock->m_mainMenuview.setMetadataEditorWindowOpen(
+            workspace.m_metadataEditorOpen);
+        mainDock->m_mainMenuview.setNoteMetadataEditorWindowOpen(
+            workspace.m_noteMetadataEditorOpen);
+    }
+}
+
+void UIManager::clearProjectWorkspaceViews()
+{
+    std::vector<std::string> dynamicViews;
+    for ( const auto& name : m_uiSequence ) {
+        if ( isProjectWorkspaceDynamicView(name) ) {
+            dynamicViews.push_back(name);
+        }
+    }
+
+    for ( const auto& name : dynamicViews ) {
+        unregisterView(name);
+    }
+}
 
 /// @brief 注册视图，转交所有权
 void UIManager::registerView(const std::string&       name,
@@ -92,6 +423,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    syncProjectWorkspaceState();
+
     // 清理已关闭的 IUIView
     std::vector<std::string> toRemove;
     for ( auto& [name, view] : m_uiviews ) {

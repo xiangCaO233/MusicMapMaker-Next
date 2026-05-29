@@ -310,6 +310,44 @@ NativeWindow::~NativeWindow()
     }
 }
 
+void NativeWindow::getWindowPlacement(int& x, int& y, int& width, int& height,
+                                      bool& maximized) const
+{
+    x         = 100;
+    y         = 100;
+    width     = 1280;
+    height    = 720;
+    maximized = false;
+
+    if ( !m_windowHandle ) {
+        return;
+    }
+
+    glfwGetWindowPos(m_windowHandle, &x, &y);
+    glfwGetWindowSize(m_windowHandle, &width, &height);
+    maximized =
+        glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+}
+
+void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
+                                        bool maximized)
+{
+    if ( !m_windowHandle || width <= 0 || height <= 0 ) {
+        return;
+    }
+
+    if ( glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ) {
+        glfwRestoreWindow(m_windowHandle);
+    }
+
+    glfwSetWindowPos(m_windowHandle, x, y);
+    glfwSetWindowSize(m_windowHandle, width, height);
+
+    if ( maximized ) {
+        glfwMaximizeWindow(m_windowHandle);
+    }
+}
+
 void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)
 {
     auto app =

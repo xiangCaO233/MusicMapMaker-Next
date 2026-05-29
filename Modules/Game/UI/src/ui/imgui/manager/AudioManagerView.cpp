@@ -186,7 +186,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 Utils::renderScrollingSelectable(
                     audio.m_id, labelStr, availW, 28 * dpiScale, [&]() {
                         // 点击弹出控制器
-                        std::string viewName = "TrackController_" + audio.m_id;
+                        std::string viewName =
+                            AudioTrackControllerUI::makeViewName(audio.m_id);
                         if ( !sourceManager->getView<AudioTrackControllerUI>(
                                  viewName) ) {
                             AudioTrackControllerUI::TrackType type =

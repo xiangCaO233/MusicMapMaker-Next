@@ -25,6 +25,9 @@ struct SessionEntry {
 
     /// @brief 是否为初始 Logo 占位画布，尚未加载谱面时为 true。
     bool isLogoPlaceholder{ false };
+
+    /// @brief 是否应使用项目工作区 ini 中保存的停靠状态。
+    bool restoreDockFromWorkspace{ false };
 };
 
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
@@ -56,6 +59,10 @@ public:
     /// @brief 生成下一个唯一画布 cameraId。
     /// @return 新生成的 cameraId。
     std::string createNextCameraId();
+
+    /// @brief 保留指定画布 ID，避免后续自动分配重复编号。
+    /// @param cameraId 已恢复或外部分配的画布 ID。
+    void reserveCameraId(const std::string& cameraId);
 
     /// @brief 获取当前活跃 Session 索引。
     /// @return 当前活跃 Session 索引，-1 表示没有活跃 Session。

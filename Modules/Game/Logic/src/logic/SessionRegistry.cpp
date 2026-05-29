@@ -1,9 +1,41 @@
 #include "logic/SessionRegistry.h"
 #include <algorithm>
+#include <charconv>
+#include <string_view>
 #include <utility>
 
 namespace MMM::Logic
 {
+
+namespace
+{
+/// @brief 解析 Canvas_N 形式的画布 ID。
+/// @param cameraId 待解析的画布 ID。
+/// @param canvasId 解析成功时写入的数字部分。
+/// @return 解析是否成功。
+bool parseCanvasCameraId(const std::string& cameraId, int32_t& canvasId)
+{
+    static constexpr std::string_view PREFIX = "Canvas_";
+    if ( cameraId.rfind(PREFIX.data(), 0) != 0 ) {
+        return false;
+    }
+
+    const char* first = cameraId.data() + PREFIX.size();
+    const char* last  = cameraId.data() + cameraId.size();
+    if ( first == last ) {
+        return false;
+    }
+
+    int32_t parsed = 0;
+    auto    result = std::from_chars(first, last, parsed);
+    if ( result.ec != std::errc{} || result.ptr != last || parsed < 0 ) {
+        return false;
+    }
+
+    canvasId = parsed;
+    return true;
+}
+}  // namespace
 
 /// @brief 获取保护会话列表的递归锁。
 std::recursive_mutex& SessionRegistry::mutex() const
@@ -20,6 +52,19 @@ std::string SessionRegistry::createNextCameraId()
     /// @brief 本次分配使用的递增画布编号。
     const int32_t canvasId = m_nextCanvasId++;
     return "Canvas_" + std::to_string(canvasId);
+}
+
+/// @brief 保留指定画布 ID，避免后续自动分配重复编号。
+void SessionRegistry::reserveCameraId(const std::string& cameraId)
+{
+    /// @brief 保护本次画布编号保留的临界区。
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+    int32_t canvasId = 0;
+    if ( !parseCanvasCameraId(cameraId, canvasId) ) {
+        return;
+    }
+    m_nextCanvasId = std::max(m_nextCanvasId, canvasId + 1);
 }
 
 /// @brief 获取当前活跃 Session 索引。

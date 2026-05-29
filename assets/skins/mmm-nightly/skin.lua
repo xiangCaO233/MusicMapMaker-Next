@@ -80,6 +80,10 @@ local Skin = {
 			note = "audio/note.wav",
 			flick = "audio/flick.wav",
 		},
+		metronome = {
+			beat_low = "audio/metronome/beat_low.wav",
+			downbeat_high = "audio/metronome/downbeat_high.wav",
+		},
 	},
 
 	-- 效果配置

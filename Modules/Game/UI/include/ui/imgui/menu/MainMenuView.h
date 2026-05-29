@@ -69,6 +69,45 @@ public:
         return m_statusMessageTimer > 0.0f ? m_statusMessage : "";
     }
 
+    /// @brief 获取重叠检测工具窗口是否打开。
+    /// @return 重叠检测工具窗口是否打开。
+    bool isOverlapCheckWindowOpen() const { return m_showOverlapCheckWindow; }
+
+    /// @brief 设置重叠检测工具窗口打开状态。
+    /// @param open 是否打开窗口。
+    void setOverlapCheckWindowOpen(bool open)
+    {
+        m_showOverlapCheckWindow = open;
+    }
+
+    /// @brief 获取谱面额外元数据编辑窗口是否打开。
+    /// @return 谱面额外元数据编辑窗口是否打开。
+    bool isMetadataEditorWindowOpen() const
+    {
+        return m_showMetadataEditorWindow;
+    }
+
+    /// @brief 设置谱面额外元数据编辑窗口打开状态。
+    /// @param open 是否打开窗口。
+    void setMetadataEditorWindowOpen(bool open)
+    {
+        m_showMetadataEditorWindow = open;
+    }
+
+    /// @brief 获取音符元数据编辑窗口是否打开。
+    /// @return 音符元数据编辑窗口是否打开。
+    bool isNoteMetadataEditorWindowOpen() const
+    {
+        return m_showNoteMetadataEditorWindow;
+    }
+
+    /// @brief 设置音符元数据编辑窗口打开状态。
+    /// @param open 是否打开窗口。
+    void setNoteMetadataEditorWindowOpen(bool open)
+    {
+        m_showNoteMetadataEditorWindow = open;
+    }
+
 private:
     /// @brief 单条重叠检测结果。
     struct OverlapResult {

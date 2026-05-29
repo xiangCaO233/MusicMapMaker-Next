@@ -128,18 +128,23 @@ public:
      * @param displayName
      * 显示名称
      * @param isLogoPlaceholder 是否为初始 Logo 画布
+     * @param preferredCameraId 工作区恢复时希望复用的稳定画布 ID。
+     * @param restoreDockFromWorkspace 是否让 UI 使用项目 ini 中的原停靠状态。
      *
      * @return 新 Session 在会话注册表中的索引
      */
-    int32_t createSession(std::shared_ptr<MMM::BeatMap> beatmap     = nullptr,
-                          const std::string&            displayName = "",
-                          bool isLogoPlaceholder                    = false);
+    int32_t createSession(std::shared_ptr<MMM::BeatMap> beatmap       = nullptr,
+                          const std::string&            displayName   = "",
+                          bool               isLogoPlaceholder        = false,
+                          const std::string& preferredCameraId        = "",
+                          bool               restoreDockFromWorkspace = false);
 
     /**
      * @brief 关闭指定索引的画布 Session
      * @param index 要关闭的 Session 索引
+     * @param updateWorkspace 是否在关闭后刷新项目工作区中的打开谱面列表
      */
-    void closeSession(int32_t index);
+    void closeSession(int32_t index, bool updateWorkspace = true);
 
     /**
      * @brief 设置当前活跃（前台）的 Session 索引
@@ -281,6 +286,14 @@ public:
     void saveProject();
 
 private:
+    /// @brief 捕获当前打开谱面、播放进度和主音轨运行时配置到项目设置。
+    void captureProjectWorkspaceState();
+
+    /// @brief 根据当前项目的工作区状态恢复上次打开的谱面和播放进度。
+    /// @param explicitBeatmapPath 本次打开项目时用户显式指定的谱面路径。
+    void restoreProjectWorkspace(
+        const std::filesystem::path& explicitBeatmapPath);
+
     /**
      * @brief 逻辑线程的主循环
      * @warning
@@ -353,6 +366,9 @@ private:
     /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
     /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ false };
+
+    /// @brief 项目工作区恢复后待激活的 Session 索引，仅由逻辑线程读写。
+    int32_t m_pendingWorkspaceActiveIndex{ -1 };
 
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
     uint32_t m_logicUpdateCount{ 0 };

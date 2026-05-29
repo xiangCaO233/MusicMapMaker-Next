@@ -5,6 +5,7 @@
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "logic/ProjectController.h"
 #include "ui/Icons.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -22,7 +23,17 @@ SideBarUI::SideBarUI(const std::string& name) : IUIView(name)
                 if ( e.targetFloatManagerName == "SideBarManager" ) {
                     auto tab = SubViewIdToTab(e.subViewId);
                     if ( tab != SideBarTab::None ) {
-                        m_activeTab = tab;
+                        if ( e.showSubView ) {
+                            m_activeTab = tab;
+                            if ( e.sourceUiName != m_name ) {
+                                persistWorkspaceActiveTab(m_activeTab);
+                            }
+                        } else if ( m_activeTab == tab ) {
+                            m_activeTab = SideBarTab::None;
+                            if ( e.sourceUiName != m_name ) {
+                                persistWorkspaceActiveTab(m_activeTab);
+                            }
+                        }
                     }
                 }
             });
@@ -34,6 +45,51 @@ SideBarUI::~SideBarUI()
         Event::EventBus::instance().unsubscribe<Event::UISubViewToggleEvent>(
             m_subId);
     }
+}
+
+std::string SideBarUI::workspaceNameFromTab(SideBarTab tab)
+{
+    switch ( tab ) {
+    case SideBarTab::Search: return "Search";
+    case SideBarTab::FileExplorer: return "FileExplorer";
+    case SideBarTab::AudioExplorer: return "AudioExplorer";
+    case SideBarTab::BeatMapExplorer: return "BeatMapExplorer";
+    case SideBarTab::Settings: return "Settings";
+    case SideBarTab::None:
+    default: return "None";
+    }
+}
+
+SideBarTab SideBarUI::workspaceNameToTab(const std::string& name)
+{
+    if ( name == "Search" ) return SideBarTab::Search;
+    if ( name == "FileExplorer" ) return SideBarTab::FileExplorer;
+    if ( name == "AudioExplorer" ) return SideBarTab::AudioExplorer;
+    if ( name == "BeatMapExplorer" ) return SideBarTab::BeatMapExplorer;
+    if ( name == "Settings" ) return SideBarTab::Settings;
+    return SideBarTab::None;
+}
+
+SideBarTab SideBarUI::getActiveTab() const
+{
+    return m_activeTab;
+}
+
+void SideBarUI::setActiveTab(SideBarTab tab)
+{
+    m_activeTab = tab;
+}
+
+void SideBarUI::persistWorkspaceActiveTab(SideBarTab tab) const
+{
+    auto* project = Logic::ProjectController::instance().currentProject();
+    if ( !project ) {
+        return;
+    }
+
+    project->m_settings.m_workspace.m_sidebarActiveTab =
+        SideBarUI::workspaceNameFromTab(tab);
+    Logic::ProjectController::instance().saveProject();
 }
 
 void SideBarUI::update(UIManager* sourceManager)
@@ -121,6 +177,7 @@ void SideBarUI::update(UIManager* sourceManager)
             std::string btnId = "##tab_btn_" + std::to_string((int)tab);
             if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
                 m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
+                persistWorkspaceActiveTab(m_activeTab);
                 // 2. 发布事件通知 FloatingManagerUI
                 using namespace MMM::Event;
 
@@ -182,7 +239,7 @@ void SideBarUI::update(UIManager* sourceManager)
                     label.c_str());
                 ImGui::PopFont();
             }
- 
+
             // --- 悬停提示 (保留以增强可用性) ---
             Utils::renderTooltip(TabToTooltip(tab).c_str(),
                                  Utils::TooltipDir::Right);

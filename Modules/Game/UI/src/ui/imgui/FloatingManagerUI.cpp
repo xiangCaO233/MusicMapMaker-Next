@@ -23,7 +23,11 @@ FloatingManagerUI::FloatingManagerUI(const std::string& name)
                               e.subViewId);
                           // 核心逻辑：只处理发给“我”的指令
                           if ( e.targetFloatManagerName == this->m_name ) {
-                              this->toggleSubView(e.subViewId);
+                              if ( e.showSubView ) {
+                                  this->restoreSubViewState(e.subViewId, true);
+                              } else {
+                                  this->restoreSubViewState(e.subViewId, false);
+                              }
                           }
                       });
 }
@@ -51,6 +55,18 @@ void FloatingManagerUI::toggleSubView(const std::string& subViewId)
         m_currentSubViewId = subViewId;
         m_isVisible        = true;  // 切换或显示
     }
+}
+
+void FloatingManagerUI::restoreSubViewState(const std::string& subViewId,
+                                            bool               visible)
+{
+    m_currentSubViewId = subViewId;
+    m_isVisible        = visible && m_subViews.contains(subViewId);
+}
+
+bool FloatingManagerUI::isVisible() const
+{
+    return m_isVisible;
 }
 
 void FloatingManagerUI::update(UIManager* sourceManager)

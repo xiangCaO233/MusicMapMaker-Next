@@ -11,6 +11,22 @@
 namespace MMM::UI
 {
 
+std::string AudioTrackControllerUI::makeViewName(const std::string& trackId)
+{
+    return "TrackController_" + trackId;
+}
+
+const char* AudioTrackControllerUI::trackTypeToWorkspaceName(TrackType type)
+{
+    return type == TrackType::Effect ? "Effect" : "Main";
+}
+
+AudioTrackControllerUI::TrackType
+AudioTrackControllerUI::workspaceNameToTrackType(const std::string& name)
+{
+    return name == "Effect" ? TrackType::Effect : TrackType::Main;
+}
+
 AudioTrackControllerUI::AudioTrackControllerUI(const std::string& trackId,
                                                const std::string& trackName,
                                                TrackType          type)
@@ -36,7 +52,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
-    if ( ImGui::Begin(m_trackName.c_str(), &m_isOpen) ) {
+    std::string windowTitle =
+        m_trackName + "###" + AudioTrackControllerUI::makeViewName(m_trackId);
+    if ( ImGui::Begin(windowTitle.c_str(), &m_isOpen) ) {
         CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         float volume = 0.5f;
         float speed  = 1.0f;

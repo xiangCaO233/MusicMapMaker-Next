@@ -45,6 +45,9 @@ private:
 
     /// @brief 项目切换关闭流程中当前等待关闭的画布 cameraId
     std::string m_projectSwitchClosingCanvas;
+
+    /// @brief 当前项目切换流程是否已经捕获过工作区状态。
+    bool m_capturedProjectSwitchWorkspace{ false };
 };
 
 }  // namespace MMM::UI

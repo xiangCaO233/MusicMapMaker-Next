@@ -17,6 +17,21 @@ class AudioTrackControllerUI : virtual public IUIView
 public:
     enum class TrackType { Main, Effect };
 
+    /// @brief 构造项目工作区使用的稳定视图名称。
+    /// @param trackId 音轨标识符。
+    /// @return UIManager 中注册音轨控制器使用的视图名。
+    static std::string makeViewName(const std::string& trackId);
+
+    /// @brief 将音轨类型转换为项目工作区中的稳定文本。
+    /// @param type 音轨类型。
+    /// @return Main 或 Effect。
+    static const char* trackTypeToWorkspaceName(TrackType type);
+
+    /// @brief 从项目工作区稳定文本恢复音轨类型。
+    /// @param name 工作区保存的音轨类型文本。
+    /// @return 对应的音轨类型；未知文本按主音轨处理。
+    static TrackType workspaceNameToTrackType(const std::string& name);
+
     /// @param trackId 音轨标识符
     /// @param trackName 显示名称
     /// @param type 音轨类型
@@ -30,6 +45,14 @@ public:
     void* getActualInstance() override { return this; }
 
     const std::string& getTrackId() const { return m_trackId; }
+
+    /// @brief 获取音轨控制器显示名称。
+    /// @return 当前窗口显示名称。
+    const std::string& getTrackName() const { return m_trackName; }
+
+    /// @brief 获取音轨类型。
+    /// @return 当前音轨控制器绑定的类型。
+    TrackType getTrackType() const { return m_type; }
 
 private:
     /// @brief 构建音量区域的 Clay 布局

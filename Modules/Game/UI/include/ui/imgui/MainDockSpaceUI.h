@@ -17,9 +17,22 @@ class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 public:
     static ImGuiID getCenterDockId() { return s_centerDockId; }
     static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
+    /// @brief 标记本帧已加载项目专属 ImGui 布局，跳过默认 DockBuilder 重置。
+    static void markProjectWorkspaceLayoutLoaded()
+    {
+        s_projectWorkspaceLayoutLoaded = true;
+    }
+    /// @brief 消费项目专属布局加载标记。
+    static bool consumeProjectWorkspaceLayoutLoaded()
+    {
+        bool loaded                    = s_projectWorkspaceLayoutLoaded;
+        s_projectWorkspaceLayoutLoaded = false;
+        return loaded;
+    }
 
 private:
     static inline ImGuiID s_centerDockId{ 0 };
+    static inline bool    s_projectWorkspaceLayoutLoaded{ false };
 
 public:
     MainDockSpaceUI(const std::string& name)

@@ -24,7 +24,14 @@ void CanvasTabManager::handlePendingProjectSwitch(
     auto& projectController = Logic::ProjectController::instance();
     if ( !projectController.hasPendingProjectSwitch() ) {
         m_projectSwitchClosingCanvas.clear();
+        m_capturedProjectSwitchWorkspace = false;
         return;
+    }
+
+    if ( !m_capturedProjectSwitchWorkspace ) {
+        sourceManager->captureProjectWorkspaceState();
+        engine.saveProject();
+        m_capturedProjectSwitchWorkspace = true;
     }
 
     if ( entries.empty() ) {
@@ -90,6 +97,23 @@ void CanvasTabManager::update(UIManager* sourceManager)
     auto& engine  = Logic::EditorEngine::instance();
     auto  entries = engine.getSessionEntries();
 
+    std::unordered_set<std::string> activeCameraIds;
+    activeCameraIds.reserve(entries.size());
+    for ( const auto& entry : entries ) {
+        activeCameraIds.insert(entry.cameraId);
+    }
+
+    std::vector<std::string> staleCanvases;
+    for ( const auto& cameraId : m_initializedCanvases ) {
+        if ( !activeCameraIds.contains(cameraId) ) {
+            staleCanvases.push_back(cameraId);
+        }
+    }
+    for ( const auto& cameraId : staleCanvases ) {
+        sourceManager->unregisterView(cameraId);
+        m_initializedCanvases.erase(cameraId);
+    }
+
     // 1. 同步：检查是否有新的 Session 需要创建 Canvas
     for ( const auto& entry : entries ) {
         if ( m_initializedCanvases.find(entry.cameraId) ==
@@ -104,14 +128,16 @@ void CanvasTabManager::update(UIManager* sourceManager)
                 200,
                 engine.getSyncBuffer(entry.cameraId),
                 entry.cameraId);
-            newCanvas->requestDockToCenter();
+            if ( !entry.restoreDockFromWorkspace ) {
+                newCanvas->requestDockToCenter();
+            }
 
             sourceManager->registerView(entry.cameraId, std::move(newCanvas));
             m_initializedCanvases.insert(entry.cameraId);
 
             // 如果有合法的中央停靠区，进行停靠
             ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
-            if ( centerDockId != 0 ) {
+            if ( centerDockId != 0 && !entry.restoreDockFromWorkspace ) {
                 XINFO("CanvasTabManager: Docking {} to center dock #{}",
                       entry.cameraId,
                       centerDockId);
@@ -138,11 +164,13 @@ void CanvasTabManager::update(UIManager* sourceManager)
                     entry.cameraId,
                     i);
 
+                bool isProjectSwitchClose =
+                    m_projectSwitchClosingCanvas == entry.cameraId;
                 m_initializedCanvases.erase(entry.cameraId);
-                if ( m_projectSwitchClosingCanvas == entry.cameraId ) {
+                if ( isProjectSwitchClose ) {
                     m_projectSwitchClosingCanvas.clear();
                 }
-                engine.closeSession(i);
+                engine.closeSession(i, !isProjectSwitchClose);
 
                 // 如果所有画布都被关闭了，我们需要恢复默认的 Logo 占位画布
                 if ( engine.getSessionCount() == 0 ) {

@@ -30,6 +30,24 @@ public:
     // 获取窗口宽高，用于 Swapchain 重建
     void getFramebufferSize(int& width, int& height) const;
 
+    /// @brief 获取窗口位置、尺寸和最大化状态。
+    /// @param x 输出窗口左上角 X 坐标。
+    /// @param y 输出窗口左上角 Y 坐标。
+    /// @param width 输出窗口宽度。
+    /// @param height 输出窗口高度。
+    /// @param maximized 输出窗口是否最大化。
+    void getWindowPlacement(int& x, int& y, int& width, int& height,
+                            bool& maximized) const;
+
+    /// @brief 应用窗口位置、尺寸和最大化状态。
+    /// @param x 目标窗口左上角 X 坐标。
+    /// @param y 目标窗口左上角 Y 坐标。
+    /// @param width 目标窗口宽度。
+    /// @param height 目标窗口高度。
+    /// @param maximized 是否恢复为最大化窗口。
+    void applyWindowPlacement(int x, int y, int width, int height,
+                              bool maximized);
+
     /**
      * @brief 全屏
      */

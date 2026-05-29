@@ -87,9 +87,6 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     m_uiManager.registerView("NewBeatmapWizard",
                              std::make_unique<UI::NewBeatmapWizard>());
 
-    // 初始化时默认激活第一个 Tab（文件管理器）
-    sidebar_manager->toggleSubView(TR("title.file_manager"));
-
     auto& engine = Logic::EditorEngine::instance();
 
     m_uiManager.registerView("CanvasTabManager",
@@ -137,6 +134,8 @@ GameLoop::~GameLoop() {}
 // clang-format on
 int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 {
+    m_uiManager.setNativeWindow(&window);
+
     // 初始化窗口
     // VKContext 表面资源后续初始化
     if ( g_vkContext ) {
@@ -309,6 +308,10 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             };
             context.getRenderer().render(window, graphicUserHooks);
         }
+
+        // 保存当前项目工作区和项目配置
+        m_uiManager.captureProjectWorkspaceState();
+        Logic::EditorEngine::instance().saveProject();
 
         // 停止逻辑线程
         Logic::EditorEngine::instance().stop();

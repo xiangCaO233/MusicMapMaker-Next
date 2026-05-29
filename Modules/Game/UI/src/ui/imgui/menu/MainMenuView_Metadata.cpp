@@ -817,7 +817,10 @@ void MainMenuView::renderNoteMetadataEditorWindow()
     ImFont* titleFont = skinMgr.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont);
 
-    bool opened = ImGui::Begin(TR("ui.edit.note_metadata.title").data(),
+    std::string windowTitle =
+        std::string(TR("ui.edit.note_metadata.title").data()) +
+        "###NoteMetadataEditorWindow";
+    bool opened = ImGui::Begin(windowTitle.c_str(),
                                &m_showNoteMetadataEditorWindow,
                                ImGuiWindowFlags_None);
 

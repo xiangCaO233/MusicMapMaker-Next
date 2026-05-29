@@ -67,6 +67,13 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     static float lastDpiScale  = -1.0f;
     static bool  is_first_time = true;
     bool shouldResetLayout     = (std::abs(dpiScale - lastDpiScale) > 0.001f);
+    bool projectLayoutLoaded =
+        MainDockSpaceUI::consumeProjectWorkspaceLayoutLoaded();
+    if ( projectLayoutLoaded ) {
+        is_first_time     = false;
+        lastDpiScale      = dpiScale;
+        shouldResetLayout = false;
+    }
 
     if ( is_first_time || shouldResetLayout ) {
         is_first_time = false;

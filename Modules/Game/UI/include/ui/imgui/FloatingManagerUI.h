@@ -27,6 +27,15 @@ public:
     ///@brief 核心切换逻辑
     void toggleSubView(const std::string& subViewId);
 
+    /// @brief 恢复浮动管理器显示的子视图状态。
+    /// @param subViewId 需要显示的子视图 ID。
+    /// @param visible 是否显示浮动管理器。
+    void restoreSubViewState(const std::string& subViewId, bool visible);
+
+    /// @brief 判断浮动管理器当前是否可见。
+    /// @return 当前是否显示。
+    bool isVisible() const;
+
     void update(UIManager* sourceManager) override;
 
     void* getActualInstance() override { return this; }

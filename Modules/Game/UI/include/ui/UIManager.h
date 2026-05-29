@@ -4,8 +4,20 @@
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace MMM::Graphic
+{
+class NativeWindow;
+}
+
+namespace MMM
+{
+class Project;
+struct ProjectWorkspaceState;
+}  // namespace MMM
 
 namespace MMM::UI
 {
@@ -33,6 +45,13 @@ public:
 
     /// @brief 清理所有ui
     void clearAllViews();
+
+    /// @brief 绑定主原生窗口，用于项目工作区保存和恢复窗口位置。
+    /// @param window 主原生窗口指针，生命周期由 GameLoop 持有。
+    void setNativeWindow(Graphic::NativeWindow* window);
+
+    /// @brief 捕获当前项目工作区 UI 状态到内存中的项目配置。
+    void captureProjectWorkspaceState();
 
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
@@ -77,6 +96,25 @@ public:
                            uint32_t           frameIndex) override;
 
 private:
+    /// @brief 无项目时应用一次默认侧边栏工作区。
+    void applyNoProjectDefaultWorkspace();
+
+    /// @brief 同步当前项目的 ImGui 布局保存和恢复状态。
+    /// @warning UI 热路径低频分支：每帧只比较当前项目路径；实际保存 ImGui
+    /// ini 和窗口状态按时间间隔触发，禁止在这里写文件。
+    void syncProjectWorkspaceState();
+
+    /// @brief 捕获当前项目打开的动态工作区视图。
+    /// @param workspace 需要写入的项目工作区状态。
+    void captureProjectWorkspaceViews(ProjectWorkspaceState& workspace);
+
+    /// @brief 恢复项目工作区中保存的动态视图。
+    /// @param workspace 项目工作区状态。
+    void restoreProjectWorkspaceViews(const ProjectWorkspaceState& workspace);
+
+    /// @brief 关闭上一个项目遗留的动态工作区视图。
+    void clearProjectWorkspaceViews();
+
     /// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
     /// @param view 即将被销毁的 UI 视图。
     /// @warning 不可中断操作：可能调用
@@ -94,5 +132,20 @@ private:
 
     /// @brief 纹理加载器接口注册顺序
     std::vector<std::string> m_textureLoaderSequence;
+
+    /// @brief 主原生窗口观察指针，不持有所有权。
+    Graphic::NativeWindow* m_nativeWindow{ nullptr };
+
+    /// @brief 上一次已应用项目工作区的项目路径。
+    std::string m_workspaceProjectPath;
+
+    /// @brief 上一次已应用项目工作区的项目实例地址。
+    const Project* m_workspaceProjectInstance{ nullptr };
+
+    /// @brief 无项目默认工作区是否已经应用。
+    bool m_noProjectWorkspaceDefaultApplied{ false };
+
+    /// @brief 下一次允许捕获项目工作区的 ImGui 时间。
+    double m_nextWorkspaceCaptureTime{ 0.0 };
 };
 }  // namespace MMM::UI
