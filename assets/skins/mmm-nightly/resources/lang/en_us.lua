@@ -81,8 +81,10 @@ return {
 	["ui.help.special_thanks_mizar"] = "@Mizar",
 	["ui.help.special_thanks_mizar_contact"] = "Contact\nQQ: 3196228173",
 	["ui.help.special_thanks_lingyun"] = "@凌云归故里",
-	["ui.help.special_thanks_xiuluo7"] = "@修罗7",
-	["ui.help.special_thanks_mz_yoake"] = "@Mzメ 夜明けの未来ˇ",
+	["ui.help.special_thanks_lingyun_contact"] = "Contact\nQQ: 2811962904",
+	["ui.help.special_thanks_xiuluo7"] = "@x1u1u0233",
+	["ui.help.special_thanks_mz_yoake"] = "@yoAke",
+	["ui.help.special_thanks_mz_yoake_contact"] = "Contact\nQQ: 274667212",
 
 	["canvas.editor"] = "Editor",
 	["canvas.preview"] = "Preview",

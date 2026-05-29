@@ -281,6 +281,14 @@ void MainMenuView::renderAboutPopup()
         /// @brief Mizar 用户主页地址，点击姓名链接时交给系统默认浏览器打开。
         constexpr const char* mizarProfileUrl =
             "https://space.bilibili.com/102030000";
+        /// @brief
+        /// 凌云归故里用户主页地址，点击姓名链接时交给系统默认浏览器打开。
+        constexpr const char* lingyunProfileUrl =
+            "https://space.bilibili.com/311780529";
+        /// @brief x1u1u0233
+        /// 用户主页地址，点击姓名链接时交给系统默认浏览器打开。
+        constexpr const char* xiuluoProfileUrl =
+            "https://space.bilibili.com/106515370";
         /// @brief 鸣谢名单中姓名之间使用的本地化分隔符。
         const char* thanksSeparator =
             TR("ui.help.special_thanks_separator").data();
@@ -296,7 +304,7 @@ void MainMenuView::renderAboutPopup()
         const char* lingyunName = TR("ui.help.special_thanks_lingyun").data();
         /// @brief 修罗7 鸣谢用户名称文本。
         const char* xiuluoName = TR("ui.help.special_thanks_xiuluo7").data();
-        /// @brief Mzメ 夜明けの未来ˇ 鸣谢用户名称文本。
+        /// @brief yoAke 鸣谢用户名称文本。
         const char* mzYoakeName = TR("ui.help.special_thanks_mz_yoake").data();
 
         /// @brief 渲染可点击的鸣谢姓名链接。
@@ -325,10 +333,38 @@ void MainMenuView::renderAboutPopup()
             }
         };
 
-        /// @brief 渲染没有额外联系方式或主页的鸣谢姓名。
+        /// @brief 渲染可点击但没有联系方式提示的鸣谢姓名链接。
         /// @param labelName 要显示的鸣谢姓名。
-        auto renderPlainThanksName = [](const char* labelName) {
+        /// @param profileUrl 点击姓名后打开的用户主页。
+        auto renderThanksProfileLink = [&](const char* labelName,
+                                           const char* profileUrl) {
+            ImGui::TextColored(linkColor, "%s", labelName);
+            /// @brief 当前无联系方式姓名链接文本的左上角坐标，用于绘制下划线。
+            ImVec2 currentProfileLinkMin = ImGui::GetItemRectMin();
+            /// @brief 当前无联系方式姓名链接文本的右下角坐标，用于绘制下划线。
+            ImVec2 currentProfileLinkMax = ImGui::GetItemRectMax();
+            ImGui::GetWindowDrawList()->AddLine(
+                ImVec2(currentProfileLinkMin.x, currentProfileLinkMax.y + 1.0f),
+                ImVec2(currentProfileLinkMax.x, currentProfileLinkMax.y + 1.0f),
+                ImGui::GetColorU32(linkColor),
+                std::max(1.0f, dpiScale));
+            if ( ImGui::IsItemClicked(ImGuiMouseButton_Left) ) {
+                MMM::Network::UpdateChecker::openUrlInBrowser(profileUrl);
+            }
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            }
+        };
+
+        /// @brief 渲染带联系方式悬浮提示但无跳转主页的鸣谢姓名。
+        /// @param labelName 要显示的鸣谢姓名。
+        /// @param tooltipText 鼠标悬停时显示的联系方式。
+        auto renderThanksNameWithTooltip = [](const char* labelName,
+                                              const char* tooltipText) {
             ImGui::TextUnformatted(labelName);
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip("%s", tooltipText);
+            }
         };
 
         /// @brief 在同一行中追加姓名分隔符。
@@ -364,7 +400,10 @@ void MainMenuView::renderAboutPopup()
                              TR("ui.help.special_thanks_mizar_contact").data(),
                              mizarProfileUrl);
             renderThanksSeparator();
-            renderPlainThanksName(lingyunName);
+            renderThanksLink(
+                lingyunName,
+                TR("ui.help.special_thanks_lingyun_contact").data(),
+                lingyunProfileUrl);
             renderThanksSeparator();
             renderThanksLink(thanksName,
                              TR("ui.help.special_thanks_bassor_contact").data(),
@@ -374,7 +413,7 @@ void MainMenuView::renderAboutPopup()
             ImGui::TableNextColumn();
             renderThanksGroupTitle(beatmapSupportTitle);
             ImGui::TableNextColumn();
-            renderPlainThanksName(xiuluoName);
+            renderThanksProfileLink(xiuluoName, xiuluoProfileUrl);
             renderThanksSeparator();
             renderThanksLink(mizarName,
                              TR("ui.help.special_thanks_mizar_contact").data(),
@@ -384,7 +423,9 @@ void MainMenuView::renderAboutPopup()
                              TR("ui.help.special_thanks_bassor_contact").data(),
                              bassorProfileUrl);
             renderThanksSeparator();
-            renderPlainThanksName(mzYoakeName);
+            renderThanksNameWithTooltip(
+                mzYoakeName,
+                TR("ui.help.special_thanks_mz_yoake_contact").data());
 
             ImGui::EndTable();
         }
