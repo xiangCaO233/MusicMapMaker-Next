@@ -20,6 +20,7 @@ add_library(Logic STATIC
 	src/logic/ProjectDirectoryScanner.cpp
 	src/logic/ProjectDirectoryWatcher.cpp
 	src/logic/ProjectResourceService.cpp
+	src/logic/ProjectCommandService.cpp
 	src/logic/EditorEngine.cpp
 	src/logic/BeatmapSyncBuffer.cpp
 	src/logic/ecs/system/render/NoteRenderSystem.cpp

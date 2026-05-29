@@ -4,6 +4,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
+#include "logic/ProjectCommandService.h"
 #include "logic/ProjectDirectoryScanner.h"
 #include "logic/ProjectDirectoryWatcher.h"
 #include "logic/ProjectResourceService.h"
@@ -23,24 +24,6 @@
 
 namespace MMM::Logic
 {
-
-/// @brief 多画布 Session 条目，绑定 Session 与其对应画布的 cameraId
-// clang-format off
-    /// @brief 逻辑会话
-    /// @brief 该画布对应的主 cameraId（如 "Canvas_0", "Canvas_1"...）
-    /// @brief 显示名称（谱面名或默认标签）
-    /// @brief 是否为初始 Logo 占位画布（尚未加载谱面）
-// clang-format on
-/// @brief 该类型定义已迁移到 SessionRegistry.h，由 SessionRegistry 统一管理。
-/// @brief 逻辑会话
-/// @brief 该字段现在由 SessionEntry::session 在 SessionRegistry.h 中定义。
-/// @brief 该画布对应的主 cameraId（如 "Canvas_0", "Canvas_1"...）
-/// @brief 该字段现在由 SessionEntry::cameraId 在 SessionRegistry.h 中定义。
-/// @brief 显示名称（谱面名或默认标签）
-/// @brief 该字段现在由 SessionEntry::displayName 在 SessionRegistry.h 中定义。
-/// @brief 是否为初始 Logo 占位画布（尚未加载谱面）
-/// @brief 该字段现在由 SessionEntry::isLogoPlaceholder 在 SessionRegistry.h
-/// 中定义。
 
 /**
  * @brief 编辑器逻辑引擎 (全局单例)
@@ -156,17 +139,16 @@ public:
 
     // ========== 多 Session 管理 API ==========
 
-    // clang-format off
     /**
      * @brief 创建新的画布 Session
-     * @param beatmap 要加载的谱面（可为 nullptr 表示空白占位）
-     * @param displayName 显示名称
+     * @param beatmap
+     * 要加载的谱面（可为 nullptr 表示空白占位）
+     * @param displayName
+     * 显示名称
      * @param isLogoPlaceholder 是否为初始 Logo 画布
-     * @return 新 Session 在 m_sessions 中的索引
-     * @note
-     * m_sessions 已迁移到 SessionRegistry 内部列表。
+     *
+     * @return 新 Session 在会话注册表中的索引
      */
-    // clang-format on
     int32_t createSession(std::shared_ptr<MMM::BeatMap> beatmap     = nullptr,
                           const std::string&            displayName = "",
                           bool isLogoPlaceholder                    = false);
@@ -350,15 +332,6 @@ private:
     /// 写入；需要跨线程停止信号，使用 acquire/release。
     std::atomic<bool> m_running{ false };
 
-    /// @brief 所有打开的画布 Session 列表
-    /// @brief 该职责已收敛到 SessionRegistry 内部列表。
-
-    /// @brief 当前活跃（前台）的 Session 索引 (-1 表示无)
-    /// @brief 该职责已收敛到 SessionRegistry 内部活跃索引。
-
-    /// @brief 全局递增的画布 ID 计数器，用于生成唯一 cameraId
-    /// @brief 该职责已收敛到 SessionRegistry 内部画布 ID 计数器。
-
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
 
@@ -374,12 +347,8 @@ private:
     /// @brief 根据项目目录扫描结果构建和同步项目资源。
     ProjectResourceService m_projectResourceService;
 
-    /// @brief 所有的同步缓冲区 (Key 为 CameraID)
-    /// @brief 该职责已收敛到 RenderSyncRegistry 内部同步缓冲区表。
-
-    /// @brief 保护会话和缓冲区的递归锁
-    /// @brief 该职责已拆分：会话由 SessionRegistry::mutex() 保护，缓冲区由
-    /// m_buffersMutex 保护。
+    /// @brief 处理项目资源命令并返回引擎侧副作用请求。
+    ProjectCommandService m_projectCommandService;
 
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
@@ -395,14 +364,6 @@ private:
     std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
         Config::FrameLimitPreference::Refresh2x
     };
-
-    /// @brief 各摄像机独立的图集 UV 映射表 (受 m_buffersMutex 保护)
-    /// @brief 该职责已收敛到 RenderSyncRegistry 内部图集 UV 映射表。
-
-    /// @brief 保护 m_syncBuffers 和 m_cameraUVMaps 的独立锁（与 m_sessionMutex
-    /// 无交叉，防止死锁）
-    /// @brief m_sessionMutex 已迁移为 SessionRegistry::mutex()。
-    /// @brief 该职责已收敛到 RenderSyncRegistry 内部共享锁。
 
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
@@ -428,22 +389,8 @@ private:
     /// @brief 保护项目打开请求路径的轻量级锁
     mutable std::mutex m_pendingMutex;
 
-    /// @brief 保护编辑器级剪贴板的轻量级锁。
-    /// @brief 该职责已收敛到 EditorClipboard 内部锁。
-
-    /// @brief 编辑器级共享剪贴板。
-    /// @brief 该职责已收敛到 EditorClipboard 内部条目列表。
-
-    /// @brief 当前剪贴板是否来自剪切操作。
-    /// @brief 该职责已收敛到 EditorClipboard 内部剪切状态。
-
-    /// @brief 剪切来源会话上下文，仅用于身份比较，不负责生命周期。
-    /// @brief 该职责已收敛到 EditorClipboard 内部来源上下文。
     /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
     EditorClipboard m_clipboard;
-
-    /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
-    /// @brief 该职责已收敛到 RenderSyncRegistry 内部视口尺寸缓存。
 
     /// @brief 逻辑线程实时刷新率 (UPS)
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
@@ -464,42 +411,12 @@ private:
     /**
      * @brief 启动文件夹监听器
      */
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::start。
     void startDirectoryWatcher(const std::filesystem::path& path);
 
     /**
      * @brief 停止文件夹监听器
      */
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::stop。
     void stopDirectoryWatcher();
-
-    /**
-     * @brief 文件夹监听线程的主循环
-     */
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::watcherThreadLoop。
-    void watcherThreadLoop(std::filesystem::path watchPath);
-
-    /// @brief 文件夹监听线程
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_thread。
-
-    /// @brief 监听线程运行标志
-    /// @warning 文件监听线程原子：仅用于启动/停止监听线程，不属于渲染热路径。
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_running。
-
-    /// @brief 是否有未处理的文件系统变更挂起
-    /// @warning 逻辑热路径/原子：loop 每次迭代 exchange；不可避免，用于把
-    /// watcher 线程的文件系统事件去抖后转入低频扫描。
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_changePending。
-
-#ifdef _WIN32
-    /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_directoryHandle。
-    /// @brief Win32 退出事件句柄，用于安全退出监听线程
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_exitEvent。
-#endif
-
-    /// @brief 保护目录句柄的独立锁
-    /// @brief 该职责已迁移到 ProjectDirectoryWatcher::m_mutex。
 };
 
 }  // namespace MMM::Logic
