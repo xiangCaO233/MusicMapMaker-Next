@@ -50,8 +50,11 @@ SnapResult getSnapResult(
 
     if ( bpmEvents.empty() ) return result;
 
-    // 只有在首个 BPM 事件之后才进行磁吸计算
-    if ( rawTime < bpmEvents[0]->m_timestamp ) return result;
+    /// @brief 首个 BPM 前是否沿用首个 BPM 向前反推分拍网格。
+    const bool allowBeforeFirstTiming =
+        config.visual.drawBeatLinesBeforeFirstTiming;
+    if ( rawTime < bpmEvents[0]->m_timestamp && !allowBeforeFirstTiming )
+        return result;
 
     float  judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
     double currentAbsY   = cache->getAbsY(visualTime);

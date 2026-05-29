@@ -31,6 +31,9 @@ struct SnapResult {
 /// @param timelineRegistry 时间轴注册表
 /// @param visualTime 当前视觉时间
 /// @param cameras 所有的相机视口字典
+/// @warning
+/// 逻辑热路径：鼠标悬停、绘制和拖拽物件时会频繁调用；禁止在此函数中加入文件系统访问、完整
+/// ECS 遍历、完整排序或 try/catch。
 /// @return SnapResult 磁吸计算结果
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,

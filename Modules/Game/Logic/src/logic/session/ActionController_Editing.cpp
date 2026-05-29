@@ -377,7 +377,12 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     auto getAlignedTime = [&](double rawTime) -> double {
         if ( bpmEvents.empty() ) return rawTime;
-        if ( rawTime < bpmEvents[0]->m_timestamp ) return rawTime;
+
+        /// @brief 首个 BPM 前是否允许按绘制出的前置分拍线对齐。
+        const bool allowBeforeFirstTiming =
+            m_ctx.lastConfig.visual.drawBeatLinesBeforeFirstTiming;
+        if ( rawTime < bpmEvents[0]->m_timestamp && !allowBeforeFirstTiming )
+            return rawTime;
 
         double bestSnappedTime  = rawTime;
         double minWeightedError = std::numeric_limits<double>::max();
@@ -388,17 +393,26 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         double                   bpmVal     = 120.0;
         double nextBpmTime = std::numeric_limits<double>::infinity();
 
-        for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-            double tBpm  = bpmEvents[i]->m_timestamp;
-            double tNext = (i + 1 < bpmEvents.size())
-                               ? bpmEvents[i + 1]->m_timestamp
-                               : std::numeric_limits<double>::infinity();
-            if ( rawTime >= tBpm && rawTime < tNext ) {
-                currentBPM  = bpmEvents[i];
-                bpmTime     = tBpm;
-                bpmVal      = currentBPM->m_value;
-                nextBpmTime = tNext;
-                break;
+        if ( rawTime < bpmEvents.front()->m_timestamp ) {
+            currentBPM  = bpmEvents.front();
+            bpmTime     = currentBPM->m_timestamp;
+            bpmVal      = currentBPM->m_value;
+            nextBpmTime = bpmEvents.size() > 1
+                              ? bpmEvents[1]->m_timestamp
+                              : std::numeric_limits<double>::infinity();
+        } else {
+            for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+                double tBpm  = bpmEvents[i]->m_timestamp;
+                double tNext = (i + 1 < bpmEvents.size())
+                                   ? bpmEvents[i + 1]->m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+                if ( rawTime >= tBpm && rawTime < tNext ) {
+                    currentBPM  = bpmEvents[i];
+                    bpmTime     = tBpm;
+                    bpmVal      = currentBPM->m_value;
+                    nextBpmTime = tNext;
+                    break;
+                }
             }
         }
 
