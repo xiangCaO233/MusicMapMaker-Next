@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mmm/project/AudioResource.h"
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -25,18 +26,31 @@ class SoundEffectPool;
 /**
  * @brief 播放状态
  */
-enum class PlaybackStatus { Stopped, Playing, Paused };
+enum class PlaybackStatus {
+    /// @brief 已停止播放。
+    Stopped,
+
+    /// @brief 正在播放。
+    Playing,
+
+    /// @brief 已暂停播放。
+    Paused
+};
 
 /**
  * @brief EQ 频段预设
  */
 enum class EQPreset {
+    /// @brief 不启用 EQ。
     None,
-    TenBand,     // 31, 62, 125, 250, 500, 1k, 2k, 4k, 8k, 16k
-    FifteenBand  // 25, 40, 63, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k,
-                 // 4k, 6.3k, 10k, 16k
-};
 
+    /// @brief 十段 EQ：31、62、125、250、500、1k、2k、4k、8k、16k。
+    TenBand,
+
+    /// @brief 十五段
+    /// EQ：25、40、63、100、160、250、400、630、1k、1.6k、2.5k、4k、6.3k、10k、16k。
+    FifteenBand
+};
 
 /**
  * @brief 音频管理器，封装 IonCachyEngine 的核心功能
@@ -158,9 +172,25 @@ public:
     /// @brief 获取主音轨音高偏移
     double getPlaybackPitch() const;
 
+    /// @brief 主音轨时间拉伸质量。
+    enum class StretchQuality {
+        /// @brief 快速质量，优先降低处理成本。
+        Fast,
+
+        /// @brief 平衡质量，在性能和音质之间折中。
+        Balanced,
+
+        /// @brief 较细质量，优先提升音质。
+        Finer,
+
+        /// @brief 最佳质量，使用最高质量设置。
+        Best
+    };
+
     /// @brief 设置主音轨拉伸质量
-    enum class StretchQuality { Fast, Balanced, Finer, Best };
-    void           setPlaybackQuality(StretchQuality quality);
+    void setPlaybackQuality(StretchQuality quality);
+
+    /// @brief 获取主音轨拉伸质量
     StretchQuality getPlaybackQuality() const;
 
     /// @brief 设置 BGM 全局增益 (0.0 ~ 1.0)
@@ -289,35 +319,77 @@ public:
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 
 private:
+    /// @brief 构造音频管理器并读取持久化音量配置。
     AudioManager();
+
+    /// @brief 析构音频管理器。
     ~AudioManager();
 
+    /// @brief 音频后台线程池。
     std::unique_ptr<ice::ThreadPool> m_threadPool;
-    std::unique_ptr<ice::AudioPool>  m_audioPool;
-    std::unique_ptr<ice::SDLPlayer>  m_player;
 
-    std::shared_ptr<ice::AudioTrack>       m_bgmTrack;
-    std::shared_ptr<ice::SourceNode>       m_bgmSource;
+    /// @brief 音频资源池，负责加载和缓存音频文件。
+    std::unique_ptr<ice::AudioPool> m_audioPool;
+
+    /// @brief SDL 播放器后端。
+    std::unique_ptr<ice::SDLPlayer> m_player;
+
+    /// @brief 当前加载的主音轨数据。
+    std::shared_ptr<ice::AudioTrack> m_bgmTrack;
+
+    /// @brief 当前主音轨播放源节点。
+    std::shared_ptr<ice::SourceNode> m_bgmSource;
+
+    /// @brief 当前主音轨图形均衡器节点。
     std::shared_ptr<ice::GraphicEqualizer> m_mainEQ;
-    EQPreset                               m_mainEQPreset{ EQPreset::None };
-    std::shared_ptr<ice::TimeStretcher>    m_stretcher;
-    std::shared_ptr<ice::MixBus>           m_mainMixer;
-    std::shared_ptr<ice::MixBus>           m_preStretcherMixer;
 
+    /// @brief 当前主音轨 EQ 预设。
+    EQPreset m_mainEQPreset{ EQPreset::None };
+
+    /// @brief 当前主音轨时间拉伸节点。
+    std::shared_ptr<ice::TimeStretcher> m_stretcher;
+
+    /// @brief 主输出混音器。
+    std::shared_ptr<ice::MixBus> m_mainMixer;
+
+    /// @brief 变速器前级混音器，用于 BGM、EQ 和可选同步变速音效。
+    std::shared_ptr<ice::MixBus> m_preStretcherMixer;
+
+    /// @brief 已加载的音效池表。
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
         m_sfxPools;
 
+    /// @brief 当前主音轨播放状态。
     PlaybackStatus m_status{ PlaybackStatus::Stopped };
-    float          m_mainTrackVolume{ 0.5f };
-    bool           m_mainTrackMuted{ false };
-    float          m_globalVolume{ 1.0f };
-    bool           m_globalMuted{ false };
-    float          m_bgmGain{ 1.0f };
-    bool           m_bgmGainMuted{ false };
-    float          m_sfxGain{ 1.0f };
-    bool           m_sfxGainMuted{ false };
-    double         m_speed{ 1.0 };
 
+    /// @brief 当前主音轨音量。
+    float m_mainTrackVolume{ 0.5f };
+
+    /// @brief 当前主音轨是否静音。
+    bool m_mainTrackMuted{ false };
+
+    /// @brief 当前全局音量。
+    float m_globalVolume{ 1.0f };
+
+    /// @brief 当前全局是否静音。
+    bool m_globalMuted{ false };
+
+    /// @brief 当前 BGM 全局增益。
+    float m_bgmGain{ 1.0f };
+
+    /// @brief 当前 BGM 增益是否静音。
+    bool m_bgmGainMuted{ false };
+
+    /// @brief 当前 SFX 全局增益。
+    float m_sfxGain{ 1.0f };
+
+    /// @brief 当前 SFX 增益是否静音。
+    bool m_sfxGainMuted{ false };
+
+    /// @brief 当前请求的播放倍率。
+    double m_speed{ 1.0 };
+
+    /// @brief 音效池静音状态表。
     std::unordered_map<std::string, bool> m_sfxMutes;
 };
 

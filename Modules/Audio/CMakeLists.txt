@@ -2,6 +2,11 @@
 
 add_library(Audio STATIC
 	src/AudioManager.cpp
+	src/AudioManager_BGM.cpp
+	src/AudioManager_EQ.cpp
+	src/AudioManager_Mix.cpp
+	src/AudioManager_Playback.cpp
+	src/AudioManager_SFX.cpp
 	src/SoundEffectPool.cpp
 )
 
