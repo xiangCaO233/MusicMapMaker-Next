@@ -4,14 +4,10 @@
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorClipboard.h"
-#include "logic/ProjectCommandService.h"
-#include "logic/ProjectDirectoryScanner.h"
-#include "logic/ProjectDirectoryWatcher.h"
-#include "logic/ProjectResourceService.h"
+#include "logic/ProjectController.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/project/Project.h"
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -78,8 +74,14 @@ public:
     /**
      * @brief 获取当前项目
      */
-    Project*       getCurrentProject() { return m_currentProject.get(); }
-    const Project* getCurrentProject() const { return m_currentProject.get(); }
+    Project* getCurrentProject()
+    {
+        return m_projectController.currentProject();
+    }
+    const Project* getCurrentProject() const
+    {
+        return m_projectController.currentProject();
+    }
 
     /**
      * @brief 向当前活动的 Session 推送指令
@@ -335,20 +337,8 @@ private:
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
 
-    /// @brief 当前打开的项目
-    std::unique_ptr<Project> m_currentProject;
-
-    /// @brief 扫描当前项目目录中的谱面和音频文件。
-    ProjectDirectoryScanner m_projectDirectoryScanner;
-
-    /// @brief 监听当前项目目录中的文件系统变更。
-    ProjectDirectoryWatcher m_projectDirectoryWatcher;
-
-    /// @brief 根据项目目录扫描结果构建和同步项目资源。
-    ProjectResourceService m_projectResourceService;
-
-    /// @brief 处理项目资源命令并返回引擎侧副作用请求。
-    ProjectCommandService m_projectCommandService;
+    /// @brief 项目控制器，管理当前项目、目录监听、资源命令和项目切换状态。
+    ProjectController m_projectController;
 
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
@@ -368,27 +358,6 @@ private:
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
 
-    /// @brief 已确认可由逻辑线程直接打开的项目路径
-    std::filesystem::path m_pendingProjectPath;
-
-    /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径
-    std::filesystem::path m_requestedProjectPath;
-
-    /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径
-    std::filesystem::path m_pendingProjectSwitchPath;
-
-    /// @brief 是否已有项目关闭请求正在等待逻辑线程分发。
-    bool m_requestedProjectClose{ false };
-
-    /// @brief UI 是否正在项目关闭前逐个关闭旧谱面画布。
-    bool m_pendingProjectClose{ false };
-
-    /// @brief 所有脏谱面关闭提示是否已完成，项目清理是否可以执行。
-    bool m_projectCloseReady{ false };
-
-    /// @brief 保护项目打开请求路径的轻量级锁
-    mutable std::mutex m_pendingMutex;
-
     /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
     EditorClipboard m_clipboard;
 
@@ -407,16 +376,6 @@ private:
 
     /// @brief 上一次计算 UPS 的时间戳
     std::chrono::high_resolution_clock::time_point m_lastUpsTime;
-
-    /**
-     * @brief 启动文件夹监听器
-     */
-    void startDirectoryWatcher(const std::filesystem::path& path);
-
-    /**
-     * @brief 停止文件夹监听器
-     */
-    void stopDirectoryWatcher();
 };
 
 }  // namespace MMM::Logic
