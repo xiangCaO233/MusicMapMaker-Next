@@ -1,5 +1,7 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/input/glfw/GLFWKeyEvent.h"
@@ -9,7 +11,11 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <stb_image.h>
+#include <vector>
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
@@ -47,24 +53,46 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     // 设置窗口图标
     if ( m_windowHandle ) {
-        int            width, height, channels;
-        unsigned char* pixels =
-            stbi_load("assets/skins/mmm-nightly/resources/image/logo.png",
-                      &width,
-                      &height,
-                      &channels,
-                      4);
-        if ( pixels ) {
-            GLFWimage images[1];
-            images[0].width  = width;
-            images[0].height = height;
-            images[0].pixels = pixels;
-            glfwSetWindowIcon(m_windowHandle, 1, images);
-            stbi_image_free(pixels);
+        /// @brief 用户 .config/mmm 资源包中的窗口图标路径。
+        const std::filesystem::path iconPath =
+            Config::AppPaths::windowIconFilePath();
+        /// @brief 以二进制方式读取窗口图标，避免 Windows 中文路径被 C fopen
+        /// 误解。
+        std::ifstream iconFile(iconPath, std::ios::binary);
+        if ( iconFile ) {
+            /// @brief 窗口图标原始文件字节。
+            std::vector<unsigned char> iconBytes{
+                std::istreambuf_iterator<char>(iconFile),
+                std::istreambuf_iterator<char>()
+            };
+            /// @brief 窗口图标宽度。
+            int width = 0;
+            /// @brief 窗口图标高度。
+            int height = 0;
+            /// @brief 窗口图标原始通道数量。
+            int channels = 0;
+            /// @brief 解码后的 RGBA 图标像素。
+            unsigned char* pixels =
+                stbi_load_from_memory(iconBytes.data(),
+                                      static_cast<int>(iconBytes.size()),
+                                      &width,
+                                      &height,
+                                      &channels,
+                                      4);
+            if ( pixels ) {
+                GLFWimage images[1];
+                images[0].width  = width;
+                images[0].height = height;
+                images[0].pixels = pixels;
+                glfwSetWindowIcon(m_windowHandle, 1, images);
+                stbi_image_free(pixels);
+            } else {
+                XWARN("Failed to decode window icon: {}",
+                      Config::pathToUtf8(iconPath));
+            }
         } else {
-            XWARN(
-                "Failed to load window icon: "
-                "assets/skins/mmm-nightly/resources/image/logo.png");
+            XWARN("Failed to open window icon: {}",
+                  Config::pathToUtf8(iconPath));
         }
     }
 

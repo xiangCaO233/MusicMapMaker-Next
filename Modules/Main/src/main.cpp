@@ -1,5 +1,6 @@
 #include "common/MessageBox.h"
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -13,28 +14,21 @@ int main(int argc, char* argv[])
 {
     using namespace MMM;
 
-    // 假设 assets 肯定在运行目录上n级
-    // 而 build 目录通常在 root/build/Modules/Main/ 下 (深度为 3 或 4)
-    auto rootDir = std::filesystem::current_path();
-    // 向上查找直到找到 assets 文件夹
-    while ( !std::filesystem::exists(rootDir / "assets") &&
-            rootDir.has_parent_path() ) {
-        rootDir = rootDir.parent_path();
-    }
-
-    if ( !std::filesystem::exists(rootDir / "assets") ) {
+    /// @brief 用户 .config/mmm 下的资源包根目录。
+    const auto assetPath = Config::AppPaths::assetsRootPath();
+    /// @brief 检查用户资源包目录是否存在时接收的文件系统错误。
+    std::error_code assetExistsError;
+    if ( !std::filesystem::exists(assetPath, assetExistsError) ) {
         std::string msg =
             "Could not find assets directory!\n"
             "Please download the resource package (assets.zip) from the "
             "website "
-            "and extract it to the executable directory.";
+            "and extract it to:\n" +
+            Config::pathToUtf8(assetPath);
         XERROR("Fatal: {}", msg);
         UI::showFatalError("MusicMapMaker - Assets Missing", msg);
         return -1;
     }
-
-    // 跨平台（自动处理 / 或 \）
-    const auto assetPath = rootDir / "assets";
 
     using namespace Config;
     // 载入应用全局配置 (序列化/反序列化测试)
@@ -42,7 +36,7 @@ int main(int argc, char* argv[])
 
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
-        Config::pathToUtf8(assetPath / "skins" / "mmm-nightly" / "skin.lua"));
+        Config::pathToUtf8(Config::AppPaths::defaultSkinFilePath()));
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
     XINFO("background color:[{},{},{},{}]", r, g, b, a);
 

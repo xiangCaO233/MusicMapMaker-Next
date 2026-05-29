@@ -3,6 +3,7 @@
 add_library(Config STATIC src/skin/SkinLoader.cpp
                           src/skin/translation/Translation.cpp
                           src/fonticon/NerdFontData.cpp
+                          src/AppPaths.cpp
                           src/AppConfig.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")

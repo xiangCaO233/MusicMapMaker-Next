@@ -84,6 +84,8 @@ private:
     AppConfig(const AppConfig&)            = delete;
     AppConfig& operator=(const AppConfig&) = delete;
 
+    /// @brief 获取默认用户配置文件路径。
+    /// @return 用户目录/.config/mmm/user_config.json。
     std::filesystem::path getDefaultConfigPath() const;
 
     EditorConfig       m_editorConfig;

@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
@@ -9,6 +10,8 @@
 #include "imgui_impl_glfw.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include <filesystem>
+#include <string>
 
 namespace MMM::Graphic
 {
@@ -33,6 +36,19 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     ImGuiStyle& style = ImGui::GetStyle();
     ImGuiIO&    io    = ImGui::GetIO();
     (void)io;
+    /// @brief 创建 ImGui ini 所在目录时接收的文件系统错误。
+    std::error_code imguiIniDirectoryError;
+    std::filesystem::create_directories(Config::AppPaths::configRootPath(),
+                                        imguiIniDirectoryError);
+    if ( imguiIniDirectoryError ) {
+        XWARN("Failed to create ImGui ini directory: {}",
+              imguiIniDirectoryError.message());
+    }
+    /// @brief ImGui ini 文件路径字符串，必须静态保存以满足 ImGui
+    /// 指针生命周期要求。
+    static const std::string imguiIniPath =
+        Config::pathToUtf8(Config::AppPaths::imguiIniFilePath());
+    io.IniFilename = imguiIniPath.c_str();
     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     // Enable Gamepad Controls

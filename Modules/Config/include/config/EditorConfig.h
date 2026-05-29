@@ -9,7 +9,7 @@
 namespace MMM::Config
 {
 
-/// @brief 编辑器全局配置容器 (持久化于 user_config.json)
+/// @brief 编辑器全局配置容器 (持久化于 用户目录/.config/mmm/user_config.json)
 /// @details 包含视觉表现和编辑行为两大类配置
 struct EditorConfig {
     /// @brief 视觉、布局与渲染相关的配置
