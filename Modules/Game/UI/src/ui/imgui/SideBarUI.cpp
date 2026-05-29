@@ -7,6 +7,8 @@
 #include "log/colorful-log.h"
 #include "logic/ProjectController.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/FloatingManagerUI.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -94,6 +96,17 @@ void SideBarUI::persistWorkspaceActiveTab(SideBarTab tab) const
 
 void SideBarUI::update(UIManager* sourceManager)
 {
+    if ( auto* sideBarManager =
+             sourceManager->getView<FloatingManagerUI>("SideBarManager") ) {
+        SideBarTab managerTab = SideBarTab::None;
+        if ( sideBarManager->isVisible() ) {
+            managerTab = SubViewIdToTab(sideBarManager->getCurrentSubViewId());
+        }
+        if ( managerTab != m_activeTab ) {
+            m_activeTab = managerTab;
+        }
+    }
+
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();

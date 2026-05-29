@@ -36,6 +36,10 @@ public:
     /// @return 当前是否显示。
     bool isVisible() const;
 
+    /// @brief 获取当前显示的子视图 ID。
+    /// @return 当前子视图 ID；未显示任何子视图时可能为空。
+    const std::string& getCurrentSubViewId() const;
+
     void update(UIManager* sourceManager) override;
 
     void* getActualInstance() override { return this; }

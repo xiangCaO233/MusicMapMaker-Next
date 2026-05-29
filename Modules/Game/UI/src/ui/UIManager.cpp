@@ -240,8 +240,14 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
             mainDock->m_mainMenuview.isNoteMetadataEditorWindowOpen();
     }
 
-    /// 侧边栏页签由 SideBarUI 在真实切换事件发生时立即写入项目配置。
-    /// 这里的周期性捕获只负责窗口布局和动态窗口，避免用临时 UI 状态覆盖项目值。
+    if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
+        SideBarTab activeTab = SideBarTab::None;
+        if ( sideBarManager->isVisible() ) {
+            activeTab = SubViewIdToTab(sideBarManager->getCurrentSubViewId());
+        }
+        workspace.m_sidebarActiveTab =
+            SideBarUI::workspaceNameFromTab(activeTab);
+    }
 }
 
 void UIManager::restoreProjectWorkspaceViews(

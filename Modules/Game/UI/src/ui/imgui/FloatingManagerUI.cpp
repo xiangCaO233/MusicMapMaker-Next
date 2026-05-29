@@ -69,6 +69,11 @@ bool FloatingManagerUI::isVisible() const
     return m_isVisible;
 }
 
+const std::string& FloatingManagerUI::getCurrentSubViewId() const
+{
+    return m_currentSubViewId;
+}
+
 void FloatingManagerUI::update(UIManager* sourceManager)
 {
     if ( !m_isVisible ) return;
