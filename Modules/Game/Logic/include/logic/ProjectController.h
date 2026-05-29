@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "event/core/EventBus.h"
 #include "logic/ProjectCommandService.h"
 #include "logic/ProjectDirectoryScanner.h"
 #include "logic/ProjectDirectoryWatcher.h"
@@ -20,6 +21,25 @@ namespace MMM::Logic
 class ProjectController
 {
 public:
+    /// @brief 获取项目控制器全局实例。
+    /// @return 项目控制器全局实例引用。
+    static ProjectController& instance();
+
+    /// @brief 析构项目控制器并取消项目事件订阅。
+    ~ProjectController();
+
+    /// @brief 禁止移动构造，项目控制器必须保持单例地址稳定。
+    ProjectController(ProjectController&&) = delete;
+
+    /// @brief 禁止拷贝构造，避免复制项目实例和事件订阅状态。
+    ProjectController(const ProjectController&) = delete;
+
+    /// @brief 禁止移动赋值，项目控制器必须保持单例地址稳定。
+    ProjectController& operator=(ProjectController&&) = delete;
+
+    /// @brief 禁止拷贝赋值，避免复制项目实例和事件订阅状态。
+    ProjectController& operator=(const ProjectController&) = delete;
+
     /// @brief 打开项目后的结果信息。
     struct OpenProjectResult {
         /// @brief 是否成功打开项目。
@@ -162,6 +182,27 @@ public:
         const CmdRemoveBeatmap& cmd);
 
 private:
+    /// @brief 构造项目控制器并订阅项目请求事件。
+    ProjectController();
+
+    /// @brief 发布项目切换需要关闭旧画布的事件。
+    /// @param projectPathToOpen 旧画布关闭后需要打开的项目路径。
+    /// @param closeOnly 是否只关闭当前项目而不打开新项目。
+    void publishProjectSwitchNeedsCanvasClose(
+        const std::filesystem::path& projectPathToOpen, bool closeOnly) const;
+
+    /// @brief 打开项目请求事件订阅 ID。
+    Event::SubscriptionID m_openProjectSubscription{ 0 };
+
+    /// @brief 关闭项目请求事件订阅 ID。
+    Event::SubscriptionID m_closeProjectSubscription{ 0 };
+
+    /// @brief 项目切换完成事件订阅 ID。
+    Event::SubscriptionID m_projectSwitchCompletedSubscription{ 0 };
+
+    /// @brief 项目切换取消事件订阅 ID。
+    Event::SubscriptionID m_projectSwitchCancelledSubscription{ 0 };
+
     /// @brief 当前打开的项目。
     std::unique_ptr<Project> m_currentProject;
 

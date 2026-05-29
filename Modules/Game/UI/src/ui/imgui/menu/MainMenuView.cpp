@@ -7,6 +7,7 @@
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "event/ui/UISettingsTabEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
@@ -1017,7 +1018,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                                   TR("ui.file.close_pro"),
                                   nullptr,
                                   hasProject) ) {
-            Logic::EditorEngine::instance().requestCloseProject();
+            Event::EventBus::instance().publish(
+                Event::ProjectCloseRequestedEvent{});
         }
         ImGui::Separator();
 

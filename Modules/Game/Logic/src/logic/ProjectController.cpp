@@ -1,6 +1,9 @@
 #include "logic/ProjectController.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "event/project/ProjectEvents.h"
+#include "event/ui/menu/OpenProjectEvent.h"
+#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 
 #include <exception>
@@ -10,6 +13,77 @@
 
 namespace MMM::Logic
 {
+
+/// @brief 获取项目控制器全局实例。
+/// @return 项目控制器全局实例引用。
+ProjectController& ProjectController::instance()
+{
+    static ProjectController instance;
+    return instance;
+}
+
+/// @brief 构造项目控制器并订阅项目请求事件。
+ProjectController::ProjectController()
+{
+    /// @brief 项目控制器订阅项目事件使用的全局事件总线。
+    auto& eventBus            = Event::EventBus::instance();
+    m_openProjectSubscription = eventBus.subscribe<Event::OpenProjectEvent>(
+        [this](const Event::OpenProjectEvent& event) {
+            requestOpenProject(event.m_projectPath);
+        });
+    m_closeProjectSubscription =
+        eventBus.subscribe<Event::ProjectCloseRequestedEvent>(
+            [this](const Event::ProjectCloseRequestedEvent&) {
+                requestCloseProject();
+            });
+    m_projectSwitchCompletedSubscription =
+        eventBus.subscribe<Event::ProjectSwitchCompletedEvent>(
+            [this](const Event::ProjectSwitchCompletedEvent&) {
+                completePendingProjectSwitch();
+            });
+    m_projectSwitchCancelledSubscription =
+        eventBus.subscribe<Event::ProjectSwitchCancelledEvent>(
+            [this](const Event::ProjectSwitchCancelledEvent&) {
+                cancelPendingProjectSwitch();
+            });
+}
+
+/// @brief 析构项目控制器并取消项目事件订阅。
+ProjectController::~ProjectController()
+{
+    /// @brief 项目控制器取消项目事件订阅使用的全局事件总线。
+    auto& eventBus = Event::EventBus::instance();
+    if ( m_openProjectSubscription != 0 ) {
+        eventBus.unsubscribe<Event::OpenProjectEvent>(
+            m_openProjectSubscription);
+    }
+    if ( m_closeProjectSubscription != 0 ) {
+        eventBus.unsubscribe<Event::ProjectCloseRequestedEvent>(
+            m_closeProjectSubscription);
+    }
+    if ( m_projectSwitchCompletedSubscription != 0 ) {
+        eventBus.unsubscribe<Event::ProjectSwitchCompletedEvent>(
+            m_projectSwitchCompletedSubscription);
+    }
+    if ( m_projectSwitchCancelledSubscription != 0 ) {
+        eventBus.unsubscribe<Event::ProjectSwitchCancelledEvent>(
+            m_projectSwitchCancelledSubscription);
+    }
+    stopDirectoryWatcher();
+}
+
+/// @brief 发布项目切换需要关闭旧画布的事件。
+/// @param projectPathToOpen 旧画布关闭后需要打开的项目路径。
+/// @param closeOnly 是否只关闭当前项目而不打开新项目。
+void ProjectController::publishProjectSwitchNeedsCanvasClose(
+    const std::filesystem::path& projectPathToOpen, bool closeOnly) const
+{
+    /// @brief 项目切换等待旧画布关闭的事件载荷。
+    Event::ProjectSwitchNeedsCanvasCloseEvent event;
+    event.m_projectPathToOpen = projectPathToOpen;
+    event.m_closeOnly         = closeOnly;
+    Event::EventBus::instance().publish(event);
+}
 
 /// @brief 获取当前项目。
 /// @return 当前项目指针；未打开项目时返回 nullptr。
@@ -112,6 +186,12 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     std::filesystem::path requestedPath;
     /// @brief 本轮是否消费到项目关闭请求。
     bool requestedClose = false;
+    /// @brief 本轮是否需要通知 UI 先关闭旧画布。
+    bool shouldPublishCanvasClose = false;
+    /// @brief 通知 UI 关闭旧画布后要打开的项目路径。
+    std::filesystem::path canvasCloseProjectPath;
+    /// @brief 通知 UI 关闭旧画布后是否只关闭项目。
+    bool canvasCloseOnly = false;
 
     {
         /// @brief 保护从待处理请求队列取出请求的锁。
@@ -132,7 +212,9 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_pendingProjectPath.clear();
             m_pendingProjectSwitchPath.clear();
-            m_pendingProjectClose = true;
+            m_pendingProjectClose    = true;
+            shouldPublishCanvasClose = true;
+            canvasCloseOnly          = true;
             XINFO(
                 "Project close deferred until current beatmap canvases close.");
         } else {
@@ -147,6 +229,9 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             m_pendingProjectPath.clear();
             m_pendingProjectClose      = false;
             m_pendingProjectSwitchPath = requestedPath;
+            shouldPublishCanvasClose   = true;
+            canvasCloseProjectPath     = requestedPath;
+            canvasCloseOnly            = false;
             XINFO(
                 "Project open deferred until current beatmap canvases close: "
                 "{}",
@@ -154,6 +239,11 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         } else {
             action.m_projectPathToOpen = requestedPath;
         }
+    }
+
+    if ( shouldPublishCanvasClose ) {
+        publishProjectSwitchNeedsCanvasClose(canvasCloseProjectPath,
+                                             canvasCloseOnly);
     }
 
     {
@@ -300,6 +390,14 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     result.m_targetBeatmapPath = targetBeatmapPath;
     result.m_projectTitle      = m_currentProject->m_metadata.m_title;
     result.m_beatmapCount      = m_currentProject->m_beatmaps.size();
+
+    /// @brief 项目加载完成后向 UI 和其它监听者发布的生命周期事件。
+    Event::ProjectLoadedEvent loadedEvent;
+    loadedEvent.m_projectTitle = result.m_projectTitle;
+    loadedEvent.m_projectPath  = Config::pathToUtf8(result.m_actualProjectPath);
+    loadedEvent.m_beatmapCount = result.m_beatmapCount;
+    Event::EventBus::instance().publish(loadedEvent);
+
     return result;
 }
 
@@ -314,9 +412,18 @@ ProjectController::CloseProjectResult ProjectController::closeProject()
     }
 
     result.m_projectTitle = m_currentProject->m_metadata.m_title;
-    result.m_project      = std::move(m_currentProject);
-    result.m_closed       = true;
+    /// @brief 被关闭项目的根目录路径快照。
+    std::filesystem::path projectPath = m_currentProject->m_projectRoot;
+    result.m_project                  = std::move(m_currentProject);
+    result.m_closed                   = true;
     m_projectDirectoryWatcher.stop();
+
+    /// @brief 项目关闭完成后向 UI 和其它监听者发布的生命周期事件。
+    Event::ProjectClosedEvent closedEvent;
+    closedEvent.m_projectTitle = result.m_projectTitle;
+    closedEvent.m_projectPath  = projectPath;
+    Event::EventBus::instance().publish(closedEvent);
+
     return result;
 }
 

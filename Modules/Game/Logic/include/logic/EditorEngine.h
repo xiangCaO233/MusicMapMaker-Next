@@ -52,35 +52,15 @@ public:
     void stop();
 
     /**
-     * @brief 打开项目目录并加载其中的所有资源
-     */
-    void openProject(const std::filesystem::path& projectPath);
-
-    /// @brief 请求打开项目，必要时先等待 UI 关闭当前谱面画布
-    void requestOpenProject(const std::filesystem::path& projectPath);
-
-    /// @brief 请求关闭当前项目，并在关闭前等待脏谱面画布确认保存。
-    void requestCloseProject();
-
-    /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
-    bool hasPendingProjectSwitch() const;
-
-    /// @brief 完成旧谱面画布关闭流程，并排队执行挂起的项目打开或关闭。
-    void completePendingProjectSwitch();
-
-    /// @brief 取消挂起的项目打开或关闭请求。
-    void cancelPendingProjectSwitch();
-
-    /**
      * @brief 获取当前项目
      */
     Project* getCurrentProject()
     {
-        return m_projectController.currentProject();
+        return ProjectController::instance().currentProject();
     }
     const Project* getCurrentProject() const
     {
-        return m_projectController.currentProject();
+        return ProjectController::instance().currentProject();
     }
 
     /**
@@ -304,14 +284,20 @@ private:
     /**
      * @brief 逻辑线程的主循环
      * @warning
-     * 逻辑热路径：独立逻辑线程按 UPS 频率执行；禁止每 update 文件系统操作、完整
-     * entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
-
+     * 逻辑热路径：独立逻辑线程按 UPS 频率执行；禁止每 update
+     * 文件系统操作、完整
+     * entt 遍历、完整排序、try/catch 和可避免的
+     * shared_ptr 拷贝。
      */
     void loop();
 
+    /// @brief 打开项目目录并加载其中的所有资源。
+    /// @param projectPath 要打开的项目目录或谱面文件路径。
+    void openProject(const std::filesystem::path& projectPath);
+
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
+
      */
     void scanProjectDirectory();
 
@@ -336,9 +322,6 @@ private:
 
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
-
-    /// @brief 项目控制器，管理当前项目、目录监听、资源命令和项目切换状态。
-    ProjectController m_projectController;
 
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;

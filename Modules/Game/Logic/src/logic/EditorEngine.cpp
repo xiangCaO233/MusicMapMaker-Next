@@ -6,8 +6,6 @@
 #include "event/core/EventBus.h"
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
-#include "event/ui/menu/OpenProjectEvent.h"
-#include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -143,6 +141,9 @@ EditorEngine::EditorEngine()
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
 
+    /// @brief 初始化项目控制器单例并建立项目事件订阅。
+    (void)ProjectController::instance();
+
     // 不在此处创建初始 Session，改由 GameLoop 通过 createSession() 创建 Logo
     // 画布
 
@@ -178,17 +179,6 @@ EditorEngine::EditorEngine()
             }
         });
 
-    // 订阅打开项目事件
-    // 重要：不在回调里直接调用 openProject！
-    // 原因：EventBus::publish 持有 shared_lock，而 openProject 内部会创建
-    // BeatmapSession， 其构造函数又会调用 EventBus::subscribe（需
-    // unique_lock）。 同一线程无法将 shared_lock 升级为 unique_lock →
-    // 永久卡死。 正确做法：将路径存入队列，在逻辑线程 loop() 里境外处理。
-    Event::EventBus::instance().subscribe<Event::OpenProjectEvent>(
-        [this](const Event::OpenProjectEvent& e) {
-            requestOpenProject(e.m_projectPath);
-        });
-
     // 订阅逻辑指令事件
     Event::EventBus::instance().subscribe<Event::LogicCommandEvent>(
         [this](const Event::LogicCommandEvent& e) {
@@ -207,31 +197,6 @@ EditorEngine::EditorEngine()
 EditorEngine::~EditorEngine()
 {
     stop();
-}
-
-void EditorEngine::requestOpenProject(const std::filesystem::path& projectPath)
-{
-    m_projectController.requestOpenProject(projectPath);
-}
-
-void EditorEngine::requestCloseProject()
-{
-    m_projectController.requestCloseProject();
-}
-
-bool EditorEngine::hasPendingProjectSwitch() const
-{
-    return m_projectController.hasPendingProjectSwitch();
-}
-
-void EditorEngine::completePendingProjectSwitch()
-{
-    m_projectController.completePendingProjectSwitch();
-}
-
-void EditorEngine::cancelPendingProjectSwitch()
-{
-    m_projectController.cancelPendingProjectSwitch();
 }
 
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
@@ -260,7 +225,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     closeProject();
 
     /// @brief 项目控制器打开项目后的结果。
-    auto openResult = m_projectController.openProject(projectPath);
+    auto openResult = ProjectController::instance().openProject(projectPath);
     if ( !openResult.m_opened ) {
         return;
     }
@@ -272,16 +237,9 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
             preload.m_resource.m_config.volume);
     }
 
-    // 发布加载成功事件
-    Event::ProjectLoadedEvent loadedEv;
-    loadedEv.m_projectTitle = openResult.m_projectTitle;
-    loadedEv.m_projectPath = Config::pathToUtf8(openResult.m_actualProjectPath);
-    loadedEv.m_beatmapCount = openResult.m_beatmapCount;
-    Event::EventBus::instance().publish(loadedEv);
-
     XINFO("Project '{}' loaded successfully with {} beatmaps.",
-          loadedEv.m_projectTitle,
-          loadedEv.m_beatmapCount);
+          openResult.m_projectTitle,
+          openResult.m_beatmapCount);
 
     // 如果指定了谱面路径，则通过 createSession 加载它
     if ( !openResult.m_targetBeatmapPath.empty() ) {
@@ -302,7 +260,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
 void EditorEngine::closeProject()
 {
     /// @brief 项目控制器关闭当前项目后的结果。
-    auto closeResult = m_projectController.closeProject();
+    auto closeResult = ProjectController::instance().closeProject();
     if ( !closeResult.m_closed || !closeResult.m_project ) {
         return;
     }
@@ -340,7 +298,7 @@ void EditorEngine::start()
 
 void EditorEngine::stop()
 {
-    m_projectController.stopDirectoryWatcher();
+    ProjectController::instance().stopDirectoryWatcher();
 
     if ( m_running.exchange(false, std::memory_order_acq_rel) ) {
         if ( m_thread.joinable() ) {
@@ -356,7 +314,7 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的新建谱面处理结果。
-    auto result = m_projectController.createBeatmap(cmd);
+    auto result = ProjectController::instance().createBeatmap(cmd);
     if ( !result.m_created || !result.m_beatmap ) {
         return;
     }
@@ -372,7 +330,7 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的导入音频处理结果。
-    auto result = m_projectController.importAudio(cmd);
+    auto result = ProjectController::instance().importAudio(cmd);
     if ( !result.m_imported ) {
         return;
     }
@@ -485,7 +443,7 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的单文件同步结果。
-    auto result = m_projectController.syncProjectWithFile(mapPath);
+    auto result = ProjectController::instance().syncProjectWithFile(mapPath);
     if ( result.m_changed ) {
         saveProject();
     }
@@ -633,9 +591,10 @@ void EditorEngine::syncSameMainAudioCanvases()
         return;
     }
 
-    auto&      activeCtx = sessions[activeIndex].session->getContext();
-    const auto activeKey =
-        getMainAudioSyncKey(activeCtx, m_projectController.currentProject());
+    /// @brief 当前项目指针快照，仅用于解析主音轨同步键。
+    const auto* currentProject = ProjectController::instance().currentProject();
+    auto&       activeCtx      = sessions[activeIndex].session->getContext();
+    const auto  activeKey      = getMainAudioSyncKey(activeCtx, currentProject);
     if ( activeKey.empty() ) {
         return;
     }
@@ -646,8 +605,7 @@ void EditorEngine::syncSameMainAudioCanvases()
         }
 
         auto& ctx = sessions[i].session->getContextMutable();
-        if ( getMainAudioSyncKey(ctx, m_projectController.currentProject()) !=
-             activeKey ) {
+        if ( getMainAudioSyncKey(ctx, currentProject) != activeKey ) {
             continue;
         }
 
@@ -675,9 +633,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
 
-    if ( m_projectController.currentProject() && beatmap ) {
-        normalizeBeatmapMetadataPathsForProject(
-            *beatmap, *m_projectController.currentProject());
+    /// @brief 当前项目指针快照，用于规范化新会话谱面中的项目相对路径。
+    const auto* currentProject = ProjectController::instance().currentProject();
+    if ( currentProject && beatmap ) {
+        normalizeBeatmapMetadataPathsForProject(*beatmap, *currentProject);
     }
 
     // 检查是否可以复用 Logo 占位画布
@@ -799,7 +758,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             if ( oldSession ) {
                 auto& oldCtx    = oldSession->getContextMutable();
                 oldMainAudioKey = getMainAudioSyncKey(
-                    oldCtx, m_projectController.currentProject());
+                    oldCtx, ProjectController::instance().currentProject());
                 if ( oldCtx.isPlaying ) {
                     oldCtx.currentTime =
                         Audio::AudioManager::instance().getCurrentTime();
@@ -816,8 +775,9 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
              !oldMainAudioKey.empty() && sessions[index].session ) {
             const auto& targetCtx = sessions[index].session->getContext();
             shouldSyncTargetTime =
-                getMainAudioSyncKey(targetCtx,
-                                    m_projectController.currentProject()) ==
+                getMainAudioSyncKey(
+                    targetCtx,
+                    ProjectController::instance().currentProject()) ==
                 oldMainAudioKey;
         }
 
@@ -953,7 +913,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 void EditorEngine::saveProject()
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    m_projectController.saveProject();
+    ProjectController::instance().saveProject();
 }
 
 /// @brief 逻辑线程的主循环。
@@ -965,6 +925,8 @@ void EditorEngine::loop()
     m_lastUpsTime      = lastTime;
     m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
+    /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
+    auto& projectController = ProjectController::instance();
 
     while ( m_running.load(std::memory_order_acquire) ) {
         // 动态获取当前的延迟目标
@@ -1030,7 +992,7 @@ void EditorEngine::loop()
         // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
         // 交叉）
         /// @brief 项目控制器消费出的本轮项目打开或关闭动作。
-        auto projectAction = m_projectController.consumePendingProjectAction(
+        auto projectAction = projectController.consumePendingProjectAction(
             needsCanvasCloseBeforeProjectOpen());
         if ( projectAction.m_closeProject ) {
             closeProject();
@@ -1058,7 +1020,7 @@ void EditorEngine::loop()
         static auto lastChangeTime = std::chrono::high_resolution_clock::now();
         static bool hasPendingChange = false;
 
-        if ( m_projectController.consumeDirectoryChangePending() ) {
+        if ( projectController.consumeDirectoryChangePending() ) {
             hasPendingChange = true;
             lastChangeTime   = std::chrono::high_resolution_clock::now();
         }
@@ -1084,7 +1046,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的音频资源更新结果。
-    auto result = m_projectController.updateAudioResource(cmd);
+    auto result = ProjectController::instance().updateAudioResource(cmd);
     if ( !result.m_updated ) {
         return;
     }
@@ -1104,7 +1066,7 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的音频资源删除结果。
-    auto result = m_projectController.removeAudioResource(cmd);
+    auto result = ProjectController::instance().removeAudioResource(cmd);
     if ( !result.m_removed ) {
         return;
     }
@@ -1122,7 +1084,7 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的谱面删除结果。
-    auto result = m_projectController.removeBeatmap(cmd);
+    auto result = ProjectController::instance().removeBeatmap(cmd);
     if ( result.m_changed ) {
         saveProject();
     }
@@ -1135,7 +1097,8 @@ void EditorEngine::updateBeatmapFilePathInProject(
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的谱面路径更新结果。
-    auto result = m_projectController.updateBeatmapFilePath(oldPath, newPath);
+    auto result =
+        ProjectController::instance().updateBeatmapFilePath(oldPath, newPath);
     if ( result.m_changed ) {
         saveProject();
     }
@@ -1145,11 +1108,11 @@ void EditorEngine::scanProjectDirectory()
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     /// @brief 当前项目指针，仅用于解析音效资源绝对路径。
-    const auto* currentProject = m_projectController.currentProject();
+    const auto* currentProject = ProjectController::instance().currentProject();
     if ( !currentProject ) return;
 
     /// @brief 当前目录资源同步结果。
-    auto syncResult = m_projectController.scanProjectDirectory();
+    auto syncResult = ProjectController::instance().scanProjectDirectory();
 
     // 自动加载音效
     for ( const auto& res : syncResult.m_effectResourcesToPreload ) {
