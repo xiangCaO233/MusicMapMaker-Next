@@ -12,6 +12,8 @@
 namespace MMM::UI
 {
 
+/// @brief 构造设置面板视图并订阅设置页切换事件。
+/// @param subViewName 子视图名称。
 SettingsView::SettingsView(const std::string& subViewName)
     : ISubView(subViewName)
 {
@@ -22,6 +24,7 @@ SettingsView::SettingsView(const std::string& subViewName)
             });
 }
 
+/// @brief 析构设置面板视图并取消设置页切换事件订阅。
 SettingsView::~SettingsView()
 {
     if ( m_tabSubId != 0 ) {
@@ -30,6 +33,9 @@ SettingsView::~SettingsView()
     }
 }
 
+/// @brief 获取或创建指定索引的设置项行布局。
+/// @param index 行布局缓存索引。
+/// @return 已清空并可复用的横向行布局。
 CLayHBox& SettingsView::getRow(size_t index)
 {
     if ( index >= m_settingRows.size() ) {
@@ -39,6 +45,9 @@ CLayHBox& SettingsView::getRow(size_t index)
     return m_settingRows[index];
 }
 
+/// @brief 获取或创建指定索引的设置段落布局。
+/// @param index 段落布局缓存索引。
+/// @return 已清空并可复用的纵向段落布局。
 CLayVBox& SettingsView::getSection(size_t index)
 {
     if ( index >= m_sectionBoxes.size() ) {
@@ -48,6 +57,9 @@ CLayVBox& SettingsView::getSection(size_t index)
     return m_sectionBoxes[index];
 }
 
+/// @brief 更新并渲染设置视图。
+/// @param layoutContext 当前布局上下文。
+/// @param sourceManager 当前 UI 管理器。
 void SettingsView::onUpdate(LayoutContext& layoutContext,
                             UIManager*     sourceManager)
 {
