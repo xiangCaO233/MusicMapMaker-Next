@@ -9,6 +9,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <ImGuiFileDialog.h>
 
@@ -105,15 +106,25 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 ? TR("ui.wizard.new_beatmap.select_audio").data()
                 : Config::pathToUtf8(m_selectedAudioPath);
 
+        const char* measureBpmLabel =
+            TR("ui.wizard.new_beatmap.measure_bpm").data();
+        const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
+                                      ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float comboWidth =
+            std::max(120.0f,
+                     ImGui::GetContentRegionAvail().x - measureBpmWidth -
+                         ImGui::GetStyle().ItemSpacing.x);
+
+        ImGui::SetNextItemWidth(comboWidth);
         if ( ImGui::BeginCombo(TR("ui.wizard.new_beatmap.select_audio").data(),
                                audioPreview.c_str()) ) {
             for ( const auto& res : project->m_audioResources ) {
                 if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
-                bool isSelected =
-                    (Config::pathToUtf8(m_selectedAudioPath) == res.m_path);
-                std::string label = res.m_id + "##" + res.m_path;
+                bool        isSelected = (m_selectedAudioTrackId == res.m_id);
+                std::string label      = res.m_id + "##" + res.m_path;
                 if ( ImGui::Selectable(label.c_str(), isSelected) ) {
+                    m_selectedAudioTrackId = res.m_id;
                     onAudioSelected(Config::utf8ToPath(res.m_path));
                 }
                 if ( isSelected ) ImGui::SetItemDefaultFocus();
@@ -121,6 +132,29 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 ImGui::TextDisabled("(%s)", res.m_path.c_str());
             }
             ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if ( m_selectedAudioTrackId.empty() ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+            std::string viewName = "BpmMeasurementTool";
+            auto*       tool =
+                sourceManager->getView<BpmMeasurementToolView>(viewName);
+            if ( !tool ) {
+                auto toolView = std::make_unique<BpmMeasurementToolView>(
+                    TR("ui.tools.bpm_measure").data());
+                tool = toolView.get();
+                sourceManager->registerView(viewName, std::move(toolView));
+            }
+            if ( tool ) {
+                tool->openWithAudioTrack(m_selectedAudioTrackId);
+            }
+            m_isOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        if ( m_selectedAudioTrackId.empty() ) {
+            ImGui::EndDisabled();
         }
 
         // 封面选择 (只可指向图片文件)
@@ -295,6 +329,7 @@ void NewBeatmapWizard::reset()
     strncpy(m_versionBuf, "Easy", sizeof(m_versionBuf));
 
     m_selectedAudioPath.clear();
+    m_selectedAudioTrackId.clear();
     m_selectedCoverPath.clear();
     m_selectedCoverImgPath.clear();
     m_audioDuration = 0.0;

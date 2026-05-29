@@ -24,6 +24,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <ImGuiFileDialog.h>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -436,6 +437,27 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( m_closeToolsMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeToolsMenuNextFrame = false;
+        }
+
+        auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+        bool  hasProject = (project != nullptr);
+
+        if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
+                                  TR("ui.tools.bpm_measure"),
+                                  nullptr,
+                                  hasProject) ) {
+            std::string viewName = "BpmMeasurementTool";
+            auto*       tool =
+                sourceManager->getView<BpmMeasurementToolView>(viewName);
+            if ( !tool ) {
+                auto toolView = std::make_unique<BpmMeasurementToolView>(
+                    TR("ui.tools.bpm_measure").data());
+                tool = toolView.get();
+                sourceManager->registerView(viewName, std::move(toolView));
+            }
+            if ( tool ) {
+                tool->openWithAudioTrack("");
+            }
         }
 
         if ( MenuItemWithFontIcon(ICON_MMM_SELECT_ALL,

@@ -181,4 +181,26 @@ std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
     return m_bgmTrack;
 }
 
+/// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。
+/// @param filePath 音频文件绝对路径。
+/// @return 加载成功时返回音频轨道；失败时返回空指针。
+/// @warning 低频分析路径：可能触发音频解码缓存加载，严禁在每帧
+/// UI、渲染或逻辑热路径中调用。
+std::shared_ptr<ice::AudioTrack> AudioManager::loadTrackForAnalysis(
+    const std::string& filePath)
+{
+    if ( !m_audioPool || !m_threadPool ) {
+        return nullptr;
+    }
+
+    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
+    auto track     = trackWeak.lock();
+    if ( !track ) {
+        XERROR("Failed to load analysis audio track: {}", filePath);
+        return nullptr;
+    }
+
+    return track;
+}
+
 }  // namespace MMM::Audio
