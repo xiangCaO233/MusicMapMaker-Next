@@ -211,6 +211,41 @@ double getDefaultCreateValue(::MMM::TimingEffect effect)
     return 1.0;
 }
 
+/// @brief 获取用于“保持画布速度”计算的基准 BPM。
+double getKeepSpeedReferenceBpm()
+{
+    double refBpm = 120.0;
+    if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
+        if ( auto beatmap = session->getContext().currentBeatmap ) {
+            if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
+                refBpm = beatmap->m_baseMapMetadata.preference_bpm;
+            }
+        }
+    }
+    return refBpm;
+}
+
+/// @brief 根据新 BPM 计算保持画布下落速度所需的流速存储值。
+double getKeepSpeedScrollValue(double bpm)
+{
+    double refBpm      = getKeepSpeedReferenceBpm();
+    double safeBpm     = bpm > 1e-6 ? bpm : refBpm;
+    double scrollSpeed = refBpm / safeBpm;
+    if ( isActiveBeatmapMalody() ) {
+        return scrollSpeed;
+    }
+    return scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed) : -100.0;
+}
+
+/// @brief 创建与新 BPM 同时间点的保持速度流速事件。
+void createKeepSpeedScrollEvent(double time, double bpm)
+{
+    double finalScrollValue = getKeepSpeedScrollValue(bpm);
+    Event::EventBus::instance().publish(
+        Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+            time, ::MMM::TimingEffect::SCROLL, finalScrollValue }));
+}
+
 /// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
 bool drawTimeEditor(const char* id, double& value,
                     const Logic::RenderSnapshot* snapshot)
@@ -489,25 +524,7 @@ void TimelineCanvas::renderEventCreationPopup()
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
             if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
-                double refBpm = 120.0;
-                if ( auto session =
-                         Logic::EditorEngine::instance().getActiveSession() ) {
-                    if ( auto beatmap = session->getContext().currentBeatmap ) {
-                        if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                            refBpm = beatmap->m_baseMapMetadata.preference_bpm;
-                        }
-                    }
-                }
-                double scrollSpeed = refBpm / m_createValue;
-                double finalScrollValue =
-                    isActiveBeatmapMalody()
-                        ? scrollSpeed
-                        : (scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed)
-                                              : -100.0);
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdCreateTimelineEvent{ m_createTimeManual,
-                                                   ::MMM::TimingEffect::SCROLL,
-                                                   finalScrollValue }));
+                createKeepSpeedScrollEvent(m_createTimeManual, m_createValue);
             }
 
             ImGui::CloseCurrentPopup();
@@ -570,15 +587,24 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::SameLine();
         if ( ImGui::Button("添加 BPM") ) {
+            constexpr double DEFAULT_BPM_VALUE = 120.0;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::BPM,
-                                               120.0 }));
+                                               DEFAULT_BPM_VALUE }));
             m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::BPM;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+
+            if ( m_keepSpeedOnBpmChange ) {
+                createKeepSpeedScrollEvent(m_currentSnapshot->currentTime,
+                                           DEFAULT_BPM_VALUE);
+            }
         }
+        ImGui::SameLine();
+        ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
+                        &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
         if ( ImGui::Button("添加流速 (SV)") ) {
             double defaultScroll = isActiveBeatmapMalody() ? 1.0 : -100.0;
