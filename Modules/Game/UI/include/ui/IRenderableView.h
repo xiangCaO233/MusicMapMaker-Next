@@ -124,6 +124,8 @@ protected:
 
     /**
      * @brief 录制具体的绘制指令 (由 UI 层实现)
+     * @warning 热路径：每帧离屏命令录制时执行；只遍历 Brush
+     * 已缓存命令，禁止资源加载和阻塞等待。
      */
     void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                           vk::PipelineLayout      pipelineLayout,

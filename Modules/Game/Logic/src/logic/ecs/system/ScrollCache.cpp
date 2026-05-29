@@ -30,6 +30,9 @@ static bool hasMalodyMetadata(const TimelineComponent& tl)
         ::MMM::TimingMetadataType::MALODY);
 }
 
+/// @brief 根据时间线注册表重建滚动缓存。
+/// @warning 逻辑热路径低频分支：会完整遍历和排序时间线，只能在 isDirty
+/// 时执行，严禁每 update 无条件调用。
 void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                           const Config::EditorConfig& config)
 {

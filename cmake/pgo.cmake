@@ -36,16 +36,34 @@
 #    最新 profile 数据即可实现持续优化。
 # ==============================================================================
 
+set(MMM_PGO_IS_LLVM_COMPILER OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
+    set(MMM_PGO_IS_LLVM_COMPILER ON)
+endif()
+
 option(MMM_PGO_USE "Build using PGO profile data" OFF)
 
 if(MMM_PGO_USE)
+    if(NOT MMM_PGO_IS_LLVM_COMPILER)
+        message(FATAL_ERROR
+            "PGO: the current profile workflow uses LLVM .profraw/.profdata files "
+            "and requires Clang/LLVM. Configure with Clang or set MMM_PGO_USE=OFF.")
+    endif()
+
     # PGO optimization and instrumentation cannot be used together.
     # When MMM_PGO_USE is enabled, we force disable instrumentation.
     set(MMM_PGO_INSTRUMENT OFF CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
     message(STATUS "PGO: MMM_PGO_USE is enabled. Disabling PGO instrumentation (MMM_PGO_INSTRUMENT=OFF).")
 else()
-    # Enable PGO instrumentation by default to collect profile data.
-    option(MMM_PGO_INSTRUMENT "Build with PGO instrumentation for profile collection" ON)
+    # Enable PGO instrumentation by default only for the LLVM profile workflow.
+    option(MMM_PGO_INSTRUMENT "Build with PGO instrumentation for profile collection" ${MMM_PGO_IS_LLVM_COMPILER})
+endif()
+
+if(MMM_PGO_INSTRUMENT AND NOT MMM_PGO_IS_LLVM_COMPILER)
+    message(WARNING
+        "PGO: disabling instrumentation because ${CMAKE_CXX_COMPILER_ID} does not "
+        "support this project's LLVM profile workflow.")
+    set(MMM_PGO_INSTRUMENT OFF CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
 endif()
 
 # --- 数据源 (三选一) ---
@@ -167,7 +185,10 @@ endif()
 if(MMM_PGO_USE)
     if(NOT "${MMM_PGO_DATA}" STREQUAL "")
         message(STATUS "PGO: Using profile data = ${MMM_PGO_DATA}")
-        add_compile_options("-fprofile-instr-use=${MMM_PGO_DATA}")
+        add_compile_options(
+            "$<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-use=${MMM_PGO_DATA}>"
+            "$<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-use=${MMM_PGO_DATA}>"
+        )
     endif()
 endif()
 
@@ -181,8 +202,14 @@ if(MMM_PGO_INSTRUMENT)
     else()
         set(DEFAULT_PGO_PATH "/dev/null")
     endif()
-    add_compile_options("-fprofile-instr-generate=${DEFAULT_PGO_PATH}")
-    add_link_options("-fprofile-instr-generate=${DEFAULT_PGO_PATH}")
+    add_compile_options(
+        "$<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+        "$<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+    )
+    add_link_options(
+        "$<$<LINK_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+        "$<$<LINK_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+    )
     add_compile_definitions(MMM_PGO_INSTRUMENT=1)
 
     if(MMM_PGO_UPLOAD_URL)

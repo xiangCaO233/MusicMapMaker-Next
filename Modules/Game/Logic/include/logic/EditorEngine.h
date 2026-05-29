@@ -3,8 +3,11 @@
 #include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorClipboard.h"
+#include "logic/ProjectController.h"
+#include "logic/RenderSyncRegistry.h"
+#include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/project/Project.h"
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -17,18 +20,6 @@
 
 namespace MMM::Logic
 {
-
-/// @brief 多画布 Session 条目，绑定 Session 与其对应画布的 cameraId
-struct SessionEntry {
-    /// @brief 逻辑会话
-    std::shared_ptr<BeatmapSession> session;
-    /// @brief 该画布对应的主 cameraId（如 "Canvas_0", "Canvas_1"...）
-    std::string cameraId;
-    /// @brief 显示名称（谱面名或默认标签）
-    std::string displayName;
-    /// @brief 是否为初始 Logo 占位画布（尚未加载谱面）
-    bool isLogoPlaceholder{ false };
-};
 
 /**
  * @brief 编辑器逻辑引擎 (全局单例)
@@ -61,31 +52,16 @@ public:
     void stop();
 
     /**
-     * @brief 打开项目目录并加载其中的所有资源
-     */
-    void openProject(const std::filesystem::path& projectPath);
-
-    /// @brief 请求打开项目，必要时先等待 UI 关闭当前谱面画布
-    void requestOpenProject(const std::filesystem::path& projectPath);
-
-    /// @brief Request closing the current project after dirty canvases confirm
-    /// saving.
-    void requestCloseProject();
-
-    /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
-    bool hasPendingProjectSwitch() const;
-
-    /// @brief 完成旧谱面画布关闭流程，并排队执行挂起的项目打开或关闭。
-    void completePendingProjectSwitch();
-
-    /// @brief 取消挂起的项目打开或关闭请求。
-    void cancelPendingProjectSwitch();
-
-    /**
      * @brief 获取当前项目
      */
-    Project*       getCurrentProject() { return m_currentProject.get(); }
-    const Project* getCurrentProject() const { return m_currentProject.get(); }
+    Project* getCurrentProject()
+    {
+        return ProjectController::instance().currentProject();
+    }
+    const Project* getCurrentProject() const
+    {
+        return ProjectController::instance().currentProject();
+    }
 
     /**
      * @brief 向当前活动的 Session 推送指令
@@ -147,10 +123,13 @@ public:
 
     /**
      * @brief 创建新的画布 Session
-     * @param beatmap 要加载的谱面（可为 nullptr 表示空白占位）
-     * @param displayName 显示名称
+     * @param beatmap
+     * 要加载的谱面（可为 nullptr 表示空白占位）
+     * @param displayName
+     * 显示名称
      * @param isLogoPlaceholder 是否为初始 Logo 画布
-     * @return 新 Session 在 m_sessions 中的索引
+     *
+     * @return 新 Session 在会话注册表中的索引
      */
     int32_t createSession(std::shared_ptr<MMM::BeatMap> beatmap     = nullptr,
                           const std::string&            displayName = "",
@@ -173,28 +152,20 @@ public:
      */
     int32_t getActiveSessionIndex() const
     {
-        return m_activeSessionIndex.load(std::memory_order_relaxed);
+        return m_sessionRegistry.activeIndex();
     }
 
     /**
      * @brief 获取 Session 总数
      */
-    int32_t getSessionCount() const
-    {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        return static_cast<int32_t>(m_sessions.size());
-    }
+    int32_t getSessionCount() const { return m_sessionRegistry.count(); }
 
     /**
      * @brief 获取指定索引的 SessionEntry (只读)
      */
     const SessionEntry* getSessionEntry(int32_t index) const
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        if ( index >= 0 && index < static_cast<int32_t>(m_sessions.size()) ) {
-            return &m_sessions[index];
-        }
-        return nullptr;
+        return m_sessionRegistry.entry(index);
     }
 
     /**
@@ -202,8 +173,7 @@ public:
      */
     std::vector<SessionEntry> getSessionEntries() const
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        return m_sessions;
+        return m_sessionRegistry.entries();
     }
 
     /**
@@ -211,12 +181,7 @@ public:
      */
     std::shared_ptr<BeatmapSession> getActiveSession()
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-        if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
-            return m_sessions[idx].session;
-        }
-        return nullptr;
+        return m_sessionRegistry.activeSession();
     }
 
     /**
@@ -224,22 +189,25 @@ public:
      */
     std::string getActiveCameraId() const
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionMutex);
-        int32_t idx = m_activeSessionIndex.load(std::memory_order_relaxed);
-        if ( idx >= 0 && idx < static_cast<int32_t>(m_sessions.size()) ) {
-            return m_sessions[idx].cameraId;
-        }
-        return "";
+        return m_sessionRegistry.activeCameraId();
     }
 
     /**
      * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态
+
      */
-    std::recursive_mutex& getSessionMutex() const { return m_sessionMutex; }
+    std::recursive_mutex& getSessionMutex() const
+    {
+        return m_sessionRegistry.mutex();
+    }
 
 
     /**
      * @brief 获取指定摄像机/画布的同步缓冲区
+     * @warning
+     * 逻辑热路径/共享指针：返回 shared_ptr
+     * 是为了保证画布关闭并擦除注册表时，本次快照发布仍持有缓冲区生命周期。
+
      */
     std::shared_ptr<BeatmapSyncBuffer> getSyncBuffer(
         const std::string& cameraId);
@@ -250,8 +218,7 @@ public:
     void setAtlasUVMap(const std::string&                             cameraId,
                        const std::unordered_map<uint32_t, glm::vec4>& uvMap)
     {
-        std::unique_lock<std::shared_mutex> lock(m_buffersMutex);
-        m_cameraUVMaps[cameraId] = uvMap;
+        m_renderSyncRegistry.setAtlasUVMap(cameraId, uvMap);
     }
 
     /**
@@ -270,6 +237,8 @@ public:
 
     /**
      * @brief 获取当前工具类型
+     * @warning 逻辑/UI
+     * 热路径原子：只读取工具枚举状态，使用 relaxed。
      */
     EditTool getCurrentTool() const;
 
@@ -280,16 +249,22 @@ public:
 
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
+
      */
+    /// @warning UI 热路径/原子：状态栏可每帧读取；只用于统计展示，使用
+    /// relaxed。
     float getLogicUps() const
     {
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
     /// @brief 设置同主音轨多画布时间同步开关。
+    /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
     void setSyncSameMainAudioCanvases(bool enabled);
 
     /// @brief 获取同主音轨多画布时间同步开关。
+    /// @warning 逻辑热路径/原子：逻辑循环同步判断读取；只表示开关状态，使用
+    /// relaxed。
     bool isSyncSameMainAudioCanvasesEnabled() const
     {
         return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
@@ -308,19 +283,30 @@ public:
 private:
     /**
      * @brief 逻辑线程的主循环
+     * @warning
+     * 逻辑热路径：独立逻辑线程按 UPS 频率执行；禁止每 update
+     * 文件系统操作、完整
+     * entt 遍历、完整排序、try/catch 和可避免的
+     * shared_ptr 拷贝。
      */
     void loop();
 
+    /// @brief 打开项目目录并加载其中的所有资源。
+    /// @param projectPath 要打开的项目目录或谱面文件路径。
+    void openProject(const std::filesystem::path& projectPath);
+
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
+
      */
     void scanProjectDirectory();
 
-    /// @brief Clear the currently opened project and unload project audio
-    /// state.
+    /// @brief 清理当前已打开的项目并卸载项目音频状态。
     void closeProject();
 
     /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
+    /// @warning 逻辑热路径/原子：每次 Session update
+    /// 后可能执行；只读取同步开关并遍历当前会话列表。
     void syncSameMainAudioCanvases();
 
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
@@ -330,89 +316,42 @@ private:
     std::thread m_thread;
 
     /// @brief 线程运行标志
+    /// @warning 逻辑热路径/原子：loop 每次迭代读取、stop
+    /// 写入；需要跨线程停止信号，使用 acquire/release。
     std::atomic<bool> m_running{ false };
 
-    /// @brief 所有打开的画布 Session 列表
-    std::vector<SessionEntry> m_sessions;
-
-    /// @brief 当前活跃（前台）的 Session 索引 (-1 表示无)
-    std::atomic<int32_t> m_activeSessionIndex{ -1 };
-
-    /// @brief 全局递增的画布 ID 计数器，用于生成唯一 cameraId
-    int32_t m_nextCanvasId{ 0 };
-
-    /// @brief 当前打开的项目
-    std::unique_ptr<Project> m_currentProject;
-
-    /// @brief 所有的同步缓冲区 (Key 为 CameraID)
-    std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
-        m_syncBuffers;
-
-    /// @brief 保护会话和缓冲区的递归锁
-    mutable std::recursive_mutex m_sessionMutex;
+    /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
+    SessionRegistry m_sessionRegistry;
 
     /// @brief 编辑器配置
     Config::EditorConfig m_editorConfig;
 
     /// @brief 当前全局编辑工具。
+    /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
+    /// 读取；只传递枚举状态，使用 relaxed。
     std::atomic<EditTool> m_currentTool{ EditTool::Move };
 
     /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
+    /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用
+    /// relaxed 降低栅栏成本。
     std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
         Config::FrameLimitPreference::Refresh2x
     };
 
-    /// @brief 各摄像机独立的图集 UV 映射表 (受 m_buffersMutex 保护)
-    std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
-        m_cameraUVMaps;
+    /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
+    RenderSyncRegistry m_renderSyncRegistry;
 
-    /// @brief 保护 m_syncBuffers 和 m_cameraUVMaps 的独立锁（与 m_sessionMutex
-    /// 无交叉，防止死锁）
-    mutable std::shared_mutex m_buffersMutex;
-
-    /// @brief 已确认可由逻辑线程直接打开的项目路径
-    std::filesystem::path m_pendingProjectPath;
-
-    /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径
-    std::filesystem::path m_requestedProjectPath;
-
-    /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径
-    std::filesystem::path m_pendingProjectSwitchPath;
-
-    /// @brief Whether a project close was requested and waits for logic-thread
-    /// routing.
-    bool m_requestedProjectClose{ false };
-
-    /// @brief Whether the UI is closing old beatmap canvases before closing
-    /// project.
-    bool m_pendingProjectClose{ false };
-
-    /// @brief Whether all dirty-close prompts finished and project cleanup can
-    /// run.
-    bool m_projectCloseReady{ false };
-
-    /// @brief 保护项目打开请求路径的轻量级锁
-    mutable std::mutex m_pendingMutex;
-
-    /// @brief 保护编辑器级剪贴板的轻量级锁。
-    mutable std::mutex m_clipboardMutex;
-
-    /// @brief 编辑器级共享剪贴板。
-    std::vector<ClipboardItem> m_clipboard;
-
-    /// @brief 当前剪贴板是否来自剪切操作。
-    bool m_clipboardIsCut{ false };
-
-    /// @brief 剪切来源会话上下文，仅用于身份比较，不负责生命周期。
-    const SessionContext* m_clipboardSourceContext{ nullptr };
-
-    /// @brief 缓存各摄像机的最后已知视口尺寸 (受 m_buffersMutex 保护)
-    std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
+    /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
+    EditorClipboard m_clipboard;
 
     /// @brief 逻辑线程实时刷新率 (UPS)
+    /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
+    /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
 
     /// @brief 是否强制同步使用同一主音轨的画布时间。
+    /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
+    /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ false };
 
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
@@ -420,40 +359,6 @@ private:
 
     /// @brief 上一次计算 UPS 的时间戳
     std::chrono::high_resolution_clock::time_point m_lastUpsTime;
-
-    /**
-     * @brief 启动文件夹监听器
-     */
-    void startDirectoryWatcher(const std::filesystem::path& path);
-
-    /**
-     * @brief 停止文件夹监听器
-     */
-    void stopDirectoryWatcher();
-
-    /**
-     * @brief 文件夹监听线程的主循环
-     */
-    void watcherThreadLoop(std::filesystem::path watchPath);
-
-    /// @brief 文件夹监听线程
-    std::thread m_watcherThread;
-
-    /// @brief 监听线程运行标志
-    std::atomic<bool> m_watcherRunning{ false };
-
-    /// @brief 是否有未处理的文件系统变更挂起
-    std::atomic<bool> m_directoryChangedPending{ false };
-
-#ifdef _WIN32
-    /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW
-    void* m_watcherDirHandle{ nullptr };
-    /// @brief Win32 退出事件句柄，用于安全退出监听线程
-    void* m_watcherExitEvent{ nullptr };
-#endif
-
-    /// @brief 保护目录句柄的独立锁
-    mutable std::mutex m_watcherMutex;
 };
 
 }  // namespace MMM::Logic

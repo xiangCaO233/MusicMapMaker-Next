@@ -91,8 +91,8 @@ void NoteRenderSystem::generateSnapshot(
     // 正常生成基础布局
     if ( cameraId == "Timeline" ) {
         batcher.setScissor(0, 0, viewportWidth, viewportHeight);
-        NoteRenderSystem::generateTimelineSnapshot(timelineRegistry,
-                                                   snapshot,
+        NoteRenderSystem::generateTimelineSnapshot(snapshot,
+                                                   bpmEvents,
                                                    batcher,
                                                    renderTime,
                                                    viewportWidth,
@@ -229,7 +229,7 @@ void NoteRenderSystem::generateSnapshot(
                                             viewportHeight,
                                             judgmentLineY,
                                             config,
-                                            timelineRegistry,
+                                            bpmEvents,
                                             renderTime,
                                             cache,
                                             leftX,
@@ -428,10 +428,11 @@ void NoteRenderSystem::renderMarqueeBox(
 }
 
 void NoteRenderSystem::generateTimelineSnapshot(
-    const entt::registry& timelineRegistry, RenderSnapshot* snapshot,
-    Batcher& batcher, double currentTime, float viewportWidth,
-    float viewportHeight, float judgmentLineY,
-    const Config::EditorConfig& config, const ScrollCache* cache)
+    RenderSnapshot*                              snapshot,
+    const std::vector<const TimelineComponent*>& bpmEvents, Batcher& batcher,
+    double currentTime, float viewportWidth, float viewportHeight,
+    float judgmentLineY, const Config::EditorConfig& config,
+    const ScrollCache* cache)
 {
     if ( !snapshot->hasBeatmap ) return;
 
@@ -480,22 +481,8 @@ void NoteRenderSystem::generateTimelineSnapshot(
     };
 
     // 3. 绘制 Timeline 自身的分拍线
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
-        }
-    }
-
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
-
+    /// @brief 绘制 Timeline 自身的分拍线；bpmEvents 由 SessionContext
+    /// 脏标记缓存维护，避免热路径完整遍历和排序。
     int beatDivisor = config.settings.beatDivisor;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 

@@ -1,10 +1,13 @@
 #include "ui/imgui/CanvasTabManager.h"
 #include "canvas/Basic2DCanvas.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ProjectController.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 
@@ -17,7 +20,9 @@ void CanvasTabManager::handlePendingProjectSwitch(
     UIManager* sourceManager, const std::vector<Logic::SessionEntry>& entries)
 {
     auto& engine = Logic::EditorEngine::instance();
-    if ( !engine.hasPendingProjectSwitch() ) {
+    /// @brief 项目控制器单例，用于查询当前项目切换流程。
+    auto& projectController = Logic::ProjectController::instance();
+    if ( !projectController.hasPendingProjectSwitch() ) {
         m_projectSwitchClosingCanvas.clear();
         return;
     }
@@ -38,7 +43,8 @@ void CanvasTabManager::handlePendingProjectSwitch(
     if ( !hasBeatmapSession ) {
         if ( entries.size() == 1 && entries.front().isLogoPlaceholder ) {
             m_projectSwitchClosingCanvas.clear();
-            engine.completePendingProjectSwitch();
+            Event::EventBus::instance().publish(
+                Event::ProjectSwitchCompletedEvent{});
         }
         return;
     }
@@ -52,7 +58,8 @@ void CanvasTabManager::handlePendingProjectSwitch(
                 "cameraId={}",
                 m_projectSwitchClosingCanvas);
             m_projectSwitchClosingCanvas.clear();
-            engine.cancelPendingProjectSwitch();
+            Event::EventBus::instance().publish(
+                Event::ProjectSwitchCancelledEvent{});
         }
         return;
     }

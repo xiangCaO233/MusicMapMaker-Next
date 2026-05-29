@@ -85,6 +85,9 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
     m_commandQueue.enqueue(std::move(cmd));
 }
 
+/// @brief 会话逻辑每帧更新。
+/// @warning 逻辑热路径：由 EditorEngine::loop 按 UPS
+/// 调用；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
 void BeatmapSession::update(double dt, const Config::EditorConfig& config)
 {
     m_ctx->lastConfig = config;

@@ -8,6 +8,10 @@ add_library(UI STATIC
     src/ui/imgui/FloatingManagerUI.cpp
     src/ui/imgui/SideBarUI.cpp
     src/ui/imgui/menu/MainMenuView.cpp
+    src/ui/imgui/menu/MainMenuView_FileDialogs.cpp
+    src/ui/imgui/menu/MainMenuView_Metadata.cpp
+    src/ui/imgui/menu/MainMenuView_Overlap.cpp
+    src/ui/imgui/menu/MainMenuView_UpdatePopups.cpp
     src/ui/imgui/manager/FileManagerView.cpp
     src/ui/imgui/manager/FileManagerView_Hierarchy.cpp
     src/ui/imgui/manager/FileManagerView_Interactions.cpp
@@ -16,7 +20,12 @@ add_library(UI STATIC
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/NewBeatmapWizard.cpp
     src/ui/imgui/manager/SettingsView.cpp
+    src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+    src/ui/imgui/manager/SettingsView_EditorTab.cpp
+    src/ui/imgui/manager/SettingsView_ProjectTab.cpp
+    src/ui/imgui/manager/SettingsView_SoftwareTab.cpp
     src/ui/imgui/manager/SettingsView_Tabs.cpp
+    src/ui/imgui/manager/SettingsView_VisualTab.cpp
     src/ui/imgui/manager/ToolbarView.cpp
     src/ui/imgui/audio/AudioTrackControllerUI.cpp
     src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp

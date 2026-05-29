@@ -46,9 +46,17 @@
 
 ### 2. 类继承与内存规范
 - **虚继承**: 在实现多重继承的 UI 视图（如同时继承 `ITextureLoader` 和 `IUIView`）时，**必须**对基类 `IUIView` 使用虚继承（`virtual public IUIView`），以避免成员歧义。
-- **严格禁用的 C++ 特性**: 
+- **严格禁用的 C++ 特性**:
     - **绝对禁止使用 C++ 异常机制**: 严禁使用 `throw`、`try` 和 `catch`。必须依赖返回值（`std::expected` 或 `std::optional`）。
     - **绝对禁止使用原始指针分配**: 严禁使用 `new` 和 `delete`。必须使用智能指针。
+
+### 2.1 C++ 热路径特性使用规范 (CRITICAL)
+- **渲染/逻辑循环热路径定义**: 主渲染循环、`VKRenderer::render`、`UIManager::onUpdateUI`、离屏命令录制、`EditorEngine::loop`、`BeatmapSession::update` 及其每帧/每 update 调用链均视为热路径。
+- **共享智能指针限制**: 热路径中必须避免 `std::shared_ptr` / `std::weak_ptr` 的所有权复制；能使用 `T&`、`const T&`、稳定索引、稳定 ID 或明确生命周期的观察指针时，优先使用引用或非拥有访问。确实需要共享所有权保证跨线程生命周期时，必须在 Doxygen `@warning` 中说明原因、执行频率和替代方案阻塞点。
+- **原子操作限制**: 渲染路径和逻辑循环中尽量避免 `std::atomic`。不可避免的原子标志必须使用最弱可证明正确的 memory order，并在成员变量和热路径访问函数的 Doxygen `@warning` 中说明：为什么不可避免、由谁写入/读取、是否只承载脏位或停止信号。
+- **热路径 Doxygen 标注**: 热路径函数必须单独添加 Doxygen `@warning`，简短说明何时执行（每帧、每 update、命令录制、资源准备等）以及禁止引入的操作。
+- **耗时/不可中断操作标注**: 热路径附近若存在 `waitIdle`、Fence 等待、阻塞式 acquire/present、sleep/yield、跨线程 join 等耗时或不可中断操作，必须用 Doxygen `@warning` 标明其触发条件，并保证它只处于低频路径或 Vulkan 必需同步点。
+- **热路径绝对禁止**: 每帧或每 update 执行的文件系统操作、完整遍历 entt 对象、完整排序、可能抛出异常的操作、任何 `try` / `catch` 行为都不得进入热路径。需要这些行为时，必须改为脏标记、缓存、增量索引、预排序数据或低频资源重载流程。
 
 ### 3. UI 与渲染规范
 - **ImGui 停靠稳定性**: 对于标题动态变化的窗口，必须使用 `###` 符号固定内部 ID（例如 `ImGui::Begin("标题###StaticID")`）。

@@ -21,6 +21,8 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 
 
 /// @brief 录制gpu指令
+/// @warning 热路径：每帧离屏命令录制时执行；扩容分支会 waitIdle 并阻塞
+/// GPU，必须保持为容量不足时的低频路径。
 void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                                      uint32_t           frameIndex)
 {

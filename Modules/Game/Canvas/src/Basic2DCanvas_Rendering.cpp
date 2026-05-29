@@ -12,6 +12,9 @@
 namespace MMM::Canvas
 {
 
+/// @brief 当快照背景路径变化时加载或清理背景纹理。
+/// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
+/// GPU；调用方必须保证不在每帧无条件执行。
 void Basic2DCanvas::updateBackgroundTexture()
 {
     if ( m_currentSnapshot &&
@@ -67,6 +70,8 @@ const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
     return empty;
 }
 
+/// @brief 录制主画布离屏绘制命令。
+/// @warning 热路径：每帧命令录制时执行；只遍历快照命令列表并复用 descriptor。
 void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
@@ -126,6 +131,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     }
 }
 
+/// @brief 录制主画布发光层离屏绘制命令。
+/// @warning 热路径：启用发光时每帧执行；只遍历 glow 命令列表。
 void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,

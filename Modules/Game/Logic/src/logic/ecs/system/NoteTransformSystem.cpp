@@ -6,6 +6,9 @@
 namespace MMM::Logic::System
 {
 
+/// @brief 更新音符逻辑坐标缓存。
+/// @warning 逻辑热路径：每个 Session update 调用；完整 registry sort/view
+/// 遍历只允许在 cacheDirty 或 forceRebuild 时执行。
 void NoteTransformSystem::update(entt::registry&             registry,
                                  entt::registry&             timelineRegistry,
                                  double                      currentTime,

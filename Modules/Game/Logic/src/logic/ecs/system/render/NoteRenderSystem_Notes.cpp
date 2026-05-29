@@ -79,6 +79,7 @@ void NoteRenderSystem::renderNotes(
                                           snapshot,
                                           ctx,
                                           config,
+                                          noteEntities,
                                           (float)currentTime,
                                           judgmentLineY,
                                           leftX,
@@ -522,19 +523,15 @@ void NoteRenderSystem::renderNoteBaseLayer(
         visibleEntities.push_back(entity);
     }
 
-    std::sort(visibleEntities.begin(),
-              visibleEntities.end(),
-              [&registry, &ctx](entt::entity a, entt::entity b) {
-                  const auto &nA = registry.get<const NoteComponent>(a),
-                             &nB = registry.get<const NoteComponent>(b);
-                  return (std::abs(nA.m_timestamp - nB.m_timestamp) > 1e-6)
-                             ? (nA.m_timestamp > nB.m_timestamp)
-                             : (a > b);
-              });
-
-    for ( auto entity : visibleEntities ) {
-        const auto& transform = registry.get<const TransformComponent>(entity);
-        const auto& note      = registry.get<const NoteComponent>(entity);
+    /// @brief visibleEntities 保持自 SessionContext
+    /// 预排序缓存继承来的时间升序。
+    /// 基础层按反向顺序绘制，避免在热路径内再次完整排序。
+    for ( auto it = visibleEntities.rbegin(); it != visibleEntities.rend();
+          ++it ) {
+        /// @brief 当前反向遍历到的可见音符实体。
+        entt::entity entity    = *it;
+        const auto&  transform = registry.get<const TransformComponent>(entity);
+        const auto&  note      = registry.get<const NoteComponent>(entity);
 
         // 处理拖拽/选中/剪切时的视觉反馈
         float alphaMul   = 1.0f;
@@ -650,36 +647,33 @@ void NoteRenderSystem::renderNoteBaseLayer(
 void NoteRenderSystem::renderNoteGlowLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
-    const Config::EditorConfig& config, float currentTime, float judgmentLineY,
-    float leftX, float rightX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY)
+    const Config::EditorConfig&                config,
+    const std::vector<entt::entity>& noteEntities, float currentTime,
+    float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
+    float singleTrackW, float renderScaleY)
 {
-    auto interactionView = registry.view<const InteractionComponent>();
     std::vector<entt::entity> hoveredEntities;
-    for ( auto entity : interactionView ) {
-        const auto& ic =
-            interactionView.get<const InteractionComponent>(entity);
-        if ( ic.isHovered ) hoveredEntities.push_back(entity);
+    hoveredEntities.reserve(noteEntities.size());
+    for ( auto entity : noteEntities ) {
+        /// @brief 当前可见实体的交互状态；不存在时跳过发光层。
+        const auto* ic = registry.try_get<const InteractionComponent>(entity);
+        if ( !ic ) continue;
+        if ( ic->isHovered ) hoveredEntities.push_back(entity);
     }
 
     if ( hoveredEntities.empty() ) return;
 
-    std::sort(hoveredEntities.begin(),
-              hoveredEntities.end(),
-              [&registry, &ctx](entt::entity a, entt::entity b) {
-                  const auto &nA = registry.get<const NoteComponent>(a),
-                             &nB = registry.get<const NoteComponent>(b);
-                  return (std::abs(nA.m_timestamp - nB.m_timestamp) > 1e-6)
-                             ? (nA.m_timestamp > nB.m_timestamp)
-                             : (a > b);
-              });
-
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
-    for ( auto entity : hoveredEntities ) {
-        const auto& transform = registry.get<const TransformComponent>(entity);
-        const auto& note      = registry.get<const NoteComponent>(entity);
-        const auto& ic = registry.get<const InteractionComponent>(entity);
-        float       screenY =
+    /// @brief hoveredEntities
+    /// 继承可见实体时间升序，反向绘制即可获得原先的后到前覆盖顺序。
+    for ( auto it = hoveredEntities.rbegin(); it != hoveredEntities.rend();
+          ++it ) {
+        /// @brief 当前反向遍历到的悬浮音符实体。
+        entt::entity entity    = *it;
+        const auto&  transform = registry.get<const TransformComponent>(entity);
+        const auto&  note      = registry.get<const NoteComponent>(entity);
+        const auto&  ic = registry.get<const InteractionComponent>(entity);
+        float        screenY =
             judgmentLineY -
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *

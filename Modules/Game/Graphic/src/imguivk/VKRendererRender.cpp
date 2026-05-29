@@ -23,13 +23,17 @@
 
 namespace MMM::Graphic
 {
+// clang-format off
 /**
  * @brief 执行单帧渲染
  *
  * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
  */
-void VKRenderer::render(NativeWindow&                  window,
-                        std::vector<IGraphicUserHook*> graphicUserHooks)
+/// @warning 热路径：主线程每帧执行；Fence/Acquire/Present 不可中断。
+/// 禁止在此加入文件系统访问、完整 ECS 遍历或完整排序。
+// clang-format on
+void VKRenderer::render(NativeWindow&                window,
+                        std::span<IGraphicUserHook*> graphicUserHooks)
 {
     // 检查窗口是否完成了缩放操作（消抖）
     if ( window.shouldRecreate() ) {

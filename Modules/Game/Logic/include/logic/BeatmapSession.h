@@ -36,6 +36,8 @@ public:
     void pushCommand(LogicCommand&& cmd);
 
     /// @brief 会话逻辑每帧更新（由 Logic 线程主循环调用）
+    /// @warning 逻辑热路径：每个逻辑 update
+    /// 执行；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
     /// @param dt 帧间隔时间 (秒)
     /// @param config 全局编辑器配置
     void update(double dt, const Config::EditorConfig& config);
@@ -52,6 +54,8 @@ private:
     bool processCommands();
 
     /// @brief 更新 ECS 状态并为所有活跃视口生成渲染快照
+    /// @warning 逻辑/渲染热路径：每个 Session update 执行；完整排序和完整 entt
+    /// 遍历只能在脏标记分支内发生。
     void updateECSAndRender(const Config::EditorConfig& config);
 
     // --- 内部指令处理器 (由 Session 自身处理的元命令) ---

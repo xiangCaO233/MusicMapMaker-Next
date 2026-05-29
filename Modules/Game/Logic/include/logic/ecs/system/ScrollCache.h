@@ -51,6 +51,8 @@ public:
     ScrollCache() = default;
 
     /// @brief 根据时间线注册表重建缓存表
+    /// @warning 逻辑热路径低频分支：会完整遍历/排序时间线，只能在 isDirty
+    /// 时执行，禁止每 update 无条件调用。
     void rebuild(const entt::registry&       timelineRegistry,
                  const Config::EditorConfig& config);
 

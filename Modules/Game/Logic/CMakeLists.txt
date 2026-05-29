@@ -14,6 +14,14 @@ add_library(Logic STATIC
 	src/logic/session/tool/GrabTool.cpp
 	src/logic/session/tool/MarqueeTool.cpp
 	src/logic/session/tool/DrawTool.cpp
+	src/logic/EditorClipboard.cpp
+	src/logic/SessionRegistry.cpp
+	src/logic/RenderSyncRegistry.cpp
+	src/logic/ProjectDirectoryScanner.cpp
+	src/logic/ProjectDirectoryWatcher.cpp
+	src/logic/ProjectResourceService.cpp
+	src/logic/ProjectCommandService.cpp
+	src/logic/ProjectController.cpp
 	src/logic/EditorEngine.cpp
 	src/logic/BeatmapSyncBuffer.cpp
 	src/logic/ecs/system/render/NoteRenderSystem.cpp
