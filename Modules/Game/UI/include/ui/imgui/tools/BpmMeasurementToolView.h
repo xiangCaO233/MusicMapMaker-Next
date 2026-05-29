@@ -38,6 +38,13 @@ public:
     /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
     void openWithAudioTrack(const std::string& audioTrackId);
 
+    /// @brief 获取当前选中的项目音频资源 ID。
+    /// @return 当前选中的音频资源 ID，未选择时为空。
+    const std::string& getSelectedAudioTrackId() const
+    {
+        return m_selectedAudioTrackId;
+    }
+
     /// @brief 更新并绘制 BPM 测量工具 UI。
     /// @param sourceManager 当前 UI 管理器。
     /// @warning UI
@@ -121,6 +128,19 @@ private:
     /// @warning UI
     /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
     void followPlaybackIfNeeded();
+
+    /// @brief 更新 BPM 工具节拍器音效触发。
+    /// @warning UI
+    /// 热路径：每帧执行；只读取播放同步快照并播放已预加载音效，不访问文件系统。
+    void updateMetronomePlayback();
+
+    /// @brief 确保 BPM 工具节拍器音效已预加载。
+    /// @return 两个节拍器音效均可播放时返回 true。
+    bool ensureMetronomeSoundEffects();
+
+    /// @brief 从当前画布时间重置节拍器触发游标。
+    /// @param canvasTime 当前 BPM 工具画布时间，单位为秒。
+    void resetMetronomeScheduler(double canvasTime);
 
     /// @brief 更新波形绘制用的画布时间缓存。
     /// @param canvasOffset 画布时间相对音频采样时间的偏移，单位为秒。
@@ -330,6 +350,28 @@ private:
 
     /// @brief BPM 工具本地试听播放倍速，不写回项目音轨配置。
     double m_playbackSpeed{ 1.0 };
+
+    /// @brief 节拍器音效是否已准备好。
+    bool m_metronomeSfxReady{ false };
+
+    /// @brief 节拍器触发器是否已有有效游标。
+    bool m_metronomeScheduleInitialized{ false };
+
+    /// @brief 节拍器下一次要触发的拍序，相对首拍位置。
+    int64_t m_nextMetronomeBeatIndex{ 0 };
+
+    /// @brief 上一帧节拍器看到的画布时间，单位为秒。
+    double m_lastMetronomeCanvasTime{ 0.0 };
+
+    /// @brief 当前节拍器触发游标对应的首拍位置，单位为秒。
+    double m_metronomeScheduledFirstBeatTime{
+        std::numeric_limits<double>::quiet_NaN()
+    };
+
+    /// @brief 当前节拍器触发游标对应的单拍时长，单位为秒。
+    double m_metronomeScheduledBeatLength{
+        std::numeric_limits<double>::quiet_NaN()
+    };
 
     /// @brief 当前是否正在拖动分析视图时间轴。
     bool m_isTimelinePanning{ false };

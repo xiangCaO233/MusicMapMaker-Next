@@ -46,6 +46,24 @@ constexpr float BEAT_MARKER_HANDLE_HALF_WIDTH = 6.0f;
 /// @brief 整拍线三角手柄高度，单位为像素。
 constexpr float BEAT_MARKER_HANDLE_HEIGHT = 10.0f;
 
+/// @brief BPM 工具普通拍节拍器音效 key。
+constexpr const char* BPM_METRONOME_LOW_KEY = "metronome.beat_low";
+
+/// @brief BPM 工具四拍重音节拍器音效 key。
+constexpr const char* BPM_METRONOME_HIGH_KEY = "metronome.downbeat_high";
+
+/// @brief BPM 工具节拍器播放时的额外音量倍率。
+constexpr float BPM_METRONOME_VOLUME_FACTOR = 2.0f;
+
+/// @brief 节拍器音效提前调度窗口，单位为秒。
+constexpr double BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS = 0.2;
+
+/// @brief 已越过拍点但仍允许立即补响的时间窗口，单位为秒。
+constexpr double BPM_METRONOME_PAST_TRIGGER_WINDOW = 0.05;
+
+/// @brief 单帧最多触发的节拍器音效数量，避免跳转后爆发播放。
+constexpr int BPM_METRONOME_MAX_TRIGGERED_PER_FRAME = 8;
+
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
 {
@@ -209,6 +227,7 @@ BpmMeasurementToolView::~BpmMeasurementToolView()
 void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
 {
     m_isOpen = true;
+    (void)ensureMetronomeSoundEffects();
 
     if ( audioTrackId.empty() ) {
         return;
@@ -232,13 +251,14 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
 {
     (void)sourceManager;
     consumePendingAnalysis();
+    updateMetronomePlayback();
 
     ImGui::SetNextWindowSize(ImVec2(980.0f, 640.0f), ImGuiCond_FirstUseEver);
-    LayoutContext layoutContext(m_layoutCtx,
-                                TR("ui.tools.bpm_measure.title").data(),
-                                true,
-                                ImGuiWindowFlags_None,
-                                &m_isOpen);
+    std::string windowTitle =
+        std::string(TR("ui.tools.bpm_measure.title").data()) +
+        "###BpmMeasurementTool";
+    LayoutContext layoutContext(
+        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( ImGui::BeginTable(
              "##BpmMeasureLayout",
@@ -689,6 +709,145 @@ void BpmMeasurementToolView::followPlaybackIfNeeded()
 
     m_viewCenter = std::clamp<double>(
         playbackState.visualTime, 0.0, std::max(0.0, canvasDuration));
+}
+
+/// @brief 更新 BPM 工具节拍器音效触发。
+/// @warning UI
+/// 热路径：每帧执行；只读取播放同步快照并播放已预加载音效，不访问文件系统。
+void BpmMeasurementToolView::updateMetronomePlayback()
+{
+    if ( !isSelectedTrackLoadedForPlayback() || m_beatLengthSeconds <= 1e-6 ) {
+        m_metronomeScheduleInitialized = false;
+        return;
+    }
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( !m_metronomeSfxReady ) {
+        m_metronomeSfxReady =
+            audio.getSFXDuration(BPM_METRONOME_LOW_KEY) > 0.0 &&
+            audio.getSFXDuration(BPM_METRONOME_HIGH_KEY) > 0.0;
+        if ( !m_metronomeSfxReady ) {
+            return;
+        }
+    }
+
+    const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+    if ( !playbackState.isPlaying ) {
+        m_metronomeScheduleInitialized = false;
+        return;
+    }
+
+    const double canvasDuration = playbackCanvasDuration();
+    const double totalTime =
+        std::max(canvasDuration, std::max(m_duration, playbackState.totalTime));
+    if ( canvasDuration <= 0.0 || totalTime <= 0.0 ) {
+        m_metronomeScheduleInitialized = false;
+        return;
+    }
+
+    const double canvasTime =
+        std::clamp(playbackState.visualTime, 0.0, canvasDuration);
+    const bool gridChanged =
+        std::abs(m_metronomeScheduledFirstBeatTime - m_firstBeatTime) > 1e-9 ||
+        std::abs(m_metronomeScheduledBeatLength - m_beatLengthSeconds) > 1e-9;
+    const double jumpThreshold = std::max(0.25, m_beatLengthSeconds * 2.0);
+    const bool jumped = canvasTime + 1e-4 < m_lastMetronomeCanvasTime ||
+                        canvasTime - m_lastMetronomeCanvasTime > jumpThreshold;
+    if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
+        resetMetronomeScheduler(canvasTime);
+    }
+
+    const double scheduleEndCanvasTime = std::min(
+        canvasDuration, canvasTime + BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS);
+
+    int scheduledCount{ 0 };
+    while ( scheduledCount < BPM_METRONOME_MAX_TRIGGERED_PER_FRAME ) {
+        const double beatCanvasTime =
+            m_firstBeatTime +
+            static_cast<double>(m_nextMetronomeBeatIndex) * m_beatLengthSeconds;
+        if ( beatCanvasTime < canvasTime - BPM_METRONOME_PAST_TRIGGER_WINDOW ) {
+            ++m_nextMetronomeBeatIndex;
+            continue;
+        }
+        if ( beatCanvasTime > scheduleEndCanvasTime ) {
+            break;
+        }
+
+        const double beatAudioTime =
+            beatCanvasTime - playbackState.visualOffset;
+        if ( beatAudioTime >= 0.0 && beatAudioTime <= totalTime ) {
+            int64_t beatMod = m_nextMetronomeBeatIndex % 4;
+            if ( beatMod < 0 ) {
+                beatMod += 4;
+            }
+            const char* key =
+                beatMod == 0 ? BPM_METRONOME_HIGH_KEY : BPM_METRONOME_LOW_KEY;
+            audio.playSoundEffectScheduled(
+                key, beatAudioTime, BPM_METRONOME_VOLUME_FACTOR);
+        }
+
+        ++m_nextMetronomeBeatIndex;
+        ++scheduledCount;
+    }
+
+    m_lastMetronomeCanvasTime = canvasTime;
+}
+
+/// @brief 确保 BPM 工具节拍器音效已预加载。
+/// @return 两个节拍器音效均可播放时返回 true。
+bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
+{
+    auto& audio = Audio::AudioManager::instance();
+    if ( audio.getSFXDuration(BPM_METRONOME_LOW_KEY) > 0.0 &&
+         audio.getSFXDuration(BPM_METRONOME_HIGH_KEY) > 0.0 ) {
+        m_metronomeSfxReady = true;
+        return true;
+    }
+
+    const auto& skinData         = Config::SkinManager::instance().getData();
+    auto        resolveAudioPath = [&](const char*                  key,
+                                       const std::filesystem::path& fallback) {
+        if ( const auto it = skinData.audioPaths.find(key);
+             it != skinData.audioPaths.end() ) {
+            return it->second;
+        }
+        return skinData.skinPath / Config::utf8ToPath("resources") / fallback;
+    };
+
+    const std::filesystem::path lowPath =
+        resolveAudioPath(BPM_METRONOME_LOW_KEY,
+                         Config::utf8ToPath("audio/metronome/beat_low.wav"));
+    const std::filesystem::path highPath = resolveAudioPath(
+        BPM_METRONOME_HIGH_KEY,
+        Config::utf8ToPath("audio/metronome/downbeat_high.wav"));
+
+    const bool lowLoaded =
+        audio.getSFXDuration(BPM_METRONOME_LOW_KEY) > 0.0 ||
+        audio.preloadSoundEffect(BPM_METRONOME_LOW_KEY,
+                                 Config::pathToUtf8(lowPath));
+    const bool highLoaded =
+        audio.getSFXDuration(BPM_METRONOME_HIGH_KEY) > 0.0 ||
+        audio.preloadSoundEffect(BPM_METRONOME_HIGH_KEY,
+                                 Config::pathToUtf8(highPath));
+    m_metronomeSfxReady = lowLoaded && highLoaded;
+    return m_metronomeSfxReady;
+}
+
+/// @brief 从当前画布时间重置节拍器调度游标。
+/// @param canvasTime 当前 BPM 工具画布时间，单位为秒。
+void BpmMeasurementToolView::resetMetronomeScheduler(double canvasTime)
+{
+    if ( m_beatLengthSeconds <= 1e-6 ) {
+        m_metronomeScheduleInitialized = false;
+        return;
+    }
+
+    m_nextMetronomeBeatIndex = static_cast<int64_t>(
+        std::ceil((canvasTime - m_firstBeatTime) / m_beatLengthSeconds - 1e-6));
+    m_lastMetronomeCanvasTime         = canvasTime;
+    m_metronomeScheduledFirstBeatTime = m_firstBeatTime;
+    m_metronomeScheduledBeatLength    = m_beatLengthSeconds;
+    m_metronomeScheduleInitialized    = true;
 }
 
 /// @brief 更新波形绘制用的画布时间缓存。
@@ -1412,6 +1571,8 @@ BpmMeasurementToolView::selectedAudioResource() const
 /// @return 加载成功或已经加载时返回 true。
 bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
 {
+    (void)ensureMetronomeSoundEffects();
+
     auto resource = selectedAudioResource();
     auto path     = selectedAudioAbsolutePath();
     if ( !resource || !path ) {
@@ -1509,6 +1670,7 @@ void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
     const double canvasDuration = playbackCanvasDuration();
     m_viewCenter                = std::clamp<double>(
         commandAudioTime + visualOffset, 0.0, std::max(0.0, canvasDuration));
+    resetMetronomeScheduler(m_viewCenter);
 
     if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
         Logic::EditorEngine::instance().pushCommand(
@@ -1528,8 +1690,13 @@ void BpmMeasurementToolView::seekPlaybackToCanvasTime(double canvasTime)
 void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
 {
     auto& audio = Audio::AudioManager::instance();
+    if ( !shouldPlay ) {
+        m_metronomeScheduleInitialized = false;
+    }
+
     if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
         if ( shouldPlay ) {
+            (void)ensureMetronomeSoundEffects();
             const PlaybackTimelineState playbackState =
                 readPlaybackTimelineState();
             const double canvasTime =
@@ -1545,6 +1712,7 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
     }
 
     if ( shouldPlay ) {
+        (void)ensureMetronomeSoundEffects();
         const PlaybackTimelineState playbackState = readPlaybackTimelineState();
         const double                canvasTime =
             std::clamp<double>(playbackState.visualTime,
