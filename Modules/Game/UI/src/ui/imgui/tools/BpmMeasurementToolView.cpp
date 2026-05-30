@@ -121,6 +121,69 @@ ImU32 toImColor(const Config::Color& color, float alphaScale)
                         std::clamp(color.a * alphaScale, 0.0f, 1.0f) * 255.0f));
 }
 
+/// @brief 获取 BPM 工具允许的最早首拍时间。
+/// @param beatLengthSeconds 当前拍长，单位为秒。
+/// @return 允许首拍略早于音频起点，最多早一拍。
+double firstBeatMinSeconds(double beatLengthSeconds)
+{
+    return -std::max(0.0, beatLengthSeconds);
+}
+
+/// @brief 将首拍时间限制到 BPM 工具可编辑范围。
+/// @param firstBeatTime 首拍时间，单位为秒。
+/// @param beatLengthSeconds 当前拍长，单位为秒。
+/// @param canvasDuration 当前音频画布时长，单位为秒。
+/// @return 限制后的首拍时间。
+double clampFirstBeatTime(double firstBeatTime, double beatLengthSeconds,
+                          double canvasDuration)
+{
+    return std::clamp<double>(firstBeatTime,
+                              firstBeatMinSeconds(beatLengthSeconds),
+                              std::max(0.0, canvasDuration));
+}
+
+/// @brief 将毫秒残差格式化为相对拍长的近似分数。
+/// @param inaccuracyMs 残差 RMS，单位为毫秒。
+/// @param beatLengthSeconds 当前拍长，单位为秒。
+/// @return 形如 1/64 的拍内分数。
+std::string formatBeatFractionInaccuracy(double inaccuracyMs,
+                                         double beatLengthSeconds)
+{
+    const double beatMs = beatLengthSeconds * 1000.0;
+    if ( !(beatMs > 0.0) || !std::isfinite(beatMs) ||
+         !std::isfinite(inaccuracyMs) ) {
+        return "0";
+    }
+
+    const double fraction = std::max(0.0, inaccuracyMs / beatMs);
+    constexpr std::array<int, 15> denominators{ 1,  2,  3,  4,  6,  8,   12, 16,
+                                                24, 32, 48, 64, 96, 128, 192 };
+
+    int    bestNumerator   = 0;
+    int    bestDenominator = denominators.back();
+    double bestError       = std::numeric_limits<double>::infinity();
+    for ( int denominator : denominators ) {
+        const int numerator =
+            static_cast<int>(std::max(0.0, std::round(fraction * denominator)));
+        const double approx =
+            static_cast<double>(numerator) / static_cast<double>(denominator);
+        const double error = std::abs(approx - fraction);
+        if ( error < bestError ) {
+            bestError       = error;
+            bestNumerator   = numerator;
+            bestDenominator = denominator;
+        }
+    }
+
+    if ( bestNumerator <= 0 ) {
+        return fraction > 0.0 ? fmt::format("<1/{}", denominators.back()) : "0";
+    }
+
+    const int divisor = std::gcd(bestNumerator, bestDenominator);
+    return fmt::format(
+        "{}/{}", bestNumerator / divisor, bestDenominator / divisor);
+}
+
 /// @brief 按主画布规则查询指定分母的分拍线样式。
 /// @param denominator 分拍分母。
 /// @return 分拍线颜色和线宽。
@@ -384,17 +447,18 @@ void BpmMeasurementToolView::consumePendingAnalysis()
             const auto& autoTiming = *result->autoTimingResult;
             m_bpm                  = std::clamp(autoTiming.bpm, 1.0, 999.0);
             m_beatLengthSeconds    = 60.0 / m_bpm;
-            m_firstBeatTime =
-                std::clamp(autoTiming.offsetMs / 1000.0,
-                           0.0,
-                           std::max(0.0, playbackCanvasDuration()));
-            m_viewCenter = std::clamp<double>(
+            m_firstBeatTime = clampFirstBeatTime(autoTiming.offsetMs / 1000.0,
+                                                 m_beatLengthSeconds,
+                                                 playbackCanvasDuration());
+            m_viewCenter    = std::clamp<double>(
                 m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
             resetMetronomeScheduler(m_viewCenter);
+            const std::string inaccuracyFraction = formatBeatFractionInaccuracy(
+                autoTiming.alignmentInaccuracyMs, m_beatLengthSeconds);
             m_statusText = TR_FMT("ui.tools.bpm_measure.auto_ready",
                                   m_bpm,
                                   autoTiming.offsetMs,
-                                  autoTiming.alignmentInaccuracyMs,
+                                  inaccuracyFraction,
                                   autoTiming.rawBpm,
                                   autoTiming.signature,
                                   autoTiming.division);
@@ -490,6 +554,8 @@ void BpmMeasurementToolView::renderControlPanel()
                           "%.3f") ) {
         m_bpm               = std::clamp<double>(bpm, 1.0, 999.0);
         m_beatLengthSeconds = 60.0 / m_bpm;
+        m_firstBeatTime     = clampFirstBeatTime(
+            m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     }
 
     constexpr double minBeatLength = 60.0 / 999.0;
@@ -502,19 +568,22 @@ void BpmMeasurementToolView::renderControlPanel()
                           "%.6f") ) {
         m_beatLengthSeconds =
             std::clamp<double>(beatLength, minBeatLength, 60.0);
-        m_bpm = 60.0 / m_beatLengthSeconds;
+        m_bpm           = 60.0 / m_beatLengthSeconds;
+        m_firstBeatTime = clampFirstBeatTime(
+            m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     }
 
-    float firstBeat = static_cast<float>(m_firstBeatTime);
+    const double minFirstBeat = firstBeatMinSeconds(m_beatLengthSeconds);
+    float        firstBeat    = static_cast<float>(m_firstBeatTime);
     if ( ImGui::DragFloat(
              TR("ui.tools.bpm_measure.first_beat").data(),
              &firstBeat,
              0.001f,
-             0.0f,
+             static_cast<float>(minFirstBeat),
              static_cast<float>(std::max(0.001, playbackCanvasDuration())),
              "%.6f") ) {
-        m_firstBeatTime = std::clamp<double>(
-            firstBeat, 0.0, std::max(0.0, playbackCanvasDuration()));
+        m_firstBeatTime = clampFirstBeatTime(
+            firstBeat, m_beatLengthSeconds, playbackCanvasDuration());
     }
 
     float markerWidth = static_cast<float>(m_markerWidthMs);
@@ -1429,7 +1498,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
         targetBeatTime -
         static_cast<double>(m_draggedBeatIndex) * m_beatLengthSeconds;
     m_firstBeatTime =
-        std::clamp<double>(nextFirstBeat, 0.0, std::max(0.0, canvasDuration));
+        clampFirstBeatTime(nextFirstBeat, m_beatLengthSeconds, canvasDuration);
 
     const std::string tooltip = Canvas::formatCanvasTime(m_firstBeatTime) +
                                 " / " +
@@ -1817,9 +1886,11 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration   = sampleRate > 0.0
-                       ? static_cast<double>(track->num_frames()) / sampleRate
-                       : 0.0;
+    m_duration = sampleRate > 0.0
+                     ? static_cast<double>(track->num_frames()) / sampleRate
+                     : 0.0;
+    m_firstBeatTime = clampFirstBeatTime(
+        m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
         m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
     m_statusText = autoMeasure

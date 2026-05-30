@@ -459,6 +459,25 @@ double snapBpm(double bpm, double uncertainty)
     return bpm;
 }
 
+/// @brief 将检测到的峰值相位归一化到距离音频 0 点最近的等价首拍。
+/// @param phaseMs 原始峰值相位，单位为毫秒。
+/// @param beatMs 拍长，单位为毫秒。
+/// @return 有符号首拍相位，范围约为 [-beatMs / 2, beatMs / 2]。
+double normalizeNearestBeatPhase(double phaseMs, double beatMs)
+{
+    double normalized = std::fmod(phaseMs, beatMs);
+    if ( normalized <= -beatMs * 0.5 ) {
+        normalized += beatMs;
+    } else if ( normalized > beatMs * 0.5 ) {
+        normalized -= beatMs;
+    }
+
+    if ( std::abs(normalized) < 1e-9 ) {
+        return 0.0;
+    }
+    return normalized;
+}
+
 /// @brief 根据特征自相关估算 BPM。
 /// @param feature 1kHz 节拍特征序列。
 /// @return 成功时返回估计值和可信度等级，否则返回空。
@@ -757,7 +776,7 @@ std::optional<double> calcOffset(const std::vector<float>& feature, double bpm)
 /// @brief 估算节奏峰值相对最终网格的实用不准确度。
 /// @param feature 1kHz 节拍特征序列。
 /// @param bpm 最终 BPM。
-/// @param offsetMs 最终起拍偏移，单位为毫秒。
+/// @param offsetMs 最终首拍相位，单位为毫秒。
 /// @param division 拍内细分数。
 /// @return 加权 RMS 不准确度，单位为毫秒。
 double calcAlignmentInaccuracy(const std::vector<float>& feature, double bpm,
@@ -879,20 +898,13 @@ std::optional<BpmAutoTimingResult> BpmAutoDetector::detect(
                      ? snapBpm(result.rawBpm, result.rawBpmUncertainty)
                      : result.rawBpm;
 
-    auto offset = calcOffset(feature, result.bpm);
-    if ( !offset ) {
+    auto rawPhase = calcOffset(feature, result.bpm);
+    if ( !rawPhase ) {
         return std::nullopt;
     }
 
-    const double beatMs    = 60000.0 / result.bpm;
-    double       offsetMod = std::fmod(*offset, beatMs);
-    if ( offsetMod < 0.0 ) {
-        offsetMod += beatMs;
-    }
-    result.offsetMs = beatMs - offsetMod;
-    if ( result.offsetMs >= beatMs ) {
-        result.offsetMs -= beatMs;
-    }
+    const double beatMs          = 60000.0 / result.bpm;
+    result.offsetMs              = normalizeNearestBeatPhase(*rawPhase, beatMs);
     result.alignmentInaccuracyMs = calcAlignmentInaccuracy(
         feature, result.bpm, result.offsetMs, result.division);
 

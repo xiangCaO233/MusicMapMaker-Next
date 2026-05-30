@@ -7,7 +7,7 @@
 namespace MMM::UI
 {
 
-/// @brief BPM 自动测量结果，单位沿用 Emiria AutoTiming：offset 为毫秒。
+/// @brief BPM 自动测量结果。
 struct BpmAutoTimingResult {
     /// @brief 经过常见 BPM 栅格吸附后的 BPM。
     double bpm{ 0.0 };
@@ -27,11 +27,11 @@ struct BpmAutoTimingResult {
     /// @brief 估计的拍内细分数。
     uint32_t division{ 1 };
 
-    /// @brief 检测到的音频起拍偏移，单位为毫秒。
+    /// @brief 检测到的首拍相位，单位为毫秒；负值表示首拍略早于音频 0 点。
     double offsetMs{ 0.0 };
 };
 
-/// @brief 从已解码的单声道音频中自动估算 BPM 和起拍偏移。
+/// @brief 从已解码的单声道音频中自动估算 BPM 和首拍相位。
 class BpmAutoDetector final
 {
 public:

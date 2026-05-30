@@ -71,8 +71,8 @@ local Skin = {
 		}
 	},
 
-    -- UI 默认主题 (DeepDark, Dark, Light, Classic)
-    theme = "DarkRuda",
+    -- UI 默认主题
+    theme = "Moonlight",
 
 	-- 音频配置
 	audios = {
