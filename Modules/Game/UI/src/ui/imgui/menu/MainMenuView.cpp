@@ -6,6 +6,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/UISettingsTabEvent.h"
@@ -25,12 +26,67 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <ImGuiFileDialog.h>
+#include <concurrentqueue.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 跨线程传递给 UI 帧内消费的保存提示载荷。
+struct SaveTooltipPayload {
+    /// @brief 目标文件路径，使用 UTF-8 字符串。
+    std::string path;
+    /// @brief 是否为成功状态。
+    bool success{ true };
+    /// @brief 是否来自另存为/导出流程。
+    bool isExport{ false };
+};
+
+/// @brief 获取保存结果提示队列。
+moodycamel::ConcurrentQueue<SaveTooltipPayload>& getSaveTooltipQueue()
+{
+    static moodycamel::ConcurrentQueue<SaveTooltipPayload> queue;
+    return queue;
+}
+
+/// @brief 根据保存结果事件构建用户可见的提示文本。
+std::string buildSaveTooltipMessage(const SaveTooltipPayload& payload)
+{
+    if ( !payload.success ) {
+        return payload.isExport ? "导出失败" : "保存失败";
+    }
+    if ( !payload.isExport ) {
+        return TR("ui.status.beatmap.saved").data();
+    }
+
+    auto        path     = Config::utf8ToPath(payload.path);
+    std::string fileName = Config::pathToUtf8(path.filename());
+    if ( fileName.empty() ) {
+        return "导出成功";
+    }
+    return "导出 " + fileName + " 成功";
+}
+
+/// @brief 订阅逻辑层保存结果事件，将事件转交 UI 帧内处理。
+void ensureSaveResultSubscription()
+{
+    static bool subscribed = false;
+    if ( subscribed ) return;
+
+    Event::EventBus::instance().subscribe<Event::BeatmapSaveResultEvent>(
+        [](const Event::BeatmapSaveResultEvent& event) {
+            getSaveTooltipQueue().enqueue(SaveTooltipPayload{
+                .path     = event.path,
+                .success  = event.success,
+                .isExport = event.isExport,
+            });
+        });
+    subscribed = true;
+}
+}  // namespace
 
 /// @brief 构造主菜单视图并初始化菜单状态、弹窗状态和更新检查器。
 MainMenuView::MainMenuView()
@@ -52,6 +108,7 @@ MainMenuView::MainMenuView()
     , m_updatePopupCanceled(false)
     , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
 {
+    ensureSaveResultSubscription();
 }
 
 /// @brief 销毁主菜单视图。
@@ -101,7 +158,6 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 openExportFilePicker("");
             } else {
                 dispatchCommand(Logic::CmdSaveBeatmap{});
-                m_saveTooltipTimer = 2.0f;
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
@@ -176,6 +232,13 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
 /// @param sourceManager 当前 UI 管理器，用于处理快捷键和菜单窗口。
 void MainMenuView::update(UIManager* sourceManager)
 {
+    SaveTooltipPayload payload;
+    while ( getSaveTooltipQueue().try_dequeue(payload) ) {
+        m_saveTooltipMessage = buildSaveTooltipMessage(payload);
+        m_saveTooltipSuccess = payload.success;
+        m_saveTooltipTimer   = payload.success ? 2.0f : 3.0f;
+    }
+
     if ( m_statusMessageTimer > 0.0f )
         m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
 
@@ -316,7 +379,6 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
             dispatchCommand(Logic::CmdSaveBeatmap{});
-            m_saveTooltipTimer = 2.0f;
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {

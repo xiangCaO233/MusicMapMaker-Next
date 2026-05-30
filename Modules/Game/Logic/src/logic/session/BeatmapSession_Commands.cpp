@@ -3,6 +3,8 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -323,8 +325,18 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         if ( !ok ) {
             XERROR("SaveBeatmap: failed to save to {}",
                    Config::pathToUtf8(savePath));
+            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+                .path     = Config::pathToUtf8(savePath),
+                .success  = false,
+                .isExport = false,
+            });
             return;
         }
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path     = Config::pathToUtf8(savePath),
+            .success  = true,
+            .isExport = false,
+        });
         auto storedSavePath = makeCurrentProjectRelativePath(savePath);
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
         m_ctx->actionStack.markSaved();
@@ -347,8 +359,18 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
+            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+                .path     = Config::pathToUtf8(savePath),
+                .success  = false,
+                .isExport = true,
+            });
             return;
         }
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path     = Config::pathToUtf8(savePath),
+            .success  = true,
+            .isExport = true,
+        });
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
             makeCurrentProjectRelativePath(savePath);
         m_ctx->actionStack.markSaved();

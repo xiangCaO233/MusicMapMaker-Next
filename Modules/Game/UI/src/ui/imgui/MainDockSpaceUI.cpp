@@ -151,6 +151,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 std::string filePath =
                     ImGuiFileDialog::Instance()->GetFilePathName();
+                filePath =
+                    m_mainMenuview.applySaveAsSelectedFormatToPath(filePath);
 
                 auto config = engine.getEditorConfig();
                 config.settings.lastFilePickerPath =

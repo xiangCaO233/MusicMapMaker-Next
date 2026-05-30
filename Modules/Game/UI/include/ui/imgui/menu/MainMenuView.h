@@ -62,6 +62,11 @@ public:
     /// @param path 目标导出路径。
     void requestSaveBeatmapAs(std::string path);
 
+    /// @brief 按统一导出文件选择器当前格式规范化保存路径。
+    /// @param path 文件选择器返回的路径。
+    /// @return 应实际导出的目标路径。
+    std::string applySaveAsSelectedFormatToPath(const std::string& path) const;
+
     /// @brief 处理主菜单相关的全局快捷键。
     /// @param sourceManager 当前 UI 管理器。
     void handleHotkeys(UIManager* sourceManager);
@@ -139,6 +144,13 @@ private:
     /// @brief 打开谱面导出路径选择器。
     /// @param ext 期望导出的文件扩展名；为空时展示全部支持格式。
     void openExportFilePicker(const std::string& ext);
+
+    /// @brief 根据导出格式生成推荐文件名。
+    /// @param extension 目标扩展名。
+    /// @param currentFileName 当前文件名，用于保留非 IMD 格式的主文件名。
+    /// @return 推荐文件名。
+    std::string makeExportFileNameForExtension(
+        const std::string& extension, const std::string& currentFileName) const;
 
     /// @brief 打开音频导入选择器。
     void openAudioImportPicker();
@@ -231,6 +243,10 @@ private:
 
     /// @brief 保存提示气泡剩余显示时间。
     float m_saveTooltipTimer = 0.0f;
+    /// @brief 保存提示气泡是否为成功状态。
+    bool m_saveTooltipSuccess = true;
+    /// @brief 保存提示气泡显示文本。
+    std::string m_saveTooltipMessage;
     /// @brief 状态消息剩余显示时间。
     float m_statusMessageTimer = 0.0f;
     /// @brief 状态栏显示的临时消息。

@@ -27,6 +27,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
@@ -50,6 +51,59 @@ std::string getLowerExtension(const std::string& path)
 {
     return toLowerAscii(
         Config::pathToUtf8(Config::utf8ToPath(path).extension()));
+}
+
+/// @brief 从文件选择器过滤器文本中解析扩展名。
+std::string extensionFromFilterText(const std::string& filterText)
+{
+    const std::string lower = toLowerAscii(filterText);
+    struct Candidate {
+        /// @brief 目标扩展名。
+        std::string extension;
+        /// @brief 在过滤器文本中的位置。
+        size_t position{ std::string::npos };
+    };
+
+    std::vector<Candidate> candidates = {
+        { ".mmm", lower.find(".mmm") },
+        { ".osu", lower.find(".osu") },
+        { ".imd", lower.find(".imd") },
+        { ".mc", lower.find(".mc") },
+    };
+
+    auto updateAlias = [&](const std::string& extension,
+                           const std::string& alias) {
+        size_t aliasPos = lower.find(alias);
+        if ( aliasPos == std::string::npos ) return;
+        for ( auto& candidate : candidates ) {
+            if ( candidate.extension == extension &&
+                 aliasPos < candidate.position ) {
+                candidate.position = aliasPos;
+            }
+        }
+    };
+    updateAlias(".mmm", "musicmapmaker");
+    updateAlias(".osu", "osu");
+    updateAlias(".imd", "imd");
+    updateAlias(".mc", "malody");
+
+    const auto best = std::min_element(
+        candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+            return a.position < b.position;
+        });
+    if ( best != candidates.end() && best->position != std::string::npos ) {
+        return best->extension;
+    }
+    return {};
+}
+
+/// @brief 替换文件名中不适合作为普通文件名的路径分隔字符。
+std::string sanitizeExportFileNamePart(std::string value)
+{
+    if ( value.empty() ) return "map";
+    std::replace(value.begin(), value.end(), '/', '_');
+    std::replace(value.begin(), value.end(), '\\', '_');
+    return value;
 }
 
 /// @brief 判断谱面是否包含 IMD 无法保存的基础元数据。
@@ -96,12 +150,78 @@ bool hasUnsupportedImdNoteMetadata(const BeatMap& beatMap)
 }
 }  // namespace
 
+/// @brief 根据导出格式生成推荐文件名。
+/// @param extension 目标扩展名。
+/// @param currentFileName 当前文件名，用于保留非 IMD 格式的主文件名。
+/// @return 推荐文件名。
+std::string MainMenuView::makeExportFileNameForExtension(
+    const std::string& extension, const std::string& currentFileName) const
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    const BeatMap* beatMap = (session && session->getContext().currentBeatmap)
+                                 ? session->getContext().currentBeatmap.get()
+                                 : nullptr;
+
+    const std::string normalizedExt =
+        extension.empty() ? ".mmm" : toLowerAscii(extension);
+
+    if ( normalizedExt == ".imd" ) {
+        std::string title    = "map";
+        int32_t     keyCount = 0;
+        std::string version  = "default";
+        if ( beatMap ) {
+            const auto& meta = beatMap->m_baseMapMetadata;
+            title    = !meta.title_unicode.empty()
+                           ? meta.title_unicode
+                           : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount = meta.track_count;
+            version  = meta.version.empty() ? "default" : meta.version;
+        }
+        return fmt::format("{}_{}k_{}.imd",
+                           sanitizeExportFileNamePart(title),
+                           keyCount,
+                           sanitizeExportFileNamePart(version));
+    }
+
+    std::filesystem::path fileName = Config::utf8ToPath(currentFileName);
+    if ( fileName.empty() ) {
+        std::string baseName = "map";
+        if ( beatMap && !beatMap->m_baseMapMetadata.name.empty() ) {
+            baseName = beatMap->m_baseMapMetadata.name;
+        }
+        fileName = Config::utf8ToPath(sanitizeExportFileNamePart(baseName));
+    }
+    fileName.replace_extension(normalizedExt);
+    return Config::pathToUtf8(fileName.filename());
+}
+
+/// @brief 按统一导出文件选择器当前格式规范化保存路径。
+/// @param path 文件选择器返回的路径。
+/// @return 应实际导出的目标路径。
+std::string MainMenuView::applySaveAsSelectedFormatToPath(
+    const std::string& path) const
+{
+    std::string currentFilter = ImGuiFileDialog::Instance()->GetCurrentFilter();
+    std::string currentExtension = extensionFromFilterText(currentFilter);
+    if ( currentExtension.empty() ) {
+        return path;
+    }
+
+    std::filesystem::path outputPath = Config::utf8ToPath(path);
+    std::string currentFileName = Config::pathToUtf8(outputPath.filename());
+    std::string nextFileName =
+        makeExportFileNameForExtension(currentExtension, currentFileName);
+    outputPath.replace_filename(Config::utf8ToPath(nextFileName));
+    return Config::pathToUtf8(outputPath);
+}
+
 /// @brief 直接分发谱面导出命令并显示保存提示。
 /// @param path 目标导出路径。
 void MainMenuView::dispatchSaveBeatmapAs(const std::string& path)
 {
     dispatchCommand(Logic::CmdSaveBeatmapAs{ path });
-    m_saveTooltipTimer = 2.0f;
 }
 
 /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
@@ -369,8 +489,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
     if ( session && session->getContext().currentBeatmap ) {
         auto& meta = session->getContext().currentBeatmap->m_baseMapMetadata;
         if ( ext == ".imd" ) {
-            defaultName = fmt::format(
-                "{}_{}k_{}.imd", meta.title, meta.track_count, meta.version);
+            defaultName = makeExportFileNameForExtension(".imd", defaultName);
         } else {
             defaultName = meta.name + (ext.empty() ? ".mmm" : ext);
         }
