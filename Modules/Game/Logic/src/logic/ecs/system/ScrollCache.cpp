@@ -1,11 +1,10 @@
 #include "logic/ecs/system/ScrollCache.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
-#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <string>
 
 namespace MMM::Logic::System
@@ -31,10 +30,14 @@ static bool hasMalodyMetadata(const TimelineComponent& tl)
 }
 
 /// @brief 根据时间线注册表重建滚动缓存。
+/// @param timelineRegistry 时间线注册表。
+/// @param config 当前编辑器配置。
+/// @param beatmap 当前 Session 绑定的谱面；为空时使用保守默认值。
 /// @warning 逻辑热路径低频分支：会完整遍历和排序时间线，只能在 isDirty
 /// 时执行，严禁每 update 无条件调用。
 void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
-                          const Config::EditorConfig& config)
+                          const Config::EditorConfig& config,
+                          MMM::BeatMap*               beatmap)
 {
     m_rebuildScratch.clear();
     auto tlView = timelineRegistry.view<const TimelineComponent>();
@@ -81,36 +84,34 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     // SliderMultiplier
     double refBPM           = 120.0;
     double sliderMultiplier = 1.0;
-    if ( auto session = EditorEngine::instance().getActiveSession() ) {
-        if ( auto beatmap = session->getContext().currentBeatmap ) {
-            // 尝试获取 SliderMultiplier (默认为 1.4)
-            sliderMultiplier = beatmap->m_metadata.get_value<double>(
-                MapMetadataType::OSU, "Difficulty::SliderMultiplier", 1.4);
+    if ( beatmap ) {
+        // 尝试获取 SliderMultiplier (默认为 1.4)
+        sliderMultiplier = beatmap->m_metadata.get_value<double>(
+            MapMetadataType::OSU, "Difficulty::SliderMultiplier", 1.4);
 
-            // 自动计算最常见的 BPM (持续时间最长)
-            std::map<double, double> bpmDurations;
-            double                   lastBpmTime   = 0.0;
-            double                   currentBpmVal = -1.0;
-            for ( const auto& entry : m_rebuildScratch ) {
-                if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
-                    if ( currentBpmVal > 0 ) {
-                        bpmDurations[currentBpmVal] +=
-                            (entry.component->m_timestamp - lastBpmTime);
-                    }
-                    currentBpmVal = entry.component->m_value;
-                    lastBpmTime   = entry.component->m_timestamp;
+        // 自动计算最常见的 BPM (持续时间最长)
+        std::map<double, double> bpmDurations;
+        double                   lastBpmTime   = 0.0;
+        double                   currentBpmVal = -1.0;
+        for ( const auto& entry : m_rebuildScratch ) {
+            if ( entry.component->m_effect == ::MMM::TimingEffect::BPM ) {
+                if ( currentBpmVal > 0 ) {
+                    bpmDurations[currentBpmVal] +=
+                        (entry.component->m_timestamp - lastBpmTime);
                 }
+                currentBpmVal = entry.component->m_value;
+                lastBpmTime   = entry.component->m_timestamp;
             }
-            // 加上最后一个段落到末尾的时间 (假设谱面时长)
-            bpmDurations[currentBpmVal] +=
-                (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
+        }
+        // 加上最后一个段落到末尾的时间 (假设谱面时长)
+        bpmDurations[currentBpmVal] +=
+            (beatmap->m_baseMapMetadata.map_length - lastBpmTime);
 
-            double maxDuration = -1.0;
-            for ( const auto& [bpm, dur] : bpmDurations ) {
-                if ( dur > maxDuration ) {
-                    maxDuration = dur;
-                    refBPM      = bpm;
-                }
+        double maxDuration = -1.0;
+        for ( const auto& [bpm, dur] : bpmDurations ) {
+            if ( dur > maxDuration ) {
+                maxDuration = dur;
+                refBPM      = bpm;
             }
         }
     }

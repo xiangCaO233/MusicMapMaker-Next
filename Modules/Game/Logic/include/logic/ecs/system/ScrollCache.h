@@ -7,6 +7,11 @@
 #include <utility>
 #include <vector>
 
+namespace MMM
+{
+class BeatMap;
+}
+
 namespace MMM::Logic
 {
 struct TimelineComponent;
@@ -51,10 +56,13 @@ public:
     ScrollCache() = default;
 
     /// @brief 根据时间线注册表重建缓存表
+    /// @param timelineRegistry 时间线注册表。
+    /// @param config 当前编辑器配置。
+    /// @param beatmap 当前 Session 绑定的谱面；为空时使用保守默认值。
     /// @warning 逻辑热路径低频分支：会完整遍历/排序时间线，只能在 isDirty
     /// 时执行，禁止每 update 无条件调用。
     void rebuild(const entt::registry&       timelineRegistry,
-                 const Config::EditorConfig& config);
+                 const Config::EditorConfig& config, MMM::BeatMap* beatmap);
 
     /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
     double getAbsY(double t) const;

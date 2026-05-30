@@ -204,6 +204,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                                         m_ctx->timelineRegistry,
                                         m_ctx->currentTime,
                                         config,
+                                        m_ctx->currentBeatmap.get(),
                                         m_ctx->isTransformDirty);
     m_ctx->isTransformDirty = false;
 

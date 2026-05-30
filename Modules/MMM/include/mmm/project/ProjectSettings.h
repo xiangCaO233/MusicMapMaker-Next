@@ -112,6 +112,9 @@ struct ProjectWorkspaceToolbarState {
     /// @brief 当前分拍数量。
     int m_beatDivisor{ 4 };
 
+    /// @brief 画布时间线缩放倍率。
+    float m_timelineZoom{ 1.0f };
+
     /// @brief 是否同步使用同一主音轨的多个画布时间。
     bool m_syncSameMainAudioCanvases{ true };
 
@@ -130,6 +133,7 @@ struct ProjectWorkspaceToolbarState {
             { "m_stopPlaybackOnScroll", state.m_stopPlaybackOnScroll },
             { "m_enableHitEffects", state.m_enableHitEffects },
             { "m_beatDivisor", state.m_beatDivisor },
+            { "m_timelineZoom", state.m_timelineZoom },
             { "m_syncSameMainAudioCanvases", state.m_syncSameMainAudioCanvases }
         };
     }
@@ -148,6 +152,7 @@ struct ProjectWorkspaceToolbarState {
         state.m_stopPlaybackOnScroll = j.value("m_stopPlaybackOnScroll", false);
         state.m_enableHitEffects     = j.value("m_enableHitEffects", true);
         state.m_beatDivisor          = j.value("m_beatDivisor", 4);
+        state.m_timelineZoom         = j.value("m_timelineZoom", 1.0f);
         state.m_syncSameMainAudioCanvases =
             j.value("m_syncSameMainAudioCanvases", true);
     }

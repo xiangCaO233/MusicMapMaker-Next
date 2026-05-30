@@ -295,6 +295,7 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
         editorConfig.settings.stopPlaybackOnScroll;
     toolbarState.m_enableHitEffects = editorConfig.visual.enableHitEffects;
     toolbarState.m_beatDivisor      = editorConfig.settings.beatDivisor;
+    toolbarState.m_timelineZoom     = editorConfig.visual.timelineZoom;
     toolbarState.m_syncSameMainAudioCanvases = syncSameMainAudioCanvases;
 }
 
@@ -316,6 +317,8 @@ void applyToolbarWorkspaceState(
     editorConfig.visual.enableHitEffects = toolbarState.m_enableHitEffects;
     editorConfig.settings.beatDivisor =
         std::clamp(toolbarState.m_beatDivisor, 1, 64);
+    editorConfig.visual.timelineZoom =
+        std::clamp(toolbarState.m_timelineZoom, 0.1f, 10.0f);
 }
 }  // namespace
 

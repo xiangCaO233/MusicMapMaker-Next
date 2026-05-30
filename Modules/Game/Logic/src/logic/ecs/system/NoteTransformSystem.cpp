@@ -13,12 +13,12 @@ void NoteTransformSystem::update(entt::registry&             registry,
                                  entt::registry&             timelineRegistry,
                                  double                      currentTime,
                                  const Config::EditorConfig& config,
-                                 bool                        forceRebuild)
+                                 MMM::BeatMap* beatmap, bool forceRebuild)
 {
     auto& cache      = timelineRegistry.ctx().get<ScrollCache>();
     bool  cacheDirty = cache.isDirty;
     if ( cache.isDirty ) {
-        cache.rebuild(timelineRegistry, config);
+        cache.rebuild(timelineRegistry, config, beatmap);
     }
 
     if ( !cacheDirty && !forceRebuild ) {
