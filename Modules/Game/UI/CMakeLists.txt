@@ -32,6 +32,7 @@ add_library(UI STATIC
     src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
     src/ui/imgui/audio/AudioWaveformView.cpp
     src/ui/imgui/audio/AudioSpectrumView.cpp
+    src/ui/imgui/tools/BpmAutoDetector.cpp
     src/ui/imgui/tools/BpmMeasurementToolView.cpp
     src/ui/imgui/DebugWindowUI.cpp
     src/ui/imgui/CanvasTabManager.cpp

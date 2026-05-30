@@ -243,6 +243,29 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
     }
 }
 
+/// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。
+/// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
+void BpmMeasurementToolView::openWithAutoMeasurement(
+    const std::string& audioTrackId)
+{
+    m_isOpen = true;
+    (void)ensureMetronomeSoundEffects();
+
+    const std::string targetAudioTrackId =
+        audioTrackId.empty() ? defaultAudioTrackId() : audioTrackId;
+    if ( targetAudioTrackId.empty() ) {
+        m_statusText = TR("ui.tools.bpm_measure.no_audio").data();
+        return;
+    }
+
+    m_selectedAudioTrackId = targetAudioTrackId;
+    if ( auto resource = selectedAudioResource() ) {
+        m_playbackSpeed =
+            std::clamp<double>(resource->m_config.playbackSpeed, 0.25, 2.0);
+    }
+    requestAnalyzeSelectedTrack(true);
+}
+
 /// @brief 更新并绘制 BPM 测量工具 UI。
 /// @param sourceManager 当前 UI 管理器。
 /// @warning UI 热路径：每帧执行；不得在此处扫描文件系统、重新解码整段音频或创建
@@ -355,7 +378,32 @@ void BpmMeasurementToolView::consumePendingAnalysis()
     m_spectrumSegmentCount      = result->spectrumSegmentCount;
     m_spectrumBinCount          = result->spectrumBinCount;
     m_texturesNeedReload        = true;
-    m_statusText                = TR("ui.tools.bpm_measure.ready").data();
+
+    if ( result->autoTimingRequested ) {
+        if ( result->autoTimingResult ) {
+            const auto& autoTiming = *result->autoTimingResult;
+            m_bpm                  = std::clamp(autoTiming.bpm, 1.0, 999.0);
+            m_beatLengthSeconds    = 60.0 / m_bpm;
+            m_firstBeatTime =
+                std::clamp(autoTiming.offsetMs / 1000.0,
+                           0.0,
+                           std::max(0.0, playbackCanvasDuration()));
+            m_viewCenter = std::clamp<double>(
+                m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
+            resetMetronomeScheduler(m_viewCenter);
+            m_statusText = TR_FMT("ui.tools.bpm_measure.auto_ready",
+                                  m_bpm,
+                                  autoTiming.offsetMs,
+                                  autoTiming.alignmentInaccuracyMs,
+                                  autoTiming.rawBpm,
+                                  autoTiming.signature,
+                                  autoTiming.division);
+        } else {
+            m_statusText = TR("ui.tools.bpm_measure.auto_failed").data();
+        }
+    } else {
+        m_statusText = TR("ui.tools.bpm_measure.ready").data();
+    }
     m_analysisFinished.store(false, std::memory_order_release);
 }
 
@@ -419,6 +467,10 @@ void BpmMeasurementToolView::renderControlPanel()
     if ( ImGui::Button(TR("ui.tools.bpm_measure.reload").data(),
                        ImVec2(-1.0f, 0.0f)) ) {
         requestAnalyzeSelectedTrack();
+    }
+    if ( ImGui::Button(TR("ui.tools.bpm_measure.auto_button").data(),
+                       ImVec2(-1.0f, 0.0f)) ) {
+        requestAutoMeasureSelectedTrack();
     }
     if ( !hasSelection ) {
         ImGui::EndDisabled();
@@ -957,7 +1009,7 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     drawList->AddRectFilled(imageMin, imageMax, IM_COL32(12, 14, 18, 255));
 
     ImGui::BeginGroup();
-    if ( !m_spectrumTextures.empty() ) {
+    if ( !m_texturesNeedReload && !m_spectrumTextures.empty() ) {
         if ( pixelStart < 0.0 ) {
             const float emptyW = std::min(
                 size.x,
@@ -1726,7 +1778,8 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
 }
 
 /// @brief 请求重新分析当前选择的音频轨道。
-void BpmMeasurementToolView::requestAnalyzeSelectedTrack()
+/// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
+void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 {
     stopAnalysisWorker();
     clearAnalysisData();
@@ -1758,16 +1811,51 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack()
                        : 0.0;
     m_viewCenter = std::clamp<double>(
         m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
-    m_statusText = TR("ui.tools.bpm_measure.analyzing").data();
+    m_statusText = autoMeasure
+                       ? TR("ui.tools.bpm_measure.auto_analyzing").data()
+                       : TR("ui.tools.bpm_measure.analyzing").data();
     m_analysisProgress.store(0.0f, std::memory_order_relaxed);
     m_analysisFinished.store(false, std::memory_order_release);
     m_analysisRunning.store(true, std::memory_order_relaxed);
 
     m_analysisThread = std::make_unique<std::jthread>(
-        [this, track = std::move(track), duration = m_duration](
+        [this, track = std::move(track), duration = m_duration, autoMeasure](
             std::stop_token stopToken) {
-            analyzeTrack(stopToken, track, duration);
+            analyzeTrack(stopToken, track, duration, autoMeasure);
         });
+}
+
+/// @brief 请求自动测量当前选择的音频轨道。
+void BpmMeasurementToolView::requestAutoMeasureSelectedTrack()
+{
+    if ( m_selectedAudioTrackId.empty() ) {
+        const std::string targetAudioTrackId = defaultAudioTrackId();
+        if ( targetAudioTrackId.empty() ) {
+            m_statusText = TR("ui.tools.bpm_measure.no_audio").data();
+            return;
+        }
+        m_selectedAudioTrackId = targetAudioTrackId;
+    }
+
+    requestAnalyzeSelectedTrack(true);
+}
+
+/// @brief 查找当前项目默认用于 BPM 自动测量的音频资源 ID。
+/// @return 优先返回主音轨 ID，否则返回首个音频资源 ID；不存在时为空。
+std::string BpmMeasurementToolView::defaultAudioTrackId() const
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_audioResources.empty() ) {
+        return {};
+    }
+
+    for ( const auto& resource : project->m_audioResources ) {
+        if ( resource.m_type == AudioTrackType::Main ) {
+            return resource.m_id;
+        }
+    }
+
+    return project->m_audioResources.front().m_id;
 }
 
 /// @brief 停止并等待当前后台分析任务。
@@ -1783,25 +1871,19 @@ void BpmMeasurementToolView::stopAnalysisWorker()
     m_analysisRunning.store(false, std::memory_order_relaxed);
 }
 
-/// @brief 清理当前分析缓存和频谱 GPU 资源。
-/// @warning 低频资源路径：可能等待 GPU 空闲，严禁放入每帧绘制路径。
+/// @brief 清理当前分析缓存并延迟释放频谱 GPU 资源。
+/// @warning 低频资源路径：由用户切换音轨或重新分析触发；GPU 纹理只打脏位，
+/// 实际释放必须延迟到下一次资源准备阶段，避免当前 ImGui draw list 仍引用旧
+/// descriptor set。
 void BpmMeasurementToolView::clearAnalysisData()
 {
-    if ( !m_spectrumTextures.empty() ) {
-        auto context = Graphic::VKContext::get();
-        if ( context ) {
-            (void)context->get().getLogicalDevice().waitIdle();
-        }
-    }
-
     m_waveTimes.clear();
     m_waveCanvasTimes.clear();
     m_waveCanvasTimesOffset = std::numeric_limits<double>::quiet_NaN();
     m_waveMin.clear();
     m_waveMax.clear();
     m_pendingSpectrumChunks.clear();
-    m_spectrumTextures.clear();
-    m_texturesNeedReload   = false;
+    m_texturesNeedReload   = !m_spectrumTextures.empty();
     m_spectrumSegmentCount = 0;
     m_spectrumBinCount     = 0;
     m_analysisProgress     = 0.0f;
@@ -1812,10 +1894,11 @@ void BpmMeasurementToolView::clearAnalysisData()
 /// @param stopToken 线程停止令牌。
 /// @param track 待分析音频轨道，后台线程持有共享所有权。
 /// @param duration 音频时长，单位为秒。
+/// @param autoMeasure 是否在频谱分析后继续执行自动 BPM/offset 测量。
 /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在 UI/渲染热路径中运行。
 void BpmMeasurementToolView::analyzeTrack(
     std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
-    double duration)
+    double duration, bool autoMeasure)
 {
     if ( !track ) {
         m_analysisRunning.store(false, std::memory_order_relaxed);
@@ -1839,14 +1922,16 @@ void BpmMeasurementToolView::analyzeTrack(
     const size_t hopSize          = std::max<size_t>(
         1, static_cast<size_t>(sampleRate / m_spectrumSegmentsPerSecond));
     const uint16_t channelCount = ice::ICEConfig::internal_format.channels;
-    const int      totalWork    = wavePointCount + spectrumSegmentCount;
-    int            finishedWork = 0;
+    const int      totalWork =
+        wavePointCount + spectrumSegmentCount + (autoMeasure ? 1 : 0);
+    int finishedWork = 0;
 
     AnalysisResult result;
     result.duration                  = duration;
     result.spectrumSegmentsPerSecond = m_spectrumSegmentsPerSecond;
     result.spectrumSegmentCount      = spectrumSegmentCount;
     result.spectrumBinCount          = spectrumBinCount;
+    result.autoTimingRequested       = autoMeasure;
     result.waveTimes.resize(wavePointCount);
     result.waveMin.assign(wavePointCount, 0.0);
     result.waveMax.assign(wavePointCount, 0.0);
@@ -2036,6 +2121,22 @@ void BpmMeasurementToolView::analyzeTrack(
     fftw_free(fftInput);
     fftw_free(fftOutput);
 
+    if ( autoMeasure ) {
+        if ( duration >= 10.0 ) {
+            if ( auto monoSamples =
+                     readMonoSamplesForAutoTiming(stopToken, track) ) {
+                if ( !stopToken.stop_requested() ) {
+                    result.autoTimingResult = BpmAutoDetector::detect(
+                        *monoSamples,
+                        ice::ICEConfig::internal_format.samplerate);
+                }
+            }
+        }
+
+        ++finishedWork;
+        updateProgress();
+    }
+
     const int chunkCount =
         (spectrumSegmentCount + static_cast<int>(MAX_TEXTURE_W) - 1) /
         static_cast<int>(MAX_TEXTURE_W);
@@ -2078,6 +2179,72 @@ void BpmMeasurementToolView::analyzeTrack(
     }
     m_analysisRunning.store(false, std::memory_order_relaxed);
     m_analysisFinished.store(true, std::memory_order_release);
+}
+
+/// @brief 读取完整音轨并混合为单声道采样，供自动 BPM 检测使用。
+/// @param stopToken 后台线程停止令牌。
+/// @param track 待读取的音频轨道。
+/// @return 成功时返回单声道采样，否则返回空。
+/// @warning 后台耗时路径：会读取完整音频，只能由手动触发的分析任务调用。
+std::optional<std::vector<float>>
+BpmMeasurementToolView::readMonoSamplesForAutoTiming(
+    std::stop_token                         stopToken,
+    const std::shared_ptr<ice::AudioTrack>& track) const
+{
+    if ( !track ) {
+        return std::nullopt;
+    }
+
+    const size_t totalFrames = track->num_frames();
+    if ( totalFrames == 0 ) {
+        return std::nullopt;
+    }
+
+    const uint16_t channelCount = ice::ICEConfig::internal_format.channels;
+    if ( channelCount == 0 ) {
+        return std::nullopt;
+    }
+
+    constexpr size_t   AUTO_TIMING_READ_CHUNK_FRAMES = 32768;
+    std::vector<float> monoSamples(totalFrames, 0.0f);
+    ice::AudioBuffer   buffer;
+
+    size_t readOffset = 0;
+    while ( readOffset < totalFrames ) {
+        if ( stopToken.stop_requested() ) {
+            return std::nullopt;
+        }
+
+        const size_t frameCount =
+            std::min(AUTO_TIMING_READ_CHUNK_FRAMES, totalFrames - readOffset);
+        buffer.resize(ice::ICEConfig::internal_format, frameCount);
+        buffer.clear();
+
+        const size_t decoded = track->read(buffer, readOffset, frameCount);
+        if ( decoded == 0 ) {
+            break;
+        }
+
+        float** data = buffer.raw_ptrs();
+        for ( size_t frame = 0; frame < decoded; ++frame ) {
+            double mixed = 0.0;
+            for ( uint16_t ch = 0; ch < channelCount; ++ch ) {
+                mixed += data[ch][frame];
+            }
+            monoSamples[readOffset + frame] =
+                static_cast<float>(mixed / channelCount);
+        }
+
+        readOffset += decoded;
+    }
+
+    if ( readOffset == 0 ) {
+        return std::nullopt;
+    }
+    if ( readOffset < monoSamples.size() ) {
+        monoSamples.resize(readOffset);
+    }
+    return monoSamples;
 }
 
 /// @brief 查找当前选中音频轨道的绝对路径。

@@ -3,6 +3,7 @@
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/tools/BpmAutoDetector.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -37,6 +38,10 @@ public:
     /// @brief 打开窗口并选中指定项目音频轨道。
     /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
     void openWithAudioTrack(const std::string& audioTrackId);
+
+    /// @brief 打开窗口并对指定或默认项目音频轨道执行自动 BPM 测量。
+    /// @param audioTrackId 项目内音频资源 ID；为空时选择默认主音轨。
+    void openWithAutoMeasurement(const std::string& audioTrackId);
 
     /// @brief 获取当前选中的项目音频资源 ID。
     /// @return 当前选中的音频资源 ID，未选择时为空。
@@ -108,6 +113,12 @@ private:
 
         /// @brief 频谱频率 bin 数。
         int spectrumBinCount{ 0 };
+
+        /// @brief 本次分析是否请求自动 BPM/offset 测量。
+        bool autoTimingRequested{ false };
+
+        /// @brief 自动 BPM/offset 测量结果。
+        std::optional<BpmAutoTimingResult> autoTimingResult;
     };
 
     /// @brief 尝试消费后台分析结果。
@@ -224,7 +235,15 @@ private:
                                   double viewStart, double viewEnd);
 
     /// @brief 请求重新分析当前选择的音频轨道。
-    void requestAnalyzeSelectedTrack();
+    /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
+    void requestAnalyzeSelectedTrack(bool autoMeasure = false);
+
+    /// @brief 请求自动测量当前选择的音频轨道。
+    void requestAutoMeasureSelectedTrack();
+
+    /// @brief 查找当前项目默认用于 BPM 自动测量的音频资源 ID。
+    /// @return 优先返回主音轨 ID，否则返回首个音频资源 ID；不存在时为空。
+    std::string defaultAudioTrackId() const;
 
     /// @brief 查找当前选中的音频资源。
     /// @return 成功时返回音频资源副本，否则返回空。
@@ -277,10 +296,21 @@ private:
     /// @param stopToken 线程停止令牌。
     /// @param track 待分析音频轨道，后台线程持有共享所有权。
     /// @param duration 音频时长，单位为秒。
+    /// @param autoMeasure 是否在频谱分析后继续执行自动 BPM/offset 测量。
     /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在
     /// UI/渲染热路径中运行。
     void analyzeTrack(std::stop_token                  stopToken,
-                      std::shared_ptr<ice::AudioTrack> track, double duration);
+                      std::shared_ptr<ice::AudioTrack> track, double duration,
+                      bool autoMeasure);
+
+    /// @brief 读取完整音轨并混合为单声道采样，供自动 BPM 检测使用。
+    /// @param stopToken 后台线程停止令牌。
+    /// @param track 待读取的音频轨道。
+    /// @return 成功时返回单声道采样，否则返回空。
+    /// @warning 后台耗时路径：会读取完整音频，只能由手动触发的分析任务调用。
+    std::optional<std::vector<float>> readMonoSamplesForAutoTiming(
+        std::stop_token                         stopToken,
+        const std::shared_ptr<ice::AudioTrack>& track) const;
 
     /// @brief 查找当前选中音频轨道的绝对路径。
     /// @return 成功时返回绝对路径，否则返回空。
