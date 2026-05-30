@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/VisualConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/ITextureLoader.h"
@@ -297,11 +298,13 @@ private:
     /// @param track 待分析音频轨道，后台线程持有共享所有权。
     /// @param duration 音频时长，单位为秒。
     /// @param autoMeasure 是否在频谱分析后继续执行自动 BPM/offset 测量。
+    /// @param spectrumProfile 计算时捕获的全局频谱精细度参数。
     /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在
     /// UI/渲染热路径中运行。
     void analyzeTrack(std::stop_token                  stopToken,
                       std::shared_ptr<ice::AudioTrack> track, double duration,
-                      bool autoMeasure);
+                      bool                          autoMeasure,
+                      Config::SpectrumDetailProfile spectrumProfile);
 
     /// @brief 读取完整音轨并混合为单声道采样，供自动 BPM 检测使用。
     /// @param stopToken 后台线程停止令牌。

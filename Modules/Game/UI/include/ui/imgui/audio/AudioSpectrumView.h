@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/VisualConfig.h"
 #include "ui/ITextureLoader.h"
 #include <atomic>
 #include <fftw3.h>
@@ -62,8 +63,17 @@ private:
         std::vector<double> gains;
         std::vector<double> qs;
     };
+    /// @brief 后台重新计算完整频谱缓存。
+    /// @param eq 计算时捕获的 EQ 设置。
+    /// @param maxFreq 最高显示频率。
+    /// @param logBias 对数频率映射偏置。
+    /// @param detailLevel 计算时捕获的频谱精细度枚举。
+    /// @param detailProfile 计算时捕获的频谱精细度参数。
+    /// @warning 后台耗时路径：执行完整音频 FFT 计算，不在 UI/渲染热路径运行。
     void backgroundRecalculate(const EQSettings& eq, float maxFreq,
-                               float logBias);
+                               float                         logBias,
+                               Config::SpectrumDetailLevel   detailLevel,
+                               Config::SpectrumDetailProfile detailProfile);
 
     /// @brief 构建 "Hot" 色图查找表 (256 级)
     void buildColormapLUT();
@@ -85,14 +95,30 @@ private:
     std::vector<double> m_cachedHeatmapL;
     std::vector<double> m_cachedHeatmapR;
 
-    /// @brief 缓存时间分辨率 (段/秒)，200 接近专业编辑器水平
-    double m_cacheSegmentsPerSecond{ 200.0 };
+    /// @brief 当前缓存时间分辨率，单位为段/秒。
+    double m_cacheSegmentsPerSecond{ 100.0 };
 
     /// @brief 缓存的总时间段数
     int m_cachedNumTotalSegments{ 0 };
 
-    /// @brief 频率 bin 数 (行) — 高精度，映射到 20Hz~20kHz 对数空间
-    int m_numFrequencyBins{ 256 };
+    /// @brief 当前频率 bin 数，映射到 20Hz~20kHz 对数空间。
+    int m_numFrequencyBins{ 128 };
+
+    /// @brief 当前已生成频谱纹理对应的全局精细度。
+    Config::SpectrumDetailLevel m_spectrumDetailLevel{
+        Config::SpectrumDetailLevel::Balanced
+    };
+
+    /// @brief 后台计算完成后等待主线程提交的精细度。
+    Config::SpectrumDetailLevel m_pendingSpectrumDetailLevel{
+        Config::SpectrumDetailLevel::Balanced
+    };
+
+    /// @brief 后台计算完成后等待主线程提交的频谱时间分辨率。
+    double m_pendingCacheSegmentsPerSecond{ 100.0 };
+
+    /// @brief 后台计算完成后等待主线程提交的频率 bin 数。
+    int m_pendingNumFrequencyBins{ 128 };
 
     // --- 异步计算状态 ---
 

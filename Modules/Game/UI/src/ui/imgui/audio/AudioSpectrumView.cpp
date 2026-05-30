@@ -54,8 +54,16 @@ private:
 AudioSpectrumView::AudioSpectrumView(const std::string& name)
     : IUIView(name), ITextureLoader(name)
 {
-    m_processBuffer = std::make_unique<ice::AudioBuffer>();
-    m_rawBuffer     = std::make_unique<ice::AudioBuffer>();
+    m_spectrumDetailLevel =
+        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
+    const auto profile = Config::spectrumDetailProfile(m_spectrumDetailLevel);
+    m_cacheSegmentsPerSecond        = profile.segmentsPerSecond;
+    m_numFrequencyBins              = profile.frequencyBins;
+    m_pendingSpectrumDetailLevel    = m_spectrumDetailLevel;
+    m_pendingCacheSegmentsPerSecond = m_cacheSegmentsPerSecond;
+    m_pendingNumFrequencyBins       = m_numFrequencyBins;
+    m_processBuffer                 = std::make_unique<ice::AudioBuffer>();
+    m_rawBuffer                     = std::make_unique<ice::AudioBuffer>();
     buildColormapLUT();
 }
 
@@ -126,6 +134,13 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         return;
     }
 
+    const auto configuredDetail =
+        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
+    if ( configuredDetail != m_spectrumDetailLevel &&
+         !m_isCalculating.load(std::memory_order_relaxed) ) {
+        startAsyncRecalculate();
+    }
+
     if ( m_isCalculating.load() ) {
         ImGui::OpenPopup("###SpectrumCalcModal");
     }
@@ -155,6 +170,9 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         if ( m_calcFinished.load() ) {
             m_calcFinished.store(false);
             m_isCalculating.store(false);
+            m_spectrumDetailLevel    = m_pendingSpectrumDetailLevel;
+            m_cacheSegmentsPerSecond = m_pendingCacheSegmentsPerSecond;
+            m_numFrequencyBins       = m_pendingNumFrequencyBins;
             // 计算完成，立即触发全量光栅化
             prepareFullGlobalTextures();
             ImGui::CloseCurrentPopup();
@@ -667,14 +685,24 @@ void AudioSpectrumView::startAsyncRecalculate()
     m_calcProgress.store(0.0f);
     m_calcFinished.store(false);
 
-    m_calcThread = std::make_unique<std::jthread>(
-        [this, eq = std::move(eq), maxFreq = m_maxFreq, logBias = m_logBias]() {
-            backgroundRecalculate(eq, maxFreq, logBias);
-        });
+    const auto detailLevel =
+        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
+    const auto detailProfile = Config::spectrumDetailProfile(detailLevel);
+
+    m_calcThread = std::make_unique<std::jthread>([this,
+                                                   eq      = std::move(eq),
+                                                   maxFreq = m_maxFreq,
+                                                   logBias = m_logBias,
+                                                   detailLevel,
+                                                   detailProfile]() {
+        backgroundRecalculate(eq, maxFreq, logBias, detailLevel, detailProfile);
+    });
 }
 
-void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
-                                              float maxFreq, float logBias)
+void AudioSpectrumView::backgroundRecalculate(
+    const EQSettings& eq, float maxFreq, float logBias,
+    Config::SpectrumDetailLevel   detailLevel,
+    Config::SpectrumDetailProfile detailProfile)
 {
     auto& audioManager = Audio::AudioManager::instance();
     auto  track        = audioManager.getBGMTrack();
@@ -683,15 +711,15 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
         return;
     }
 
-    double totalTime  = audioManager.getTotalTime();
-    double sampleRate = ice::ICEConfig::internal_format.samplerate;
-    int    numTotalSegments =
-        static_cast<int>(totalTime * m_cacheSegmentsPerSecond) + 1;
+    double       totalTime         = audioManager.getTotalTime();
+    double       sampleRate        = ice::ICEConfig::internal_format.samplerate;
+    const double segmentsPerSecond = detailProfile.segmentsPerSecond;
+    const int    frequencyBins     = detailProfile.frequencyBins;
+    int numTotalSegments = static_cast<int>(totalTime * segmentsPerSecond) + 1;
     uint16_t numChannels = ice::ICEConfig::internal_format.channels;
 
     const int    fftSize = 2048;
-    const size_t hopSize =
-        static_cast<size_t>(sampleRate / m_cacheSegmentsPerSecond);
+    const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 
     unsigned int hwThreads = std::thread::hardware_concurrency();
     unsigned int numWorkers =
@@ -702,7 +730,7 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
         "maxFreq: {}, logBias: {}",
         numWorkers,
         numTotalSegments,
-        m_numFrequencyBins,
+        frequencyBins,
         maxFreq,
         logBias);
 
@@ -712,9 +740,9 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
     }
 
     std::vector<double> heatmapL(
-        static_cast<size_t>(m_numFrequencyBins) * numTotalSegments, -100.0);
+        static_cast<size_t>(frequencyBins) * numTotalSegments, -100.0);
     std::vector<double> heatmapR(
-        static_cast<size_t>(m_numFrequencyBins) * numTotalSegments, -100.0);
+        static_cast<size_t>(frequencyBins) * numTotalSegments, -100.0);
 
     std::atomic<int> completedSegments{ 0 };
     int              totalWork = numTotalSegments * (numChannels > 1 ? 2 : 1);
@@ -776,7 +804,7 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
             double fRange     = fmax - fmin;
             double expKMinus1 = std::exp(k) - 1.0;
 
-            for ( int b = 0; b < m_numFrequencyBins; ++b ) {
+            for ( int b = 0; b < frequencyBins; ++b ) {
                 auto getFreq = [&](double progress) {
                     if ( std::abs(k) < 1e-4 ) {
                         return fmin + fRange * progress;
@@ -785,8 +813,8 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
                            fRange * (std::exp(k * progress) - 1.0) / expKMinus1;
                 };
 
-                double freqStart = getFreq((double)b / m_numFrequencyBins);
-                double freqEnd = getFreq((double)(b + 1) / m_numFrequencyBins);
+                double freqStart = getFreq((double)b / frequencyBins);
+                double freqEnd   = getFreq((double)(b + 1) / frequencyBins);
                 int bStart = static_cast<int>(freqStart * fftSize / sampleRate);
                 int bEnd =
                     std::min(static_cast<int>(freqEnd * fftSize / sampleRate),
@@ -844,9 +872,12 @@ void AudioSpectrumView::backgroundRecalculate(const EQSettings& eq,
         heatmapR = heatmapL;
     }
 
-    m_cachedHeatmapL         = std::move(heatmapL);
-    m_cachedHeatmapR         = std::move(heatmapR);
-    m_cachedNumTotalSegments = numTotalSegments;
+    m_cachedHeatmapL                = std::move(heatmapL);
+    m_cachedHeatmapR                = std::move(heatmapR);
+    m_cachedNumTotalSegments        = numTotalSegments;
+    m_pendingSpectrumDetailLevel    = detailLevel;
+    m_pendingCacheSegmentsPerSecond = segmentsPerSecond;
+    m_pendingNumFrequencyBins       = frequencyBins;
 
     m_calcProgress.store(1.0f);
     m_calcFinished.store(true);

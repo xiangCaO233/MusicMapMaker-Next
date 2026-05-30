@@ -16,8 +16,11 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <nfd.h>
+#include <string>
 
 namespace MMM::UI
 {
@@ -62,6 +65,7 @@ void SettingsView::drawVisualSettings()
         TR_CACHE("ui.settings.visual.timeline_zoom").data(),
         TR_CACHE("ui.settings.visual.linear_scroll").data(),
         TR_CACHE("ui.settings.visual.snap_threshold").data(),
+        TR_CACHE("ui.settings.visual.spectrum_detail").data(),
         TR_CACHE("ui.settings.visual.visual_offset").data()
     };
     float maxLabelW = 0;
@@ -512,6 +516,86 @@ void SettingsView::drawVisualSettings()
                                                          48.0f,
                                                          "%.1f px");
                        });
+    }
+
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.visual.spectrum").data(), true) ) {
+        const std::array<Config::SpectrumDetailLevel, 6> detailLevels = {
+            Config::SpectrumDetailLevel::Performance,
+            Config::SpectrumDetailLevel::Balanced,
+            Config::SpectrumDetailLevel::Fine,
+            Config::SpectrumDetailLevel::Ultra,
+            Config::SpectrumDetailLevel::Extreme,
+            Config::SpectrumDetailLevel::Experimental
+        };
+        const std::array<const char*, 6> detailNames = {
+            TR_CACHE("ui.settings.visual.spectrum_detail.performance").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.balanced").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.fine").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.ultra").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.extreme").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail.experimental").data()
+        };
+        auto bytesToMiB = [](std::uint64_t bytes) {
+            return static_cast<double>(bytes) / (1024.0 * 1024.0);
+        };
+        auto makeDetailLabel = [&](Config::SpectrumDetailLevel level,
+                                   const char*                 name) {
+            const auto   profile   = Config::spectrumDetailProfile(level);
+            const double stereoMiB = bytesToMiB(
+                Config::estimateSpectrumTextureBytesPerMinute(level, 2));
+            const double monoMiB = bytesToMiB(
+                Config::estimateSpectrumTextureBytesPerMinute(level, 1));
+            return TR_FMT("ui.settings.visual.spectrum_detail.option",
+                          name,
+                          profile.segmentsPerSecond,
+                          profile.frequencyBins,
+                          stereoMiB,
+                          monoMiB);
+        };
+
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.spectrum_detail").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int currentIndex = 1;
+                for ( size_t i = 0; i < detailLevels.size(); ++i ) {
+                    if ( visual.spectrumDetailLevel == detailLevels[i] ) {
+                        currentIndex = static_cast<int>(i);
+                        break;
+                    }
+                }
+
+                std::array<std::string, 6> labels;
+                for ( size_t i = 0; i < detailLevels.size(); ++i ) {
+                    labels[i] =
+                        makeDetailLabel(detailLevels[i], detailNames[i]);
+                }
+
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##SpectrumDetail",
+                                       labels[currentIndex].c_str()) ) {
+                    for ( size_t i = 0; i < detailLevels.size(); ++i ) {
+                        const bool selected =
+                            currentIndex == static_cast<int>(i);
+                        if ( ImGui::Selectable(labels[i].c_str(), selected) ) {
+                            visual.spectrumDetailLevel = detailLevels[i];
+                            changed                    = true;
+                        }
+                        if ( selected ) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.visual.spectrum_detail.tooltip").data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
     }
 
     if ( auto* sec =

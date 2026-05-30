@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <nlohmann/json.hpp>
 
 namespace MMM::Config
@@ -19,6 +20,66 @@ NLOHMANN_JSON_SERIALIZE_ENUM(BackgroundFillMode,
                                    "AspectFill" },
                                  { BackgroundFillMode::Center, "Center" },
                              })
+
+/// @brief 频谱图生成精细度。
+enum class SpectrumDetailLevel {
+    Performance,
+    Balanced,
+    Fine,
+    Ultra,
+    Extreme,
+    Experimental,
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(
+    SpectrumDetailLevel,
+    {
+        { SpectrumDetailLevel::Performance, "Performance" },
+        { SpectrumDetailLevel::Balanced, "Balanced" },
+        { SpectrumDetailLevel::Fine, "Fine" },
+        { SpectrumDetailLevel::Ultra, "Ultra" },
+        { SpectrumDetailLevel::Extreme, "Extreme" },
+        { SpectrumDetailLevel::Experimental, "Experimental" },
+    })
+
+/// @brief 频谱图精细度对应的生成参数。
+struct SpectrumDetailProfile {
+    /// @brief 时间分辨率，单位为段/秒。
+    double segmentsPerSecond{ 100.0 };
+
+    /// @brief 频率方向分箱数。
+    int frequencyBins{ 128 };
+};
+
+/// @brief 获取频谱图精细度对应的生成参数。
+/// @param level 频谱图精细度。
+/// @return 频谱图生成参数。
+inline SpectrumDetailProfile spectrumDetailProfile(SpectrumDetailLevel level)
+{
+    switch ( level ) {
+    case SpectrumDetailLevel::Performance: return { 64.0, 96 };
+    case SpectrumDetailLevel::Balanced: return { 100.0, 128 };
+    case SpectrumDetailLevel::Fine: return { 200.0, 256 };
+    case SpectrumDetailLevel::Ultra: return { 400.0, 512 };
+    case SpectrumDetailLevel::Extreme: return { 800.0, 1024 };
+    case SpectrumDetailLevel::Experimental: return { 1600.0, 2048 };
+    }
+    return { 100.0, 128 };
+}
+
+/// @brief 估算指定频谱图精细度每分钟需要的 RGBA8 纹理显存。
+/// @param level 频谱图精细度。
+/// @param channelCount 频谱图纹理通道数量。
+/// @return 每分钟纹理显存字节数，不含驱动对齐和描述符开销。
+inline std::uint64_t estimateSpectrumTextureBytesPerMinute(
+    SpectrumDetailLevel level, std::uint32_t channelCount)
+{
+    const auto profile = spectrumDetailProfile(level);
+    return static_cast<std::uint64_t>(
+        profile.segmentsPerSecond * 60.0 *
+        static_cast<double>(profile.frequencyBins) * 4.0 *
+        static_cast<double>(channelCount));
+}
 
 struct TrackLayout {
     /// @brief 左侧分隔比例位置
@@ -163,6 +224,8 @@ struct VisualConfig {
     bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
     bool drawBeatLines{ true };
+    /// @brief 全局频谱图生成精细度。
+    SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画
     bool enableHitEffects{ true };
     /// @brief 是否绘制音符悬浮拾取包围盒，主要用于调试交互命中区域。
@@ -187,6 +250,7 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
         { "beatLineAlpha", c.beatLineAlpha },
         { "drawBeatLinesBeforeFirstTiming", c.drawBeatLinesBeforeFirstTiming },
         { "drawBeatLines", c.drawBeatLines },
+        { "spectrumDetailLevel", c.spectrumDetailLevel },
         { "enableHitEffects", c.enableHitEffects },
         { "debugDrawHitboxes", c.debugDrawHitboxes }
     };
@@ -210,6 +274,8 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.drawBeatLines             = j.value("drawBeatLines", true);
     c.drawBeatLinesBeforeFirstTiming =
         j.value("drawBeatLinesBeforeFirstTiming", true);
+    c.spectrumDetailLevel =
+        j.value("spectrumDetailLevel", SpectrumDetailLevel::Balanced);
     c.enableHitEffects  = j.value("enableHitEffects", true);
     c.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
 }

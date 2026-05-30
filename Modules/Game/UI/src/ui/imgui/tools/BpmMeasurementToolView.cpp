@@ -1945,10 +1945,17 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
     m_analysisFinished.store(false, std::memory_order_release);
     m_analysisRunning.store(true, std::memory_order_relaxed);
 
+    const auto spectrumProfile = Config::spectrumDetailProfile(
+        Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel);
+
     m_analysisThread = std::make_unique<std::jthread>(
-        [this, track = std::move(track), duration = m_duration, autoMeasure](
-            std::stop_token stopToken) {
-            analyzeTrack(stopToken, track, duration, autoMeasure);
+        [this,
+         track    = std::move(track),
+         duration = m_duration,
+         autoMeasure,
+         spectrumProfile](std::stop_token stopToken) {
+            analyzeTrack(
+                stopToken, track, duration, autoMeasure, spectrumProfile);
         });
 }
 
@@ -2027,7 +2034,8 @@ void BpmMeasurementToolView::clearAnalysisData()
 /// @warning 后台耗时路径：执行完整音频解码和 FFT；不在 UI/渲染热路径中运行。
 void BpmMeasurementToolView::analyzeTrack(
     std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
-    double duration, bool autoMeasure)
+    double duration, bool autoMeasure,
+    Config::SpectrumDetailProfile spectrumProfile)
 {
     if ( !track ) {
         m_analysisRunning.store(false, std::memory_order_relaxed);
@@ -2044,12 +2052,13 @@ void BpmMeasurementToolView::analyzeTrack(
 
     const int wavePointCount =
         std::max(2, static_cast<int>(duration * m_wavePointsPerSecond) + 1);
-    const int spectrumSegmentCount = std::max(
-        1, static_cast<int>(duration * m_spectrumSegmentsPerSecond) + 1);
-    const int    spectrumBinCount = 128;
+    const double spectrumSegmentsPerSecond = spectrumProfile.segmentsPerSecond;
+    const int    spectrumSegmentCount =
+        std::max(1, static_cast<int>(duration * spectrumSegmentsPerSecond) + 1);
+    const int    spectrumBinCount = spectrumProfile.frequencyBins;
     const int    fftSize          = 2048;
     const size_t hopSize          = std::max<size_t>(
-        1, static_cast<size_t>(sampleRate / m_spectrumSegmentsPerSecond));
+        1, static_cast<size_t>(sampleRate / spectrumSegmentsPerSecond));
     const uint16_t channelCount = ice::ICEConfig::internal_format.channels;
     const int      totalWork =
         wavePointCount + spectrumSegmentCount + (autoMeasure ? 1 : 0);
@@ -2057,7 +2066,7 @@ void BpmMeasurementToolView::analyzeTrack(
 
     AnalysisResult result;
     result.duration                  = duration;
-    result.spectrumSegmentsPerSecond = m_spectrumSegmentsPerSecond;
+    result.spectrumSegmentsPerSecond = spectrumSegmentsPerSecond;
     result.spectrumSegmentCount      = spectrumSegmentCount;
     result.spectrumBinCount          = spectrumBinCount;
     result.autoTimingRequested       = autoMeasure;
