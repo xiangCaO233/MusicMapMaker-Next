@@ -48,6 +48,16 @@ public:
     /// @brief 获取共享上下文的可变引用
     SessionContext& getContextMutable() { return *m_ctx; }
 
+    /// @brief 判断会话是否存在等待逻辑线程消费的指令。
+    /// @warning 逻辑热路径：后台 Session
+    /// 限频判断会调用；只读取无锁队列近似长度。
+    bool hasPendingCommands() const;
+
+    /// @brief 判断会话是否需要跳过后台限频并立即更新。
+    /// @warning 逻辑热路径：每个 Session update
+    /// 调度前调用；只读取会话热状态和队列近似长度。
+    bool needsRealtimeUpdate() const;
+
 private:
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true

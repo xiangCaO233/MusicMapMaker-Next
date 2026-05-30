@@ -28,6 +28,12 @@ using FrameLimitClock = std::chrono::steady_clock;
 /// @brief 限频粗睡眠预留量，给操作系统调度精度留出少量余量。
 constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
 
+/// @brief 后台非活跃谱面画布的最高快照更新频率下限。
+constexpr int BACKGROUND_SESSION_MIN_UPS = 60;
+
+/// @brief 后台非活跃谱面画布的最高快照更新频率上限。
+constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
+
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
 /// @warning 逻辑热路径等待：UPS 提前到达目标间隔时执行；只能包含 sleep
 /// 和时间查询，禁止加入锁、分配或业务逻辑。
@@ -47,6 +53,17 @@ void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
             return;
         }
     }
+}
+
+/// @brief 根据设备刷新率计算后台谱面画布的快照更新间隔。
+/// @warning 逻辑热路径：每 update 调用；只做常量级整数夹取和 duration 转换。
+FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
+{
+    int backgroundUps = std::clamp(
+        refreshRate, BACKGROUND_SESSION_MIN_UPS, BACKGROUND_SESSION_MAX_UPS);
+    return std::chrono::duration_cast<FrameLimitClock::duration>(
+        std::chrono::duration<double>(1.0 /
+                                      static_cast<double>(backgroundUps)));
 }
 
 /// @brief 根据 Session 上下文计算软件光标 BPM 同步烟雾寿命。
@@ -1441,8 +1458,48 @@ void EditorEngine::loop()
         m_sessionRegistry.fillIndexedSessionSnapshot(m_sessionUpdateSnapshot);
 
         if ( !m_sessionUpdateSnapshot.empty() ) {
+            int32_t activeIndex     = m_sessionRegistry.activeIndex();
+            int32_t maxSessionIndex = -1;
+            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+                maxSessionIndex = std::max(maxSessionIndex, entry.index);
+            }
+            if ( maxSessionIndex >= 0 &&
+                 m_backgroundSessionUpdateTimes.size() <=
+                     static_cast<size_t>(maxSessionIndex) ) {
+                m_backgroundSessionUpdateTimes.resize(
+                    static_cast<size_t>(maxSessionIndex) + 1);
+            }
+
+            const auto backgroundInterval =
+                backgroundSessionUpdateInterval(refreshRate);
             for ( auto& entry : m_sessionUpdateSnapshot ) {
+                bool shouldUpdateSession = entry.index == activeIndex;
+                if ( !shouldUpdateSession ) {
+                    const bool needsRealtimeUpdate =
+                        entry.session->needsRealtimeUpdate();
+                    if ( needsRealtimeUpdate ) {
+                        shouldUpdateSession = true;
+                    } else {
+                        auto& lastBackgroundUpdate =
+                            m_backgroundSessionUpdateTimes[static_cast<size_t>(
+                                entry.index)];
+                        shouldUpdateSession =
+                            lastBackgroundUpdate ==
+                                FrameLimitClock::time_point{} ||
+                            currentTime - lastBackgroundUpdate >=
+                                backgroundInterval;
+                    }
+                }
+
+                if ( !shouldUpdateSession ) {
+                    continue;
+                }
+
                 entry.session->update(dt, m_editorConfig);
+                if ( entry.index != activeIndex ) {
+                    m_backgroundSessionUpdateTimes[static_cast<size_t>(
+                        entry.index)] = currentTime;
+                }
             }
             if ( m_pendingWorkspaceActiveIndex >= 0 ) {
                 int32_t activeIndex           = m_pendingWorkspaceActiveIndex;

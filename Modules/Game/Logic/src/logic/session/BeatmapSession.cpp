@@ -13,6 +13,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <chrono>
+#include <cmath>
 
 static void markScrollCacheDirty(entt::registry& reg, entt::entity)
 {
@@ -83,6 +84,21 @@ BeatmapSession::~BeatmapSession() = default;
 void BeatmapSession::pushCommand(LogicCommand&& cmd)
 {
     m_commandQueue.enqueue(std::move(cmd));
+}
+
+/// @brief 判断会话是否存在等待逻辑线程消费的指令。
+bool BeatmapSession::hasPendingCommands() const
+{
+    return m_commandQueue.size_approx() > 0;
+}
+
+/// @brief 判断会话是否需要跳过后台限频并立即更新。
+bool BeatmapSession::needsRealtimeUpdate() const
+{
+    return hasPendingCommands() || m_ctx->isPlaying || m_ctx->isDragging ||
+           m_ctx->isSelecting || m_ctx->brushState.isActive ||
+           m_ctx->eraserState.isActive ||
+           std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
 }
 
 /// @brief 会话逻辑每帧更新。

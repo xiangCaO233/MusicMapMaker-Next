@@ -9,6 +9,7 @@
 #include "logic/SessionRegistry.h"
 #include "logic/session/context/SessionContext.h"
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -368,6 +369,13 @@ private:
     /// @warning 逻辑热路径/共享指针：每 update 复用容量以避免 vector
     /// 分配；元素持有 shared_ptr 是为了保证锁外 update 生命周期安全。
     std::vector<SessionSnapshotEntry> m_sessionUpdateSnapshot;
+
+    /// @brief 非活跃 Session 最近一次生成渲染快照的时间点，按 Session
+    /// 索引存储。
+    /// @warning 逻辑热路径：每 update
+    /// 读取和低频写入；用于限制后台画布快照频率。
+    std::vector<std::chrono::steady_clock::time_point>
+        m_backgroundSessionUpdateTimes;
 
     /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
     EditorClipboard m_clipboard;
