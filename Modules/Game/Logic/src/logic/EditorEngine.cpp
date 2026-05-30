@@ -1338,9 +1338,11 @@ void EditorEngine::saveProject()
 /// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
 void EditorEngine::loop()
 {
-    auto lastTime      = FrameLimitClock::now();
-    m_lastUpsTime      = lastTime;
-    m_logicUpdateCount = 0;
+    auto   lastTime     = FrameLimitClock::now();
+    auto   nextDeadline = lastTime;
+    double lastTargetDt = 0.0;
+    m_lastUpsTime       = lastTime;
+    m_logicUpdateCount  = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
     /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
     auto& projectController = ProjectController::instance();
@@ -1370,21 +1372,36 @@ void EditorEngine::loop()
         default: targetDt = 0.0; break;
         }
 
-        auto                          currentTime = FrameLimitClock::now();
-        std::chrono::duration<double> passed      = currentTime - lastTime;
+        auto currentTime = FrameLimitClock::now();
 
-        // 如果设置了帧率限制，并且距离上一帧还没有达到目标时间，就主动让出 CPU
-        if ( passed.count() < targetDt ) {
-            auto frameDeadline =
-                lastTime +
+        if ( targetDt > 0.0 ) {
+            const auto targetDuration =
                 std::chrono::duration_cast<FrameLimitClock::duration>(
                     std::chrono::duration<double>(targetDt));
-            sleepUntilFrameDeadline(frameDeadline);
-            continue;
+
+            if ( targetDt != lastTargetDt ) {
+                nextDeadline = currentTime + targetDuration;
+                lastTargetDt = targetDt;
+            }
+
+            if ( currentTime < nextDeadline ) {
+                sleepUntilFrameDeadline(nextDeadline);
+                currentTime = FrameLimitClock::now();
+            }
+
+            if ( currentTime - nextDeadline > targetDuration ) {
+                nextDeadline = currentTime + targetDuration;
+            } else {
+                nextDeadline += targetDuration;
+            }
+        } else {
+            nextDeadline = currentTime;
+            lastTargetDt = targetDt;
         }
 
-        lastTime  = currentTime;
-        double dt = passed.count();
+        std::chrono::duration<double> passed = currentTime - lastTime;
+        lastTime                             = currentTime;
+        double dt                            = passed.count();
 
         // 统计逻辑线程实时刷新率 (UPS)
         m_logicUpdateCount++;
