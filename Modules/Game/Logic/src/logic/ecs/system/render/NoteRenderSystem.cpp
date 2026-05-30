@@ -566,7 +566,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
     }
 
-    // 5. 绘制 Timing 事件为普通 Note 形状
+    // 5. 绘制 Timing 事件为普通 Note 形状。
     float noteW = lineW;
     float noteH = noteW * 0.36f;
     if ( auto uvIt =
