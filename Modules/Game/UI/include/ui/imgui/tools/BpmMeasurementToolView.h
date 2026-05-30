@@ -351,6 +351,12 @@ private:
     /// @brief 待上传的频谱纹理分块数据。
     std::vector<TextureChunkData> m_pendingSpectrumChunks;
 
+    /// @brief 频谱纹理分块上传是否已经进入进行中状态。
+    bool m_spectrumTextureReloadStarted{ false };
+
+    /// @brief 下一块待上传的频谱纹理分块索引。
+    size_t m_nextSpectrumChunkUploadIndex{ 0 };
+
     /// @brief 当前音频总时长，单位为秒。
     double m_duration{ 0.0 };
 

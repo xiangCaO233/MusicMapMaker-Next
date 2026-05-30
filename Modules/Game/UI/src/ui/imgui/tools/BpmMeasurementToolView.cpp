@@ -388,13 +388,27 @@ void BpmMeasurementToolView::reloadTextures(vk::PhysicalDevice& physicalDevice,
         return;
     }
 
-    (void)logicalDevice.waitIdle();
-    m_spectrumTextures.clear();
+    if ( !m_spectrumTextureReloadStarted ) {
+        (void)logicalDevice.waitIdle();
+        m_spectrumTextures.clear();
+        m_spectrumTextures.reserve(m_pendingSpectrumChunks.size());
+        m_nextSpectrumChunkUploadIndex = 0;
+        m_spectrumTextureReloadStarted = true;
+    }
 
-    for ( const auto& chunk : m_pendingSpectrumChunks ) {
+    constexpr size_t MAX_UPLOAD_CHUNKS_PER_FRAME = 1;
+    size_t           uploadedThisFrame           = 0;
+    while ( m_nextSpectrumChunkUploadIndex < m_pendingSpectrumChunks.size() &&
+            uploadedThisFrame < MAX_UPLOAD_CHUNKS_PER_FRAME ) {
+        const auto& chunk =
+            m_pendingSpectrumChunks[m_nextSpectrumChunkUploadIndex];
+        ++m_nextSpectrumChunkUploadIndex;
+        ++uploadedThisFrame;
+
         if ( chunk.pixels.empty() || chunk.width == 0 || chunk.height == 0 ) {
             continue;
         }
+
         m_spectrumTextures.push_back(
             std::make_unique<Graphic::VKTexture>(chunk.pixels.data(),
                                                  chunk.width,
@@ -405,8 +419,12 @@ void BpmMeasurementToolView::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                                  queue));
     }
 
-    m_pendingSpectrumChunks.clear();
-    m_texturesNeedReload = false;
+    if ( m_nextSpectrumChunkUploadIndex >= m_pendingSpectrumChunks.size() ) {
+        m_pendingSpectrumChunks.clear();
+        m_nextSpectrumChunkUploadIndex = 0;
+        m_spectrumTextureReloadStarted = false;
+        m_texturesNeedReload           = false;
+    }
 }
 
 /// @brief 尝试消费后台分析结果。
@@ -432,15 +450,17 @@ void BpmMeasurementToolView::consumePendingAnalysis()
 
     m_waveTimes = std::move(result->waveTimes);
     m_waveCanvasTimes.clear();
-    m_waveCanvasTimesOffset     = std::numeric_limits<double>::quiet_NaN();
-    m_waveMin                   = std::move(result->waveMin);
-    m_waveMax                   = std::move(result->waveMax);
-    m_pendingSpectrumChunks     = std::move(result->spectrumChunks);
-    m_duration                  = result->duration;
-    m_spectrumSegmentsPerSecond = result->spectrumSegmentsPerSecond;
-    m_spectrumSegmentCount      = result->spectrumSegmentCount;
-    m_spectrumBinCount          = result->spectrumBinCount;
-    m_texturesNeedReload        = true;
+    m_waveCanvasTimesOffset        = std::numeric_limits<double>::quiet_NaN();
+    m_waveMin                      = std::move(result->waveMin);
+    m_waveMax                      = std::move(result->waveMax);
+    m_pendingSpectrumChunks        = std::move(result->spectrumChunks);
+    m_duration                     = result->duration;
+    m_spectrumSegmentsPerSecond    = result->spectrumSegmentsPerSecond;
+    m_spectrumSegmentCount         = result->spectrumSegmentCount;
+    m_spectrumBinCount             = result->spectrumBinCount;
+    m_nextSpectrumChunkUploadIndex = 0;
+    m_spectrumTextureReloadStarted = false;
+    m_texturesNeedReload           = true;
 
     if ( result->autoTimingRequested ) {
         if ( result->autoTimingResult ) {
@@ -1025,15 +1045,40 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
 
         if ( !m_waveTimes.empty() ) {
             updateWaveCanvasTimes(0.0);
-            const int count = static_cast<int>(std::min<size_t>(
-                m_waveCanvasTimes.size(),
-                static_cast<size_t>(std::numeric_limits<int>::max())));
-            ImPlot::PlotShaded("##WaveEnvelope",
-                               m_waveCanvasTimes.data(),
-                               m_waveMin.data(),
-                               m_waveMax.data(),
-                               count,
-                               ImPlotSpec(ImPlotProp_FillAlpha, 0.55f));
+            const size_t availableCount = std::min(
+                { m_waveCanvasTimes.size(),
+                  m_waveMin.size(),
+                  m_waveMax.size(),
+                  static_cast<size_t>(std::numeric_limits<int>::max()) });
+            auto beginIt = std::lower_bound(
+                m_waveCanvasTimes.begin(),
+                m_waveCanvasTimes.begin() +
+                    static_cast<std::ptrdiff_t>(availableCount),
+                viewStart);
+            auto endIt = std::upper_bound(
+                m_waveCanvasTimes.begin(),
+                m_waveCanvasTimes.begin() +
+                    static_cast<std::ptrdiff_t>(availableCount),
+                viewEnd);
+            if ( beginIt != m_waveCanvasTimes.begin() ) {
+                --beginIt;
+            }
+            if ( endIt != m_waveCanvasTimes.begin() +
+                              static_cast<std::ptrdiff_t>(availableCount) ) {
+                ++endIt;
+            }
+
+            const size_t firstVisibleIndex =
+                static_cast<size_t>(beginIt - m_waveCanvasTimes.begin());
+            const int visibleCount = static_cast<int>(endIt - beginIt);
+            if ( visibleCount >= 2 ) {
+                ImPlot::PlotShaded("##WaveEnvelope",
+                                   m_waveCanvasTimes.data() + firstVisibleIndex,
+                                   m_waveMin.data() + firstVisibleIndex,
+                                   m_waveMax.data() + firstVisibleIndex,
+                                   visibleCount,
+                                   ImPlotSpec(ImPlotProp_FillAlpha, 0.55f));
+            }
         }
 
         ImPlot::PushPlotClipRect();
@@ -1088,16 +1133,7 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->AddRectFilled(imageMin, imageMax, IM_COL32(12, 14, 18, 255));
 
-    ImGui::BeginGroup();
     if ( !m_texturesNeedReload && !m_spectrumTextures.empty() ) {
-        if ( pixelStart < 0.0 ) {
-            const float emptyW = std::min(
-                size.x,
-                static_cast<float>((0.0 - pixelStart) / pixelWidth * size.x));
-            ImGui::Dummy(ImVec2(emptyW, size.y));
-            ImGui::SameLine(0.0f, 0.0f);
-        }
-
         for ( size_t i = 0; i < m_spectrumTextures.size(); ++i ) {
             const auto&  texture = m_spectrumTextures[i];
             const double texStart =
@@ -1114,22 +1150,24 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
                                                    texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
                                                    texture->width());
-            const float  screenW = static_cast<float>(
-                (intersectEnd - intersectStart) / pixelWidth * size.x);
+            const float  screenX0 =
+                imageMin.x + static_cast<float>((intersectStart - pixelStart) /
+                                                pixelWidth * size.x);
+            const float screenX1 =
+                imageMin.x + static_cast<float>((intersectEnd - pixelStart) /
+                                                pixelWidth * size.x);
+            if ( screenX1 <= screenX0 ) {
+                continue;
+            }
 
-            ImGui::Image(texture->getImTextureID(),
-                         ImVec2(screenW, size.y),
-                         ImVec2(uv0x, 0.0f),
-                         ImVec2(uv1x, 1.0f));
-            ImGui::SameLine(0.0f, 0.0f);
+            drawList->AddImage(texture->getImTextureID(),
+                               ImVec2(screenX0, imageMin.y),
+                               ImVec2(screenX1, imageMax.y),
+                               ImVec2(uv0x, 0.0f),
+                               ImVec2(uv1x, 1.0f));
         }
-    } else {
-        ImGui::Dummy(size);
     }
-    ImGui::EndGroup();
 
-    imageMin = ImGui::GetItemRectMin();
-    imageMax = ImGui::GetItemRectMax();
     drawBeatSubdivisionLines(*drawList, imageMin, imageMax, viewStart, viewEnd);
     drawBeatMarkers(*drawList, imageMin, imageMax, viewStart, viewEnd);
     drawPlaybackCursor(*drawList, imageMin, imageMax, viewStart, viewEnd);
@@ -1141,7 +1179,8 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
         "##BpmMeasureSpectrumHover",
         ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y));
     handleTimelineNavigation(imageMin, imageMax, viewStart, viewEnd);
-    if ( ImGui::IsItemHovered() ) {
+    const bool isSpectrumHovered = ImGui::IsItemHovered();
+    if ( isSpectrumHovered ) {
         const ImVec2 mousePos = ImGui::GetMousePos();
         const double relX     = std::clamp<double>(
             (mousePos.x - imageMin.x) / std::max(1.0f, imageMax.x - imageMin.x),
@@ -1965,11 +2004,13 @@ void BpmMeasurementToolView::clearAnalysisData()
     m_waveMin.clear();
     m_waveMax.clear();
     m_pendingSpectrumChunks.clear();
-    m_texturesNeedReload   = !m_spectrumTextures.empty();
-    m_spectrumSegmentCount = 0;
-    m_spectrumBinCount     = 0;
-    m_analysisProgress     = 0.0f;
-    m_analysisFinished     = false;
+    m_nextSpectrumChunkUploadIndex = 0;
+    m_spectrumTextureReloadStarted = false;
+    m_texturesNeedReload           = !m_spectrumTextures.empty();
+    m_spectrumSegmentCount         = 0;
+    m_spectrumBinCount             = 0;
+    m_analysisProgress             = 0.0f;
+    m_analysisFinished             = false;
 }
 
 /// @brief 后台分析线程执行体。
