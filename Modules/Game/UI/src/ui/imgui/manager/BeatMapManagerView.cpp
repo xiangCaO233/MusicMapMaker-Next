@@ -124,7 +124,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+    Utils::pushFixedButtonStyleVars();
 
     ImGui::SetCursorScreenPos(buttonPos);
     ImDrawList* dl    = ImGui::GetWindowDrawList();
@@ -148,7 +148,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
         if ( wizard ) wizard->open();
     }
 
-    ImGui::PopStyleVar();
+    Utils::popFixedButtonStyleVars();
     ImGui::PopStyleColor(4);
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("%s", TR_CACHE("ui.file.new_map").data());

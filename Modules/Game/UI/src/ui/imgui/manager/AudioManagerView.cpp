@@ -119,10 +119,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::PushStyleColor(
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
+                Utils::pushFixedButtonStyleVars();
                 if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
                                    ImVec2(32, 30)) ) {
                     onMuteChange(!muted);
                 }
+                Utils::popFixedButtonStyleVars();
                 if ( muted ) {
                     ImGui::PopStyleColor();
                 }
@@ -484,7 +486,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                       ImVec4(1, 1, 1, 0.1f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                                       ImVec4(1, 1, 1, 0.2f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                Utils::pushFixedButtonStyleVars();
 
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImDrawList* dl    = ImGui::GetWindowDrawList();
@@ -535,7 +537,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 }
 
-                ImGui::PopStyleVar();
+                Utils::popFixedButtonStyleVars();
                 ImGui::PopStyleColor(4);
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip(

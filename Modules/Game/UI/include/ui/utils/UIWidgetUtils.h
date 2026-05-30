@@ -153,11 +153,24 @@ static bool renderScrollingTreeNode(const std::string& id,
 
 enum class TooltipDir { Left, Right };
 
-/**
- * @brief 绘制标准的、带有审美风格的 Tooltip。
- * @param text 文本内容
- * @param dir 弹出方向 (相对于当前 Item)
- */
+/// @brief 压入固定尺寸按钮的样式隔离变量，避免主题文字按钮内边距影响图标居中。
+/// @warning 每帧 UI 绘制路径调用，只允许保留轻量 ImGui 样式栈操作。
+static void pushFixedButtonStyleVars()
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+}
+
+/// @brief 弹出 pushFixedButtonStyleVars 压入的固定尺寸按钮样式变量。
+/// @warning 每帧 UI 绘制路径调用，只允许保留轻量 ImGui 样式栈操作。
+static void popFixedButtonStyleVars()
+{
+    ImGui::PopStyleVar(2);
+}
+
+/// @brief 绘制标准的、带有审美风格的 Tooltip。
+/// @param text 文本内容。
+/// @param dir 弹出方向，相对于当前 Item。
 static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
 {
     if ( ImGui::IsItemHovered() ) {

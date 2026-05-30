@@ -55,7 +55,7 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+    Utils::pushFixedButtonStyleVars();
 
     auto pushBtnStyle = [&](bool active) {
         if ( active ) {
@@ -314,8 +314,9 @@ void ToolbarView::update(UIManager* sourceManager)
         if ( pushedIconFont ) ImGui::PopFont();
     }
     ImGui::End();
-    ImGui::PopStyleVar(5);
     ImGui::PopStyleVar(3);  // WindowPadding, WindowBorderSize, WindowRounding
+    Utils::popFixedButtonStyleVars();
+    ImGui::PopStyleVar(4);
 
     // --- 绘制分拍数量设置悬浮窗 ---
     if ( m_showDivisorPopup ) {

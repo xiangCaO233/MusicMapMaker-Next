@@ -13,6 +13,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -184,7 +185,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 auto& visual = Config::AppConfig::instance().getVisualConfig();
                 float proximity = visual.snapThreshold;
 
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+                UI::Utils::pushFixedButtonStyleVars();
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                                       ImVec4(0, 0, 0, 0));
@@ -307,7 +308,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     }
                 }
                 ImGui::PopStyleColor(2);
-                ImGui::PopStyleVar();
+                UI::Utils::popFixedButtonStyleVars();
 
                 // 绘制右上角时间点面板汉堡按钮
                 ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f,
@@ -321,9 +322,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive,
                                       ImVec4(0.35f, 0.38f, 0.42f, 1.0f));
                 ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
+                UI::Utils::pushFixedButtonStyleVars();
                 if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {
                     m_isTableWindowOpen = !m_isTableWindowOpen;
                 }
+                UI::Utils::popFixedButtonStyleVars();
                 ImGui::PopStyleVar();
                 ImGui::PopStyleColor(3);
 

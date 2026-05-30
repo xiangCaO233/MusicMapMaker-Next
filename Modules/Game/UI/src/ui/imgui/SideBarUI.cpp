@@ -159,7 +159,7 @@ void SideBarUI::update(UIManager* sourceManager)
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+        Utils::pushFixedButtonStyleVars();
 
         // lambda：绘制互斥按钮
         auto DrawSidebarButton = [&](const char*      iconStr,
@@ -316,7 +316,8 @@ void SideBarUI::update(UIManager* sourceManager)
         ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
         // --- 弹出样式变量 ---
-        ImGui::PopStyleVar(5);
+        Utils::popFixedButtonStyleVars();
+        ImGui::PopStyleVar(4);
     }
     ImGui::End();
     ImGui::PopStyleVar(3);  // WindowPadding, WindowBorderSize, WindowRounding

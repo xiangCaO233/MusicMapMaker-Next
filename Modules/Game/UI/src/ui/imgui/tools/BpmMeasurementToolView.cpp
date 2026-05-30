@@ -14,6 +14,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -694,8 +695,9 @@ void BpmMeasurementToolView::renderPlaybackControls()
     }
 
     const float iconButtonSize = ImGui::GetFrameHeight();
+    Utils::pushFixedButtonStyleVars();
     if ( ImGui::Button(isPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
-                       ImVec2(iconButtonSize, 0.0f)) ) {
+                       ImVec2(iconButtonSize, iconButtonSize)) ) {
         if ( isPlaying ) {
             setPlaybackState(false);
         } else if ( loadSelectedTrackForPlayback() ) {
@@ -708,6 +710,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
             setPlaybackState(true);
         }
     }
+    Utils::popFixedButtonStyleVars();
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("%s",
                           isPlaying ? TR("ui.tools.bpm_measure.pause").data()
@@ -718,11 +721,14 @@ void BpmMeasurementToolView::renderPlaybackControls()
     if ( !trackLoaded ) {
         ImGui::BeginDisabled();
     }
-    if ( ImGui::Button(ICON_MMM_STOP, ImVec2(iconButtonSize, 0.0f)) ) {
+    Utils::pushFixedButtonStyleVars();
+    if ( ImGui::Button(ICON_MMM_STOP,
+                       ImVec2(iconButtonSize, iconButtonSize)) ) {
         setPlaybackState(false);
         seekPlaybackToCanvasTime(0.0);
         audio.stop();
     }
+    Utils::popFixedButtonStyleVars();
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("%s", TR("ui.tools.bpm_measure.stop").data());
     }

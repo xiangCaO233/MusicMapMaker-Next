@@ -126,14 +126,15 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                 pushedTextColor = true;
             }
 
-            float btnWidth = 30.0f;
+            float btnWidth  = 30.0f;
+            float btnHeight = ImGui::GetFrameHeight();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-            if ( ImGui::Button(icon, ImVec2(btnWidth, 0)) ) {
+            Utils::pushFixedButtonStyleVars();
+            if ( ImGui::Button(icon, ImVec2(btnWidth, btnHeight)) ) {
                 muted   = !muted;
                 changed = true;
             }
-            ImGui::PopStyleVar();
+            Utils::popFixedButtonStyleVars();
             ImGui::PopStyleColor();
 
             if ( pushedTextColor ) {

@@ -10,6 +10,7 @@
 #include "ui/Icons.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
 #include <memory>
 
@@ -65,7 +66,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
                                   std::unique_ptr<Graphic::VKTexture>& tex,
                                   float                                btnSize,
                                   ImVec4 hoverColor) -> bool {
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
@@ -86,13 +87,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
                     imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
             }
             ImGui::PopStyleColor(2);
-            ImGui::PopStyleVar(1);
+            Utils::popFixedButtonStyleVars();
             return clicked;
         };
 
         auto DrawFontIconButton =
             [&](const char* icon, float btnSize, ImVec4 hoverColor) -> bool {
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
@@ -102,7 +103,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             bool clicked = ImGui::Button(icon, ImVec2(btnSize, btnSize));
 
             ImGui::PopStyleColor(3);
-            ImGui::PopStyleVar(1);
+            Utils::popFixedButtonStyleVars();
             return clicked;
         };
 

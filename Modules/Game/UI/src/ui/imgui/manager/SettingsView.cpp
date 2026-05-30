@@ -80,7 +80,7 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
         float rounding = std::floor(aesthetics.frameRounding * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+        Utils::pushFixedButtonStyleVars();
 
         auto DrawCategoryIcon = [&](Event::SettingsTab tab,
                                     const char*        iconStr,
@@ -189,7 +189,8 @@ void SettingsView::onUpdate(LayoutContext& layoutContext,
         vbox.renderInCurrent(
             startPos, { sidebarWidth, ImGui::GetContentRegionAvail().y });
 
-        ImGui::PopStyleVar(3);
+        Utils::popFixedButtonStyleVars();
+        ImGui::PopStyleVar(2);
     }
     ImGui::EndChild();
     ImGui::PopStyleVar(2);  // WindowPadding, ChildRounding
