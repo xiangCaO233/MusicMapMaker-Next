@@ -92,6 +92,28 @@ void CanvasTabManager::handlePendingProjectSwitch(
     }
 }
 
+/// @brief 消费逻辑层的画布聚焦请求并转发给对应 Basic2DCanvas。
+void CanvasTabManager::focusPendingSessionCanvas(
+    UIManager* sourceManager, const std::vector<Logic::SessionEntry>& entries)
+{
+    auto&   engine     = Logic::EditorEngine::instance();
+    int32_t focusIndex = engine.consumePendingFocusSessionIndex();
+    if ( focusIndex < 0 ||
+         focusIndex >= static_cast<int32_t>(entries.size()) ) {
+        return;
+    }
+
+    const auto& entry = entries[static_cast<size_t>(focusIndex)];
+    auto*       canvas =
+        sourceManager->getView<Canvas::Basic2DCanvas>(entry.cameraId);
+    if ( !canvas ) {
+        engine.requestSessionFocus(focusIndex);
+        return;
+    }
+
+    canvas->requestFocus();
+}
+
 void CanvasTabManager::update(UIManager* sourceManager)
 {
     auto& engine  = Logic::EditorEngine::instance();
@@ -146,6 +168,8 @@ void CanvasTabManager::update(UIManager* sourceManager)
             }
         }
     }
+
+    focusPendingSessionCanvas(sourceManager, entries);
 
     // 2. 检查：是否有已初始化的 Canvas 被关闭了
     bool sessionClosed = false;

@@ -58,6 +58,9 @@ public:
     /// @brief 请求下一次显示时停靠到主编辑区
     void requestDockToCenter();
 
+    /// @brief 请求下一次更新时将画布窗口聚焦到前台。
+    void requestFocus();
+
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
 
@@ -111,6 +114,9 @@ private:
 
     /// @brief 逻辑视口 ID (对应 BeatmapSession 中的 Camera)
     std::string m_cameraId;
+
+    /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus。
+    bool m_shouldFocusNextFrame{ false };
 
     /// @brief 同步缓冲区
     /// @warning 热路径/共享指针：画布仅持有所有权确保缓冲区生命周期，update

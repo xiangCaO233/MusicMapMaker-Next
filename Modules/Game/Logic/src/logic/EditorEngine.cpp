@@ -144,6 +144,37 @@ std::filesystem::path makeProjectRelativePath(const Project& project,
     return path.filename();
 }
 
+/// @brief 生成用于判断谱面是否已打开的稳定路径键。
+/// @param project 当前项目；存在时相对路径按项目根目录解析。
+/// @param path 谱面文件路径。
+/// @return 规范化后的 UTF-8 路径键，空路径返回空字符串。
+std::string makeBeatmapPathKey(const Project*               project,
+                               const std::filesystem::path& path)
+{
+    if ( path.empty() ) {
+        return "";
+    }
+
+    std::filesystem::path keyPath = path;
+    if ( project ) {
+        keyPath = resolveProjectPath(*project, keyPath);
+    } else if ( keyPath.is_relative() ) {
+        std::error_code ec;
+        auto            absolutePath = std::filesystem::absolute(keyPath, ec);
+        if ( !ec ) {
+            keyPath = absolutePath;
+        }
+    }
+
+    std::error_code ec;
+    auto canonicalPath = std::filesystem::weakly_canonical(keyPath, ec);
+    if ( !ec ) {
+        keyPath = canonicalPath;
+    }
+
+    return Config::pathToUtf8(keyPath.lexically_normal());
+}
+
 /// @brief 在写入项目前解析元数据资源路径。
 std::filesystem::path resolveMetadataResourcePath(
     const Project& project, const std::filesystem::path& mapDirectory,
@@ -839,6 +870,24 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     if ( result.m_changed ) {
         saveProject();
     }
+
+    /// @brief 当前项目指针，仅用于刷新已打开 Session 的谱面路径键。
+    const auto* currentProject = ProjectController::instance().currentProject();
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( !entry.session ) {
+            continue;
+        }
+
+        const auto& ctx = entry.session->getContext();
+        if ( !ctx.currentBeatmap ) {
+            continue;
+        }
+
+        entry.beatmapPathKey = makeBeatmapPathKey(
+            currentProject, ctx.currentBeatmap->m_baseMapMetadata.map_path);
+    }
 }
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)
@@ -1047,6 +1096,44 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         normalizeBeatmapMetadataPathsForProject(*beatmap, *currentProject);
     }
 
+    /// @brief 本次请求打开的谱面稳定路径键。
+    const std::string requestedBeatmapKey =
+        beatmap ? makeBeatmapPathKey(currentProject,
+                                     beatmap->m_baseMapMetadata.map_path)
+                : std::string{};
+
+    if ( !isLogoPlaceholder && beatmap ) {
+        if ( !requestedBeatmapKey.empty() ) {
+            for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size());
+                  ++i ) {
+                const auto& entry = sessions[static_cast<size_t>(i)];
+                if ( entry.isLogoPlaceholder || !entry.session ) {
+                    continue;
+                }
+
+                const auto&       ctx = entry.session->getContext();
+                const std::string openedBeatmapKey =
+                    !entry.beatmapPathKey.empty()
+                        ? entry.beatmapPathKey
+                        : (ctx.currentBeatmap
+                               ? makeBeatmapPathKey(
+                                     currentProject,
+                                     ctx.currentBeatmap->m_baseMapMetadata
+                                         .map_path)
+                               : std::string{});
+                if ( openedBeatmapKey != requestedBeatmapKey ) {
+                    continue;
+                }
+
+                requestSessionFocus(i);
+                XINFO("Beatmap already open. Focusing Session #{} cameraId={}",
+                      i,
+                      entry.cameraId);
+                return i;
+            }
+        }
+    }
+
     // 检查是否可以复用 Logo 占位画布
     if ( !isLogoPlaceholder && beatmap ) {
         for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
@@ -1061,6 +1148,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 sessions[i].displayName = displayName.empty()
                                               ? beatmap->m_baseMapMetadata.name
                                               : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
                 }
@@ -1127,6 +1215,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         displayName.empty()
             ? (beatmap ? beatmap->m_baseMapMetadata.name : "New Canvas")
             : displayName;
+    entry.beatmapPathKey           = requestedBeatmapKey;
     entry.isLogoPlaceholder        = isLogoPlaceholder;
     entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
@@ -1295,6 +1384,18 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             }
         }
     }
+}
+
+/// @brief 请求 UI 线程将指定 Session 对应的画布窗口聚焦到前台。
+void EditorEngine::requestSessionFocus(int32_t index)
+{
+    m_pendingFocusSessionIndex.store(index, std::memory_order_relaxed);
+}
+
+/// @brief 消费一次待聚焦 Session 请求。
+int32_t EditorEngine::consumePendingFocusSessionIndex()
+{
+    return m_pendingFocusSessionIndex.exchange(-1, std::memory_order_relaxed);
 }
 
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
@@ -1595,11 +1696,32 @@ void EditorEngine::updateBeatmapFilePathInProject(
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
+    /// @brief 当前项目指针，仅用于更新已打开 Session 的谱面路径键。
+    const auto* currentProject = ProjectController::instance().currentProject();
+    /// @brief 旧谱面路径键。
+    const std::string oldBeatmapKey =
+        makeBeatmapPathKey(currentProject, oldPath);
+    /// @brief 新谱面路径键。
+    const std::string newBeatmapKey =
+        makeBeatmapPathKey(currentProject, newPath);
+
     /// @brief 项目命令服务的谱面路径更新结果。
     auto result =
         ProjectController::instance().updateBeatmapFilePath(oldPath, newPath);
     if ( result.m_changed ) {
         saveProject();
+    }
+
+    if ( oldBeatmapKey.empty() || newBeatmapKey.empty() ) {
+        return;
+    }
+
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( entry.beatmapPathKey == oldBeatmapKey ) {
+            entry.beatmapPathKey = newBeatmapKey;
+        }
     }
 }
 

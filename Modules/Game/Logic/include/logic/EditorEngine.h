@@ -153,6 +153,17 @@ public:
      */
     void setActiveSessionIndex(int32_t index);
 
+    /// @brief 请求 UI 线程将指定 Session 对应的画布窗口聚焦到前台。
+    /// @param index 目标 Session 索引。
+    /// @warning 逻辑/UI 热路径原子：低频写入，UI 同步阶段读取；只传递索引。
+    void requestSessionFocus(int32_t index);
+
+    /// @brief 消费一次待聚焦 Session 请求。
+    /// @return 目标 Session 索引；无请求时返回 -1。
+    /// @warning UI 热路径原子：CanvasTabManager
+    /// 每帧读取；只承载一次性焦点请求。
+    int32_t consumePendingFocusSessionIndex();
+
     /**
      * @brief 获取当前活跃 Session 索引
      */
@@ -395,6 +406,11 @@ private:
     /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
     /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ true };
+
+    /// @brief 等待 UI 线程聚焦的 Session 索引。
+    /// @warning 逻辑/UI 热路径原子：createSession 低频写入，CanvasTabManager
+    /// 每帧消费。
+    std::atomic<int32_t> m_pendingFocusSessionIndex{ -1 };
 
     /// @brief 项目工作区恢复后待激活的 Session 索引，仅由逻辑线程读写。
     int32_t m_pendingWorkspaceActiveIndex{ -1 };

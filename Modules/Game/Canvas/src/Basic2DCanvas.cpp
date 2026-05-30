@@ -73,7 +73,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     ImGuiID dockId =
         m_shouldDockToCenter ? UI::MainDockSpaceUI::getCenterDockId() : 0;
-    std::string       windowName = fmt::format("{}###{}", title, m_canvasName);
+    std::string windowName = fmt::format("{}###{}", title, m_canvasName);
+    if ( m_shouldFocusNextFrame ) {
+        ImGui::SetNextWindowFocus();
+        m_shouldFocusNextFrame = false;
+    }
     UI::LayoutContext lctx(m_layoutCtx,
                            windowName,
                            false,
@@ -244,6 +248,12 @@ bool Basic2DCanvas::consumeCloseCancelled()
 void Basic2DCanvas::requestDockToCenter()
 {
     m_shouldDockToCenter = true;
+}
+
+/// @brief 请求下一次更新时将画布窗口聚焦到前台。
+void Basic2DCanvas::requestFocus()
+{
+    m_shouldFocusNextFrame = true;
 }
 
 bool Basic2DCanvas::isDirty() const

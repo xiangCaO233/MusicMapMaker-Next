@@ -23,6 +23,9 @@ struct SessionEntry {
     /// @brief 显示名称，例如谱面名或默认标签。
     std::string displayName;
 
+    /// @brief 当前会话谱面文件的稳定路径键，用于阻止重复打开同一谱面。
+    std::string beatmapPathKey;
+
     /// @brief 是否为初始 Logo 占位画布，尚未加载谱面时为 true。
     bool isLogoPlaceholder{ false };
 

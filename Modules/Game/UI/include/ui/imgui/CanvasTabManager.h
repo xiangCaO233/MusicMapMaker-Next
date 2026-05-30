@@ -40,6 +40,11 @@ private:
         UIManager*                              sourceManager,
         const std::vector<Logic::SessionEntry>& entries);
 
+    /// @brief 消费逻辑层的画布聚焦请求并转发给对应 Basic2DCanvas。
+    void focusPendingSessionCanvas(
+        UIManager*                              sourceManager,
+        const std::vector<Logic::SessionEntry>& entries);
+
     /// @brief 已初始化画布的 cameraId 集合
     std::unordered_set<std::string> m_initializedCanvases;
 
