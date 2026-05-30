@@ -58,6 +58,10 @@ public:
     /// @brief 渲染底部提示文本占位区域。
     void renderInfoText();
 
+    /// @brief 请求导出当前谱面，必要时先展示格式兼容性警告。
+    /// @param path 目标导出路径。
+    void requestSaveBeatmapAs(std::string path);
+
     /// @brief 处理主菜单相关的全局快捷键。
     /// @param sourceManager 当前 UI 管理器。
     void handleHotkeys(UIManager* sourceManager);
@@ -143,6 +147,20 @@ private:
     /// @param cmd 需要分发给逻辑层的命令。
     void dispatchCommand(const Logic::LogicCommand& cmd);
 
+    /// @brief 直接分发谱面导出命令并显示保存提示。
+    /// @param path 目标导出路径。
+    void dispatchSaveBeatmapAs(const std::string& path);
+
+    /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
+    /// @param path 目标导出路径。
+    /// @return 需要展示的警告消息列表。
+    std::vector<std::string> collectExportCompatibilityWarnings(
+        const std::string& path) const;
+
+    /// @brief 渲染导出兼容性警告弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderExportCompatibilityWarningPopup(float dpiScale);
+
     /// @brief 渲染帮助菜单。
     /// @param sourceManager 当前 UI 管理器。
     void renderHelpMenu(UIManager* sourceManager);
@@ -201,6 +219,8 @@ private:
     bool m_showCheckingPopup = false;
     /// @brief 是否显示更新成功弹窗。
     bool m_showUpdateSuccessPopup = false;
+    /// @brief 是否在下一帧打开导出兼容性警告弹窗。
+    bool m_showExportCompatibilityWarning = false;
 
     /// @brief 是否已完成启动时的自动更新检查。
     bool m_hasCheckedOnStartup = false;
@@ -215,6 +235,12 @@ private:
     float m_statusMessageTimer = 0.0f;
     /// @brief 状态栏显示的临时消息。
     std::string m_statusMessage;
+    /// @brief 待确认导出的目标路径。
+    std::string m_pendingExportPath;
+    /// @brief 待确认导出的格式名称。
+    std::string m_pendingExportFormatName;
+    /// @brief 待确认导出的兼容性警告消息。
+    std::vector<std::string> m_pendingExportWarnings;
 
     /// @brief 更新检查器实例。
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;

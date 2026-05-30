@@ -159,16 +159,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
                     m_pendingOverwritePath     = filePath;
-                    this->m_onOverwriteConfirm = [filePath]() {
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdSaveBeatmapAs{ filePath }));
+                    this->m_onOverwriteConfirm = [this, filePath]() {
+                        m_mainMenuview.requestSaveBeatmapAs(filePath);
                     };
                     m_showOverwriteModal = true;
                 } else {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSaveBeatmapAs{ filePath }));
+                    m_mainMenuview.requestSaveBeatmapAs(filePath);
                 }
             }
             ImGuiFileDialog::Instance()->Close();

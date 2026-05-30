@@ -479,6 +479,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderOverlapCheckWindow();
     renderMetadataEditorWindow();
     renderNoteMetadataEditorWindow();
+    renderExportCompatibilityWarningPopup(dpiScale);
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding

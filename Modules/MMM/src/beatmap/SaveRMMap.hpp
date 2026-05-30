@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -96,12 +97,23 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
     }
     write_value(output_map_length);
 
-    // 5~8字节:int32 图时间点数
-    int32_t timing_count = static_cast<int32_t>(beatMap.m_timings.size());
+    std::vector<std::reference_wrapper<const Timing>> bpm_timings;
+    bpm_timings.reserve(beatMap.m_timings.size());
+    for ( const auto& timing : beatMap.m_timings ) {
+        if ( timing.m_timingEffect == TimingEffect::BPM ) {
+            bpm_timings.push_back(std::cref(timing));
+        }
+    }
+
+    // 5~8字节:int32 图时间点数，仅保存 IMD 支持的 BPM timing
+    int32_t timing_count = static_cast<int32_t>(std::min<size_t>(
+        bpm_timings.size(),
+        static_cast<size_t>(std::numeric_limits<int32_t>::max())));
     write_value(timing_count);
 
     // 每12字节一组: 4字节int32 时间戳 + 8字节double bpm
-    for ( const auto& timing : beatMap.m_timings ) {
+    for ( int32_t i = 0; i < timing_count; ++i ) {
+        const auto& timing = bpm_timings[static_cast<size_t>(i)].get();
         write_value(static_cast<int32_t>(std::round(timing.m_timestamp)));
         write_value(static_cast<double>(timing.m_bpm));  // BPM
     }
