@@ -183,8 +183,12 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
+            const auto   leadInIt = skinData.audioLeadInSeconds.find(key);
+            const double leadInSeconds =
+                leadInIt != skinData.audioLeadInSeconds.end() ? leadInIt->second
+                                                              : 0.0;
             Audio::AudioManager::instance().preloadSoundEffect(
-                key, Config::pathToUtf8(path));
+                key, Config::pathToUtf8(path), 1.0f, leadInSeconds);
         }
 
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)

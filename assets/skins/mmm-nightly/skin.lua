@@ -77,12 +77,12 @@ local Skin = {
 	-- 音频配置
 	audios = {
 		hiteffect = {
-			note = "audio/note.wav",
-			flick = "audio/flick.wav",
+			note = { path = "audio/note.wav", lead_in_ms = 0.023 },
+			flick = { path = "audio/flick.wav", lead_in_ms = 0.0 },
 		},
 		metronome = {
-			beat_low = "audio/metronome/beat_low.wav",
-			downbeat_high = "audio/metronome/downbeat_high.wav",
+			beat_low = { path = "audio/metronome/beat_low.wav", lead_in_ms = 0.023 },
+			downbeat_high = { path = "audio/metronome/downbeat_high.wav", lead_in_ms = 0.023 },
 		},
 	},
 

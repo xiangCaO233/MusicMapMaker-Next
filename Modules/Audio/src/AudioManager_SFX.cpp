@@ -144,10 +144,11 @@ double AudioManager::getSFXPlaybackTime(const std::string& key) const
 /// @param key 音效池标识。
 /// @param filePath 音效文件绝对路径。
 /// @param defaultVolume 默认音量。
+/// @param leadInSeconds 文件开头到有效出声点的延迟，单位为秒。
 /// @return 加载成功时返回 true。
 bool AudioManager::preloadSoundEffect(const std::string& key,
                                       const std::string& filePath,
-                                      float              defaultVolume)
+                                      float defaultVolume, double leadInSeconds)
 {
     if ( !m_audioPool || !m_threadPool || !m_mainMixer ) return false;
 
@@ -182,7 +183,8 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
         m_mainMixer->add_source(pool->getMixer());
     }
 
-    m_sfxPools[key] = std::move(pool);
+    m_sfxPools[key]         = std::move(pool);
+    m_sfxLeadInSeconds[key] = std::max(0.0, leadInSeconds);
     return true;
 }
 
@@ -198,6 +200,7 @@ void AudioManager::unloadSoundEffect(const std::string& key)
             m_preStretcherMixer->remove_source(mixer);
         }
         m_sfxPools.erase(it);
+        m_sfxLeadInSeconds.erase(key);
         m_sfxMutes.erase(key);
         XINFO("Unloaded SFX: {}", key);
     }
@@ -264,7 +267,7 @@ void AudioManager::resumeSoundEffect(const std::string& key)
 
 /// @brief 按主音轨时间计划播放指定音效。
 /// @param key 音效池标识。
-/// @param targetTime 目标播放时间，单位为秒。
+/// @param targetTime 目标有效出声时间，单位为秒。
 /// @param volumeFactor 本次播放额外音量倍率。
 void AudioManager::playSoundEffectScheduled(const std::string& key,
                                             double             targetTime,
@@ -279,7 +282,10 @@ void AudioManager::playSoundEffectScheduled(const std::string& key,
 
     double samplerate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    size_t targetFrame = static_cast<size_t>(targetTime * samplerate);
+    const double leadInSeconds =
+        m_sfxLeadInSeconds.contains(key) ? m_sfxLeadInSeconds[key] : 0.0;
+    const double scheduledTime = std::max(0.0, targetTime - leadInSeconds);
+    size_t       targetFrame = static_cast<size_t>(scheduledTime * samplerate);
 
     // 获取 BGM 播放位置的闭包，用于 SourceNode 内部参考
     auto bgmRef = [this]() -> size_t {

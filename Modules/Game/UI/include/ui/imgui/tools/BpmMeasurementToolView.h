@@ -149,9 +149,9 @@ private:
     /// @return 两个节拍器音效均可播放时返回 true。
     bool ensureMetronomeSoundEffects();
 
-    /// @brief 从当前画布时间重置节拍器触发游标。
-    /// @param canvasTime 当前 BPM 工具画布时间，单位为秒。
-    void resetMetronomeScheduler(double canvasTime);
+    /// @brief 从当前音频调度时间重置节拍器触发游标。
+    /// @param audioTime 当前音频调度时间，单位为秒。
+    void resetMetronomeScheduler(double audioTime);
 
     /// @brief 更新波形绘制用的画布时间缓存。
     /// @param canvasOffset 画布时间相对音频采样时间的偏移，单位为秒。
@@ -390,8 +390,8 @@ private:
     /// @brief 节拍器下一次要触发的拍序，相对首拍位置。
     int64_t m_nextMetronomeBeatIndex{ 0 };
 
-    /// @brief 上一帧节拍器看到的画布时间，单位为秒。
-    double m_lastMetronomeCanvasTime{ 0.0 };
+    /// @brief 上一帧节拍器看到的音频调度时间，单位为秒。
+    double m_lastMetronomeAudioTime{ 0.0 };
 
     /// @brief 当前节拍器触发游标对应的首拍位置，单位为秒。
     double m_metronomeScheduledFirstBeatTime{

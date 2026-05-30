@@ -280,9 +280,11 @@ public:
     /// @param key 标识符（如 "hiteffect.note"）
     /// @param filePath 音效文件绝对路径
     /// @param defaultVolume 初始默认音量
+    /// @param leadInSeconds 文件开头到有效出声点的延迟，调度时会提前抵消
     /// @return 是否加载成功
     bool preloadSoundEffect(const std::string& key, const std::string& filePath,
-                            float defaultVolume = 1.0f);
+                            float  defaultVolume = 1.0f,
+                            double leadInSeconds = 0.0);
 
     /// @brief 卸载并释放指定 key 的音效
     /// @param key 标识符
@@ -373,6 +375,9 @@ private:
     /// @brief 已加载的音效池表。
     std::unordered_map<std::string, std::shared_ptr<SoundEffectPool>>
         m_sfxPools;
+
+    /// @brief 音效文件开头到有效出声点的延迟表，单位为秒。
+    std::unordered_map<std::string, double> m_sfxLeadInSeconds;
 
     /// @brief 当前主音轨播放状态。
     PlaybackStatus m_status{ PlaybackStatus::Stopped };

@@ -54,6 +54,9 @@ struct SkinData {
     // 音频路径表 (Key: 音频ID, Value: 文件路径)
     std::unordered_map<std::string, std::filesystem::path> audioPaths;
 
+    /// @brief 音效文件开头到有效出声点的延迟，单位为秒。
+    std::unordered_map<std::string, double> audioLeadInSeconds;
+
     // 特效序列帧表
     struct EffectSequence {
         std::vector<std::filesystem::path> frames;
@@ -124,6 +127,11 @@ public:
     ///@brief 获取音频路径
     std::filesystem::path getAudioPath(const std::string& key);
 
+    /// @brief 获取音效文件开头到有效出声点的延迟。
+    /// @param key 音频 ID。
+    /// @return 延迟，单位为秒；不存在时返回 0。
+    double getAudioLeadInSeconds(const std::string& key) const;
+
     ///@brief 获取资产路径
     std::filesystem::path getAssetPath(const std::string& key);
 
@@ -181,6 +189,9 @@ private:
     void parseAssetsRecursive(const sol::table&  currentTable,
                               const std::string& prefix);
 
+    /// @brief 递归解析音频配置表。
+    /// @param currentTable 当前处理的 Lua 表。
+    /// @param prefix 键前缀。
     void parseAudiosRecursive(const sol::table&  currentTable,
                               const std::string& prefix);
 
