@@ -29,7 +29,6 @@ static std::string TabToSubViewId(SideBarTab tab)
     case SideBarTab::FileExplorer: return TR("title.file_manager");
     case SideBarTab::AudioExplorer: return TR("title.audio_manager");
     case SideBarTab::BeatMapExplorer: return TR("title.beatmap_manager");
-    case SideBarTab::Settings: return TR("title.settings_manager");
     default: return "";
     }
 }
@@ -91,8 +90,6 @@ static SideBarTab SubViewIdToTab(const std::string& subViewId)
         return SideBarTab::AudioExplorer;
     if ( subViewId == TR("title.beatmap_manager").view )
         return SideBarTab::BeatMapExplorer;
-    if ( subViewId == TR("title.settings_manager").view )
-        return SideBarTab::Settings;
     return SideBarTab::None;
 }
 

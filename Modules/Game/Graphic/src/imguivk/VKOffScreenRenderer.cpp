@@ -31,6 +31,17 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         return;
     }
 
+    /// @brief 当前离屏资源是否已经完成创建。
+    const bool resourcesReady =
+        m_device && m_framebuffer && m_offScreenRenderPass &&
+        m_mainBrushRenderPipeline && frameIndex < m_vertexBuffers.size() &&
+        frameIndex < m_indexBuffers.size() &&
+        frameIndex < m_uniformBuffers.size() &&
+        frameIndex < m_offScreenDescriptorSets.size();
+    if ( !resourcesReady ) {
+        return;
+    }
+
     // 1. 设置清除颜色 (Alpha 为 0，确保画布背景透明)
     vk::ClearValue clearValue;
     clearValue.setColor(

@@ -19,10 +19,16 @@ class Project;
 struct ProjectWorkspaceState;
 }  // namespace MMM
 
+namespace MMM::Event
+{
+enum class SettingsTab;
+}  // namespace MMM::Event
+
 namespace MMM::UI
 {
 class IRenderableView;
 class ITextureLoader;
+
 class UIManager : public MMM::Graphic::IGraphicUserHook
 {
 public:
@@ -52,6 +58,10 @@ public:
 
     /// @brief 捕获当前项目工作区 UI 状态到内存中的项目配置。
     void captureProjectWorkspaceState();
+
+    /// @brief 打开独立设置窗口，切换到指定标签页并请求聚焦。
+    /// @param tab 需要激活的设置标签页。
+    void openSettingsWindow(MMM::Event::SettingsTab tab);
 
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)

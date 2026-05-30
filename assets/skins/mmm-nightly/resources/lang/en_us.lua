@@ -94,6 +94,7 @@ return {
 	["title.file_manager"] = "File Browser",
 	["title.settings_manager"] = "Settings",
 	["ui.settings.software"] = "Software Config",
+	["ui.settings.software.short"] = "Software",
 	["ui.settings.software.general"] = "General Settings",
 	["ui.settings.software.language"] = "Language",
 	["ui.settings.software.vsync"] = "Enable VSync",
@@ -145,6 +146,7 @@ return {
 	["ui.settings.software.cursor_bpm_sync"] = "Sync Smoke Life with BPM",
 
 	["ui.settings.visual"] = "Visual Config",
+	["ui.settings.visual.short"] = "Visual",
 	["ui.settings.visual.layout"] = "Layout",
 	["ui.settings.visual.layout_left"] = "Left Margin",
 	["ui.settings.visual.layout_top"] = "Top Margin",
@@ -196,6 +198,7 @@ return {
 	["ui.settings.visual.snap_threshold"] = "Snap Threshold (px)",
 
 	["ui.settings.project"] = "Project Config",
+	["ui.settings.project.short"] = "Project",
 	["ui.settings.project.no_project"] = "No project opened currently",
 	["ui.settings.project.info"] = "Project Information",
 	["ui.settings.project.name"] = "Project Title",
@@ -203,6 +206,7 @@ return {
 	["ui.settings.project.mapper"] = "Mapper",
 	["ui.settings.project.path"] = "Physical Path",
 	["ui.settings.beatmap"] = "Beatmap Config",
+	["ui.settings.beatmap.short"] = "Beatmap",
 	["ui.settings.beatmap.no_beatmap"] = "No beatmap loaded currently",
 	["ui.settings.beatmap.path"] = "Beatmap File Path",
 	["ui.settings.beatmap.stats"] = "Object Stats",
@@ -230,6 +234,7 @@ return {
 	["ui.settings.beatmap.length"] = "Total Length",
 
 	["ui.settings.editor"] = "Editor Config",
+	["ui.settings.editor.short"] = "Editor",
 	["ui.settings.editor.behavior"] = "Behavior",
 	["ui.settings.editor.reverse_scroll"] = "Reverse Scroll Direction",
 	["ui.settings.editor.scroll_snap"] = "Enable Scroll Snap",

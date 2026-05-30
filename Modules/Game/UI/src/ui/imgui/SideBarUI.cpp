@@ -2,6 +2,7 @@
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/ui/UISettingsTabEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
@@ -56,7 +57,7 @@ std::string SideBarUI::workspaceNameFromTab(SideBarTab tab)
     case SideBarTab::FileExplorer: return "FileExplorer";
     case SideBarTab::AudioExplorer: return "AudioExplorer";
     case SideBarTab::BeatMapExplorer: return "BeatMapExplorer";
-    case SideBarTab::Settings: return "Settings";
+    case SideBarTab::Settings:
     case SideBarTab::None:
     default: return "None";
     }
@@ -68,7 +69,6 @@ SideBarTab SideBarUI::workspaceNameToTab(const std::string& name)
     if ( name == "FileExplorer" ) return SideBarTab::FileExplorer;
     if ( name == "AudioExplorer" ) return SideBarTab::AudioExplorer;
     if ( name == "BeatMapExplorer" ) return SideBarTab::BeatMapExplorer;
-    if ( name == "Settings" ) return SideBarTab::Settings;
     return SideBarTab::None;
 }
 
@@ -189,22 +189,27 @@ void SideBarUI::update(UIManager* sourceManager)
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
             std::string btnId = "##tab_btn_" + std::to_string((int)tab);
             if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
-                m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
-                persistWorkspaceActiveTab(m_activeTab);
-                // 2. 发布事件通知 FloatingManagerUI
-                using namespace MMM::Event;
+                if ( tab == SideBarTab::Settings ) {
+                    sourceManager->openSettingsWindow(
+                        Event::SettingsTab::Software);
+                } else {
+                    m_activeTab = (m_activeTab == tab) ? SideBarTab::None : tab;
+                    persistWorkspaceActiveTab(m_activeTab);
+                    // 2. 发布事件通知 FloatingManagerUI
+                    using namespace MMM::Event;
 
-                UISubViewToggleEvent evt;
-                evt.sourceUiName           = m_name;
-                evt.uiManager              = sourceManager;
-                evt.targetFloatManagerName = "SideBarManager";
-                evt.subViewId              = TabToSubViewId(tab);
+                    UISubViewToggleEvent evt;
+                    evt.sourceUiName           = m_name;
+                    evt.uiManager              = sourceManager;
+                    evt.targetFloatManagerName = "SideBarManager";
+                    evt.subViewId              = TabToSubViewId(tab);
 
-                if ( m_activeTab != SideBarTab::None ) {
-                    evt.showSubView = true;
+                    if ( m_activeTab != SideBarTab::None ) {
+                        evt.showSubView = true;
+                    }
+
+                    EventBus::instance().publish(evt);
                 }
-
-                EventBus::instance().publish(evt);
             }
 
             // --- 绘制内容 (图标 + 分隔线 + 文本) ---

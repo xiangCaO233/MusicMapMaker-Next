@@ -29,7 +29,6 @@
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/SearchView.h"
-#include "ui/imgui/manager/SettingsView.h"
 #include <array>
 #include <chrono>
 #include <nfd.h>
@@ -109,9 +108,6 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     sidebar_manager->registerSubView(
         TR("title.beatmap_manager"),
         std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
-    sidebar_manager->registerSubView(
-        TR("title.settings_manager"),
-        std::make_unique<UI::SettingsView>(TR("title.settings_manager")));
 
     // 注册新建谱面向导
     m_uiManager.registerView("NewBeatmapWizard",

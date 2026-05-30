@@ -93,6 +93,7 @@ return {
 	["title.file_manager"] = "文件浏览",
 	["title.settings_manager"] = "设置",
 	["ui.settings.software"] = "软件配置",
+	["ui.settings.software.short"] = "软件",
 	["ui.settings.software.general"] = "通用设置",
 	["ui.settings.software.language"] = "界面语言",
 	["ui.settings.software.vsync"] = "开启垂直同步",
@@ -148,6 +149,7 @@ return {
 	["ui.settings.software.aesthetics.window_padding"] = "全局窗口内边距",
 
 	["ui.settings.visual"] = "视觉配置",
+	["ui.settings.visual.short"] = "视觉",
 	["ui.settings.visual.layout"] = "布局比例",
 	["ui.settings.visual.layout_left"] = "左侧边界",
 	["ui.settings.visual.layout_top"] = "顶部边界",
@@ -199,6 +201,7 @@ return {
 	["ui.settings.visual.snap_threshold"] = "磁吸阈值 (像素)",
 
 	["ui.settings.project"] = "项目配置",
+	["ui.settings.project.short"] = "项目",
 	["ui.settings.project.no_project"] = "当前未打开任何项目",
 	["ui.settings.project.info"] = "项目基本信息",
 	["ui.settings.project.name"] = "项目标题",
@@ -206,6 +209,7 @@ return {
 	["ui.settings.project.mapper"] = "谱师",
 	["ui.settings.project.path"] = "项目物理路径",
 	["ui.settings.beatmap"] = "谱面配置",
+	["ui.settings.beatmap.short"] = "谱面",
 	["ui.settings.beatmap.no_beatmap"] = "当前未加载任何谱面",
 	["ui.settings.beatmap.path"] = "谱面文件路径",
 	["ui.settings.beatmap.stats"] = "物件统计",
@@ -233,6 +237,7 @@ return {
 	["ui.settings.beatmap.length"] = "总时长",
 
 	["ui.settings.editor"] = "编辑器配置",
+	["ui.settings.editor.short"] = "编辑",
 	["ui.settings.editor.behavior"] = "基础行为",
 	["ui.settings.editor.reverse_scroll"] = "反转鼠标滚轮方向",
 	["ui.settings.editor.scroll_snap"] = "鼠标滚动时启用磁吸",

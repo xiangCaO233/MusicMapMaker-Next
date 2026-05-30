@@ -774,6 +774,11 @@ void VKOffScreenRenderer::releaseResources()
         m_device.destroyImageView(m_imageView);
         m_device.destroyImage(m_image);
         m_device.freeMemory(m_imageMemory);
+        m_framebuffer = VK_NULL_HANDLE;
+        m_sampler     = VK_NULL_HANDLE;
+        m_imageView   = VK_NULL_HANDLE;
+        m_image       = VK_NULL_HANDLE;
+        m_imageMemory = VK_NULL_HANDLE;
 
         if ( m_glowFramebuffer ) m_device.destroyFramebuffer(m_glowFramebuffer);
         if ( m_pingFramebuffer ) m_device.destroyFramebuffer(m_pingFramebuffer);
@@ -808,6 +813,11 @@ void VKOffScreenRenderer::releaseResources()
         m_vertexBuffers.clear();
         m_indexBuffers.clear();
         m_uniformBuffers.clear();
+        m_offScreenDescriptorSets.clear();
+        m_pingDescriptorSets.clear();
+        m_pongDescriptorSets.clear();
+        m_glowDescriptorSets.clear();
+        m_lastAllocatedCount = 0;
     }
 }
 

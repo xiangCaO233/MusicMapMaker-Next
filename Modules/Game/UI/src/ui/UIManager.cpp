@@ -21,6 +21,7 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
+#include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <vector>
 
@@ -37,6 +38,9 @@ constexpr const char* AUDIO_SPECTRUM_VIEW_NAME = "AudioSpectrum";
 
 /// @brief BPM 测量工具窗口的稳定 UIManager 视图名。
 constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
+
+/// @brief 独立设置窗口的稳定 UIManager 视图名。
+constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
 
 /// @brief 判断视图名是否是项目工作区动态视图。
 /// @param name UIManager 中注册的视图名。
@@ -113,6 +117,25 @@ void UIManager::captureProjectWorkspaceState()
                                            windowState.m_height,
                                            windowState.m_maximized);
         windowState.m_valid = true;
+    }
+}
+
+/// @brief 打开独立设置窗口，切换到指定标签页并请求中心停靠和聚焦。
+/// @param tab 需要激活的设置标签页。
+void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
+{
+    auto* settingsView = getView<SettingsView>(SETTINGS_VIEW_NAME);
+    if ( !settingsView ) {
+        auto view =
+            std::make_unique<SettingsView>(TR("title.settings_manager").data());
+        settingsView = view.get();
+        registerView(SETTINGS_VIEW_NAME, std::move(view));
+    }
+
+    if ( settingsView ) {
+        settingsView->open(tab);
+        settingsView->requestDockToCenter();
+        settingsView->requestFocus();
     }
 }
 

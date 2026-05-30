@@ -9,7 +9,6 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/UISettingsTabEvent.h"
-#include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
@@ -415,15 +414,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::Separator();
         if ( MenuItemWithFontIcon(ICON_MMM_FILE,
                                   TR("ui.edit.beatmap_settings")) ) {
-            Event::UISubViewToggleEvent evt;
-            evt.targetFloatManagerName = "SideBarManager";
-            evt.subViewId              = TR("title.settings_manager").data();
-            evt.showSubView            = true;
-            Event::EventBus::instance().publish(evt);
-
-            Event::UISettingsTabEvent tabEvt;
-            tabEvt.tab = Event::SettingsTab::Beatmap;
-            Event::EventBus::instance().publish(tabEvt);
+            sourceManager->openSettingsWindow(Event::SettingsTab::Beatmap);
         }
         ImGui::EndMenu();
     }
