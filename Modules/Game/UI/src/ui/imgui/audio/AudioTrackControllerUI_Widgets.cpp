@@ -11,6 +11,8 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
+#include <algorithm>
+
 #include <fmt/core.h>
 
 namespace MMM::UI
@@ -126,8 +128,15 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                 pushedTextColor = true;
             }
 
-            float btnWidth  = 30.0f;
-            float btnHeight = ImGui::GetFrameHeight();
+            const ImGuiStyle& style      = ImGui::GetStyle();
+            float             btnWidth   = 30.0f;
+            float             btnHeight  = ImGui::GetFrameHeight();
+            float             lrPaddingX = 3.0f;
+            float             lrGap      = 2.0f;
+            float             lrButtonW = std::max(ImGui::CalcTextSize("L").x,
+                                                   ImGui::CalcTextSize("R").x) +
+                                          lrPaddingX * 2.0f;
+            lrButtonW                   = std::max(lrButtonW, 24.0f);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             Utils::pushFixedButtonStyleVars();
             if ( ImGui::Button(icon, ImVec2(btnWidth, btnHeight)) ) {
@@ -150,8 +159,12 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             ImGui::SameLine();
 
             float lrWidth =
-                (m_type == TrackType::Main) ? (22.0f * 2 + 4.0f) : 0.0f;
-            float sliderWidth = r.width - btnWidth - lrWidth - 16.0f;
+                (m_type == TrackType::Main)
+                    ? (style.ItemSpacing.x + lrButtonW * 2.0f + lrGap)
+                    : 0.0f;
+            float sliderWidth =
+                r.width - btnWidth - style.ItemSpacing.x - lrWidth;
+            sliderWidth = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
             if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
                 changed = true;
@@ -169,9 +182,15 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                     ImGui::PushStyleColor(
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
-                if ( ImGui::Button("L", ImVec2(22, 0)) ) {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(lrPaddingX, style.FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                    ImVec2(0.5f, 0.5f));
+                if ( ImGui::Button("L##MainMixerMuteL",
+                                   ImVec2(lrButtonW, btnHeight)) ) {
                     audio.setMainMixerLeftMute(!muteL);
                 }
+                ImGui::PopStyleVar(2);
                 if ( muteL ) {
                     ImGui::PopStyleColor();
                 }
@@ -186,9 +205,15 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                     ImGui::PushStyleColor(
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
-                if ( ImGui::Button("R", ImVec2(22, 0)) ) {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(lrPaddingX, style.FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                    ImVec2(0.5f, 0.5f));
+                if ( ImGui::Button("R##MainMixerMuteR",
+                                   ImVec2(lrButtonW, btnHeight)) ) {
                     audio.setMainMixerRightMute(!muteR);
                 }
+                ImGui::PopStyleVar(2);
                 if ( muteR ) {
                     ImGui::PopStyleColor();
                 }

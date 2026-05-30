@@ -56,6 +56,7 @@ public:
 
 private:
     /// @brief 构建音量区域的 Clay 布局
+    /// @warning UI 每帧绘制路径：仅允许轻量 ImGui 控件测量与样式栈操作。
     void buildVolumeSection(CLayVBox& parent, size_t& rowIndex,
                             float labelWidth, float& volume, bool& muted,
                             bool& changed);
