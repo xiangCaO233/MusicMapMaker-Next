@@ -40,7 +40,8 @@ void NoteRenderSystem::renderNotes(
                                         bottomY,
                                         renderScaleY);
 
-    bool shouldGenerateHitboxes = SessionUtils::isMainCanvasCameraId(cameraId);
+    bool shouldGenerateHitboxes = snapshot->acceptsInteraction &&
+                                  SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
     if ( shouldGenerateHitboxes ) {

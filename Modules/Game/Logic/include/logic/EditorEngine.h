@@ -297,6 +297,11 @@ public:
         return m_syncSameMainAudioCanvases.load(std::memory_order_relaxed);
     }
 
+    /// @brief 刷新已打开 Session 的主音轨同步路径键。
+    /// @warning 低频路径：谱面元数据或项目路径发生变化时调用；会遍历当前
+    /// Session 列表并执行路径规范化，禁止放入每帧或每 update 调用链。
+    void refreshMainAudioSyncKeys();
+
     /**
      * @brief 设置编辑器配置 (同时分发指令给 Session)
      */
@@ -343,6 +348,14 @@ private:
     /// @warning 逻辑热路径/原子：每次 Session update
     /// 后可能执行；只读取同步开关并遍历当前会话列表。
     void syncSameMainAudioCanvases();
+
+    /// @brief 刷新已打开 Session 的主音轨同步路径键，调用者必须持有注册表锁。
+    /// @warning 低频路径：会遍历当前 Session 列表并执行路径规范化。
+    void refreshMainAudioSyncKeysUnsafe();
+
+    /// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
+    /// @warning 低频路径：只在 Session 增删或主音轨路径变化后调用。
+    void refreshMainAudioSyncPeerStateUnsafe();
 
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
     bool needsCanvasCloseBeforeProjectOpen() const;
@@ -407,6 +420,11 @@ private:
     /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ true };
 
+    /// @brief 当前是否存在至少两个使用同一主音轨的非 Logo Session。
+    /// @warning 逻辑热路径/原子：同步入口每次读取；低频路径写入，只承载
+    /// 同步候选脏状态，使用 relaxed。
+    std::atomic<bool> m_hasMainAudioSyncPeers{ false };
+
     /// @brief 等待 UI 线程聚焦的 Session 索引。
     /// @warning 逻辑/UI 热路径原子：createSession 低频写入，CanvasTabManager
     /// 每帧消费。
@@ -414,6 +432,12 @@ private:
 
     /// @brief 项目工作区恢复后待激活的 Session 索引，仅由逻辑线程读写。
     int32_t m_pendingWorkspaceActiveIndex{ -1 };
+
+    /// @brief 上次执行同主音轨同步时的活跃 Session 索引。
+    int32_t m_lastMainAudioSyncActiveIndex{ -1 };
+
+    /// @brief 上次执行同主音轨同步时的活跃 Session 逻辑时间。
+    double m_lastMainAudioSyncTime{ 0.0 };
 
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
     uint32_t m_logicUpdateCount{ 0 };

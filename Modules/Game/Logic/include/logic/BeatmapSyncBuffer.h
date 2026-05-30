@@ -178,7 +178,9 @@ struct RenderSnapshot {
     };
 
     // 交互状态
-    EditTool                        currentTool{ EditTool::Move };
+    EditTool currentTool{ EditTool::Move };
+    /// @brief 当前快照是否允许生成拾取/悬浮等交互数据。
+    bool                            acceptsInteraction{ false };
     bool                            isHoveringCanvas{ false };
     bool                            isSelecting{ false };
     std::vector<MarqueeBoxSnapshot> marqueeBoxes;
@@ -301,15 +303,16 @@ struct RenderSnapshot {
         scrollSegments.clear();
         uvMap.clear();
         backgroundPath.clear();
-        bgSize           = glm::vec2(0.0f, 0.0f);
-        isPlaying        = false;
-        currentTime      = 0.0;
-        totalTime        = 0.0;
-        snapshotSysTime  = 0.0;
-        playbackSpeed    = 1.0;
-        currentTool      = EditTool::Move;
-        isHoveringCanvas = false;
-        isSelecting      = false;
+        bgSize             = glm::vec2(0.0f, 0.0f);
+        isPlaying          = false;
+        currentTime        = 0.0;
+        totalTime          = 0.0;
+        snapshotSysTime    = 0.0;
+        playbackSpeed      = 1.0;
+        currentTool        = EditTool::Move;
+        acceptsInteraction = false;
+        isHoveringCanvas   = false;
+        isSelecting        = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
         hoveredTime            = 0.0;

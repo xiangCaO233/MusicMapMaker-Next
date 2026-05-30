@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 
 namespace MMM::Logic
@@ -33,6 +34,9 @@ constexpr int BACKGROUND_SESSION_MIN_UPS = 60;
 
 /// @brief 后台非活跃谱面画布的最高快照更新频率上限。
 constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
+
+/// @brief 同主音轨画布同步的逻辑时间变化阈值。
+constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
 /// @warning 逻辑热路径等待：UPS 提前到达目标间隔时执行；只能包含 sleep
@@ -231,25 +235,48 @@ void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
     normalizeResourcePath(meta.cover_path);
 }
 
-std::string getMainAudioSyncKey(const SessionContext& ctx,
-                                const Project*        project)
+/// @brief 生成用于判断多个谱面是否使用同一主音轨的稳定路径键。
+/// @param project 当前项目；存在时相对路径按项目根目录解析。
+/// @param mapPath 谱面文件路径；无项目时用于解析相对音频路径。
+/// @param audioPath 主音轨路径。
+/// @return 规范化后的 UTF-8 路径键，空音频路径返回空字符串。
+std::string makeMainAudioSyncKey(const Project*               project,
+                                 const std::filesystem::path& mapPath,
+                                 const std::filesystem::path& audioPath)
 {
-    if ( !ctx.currentBeatmap ||
-         ctx.currentBeatmap->m_baseMapMetadata.main_audio_path.empty() ) {
+    if ( audioPath.empty() ) {
         return "";
     }
 
-    std::filesystem::path audioPath =
-        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-    if ( project && audioPath.is_relative() ) {
-        audioPath = project->m_projectRoot / audioPath;
-    } else if ( !project && audioPath.is_relative() ) {
-        audioPath =
-            ctx.currentBeatmap->m_baseMapMetadata.map_path.parent_path() /
-            audioPath;
+    std::filesystem::path keyPath = audioPath;
+    if ( project && keyPath.is_relative() ) {
+        keyPath = project->m_projectRoot / keyPath;
+    } else if ( !project && keyPath.is_relative() ) {
+        keyPath = mapPath.parent_path() / keyPath;
     }
 
-    return Config::pathToUtf8(audioPath.lexically_normal());
+    std::error_code ec;
+    auto canonicalPath = std::filesystem::weakly_canonical(keyPath, ec);
+    if ( !ec ) {
+        keyPath = canonicalPath;
+    }
+
+    return Config::pathToUtf8(keyPath.lexically_normal());
+}
+
+/// @brief 根据 Session 上下文生成主音轨同步路径键。
+/// @param ctx 当前 Session 上下文。
+/// @param project 当前项目；存在时相对路径按项目根目录解析。
+/// @return 规范化后的 UTF-8 路径键，缺少谱面或音频路径时返回空字符串。
+std::string getMainAudioSyncKey(const SessionContext& ctx,
+                                const Project*        project)
+{
+    if ( !ctx.currentBeatmap ) {
+        return "";
+    }
+
+    const auto& meta = ctx.currentBeatmap->m_baseMapMetadata;
+    return makeMainAudioSyncKey(project, meta.map_path, meta.main_audio_path);
 }
 
 /// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
@@ -891,6 +918,7 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
         entry.beatmapPathKey = makeBeatmapPathKey(
             currentProject, ctx.currentBeatmap->m_baseMapMetadata.map_path);
     }
+    refreshMainAudioSyncKeysUnsafe();
 }
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)
@@ -1023,12 +1051,65 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
     }
 }
 
+/// @brief 刷新已打开 Session 的主音轨同步路径键。
+void EditorEngine::refreshMainAudioSyncKeys()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    refreshMainAudioSyncKeysUnsafe();
+}
+
+/// @brief 刷新已打开 Session 的主音轨同步路径键，调用者必须持有注册表锁。
+void EditorEngine::refreshMainAudioSyncKeysUnsafe()
+{
+    const auto* currentProject = ProjectController::instance().currentProject();
+    auto&       sessions       = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( entry.isLogoPlaceholder || !entry.session ) {
+            entry.mainAudioSyncKey.clear();
+            continue;
+        }
+
+        const auto& ctx        = entry.session->getContext();
+        entry.mainAudioSyncKey = getMainAudioSyncKey(ctx, currentProject);
+    }
+    refreshMainAudioSyncPeerStateUnsafe();
+    m_lastMainAudioSyncActiveIndex = -1;
+}
+
+/// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
+void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
+{
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( size_t i = 0; i < sessions.size(); ++i ) {
+        const auto& key = sessions[i].mainAudioSyncKey;
+        if ( key.empty() || sessions[i].isLogoPlaceholder ||
+             !sessions[i].session ) {
+            continue;
+        }
+
+        for ( size_t j = i + 1; j < sessions.size(); ++j ) {
+            if ( sessions[j].isLogoPlaceholder || !sessions[j].session ) {
+                continue;
+            }
+            if ( sessions[j].mainAudioSyncKey == key ) {
+                m_hasMainAudioSyncPeers.store(true, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+
+    m_hasMainAudioSyncPeers.store(false, std::memory_order_relaxed);
+}
+
 /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
 /// @warning 逻辑热路径/原子：每次 Session update 后可能执行；开关读取使用
 /// relaxed，后续只遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvases()
 {
     if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
+        return;
+    }
+    if ( !m_hasMainAudioSyncPeers.load(std::memory_order_relaxed) ) {
         return;
     }
 
@@ -1043,10 +1124,8 @@ void EditorEngine::syncSameMainAudioCanvases()
         return;
     }
 
-    /// @brief 当前项目指针快照，仅用于解析主音轨同步键。
-    const auto* currentProject = ProjectController::instance().currentProject();
-    auto&       activeCtx      = sessions[activeIndex].session->getContext();
-    const auto  activeKey      = getMainAudioSyncKey(activeCtx, currentProject);
+    auto&       activeCtx = sessions[activeIndex].session->getContext();
+    const auto& activeKey = sessions[activeIndex].mainAudioSyncKey;
     if ( activeKey.empty() ) {
         return;
     }
@@ -1057,7 +1136,7 @@ void EditorEngine::syncSameMainAudioCanvases()
         }
 
         auto& ctx = sessions[i].session->getContextMutable();
-        if ( getMainAudioSyncKey(ctx, currentProject) != activeKey ) {
+        if ( sessions[i].mainAudioSyncKey != activeKey ) {
             continue;
         }
 
@@ -1104,6 +1183,13 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
         beatmap ? makeBeatmapPathKey(currentProject,
                                      beatmap->m_baseMapMetadata.map_path)
                 : std::string{};
+    /// @brief 本次请求打开的主音轨稳定路径键。
+    const std::string requestedMainAudioSyncKey =
+        beatmap
+            ? makeMainAudioSyncKey(currentProject,
+                                   beatmap->m_baseMapMetadata.map_path,
+                                   beatmap->m_baseMapMetadata.main_audio_path)
+            : std::string{};
 
     if ( !isLogoPlaceholder && beatmap ) {
         if ( !requestedBeatmapKey.empty() ) {
@@ -1151,7 +1237,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 sessions[i].displayName = displayName.empty()
                                               ? beatmap->m_baseMapMetadata.name
                                               : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
+                sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
                 }
@@ -1162,6 +1249,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
+                refreshMainAudioSyncPeerStateUnsafe();
+                m_lastMainAudioSyncActiveIndex = -1;
 
                 XINFO("Reused Logo canvas {} for beatmap: {}",
                       sessions[i].cameraId,
@@ -1219,10 +1308,13 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
             ? (beatmap ? beatmap->m_baseMapMetadata.name : "New Canvas")
             : displayName;
     entry.beatmapPathKey           = requestedBeatmapKey;
+    entry.mainAudioSyncKey         = requestedMainAudioSyncKey;
     entry.isLogoPlaceholder        = isLogoPlaceholder;
     entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
     int32_t newIndex = m_sessionRegistry.append(std::move(entry));
+    refreshMainAudioSyncPeerStateUnsafe();
+    m_lastMainAudioSyncActiveIndex = -1;
 
     XINFO("Created Session #{} cameraId={} name={} (logo={})",
           newIndex,
@@ -1250,6 +1342,8 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
 
     // 移除 Session
     m_sessionRegistry.erase(index);
+    refreshMainAudioSyncPeerStateUnsafe();
+    m_lastMainAudioSyncActiveIndex = -1;
 
     // 清理对应的 SyncBuffer
     m_renderSyncRegistry.eraseCamera(cameraId);
@@ -1276,8 +1370,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             auto& oldSession = sessions[currentActive].session;
             if ( oldSession ) {
                 auto& oldCtx    = oldSession->getContextMutable();
-                oldMainAudioKey = getMainAudioSyncKey(
-                    oldCtx, ProjectController::instance().currentProject());
+                oldMainAudioKey = sessions[currentActive].mainAudioSyncKey;
                 if ( oldCtx.isPlaying ) {
                     oldCtx.currentTime =
                         Audio::AudioManager::instance().getCurrentTime();
@@ -1292,12 +1385,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
         if ( m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) &&
              !oldMainAudioKey.empty() && sessions[index].session ) {
-            const auto& targetCtx = sessions[index].session->getContext();
             shouldSyncTargetTime =
-                getMainAudioSyncKey(
-                    targetCtx,
-                    ProjectController::instance().currentProject()) ==
-                oldMainAudioKey;
+                sessions[index].mainAudioSyncKey == oldMainAudioKey;
         }
 
         m_sessionRegistry.setActiveIndex(index);
@@ -1599,18 +1688,41 @@ void EditorEngine::loop()
                     continue;
                 }
 
-                entry.session->update(dt, m_editorConfig);
+                entry.session->update(
+                    dt, m_editorConfig, entry.index == activeIndex);
                 if ( entry.index != activeIndex ) {
                     m_backgroundSessionUpdateTimes[static_cast<size_t>(
                         entry.index)] = currentTime;
                 }
             }
             if ( m_pendingWorkspaceActiveIndex >= 0 ) {
-                int32_t activeIndex           = m_pendingWorkspaceActiveIndex;
+                int32_t requestedActiveIndex  = m_pendingWorkspaceActiveIndex;
                 m_pendingWorkspaceActiveIndex = -1;
-                setActiveSessionIndex(activeIndex);
+                setActiveSessionIndex(requestedActiveIndex);
+                activeIndex = m_sessionRegistry.activeIndex();
             }
-            syncSameMainAudioCanvases();
+
+            bool shouldSyncMainAudioCanvases = false;
+            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+                if ( entry.index != activeIndex || !entry.session ) {
+                    continue;
+                }
+
+                const auto& activeCtx = entry.session->getContext();
+                shouldSyncMainAudioCanvases =
+                    activeCtx.isPlaying ||
+                    activeIndex != m_lastMainAudioSyncActiveIndex ||
+                    std::abs(activeCtx.currentTime - m_lastMainAudioSyncTime) >
+                        MAIN_AUDIO_SYNC_TIME_EPSILON;
+                if ( shouldSyncMainAudioCanvases ) {
+                    m_lastMainAudioSyncActiveIndex = activeIndex;
+                    m_lastMainAudioSyncTime        = activeCtx.currentTime;
+                }
+                break;
+            }
+            if ( shouldSyncMainAudioCanvases ) {
+                syncSameMainAudioCanvases();
+            }
             m_cursorSmokeLifeOverride.store(
                 resolveActiveCursorSmokeLifeOverride(
                     m_sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
@@ -1715,17 +1827,16 @@ void EditorEngine::updateBeatmapFilePathInProject(
         saveProject();
     }
 
-    if ( oldBeatmapKey.empty() || newBeatmapKey.empty() ) {
-        return;
-    }
-
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
-    for ( auto& entry : sessions ) {
-        if ( entry.beatmapPathKey == oldBeatmapKey ) {
-            entry.beatmapPathKey = newBeatmapKey;
+    if ( !oldBeatmapKey.empty() && !newBeatmapKey.empty() ) {
+        for ( auto& entry : sessions ) {
+            if ( entry.beatmapPathKey == oldBeatmapKey ) {
+                entry.beatmapPathKey = newBeatmapKey;
+            }
         }
     }
+    refreshMainAudioSyncKeysUnsafe();
 }
 
 void EditorEngine::scanProjectDirectory()

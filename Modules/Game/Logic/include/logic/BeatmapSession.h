@@ -40,7 +40,9 @@ public:
     /// 执行；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
     /// @param dt 帧间隔时间 (秒)
     /// @param config 全局编辑器配置
-    void update(double dt, const Config::EditorConfig& config);
+    /// @param isActiveSession 当前会话是否是前台活跃会话。
+    void update(double dt, const Config::EditorConfig& config,
+                bool isActiveSession);
 
     /// @brief 获取共享上下文的只读引用（通常供 UI 渲染层读取状态）
     const SessionContext& getContext() const { return *m_ctx; }
@@ -64,9 +66,12 @@ private:
     bool processCommands();
 
     /// @brief 更新 ECS 状态并为所有活跃视口生成渲染快照
+    /// @param config 全局编辑器配置。
+    /// @param isActiveSession 当前会话是否是前台活跃会话。
     /// @warning 逻辑/渲染热路径：每个 Session update 执行；完整排序和完整 entt
     /// 遍历只能在脏标记分支内发生。
-    void updateECSAndRender(const Config::EditorConfig& config);
+    void updateECSAndRender(const Config::EditorConfig& config,
+                            bool                        isActiveSession);
 
     // --- 内部指令处理器 (由 Session 自身处理的元命令) ---
     void handleCommand(const CmdUpdateEditorConfig& cmd);

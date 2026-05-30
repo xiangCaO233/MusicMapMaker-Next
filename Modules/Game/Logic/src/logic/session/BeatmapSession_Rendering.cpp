@@ -154,7 +154,11 @@ void accumulateNoteStats(const NoteComponent&  note,
 }
 }  // namespace
 
-void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
+/// @brief 更新 ECS 状态并为当前 Session 的视口生成渲染快照。
+/// @warning 逻辑/渲染热路径：每个 Session update 执行；后台 Session
+/// 不生成拾取/悬浮交互数据。
+void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
+                                        bool isActiveSession)
 {
     // Rebuild sorted note entities cache if needed
     if ( m_ctx->sortedNoteEntities.empty() || m_ctx->isTransformDirty ) {
@@ -240,7 +244,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
         // Session 覆盖
         if ( (cameraId == "Preview" || cameraId == "Timeline") &&
-             EditorEngine::instance().getActiveSession().get() != this ) {
+             !isActiveSession ) {
             continue;
         }
 
@@ -309,20 +313,22 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         }
 
         // --- 注入交互状态 ---
-        snapshot->currentTool = m_ctx->currentTool;
-        snapshot->noteCount   = m_ctx->noteCount;
-        snapshot->maxCombo    = m_ctx->maxCombo;
-        snapshot->isHoveringCanvas =
-            m_ctx->isMouseInCanvas && (m_ctx->mouseCameraId == cameraId);
+        snapshot->currentTool        = m_ctx->currentTool;
+        snapshot->acceptsInteraction = isActiveSession;
+        snapshot->noteCount          = m_ctx->noteCount;
+        snapshot->maxCombo           = m_ctx->maxCombo;
+        snapshot->isHoveringCanvas   = isActiveSession &&
+                                       m_ctx->isMouseInCanvas &&
+                                       (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
-        snapshot->isPreviewDragging =
-            m_ctx->isDragging && (m_ctx->dragCameraId == "Preview" ||
-                                  m_ctx->mouseCameraId == "Preview" ||
-                                  m_ctx->dragCameraId == "AudioWaveform" ||
-                                  m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime = m_ctx->previewHoverTime;
+        snapshot->isPreviewDragging = isActiveSession && m_ctx->isDragging &&
+                                      (m_ctx->dragCameraId == "Preview" ||
+                                       m_ctx->mouseCameraId == "Preview" ||
+                                       m_ctx->dragCameraId == "AudioWaveform" ||
+                                       m_ctx->dragCameraId == "AudioSpectrum");
+        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -743,7 +749,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         snapshot->trackCount = m_ctx->trackCount;
 
         // --- 注入画笔预览状态 ---
-        if ( m_ctx->brushState.isActive ) {
+        if ( isActiveSession && m_ctx->brushState.isActive ) {
             snapshot->brush.isActive = true;
             snapshot->brush.time     = m_ctx->brushState.time;
             snapshot->brush.duration = m_ctx->brushState.duration;
@@ -755,7 +761,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
         }
 
         // --- 注入橡皮擦预览状态 ---
-        if ( m_ctx->eraserState.isActive ) {
+        if ( isActiveSession && m_ctx->eraserState.isActive ) {
             snapshot->erasingEntities = m_ctx->eraserState.targetEntities;
             snapshot->erasingSubIndex = -1;
 

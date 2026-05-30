@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/EditorSettings.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/imguivk/VKRenderPass.h"
@@ -78,10 +79,11 @@ public:
      */
     inline vk::Device& getLogicalDevice() { return m_vkLogicalDevice; }
 
-    /**
-     * @brief 切换垂直同步
-     */
-    void setVSync(bool enabled);
+    /// @brief 根据帧率限制策略切换交换链呈现模式。
+    /// @param frameLimit 帧率限制策略。
+    /// @warning 低频同步点：呈现模式实际变化时会 waitIdle 并标记交换链重建，
+    /// 只能由设置变更路径调用。
+    void setFrameLimitPresentMode(Config::FrameLimitPreference frameLimit);
 
     /**
      * @brief 全屏
@@ -165,10 +167,15 @@ private:
     std::atomic<bool> m_fontRebuildRequested{ false };
 
 private:
-    /**
-     * @brief 仅更新全局呈现模式参数，不触发重建
-     */
-    void updateGlobalPresentMode(bool enabled);
+    /// @brief 根据帧率限制策略选择当前设备支持的呈现模式。
+    /// @param frameLimit 帧率限制策略。
+    /// @return 当前设备可用的 Vulkan 呈现模式。
+    vk::PresentModeKHR selectPresentMode(
+        Config::FrameLimitPreference frameLimit) const;
+
+    /// @brief 仅更新全局呈现模式参数，不触发重建。
+    /// @param frameLimit 帧率限制策略。
+    void updateGlobalPresentMode(Config::FrameLimitPreference frameLimit);
 
     /**
      * @brief 初始化 GLFW 上下文

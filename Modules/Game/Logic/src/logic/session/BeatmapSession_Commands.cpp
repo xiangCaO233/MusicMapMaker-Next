@@ -364,6 +364,7 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
+        auto oldMap = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto oldAudio =
             m_ctx->currentBeatmap->m_baseMapMetadata.main_audio_path;
         auto oldCover =
@@ -376,6 +377,10 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         m_ctx->currentBeatmap->m_baseMapMetadata = updatedMeta;
         XINFO("BeatmapSession: Metadata updated for {}",
               m_ctx->currentBeatmap->m_baseMapMetadata.name);
+        if ( oldMap != updatedMeta.map_path ||
+             oldAudio != updatedMeta.main_audio_path ) {
+            EditorEngine::instance().refreshMainAudioSyncKeys();
+        }
 
         // 同步轨道数到上下文，确保渲染实时更新
         m_ctx->trackCount = updatedMeta.track_count;
