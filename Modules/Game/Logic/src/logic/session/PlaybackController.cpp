@@ -11,7 +11,8 @@ namespace MMM::Logic
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
-    m_ctx.isPlaying = cmd.isPlaying;
+    m_ctx.isMainAudioSyncFollower = false;
+    m_ctx.isPlaying               = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
         m_ctx.syncTimer             = 0.0;
         m_ctx.lastAudioPos          = 0.0;
@@ -35,6 +36,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    m_ctx.isMainAudioSyncFollower = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
         m_ctx.isPlaying = false;
         Audio::AudioManager::instance().pause();

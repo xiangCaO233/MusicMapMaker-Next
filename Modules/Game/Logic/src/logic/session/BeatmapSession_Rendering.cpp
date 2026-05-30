@@ -258,8 +258,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->clear();
 
         // 注入该 Camera 特有的 UV 映射到快照
-        snapshot->uvMap     = EditorEngine::instance().getAtlasUVMap(cameraId);
-        snapshot->isPlaying = m_ctx->isPlaying;
+        snapshot->uvMap = EditorEngine::instance().getAtlasUVMap(cameraId);
+        snapshot->isPlaying =
+            m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
         snapshot->currentTime = m_ctx->visualTime;  // 快照使用视觉平滑时间
         snapshot->totalTime   = Audio::AudioManager::instance().getTotalTime();
         snapshot->snapshotSysTime =

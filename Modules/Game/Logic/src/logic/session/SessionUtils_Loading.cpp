@@ -27,9 +27,10 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
-    ctx.isPlaying      = false;
-    ctx.currentTime    = 0.0;
-    ctx.currentBeatmap = beatmap;
+    ctx.isPlaying               = false;
+    ctx.isMainAudioSyncFollower = false;
+    ctx.currentTime             = 0.0;
+    ctx.currentBeatmap          = beatmap;
 
     if ( !beatmap ) {
         ctx.hitEvents.clear();

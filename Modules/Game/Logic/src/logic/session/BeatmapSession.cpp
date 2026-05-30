@@ -45,7 +45,8 @@ BeatmapSession::BeatmapSession()
             .subscribe<MMM::Event::AudioFinishedEvent>(
                 [this](const MMM::Event::AudioFinishedEvent& e) {
                     if ( !e.isLooping ) {
-                        m_ctx->isPlaying = false;
+                        m_ctx->isPlaying               = false;
+                        m_ctx->isMainAudioSyncFollower = false;
                         Audio::AudioManager::instance().pause();
                     }
                 });

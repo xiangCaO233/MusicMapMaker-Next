@@ -48,10 +48,12 @@ struct SessionContext {
     entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
 
-    double  currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
-    double  visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
-    bool    isPlaying{ false };  ///< 是否正在播放
-    int32_t trackCount{ 12 };    ///< 当前轨道总数
+    double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
+    double visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
+    bool   isPlaying{ false };  ///< 是否正在播放
+    /// @brief 是否作为同主音轨后台跟随者进行播放态视觉插值。
+    bool    isMainAudioSyncFollower{ false };
+    int32_t trackCount{ 12 };  ///< 当前轨道总数
 
     std::shared_ptr<MMM::BeatMap> currentBeatmap;  ///< 当前载入的谱面对象
     Config::EditorConfig          lastConfig;      ///< 最近一次同步的编辑器配置

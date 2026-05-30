@@ -1042,6 +1042,16 @@ bool EditorEngine::isPlaybackPlaying() const
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
 {
     m_syncSameMainAudioCanvases.store(enabled, std::memory_order_relaxed);
+    if ( !enabled ) {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( auto& entry : sessions ) {
+            if ( entry.session ) {
+                entry.session->getContextMutable().isMainAudioSyncFollower =
+                    false;
+            }
+        }
+    }
     if ( auto* project = ProjectController::instance().currentProject() ) {
         captureToolbarWorkspaceState(
             project->m_settings.m_workspace, m_editorConfig, enabled);
@@ -1140,12 +1150,13 @@ void EditorEngine::syncSameMainAudioCanvases()
             continue;
         }
 
-        ctx.currentTime           = activeCtx.currentTime;
-        ctx.visualTime            = activeCtx.visualTime;
-        ctx.isPlaying             = false;
-        ctx.lastAudioPos          = 0.0;
-        ctx.lastAudioSysTime      = 0.0;
-        ctx.hasInitialAudioOffset = false;
+        ctx.currentTime             = activeCtx.currentTime;
+        ctx.visualTime              = activeCtx.visualTime;
+        ctx.isPlaying               = false;
+        ctx.isMainAudioSyncFollower = activeCtx.isPlaying;
+        ctx.lastAudioPos            = 0.0;
+        ctx.lastAudioSysTime        = 0.0;
+        ctx.hasInitialAudioOffset   = false;
         ctx.playStartSysTime =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch())
@@ -1377,7 +1388,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                     oldCtx.visualTime =
                         oldCtx.currentTime +
                         m_editorConfig.visual.getEffectiveVisualOffset();
-                    oldCtx.isPlaying = false;
+                    oldCtx.isPlaying               = false;
+                    oldCtx.isMainAudioSyncFollower = false;
                 }
                 syncedCurrentTime = oldCtx.currentTime;
             }
@@ -1400,7 +1412,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             // 停止当前所有播放
             Audio::AudioManager::instance().stop();
 
-            auto& ctx = activeSession->getContextMutable();
+            auto& ctx                   = activeSession->getContextMutable();
+            ctx.isMainAudioSyncFollower = false;
             if ( shouldSyncTargetTime ) {
                 ctx.currentTime = syncedCurrentTime;
             }
@@ -1447,14 +1460,15 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             if ( minTime > totalTime ) {
                 minTime = totalTime;
             }
-            ctx.currentTime  = std::clamp(ctx.currentTime, minTime, totalTime);
-            ctx.visualTime   = ctx.currentTime +
-                               m_editorConfig.visual.getEffectiveVisualOffset();
-            ctx.currentTool  = m_currentTool.load(std::memory_order_relaxed);
-            ctx.isPlaying    = false;
-            ctx.lastAudioPos = 0.0;
-            ctx.lastAudioSysTime      = 0.0;
-            ctx.hasInitialAudioOffset = false;
+            ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
+            ctx.visualTime  = ctx.currentTime +
+                              m_editorConfig.visual.getEffectiveVisualOffset();
+            ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
+            ctx.isPlaying   = false;
+            ctx.isMainAudioSyncFollower = false;
+            ctx.lastAudioPos            = 0.0;
+            ctx.lastAudioSysTime        = 0.0;
+            ctx.hasInitialAudioOffset   = false;
             ctx.playStartSysTime =
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now().time_since_epoch())
