@@ -42,6 +42,36 @@
 namespace MMM
 {
 
+namespace
+{
+/// @brief 主循环限帧等待使用的时钟类型，要求单调递增避免系统时间跳变影响。
+using FrameLimitClock = std::chrono::steady_clock;
+
+/// @brief 限帧粗睡眠预留量，给操作系统调度精度留出少量余量。
+constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
+
+/// @brief 等待到目标帧时间点，避免用 yield 反复忙等。
+/// @warning 热路径等待：主渲染循环提前到达目标帧间隔时执行；只能包含
+/// sleep 和时间查询，禁止加入锁、分配或业务逻辑。
+void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
+{
+    while ( true ) {
+        auto now = FrameLimitClock::now();
+        if ( now >= deadline ) {
+            return;
+        }
+
+        auto remaining = deadline - now;
+        if ( remaining > FRAME_LIMIT_SLEEP_MARGIN ) {
+            std::this_thread::sleep_for(remaining - FRAME_LIMIT_SLEEP_MARGIN);
+        } else {
+            std::this_thread::sleep_until(deadline);
+            return;
+        }
+    }
+}
+}  // namespace
+
 /**
  * @brief 获取 GameLoop 单例实例
  * @return GameLoop& 唯一实例引用
@@ -209,7 +239,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // Logic::EditorEngine::instance().pushCommand(
         //     Logic::CmdLoadBeatmap{ map });
 
-        auto lastRenderTime = std::chrono::high_resolution_clock::now();
+        auto lastRenderTime = FrameLimitClock::now();
 
         // 进入主循环
         while ( !window.shouldClose() ) {
@@ -241,27 +271,17 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             }
 
             if ( targetDt > 0.0 ) {
-                auto currentTime = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double> passed =
-                    currentTime - lastRenderTime;
-                if ( passed.count() < targetDt ) {
-                    auto remaining =
-                        std::chrono::duration<double>(targetDt) - passed;
-                    if ( remaining.count() > 0.0015 ) {
-                        // 剩余时间较长，粗粒度 Sleep (减去 1ms
-                        // 作为时间片调度补偿)
-                        std::this_thread::sleep_for(std::chrono::duration_cast<
-                                                    std::chrono::microseconds>(
-                            remaining - std::chrono::milliseconds(1)));
-                    } else {
-                        // 剩余时间极短，让出时间片或自旋
-                        std::this_thread::yield();
-                    }
+                auto frameDeadline =
+                    lastRenderTime +
+                    std::chrono::duration_cast<FrameLimitClock::duration>(
+                        std::chrono::duration<double>(targetDt));
+                if ( FrameLimitClock::now() < frameDeadline ) {
+                    sleepUntilFrameDeadline(frameDeadline);
                     continue;
                 }
             }
 
-            lastRenderTime = std::chrono::high_resolution_clock::now();
+            lastRenderTime = FrameLimitClock::now();
 
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
             // 已移至渲染循环内以降低 VSync 延迟 window.pollEvents();
@@ -270,32 +290,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             float cursorSmokeLifeOverride = -1.0f;
             if ( settings.cursorStyle == Config::CursorStyle::Software &&
                  settings.softwareCursorConfig.enableBpmSyncSmokeLife ) {
-                auto& engine = Logic::EditorEngine::instance();
-                std::lock_guard<std::recursive_mutex> lock(
-                    engine.getSessionMutex());
-                if ( auto session = engine.getActiveSession() ) {
-                    auto& ctx = session->getContext();
-                    if ( ctx.currentBeatmap ) {
-                        double time = ctx.currentTime;
-                        double bpm  = ctx.currentBeatmap->m_baseMapMetadata
-                                          .preference_bpm;
-
-                        for ( const auto& t : ctx.currentBeatmap->m_timings ) {
-                            if ( t.m_timingEffect == MMM::TimingEffect::BPM ) {
-                                if ( t.m_timestamp <= time ) {
-                                    bpm = t.m_bpm;
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-
-                        if ( bpm > 0 ) {
-                            cursorSmokeLifeOverride =
-                                static_cast<float>(60.0 / bpm);
-                        }
-                    }
-                }
+                cursorSmokeLifeOverride = Logic::EditorEngine::instance()
+                                              .getCursorSmokeLifeOverride();
             }
             context.getRenderer().setCursorSmokeLifeOverride(
                 cursorSmokeLifeOverride);

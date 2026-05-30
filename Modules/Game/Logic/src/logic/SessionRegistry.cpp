@@ -175,6 +175,38 @@ SessionRegistry::sessionSnapshot() const
     return sessions;
 }
 
+/// @brief 获取当前所有有效 Session 指针快照，并保留注册表索引。
+/// @warning 逻辑热路径/共享指针：shared_ptr 拷贝用于延长会话生命周期，index
+/// 用于锁外匹配当前活跃 Session。
+std::vector<SessionSnapshotEntry>
+SessionRegistry::indexedSessionSnapshot() const
+{
+    /// @brief 当前非空 Session 指针与索引快照。
+    std::vector<SessionSnapshotEntry> sessions;
+    fillIndexedSessionSnapshot(sessions);
+    return sessions;
+}
+
+/// @brief 填充当前所有有效 Session 指针快照，并保留注册表索引。
+/// @warning 逻辑热路径/共享指针：复用调用方 vector 容量，shared_ptr
+/// 拷贝用于延长会话生命周期。
+void SessionRegistry::fillIndexedSessionSnapshot(
+    std::vector<SessionSnapshotEntry>& sessions) const
+{
+    /// @brief 保护本次带索引 Session 指针快照读取的临界区。
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+
+    sessions.clear();
+    sessions.reserve(m_entries.size());
+    for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
+          ++index ) {
+        const auto& entry = m_entries[static_cast<size_t>(index)];
+        if ( entry.session ) {
+            sessions.push_back({ index, entry.session });
+        }
+    }
+}
+
 /// @brief 查找第一个 Logo 占位 Session。
 int32_t SessionRegistry::findLogoPlaceholder() const
 {

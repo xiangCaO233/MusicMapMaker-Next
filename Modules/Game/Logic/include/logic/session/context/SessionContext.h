@@ -85,6 +85,8 @@ struct SessionContext {
         sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
     std::vector<double>
            sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
+    size_t noteCount{ 0 };          ///< 当前谱面的可计数物件数量缓存
+    size_t maxCombo{ 0 };           ///< 当前谱面的最大连击数缓存
     double lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>

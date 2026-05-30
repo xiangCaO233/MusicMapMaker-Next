@@ -22,6 +22,83 @@ namespace MMM::Logic
 
 namespace
 {
+/// @brief 逻辑循环限频等待使用的时钟类型，要求单调递增避免系统时间跳变影响。
+using FrameLimitClock = std::chrono::steady_clock;
+
+/// @brief 限频粗睡眠预留量，给操作系统调度精度留出少量余量。
+constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
+
+/// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
+/// @warning 逻辑热路径等待：UPS 提前到达目标间隔时执行；只能包含 sleep
+/// 和时间查询，禁止加入锁、分配或业务逻辑。
+void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
+{
+    while ( true ) {
+        auto now = FrameLimitClock::now();
+        if ( now >= deadline ) {
+            return;
+        }
+
+        auto remaining = deadline - now;
+        if ( remaining > FRAME_LIMIT_SLEEP_MARGIN ) {
+            std::this_thread::sleep_for(remaining - FRAME_LIMIT_SLEEP_MARGIN);
+        } else {
+            std::this_thread::sleep_until(deadline);
+            return;
+        }
+    }
+}
+
+/// @brief 根据 Session 上下文计算软件光标 BPM 同步烟雾寿命。
+/// @param ctx 当前活跃 Session 上下文。
+/// @return 当前 BPM 对应的一拍时长；无有效 BPM 时返回 -1。
+/// @warning 逻辑热路径：每 update 为活跃 Session 执行；只读取已缓存排序的
+/// bpmEvents 并二分查找，禁止回退为完整 timings 遍历或加锁访问 UI 状态。
+float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
+{
+    if ( !ctx.currentBeatmap ) {
+        return -1.0f;
+    }
+
+    double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+                               ctx.bpmEvents.end(),
+                               ctx.currentTime,
+                               [](double time, const TimelineComponent* event) {
+                                   return time < event->m_timestamp;
+                               });
+
+    if ( it != ctx.bpmEvents.begin() ) {
+        const auto* event = *std::prev(it);
+        if ( event ) {
+            bpm = event->m_value;
+        }
+    }
+
+    if ( bpm <= 0.0 ) {
+        return -1.0f;
+    }
+    return static_cast<float>(60.0 / bpm);
+}
+
+/// @brief 从带索引 Session 快照中解析活跃 Session 的光标烟雾寿命。
+/// @param sessions 当前逻辑线程持有的带索引 Session 快照。
+/// @param activeIndex 当前活跃 Session 的注册表索引。
+/// @return 当前活跃 Session 的烟雾寿命覆盖值；无活跃 Session 时返回 -1。
+/// @warning 逻辑热路径：每 update 执行；只遍历当前打开的 Session
+/// 快照，不访问注册表锁。
+float resolveActiveCursorSmokeLifeOverride(
+    const std::vector<SessionSnapshotEntry>& sessions, int32_t activeIndex)
+{
+    for ( const auto& entry : sessions ) {
+        if ( entry.index == activeIndex && entry.session ) {
+            return calculateCursorSmokeLifeOverride(
+                entry.session->getContext());
+        }
+    }
+    return -1.0f;
+}
+
 /// @brief 将持久化的项目相对路径解析为文件系统路径。
 std::filesystem::path resolveProjectPath(const Project&               project,
                                          const std::filesystem::path& path)
@@ -1194,7 +1271,7 @@ void EditorEngine::saveProject()
 /// entt 遍历、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
 void EditorEngine::loop()
 {
-    auto lastTime      = std::chrono::high_resolution_clock::now();
+    auto lastTime      = FrameLimitClock::now();
     m_lastUpsTime      = lastTime;
     m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
@@ -1226,21 +1303,16 @@ void EditorEngine::loop()
         default: targetDt = 0.0; break;
         }
 
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double> passed = currentTime - lastTime;
+        auto                          currentTime = FrameLimitClock::now();
+        std::chrono::duration<double> passed      = currentTime - lastTime;
 
         // 如果设置了帧率限制，并且距离上一帧还没有达到目标时间，就主动让出 CPU
         if ( passed.count() < targetDt ) {
-            auto remaining = std::chrono::duration<double>(targetDt) - passed;
-            if ( remaining.count() > 0.0015 ) {
-                // 剩余时间较长，进行较粗粒度的睡眠（减去 1ms 预留以补偿精度）
-                std::this_thread::sleep_for(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        remaining - std::chrono::milliseconds(1)));
-            } else {
-                // 剩余时间很少，微量让出 CPU 或进行非常短的睡眠
-                std::this_thread::yield();
-            }
+            auto frameDeadline =
+                lastTime +
+                std::chrono::duration_cast<FrameLimitClock::duration>(
+                    std::chrono::duration<double>(targetDt));
+            sleepUntilFrameDeadline(frameDeadline);
             continue;
         }
 
@@ -1257,6 +1329,10 @@ void EditorEngine::loop()
             m_logicUpdateCount = 0;
             m_lastUpsTime      = currentTime;
         }
+
+        /// @brief 释放上一轮锁外 update 持有的 Session 引用，并保留 vector
+        /// 容量供本轮复用。
+        m_sessionUpdateSnapshot.clear();
 
         // 关键修复：使用 shared_ptr 在锁内获取引用。
         // 这样即使 UI 线程在此时 closeSession 销毁了某个 Session，
@@ -1278,12 +1354,11 @@ void EditorEngine::loop()
         /// @brief 当前所有有效 Session 指针快照，避免更新时持有注册表锁。
         /// @warning 逻辑热路径/共享指针：这里的 shared_ptr
         /// 拷贝用于保证会话在锁外 update 期间不被 UI 线程关闭释放。
-        std::vector<std::shared_ptr<BeatmapSession>> sessionsSnapshot =
-            m_sessionRegistry.sessionSnapshot();
+        m_sessionRegistry.fillIndexedSessionSnapshot(m_sessionUpdateSnapshot);
 
-        if ( !sessionsSnapshot.empty() ) {
-            for ( auto& session : sessionsSnapshot ) {
-                session->update(dt, m_editorConfig);
+        if ( !m_sessionUpdateSnapshot.empty() ) {
+            for ( auto& entry : m_sessionUpdateSnapshot ) {
+                entry.session->update(dt, m_editorConfig);
             }
             if ( m_pendingWorkspaceActiveIndex >= 0 ) {
                 int32_t activeIndex           = m_pendingWorkspaceActiveIndex;
@@ -1291,20 +1366,25 @@ void EditorEngine::loop()
                 setActiveSessionIndex(activeIndex);
             }
             syncSameMainAudioCanvases();
+            m_cursorSmokeLifeOverride.store(
+                resolveActiveCursorSmokeLifeOverride(
+                    m_sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
+                std::memory_order_relaxed);
         } else {
+            m_cursorSmokeLifeOverride.store(-1.0f, std::memory_order_relaxed);
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         // 检查文件夹监听器是否捕获到了任何文件系统变更事件
-        static auto lastChangeTime = std::chrono::high_resolution_clock::now();
+        static auto lastChangeTime   = FrameLimitClock::now();
         static bool hasPendingChange = false;
 
         if ( projectController.consumeDirectoryChangePending() ) {
             hasPendingChange = true;
-            lastChangeTime   = std::chrono::high_resolution_clock::now();
+            lastChangeTime   = FrameLimitClock::now();
         }
 
         if ( hasPendingChange ) {
-            auto now = std::chrono::high_resolution_clock::now();
+            auto now = FrameLimitClock::now();
             // 去抖动延时（200ms），在所有批量写操作静止后再执行安全扫描
             if ( std::chrono::duration<double>(now - lastChangeTime).count() >=
                  0.2 ) {

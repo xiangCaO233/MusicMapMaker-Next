@@ -79,6 +79,10 @@ public:
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
                             float statusBarHeight, float sidebarWidth,
                             float toolbarWidth);
+    /// @brief 渲染底部状态栏。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param statusBarHeight 状态栏高度。
+    /// @param dpiScale 当前 DPI 缩放。
     void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
                          float dpiScale);
 

@@ -14,11 +14,145 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <numeric>
 
 namespace MMM::Logic
 {
+
+namespace
+{
+/// @brief 谱面状态栏统计缓存。
+struct BeatmapStatusStats {
+    /// @brief 当前谱面的可计数物件数量。
+    size_t noteCount{ 0 };
+
+    /// @brief 当前谱面的最大连击数。
+    size_t maxCombo{ 0 };
+};
+
+/// @brief 计算 Hold 区间内的 1/4 拍连击增量。
+/// @param startTime Hold 起始时间。
+/// @param endTime Hold 结束时间。
+/// @param beatmap 当前谱面数据。
+/// @return 区间内按 BPM 分段累计的连击增量。
+/// @warning 逻辑热路径低频分支：仅在音符/时间线脏标记触发统计重算时执行；禁止每
+/// update 无条件调用。
+size_t calculateIntervalCombos(double startTime, double endTime,
+                               const ::MMM::BeatMap* beatmap)
+{
+    if ( !beatmap || endTime <= startTime ) {
+        return 0;
+    }
+
+    double totalQuarterBeats = 0.0;
+    double currTime          = startTime;
+
+    double currentBpm = beatmap->m_baseMapMetadata.preference_bpm;
+    if ( currentBpm <= 0.0 ) currentBpm = 120.0;
+
+    size_t nextTimingIdx = 0;
+    for ( size_t i = 0; i < beatmap->m_timings.size(); ++i ) {
+        const auto& timing = beatmap->m_timings[i];
+        if ( timing.m_timingEffect == ::MMM::TimingEffect::BPM ) {
+            if ( timing.m_timestamp <= startTime ) {
+                currentBpm = timing.m_bpm;
+            } else {
+                nextTimingIdx = i;
+                break;
+            }
+        }
+    }
+
+    while ( currTime < endTime ) {
+        double nextEventTime = endTime;
+        double nextBpm       = currentBpm;
+        size_t foundIdx      = beatmap->m_timings.size();
+
+        for ( size_t i = nextTimingIdx; i < beatmap->m_timings.size(); ++i ) {
+            const auto& timing = beatmap->m_timings[i];
+            if ( timing.m_timingEffect == ::MMM::TimingEffect::BPM &&
+                 timing.m_timestamp > currTime ) {
+                if ( timing.m_timestamp < endTime ) {
+                    nextEventTime = timing.m_timestamp;
+                    nextBpm       = timing.m_bpm;
+                    foundIdx      = i + 1;
+                }
+                break;
+            }
+        }
+
+        double dt = nextEventTime - currTime;
+        totalQuarterBeats += dt * (currentBpm / 15.0);
+
+        currTime   = nextEventTime;
+        currentBpm = nextBpm;
+        if ( foundIdx < beatmap->m_timings.size() ) {
+            nextTimingIdx = foundIdx;
+        }
+    }
+
+    double tolerance = 0.003 * (currentBpm / 15.0);
+    return static_cast<size_t>(std::floor(totalQuarterBeats + tolerance));
+}
+
+/// @brief 将单个音符组件累计到状态栏统计。
+/// @param note 当前音符组件。
+/// @param beatmap 当前谱面数据。
+/// @param stats 待更新的统计缓存。
+void accumulateNoteStats(const NoteComponent&  note,
+                         const ::MMM::BeatMap* beatmap,
+                         BeatmapStatusStats&   stats)
+{
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            if ( sub.type == ::MMM::NoteType::NOTE ||
+                 sub.type == ::MMM::NoteType::HOLD ||
+                 sub.type == ::MMM::NoteType::FLICK ) {
+                ++stats.noteCount;
+            }
+        }
+    } else if ( !note.m_isSubNote ) {
+        if ( note.m_type == ::MMM::NoteType::NOTE ||
+             note.m_type == ::MMM::NoteType::HOLD ||
+             note.m_type == ::MMM::NoteType::FLICK ) {
+            ++stats.noteCount;
+        }
+    }
+
+    if ( note.m_isSubNote ) {
+        return;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::NOTE ||
+         note.m_type == ::MMM::NoteType::FLICK ) {
+        ++stats.maxCombo;
+    } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        ++stats.maxCombo;
+        stats.maxCombo += calculateIntervalCombos(
+            note.m_timestamp, note.m_timestamp + note.m_duration, beatmap);
+    } else if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                !note.m_subNotes.empty() ) {
+        ++stats.maxCombo;
+        if ( note.m_subNotes[0].type == ::MMM::NoteType::HOLD ) {
+            stats.maxCombo += calculateIntervalCombos(
+                note.m_subNotes[0].timestamp,
+                note.m_subNotes[0].timestamp + note.m_subNotes[0].duration,
+                beatmap);
+        }
+        for ( size_t i = 1; i < note.m_subNotes.size(); ++i ) {
+            const auto& sub = note.m_subNotes[i];
+            if ( sub.type == ::MMM::NoteType::FLICK ) {
+                ++stats.maxCombo;
+            } else if ( sub.type == ::MMM::NoteType::HOLD ) {
+                stats.maxCombo += calculateIntervalCombos(
+                    sub.timestamp, sub.timestamp + sub.duration, beatmap);
+            }
+        }
+    }
+}
+}  // namespace
 
 void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 {
@@ -36,10 +170,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
                   });
         m_ctx->sortedNoteMaxEndPrefix.clear();
         m_ctx->sortedNoteMaxEndPrefix.reserve(m_ctx->sortedNoteEntities.size());
-        double maxEndTime = 0.0;
+        BeatmapStatusStats stats;
+        const auto*        beatmap    = m_ctx->currentBeatmap.get();
+        double             maxEndTime = 0.0;
         for ( auto entity : m_ctx->sortedNoteEntities ) {
             const auto& note =
                 m_ctx->noteRegistry.get<const NoteComponent>(entity);
+            accumulateNoteStats(note, beatmap, stats);
             double noteEnd = note.m_timestamp + std::max(0.0, note.m_duration);
             if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
                 for ( const auto& sub : note.m_subNotes ) {
@@ -50,6 +187,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
             maxEndTime = std::max(maxEndTime, noteEnd);
             m_ctx->sortedNoteMaxEndPrefix.push_back(maxEndTime);
         }
+        m_ctx->noteCount = stats.noteCount;
+        m_ctx->maxCombo  = stats.maxCombo;
     }
 
     m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
@@ -170,6 +309,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
 
         // --- 注入交互状态 ---
         snapshot->currentTool = m_ctx->currentTool;
+        snapshot->noteCount   = m_ctx->noteCount;
+        snapshot->maxCombo    = m_ctx->maxCombo;
         snapshot->isHoveringCanvas =
             m_ctx->isMouseInCanvas && (m_ctx->mouseCameraId == cameraId);
 

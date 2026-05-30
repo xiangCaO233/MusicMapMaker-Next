@@ -263,6 +263,16 @@ public:
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
+    /// @brief 获取逻辑线程发布的软件光标 BPM 同步烟雾寿命。
+    /// @return 当前 BPM 对应的一拍时长；无有效谱面或 BPM 时返回 -1。
+    /// @warning UI
+    /// 热路径/原子：主渲染循环每帧读取；只承载逻辑线程发布的显示状态， 使用
+    /// relaxed，避免渲染线程访问 Session 锁和谱面数据。
+    float getCursorSmokeLifeOverride() const
+    {
+        return m_cursorSmokeLifeOverride.load(std::memory_order_relaxed);
+    }
+
     /// @brief 设置同主音轨多画布时间同步开关。
     /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
     void setSyncSameMainAudioCanvases(bool enabled);
@@ -354,6 +364,11 @@ private:
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
 
+    /// @brief 逻辑线程复用的 Session 更新快照容器。
+    /// @warning 逻辑热路径/共享指针：每 update 复用容量以避免 vector
+    /// 分配；元素持有 shared_ptr 是为了保证锁外 update 生命周期安全。
+    std::vector<SessionSnapshotEntry> m_sessionUpdateSnapshot;
+
     /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
     EditorClipboard m_clipboard;
 
@@ -361,6 +376,12 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 逻辑线程发布给渲染线程的软件光标烟雾寿命覆盖值。
+    /// @warning 逻辑/UI 热路径/原子：逻辑线程每 update
+    /// 写入，渲染线程每帧读取；只承载 当前 BPM 对应的一拍时长或 -1，使用
+    /// relaxed 以避免主渲染线程锁竞争。
+    std::atomic<float> m_cursorSmokeLifeOverride{ -1.0f };
 
     /// @brief 是否强制同步使用同一主音轨的画布时间。
     /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
@@ -373,8 +394,8 @@ private:
     /// @brief 逻辑线程更新计数器，用于 UPS 计算
     uint32_t m_logicUpdateCount{ 0 };
 
-    /// @brief 上一次计算 UPS 的时间戳
-    std::chrono::high_resolution_clock::time_point m_lastUpsTime;
+    /// @brief 上次统计 UPS 的单调时钟时间点。
+    std::chrono::steady_clock::time_point m_lastUpsTime;
 };
 
 }  // namespace MMM::Logic

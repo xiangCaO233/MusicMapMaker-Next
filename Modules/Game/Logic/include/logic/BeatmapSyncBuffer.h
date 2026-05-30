@@ -211,6 +211,8 @@ struct RenderSnapshot {
     float   renderScaleY{ 1.0f };     ///< 垂直缩放倍率 (用于亚帧补偿计算)
     double  visibleTimeStart{ 0.0 };  ///< 当前视口可见的时间范围起点
     double  visibleTimeEnd{ 0.0 };    ///< 当前视口可见的时间范围终点
+    size_t  noteCount{ 0 };           ///< 当前谱面的可计数物件数量
+    size_t  maxCombo{ 0 };            ///< 当前谱面的最大连击数
 
     // 笔刷预览状态
     struct BrushSnapshot {
@@ -340,6 +342,8 @@ struct RenderSnapshot {
         dynamicVertexCount = 0;
         visibleTimeStart   = 0.0;
         visibleTimeEnd     = 0.0;
+        noteCount          = 0;
+        maxCombo           = 0;
     }
 };
 

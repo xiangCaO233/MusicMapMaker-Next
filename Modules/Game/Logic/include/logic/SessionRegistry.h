@@ -30,6 +30,15 @@ struct SessionEntry {
     bool restoreDockFromWorkspace{ false };
 };
 
+/// @brief 逻辑线程使用的 Session 指针快照，保留原始列表索引用于匹配活跃项。
+struct SessionSnapshotEntry {
+    /// @brief Session 在注册表中的原始索引。
+    int32_t index{ -1 };
+
+    /// @brief 逻辑会话共享引用，保证锁外 update 期间生命周期有效。
+    std::shared_ptr<BeatmapSession> session;
+};
+
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
 class SessionRegistry
 {
@@ -111,6 +120,21 @@ public:
     /// 拷贝用于保证会话在锁外更新期间不被 UI
     /// 关闭销毁，不能替换为裸引用，除非先引入延迟销毁队列。
     std::vector<std::shared_ptr<BeatmapSession>> sessionSnapshot() const;
+
+    /// @brief 获取当前所有有效 Session 指针快照，并保留它们的注册表索引。
+    /// @return 当前注册的非空 BeatmapSession 指针与原始索引列表。
+    /// @warning 逻辑热路径/共享指针：逻辑循环每次 update 前调用；shared_ptr
+    /// 拷贝用于保证会话在锁外更新期间不被 UI 关闭销毁，索引用于无锁匹配活跃
+    /// Session。
+    std::vector<SessionSnapshotEntry> indexedSessionSnapshot() const;
+
+    /// @brief 填充当前所有有效 Session 指针快照，并保留它们的注册表索引。
+    /// @param sessions 接收快照的输出容器；会被清空并复用已有容量。
+    /// @warning 逻辑热路径/共享指针：逻辑循环每次 update
+    /// 前调用；复用调用方容器避免 每轮 vector 分配，但仍会复制 shared_ptr
+    /// 以保证锁外 update 生命周期安全。
+    void fillIndexedSessionSnapshot(
+        std::vector<SessionSnapshotEntry>& sessions) const;
 
     /// @brief 查找第一个 Logo 占位 Session。
     /// @return Logo 占位 Session 索引；不存在时返回 -1。
