@@ -113,7 +113,7 @@ struct ProjectWorkspaceToolbarState {
     int m_beatDivisor{ 4 };
 
     /// @brief 是否同步使用同一主音轨的多个画布时间。
-    bool m_syncSameMainAudioCanvases{ false };
+    bool m_syncSameMainAudioCanvases{ true };
 
     /// @brief 序列化工具栏工作区状态。
     friend void to_json(nlohmann::json&                     j,
@@ -149,7 +149,7 @@ struct ProjectWorkspaceToolbarState {
         state.m_enableHitEffects     = j.value("m_enableHitEffects", true);
         state.m_beatDivisor          = j.value("m_beatDivisor", 4);
         state.m_syncSameMainAudioCanvases =
-            j.value("m_syncSameMainAudioCanvases", false);
+            j.value("m_syncSameMainAudioCanvases", true);
     }
 };
 

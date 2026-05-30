@@ -597,7 +597,7 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
                 std::memory_order_relaxed);
             setEditorConfig(restoredConfig);
         } else {
-            m_syncSameMainAudioCanvases.store(false, std::memory_order_relaxed);
+            m_syncSameMainAudioCanvases.store(true, std::memory_order_relaxed);
         }
     }
 

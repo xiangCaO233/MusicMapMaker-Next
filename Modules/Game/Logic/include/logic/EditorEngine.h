@@ -386,7 +386,7 @@ private:
     /// @brief 是否强制同步使用同一主音轨的画布时间。
     /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
     /// relaxed。
-    std::atomic<bool> m_syncSameMainAudioCanvases{ false };
+    std::atomic<bool> m_syncSameMainAudioCanvases{ true };
 
     /// @brief 项目工作区恢复后待激活的 Session 索引，仅由逻辑线程读写。
     int32_t m_pendingWorkspaceActiveIndex{ -1 };

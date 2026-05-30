@@ -325,7 +325,7 @@ struct EditorSettings {
     SfxConfig sfxConfig;
 
     /// @brief 文件选择器样式
-    FilePickerStyle filePickerStyle{ FilePickerStyle::Unified };
+    FilePickerStyle filePickerStyle{ FilePickerStyle::Native };
 
     /// @brief 光标样式
     CursorStyle cursorStyle{ CursorStyle::Software };
@@ -467,14 +467,14 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
 {
-    c.syncConfig      = j.value("syncConfig", SyncConfig());
-    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
-    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Unified);
-    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
-    c.theme           = j.value("theme", UITheme::Auto);
-    c.beatDivisor     = j.value("beatDivisor", 4);
-    c.reverseScroll   = j.value("reverseScroll", false);
-    c.scrollSnap      = j.value("scrollSnap", false);
+    c.syncConfig          = j.value("syncConfig", SyncConfig());
+    c.sfxConfig           = j.value("sfxConfig", SfxConfig());
+    c.filePickerStyle     = j.value("filePickerStyle", FilePickerStyle::Native);
+    c.cursorStyle         = j.value("cursorStyle", CursorStyle::Software);
+    c.theme               = j.value("theme", UITheme::Auto);
+    c.beatDivisor         = j.value("beatDivisor", 4);
+    c.reverseScroll       = j.value("reverseScroll", false);
+    c.scrollSnap          = j.value("scrollSnap", false);
     c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
     c.language            = j.value("language", std::string("zh_cn"));
     c.frameLimit =
@@ -496,7 +496,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.marqueeThickness = j.value("marqueeThickness", 2.0f);
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
     c.saveFormatPreference =
-        j.value("saveFormatPreference", SaveFormatPreference::Original);
+        j.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
     c.timeFormatPreference =
         j.value("timeFormatPreference", TimeFormatPreference::Seconds);
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
