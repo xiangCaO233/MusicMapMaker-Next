@@ -90,8 +90,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config)
     // 筛选出所有 BPM 标记供后续视口处理（磁轴、智能拟合等）
     const auto& bpmEvents = m_ctx->bpmEvents;
 
-    // 0. 如果存在框选区域，更新选中状态
-    if ( m_ctx->isSelecting || !m_ctx->marqueeBoxes.empty() ) {
+    // 0. 框选区域变化时更新选中状态，避免旧框选框每帧覆盖手动选择。
+    if ( m_ctx->isMarqueeSelectionDirty ) {
         m_interaction->updateMarqueeSelection();
     }
 

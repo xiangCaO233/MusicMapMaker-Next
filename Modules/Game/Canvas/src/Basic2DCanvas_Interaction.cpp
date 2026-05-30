@@ -542,6 +542,10 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     if ( ImGui::IsMouseClicked(0) ) {
+        m_leftPressStartedOnCanvas = isHovered;
+        m_leftPressStartedOnEntity = hoveredEntity != entt::null;
+        m_leftPressDragged         = false;
+
         if ( isHovered ) {
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 if ( hoveredEntity != entt::null ) {
@@ -566,8 +570,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
                                                  ImGui::GetIO().KeyCtrl }));
-                } else {
-                    // 抓取工具点击空白处不再清除选中（只有框选工具可以管理选中）
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -585,6 +587,8 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     if ( ImGui::IsMouseDragging(0) ) {
+        m_leftPressDragged = true;
+
         if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
@@ -615,7 +619,17 @@ void Basic2DCanvasInteraction::handleInteractions(
         } else {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
+                 !m_leftPressDragged ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                        entt::null, !ImGui::GetIO().KeyCtrl }));
+            }
         }
+
+        m_leftPressStartedOnCanvas = false;
+        m_leftPressStartedOnEntity = false;
+        m_leftPressDragged         = false;
     }
 
     // --- 右键交互：画笔工具下为擦除 ---

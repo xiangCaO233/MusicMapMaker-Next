@@ -18,6 +18,34 @@
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief 清空实体选中状态和框选运行状态。
+void clearSelection(SessionContext& ctx)
+{
+    ctx.isSelecting             = false;
+    ctx.hasMarqueeSelection     = false;
+    ctx.marqueeIsAdditive       = false;
+    ctx.isMarqueeSelectionDirty = false;
+    ctx.marqueeBoxes.clear();
+
+    auto view = ctx.noteRegistry.view<InteractionComponent>();
+    for ( auto entity : view ) {
+        ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = false;
+    }
+}
+
+/// @brief 停止使用框选框驱动选择状态，但保留当前实体选中集合。
+void detachMarqueeSelection(SessionContext& ctx)
+{
+    ctx.isSelecting             = false;
+    ctx.hasMarqueeSelection     = false;
+    ctx.marqueeIsAdditive       = false;
+    ctx.isMarqueeSelectionDirty = false;
+    ctx.marqueeBoxes.clear();
+}
+}  // namespace
+
 InteractionController::InteractionController(SessionContext& ctx) : m_ctx(ctx)
 {
     m_tools[EditTool::Move]    = std::make_unique<GrabTool>();
@@ -62,29 +90,43 @@ void InteractionController::handleCommand(const CmdSetHoveredEntity& cmd)
 
 void InteractionController::handleCommand(const CmdSelectEntity& cmd)
 {
-    // 只有在框选工具模式下才允许修改选中状态
+    if ( cmd.entity == entt::null ) {
+        if ( cmd.clearOthers ) {
+            clearSelection(m_ctx);
+        }
+        return;
+    }
+
+    // 只有在框选工具模式下才允许通过点击实体修改选中状态。
     if ( m_ctx.currentTool != EditTool::Marquee ) return;
 
-    // 如果清空其他选中，则也清空当前可能的框选留存
-    if ( cmd.clearOthers ) {
-        m_ctx.hasMarqueeSelection = false;
-        auto view = m_ctx.noteRegistry.view<InteractionComponent>();
-        for ( auto entity : view ) {
-            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
-                false;
-        }
+    if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
+        m_ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
     }
-    if ( cmd.entity != entt::null ) {
-        if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
-            m_ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
-        }
-        auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(cmd.entity);
+    auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(cmd.entity);
+    bool  wasSelected = ic.isSelected;
+
+    if ( !cmd.clearOthers ) {
+        detachMarqueeSelection(m_ctx);
         ic.isSelected = !ic.isSelected;
+        return;
     }
+
+    if ( wasSelected ) {
+        return;
+    }
+
+    clearSelection(m_ctx);
+    if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(cmd.entity) ) {
+        m_ctx.noteRegistry.emplace<InteractionComponent>(cmd.entity);
+    }
+    m_ctx.noteRegistry.get<InteractionComponent>(cmd.entity).isSelected = true;
 }
 
 void InteractionController::handleCommand(const CmdSelectAll& cmd)
 {
+    detachMarqueeSelection(m_ctx);
+
     auto view = m_ctx.noteRegistry.view<NoteComponent>();
     for ( auto entity : view ) {
         const auto& note = view.get<NoteComponent>(entity);
@@ -95,7 +137,6 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
         }
         m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = true;
     }
-    m_ctx.hasMarqueeSelection = false;
 }
 
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
@@ -284,10 +325,10 @@ void InteractionController::handleCommand(const CmdEndErase& cmd)
     m_ctx.isDragging = false;
 }
 
-
-
 void InteractionController::updateMarqueeSelection(bool forceFullSync)
 {
+    if ( !m_ctx.isMarqueeSelectionDirty && !forceFullSync ) return;
+    m_ctx.isMarqueeSelectionDirty = false;
     if ( m_ctx.marqueeBoxes.empty() ) return;
 
     auto mode = m_ctx.lastConfig.settings.selectionMode;

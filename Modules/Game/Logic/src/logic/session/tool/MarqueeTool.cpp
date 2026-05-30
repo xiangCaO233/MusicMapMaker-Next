@@ -18,6 +18,7 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
     // 如果不是加选模式，先清除当前所有选中框和实体选中
     if ( !ctx.marqueeIsAdditive ) {
         ctx.marqueeBoxes.clear();
+        ctx.isMarqueeSelectionDirty = false;
         auto view = ctx.noteRegistry.view<InteractionComponent>();
         for ( auto entity : view ) {
             ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
@@ -128,6 +129,7 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
             float trackAreaW = rightX - leftX;
             currentBox.endTrack =
                 (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
+            ctx.isMarqueeSelectionDirty = true;
         }
     }
 }
@@ -142,6 +144,14 @@ void MarqueeTool::handleEndMarquee(SessionContext&      ctx,
         if ( std::abs(lastBox.endTime - lastBox.startTime) < 0.001 &&
              std::abs(lastBox.endTrack - lastBox.startTrack) < 0.1 ) {
             ctx.marqueeBoxes.pop_back();
+            if ( ctx.marqueeBoxes.empty() ) {
+                ctx.hasMarqueeSelection     = false;
+                ctx.isMarqueeSelectionDirty = false;
+            } else {
+                ctx.isMarqueeSelectionDirty = true;
+            }
+        } else {
+            ctx.isMarqueeSelectionDirty = true;
         }
     }
 }
@@ -208,6 +218,9 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
             // 移除后需要重算一次所有物件的选中状态
             // 如果框选列表空了，清除所有选中（除非处于追加模式，但移除框通常意味着我们想改变选中结果）
             if ( ctx.marqueeBoxes.empty() ) {
+                ctx.hasMarqueeSelection     = false;
+                ctx.marqueeIsAdditive       = false;
+                ctx.isMarqueeSelectionDirty = false;
                 auto view = ctx.noteRegistry.view<InteractionComponent>();
                 for ( auto entity : view ) {
                     ctx.noteRegistry.get<InteractionComponent>(entity)
@@ -222,7 +235,8 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                     ctx.noteRegistry.get<InteractionComponent>(entity)
                         .isSelected = false;
                 }
-                ctx.hasMarqueeSelection = true;
+                ctx.hasMarqueeSelection     = true;
+                ctx.isMarqueeSelectionDirty = true;
             }
             return;
         }

@@ -13,6 +13,20 @@
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief 确保音符实体拥有更新所需的辅助组件，并保留已有交互状态。
+void ensureNoteAuxiliaryComponents(entt::registry& reg, entt::entity entity)
+{
+    if ( !reg.all_of<TransformComponent>(entity) ) {
+        reg.emplace<TransformComponent>(entity);
+    }
+    if ( !reg.all_of<InteractionComponent>(entity) ) {
+        reg.emplace<InteractionComponent>(entity);
+    }
+}
+}  // namespace
+
 // --- TimelineAction Implementation ---
 
 void TimelineAction::execute(SessionContext& ctx)
@@ -199,8 +213,7 @@ void BatchNoteAction::execute(SessionContext& ctx)
             if ( !reg.valid(entry.entity) )
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
-            reg.emplace_or_replace<TransformComponent>(entry.entity);
-            reg.emplace_or_replace<InteractionComponent>(entry.entity);
+            ensureNoteAuxiliaryComponents(reg, entry.entity);
         } else if ( entry.before.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
@@ -218,8 +231,7 @@ void BatchNoteAction::undo(SessionContext& ctx)
             if ( !reg.valid(entry.entity) )
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
-            reg.emplace_or_replace<TransformComponent>(entry.entity);
-            reg.emplace_or_replace<InteractionComponent>(entry.entity);
+            ensureNoteAuxiliaryComponents(reg, entry.entity);
         } else if ( entry.after.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }

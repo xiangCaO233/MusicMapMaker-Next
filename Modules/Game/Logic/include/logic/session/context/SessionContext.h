@@ -111,9 +111,11 @@ struct SessionContext {
         dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
     std::string dragCameraId;  ///< 发起拖拽的视口 ID
 
-    bool isSelecting{ false };             ///< 是否正在进行框选操作
-    bool hasMarqueeSelection{ false };     ///< 是否当前存在有效的框选结果
-    bool marqueeIsAdditive{ false };       ///< 框选是否为加选模式 (Ctrl)
+    bool isSelecting{ false };          ///< 是否正在进行框选操作
+    bool hasMarqueeSelection{ false };  ///< 是否当前存在有效的框选结果
+    bool marqueeIsAdditive{ false };    ///< 框选是否为加选模式 (Ctrl)
+    /// @brief 框选区域变化后是否需要重算实体选中状态
+    bool                    isMarqueeSelectionDirty{ false };
     std::vector<MarqueeBox> marqueeBoxes;  ///< 当前活跃的框选框列表
 
     // --- 笔刷工具状态 ---
