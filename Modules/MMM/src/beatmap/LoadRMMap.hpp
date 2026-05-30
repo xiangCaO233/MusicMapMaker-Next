@@ -182,6 +182,9 @@ inline BeatMap loadRMMap(std::filesystem::path path)
     // 读取0~4字节:int32 谱面时长
     CHECK_BOUNDS(4);
     basemeta.map_length = reader.read_value<int32_t>(data_pos);
+    auto& rmMapProps = beatMap.m_metadata.map_properties[MapMetadataType::RM];
+    rmMapProps["mapLength"] =
+        std::to_string(static_cast<int32_t>(basemeta.map_length));
     data_pos += 4;
     XINFO("谱面时长: {}", basemeta.map_length);
 
@@ -225,7 +228,8 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
     // 读取一个int32: 表格行数
     CHECK_BOUNDS(4);
-    auto table_rows = reader.read_value<int32_t>(data_pos);
+    auto table_rows       = reader.read_value<int32_t>(data_pos);
+    rmMapProps["tabRows"] = std::to_string(table_rows);
     data_pos += 4;
     XINFO("读取到表格行数: {}", table_rows);
 
