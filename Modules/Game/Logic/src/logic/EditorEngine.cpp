@@ -226,6 +226,49 @@ EditTool workspaceNameToEditTool(const std::string& name)
     }
     return EditTool::Move;
 }
+
+/// @brief 捕获工具栏开关到项目工作区状态。
+/// @param workspace 需要写入的项目工作区状态。
+/// @param editorConfig 当前编辑器配置。
+/// @param syncSameMainAudioCanvases 当前多画布同主音轨同步开关。
+void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
+                                  const Config::EditorConfig& editorConfig,
+                                  bool syncSameMainAudioCanvases)
+{
+    auto& toolbarState           = workspace.m_toolbarState;
+    toolbarState.m_valid         = true;
+    toolbarState.m_reverseScroll = editorConfig.settings.reverseScroll;
+    toolbarState.m_scrollSnap    = editorConfig.settings.scrollSnap;
+    toolbarState.m_snapFloor     = editorConfig.settings.snapFloor;
+    toolbarState.m_enableLinearScrollMapping =
+        editorConfig.visual.enableLinearScrollMapping;
+    toolbarState.m_drawBeatLines = editorConfig.visual.drawBeatLines;
+    toolbarState.m_stopPlaybackOnScroll =
+        editorConfig.settings.stopPlaybackOnScroll;
+    toolbarState.m_enableHitEffects = editorConfig.visual.enableHitEffects;
+    toolbarState.m_beatDivisor      = editorConfig.settings.beatDivisor;
+    toolbarState.m_syncSameMainAudioCanvases = syncSameMainAudioCanvases;
+}
+
+/// @brief 将项目工作区工具栏状态应用到编辑器配置。
+/// @param editorConfig 需要修改的编辑器配置。
+/// @param toolbarState 项目工作区中保存的工具栏状态。
+void applyToolbarWorkspaceState(
+    Config::EditorConfig&               editorConfig,
+    const ProjectWorkspaceToolbarState& toolbarState)
+{
+    editorConfig.settings.reverseScroll = toolbarState.m_reverseScroll;
+    editorConfig.settings.scrollSnap    = toolbarState.m_scrollSnap;
+    editorConfig.settings.snapFloor     = toolbarState.m_snapFloor;
+    editorConfig.visual.enableLinearScrollMapping =
+        toolbarState.m_enableLinearScrollMapping;
+    editorConfig.visual.drawBeatLines = toolbarState.m_drawBeatLines;
+    editorConfig.settings.stopPlaybackOnScroll =
+        toolbarState.m_stopPlaybackOnScroll;
+    editorConfig.visual.enableHitEffects = toolbarState.m_enableHitEffects;
+    editorConfig.settings.beatDivisor =
+        std::clamp(toolbarState.m_beatDivisor, 1, 64);
+}
 }  // namespace
 
 EditorEngine& EditorEngine::instance()
@@ -317,6 +360,10 @@ void EditorEngine::captureProjectWorkspaceState()
     workspace.m_activePlaybackTime = 0.0;
     workspace.m_activeEditTool =
         editToolToWorkspaceName(m_currentTool.load(std::memory_order_relaxed));
+    captureToolbarWorkspaceState(
+        workspace,
+        m_editorConfig,
+        m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
 
     /// @brief 保护工作区状态捕获期间的会话列表访问。
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -538,10 +585,20 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     }
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
-        m_currentTool.store(
-            workspaceNameToEditTool(
-                project->m_settings.m_workspace.m_activeEditTool),
-            std::memory_order_relaxed);
+        const auto& workspace = project->m_settings.m_workspace;
+        m_currentTool.store(workspaceNameToEditTool(workspace.m_activeEditTool),
+                            std::memory_order_relaxed);
+        if ( workspace.m_toolbarState.m_valid ) {
+            auto restoredConfig = m_editorConfig;
+            applyToolbarWorkspaceState(restoredConfig,
+                                       workspace.m_toolbarState);
+            m_syncSameMainAudioCanvases.store(
+                workspace.m_toolbarState.m_syncSameMainAudioCanvases,
+                std::memory_order_relaxed);
+            setEditorConfig(restoredConfig);
+        } else {
+            m_syncSameMainAudioCanvases.store(false, std::memory_order_relaxed);
+        }
     }
 
     for ( const auto& preload : openResult.m_effectPreloads ) {
@@ -888,6 +945,10 @@ bool EditorEngine::isPlaybackPlaying() const
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
 {
     m_syncSameMainAudioCanvases.store(enabled, std::memory_order_relaxed);
+    if ( auto* project = ProjectController::instance().currentProject() ) {
+        captureToolbarWorkspaceState(
+            project->m_settings.m_workspace, m_editorConfig, enabled);
+    }
     if ( enabled ) {
         syncSameMainAudioCanvases();
     }
@@ -1229,6 +1290,12 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     m_editorConfig.recentProjects = globalRecent;
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
+    if ( auto* project = ProjectController::instance().currentProject() ) {
+        captureToolbarWorkspaceState(
+            project->m_settings.m_workspace,
+            m_editorConfig,
+            m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
+    }
 
     // 同步回全局 AppConfig 实例
     Config::AppConfig::instance().getEditorConfig() = m_editorConfig;

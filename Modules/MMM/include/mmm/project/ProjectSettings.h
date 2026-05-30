@@ -83,6 +83,76 @@ struct ProjectWorkspaceAudioControllerState {
                                    m_trackId, m_trackName, m_trackType)
 };
 
+/// @brief 项目工作区中的工具栏运行时开关状态。
+struct ProjectWorkspaceToolbarState {
+    /// @brief 是否已经记录过有效工具栏状态。
+    bool m_valid{ false };
+
+    /// @brief 是否反转鼠标滚动方向。
+    bool m_reverseScroll{ false };
+
+    /// @brief 是否开启滚动吸附。
+    bool m_scrollSnap{ false };
+
+    /// @brief 是否吸附到早于鼠标位置的分拍线。
+    bool m_snapFloor{ false };
+
+    /// @brief 是否启用线性滚动映射。
+    bool m_enableLinearScrollMapping{ false };
+
+    /// @brief 是否绘制分拍线。
+    bool m_drawBeatLines{ true };
+
+    /// @brief 是否在滚动时停止播放。
+    bool m_stopPlaybackOnScroll{ false };
+
+    /// @brief 是否启用打击特效动画。
+    bool m_enableHitEffects{ true };
+
+    /// @brief 当前分拍数量。
+    int m_beatDivisor{ 4 };
+
+    /// @brief 是否同步使用同一主音轨的多个画布时间。
+    bool m_syncSameMainAudioCanvases{ false };
+
+    /// @brief 序列化工具栏工作区状态。
+    friend void to_json(nlohmann::json&                     j,
+                        const ProjectWorkspaceToolbarState& state)
+    {
+        j = nlohmann::json{
+            { "m_valid", state.m_valid },
+            { "m_reverseScroll", state.m_reverseScroll },
+            { "m_scrollSnap", state.m_scrollSnap },
+            { "m_snapFloor", state.m_snapFloor },
+            { "m_enableLinearScrollMapping",
+              state.m_enableLinearScrollMapping },
+            { "m_drawBeatLines", state.m_drawBeatLines },
+            { "m_stopPlaybackOnScroll", state.m_stopPlaybackOnScroll },
+            { "m_enableHitEffects", state.m_enableHitEffects },
+            { "m_beatDivisor", state.m_beatDivisor },
+            { "m_syncSameMainAudioCanvases", state.m_syncSameMainAudioCanvases }
+        };
+    }
+
+    /// @brief 反序列化工具栏工作区状态，并兼容旧项目文件。
+    friend void from_json(const nlohmann::json&         j,
+                          ProjectWorkspaceToolbarState& state)
+    {
+        state.m_valid         = j.value("m_valid", false);
+        state.m_reverseScroll = j.value("m_reverseScroll", false);
+        state.m_scrollSnap    = j.value("m_scrollSnap", false);
+        state.m_snapFloor     = j.value("m_snapFloor", false);
+        state.m_enableLinearScrollMapping =
+            j.value("m_enableLinearScrollMapping", false);
+        state.m_drawBeatLines        = j.value("m_drawBeatLines", true);
+        state.m_stopPlaybackOnScroll = j.value("m_stopPlaybackOnScroll", false);
+        state.m_enableHitEffects     = j.value("m_enableHitEffects", true);
+        state.m_beatDivisor          = j.value("m_beatDivisor", 4);
+        state.m_syncSameMainAudioCanvases =
+            j.value("m_syncSameMainAudioCanvases", false);
+    }
+};
+
 /// @brief 项目级工作区状态，用于再次打开项目时恢复编辑现场。
 struct ProjectWorkspaceState {
     /// @brief 上次打开的谱面列表，顺序对应画布标签顺序。
@@ -114,6 +184,9 @@ struct ProjectWorkspaceState {
 
     /// @brief 上次选中的编辑工具。
     std::string m_activeEditTool{ "Move" };
+
+    /// @brief 上次工具栏上的运行时开关状态。
+    ProjectWorkspaceToolbarState m_toolbarState;
 
     /// @brief 上次是否打开了 BPM 测量工具。
     bool m_bpmMeasurementToolOpen{ false };
@@ -148,6 +221,7 @@ struct ProjectWorkspaceState {
             { "m_audioSpectrumOpen", workspace.m_audioSpectrumOpen },
             { "m_sidebarActiveTab", workspace.m_sidebarActiveTab },
             { "m_activeEditTool", workspace.m_activeEditTool },
+            { "m_toolbarState", workspace.m_toolbarState },
             { "m_bpmMeasurementToolOpen", workspace.m_bpmMeasurementToolOpen },
             { "m_bpmMeasurementAudioTrackId",
               workspace.m_bpmMeasurementAudioTrackId },
@@ -179,6 +253,8 @@ struct ProjectWorkspaceState {
             j.value("m_sidebarActiveTab", std::string{ "FileExplorer" });
         workspace.m_activeEditTool =
             j.value("m_activeEditTool", std::string{ "Move" });
+        workspace.m_toolbarState =
+            j.value("m_toolbarState", ProjectWorkspaceToolbarState{});
         workspace.m_bpmMeasurementToolOpen =
             j.value("m_bpmMeasurementToolOpen", false);
         workspace.m_bpmMeasurementAudioTrackId =
