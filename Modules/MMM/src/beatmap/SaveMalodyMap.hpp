@@ -18,6 +18,8 @@ namespace MMM
 
 using json = nlohmann::json;
 
+/// @brief 保存谱面为 Malody .mc JSON 文件。
+/// @warning 低频导出路径：允许完整遍历谱面数据；位置换算必须以当前时间戳为准。
 inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     json fileData;
@@ -165,7 +167,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             currentBpm = t.m_bpm;
         }
         lastBeat += (time - lastTime) / (60000.0 / currentBpm);
-        lastBeat = std::max(0.0, lastBeat);
 
         int    integerBeat = static_cast<int>(std::floor(lastBeat + 1e-6));
         double fraction    = lastBeat - integerBeat;

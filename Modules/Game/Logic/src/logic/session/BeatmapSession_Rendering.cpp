@@ -511,7 +511,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             break;
                         }
                     }
+                    if ( !activeBpm && !bpmEvents.empty() &&
+                         time < bpmEvents.front()->m_timestamp ) {
+                        activeBpm = bpmEvents.front();
+                    }
                     if ( !activeBpm ) return point;
+                    bool isBeforeFirstBpm = !bpmEvents.empty() &&
+                                            activeBpm == bpmEvents.front() &&
+                                            time < activeBpm->m_timestamp;
 
                     double bpmVal = activeBpm->m_value;
                     if ( bpmVal <= 0.0 ) {
@@ -585,14 +592,18 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             std::round(dur / (60.0 / bVal)));
                     }
 
-                    double rel = time - activeBpm->m_timestamp;
-                    if ( rel < 0 ) rel = 0;
+                    double  rel           = time - activeBpm->m_timestamp;
                     int64_t beatsInActive = static_cast<int64_t>(
                         std::floor(rel / beatDuration + 1e-6));
 
-                    point.beatIndex =
-                        static_cast<int>(totalBeatsPrefix + beatsInActive + 1);
-                    point.numerator   = bestNum;
+                    if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
+                        bestNum = 0;
+                    }
+                    point.beatIndex = isBeforeFirstBpm
+                                          ? static_cast<int>(beatsInActive)
+                                          : static_cast<int>(totalBeatsPrefix +
+                                                             beatsInActive + 1);
+                    point.numerator = bestNum;
                     point.denominator = bestDen;
                     return point;
                 };

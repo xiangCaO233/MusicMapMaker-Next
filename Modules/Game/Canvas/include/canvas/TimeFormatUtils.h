@@ -95,6 +95,35 @@ inline std::string formatBeatTime(double                       timeSeconds,
     int beatDivisor = snapshot ? snapshot->currentBeatDivisor : 4;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
+    auto formatWithinBpm = [&](double  pointTime,
+                               double  pointBpm,
+                               int64_t totalBeats,
+                               bool    beforeFirstTiming) {
+        double  beatDuration = 60.0 / pointBpm;
+        double  timeInBpm    = timeSeconds - pointTime;
+        double  beatFloat    = timeInBpm / beatDuration;
+        int64_t beatOffset = static_cast<int64_t>(std::floor(beatFloat + 1e-6));
+        double  stepFloat  = (beatFloat - static_cast<double>(beatOffset)) *
+                             static_cast<double>(beatDivisor);
+        int     step       = static_cast<int>(std::round(stepFloat));
+        if ( step >= beatDivisor ) {
+            ++beatOffset;
+            step = 0;
+        }
+
+        int beatNumber = beforeFirstTiming
+                             ? static_cast<int>(beatOffset)
+                             : static_cast<int>(totalBeats + beatOffset + 1);
+        if ( step == 0 ) {
+            return beforeFirstTiming ? fmt::format("{} + 0/1", beatNumber)
+                                     : fmt::format("{} + 1/1", beatNumber);
+        }
+
+        int divisor = beatDivisor;
+        int gcd     = std::gcd(step, divisor);
+        return fmt::format("{} + {}/{}", beatNumber, step / gcd, divisor / gcd);
+    };
+
     int64_t totalBeats = 0;
     for ( size_t i = 0; i < points.size(); ++i ) {
         const auto& point       = points[i];
@@ -103,27 +132,14 @@ inline std::string formatBeatTime(double                       timeSeconds,
                                       : std::numeric_limits<double>::infinity();
         double      beatDuration = 60.0 / point.bpm;
 
-        if ( timeSeconds < point.time ) break;
-        if ( timeSeconds < nextBpmTime ) {
-            double  timeInBpm = timeSeconds - point.time;
-            double  beatFloat = timeInBpm / beatDuration;
-            int64_t beatOffset =
-                static_cast<int64_t>(std::floor(beatFloat + 1e-6));
-            double stepFloat = (beatFloat - static_cast<double>(beatOffset)) *
-                               static_cast<double>(beatDivisor);
-            int    step      = static_cast<int>(std::round(stepFloat));
-            if ( step >= beatDivisor ) {
-                ++beatOffset;
-                step = 0;
+        if ( timeSeconds < point.time ) {
+            if ( i == 0 ) {
+                return formatWithinBpm(point.time, point.bpm, totalBeats, true);
             }
-
-            int beatNumber = static_cast<int>(totalBeats + beatOffset + 1);
-            if ( step == 0 ) return fmt::format("{} + 1/1", beatNumber);
-
-            int divisor = beatDivisor;
-            int gcd     = std::gcd(step, divisor);
-            return fmt::format(
-                "{} + {}/{}", beatNumber, step / gcd, divisor / gcd);
+            break;
+        }
+        if ( timeSeconds < nextBpmTime ) {
+            return formatWithinBpm(point.time, point.bpm, totalBeats, false);
         }
 
         double bpmDuration = nextBpmTime - point.time;
