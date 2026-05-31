@@ -160,6 +160,10 @@ void InteractionController::handleCommand(const CmdEndDrag& cmd)
     }
 }
 
+/// @brief 处理视口鼠标位置、拖拽状态和边缘自动滚动速度。
+/// @param cmd 鼠标位置更新指令。
+/// @warning 逻辑热路径：UI 可每帧推送；只能更新交互状态和常量时间边缘滚动计算，
+/// 禁止 ECS 遍历、文件系统访问和阻塞操作。
 void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
 {
     bool canUpdate = false;
@@ -223,7 +227,8 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
                     static_cast<double>(dist) * sensitivity;
             }
         }
-    } else {
+    } else if ( cmd.cameraId == m_ctx.mouseCameraId ||
+                cmd.cameraId == m_ctx.dragCameraId ) {
         m_ctx.previewEdgeScrollVelocity = 0.0;
     }
 

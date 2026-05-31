@@ -152,6 +152,74 @@ void accumulateNoteStats(const NoteComponent&  note,
         }
     }
 }
+
+/// @brief 计算预览区相对主画布的纵向渲染缩放倍率。
+/// @param ctx 当前会话上下文。
+/// @param previewCamera 预览区相机信息。
+/// @param config 当前编辑器配置。
+/// @return 可用的预览区纵向缩放倍率；输入尺寸无效时返回 0。
+/// @warning 逻辑/渲染热路径：每个 Session update 的预览相关分支调用；只允许
+/// 常量时间计算，禁止 ECS 遍历、文件系统访问和阻塞操作。
+float calculatePreviewRenderScaleY(const SessionContext&       ctx,
+                                   const CameraInfo&           previewCamera,
+                                   const Config::EditorConfig& config)
+{
+    const auto* mainCamera = SessionUtils::findMainCanvasCamera(ctx.cameras);
+    float       mainViewportHeight =
+        mainCamera ? mainCamera->viewportHeight : 1000.0f;
+    float mainEffectiveH =
+        (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
+        mainViewportHeight;
+    float previewDrawH = previewCamera.viewportHeight -
+                         (config.visual.previewConfig.margin.top +
+                          config.visual.previewConfig.margin.bottom);
+    float areaRatio    = config.visual.previewConfig.areaRatio;
+
+    if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
+         areaRatio <= 0.0001f ) {
+        return 0.0f;
+    }
+
+    return previewDrawH / (mainEffectiveH * areaRatio);
+}
+
+/// @brief 在生成视口快照前同步预览拖拽目标时间。
+/// @param ctx 当前会话上下文。
+/// @param config 当前编辑器配置。
+/// @warning 逻辑/渲染热路径：每个 Session update 调用；只读取预览相机、
+/// ScrollCache 和最后鼠标坐标，禁止引入 ECS 遍历或共享所有权复制。
+void syncPreviewDragHoverTime(SessionContext&             ctx,
+                              const Config::EditorConfig& config)
+{
+    if ( !ctx.isDragging ||
+         (ctx.dragCameraId != "Preview" && ctx.mouseCameraId != "Preview") ) {
+        return;
+    }
+
+    auto cameraIt = ctx.cameras.find("Preview");
+    if ( cameraIt == ctx.cameras.end() ) {
+        return;
+    }
+
+    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( !cache ) {
+        return;
+    }
+
+    const auto& previewCamera = cameraIt->second;
+    float       renderScaleY =
+        calculatePreviewRenderScaleY(ctx, previewCamera, config);
+    if ( std::abs(renderScaleY) <= 0.0001f ) {
+        return;
+    }
+
+    float judgmentLineY =
+        previewCamera.viewportHeight * config.visual.judgeline_pos;
+    double currentAbsY   = cache->getAbsY(ctx.visualTime);
+    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
+                           static_cast<double>(renderScaleY);
+    ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
+}
 }  // namespace
 
 /// @brief 更新 ECS 状态并为当前 Session 的视口生成渲染快照。
@@ -238,6 +306,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     if ( m_ctx->isMarqueeSelectionDirty ) {
         m_interaction->updateMarqueeSelection();
     }
+
+    syncPreviewDragHoverTime(*m_ctx, config);
 
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
@@ -361,24 +431,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 float renderScaleY = 1.0f;
                 // 核心修复：预览区的坐标是经过压缩的，计算时间时需要除以缩放比例
                 if ( cameraId == "Preview" || cameraId == "PreviewCanvas" ) {
-                    const auto* mainCamera =
-                        SessionUtils::findMainCanvasCamera(m_ctx->cameras);
-                    float previewMainHeight =
-                        mainCamera ? mainCamera->viewportHeight : 1000.0f;
-
-                    float mainEffectiveH = (config.visual.trackLayout.bottom -
-                                            config.visual.trackLayout.top) *
-                                           previewMainHeight;
-
-                    // 计算预览区的有效绘图高度（扣除边距）
-                    float previewDrawH =
-                        camera.viewportHeight -
-                        (config.visual.previewConfig.margin.top +
-                         config.visual.previewConfig.margin.bottom);
-
                     renderScaleY =
-                        previewDrawH / (mainEffectiveH *
-                                        config.visual.previewConfig.areaRatio);
+                        calculatePreviewRenderScaleY(*m_ctx, camera, config);
                 }
 
                 if ( std::abs(renderScaleY) > 0.0001f ) {
@@ -709,21 +763,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 double currentAbsY = cache->getAbsY(m_ctx->visualTime);
                 double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
 
-                const auto* mainCamera =
-                    SessionUtils::findMainCanvasCamera(m_ctx->cameras);
-                float mainViewportHeight =
-                    mainCamera ? mainCamera->viewportHeight : 1000.0f;
-
-                float mainEffectiveH = (config.visual.trackLayout.bottom -
-                                        config.visual.trackLayout.top) *
-                                       mainViewportHeight;
-                float previewDrawH =
-                    camera.viewportHeight -
-                    (config.visual.previewConfig.margin.top +
-                     config.visual.previewConfig.margin.bottom);
                 float renderScaleY =
-                    previewDrawH /
-                    (mainEffectiveH * config.visual.previewConfig.areaRatio);
+                    calculatePreviewRenderScaleY(*m_ctx, camera, config);
 
                 if ( std::abs(renderScaleY) > 0.0001f ) {
                     snapshot->previewHoverY =
