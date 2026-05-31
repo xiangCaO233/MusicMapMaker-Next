@@ -148,6 +148,20 @@ bool hasUnsupportedImdNoteMetadata(const BeatMap& beatMap)
     }
     return false;
 }
+
+/// @brief 获取另存为对话框默认打开路径，优先使用当前项目根目录。
+/// @param settings 编辑器设置，用于无项目时回退到通用文件选择器路径。
+/// @return UTF-8 编码的默认目录路径。
+std::string getSaveAsPickerDefaultPath(const Config::EditorSettings& settings)
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( project && !project->m_projectRoot.empty() ) {
+        return Config::pathToUtf8(project->m_projectRoot);
+    }
+
+    return settings.lastFilePickerPath.empty() ? std::string(".")
+                                               : settings.lastFilePickerPath;
+}
 }  // namespace
 
 /// @brief 根据导出格式生成推荐文件名。
@@ -481,6 +495,7 @@ void MainMenuView::openAudioImportPicker()
 void MainMenuView::openExportFilePicker(const std::string& ext)
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
+    const std::string defaultPath = getSaveAsPickerDefaultPath(config);
 
     std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
     auto&       engine      = Logic::EditorEngine::instance();
@@ -513,8 +528,11 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
             filters[filterCount++] = { "Malody Chart", "mc" };
         }
 
-        nfdresult_t result = NFD_SaveDialogU8(
-            &outPath, filters, filterCount, nullptr, defaultName.c_str());
+        nfdresult_t result = NFD_SaveDialogU8(&outPath,
+                                              filters,
+                                              filterCount,
+                                              defaultPath.c_str(),
+                                              defaultName.c_str());
 
         if ( result == NFD_OKAY ) {
             requestSaveBeatmapAs(outPath);
@@ -522,7 +540,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
         }
     } else {
         IGFD::FileDialogConfig fdConfig;
-        fdConfig.path              = config.lastFilePickerPath;
+        fdConfig.path              = defaultPath;
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = defaultName;
         fdConfig.flags =

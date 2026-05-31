@@ -154,11 +154,6 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 filePath =
                     m_mainMenuview.applySaveAsSelectedFormatToPath(filePath);
 
-                auto config = engine.getEditorConfig();
-                config.settings.lastFilePickerPath =
-                    ImGuiFileDialog::Instance()->GetCurrentPath();
-                engine.setEditorConfig(config);
-
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
                     m_pendingOverwritePath     = filePath;
                     this->m_onOverwriteConfirm = [this, filePath]() {
