@@ -181,6 +181,36 @@ int32_t clampDoubleToInt32(double value)
         std::round(std::clamp(value, minValue, maxValue)));
 }
 
+/// @brief 读取状态栏同源的当前判定线时间，并转换为预览元数据毫秒文本。
+/// @return 非负毫秒整数字符串。
+std::string readCurrentJudgelinePreviewMsText()
+{
+    auto&       engine         = Logic::EditorEngine::instance();
+    std::string activeCameraId = engine.getActiveCameraId();
+    auto        syncBuffer     = engine.getSyncBuffer(
+        activeCameraId.empty() ? "Basic2DCanvas" : activeCameraId);
+
+    double timeSeconds = 0.0;
+    bool   hasTime     = false;
+    if ( syncBuffer ) {
+        auto* snapshot = syncBuffer->getReadingSnapshot();
+        if ( snapshot ) {
+            timeSeconds = snapshot->currentTime;
+            hasTime     = true;
+        }
+    }
+
+    if ( !hasTime ) {
+        auto session = engine.getActiveSession();
+        if ( session ) {
+            timeSeconds = session->getContext().currentTime;
+        }
+    }
+
+    int32_t timeMs = clampDoubleToInt32(std::max(0.0, timeSeconds) * 1000.0);
+    return std::to_string(timeMs);
+}
+
 /// @brief 去掉纯文本编辑行首尾空白。
 std::string trimMetadataLine(std::string value)
 {
@@ -1132,7 +1162,7 @@ void MainMenuView::renderMetadataEditorWindow()
                             ImGui::TableSetupColumn(
                                 "操作 (Action)",
                                 ImGuiTableColumnFlags_WidthFixed,
-                                60.0f * dpiScale);
+                                130.0f * dpiScale);
                             ImGui::TableHeadersRow();
 
                             // 1. Render predefined fields
@@ -1189,6 +1219,27 @@ void MainMenuView::renderMetadataEditorWindow()
                                 }
 
                                 ImGui::TableNextColumn();
+                                const bool isPreviewTimeKey =
+                                    key == "General::PreviewTime";
+                                if ( isPreviewTimeKey ) {
+                                    if ( ImGui::Button(
+                                             (std::string(
+                                                  "当前##current_osu_") +
+                                              key)
+                                                 .c_str()) ) {
+                                        props[key] =
+                                            readCurrentJudgelinePreviewMsText();
+                                        osuPropsChanged = true;
+                                    }
+                                    if ( ImGui::IsItemHovered() ) {
+                                        ImGui::SetTooltip(
+                                            "%s",
+                                            "读取当前判定线时间并写入毫秒值。");
+                                    }
+                                    if ( hasKey ) {
+                                        ImGui::SameLine();
+                                    }
+                                }
                                 if ( hasKey ) {
                                     if ( ImGui::Button(
                                              (std::string("默认##reset_osu_") +
@@ -1198,7 +1249,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                             *beatmap, key);
                                         osuPropsChanged = true;
                                     }
-                                } else {
+                                } else if ( !isPreviewTimeKey ) {
                                     ImGui::TextDisabled("-");
                                 }
                             }
@@ -1355,7 +1406,7 @@ void MainMenuView::renderMetadataEditorWindow()
                             ImGui::TableSetupColumn(
                                 "操作 (Action)",
                                 ImGuiTableColumnFlags_WidthFixed,
-                                130.0f * dpiScale);
+                                190.0f * dpiScale);
                             ImGui::TableHeadersRow();
 
                             // 1. Render predefined fields
@@ -1417,6 +1468,19 @@ void MainMenuView::renderMetadataEditorWindow()
                                                          key,
                                                          fieldValue,
                                                          "map_mld_builtin");
+                                if ( key == "preview" ) {
+                                    ImGui::SameLine();
+                                    if ( ImGui::Button(
+                                             "当前##current_mld_preview") ) {
+                                        props[key] =
+                                            readCurrentJudgelinePreviewMsText();
+                                    }
+                                    if ( ImGui::IsItemHovered() ) {
+                                        ImGui::SetTooltip(
+                                            "%s",
+                                            "读取当前判定线时间并写入毫秒值。");
+                                    }
+                                }
                                 if ( hasKey ) {
                                     ImGui::SameLine();
                                     if ( ImGui::Button(
