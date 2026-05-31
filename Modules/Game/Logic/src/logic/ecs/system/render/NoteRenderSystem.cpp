@@ -19,6 +19,9 @@
 namespace MMM::Logic::System
 {
 
+/// @brief 生成指定画布的批量渲染快照。
+/// @warning 热路径：每帧/每 update 执行；禁止引入文件系统访问、
+/// registry 全量无缓存扫描或阻塞同步。
 void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     const std::vector<const TimelineComponent*>& bpmEvents,
@@ -253,6 +256,7 @@ void NoteRenderSystem::generateSnapshot(
                                               renderScaleY);
         }
 
+        batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         NoteRenderSystem::renderNotes(registry,
                                       snapshot,
                                       cameraId,
@@ -263,10 +267,23 @@ void NoteRenderSystem::generateSnapshot(
                                       batcher,
                                       leftX,
                                       rightX,
-                                      -viewportHeight * 0.5f,
-                                      viewportHeight * 1.5f,
+                                      topY,
+                                      bottomY,
                                       singleTrackW,
                                       renderScaleY);
+        if ( cameraId == "Preview" ) {
+            float lx = config.visual.previewConfig.margin.left;
+            float rx = viewportWidth - config.visual.previewConfig.margin.right;
+            float ty = config.visual.previewConfig.margin.top;
+            float by =
+                viewportHeight - config.visual.previewConfig.margin.bottom;
+            batcher.setScissor(lx, ty, rx - lx, by - ty);
+        } else {
+            batcher.setScissor(leftX,
+                               -viewportHeight * 0.5f,
+                               trackAreaW,
+                               viewportHeight * 2.0f);
+        }
         if ( isMainCanvas && config.visual.debugDrawHitboxes ) {
             NoteRenderSystem::debugRenderHitboxes(batcher, snapshot);
         }

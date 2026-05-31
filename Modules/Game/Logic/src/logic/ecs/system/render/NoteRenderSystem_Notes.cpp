@@ -645,6 +645,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
     batcher.flush();
 }
 
+/// @brief 绘制悬浮音符的发光层，并使用轨道框限制可见区域。
+/// @warning 热路径：悬浮音符每帧绘制；只允许使用已缓存的实体列表和纹理信息。
 void NoteRenderSystem::renderNoteGlowLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
@@ -665,6 +667,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
     if ( hoveredEntities.empty() ) return;
 
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+    glowBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
     /// @brief hoveredEntities
     /// 继承可见实体时间升序，反向绘制即可获得原先的后到前覆盖顺序。
     for ( auto it = hoveredEntities.rbegin(); it != hoveredEntities.rend();
