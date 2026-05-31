@@ -19,6 +19,30 @@
 namespace MMM::Logic::System
 {
 
+namespace
+{
+
+/// @brief 绘制时间线/预览用的小型判定框。
+/// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
+void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
+                          float width, float height)
+{
+    if ( width <= 0.5f || height <= 0.5f ) return;
+
+    constexpr glm::vec4 fillColor{ 1.0f, 0.35f, 0.86f, 0.16f };
+    constexpr glm::vec4 strokeColor{ 1.0f, 0.36f, 0.95f, 1.0f };
+    constexpr float     strokeWidth = 2.0f;
+
+    const float topY    = centerY - height * 0.5f;
+    const float bottomY = centerY + height * 0.5f;
+    batcher.setTexture(TextureID::None);
+    batcher.pushQuad(leftX, bottomY, width, height, fillColor);
+    batcher.pushStrokeRect(
+        leftX, topY, leftX + width, bottomY, strokeWidth, strokeColor);
+}
+
+}  // namespace
+
 /// @brief 生成指定画布的批量渲染快照。
 /// @warning 热路径：每帧/每 update 执行；禁止引入文件系统访问、
 /// registry 全量无缓存扫描或阻塞同步。
@@ -319,7 +343,6 @@ void NoteRenderSystem::generateSnapshot(
     if ( cameraId == "Preview" ) {
         auto& skin       = Config::SkinManager::instance();
         auto  boxCol     = skin.getColor("preview.boundingbox");
-        auto  lineCol    = skin.getColor("preview.judgeline");
         bool  isDragging = snapshot->isPreviewDragging;
 
         float mainEffectiveH =
@@ -388,13 +411,9 @@ void NoteRenderSystem::generateSnapshot(
                 { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
         }
 
-        // 3. 绘制预览区判定红线 (最上层静态)
-        batcher.setTexture(TextureID::None);
-        batcher.pushQuad(leftX,
-                         judgmentLineY + 2.0f * 0.5f,
-                         trackAreaW,
-                         2.0f,
-                         { lineCol.r, lineCol.g, lineCol.b, lineCol.a });
+        // 3. 绘制预览区判定框 (最上层静态)
+        batcher.flush();
+        drawJudgmentGuideBox(batcher, leftX, judgmentLineY, trackAreaW, 18.0f);
     }
 
     batcher.flush();
@@ -466,13 +485,6 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     float paddingX = 30.0f;
     float lineW    = std::max(1.0f, viewportWidth - paddingX * 2.0f);
-
-    // 2. 绘制当前时间红线 (静态)
-    batcher.pushQuad(paddingX,
-                     judgmentLineY + 1.0f,
-                     lineW,
-                     2.0f,
-                     { 1.0f, 0.2f, 0.2f, 1.0f });
 
     // 记录静态边界
     snapshot->staticVertexCount =
@@ -675,6 +687,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
                                config.visual.noteFillMode,
                                color);
     }
+
+    // 6. 绘制当前时间判定框，作为时间线最上层覆盖物。
+    batcher.flush();
+    drawJudgmentGuideBox(batcher, paddingX, judgmentLineY, lineW, 18.0f);
 }
 
 void NoteRenderSystem::generatePreviewSnapshot(
