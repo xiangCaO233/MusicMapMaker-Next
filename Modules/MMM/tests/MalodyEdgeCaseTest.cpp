@@ -308,6 +308,71 @@ void test_audio_node_type_is_string()
     XINFO("PASS: Audio node type is 'SOUND' string");
 }
 
+/// @brief 确认 BGM/SOUND 物件的 column 不参与 key 数量推断。
+void test_sound_column_does_not_expand_key_count()
+{
+    XINFO("=== Test: SOUND column does not expand key count ===");
+
+    fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_sound_column.mc";
+
+    json  fileData;
+    auto& meta         = fileData["meta"];
+    meta["id"]         = 0;
+    meta["creator"]    = "Test";
+    meta["background"] = "";
+    meta["cover"]      = "";
+    meta["version"]    = "4K";
+    meta["preview"]    = 0;
+    meta["mode"]       = 0;
+    meta["aimode"]     = "";
+
+    auto& song        = meta["song"];
+    song["title"]     = "SoundColumn";
+    song["artist"]    = "Test";
+    song["titleorg"]  = "";
+    song["artistorg"] = "";
+    song["file"]      = "audio.ogg";
+    song["bpm"]       = 120.0;
+
+    meta["mode_ext"]["column"]    = 4;
+    meta["mode_ext"]["bar_begin"] = 0;
+
+    json timing;
+    timing["beat"]   = json::array({ 0, 0, 1 });
+    timing["bpm"]    = 120.0;
+    timing["delay"]  = 0.0;
+    fileData["time"] = json::array({ timing });
+
+    json gameNote;
+    gameNote["beat"]   = json::array({ 1, 0, 1 });
+    gameNote["column"] = 3;
+
+    json soundNote;
+    soundNote["beat"]   = json::array({ 0, 0, 1 });
+    soundNote["column"] = 8;
+    soundNote["type"]   = 1;
+    soundNote["sound"]  = "audio.ogg";
+    soundNote["offset"] = 0;
+
+    fileData["note"] = json::array({ gameNote, soundNote });
+
+    std::ofstream ofs(outPath);
+    TEST_ASSERT(ofs.good(), "should open temp Malody file");
+    ofs << fileData.dump();
+    ofs.close();
+
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outPath);
+    reloaded.sync();
+
+    TEST_ASSERT(reloaded.m_baseMapMetadata.track_count == 4,
+                "SOUND column should not expand key count");
+    TEST_ASSERT(reloaded.m_allNotes.size() == 1,
+                "SOUND object should not become a playable note");
+
+    XINFO("PASS: SOUND column ignored for key count");
+}
+
 void test_original_structure_not_leaked()
 {
     XINFO("=== Test: original_structure key not leaked into output ===");
@@ -422,6 +487,7 @@ int main()
     test_key_mode_hold_uses_endbeat();
     test_slide_mode_saves_xw();
     test_audio_node_type_is_string();
+    test_sound_column_does_not_expand_key_count();
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();
 

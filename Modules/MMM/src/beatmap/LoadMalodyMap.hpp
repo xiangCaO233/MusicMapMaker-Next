@@ -191,13 +191,30 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         malodyMode = fileData["meta"].value("mode", 0);
     }
 
+    /// @brief 判断 note 条目是否为音效或 BGM 采样。
+    /// type 字段为字符串 ("SOUND") 或旧版整数 (1) 时不参与 key 数推断。
+    auto isSoundNote = [](const json& n) -> bool {
+        if ( n.contains("type") ) {
+            if ( n["type"].is_string() )
+                return n["type"].get<std::string>() == "SOUND";
+            if ( n["type"].is_number_integer() )
+                return n["type"].get<int>() == 1;
+        }
+        return false;
+    };
+
     // 2.5 预扫描：通过统计学特征自动识别轨道数 (针对 Mode 7 / 坐标模式)
     std::map<int, int> xFreq;
-    int                maxColumnField = -1;
-    bool               hasX           = false;
+    int                maxColumnField    = -1;
+    bool               hasX              = false;
+    int                playableNoteCount = 0;
+    int                metadataTrackCount =
+        basemeta.track_count > 0 ? basemeta.track_count : -1;
 
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
+            if ( isSoundNote(n) ) continue;
+            ++playableNoteCount;
             if ( n.contains("column") ) {
                 maxColumnField = std::max(maxColumnField, n.value("column", 0));
             } else if ( n.contains("x") ) {
@@ -210,14 +227,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 默认轨道数取 column 字段最大值
     int finalK = std::max(0, maxColumnField + 1);
 
+    // Key 模式的 mode_ext.column 是谱面声明的列数；可玩物件只能在此基础上扩展。
+    if ( malodyMode == 0 && metadataTrackCount > 0 ) {
+        finalK = std::max(finalK, metadataTrackCount);
+    }
+
     // 如果没有通过 column 识别出轨道数，则回退到元数据中的配置
     if ( finalK <= 0 ) {
-        if ( fileData.contains("meta") &&
-             fileData["meta"].contains("mode_ext") ) {
-            finalK = fileData["meta"]["mode_ext"].value("column", 4);
-        } else {
-            finalK = 4;
-        }
+        finalK = metadataTrackCount > 0 ? metadataTrackCount : 4;
     }
 
     // 根据轨道数计算默认间距 (Malody 默认画布宽度为 256)
@@ -269,7 +286,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             if ( error < minTotalError ) {
                 minTotalError = error;
                 // 只有当拟合误差显著小时才更新轨道参数
-                if ( error < (double)fileData["note"].size() * 5.0 ) {
+                if ( error < (double)playableNoteCount * 5.0 ) {
                     finalK      = k;
                     bestW       = w;
                     bestS       = s;
@@ -334,18 +351,6 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         }
         lastT += (beat - lastB) * (60000.0 / curBpm);
         return lastT;
-    };
-
-    /// @brief 判断 note 条目是否为音效采样
-    /// type 字段为字符串 ("SOUND") 或旧版整数 (1)
-    auto isSoundNote = [](const json& n) -> bool {
-        if ( n.contains("type") ) {
-            if ( n["type"].is_string() )
-                return n["type"].get<std::string>() == "SOUND";
-            if ( n["type"].is_number_integer() )
-                return n["type"].get<int>() == 1;
-        }
-        return false;
     };
 
     // 4. 处理音频偏移
