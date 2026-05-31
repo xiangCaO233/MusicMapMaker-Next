@@ -106,7 +106,7 @@ std::string sanitizeExportFileNamePart(std::string value)
     return value;
 }
 
-/// @brief 判断谱面是否包含 IMD 无法保存的基础元数据。
+/// @brief 判断谱面是否包含 RM/IMD 无法保存的基础元数据。
 bool hasUnsupportedImdBaseMetadata(const BaseMapMeta& meta)
 {
     return !meta.title.empty() || !meta.title_unicode.empty() ||
@@ -117,7 +117,7 @@ bool hasUnsupportedImdBaseMetadata(const BaseMapMeta& meta)
            meta.bgyoffset != 0;
 }
 
-/// @brief 判断谱面是否包含 IMD 无法保存的谱面扩展元数据。
+/// @brief 判断谱面是否包含 RM/IMD 无法保存的谱面扩展元数据。
 bool hasUnsupportedImdMapMetadata(const MapMetadata& metadata)
 {
     for ( const auto& [source, properties] : metadata.map_properties ) {
@@ -131,7 +131,7 @@ bool hasUnsupportedImdMapMetadata(const MapMetadata& metadata)
     return false;
 }
 
-/// @brief 判断谱面物件是否包含 IMD 无法保存的额外物件元数据。
+/// @brief 判断谱面物件是否包含 RM/IMD 无法保存的额外物件元数据。
 bool hasUnsupportedImdNoteMetadata(const BeatMap& beatMap)
 {
     for ( const auto& noteRef : beatMap.m_allNotes ) {
@@ -166,7 +166,7 @@ std::string getSaveAsPickerDefaultPath(const Config::EditorSettings& settings)
 
 /// @brief 根据导出格式生成推荐文件名。
 /// @param extension 目标扩展名。
-/// @param currentFileName 当前文件名，用于保留非 IMD 格式的主文件名。
+/// @param currentFileName 当前文件名，用于保留非 RM/IMD 格式的主文件名。
 /// @return 推荐文件名。
 std::string MainMenuView::makeExportFileNameForExtension(
     const std::string& extension, const std::string& currentFileName) const
@@ -306,20 +306,20 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
 
         if ( hasAnyNonBpmTimingForImd ) {
             warnings.push_back(
-                "IMD 文件不支持保存 Jump/HS/Scroll timing；导出时只会保留 BPM "
-                "timing。");
+                "RM 谱面格式不支持保存 Jump/HS/Scroll timing；导出时只会保留 "
+                "BPM timing。");
         }
         if ( hasUnsupportedBaseMeta || hasUnsupportedMapMeta ) {
             warnings.push_back(
-                "IMD 文件不支持保存 "
+                "RM 谱面格式不支持保存 "
                 "title、artist、音频、封面等扩展元数据；仅保留 Version、key "
                 "数、谱面时长、BPM timing 和物件数量/总数。");
         }
         if ( hasUnsupportedNoteMeta ) {
             warnings.push_back(
-                "IMD "
-                "文件不支持保存物件额外元数据；导出时只保留物件类型、时间、轨道"
-                "和格式本身支持的参数。");
+                "RM "
+                "谱面格式不支持保存物件额外元数据；导出时只保留物件类型、时间、"
+                "轨道和格式本身支持的参数。");
         }
     }
 
@@ -340,7 +340,7 @@ void MainMenuView::requestSaveBeatmapAs(std::string path)
     m_pendingExportPath     = std::move(path);
     m_pendingExportWarnings = std::move(warnings);
     m_pendingExportFormatName =
-        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "IMD" : "谱面");
+        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "RM" : "谱面");
     m_showExportCompatibilityWarning = true;
 }
 
@@ -397,6 +397,65 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
         }
 
         ImGui::EndPopup();
+    }
+}
+
+/// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
+{
+    constexpr const char* popupId = "选择导出格式###ExportFormatPickerModal";
+    if ( m_showExportFormatPicker ) {
+        ImGui::OpenPopup(popupId);
+        m_showExportFormatPicker = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    ImGui::SetNextWindowSize(ImVec2(360.0f * dpiScale, 0.0f),
+                             ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+
+    std::string selectedExtension;
+    if ( ImGui::BeginPopupModal(
+             popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        ImGui::TextUnformatted("选择另存为格式：");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const ImVec2 buttonSize(300.0f * dpiScale, 0.0f);
+        if ( ImGui::Button("MusicMapMaker Beatmap (.mmm)", buttonSize) ) {
+            selectedExtension = ".mmm";
+        }
+        if ( ImGui::Button("osu!mania Beatmap (.osu)", buttonSize) ) {
+            selectedExtension = ".osu";
+        }
+        if ( ImGui::Button("RM Beatmap (.imd)", buttonSize) ) {
+            selectedExtension = ".imd";
+        }
+        if ( ImGui::Button("Malody Chart (.mc)", buttonSize) ) {
+            selectedExtension = ".mc";
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if ( ImGui::Button(TR("ui.common.cancel").data(),
+                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        if ( !selectedExtension.empty() ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if ( !selectedExtension.empty() ) {
+        openExportFilePicker(selectedExtension);
     }
 }
 
@@ -495,6 +554,12 @@ void MainMenuView::openAudioImportPicker()
 void MainMenuView::openExportFilePicker(const std::string& ext)
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
+    if ( config.filePickerStyle == Config::FilePickerStyle::Native &&
+         ext.empty() ) {
+        m_showExportFormatPicker = true;
+        return;
+    }
+
     const std::string defaultPath = getSaveAsPickerDefaultPath(config);
 
     std::string defaultName = "map" + (ext.empty() ? ".mmm" : ext);
@@ -522,7 +587,7 @@ void MainMenuView::openExportFilePicker(const std::string& ext)
             filters[filterCount++] = { "osu!mania Beatmap", "osu" };
         }
         if ( ext == ".imd" || ext == "" ) {
-            filters[filterCount++] = { "IvoryMusicData", "imd" };
+            filters[filterCount++] = { "RM Beatmap", "imd" };
         }
         if ( ext == ".mc" || ext == "" ) {
             filters[filterCount++] = { "Malody Chart", "mc" };

@@ -147,7 +147,7 @@ private:
 
     /// @brief 根据导出格式生成推荐文件名。
     /// @param extension 目标扩展名。
-    /// @param currentFileName 当前文件名，用于保留非 IMD 格式的主文件名。
+    /// @param currentFileName 当前文件名，用于保留非 RM/IMD 格式的主文件名。
     /// @return 推荐文件名。
     std::string makeExportFileNameForExtension(
         const std::string& extension, const std::string& currentFileName) const;
@@ -172,6 +172,10 @@ private:
     /// @brief 渲染导出兼容性警告弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportCompatibilityWarningPopup(float dpiScale);
+
+    /// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderExportFormatPickerPopup(float dpiScale);
 
     /// @brief 渲染帮助菜单。
     /// @param sourceManager 当前 UI 管理器。
@@ -233,6 +237,8 @@ private:
     bool m_showUpdateSuccessPopup = false;
     /// @brief 是否在下一帧打开导出兼容性警告弹窗。
     bool m_showExportCompatibilityWarning = false;
+    /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
+    bool m_showExportFormatPicker = false;
 
     /// @brief 是否已完成启动时的自动更新检查。
     bool m_hasCheckedOnStartup = false;
