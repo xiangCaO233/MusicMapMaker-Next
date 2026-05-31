@@ -37,6 +37,7 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
     auto*       project  = engine.getCurrentProject();
     const float scale    = std::max(1.0f, dpiScale);
     const float padding  = 12.0f * scale;
+    const auto& style    = ImGui::GetStyle();
     float       minWidth = 0.0f;
     float       minHeight;
 
@@ -52,22 +53,16 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
     } else {
         const auto& recent =
             Config::AppConfig::instance().getEditorConfig().recentProjects;
-        minWidth = std::max(
-            ImGui::CalcTextSize(TR("ui.file_manager.initial_hint")).x,
-            ImGui::CalcTextSize(TR("ui.file_manager.open_directory")).x);
+        const float openButtonWidth =
+            ImGui::CalcTextSize(TR("ui.file_manager.open_directory")).x +
+            style.FramePadding.x * 2.0f;
+        minWidth =
+            std::max(ImGui::CalcTextSize(TR("ui.file_manager.initial_hint")).x,
+                     openButtonWidth);
         if ( !recent.empty() ) {
             minWidth = std::max(
                 minWidth,
                 ImGui::CalcTextSize(TR("ui.file.open_recent").data()).x);
-            for ( const auto& path : recent ) {
-                std::filesystem::path p    = Config::utf8ToPath(path);
-                std::string           name = Config::pathToUtf8(p.filename());
-                if ( name.empty() ) {
-                    name = path;
-                }
-                minWidth =
-                    std::max(minWidth, ImGui::CalcTextSize(name.c_str()).x);
-            }
         }
         minHeight = 40.0f + 12.0f + 40.0f;
         if ( !recent.empty() ) {

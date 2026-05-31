@@ -56,10 +56,10 @@ struct ProjectWorkspaceWindowState {
     int m_y{ 100 };
 
     /// @brief 窗口宽度。
-    int m_width{ 1280 };
+    int m_width{ 1400 };
 
     /// @brief 窗口高度。
-    int m_height{ 720 };
+    int m_height{ 900 };
 
     /// @brief 保存时窗口是否最大化。
     bool m_maximized{ false };

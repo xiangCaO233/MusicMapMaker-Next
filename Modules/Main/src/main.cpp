@@ -59,7 +59,7 @@ int main(int argc, char* argv[])
     // 正常运行
     XINFO("entering gameloop...");
 
-    Graphic::NativeWindow nativeWindow(1280, 720, "MusicMapMaker(Gamma)");
+    Graphic::NativeWindow nativeWindow(1400, 900, "MusicMapMaker(Gamma)");
 
     const auto ret = gameLoop.start(nativeWindow, argc, argv);
 

@@ -1,6 +1,5 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
@@ -11,6 +10,7 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
 
@@ -64,7 +64,6 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
 
 void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
 {
-    auto&    skinCfg = Config::SkinManager::instance();
     CLayVBox rootVBox;
 
     CLayHBox labelHBox;
@@ -117,32 +116,25 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                 fmt::format("RecentItem_{}", i),
                 Sizing::Grow(),
                 Sizing::Fixed(20),
-                [path, &skinCfg](Clay_BoundingBox r, bool isHovered) {
+                [path, i](Clay_BoundingBox r, bool isHovered) {
                     std::filesystem::path p = Config::utf8ToPath(path);
                     std::string name        = Config::pathToUtf8(p.filename());
                     if ( name.empty() ) name = path;
-                    ImVec4 col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-                    if ( isHovered )
-                        col = ImGui::GetStyle().Colors[ImGuiCol_ButtonHovered];
-
-                    ImGui::PushStyleColor(ImGuiCol_Text, col);
-                    ImGui::TextUnformatted(name.c_str());
-                    ImGui::PopStyleColor();
-
-                    ImVec2 min = ImGui::GetItemRectMin();
-                    ImVec2 max = ImGui::GetItemRectMax();
-                    min.y      = max.y;
-                    ImGui::GetWindowDrawList()->AddLine(
-                        min, max, ImGui::ColorConvertFloat4ToU32(col), 1.0f);
-
-                    if ( isHovered ) {
-                        ImGui::SetTooltip("%s", path.c_str());
+                    const std::string itemId =
+                        fmt::format("RecentProject_{}", i);
+                    Utils::renderScrollingSelectable(
+                        itemId,
+                        name,
+                        r.width,
+                        r.height,
+                        [p]() {
+                            Event::OpenProjectEvent ev;
+                            ev.m_projectPath = p;
+                            Event::EventBus::instance().publish(ev);
+                        },
+                        path);
+                    if ( ImGui::IsItemHovered() ) {
                         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    }
-                    if ( ImGui::IsItemClicked() ) {
-                        Event::OpenProjectEvent ev;
-                        ev.m_projectPath = p;
-                        Event::EventBus::instance().publish(ev);
                     }
                 });
         }

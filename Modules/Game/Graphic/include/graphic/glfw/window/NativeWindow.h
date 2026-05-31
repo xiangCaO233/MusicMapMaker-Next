@@ -126,13 +126,13 @@ private:
     int m_normalWindowPos[2] = { 100, 100 };
 
     /// @brief 最近一次普通窗口模式下的尺寸，用于最大化后的还原。
-    int m_normalWindowSize[2] = { 1280, 720 };
+    int m_normalWindowSize[2] = { 1400, 900 };
 
     /// @brief 全屏切换前的窗口位置备份。
     int m_backupPos[2] = { 100, 100 };
 
     /// @brief 全屏切换前的窗口尺寸备份。
-    int m_backupSize[2] = { 1280, 720 };
+    int m_backupSize[2] = { 1400, 900 };
 
 #ifdef _WIN32
     std::unique_ptr<Win32WindowAdapter>
