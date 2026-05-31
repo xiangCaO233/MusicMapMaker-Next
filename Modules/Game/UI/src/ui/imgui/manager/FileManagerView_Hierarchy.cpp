@@ -157,24 +157,14 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                             for ( const auto& audio :
                                   project->m_audioResources ) {
                                 if ( audio.m_path == relPath ) {
-                                    std::string viewName =
-                                        AudioTrackControllerUI::makeViewName(
-                                            audio.m_id);
-                                    if ( !sourceManager
-                                              ->getView<AudioTrackControllerUI>(
-                                                  viewName) ) {
-                                        auto controller = std::make_unique<
-                                            AudioTrackControllerUI>(
-                                            audio.m_id,
-                                            audio.m_id,
-                                            audio.m_type == AudioTrackType::Main
-                                                ? AudioTrackControllerUI::
-                                                      TrackType::Main
-                                                : AudioTrackControllerUI::
-                                                      TrackType::Effect);
-                                        sourceManager->registerView(
-                                            viewName, std::move(controller));
-                                    }
+                                    sourceManager->openAudioTrackController(
+                                        audio.m_id,
+                                        audio.m_id,
+                                        audio.m_type == AudioTrackType::Main
+                                            ? AudioTrackControllerUI::
+                                                  TrackType::Main
+                                            : AudioTrackControllerUI::
+                                                  TrackType::Effect);
                                     break;
                                 }
                             }

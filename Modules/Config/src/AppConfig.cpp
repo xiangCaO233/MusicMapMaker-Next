@@ -95,7 +95,14 @@ bool AppConfig::save(const std::filesystem::path& path) const
     try {
         // 确保目录存在
         if ( auto parent = finalPath.parent_path(); !parent.empty() ) {
-            std::filesystem::create_directories(parent);
+            std::error_code createDirectoryError;
+            std::filesystem::create_directories(parent, createDirectoryError);
+            if ( createDirectoryError ) {
+                XERROR("Failed to create config directory: {}. Error: {}",
+                       pathToUtf8(parent),
+                       createDirectoryError.message());
+                return false;
+            }
         }
 
         std::ofstream file(finalPath);

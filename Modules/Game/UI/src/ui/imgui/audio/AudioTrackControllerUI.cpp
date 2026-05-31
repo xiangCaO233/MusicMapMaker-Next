@@ -37,6 +37,19 @@ AudioTrackControllerUI::AudioTrackControllerUI(const std::string& trackId,
 {
 }
 
+/// @brief 请求下一次显示时停靠到指定 Dock 节点。
+/// @param dockId 目标 ImGui Dock 节点 ID，0 表示不改变停靠位置。
+void AudioTrackControllerUI::requestDockTo(ImGuiID dockId)
+{
+    m_pendingDockId = dockId;
+}
+
+/// @brief 请求下一次更新时将音轨控制器窗口聚焦到前台。
+void AudioTrackControllerUI::requestFocus()
+{
+    m_shouldFocusNextFrame = true;
+}
+
 void AudioTrackControllerUI::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) {
@@ -51,10 +64,20 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto* project  = engine.getCurrentProject();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
+    if ( m_pendingDockId != 0 ) {
+        ImGui::SetNextWindowDockID(m_pendingDockId, ImGuiCond_Always);
+    }
+    if ( m_shouldFocusNextFrame ) {
+        ImGui::SetNextWindowFocus();
+        m_shouldFocusNextFrame = false;
+    }
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     std::string windowTitle =
         m_trackName + "###" + AudioTrackControllerUI::makeViewName(m_trackId);
     if ( ImGui::Begin(windowTitle.c_str(), &m_isOpen) ) {
+        if ( m_pendingDockId != 0 && ImGui::IsWindowDocked() ) {
+            m_pendingDockId = 0;
+        }
         CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
         float volume = 0.5f;
         float speed  = 1.0f;

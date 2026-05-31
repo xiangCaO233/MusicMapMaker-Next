@@ -61,6 +61,10 @@ public:
     /// @brief 请求下一次更新时将画布窗口聚焦到前台。
     void requestFocus();
 
+    /// @brief 获取画布当前所在的 ImGui Dock 节点。
+    /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
+    ImGuiID getDockId() const;
+
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
 
@@ -167,6 +171,9 @@ private:
 
     /// @brief 是否需要在下一次 Begin 前停靠到主编辑区
     bool m_shouldDockToCenter{ false };
+
+    /// @brief 当前画布窗口最近一次更新时所在的 ImGui Dock 节点。
+    ImGuiID m_lastDockId{ 0 };
 
 private:
     /// @brief 当快照背景路径变化时加载或清理背景纹理。

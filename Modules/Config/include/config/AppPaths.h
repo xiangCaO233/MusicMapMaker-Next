@@ -13,6 +13,10 @@ public:
     /// @return 用户配置根目录，Windows 下为 用户目录/.config/mmm。
     static std::filesystem::path configRootPath();
 
+    /// @brief 确保用户配置根目录及其父路径存在。
+    /// @return 目录存在或创建成功时返回 true。
+    static bool ensureConfigRootPath();
+
     /// @brief 获取用户配置文件路径。
     /// @return user_config.json 在用户 .config 根目录下的完整路径。
     static std::filesystem::path userConfigFilePath();

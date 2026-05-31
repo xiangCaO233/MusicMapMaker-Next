@@ -1,4 +1,5 @@
 #include "ui/UIManager.h"
+#include "canvas/Basic2DCanvas.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -136,6 +137,68 @@ void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
         settingsView->open(tab);
         settingsView->requestDockToCenter();
         settingsView->requestFocus();
+    }
+}
+
+/// @brief 为新打开的音轨控制器选择默认 Dock 节点。
+/// @return 目标 Dock 节点 ID；无法解析时返回 0。
+ImGuiID UIManager::resolveAudioControllerDockId()
+{
+    auto& engine  = Logic::EditorEngine::instance();
+    auto  entries = engine.getSessionEntries();
+
+    auto resolveEntryDockId = [this](const Logic::SessionEntry& entry) {
+        if ( entry.isLogoPlaceholder ) {
+            return static_cast<ImGuiID>(0);
+        }
+
+        auto* canvas = getView<Canvas::Basic2DCanvas>(entry.cameraId);
+        if ( !canvas ) {
+            return static_cast<ImGuiID>(0);
+        }
+        return canvas->getDockId();
+    };
+
+    const int32_t activeIndex = engine.getActiveSessionIndex();
+    if ( activeIndex >= 0 &&
+         activeIndex < static_cast<int32_t>(entries.size()) ) {
+        ImGuiID activeDockId =
+            resolveEntryDockId(entries[static_cast<size_t>(activeIndex)]);
+        if ( activeDockId != 0 ) {
+            return activeDockId;
+        }
+    }
+
+    for ( const auto& entry : entries ) {
+        ImGuiID dockId = resolveEntryDockId(entry);
+        if ( dockId != 0 ) {
+            return dockId;
+        }
+    }
+
+    return MainDockSpaceUI::getCenterDockId();
+}
+
+/// @brief 打开音轨控制器并默认停靠到谱面画布标签组。
+/// @param trackId 音轨标识符。
+/// @param trackName 音轨显示名称。
+/// @param type 音轨类型。
+void UIManager::openAudioTrackController(const std::string& trackId,
+                                         const std::string& trackName,
+                                         AudioTrackControllerUI::TrackType type)
+{
+    std::string viewName   = AudioTrackControllerUI::makeViewName(trackId);
+    auto*       controller = getView<AudioTrackControllerUI>(viewName);
+    if ( !controller ) {
+        auto view = std::make_unique<AudioTrackControllerUI>(
+            trackId, trackName.empty() ? trackId : trackName, type);
+        controller = view.get();
+        registerView(viewName, std::move(view));
+    }
+
+    if ( controller ) {
+        controller->requestDockTo(resolveAudioControllerDockId());
+        controller->requestFocus();
     }
 }
 

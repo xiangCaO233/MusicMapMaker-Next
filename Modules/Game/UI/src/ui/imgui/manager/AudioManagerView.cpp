@@ -188,20 +188,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 Utils::renderScrollingSelectable(
                     audio.m_id, labelStr, availW, 28 * dpiScale, [&]() {
                         // 点击弹出控制器
-                        std::string viewName =
-                            AudioTrackControllerUI::makeViewName(audio.m_id);
-                        if ( !sourceManager->getView<AudioTrackControllerUI>(
-                                 viewName) ) {
-                            AudioTrackControllerUI::TrackType type =
-                                (audio.m_type == AudioTrackType::Main)
-                                    ? AudioTrackControllerUI::TrackType::Main
-                                    : AudioTrackControllerUI::TrackType::Effect;
-                            std::unique_ptr<IUIView> controller =
-                                std::make_unique<AudioTrackControllerUI>(
-                                    audio.m_id, audio.m_id, type);
-                            sourceManager->registerView(viewName,
-                                                        std::move(controller));
-                        }
+                        AudioTrackControllerUI::TrackType type =
+                            (audio.m_type == AudioTrackType::Main)
+                                ? AudioTrackControllerUI::TrackType::Main
+                                : AudioTrackControllerUI::TrackType::Effect;
+                        sourceManager->openAudioTrackController(
+                            audio.m_id, audio.m_id, type);
                     });
 
                 static int s_audioLogCounter = 0;

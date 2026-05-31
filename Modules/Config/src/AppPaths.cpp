@@ -23,6 +23,9 @@ namespace
 /// @brief 应用在 .config 下使用的子目录名。
 constexpr const char* kAppConfigDirectoryName = "mmm";
 
+/// @brief 用户配置基础目录名。
+constexpr const char* kBaseConfigDirectoryName = ".config";
+
 /// @brief 用户全局配置文件名。
 constexpr const char* kUserConfigFileName = "user_config.json";
 
@@ -73,7 +76,10 @@ std::filesystem::path userHomePath()
     std::filesystem::path homeDrive = readWideEnvironmentPath(L"HOMEDRIVE");
     /// @brief Windows 用户主目录相对路径，作为 USERPROFILE 不存在时的后备。
     std::filesystem::path homePath = readWideEnvironmentPath(L"HOMEPATH");
-    if ( !homeDrive.empty() && !homePath.empty() ) return homeDrive / homePath;
+    if ( !homeDrive.empty() && !homePath.empty() ) {
+        homeDrive /= homePath;
+        return homeDrive;
+    }
 #else
     /// @brief POSIX 用户主目录环境变量值。
     const char* home = std::getenv("HOME");
@@ -101,39 +107,101 @@ std::filesystem::path baseConfigPath()
     }
 #endif
 
-    return userHomePath() / ".config";
+    std::filesystem::path path = userHomePath();
+    path /= kBaseConfigDirectoryName;
+    return path;
+}
+
+#ifdef _WIN32
+/// @brief 将目录设置为 Windows 隐藏目录。
+/// @param path 需要隐藏的目录。
+void markDirectoryHidden(const std::filesystem::path& path)
+{
+    if ( path.empty() ) return;
+
+    DWORD attrs = GetFileAttributesW(path.wstring().c_str());
+    if ( attrs == INVALID_FILE_ATTRIBUTES ) return;
+    if ( (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0 ) return;
+    if ( (attrs & FILE_ATTRIBUTE_HIDDEN) != 0 ) return;
+
+    SetFileAttributesW(path.wstring().c_str(), attrs | FILE_ATTRIBUTE_HIDDEN);
+}
+#endif
+
+/// @brief 确保目录存在。
+/// @param path 需要创建的目录。
+/// @return 目录存在或创建成功时返回 true。
+bool ensureDirectory(const std::filesystem::path& path)
+{
+    if ( path.empty() ) return false;
+
+    std::error_code createError;
+    std::filesystem::create_directories(path, createError);
+
+    std::error_code existsError;
+    bool            exists = std::filesystem::exists(path, existsError);
+    if ( createError || existsError || !exists ) {
+        return false;
+    }
+
+#ifdef _WIN32
+    std::filesystem::path baseDirectory = userHomePath();
+    baseDirectory /= kBaseConfigDirectoryName;
+    markDirectoryHidden(baseDirectory);
+#endif
+    return true;
 }
 
 }  // namespace
 
 std::filesystem::path AppPaths::configRootPath()
 {
-    return baseConfigPath() / kAppConfigDirectoryName;
+    std::filesystem::path path = baseConfigPath();
+    path /= kAppConfigDirectoryName;
+    ensureDirectory(path);
+    return path;
+}
+
+bool AppPaths::ensureConfigRootPath()
+{
+    std::filesystem::path path = baseConfigPath();
+    path /= kAppConfigDirectoryName;
+    return ensureDirectory(path);
 }
 
 std::filesystem::path AppPaths::userConfigFilePath()
 {
-    return configRootPath() / kUserConfigFileName;
+    std::filesystem::path path = configRootPath();
+    path /= kUserConfigFileName;
+    return path;
 }
 
 std::filesystem::path AppPaths::imguiIniFilePath()
 {
-    return configRootPath() / kImguiIniFileName;
+    std::filesystem::path path = configRootPath();
+    path /= kImguiIniFileName;
+    return path;
 }
 
 std::filesystem::path AppPaths::assetsRootPath()
 {
-    return configRootPath() / kAssetsDirectoryName;
+    std::filesystem::path path = configRootPath();
+    path /= kAssetsDirectoryName;
+    return path;
 }
 
 std::filesystem::path AppPaths::defaultSkinFilePath()
 {
-    return assetsRootPath() / utf8ToPath(kDefaultSkinRelativePath);
+    std::filesystem::path path = assetsRootPath();
+    path /= utf8ToPath(kDefaultSkinRelativePath);
+    return path;
 }
 
 std::filesystem::path AppPaths::windowIconFilePath()
 {
-    return assetsRootPath() / utf8ToPath(kWindowIconRelativePath);
+    std::filesystem::path path = assetsRootPath();
+    path /= utf8ToPath(kWindowIconRelativePath);
+    return path;
 }
 
 std::filesystem::path AppPaths::legacyUserConfigFilePath()

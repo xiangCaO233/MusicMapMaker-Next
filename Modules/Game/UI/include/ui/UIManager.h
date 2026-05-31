@@ -2,6 +2,7 @@
 
 #include "IUIView.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
+#include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include <memory>
 #include <string>
@@ -62,6 +63,14 @@ public:
     /// @brief 打开独立设置窗口，切换到指定标签页并请求聚焦。
     /// @param tab 需要激活的设置标签页。
     void openSettingsWindow(MMM::Event::SettingsTab tab);
+
+    /// @brief 打开音轨控制器并默认停靠到谱面画布标签组。
+    /// @param trackId 音轨标识符。
+    /// @param trackName 音轨显示名称。
+    /// @param type 音轨类型。
+    void openAudioTrackController(const std::string&                trackId,
+                                  const std::string&                trackName,
+                                  AudioTrackControllerUI::TrackType type);
 
     /// @brief 泛型获取裸指针 外部不负责销毁
     template<typename T> T* getView(const std::string& name)
@@ -124,6 +133,10 @@ private:
 
     /// @brief 关闭上一个项目遗留的动态工作区视图。
     void clearProjectWorkspaceViews();
+
+    /// @brief 为新打开的音轨控制器选择默认 Dock 节点。
+    /// @return 目标 Dock 节点 ID；无法解析时返回 0。
+    ImGuiID resolveAudioControllerDockId();
 
     /// @brief 在销毁可能持有 Vulkan 资源的视图前等待 GPU 完成在途命令。
     /// @param view 即将被销毁的 UI 视图。

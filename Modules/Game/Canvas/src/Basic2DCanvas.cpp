@@ -85,6 +85,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                            showClose ? &m_isOpen : nullptr,
                            dockId,
                            ImGuiCond_Always);
+    m_lastDockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
     if ( m_shouldDockToCenter && ImGui::IsWindowDocked() ) {
         m_shouldDockToCenter = false;
     }
@@ -254,6 +255,13 @@ void Basic2DCanvas::requestDockToCenter()
 void Basic2DCanvas::requestFocus()
 {
     m_shouldFocusNextFrame = true;
+}
+
+/// @brief 获取画布当前所在的 ImGui Dock 节点。
+/// @return 当前窗口停靠节点 ID；未停靠时返回 0。
+ImGuiID Basic2DCanvas::getDockId() const
+{
+    return m_lastDockId;
 }
 
 bool Basic2DCanvas::isDirty() const

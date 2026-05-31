@@ -46,6 +46,13 @@ public:
 
     const std::string& getTrackId() const { return m_trackId; }
 
+    /// @brief 请求下一次显示时停靠到指定 Dock 节点。
+    /// @param dockId 目标 ImGui Dock 节点 ID，0 表示不改变停靠位置。
+    void requestDockTo(ImGuiID dockId);
+
+    /// @brief 请求下一次更新时将音轨控制器窗口聚焦到前台。
+    void requestFocus();
+
     /// @brief 获取音轨控制器显示名称。
     /// @return 当前窗口显示名称。
     const std::string& getTrackName() const { return m_trackName; }
@@ -95,6 +102,12 @@ private:
     CLayVBox             m_contentVBox;
     std::deque<CLayHBox> m_rows;
     std::deque<CLayVBox> m_sections;
+
+    /// @brief 下一帧需要停靠到的目标 Dock 节点。
+    ImGuiID m_pendingDockId{ 0 };
+
+    /// @brief 下一帧是否请求窗口聚焦。
+    bool m_shouldFocusNextFrame{ false };
 };
 
 }  // namespace MMM::UI
