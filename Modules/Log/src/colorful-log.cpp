@@ -1,5 +1,74 @@
 #include "log/colorful-log.h"
 
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <string>
+
+namespace
+{
+
+/// @brief 日志文件存放在用户主目录下的相对目录。
+const std::filesystem::path kLogRelativeDirectory =
+    std::filesystem::path(".local") / "mmm" / "logs";
+
+/// @brief 获取当前用户主目录路径。
+/// @return 用户主目录；无法读取环境变量时退回到当前工作目录。
+std::filesystem::path userHomePath()
+{
+#ifdef _WIN32
+    const char* userProfile = std::getenv("USERPROFILE");
+    if ( userProfile && userProfile[0] != '\0' ) {
+        return std::filesystem::path(userProfile);
+    }
+
+    const char* homeDrive = std::getenv("HOMEDRIVE");
+    const char* homePath  = std::getenv("HOMEPATH");
+    if ( homeDrive && homeDrive[0] != '\0' && homePath &&
+         homePath[0] != '\0' ) {
+        return std::filesystem::path(homeDrive) / homePath;
+    }
+#else
+    const char* home = std::getenv("HOME");
+    if ( home && home[0] != '\0' ) {
+        return std::filesystem::path(home);
+    }
+#endif
+
+    std::error_code       currentPathError;
+    std::filesystem::path currentPath =
+        std::filesystem::current_path(currentPathError);
+    if ( !currentPathError ) return currentPath;
+    return ".";
+}
+
+/// @brief 获取日志输出目录。
+/// @return 用户主目录下的 .local/mmm/logs 路径。
+std::filesystem::path logDirectoryPath()
+{
+    return userHomePath() / kLogRelativeDirectory;
+}
+
+/// @brief 生成用于日志文件名的本地时间戳。
+/// @return 格式为 YYYYMMDD-HHMMSS 的时间戳字符串。
+std::string makeLogTimestamp()
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto t   = std::chrono::system_clock::to_time_t(now);
+    std::tm    tmBuf{};
+    char       buffer[32]{};
+#ifdef _WIN32
+    localtime_s(&tmBuf, &t);
+#else
+    localtime_r(&t, &tmBuf);
+#endif
+    std::strftime(buffer, sizeof(buffer), "%Y%m%d-%H%M%S", &tmBuf);
+    return buffer;
+}
+
+}  // namespace
+
 // 判断路径分隔符
 inline bool is_path_sep(char c)
 {
@@ -127,12 +196,22 @@ std::shared_ptr<spdlog::logger> XLogger::logger;
 
 void XLogger::init(const char* name)
 {
+    const std::filesystem::path logDirectory = logDirectoryPath();
+    std::error_code             createDirectoryError;
+    std::filesystem::create_directories(logDirectory, createDirectoryError);
+
+    const std::string           timestamp = makeLogTimestamp();
+    const std::filesystem::path allLogPath =
+        logDirectory / ("mmm-" + timestamp + ".log");
+    const std::filesystem::path errorLogPath =
+        logDirectory / ("mmm-error-" + timestamp + ".log");
+
     // 创建三个sink（终端、全量文件、错误文件）
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    auto file_all_sink =
-        std::make_shared<spdlog::sinks::basic_file_sink_mt>("logs/latest.log");
-    auto file_error_sink =
-        std::make_shared<spdlog::sinks::basic_file_sink_mt>("logs/error.log");
+    auto file_all_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+        allLogPath.string());
+    auto file_error_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+        errorLogPath.string());
 
     // 设置统一的自定义格式
     auto formatter = std::make_unique<ColorfulFormatter>();
@@ -160,7 +239,7 @@ void XLogger::init(const char* name)
     spdlog::register_logger(logger);
     spdlog::set_default_logger(logger);
 
-    XINFO("日志初始化完成");
+    XINFO("日志初始化完成，日志目录: {}", logDirectory.string());
 }
 
 void XLogger::shutdown()
