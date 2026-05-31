@@ -95,11 +95,13 @@ void ToolbarView::update(UIManager* sourceManager)
                                     const char* tooltip,
                                     auto        applyChange) {
             pushBtnStyle(active);
+            ImGui::PushID(tooltip);
             if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
                 auto newConfig = editorCfg;
                 applyChange(newConfig);
                 engine.setEditorConfig(newConfig);
             }
+            ImGui::PopID();
             drawTooltip(tooltip);
             ImGui::PopStyleColor(3);
             advanceItem();
@@ -110,9 +112,11 @@ void ToolbarView::update(UIManager* sourceManager)
                                            const char* tooltip,
                                            auto        applyChange) {
             pushBtnStyle(active);
+            ImGui::PushID(tooltip);
             if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
                 applyChange(!active);
             }
+            ImGui::PopID();
             drawTooltip(tooltip);
             ImGui::PopStyleColor(3);
             advanceItem();
@@ -190,6 +194,14 @@ void ToolbarView::update(UIManager* sourceManager)
                          [](Config::EditorConfig& config) {
                              config.settings.stopPlaybackOnScroll =
                                  !config.settings.stopPlaybackOnScroll;
+                         });
+
+        drawToggleButton(ICON_MMM_HIT_SFX,
+                         editorCfg.settings.sfxConfig.enableHitSfx,
+                         TR("ui.toolbar.hit_sfx").data(),
+                         [](Config::EditorConfig& config) {
+                             config.settings.sfxConfig.enableHitSfx =
+                                 !config.settings.sfxConfig.enableHitSfx;
                          });
 
         drawToggleButton(ICON_MMM_VISUAL_EFFECTS,

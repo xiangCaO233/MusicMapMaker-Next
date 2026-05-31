@@ -49,13 +49,11 @@ constexpr const char* ICON_MMM_SQUARE_SELECT =
     "\xef\x83\x88";  ///< \uf0c8 square (Marquee Tool)
 constexpr const char* ICON_MMM_SCISSORS =
     "\xef\x83\x84";  ///< \uf0c4 scissors (Cut Tool)
-constexpr const char* ICON_MMM_UNDO = "\xef\x8b\xaa";  ///< \uf2ea rotate-left
-constexpr const char* ICON_MMM_REDO = "\xef\x8b\xb9";  ///< \uf2f9 rotate-right
-constexpr const char* ICON_MMM_COPY = "\xef\x83\x85";  ///< \uf0c5 copy
-constexpr const char* ICON_MMM_PASTE =
-    "\xef\x83\xaa";  ///< \uf0ea paste
-constexpr const char* ICON_MMM_MIRROR =
-    "\xef\x81\xbe";  ///< \uf07e arrows-h
+constexpr const char* ICON_MMM_UNDO  = "\xef\x8b\xaa";  ///< \uf2ea rotate-left
+constexpr const char* ICON_MMM_REDO  = "\xef\x8b\xb9";  ///< \uf2f9 rotate-right
+constexpr const char* ICON_MMM_COPY  = "\xef\x83\x85";  ///< \uf0c5 copy
+constexpr const char* ICON_MMM_PASTE = "\xef\x83\xaa";  ///< \uf0ea paste
+constexpr const char* ICON_MMM_MIRROR = "\xef\x81\xbe";  ///< \uf07e arrows-h
 constexpr const char* ICON_MMM_SELECT_ALL =
     "\xef\x89\x87";  ///< \uf247 object-group
 
@@ -78,8 +76,7 @@ constexpr const char* ICON_MMM_VOLUME_OFF =
 constexpr const char* ICON_MMM_VOLUME_MUTE =
     "\xef\x80\xa6";  ///< \uf026 volume-off (Mute Fallback)
 
-constexpr const char* ICON_MMM_HIT_SFX =
-    "\xef\x80\xa8";  ///< \uf028 volume-high
+constexpr const char* ICON_MMM_HIT_SFX = "\xef\x80\x81";  ///< \uf001 music
 constexpr const char* ICON_MMM_VISUAL_EFFECTS =
     "\xef\x83\xa7";  ///< \uf0e7 bolt
 
