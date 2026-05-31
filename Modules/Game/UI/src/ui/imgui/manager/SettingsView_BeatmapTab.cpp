@@ -43,6 +43,10 @@ void SettingsView::drawBeatmapSettings()
     if ( m_lastBeatmapPath != currentPath ) {
         m_editingMeta     = beatmap.m_baseMapMetadata;
         m_lastBeatmapPath = currentPath;
+    } else if ( m_editingMeta.track_count !=
+                beatmap.m_baseMapMetadata.track_count ) {
+        // 右侧工具栏可直接修改 key 数，谱面设置页需要同步这份外部变更。
+        m_editingMeta.track_count = beatmap.m_baseMapMetadata.track_count;
     }
     auto& meta    = m_editingMeta;
     bool  changed = false;
