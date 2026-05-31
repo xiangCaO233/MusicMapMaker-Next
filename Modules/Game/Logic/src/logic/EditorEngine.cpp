@@ -10,6 +10,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -37,6 +38,31 @@ constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
 
 /// @brief 同主音轨画布同步的逻辑时间变化阈值。
 constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
+
+/// @brief 为同主音轨后台跟随谱面推进视觉打击特效事件。
+/// @warning 逻辑热路径：同主音轨同步时调用；只线性消费已排序 hitEvents
+/// 的新增区间，禁止文件系统访问或重新构建事件序列。
+void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
+                              const Config::EditorConfig& config,
+                              bool                        resetHitIndex)
+{
+    if ( resetHitIndex ) {
+        SessionUtils::syncHitIndex(ctx);
+        return;
+    }
+
+    std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
+    while ( ctx.nextHitIndex < ctx.hitEvents.size() &&
+            ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.visualTime ) {
+        const auto& ev = ctx.hitEvents[ctx.nextHitIndex];
+        if ( ev.timestamp > previousVisualTime ) {
+            triggeredEvents.push_back(ev);
+        }
+        ctx.nextHitIndex++;
+    }
+
+    ctx.hitFXSystem.update(ctx.visualTime, triggeredEvents, config);
+}
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
 /// @warning 逻辑热路径等待：UPS 提前到达目标间隔时执行；只能包含 sleep
@@ -1150,6 +1176,13 @@ void EditorEngine::syncSameMainAudioCanvases()
             continue;
         }
 
+        const bool   wasFollowing       = ctx.isMainAudioSyncFollower;
+        const double previousVisualTime = ctx.visualTime;
+        const bool   shouldClearHitEffects =
+            wasFollowing != activeCtx.isPlaying ||
+            activeCtx.visualTime < previousVisualTime ||
+            std::abs(activeCtx.visualTime - previousVisualTime) > 0.2;
+
         ctx.currentTime             = activeCtx.currentTime;
         ctx.visualTime              = activeCtx.visualTime;
         ctx.isPlaying               = false;
@@ -1163,7 +1196,13 @@ void EditorEngine::syncSameMainAudioCanvases()
                 .count();
         ctx.playStartVisualTime = ctx.currentTime;
         ctx.syncClock.reset(ctx.currentTime);
-        ctx.hitFXSystem.clearActiveEffects();
+        if ( shouldClearHitEffects ) {
+            ctx.hitFXSystem.clearActiveEffects();
+        }
+        if ( ctx.isMainAudioSyncFollower ) {
+            updateFollowerHitEffects(
+                ctx, previousVisualTime, m_editorConfig, shouldClearHitEffects);
+        }
     }
 }
 
