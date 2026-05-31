@@ -27,6 +27,12 @@ double NativeWindow::s_lastMouseX{ 0. };
 double NativeWindow::s_lastMouseY{ 0. };
 bool   NativeWindow::s_firstMouse{ true };
 
+namespace
+{
+/// @brief 判断历史尺寸是否贴近显示器工作区时允许的像素误差。
+constexpr int MAXIMIZED_PLACEMENT_TOLERANCE = 8;
+}  // namespace
+
 NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 {
     if ( !glfwVulkanSupported() ) {
@@ -158,6 +164,8 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
         }
     }
 
+    rememberCurrentWindowPlacement();
+
     // 在 glfwCreateWindow 之后调用
 #ifdef _WIN32
     m_win32Adapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
@@ -182,6 +190,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetWindowUserPointer(m_windowHandle, this);
     glfwSetFramebufferSizeCallback(m_windowHandle,
                                    &NativeWindow::framebufferResizeCallback);
+    glfwSetWindowPosCallback(m_windowHandle, &NativeWindow::windowPosCallback);
+    glfwSetWindowSizeCallback(m_windowHandle,
+                              &NativeWindow::windowSizeCallback);
     glfwSetKeyCallback(m_windowHandle, GLFW_KeyCallback);
     glfwSetDropCallback(m_windowHandle, GLFW_DropCallback);
 
@@ -209,6 +220,12 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     // 窗口最大化/还原回调 (处理系统级别的状态变更)
     glfwSetWindowMaximizeCallback(
         m_windowHandle, [](GLFWwindow* w, int maximized) {
+            auto app =
+                reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
+            if ( app && maximized == GLFW_FALSE ) {
+                app->rememberCurrentWindowPlacement();
+            }
+
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE,
                 .hasStateChange = true,
@@ -284,7 +301,14 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
                     glfwRestoreWindow(m_windowHandle);
                     XINFO("Window restored.");
                 } else {
+                    rememberCurrentWindowPlacement();
+                    const int restoreX      = m_normalWindowPos[0];
+                    const int restoreY      = m_normalWindowPos[1];
+                    const int restoreWidth  = m_normalWindowSize[0];
+                    const int restoreHeight = m_normalWindowSize[1];
                     glfwMaximizeWindow(m_windowHandle);
+                    rememberWindowPlacement(
+                        restoreX, restoreY, restoreWidth, restoreHeight);
                     XINFO("Window maximized.");
                 }
                 break;
@@ -299,6 +323,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
                 glfwSetWindowShouldClose(m_windowHandle, GLFW_TRUE);
                 break;
             }
+            case Event::NativeEventType::GLFW_WINDOW_RESIZED:
+            case Event::NativeEventType::GLFW_WINDOW_CONTENT_SCALE_CHANGED:
+                break;
             }
         });
 }
@@ -327,6 +354,13 @@ void NativeWindow::getWindowPlacement(int& x, int& y, int& width, int& height,
     glfwGetWindowSize(m_windowHandle, &width, &height);
     maximized =
         glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+
+    if ( maximized ) {
+        x      = m_normalWindowPos[0];
+        y      = m_normalWindowPos[1];
+        width  = m_normalWindowSize[0];
+        height = m_normalWindowSize[1];
+    }
 }
 
 void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
@@ -336,15 +370,30 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
         return;
     }
 
+    int restoreX      = x;
+    int restoreY      = y;
+    int restoreWidth  = width;
+    int restoreHeight = height;
+    if ( maximized && isLikelyMaximizedPlacement(width, height) ) {
+        restoreX      = m_normalWindowPos[0];
+        restoreY      = m_normalWindowPos[1];
+        restoreWidth  = m_normalWindowSize[0];
+        restoreHeight = m_normalWindowSize[1];
+    }
+
+    rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
+
     if ( glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ) {
         glfwRestoreWindow(m_windowHandle);
     }
 
-    glfwSetWindowPos(m_windowHandle, x, y);
-    glfwSetWindowSize(m_windowHandle, width, height);
+    glfwSetWindowPos(m_windowHandle, restoreX, restoreY);
+    glfwSetWindowSize(m_windowHandle, restoreWidth, restoreHeight);
 
     if ( maximized ) {
         glfwMaximizeWindow(m_windowHandle);
+        rememberWindowPlacement(
+            restoreX, restoreY, restoreWidth, restoreHeight);
     }
 }
 
@@ -354,6 +403,100 @@ void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)
         reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(window));
     app->m_lastResizeTime = std::chrono::steady_clock::now();
     app->m_resizePending.store(true, std::memory_order_relaxed);
+}
+
+void NativeWindow::windowPosCallback(GLFWwindow* window, int x, int y)
+{
+    auto app =
+        reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(window));
+    if ( !app || !app->canRememberCurrentWindowPlacement() ) {
+        return;
+    }
+
+    int width  = 0;
+    int height = 0;
+    glfwGetWindowSize(window, &width, &height);
+    app->rememberWindowPlacement(x, y, width, height);
+}
+
+void NativeWindow::windowSizeCallback(GLFWwindow* window, int width, int height)
+{
+    auto app =
+        reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(window));
+    if ( !app || !app->canRememberCurrentWindowPlacement() ) {
+        return;
+    }
+
+    int x = 0;
+    int y = 0;
+    glfwGetWindowPos(window, &x, &y);
+    app->rememberWindowPlacement(x, y, width, height);
+}
+
+bool NativeWindow::canRememberCurrentWindowPlacement() const
+{
+    return m_windowHandle && glfwGetWindowMonitor(m_windowHandle) == nullptr &&
+           glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) != GLFW_TRUE &&
+           glfwGetWindowAttrib(m_windowHandle, GLFW_ICONIFIED) != GLFW_TRUE;
+}
+
+bool NativeWindow::isLikelyMaximizedPlacement(int width, int height) const
+{
+    if ( !m_windowHandle || width <= 0 || height <= 0 ) {
+        return false;
+    }
+
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    if ( !monitor ) {
+        return false;
+    }
+
+    int workAreaX      = 0;
+    int workAreaY      = 0;
+    int workAreaWidth  = 0;
+    int workAreaHeight = 0;
+    glfwGetMonitorWorkarea(
+        monitor, &workAreaX, &workAreaY, &workAreaWidth, &workAreaHeight);
+
+    if ( workAreaWidth <= 0 || workAreaHeight <= 0 ) {
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if ( !mode ) {
+            return false;
+        }
+
+        workAreaWidth  = mode->width;
+        workAreaHeight = mode->height;
+    }
+
+    return width >= workAreaWidth - MAXIMIZED_PLACEMENT_TOLERANCE ||
+           height >= workAreaHeight - MAXIMIZED_PLACEMENT_TOLERANCE;
+}
+
+void NativeWindow::rememberCurrentWindowPlacement()
+{
+    if ( !canRememberCurrentWindowPlacement() ) {
+        return;
+    }
+
+    int x      = 0;
+    int y      = 0;
+    int width  = 0;
+    int height = 0;
+    glfwGetWindowPos(m_windowHandle, &x, &y);
+    glfwGetWindowSize(m_windowHandle, &width, &height);
+    rememberWindowPlacement(x, y, width, height);
+}
+
+void NativeWindow::rememberWindowPlacement(int x, int y, int width, int height)
+{
+    if ( width <= 0 || height <= 0 ) {
+        return;
+    }
+
+    m_normalWindowPos[0]  = x;
+    m_normalWindowPos[1]  = y;
+    m_normalWindowSize[0] = width;
+    m_normalWindowSize[1] = height;
 }
 
 void NativeWindow::GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,
@@ -429,6 +572,8 @@ void NativeWindow::ToggleFullscreen()
                              m_backupSize[0],
                              m_backupSize[1],
                              0);
+        rememberWindowPlacement(
+            m_backupPos[0], m_backupPos[1], m_backupSize[0], m_backupSize[1]);
         XINFO("Restored window to {}x{} at ({},{})",
               m_backupSize[0],
               m_backupSize[1],
@@ -436,8 +581,11 @@ void NativeWindow::ToggleFullscreen()
               m_backupPos[1]);
     } else {
         // --- 进入全屏前，备份当前窗口状态 ---
-        glfwGetWindowPos(m_windowHandle, &m_backupPos[0], &m_backupPos[1]);
-        glfwGetWindowSize(m_windowHandle, &m_backupSize[0], &m_backupSize[1]);
+        rememberCurrentWindowPlacement();
+        m_backupPos[0]  = m_normalWindowPos[0];
+        m_backupPos[1]  = m_normalWindowPos[1];
+        m_backupSize[0] = m_normalWindowSize[0];
+        m_backupSize[1] = m_normalWindowSize[1];
 
         // 执行全屏切换
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();

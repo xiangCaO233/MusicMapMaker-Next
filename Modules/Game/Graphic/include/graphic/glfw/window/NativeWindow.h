@@ -80,7 +80,39 @@ public:
 
     static void framebufferResizeCallback(GLFWwindow* window, int w, int h);
 
+    /// @brief 记录普通窗口移动后的可还原位置。
+    /// @param window GLFW 窗口句柄。
+    /// @param x 窗口左上角 X 坐标。
+    /// @param y 窗口左上角 Y 坐标。
+    static void windowPosCallback(GLFWwindow* window, int x, int y);
+
+    /// @brief 记录普通窗口缩放后的可还原尺寸。
+    /// @param window GLFW 窗口句柄。
+    /// @param width 窗口宽度。
+    /// @param height 窗口高度。
+    static void windowSizeCallback(GLFWwindow* window, int width, int height);
+
 private:
+    /// @brief 判断当前窗口状态是否适合写入普通窗口还原矩形。
+    /// @return 普通窗口模式下返回 true，最大化、最小化或全屏时返回 false。
+    bool canRememberCurrentWindowPlacement() const;
+
+    /// @brief 判断历史窗口尺寸是否疑似误保存了最大化后的工作区尺寸。
+    /// @param width 历史窗口宽度。
+    /// @param height 历史窗口高度。
+    /// @return 尺寸贴近当前显示器工作区时返回 true。
+    bool isLikelyMaximizedPlacement(int width, int height) const;
+
+    /// @brief 从 GLFW 当前状态更新普通窗口还原矩形。
+    void rememberCurrentWindowPlacement();
+
+    /// @brief 写入普通窗口还原矩形。
+    /// @param x 窗口左上角 X 坐标。
+    /// @param y 窗口左上角 Y 坐标。
+    /// @param width 窗口宽度。
+    /// @param height 窗口高度。
+    void rememberWindowPlacement(int x, int y, int width, int height);
+
     GLFWwindow*                           m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
     /// @brief 是否有待消抖的窗口尺寸变化。
@@ -90,8 +122,17 @@ private:
     static double             s_lastMouseX;
     static double             s_lastMouseY;
     static bool               s_firstMouse;
-    int                       m_backupPos[2]  = { 100, 100 };   // 默认备份位置
-    int                       m_backupSize[2] = { 1280, 720 };  // 默认备份尺寸
+    /// @brief 最近一次普通窗口模式下的左上角位置，用于最大化后的还原。
+    int m_normalWindowPos[2] = { 100, 100 };
+
+    /// @brief 最近一次普通窗口模式下的尺寸，用于最大化后的还原。
+    int m_normalWindowSize[2] = { 1280, 720 };
+
+    /// @brief 全屏切换前的窗口位置备份。
+    int m_backupPos[2] = { 100, 100 };
+
+    /// @brief 全屏切换前的窗口尺寸备份。
+    int m_backupSize[2] = { 1280, 720 };
 
 #ifdef _WIN32
     std::unique_ptr<Win32WindowAdapter>
