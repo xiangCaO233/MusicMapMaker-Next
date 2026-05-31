@@ -75,6 +75,27 @@ private:
     // 渲染时间点表格大窗口
     void renderTimingPointsTableWindow();
 
+    /// @brief 开始跟踪一次“保持画布速度”创建出的 BPM/Scroll 联动。
+    /// @param time 新建 BPM 与 Scroll 所在时间点。
+    void beginKeepSpeedBinding(double time);
+
+    /// @brief 刷新当前“保持画布速度”联动关联的实体。
+    /// @param elements 当前时间点表格展示的完整事件列表。
+    void refreshKeepSpeedBinding(
+        const std::vector<Logic::TimelineInteractiveElement>& elements);
+
+    /// @brief 判断表格行是否属于当前临时联动。
+    /// @param entity 当前行实体。
+    /// @return 属于联动中的 BPM 或 Scroll 行则返回 true。
+    bool isKeepSpeedBindingEntity(entt::entity entity) const;
+
+    /// @brief 使用编辑中的 BPM 值刷新联动 Scroll 值。
+    /// @param bpm 当前 BPM 编辑值。
+    void updateKeepSpeedBindingScroll(double bpm);
+
+    /// @brief 结束“保持画布速度”临时联动并恢复普通编辑状态。
+    void finishKeepSpeedBinding();
+
     void handleRightClick(const ImVec2& size);
 
     std::string                               m_canvasName;
@@ -107,6 +128,17 @@ private:
     ::MMM::TimingEffect m_lastCreatedTimingEffect{ ::MMM::TimingEffect::BPM };
     /// @brief 最近一次新建 Timing 的高亮截止时间（ImGui 时间）
     double m_lastCreatedTimingHighlightUntil{ 0.0 };
+
+    /// @brief “保持画布速度”临时联动是否正在等待 BPM 编辑结束。
+    bool m_keepSpeedBindingActive{ false };
+    /// @brief 联动创建的 BPM 与 Scroll 所在时间点。
+    double m_keepSpeedBindingTime{ -1.0 };
+    /// @brief 联动创建或匹配到的 BPM 实体。
+    entt::entity m_keepSpeedBindingBpmEntity{ entt::null };
+    /// @brief 联动创建或匹配到的 Scroll 实体。
+    entt::entity m_keepSpeedBindingScrollEntity{ entt::null };
+    /// @brief 是否需要在表格中自动聚焦联动 BPM 输入框。
+    bool m_keepSpeedBindingFocusBpm{ false };
 
     // 缓存 Shader 源码
     std::unordered_map<std::string, std::vector<std::string>>

@@ -277,6 +277,77 @@ bool drawTimeEditor(const char* id, double& value,
 }
 }  // namespace
 
+/// @brief 开始跟踪一次“保持画布速度”创建出的 BPM/Scroll 联动。
+void TimelineCanvas::beginKeepSpeedBinding(double time)
+{
+    m_keepSpeedBindingActive       = true;
+    m_keepSpeedBindingTime         = time;
+    m_keepSpeedBindingBpmEntity    = entt::null;
+    m_keepSpeedBindingScrollEntity = entt::null;
+    m_keepSpeedBindingFocusBpm     = true;
+}
+
+/// @brief 刷新当前“保持画布速度”联动关联的实体。
+void TimelineCanvas::refreshKeepSpeedBinding(
+    const std::vector<Logic::TimelineInteractiveElement>& elements)
+{
+    if ( !m_keepSpeedBindingActive ) return;
+
+    auto chooseNewest = [](entt::entity current,
+                           entt::entity candidate) -> entt::entity {
+        if ( candidate == entt::null ) return current;
+        if ( current == entt::null ) return candidate;
+        return entt::to_integral(candidate) > entt::to_integral(current)
+                   ? candidate
+                   : current;
+    };
+
+    for ( const auto& el : elements ) {
+        if ( std::abs(el.time - m_keepSpeedBindingTime) > 1e-6 ) continue;
+
+        if ( el.effects & Logic::System::SCROLL_EFFECT_BPM ) {
+            m_keepSpeedBindingBpmEntity =
+                chooseNewest(m_keepSpeedBindingBpmEntity, el.bpmEntity);
+        }
+        if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
+            m_keepSpeedBindingScrollEntity =
+                chooseNewest(m_keepSpeedBindingScrollEntity, el.scrollEntity);
+        }
+    }
+}
+
+/// @brief 判断表格行是否属于当前临时联动。
+bool TimelineCanvas::isKeepSpeedBindingEntity(entt::entity entity) const
+{
+    return m_keepSpeedBindingActive && entity != entt::null &&
+           (entity == m_keepSpeedBindingBpmEntity ||
+            entity == m_keepSpeedBindingScrollEntity);
+}
+
+/// @brief 使用编辑中的 BPM 值刷新联动 Scroll 值。
+void TimelineCanvas::updateKeepSpeedBindingScroll(double bpm)
+{
+    if ( !m_keepSpeedBindingActive ||
+         m_keepSpeedBindingScrollEntity == entt::null ) {
+        return;
+    }
+
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdUpdateTimelineEvent{ m_keepSpeedBindingScrollEntity,
+                                       m_keepSpeedBindingTime,
+                                       getKeepSpeedScrollValue(bpm) }));
+}
+
+/// @brief 结束“保持画布速度”临时联动并恢复普通编辑状态。
+void TimelineCanvas::finishKeepSpeedBinding()
+{
+    m_keepSpeedBindingActive       = false;
+    m_keepSpeedBindingTime         = -1.0;
+    m_keepSpeedBindingBpmEntity    = entt::null;
+    m_keepSpeedBindingScrollEntity = entt::null;
+    m_keepSpeedBindingFocusBpm     = false;
+}
+
 void TimelineCanvas::renderEventEditorPopup()
 {
     static bool wasOpen = false;
@@ -525,6 +596,7 @@ void TimelineCanvas::renderEventCreationPopup()
 
             if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
                 createKeepSpeedScrollEvent(m_createTimeManual, m_createValue);
+                beginKeepSpeedBinding(m_createTimeManual);
             }
 
             ImGui::CloseCurrentPopup();
@@ -546,7 +618,10 @@ void TimelineCanvas::renderEventCreationPopup()
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
-    if ( !m_isTableWindowOpen ) return;
+    if ( !m_isTableWindowOpen ) {
+        finishKeepSpeedBinding();
+        return;
+    }
 
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -583,6 +658,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
 
         auto elements = collectTimelineElements();
+        refreshKeepSpeedBinding(elements);
 
         // 顶层工具栏
         ImGui::AlignTextToFramePadding();
@@ -602,6 +678,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             if ( m_keepSpeedOnBpmChange ) {
                 createKeepSpeedScrollEvent(m_currentSnapshot->currentTime,
                                            DEFAULT_BPM_VALUE);
+                beginKeepSpeedBinding(m_currentSnapshot->currentTime);
             }
         }
         ImGui::SameLine();
@@ -733,14 +810,20 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     const auto&         el         = elements[idx];
                     int                 displayIdx = idx + 1;
                     ::MMM::TimingEffect effect     = getElementEffect(el);
-                    bool                isRecentlyCreated =
+                    entt::entity        ent        = getElementEntity(el);
+                    const bool          isKeepSpeedBindingRow =
+                        isKeepSpeedBindingEntity(ent);
+                    bool isRecentlyCreated =
                         (ImGui::GetTime() <=
                          m_lastCreatedTimingHighlightUntil) &&
                         (effect == m_lastCreatedTimingEffect) &&
                         (std::abs(el.time - m_lastCreatedTimingTime) <= 1e-6);
 
                     ImGui::TableNextRow();
-                    if ( isRecentlyCreated ) {
+                    if ( isKeepSpeedBindingRow ) {
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                               IM_COL32(180, 225, 255, 115));
+                    } else if ( isRecentlyCreated ) {
                         ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                                                IM_COL32(255, 245, 170, 95));
                     }
@@ -774,23 +857,59 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // Column 3: 数值
                     ImGui::TableSetColumnIndex(3);
-                    entt::entity ent = getElementEntity(el);
-                    double       vVal =
+                    double vVal =
                         getDisplayValue(effect, getElementRawValue(el), ent);
                     ImGui::SetNextItemWidth(-FLT_MIN);
                     std::string vId = fmt::format("##V_{}", displayIdx);
+                    const bool  isBoundBpm =
+                        m_keepSpeedBindingActive &&
+                        ent == m_keepSpeedBindingBpmEntity &&
+                        effect == ::MMM::TimingEffect::BPM;
+                    const bool isBoundScroll =
+                        m_keepSpeedBindingActive &&
+                        ent == m_keepSpeedBindingScrollEntity &&
+                        effect == ::MMM::TimingEffect::SCROLL;
+                    if ( isBoundBpm && m_keepSpeedBindingFocusBpm ) {
+                        ImGui::SetKeyboardFocusHere();
+                        m_keepSpeedBindingFocusBpm = false;
+                    }
+                    if ( isBoundScroll ) {
+                        ImGui::BeginDisabled();
+                    }
                     ImGui::InputDouble(
                         vId.c_str(),
                         &vVal,
                         effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
                         effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
                         effect == ::MMM::TimingEffect::BPM ? "%.2f" : "%.4f");
+                    if ( isBoundScroll ) {
+                        ImGui::EndDisabled();
+                        if ( ImGui::IsItemHovered(
+                                 ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                            ImGui::SetTooltip(
+                                "保持画布速度联动中，修改 BPM 后自动刷新");
+                        }
+                    }
+                    if ( isBoundBpm && ImGui::IsItemEdited() ) {
+                        double finalValue = getStoredValue(effect, vVal, ent);
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(
+                                Logic::CmdUpdateTimelineEvent{
+                                    ent, el.time, finalValue }));
+                        updateKeepSpeedBindingScroll(vVal);
+                    }
                     if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                         double finalValue = getStoredValue(effect, vVal, ent);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdUpdateTimelineEvent{
                                     ent, el.time, finalValue }));
+                        if ( isBoundBpm ) {
+                            updateKeepSpeedBindingScroll(vVal);
+                            finishKeepSpeedBinding();
+                        }
+                    } else if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
+                        finishKeepSpeedBinding();
                     }
 
                     // Column 4: 操作
