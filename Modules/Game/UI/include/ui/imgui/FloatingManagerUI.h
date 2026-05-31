@@ -40,6 +40,16 @@ public:
     /// @return 当前子视图 ID；未显示任何子视图时可能为空。
     const std::string& getCurrentSubViewId() const;
 
+    /// @brief 在主 DockSpace 渲染前应用停靠最小尺寸约束。
+    /// @param sourceManager 当前 UIManager。
+    /// @warning UI 热路径：每帧 DockSpace
+    /// 绘制前执行；只允许读取当前子视图尺寸并修正 ImGui DockNode。
+    void applyDockResizeConstraintsBeforeDockSpace(UIManager* sourceManager);
+
+    /// @brief 主 DockSpace 渲染后恢复被临时钳住的鼠标位置。
+    /// @warning UI 热路径：每帧 DockSpace 绘制后执行；只在曾钳住鼠标时写回。
+    void restoreDockResizeMouseAfterDockSpace();
+
     void update(UIManager* sourceManager) override;
 
     void* getActualInstance() override { return this; }
@@ -54,11 +64,42 @@ public:
                                 vk::Queue&          queue) override;
 
 private:
+    /// @brief 隐藏当前子视图并同步取消侧边栏选中状态。
+    /// @param sourceManager 当前 UIManager。
+    void hideCurrentSubView(UIManager* sourceManager);
+
     ///@brief 是否需要重载
     bool m_needReload{ true };
 
     ///@brief 是否显示此浮窗
     bool m_isVisible = false;
+
+    /// @brief 显示后是否已经见过满足当前子视图最小尺寸的窗口大小。
+    bool m_hasSeenUsableSize{ false };
+
+    /// @brief 下一次显示时是否请求恢复到当前内容最小尺寸。
+    bool m_requestShowSizeReset{ false };
+
+    /// @brief 上一帧窗口是否处于停靠状态，用于检测拖出成为浮窗的瞬间。
+    bool m_wasDocked{ false };
+
+    /// @brief 当前是否锁定在最小尺寸边界并等待继续拖拽触发收起。
+    bool m_minResizeLockActive{ false };
+
+    /// @brief 最小尺寸锁定的 dock split 轴，-1 表示无锁定。
+    int m_minResizeLockAxis{ -1 };
+
+    /// @brief 最小尺寸锁定时鼠标已经越过手柄的距离。
+    float m_minResizeLockStartOverrun{ 0.0f };
+
+    /// @brief 本帧 DockSpace 前是否临时钳住过 ImGui 鼠标坐标。
+    bool m_restoreMouseAfterDockSpace{ false };
+
+    /// @brief DockSpace 前被钳住前的真实鼠标位置。
+    ImVec2 m_mousePosBeforeDockClamp{ 0.0f, 0.0f };
+
+    /// @brief DockSpace 前被钳住前的真实鼠标位移。
+    ImVec2 m_mouseDeltaBeforeDockClamp{ 0.0f, 0.0f };
 
     ///@brief 当前子视图id
     std::string m_currentSubViewId;

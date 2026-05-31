@@ -2,6 +2,8 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 
 namespace MMM::UI
@@ -58,9 +60,19 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     // 立即弹出 WindowPadding，防止其应用到停靠在其中的子窗口
     ImGui::PopStyleVar(1);
 
+    auto* sideBarManager =
+        sourceManager->getView<FloatingManagerUI>("SideBarManager");
+    if ( sideBarManager ) {
+        sideBarManager->applyDockResizeConstraintsBeforeDockSpace(
+            sourceManager);
+    }
+
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+    if ( sideBarManager ) {
+        sideBarManager->restoreDockResizeMouseAfterDockSpace();
+    }
 
     if ( titleFont ) ImGui::PopFont();
 

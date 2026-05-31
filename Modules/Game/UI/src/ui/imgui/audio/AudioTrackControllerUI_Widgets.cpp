@@ -12,11 +12,42 @@
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
 
 #include <fmt/core.h>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 使用音轨控制器内容字体测量单行文本宽度。
+float measureTrackControllerText(const char* text)
+{
+    if ( !text ) return 0.0f;
+
+    auto&   skinMgr = Config::SkinManager::instance();
+    ImFont* font    = skinMgr.getFont("content");
+    if ( !font ) {
+        font = ImGui::GetFont();
+    }
+    return font
+        ->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, text, nullptr)
+        .x;
+}
+
+/// @brief 测量一组音轨控制器文本中的最大单行宽度。
+template<size_t N>
+float measureTrackControllerTextList(const std::array<const char*, N>& labels)
+{
+    float maxWidth = 0.0f;
+    for ( const char* label : labels ) {
+        maxWidth = std::max(maxWidth, measureTrackControllerText(label));
+    }
+    return maxWidth;
+}
+}  // namespace
 
 CLayHBox& AudioTrackControllerUI::getRow(size_t index)
 {
@@ -42,6 +73,108 @@ float AudioTrackControllerUI::measureLabelWidth(const char* label)
     float  fontSize = font->LegacySize * font->Scale;
     ImVec2 sz       = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
     return sz.x;
+}
+
+/// @brief 计算音轨控制器当前音轨类型所需的最小整窗尺寸。
+ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
+{
+    const float scale     = std::max(1.0f, dpiScale);
+    const auto& style     = ImGui::GetStyle();
+    const float rowHeight = ImGui::GetFrameHeight() + 8.0f;
+    const float rowGap    = 4.0f;
+
+    const std::array<const char*, 8> allLabels{
+        TR_CACHE("ui.audio_manager.volume").data(),
+        TR_CACHE("ui.audio_manager.speed_control").data(),
+        TR_CACHE("ui.audio_manager.speed_presets").data(),
+        TR_CACHE("ui.audio_manager.speed_value").data(),
+        TR_CACHE("ui.audio_manager.stretch_quality").data(),
+        TR_CACHE("ui.audio_manager.pitch_presets").data(),
+        TR_CACHE("ui.audio_manager.pitch_value").data(),
+        TR_CACHE("ui.audio_manager.play_preview").data()
+    };
+    const float labelWidth = measureTrackControllerTextList(allLabels) + 8.0f;
+
+    const float sliderMinW  = measureTrackControllerText("0.0000") +
+                              style.FramePadding.x * 4.0f +
+                              std::floor(48.0f * scale);
+    const float muteButtonW = 30.0f;
+    const float lrButtonW   = std::max({ measureTrackControllerText("L"),
+                                         measureTrackControllerText("R"),
+                                         24.0f });
+    float       widgetWidth = muteButtonW + style.ItemSpacing.x + sliderMinW;
+    if ( m_type == TrackType::Main ) {
+        widgetWidth += style.ItemSpacing.x + lrButtonW * 2.0f + 2.0f;
+
+        const std::array<const char*, 4> speedPresets{
+            TR_CACHE("ui.audio_manager.speed_025x").data(),
+            TR_CACHE("ui.audio_manager.speed_050x").data(),
+            TR_CACHE("ui.audio_manager.speed_075x").data(),
+            TR_CACHE("ui.audio_manager.speed_100x").data()
+        };
+        const std::array<const char*, 4> pitchPresets{
+            TR_CACHE("ui.audio_manager.pitch_n24").data(),
+            TR_CACHE("ui.audio_manager.pitch_n12").data(),
+            TR_CACHE("ui.audio_manager.pitch_n5").data(),
+            TR_CACHE("ui.audio_manager.pitch_0").data()
+        };
+        const float speedButtonsW =
+            measureTrackControllerTextList(speedPresets) +
+            style.FramePadding.x * 2.0f;
+        const float pitchButtonsW =
+            measureTrackControllerTextList(pitchPresets) +
+            style.FramePadding.x * 2.0f;
+        const float analysisButtonsW =
+            measureTrackControllerText(
+                TR("ui.audio_manager.open_waveform").data()) +
+            measureTrackControllerText(
+                TR("ui.audio_manager.open_spectrum").data()) +
+            style.FramePadding.x * 4.0f + 8.0f;
+        widgetWidth = std::max({ widgetWidth,
+                                 speedButtonsW,
+                                 pitchButtonsW,
+                                 analysisButtonsW,
+                                 200.0f * scale });
+    } else {
+        const float playButtonW =
+            std::max(80.0f * scale,
+                     measureTrackControllerText(
+                         TR("ui.audio_manager.resume_preview").data()) +
+                         style.FramePadding.x * 2.0f);
+        const float pauseButtonW =
+            std::max(80.0f * scale,
+                     measureTrackControllerText(
+                         TR("ui.audio_manager.pause_preview").data()) +
+                         style.FramePadding.x * 2.0f);
+        const float progressW =
+            measureTrackControllerText("000.00s / 000.00s") +
+            style.FramePadding.x * 2.0f;
+        widgetWidth = std::max(widgetWidth,
+                               playButtonW + pauseButtonW + progressW +
+                                   style.ItemSpacing.x * 2.0f);
+    }
+
+    const float  rowDecorations = 8.0f * 2.0f + 8.0f + 4.0f * 2.0f;
+    const float  contentWidth   = labelWidth + widgetWidth + rowDecorations;
+    const size_t rowCount       = m_type == TrackType::Main ? 8U : 2U;
+    float        contentH = 2.0f * scale + 8.0f + rowCount * rowHeight +
+                            (rowCount > 0 ? (rowCount - 1) * rowGap : 0.0f);
+
+    if ( m_type == TrackType::Main ) {
+        auto& audio = Audio::AudioManager::instance();
+        contentH += ImGui::GetFrameHeightWithSpacing() * 3.0f;
+        if ( audio.isMainTrackEQEnabled() ) {
+            contentH +=
+                150.0f + 220.0f + ImGui::GetFrameHeightWithSpacing() * 2.0f;
+        }
+    }
+
+    float titleWidth = measureTrackControllerText(m_trackName.c_str()) +
+                       ImGui::GetFrameHeight() * 2.0f;
+    return ImVec2(std::ceil(std::max(contentWidth, titleWidth) +
+                            style.WindowPadding.x * 2.0f),
+                  std::ceil(contentH + style.WindowPadding.y * 2.0f +
+                            ImGui::GetFrameHeightWithSpacing()));
 }
 
 void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,

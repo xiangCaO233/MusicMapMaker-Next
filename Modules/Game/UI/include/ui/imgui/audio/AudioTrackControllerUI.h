@@ -86,6 +86,10 @@ private:
     CLayVBox& getSection(size_t index);
     /// @brief 测量标签文本的像素宽度
     float measureLabelWidth(const char* label);
+    /// @brief 计算音轨控制器当前音轨类型所需的最小整窗尺寸。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return ImGui 窗口最小尺寸。
+    ImVec2 getMinWindowSize(float dpiScale) const;
     /// @brief 添加一个设置项行（标签 + 控件）
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget,

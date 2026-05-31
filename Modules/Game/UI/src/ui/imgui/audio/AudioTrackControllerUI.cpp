@@ -7,6 +7,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
+#include <cfloat>
 
 namespace MMM::UI
 {
@@ -71,6 +72,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         ImGui::SetNextWindowFocus();
         m_shouldFocusNextFrame = false;
     }
+    ImGui::SetNextWindowSizeConstraints(getMinWindowSize(dpiScale),
+                                        ImVec2(FLT_MAX, FLT_MAX));
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     std::string windowTitle =
         m_trackName + "###" + AudioTrackControllerUI::makeViewName(m_trackId);

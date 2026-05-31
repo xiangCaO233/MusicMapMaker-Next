@@ -31,6 +31,11 @@ public:
     void onUpdate(LayoutContext& layoutContext,
                   UIManager*     sourceManager) override;
 
+    /// @brief 获取文件管理器中不可再换行控件所需的最小内容尺寸。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 文件管理器最小内容尺寸。
+    ImVec2 getMinContentSize(float dpiScale) const override;
+
 private:
     void handleDragDrop(UIManager* sourceManager);
     void renderEmptyProjectView(LayoutContext& layoutContext);

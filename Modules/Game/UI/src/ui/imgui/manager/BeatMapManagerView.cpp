@@ -11,9 +11,38 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <cmath>
 
 namespace MMM::UI
 {
+
+/// @brief 获取谱面管理器中不可再换行控件所需的最小内容尺寸。
+ImVec2 BeatMapManagerView::getMinContentSize(float dpiScale) const
+{
+    auto&       engine    = Logic::EditorEngine::instance();
+    auto*       project   = engine.getCurrentProject();
+    const float scale     = std::max(1.0f, dpiScale);
+    const float panelPad  = 12.0f * scale;
+    const float rowHeight = 28.0f * scale;
+    const float footerH   = 44.0f * scale;
+    const float headerWidth =
+        ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x +
+        ImGui::CalcTextSize(TR("ui.beatmap_manager.beatmaps").data()).x;
+
+    if ( !project ) {
+        const char* hint = TR("ui.beatmap_manager.initial_hint").data();
+        return ImVec2(
+            std::ceil(ImGui::CalcTextSize(hint).x + panelPad * 2.0f),
+            std::ceil(ImGui::GetTextLineHeightWithSpacing() + panelPad * 2.0f));
+    }
+
+    const float visibleRows =
+        m_showBeatmapList ? std::min<size_t>(project->m_beatmaps.size(), 1) : 0;
+    const float minHeight = panelPad * 2.0f + ImGui::GetFrameHeight() +
+                            visibleRows * rowHeight + footerH;
+    return ImVec2(std::ceil(headerWidth + panelPad * 2.0f),
+                  std::ceil(minHeight));
+}
 
 void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                   UIManager*     sourceManager)

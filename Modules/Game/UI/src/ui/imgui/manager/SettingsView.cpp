@@ -10,9 +10,251 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <array>
+#include <cfloat>
+#include <charconv>
+#include <cmath>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 获取设置分类短标签。
+const char* getCategoryShortLabel(Event::SettingsTab tab)
+{
+    switch ( tab ) {
+    case Event::SettingsTab::Software:
+        return TR_CACHE("ui.settings.software.short").data();
+    case Event::SettingsTab::Visual:
+        return TR_CACHE("ui.settings.visual.short").data();
+    case Event::SettingsTab::Project:
+        return TR_CACHE("ui.settings.project.short").data();
+    case Event::SettingsTab::Beatmap:
+        return TR_CACHE("ui.settings.beatmap.short").data();
+    case Event::SettingsTab::Editor:
+        return TR_CACHE("ui.settings.editor.short").data();
+    }
+    return "";
+}
+
+/// @brief 使用指定字体测量单行文本宽度。
+float measureSettingsText(const char* text, const char* fontName)
+{
+    if ( !text ) return 0.0f;
+
+    auto&   skinCfg = Config::SkinManager::instance();
+    ImFont* font    = skinCfg.getFont(fontName);
+    if ( !font ) {
+        font = ImGui::GetFont();
+    }
+    return font
+        ->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, text, nullptr)
+        .x;
+}
+
+/// @brief 无异常解析皮肤布局中的浮点值。
+float parseLayoutFloat(const std::string& value, float fallback)
+{
+    float parsed = fallback;
+    auto  result =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if ( result.ec != std::errc() ) {
+        return fallback;
+    }
+    return parsed;
+}
+
+/// @brief 测量一组设置文本中的最大单行宽度。
+template<size_t N>
+float measureSettingsTextList(const std::array<const char*, N>& labels,
+                              const char*                       fontName)
+{
+    float maxWidth = 0.0f;
+    for ( const char* label : labels ) {
+        maxWidth = std::max(maxWidth, measureSettingsText(label, fontName));
+    }
+    return maxWidth;
+}
+
+/// @brief 估算当前设置页标签列中的最大宽度。
+float measureSettingsTabLabelWidth(Event::SettingsTab tab)
+{
+    switch ( tab ) {
+    case Event::SettingsTab::Software: {
+        const std::array<const char*, 27> labels{
+            TR_CACHE("ui.settings.software.language").data(),
+            TR_CACHE("ui.settings.software.framelimit").data(),
+            TR_CACHE("ui.settings.software.theme").data(),
+            TR_CACHE("ui.settings.software.font.ascii").data(),
+            TR_CACHE("ui.settings.software.font.cjk").data(),
+            TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
+            TR_CACHE("ui.settings.software.font.multiplier").data(),
+            TR_CACHE("ui.settings.editor.cursor_style").data(),
+            TR_CACHE("ui.settings.software.cursor_size").data(),
+            TR_CACHE("ui.settings.software.trail_size").data(),
+            TR_CACHE("ui.settings.software.trail_life").data(),
+            TR_CACHE("ui.settings.software.smoke_size").data(),
+            TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
+            TR_CACHE("ui.settings.software.smoke_life").data(),
+            TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
+            TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
+            TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
+            TR_CACHE("ui.settings.software.picker_style").data(),
+            TR_CACHE("ui.settings.software.save_format").data(),
+            TR_CACHE("ui.settings.software.time_format").data(),
+            TR_CACHE("ui.settings.software.recent_limit").data(),
+            TR_CACHE("ui.settings.software.sync_mode").data(),
+            TR_CACHE("ui.settings.software.sync_factor").data(),
+            TR_CACHE("ui.settings.software.sync_buffer").data(),
+            TR_CACHE("ui.settings.software.sync_interval").data()
+        };
+        return measureSettingsTextList(labels, "content");
+    }
+    case Event::SettingsTab::Visual: {
+        const std::array<const char*, 28> labels{
+            TR_CACHE("ui.settings.visual.layout_left").data(),
+            TR_CACHE("ui.settings.visual.layout_top").data(),
+            TR_CACHE("ui.settings.visual.layout_right").data(),
+            TR_CACHE("ui.settings.visual.layout_bottom").data(),
+            TR_CACHE("ui.settings.visual.layout_box_width").data(),
+            TR_CACHE("ui.settings.visual.judgeline_pos").data(),
+            TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
+            TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
+            TR_CACHE("ui.settings.visual.note_scale_x").data(),
+            TR_CACHE("ui.settings.visual.note_scale_y").data(),
+            TR_CACHE("ui.settings.visual.note_fill_mode").data(),
+            TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
+            TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
+            TR_CACHE("ui.settings.visual.bg_opaque").data(),
+            TR_CACHE("ui.settings.visual.bg_darken").data(),
+            TR_CACHE("ui.settings.visual.preview_ratio").data(),
+            TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity")
+                .data(),
+            TR_CACHE("ui.settings.visual.preview_margin_left").data(),
+            TR_CACHE("ui.settings.visual.preview_margin_top").data(),
+            TR_CACHE("ui.settings.visual.preview_margin_right").data(),
+            TR_CACHE("ui.settings.visual.preview_margin_bottom").data(),
+            TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
+            TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
+            TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+            TR_CACHE("ui.settings.visual.linear_scroll").data(),
+            TR_CACHE("ui.settings.visual.snap_threshold").data(),
+            TR_CACHE("ui.settings.visual.spectrum_detail").data(),
+            TR_CACHE("ui.settings.visual.visual_offset").data()
+        };
+        return measureSettingsTextList(labels, "content");
+    }
+    case Event::SettingsTab::Project: {
+        const std::array<const char*, 3> labels{
+            TR_CACHE("ui.settings.project.info").data(),
+            TR_CACHE("ui.settings.project.path").data(),
+            TR_CACHE("ui.settings.project.no_project").data()
+        };
+        return measureSettingsTextList(labels, "content");
+    }
+    case Event::SettingsTab::Beatmap: {
+        const std::array<const char*, 17> labels{
+            TR_CACHE("ui.settings.beatmap.name").data(),
+            TR_CACHE("ui.settings.beatmap.title").data(),
+            TR_CACHE("ui.settings.beatmap.title_unicode").data(),
+            TR_CACHE("ui.settings.beatmap.artist").data(),
+            TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
+            TR_CACHE("ui.settings.beatmap.mapper").data(),
+            TR_CACHE("ui.settings.beatmap.version").data(),
+            TR_CACHE("ui.settings.beatmap.path").data(),
+            TR_CACHE("ui.settings.beatmap.cover_type").data(),
+            TR_CACHE("ui.settings.beatmap.video_start").data(),
+            TR_CACHE("ui.settings.beatmap.bg_offset").data(),
+            TR_CACHE("ui.settings.beatmap.bpm").data(),
+            TR_CACHE("ui.settings.beatmap.tracks").data(),
+            TR_CACHE("ui.settings.beatmap.length").data(),
+            TR_CACHE("ui.settings.beatmap.audio").data(),
+            TR_CACHE("ui.settings.beatmap.cover").data(),
+            TR_CACHE("ui.settings.beatmap.background").data()
+        };
+        return measureSettingsTextList(labels, "content");
+    }
+    case Event::SettingsTab::Editor: {
+        const std::array<const char*, 14> labels{
+            TR_CACHE("ui.settings.editor.reverse_scroll").data(),
+            TR_CACHE("ui.settings.editor.scroll_snap").data(),
+            TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
+                .data(),
+            TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path")
+                .data(),
+            TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
+            TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
+            TR_CACHE("ui.settings.editor.beat_divisor").data(),
+            TR_CACHE("ui.settings.editor.selection").data(),
+            TR_CACHE("ui.settings.editor.selection.thickness").data(),
+            TR_CACHE("ui.settings.editor.selection.rounding").data(),
+            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+            TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
+            TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
+            TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
+        };
+        return measureSettingsTextList(labels, "content");
+    }
+    }
+    return 0.0f;
+}
+
+/// @brief 估算当前设置页右侧控件中不可再换行内容的宽度。
+float measureSettingsTabWidgetWidth(Event::SettingsTab tab, float dpiScale)
+{
+    const float scale      = std::max(1.0f, dpiScale);
+    const float framePad   = ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float comboArrow = ImGui::GetFrameHeight();
+    float       minWidth = measureSettingsText("0.0000", "content") + framePad +
+                           std::floor(48.0f * scale);
+
+    auto addOptions = [&](auto&& labels) {
+        minWidth = std::max(
+            minWidth,
+            measureSettingsTextList(labels, "content") + framePad + comboArrow);
+    };
+
+    switch ( tab ) {
+    case Event::SettingsTab::Software: {
+        addOptions(std::array<const char*, 2>{ "简体中文 (zh_cn)",
+                                               "English (en_us)" });
+        addOptions(std::array<const char*, 6>{
+            TR_CACHE("ui.settings.software.framelimit.vsync").data(),
+            TR_CACHE("ui.settings.software.framelimit.2x").data(),
+            TR_CACHE("ui.settings.software.framelimit.4x").data(),
+            TR_CACHE("ui.settings.software.framelimit.8x").data(),
+            TR_CACHE("ui.settings.software.framelimit.unlimited").data(),
+            TR_CACHE("ui.settings.software.font.default").data() });
+        break;
+    }
+    case Event::SettingsTab::Visual: {
+        addOptions(std::array<const char*, 4>{
+            TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
+            TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
+            TR_CACHE("ui.settings.visual.fill_mode.aspect_fill").data(),
+            TR_CACHE("ui.settings.visual.fill_mode.center").data() });
+        break;
+    }
+    case Event::SettingsTab::Beatmap: {
+        addOptions(std::array<const char*, 2>{
+            TR_CACHE("ui.settings.beatmap.cover_type.image").data(),
+            TR_CACHE("ui.settings.beatmap.cover_type.video").data() });
+        break;
+    }
+    case Event::SettingsTab::Editor: {
+        addOptions(std::array<const char*, 2>{
+            TR_CACHE("ui.settings.editor.selection.strict").data(),
+            TR_CACHE("ui.settings.editor.selection.intersection").data() });
+        break;
+    }
+    case Event::SettingsTab::Project: break;
+    }
+
+    return std::ceil(minWidth);
+}
+}  // namespace
 
 /// @brief 构造设置面板视图并订阅设置页切换事件。
 /// @param viewName 视图名称。
@@ -56,6 +298,62 @@ CLayVBox& SettingsView::getSection(size_t index)
     return m_sectionBoxes[index];
 }
 
+/// @brief 计算设置分类侧栏中不可再换行文本所需的宽度。
+float SettingsView::getCategorySidebarWidth(float dpiScale) const
+{
+    Config::SkinManager& skinCfg = Config::SkinManager::instance();
+    const float          scale   = std::max(1.0f, dpiScale);
+    const float          sidebarBaseW =
+        parseLayoutFloat(skinCfg.getLayoutConfig("side_bar.width"), 40.0f);
+    const float btnSize = std::floor(sidebarBaseW * scale);
+
+    const std::array<const char*, 5> labels{
+        getCategoryShortLabel(Event::SettingsTab::Software),
+        getCategoryShortLabel(Event::SettingsTab::Visual),
+        getCategoryShortLabel(Event::SettingsTab::Project),
+        getCategoryShortLabel(Event::SettingsTab::Beatmap),
+        getCategoryShortLabel(Event::SettingsTab::Editor)
+    };
+    const float maxLabelWidth = measureSettingsTextList(labels, "menu");
+    const float sepAreaW      = std::floor(12.0f * scale);
+    const float labelPadding  = std::floor(12.0f * scale);
+    const float vboxPadding   = std::floor(12.0f * scale);
+
+    return std::floor(btnSize + sepAreaW + maxLabelWidth + labelPadding +
+                      vboxPadding);
+}
+
+/// @brief 计算设置窗口当前内容所需的最小整窗尺寸。
+ImVec2 SettingsView::getMinWindowSize(float dpiScale) const
+{
+    const float scale = std::max(1.0f, dpiScale);
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    const float windowPad = std::floor(aesthetics.windowPadding * scale) * 2.0f;
+    const float sidebarWidth = getCategorySidebarWidth(scale);
+    const float categorySize = std::floor(
+        parseLayoutFloat(
+            Config::SkinManager::instance().getLayoutConfig("side_bar.width"),
+            40.0f) *
+        scale);
+    const float categorySpacing = std::floor(aesthetics.itemSpacing * scale);
+    const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
+                                  categorySize * 5.0f + categorySpacing * 4.0f;
+
+    const float labelWidth =
+        measureSettingsTabLabelWidth(m_currentTab) + std::floor(16.0f * scale);
+    const float widgetWidth =
+        measureSettingsTabWidgetWidth(m_currentTab, scale);
+    const float contentDecorations = std::floor(15.0f * scale) * 2.0f +
+                                     std::floor(8.0f * scale) * 4.0f +
+                                     std::floor(8.0f * scale);
+    const float contentWidth = labelWidth + widgetWidth + contentDecorations;
+    const float titleHeight  = ImGui::GetFrameHeightWithSpacing();
+
+    return ImVec2(std::ceil(windowPad + sidebarWidth + 1.0f + contentWidth),
+                  std::ceil(windowPad + titleHeight + categoryHeight));
+}
+
 /// @brief 打开设置窗口并切换到指定设置页。
 /// @param tab 需要激活的设置页。
 void SettingsView::open(Event::SettingsTab tab)
@@ -95,6 +393,10 @@ void SettingsView::update(UIManager* sourceManager)
         ImGui::SetNextWindowFocus();
         m_focusNextFrame = false;
     }
+    const float dpiScale =
+        MMM::Config::AppConfig::instance().getWindowContentScale();
+    ImGui::SetNextWindowSizeConstraints(getMinWindowSize(dpiScale),
+                                        ImVec2(FLT_MAX, FLT_MAX));
 
     LayoutContext layoutContext(m_layoutCtx,
                                 windowName,
@@ -117,51 +419,11 @@ void SettingsView::drawContent()
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
-    float btnSize      = std::floor(sidebarBaseW * dpiScale);
+    float sidebarBaseW =
+        parseLayoutFloat(skinCfg.getLayoutConfig("side_bar.width"), 40.0f);
+    float btnSize = std::floor(sidebarBaseW * dpiScale);
 
-    auto GetCategoryShortLabel = [](Event::SettingsTab tab) -> const char* {
-        switch ( tab ) {
-        case Event::SettingsTab::Software:
-            return TR_CACHE("ui.settings.software.short").data();
-        case Event::SettingsTab::Visual:
-            return TR_CACHE("ui.settings.visual.short").data();
-        case Event::SettingsTab::Project:
-            return TR_CACHE("ui.settings.project.short").data();
-        case Event::SettingsTab::Beatmap:
-            return TR_CACHE("ui.settings.beatmap.short").data();
-        case Event::SettingsTab::Editor:
-            return TR_CACHE("ui.settings.editor.short").data();
-        }
-        return "";
-    };
-
-    float maxLabelWidth = 0.0f;
-    if ( ImFont* menuFont = skinCfg.getFont("menu");
-         menuFont && ImGui::GetCurrentContext() ) {
-        ImGui::PushFont(menuFont);
-        const char* labels[] = {
-            GetCategoryShortLabel(Event::SettingsTab::Software),
-            GetCategoryShortLabel(Event::SettingsTab::Visual),
-            GetCategoryShortLabel(Event::SettingsTab::Project),
-            GetCategoryShortLabel(Event::SettingsTab::Beatmap),
-            GetCategoryShortLabel(Event::SettingsTab::Editor)
-        };
-        for ( const char* label : labels ) {
-            maxLabelWidth =
-                std::max(maxLabelWidth, ImGui::CalcTextSize(label).x);
-        }
-        ImGui::PopFont();
-    }
-    if ( maxLabelWidth < 1.0f ) {
-        maxLabelWidth = std::floor(48.0f * dpiScale);
-    }
-
-    float sepAreaW     = std::floor(12.0f * dpiScale);
-    float labelPadding = std::floor(12.0f * dpiScale);
-    float vboxPadding  = std::floor(12.0f * dpiScale);
-    float sidebarWidth = std::floor(btnSize + sepAreaW + maxLabelWidth +
-                                    labelPadding + vboxPadding);
+    float sidebarWidth = getCategorySidebarWidth(dpiScale);
 
     // 1. 左侧图标侧边栏 (Clay 布局)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -229,7 +491,7 @@ void SettingsView::drawContent()
                 ImGui::GetColorU32(sepCol),
                 std::floor(1.0f * dpiScale));
 
-            std::string label    = GetCategoryShortLabel(tab);
+            std::string label    = getCategoryShortLabel(tab);
             ImFont*     menuFont = skinCfg.getFont("menu");
             if ( menuFont ) {
                 ImGui::PushFont(menuFont);

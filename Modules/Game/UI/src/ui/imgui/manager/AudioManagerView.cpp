@@ -17,10 +17,153 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
 #include <nfd.h>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 按音频管理器实际字体计算不可折行文本宽度。
+float measureAudioManagerText(const char* text)
+{
+    if ( !text ) return 0.0f;
+
+    auto&   skinCfg = Config::SkinManager::instance();
+    ImFont* font    = skinCfg.getFont("filemanager");
+    if ( font ) {
+        return font
+            ->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, text, nullptr)
+            .x;
+    }
+    return ImGui::CalcTextSize(text).x;
+}
+
+/// @brief 向当前最小高度累加一行列表内容和列表间距。
+void addAudioManagerListRow(float& height, size_t& rowCount, float rowHeight,
+                            float rowSpacing)
+{
+    if ( rowCount > 0 ) {
+        height += rowSpacing;
+    }
+    height += rowHeight;
+    rowCount++;
+}
+}  // namespace
+
+/// @brief 获取音频管理器中不可再换行控件所需的最小内容尺寸。
+ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
+{
+    const float scale       = std::max(1.0f, dpiScale);
+    auto&       engine      = Logic::EditorEngine::instance();
+    auto*       project     = engine.getCurrentProject();
+    const auto& skinData    = Config::SkinManager::instance().getData();
+    const float frameH      = ImGui::GetFrameHeight();
+    const float frameWithSp = ImGui::GetFrameHeightWithSpacing();
+    const float itemSpacing = ImGui::GetStyle().ItemSpacing.x;
+    const float rowSpacingY = 4.0f;
+    const float labelPad    = std::floor(12.0f * scale);
+    const float footerPadX  = std::floor(16.0f * scale) * 2.0f;
+    const float muteButtonW = std::floor(32.0f * scale);
+    const float rootPadX    = std::floor(12.0f * scale) * 2.0f;
+    const float rootPadY    = std::floor(12.0f * scale) * 2.0f;
+
+    const std::array<const char*, 3> controlLabels{
+        TR("ui.audio_manager.global_volume").data(),
+        TR("ui.audio_manager.bgm_gain").data(),
+        TR("ui.audio_manager.sfx_gain").data()
+    };
+
+    float labelWidth = 0.0f;
+    for ( const char* label : controlLabels ) {
+        labelWidth = std::max(labelWidth, measureAudioManagerText(label));
+    }
+    labelWidth += labelPad;
+
+    const float sliderValueW = std::max(measureAudioManagerText("0.00"),
+                                        measureAudioManagerText("100%"));
+    const float sliderMinW   = sliderValueW +
+                               ImGui::GetStyle().FramePadding.x * 4.0f +
+                               std::floor(48.0f * scale);
+
+    const std::array<const char*, 4> headers{
+        TR("ui.audio_manager.global_settings").data(),
+        TR("ui.audio_manager.permanent_sfx").data(),
+        TR("ui.audio_manager.audio_tracks").data(),
+        TR("ui.audio_manager.project_sfx").data()
+    };
+
+    float headerWidth = 0.0f;
+    for ( const char* header : headers ) {
+        headerWidth =
+            std::max(headerWidth,
+                     frameH + itemSpacing + measureAudioManagerText(header));
+    }
+
+    size_t mainTrackCount   = 0;
+    size_t effectTrackCount = 0;
+    if ( project ) {
+        for ( const auto& audio : project->m_audioResources ) {
+            if ( audio.m_type == AudioTrackType::Main ) {
+                mainTrackCount++;
+            } else {
+                effectTrackCount++;
+            }
+        }
+    }
+
+    const float controlRowWidth = footerPadX + labelWidth + itemSpacing +
+                                  muteButtonW + itemSpacing + sliderMinW;
+    float       minWidth =
+        std::ceil(rootPadX + std::max({ controlRowWidth, headerWidth }));
+
+    float  listHeight = 0.0f;
+    size_t listRows   = 0;
+    if ( !skinData.audioPaths.empty() ) {
+        addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
+        if ( m_showPermanentSFX ) {
+            for ( size_t i = 0; i < skinData.audioPaths.size(); ++i ) {
+                addAudioManagerListRow(
+                    listHeight, listRows, 28.0f * scale, rowSpacingY);
+            }
+        }
+    }
+
+    if ( project ) {
+        addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
+        if ( m_showMainTracks ) {
+            for ( size_t i = 0; i < mainTrackCount; ++i ) {
+                addAudioManagerListRow(
+                    listHeight, listRows, 28.0f * scale, rowSpacingY);
+            }
+            if ( effectTrackCount > 0 ) {
+                addAudioManagerListRow(
+                    listHeight, listRows, frameH, rowSpacingY);
+                if ( m_showProjectSFX ) {
+                    for ( size_t i = 0; i < effectTrackCount; ++i ) {
+                        addAudioManagerListRow(
+                            listHeight, listRows, 28.0f * scale, rowSpacingY);
+                    }
+                }
+            }
+        }
+    } else {
+        addAudioManagerListRow(listHeight, listRows, 20.0f, rowSpacingY);
+        addAudioManagerListRow(listHeight, listRows, 30.0f, rowSpacingY);
+    }
+
+    float footerH = frameWithSp;
+    if ( m_showGlobalSettings ) {
+        footerH += 3.0f * 32.0f + 3.0f * 2.0f + 16.0f;
+    }
+    footerH += 32.0f + 8.0f;
+
+    float minHeight = std::ceil(rootPadY + listHeight + footerH);
+    return ImVec2(minWidth, minHeight);
+}
 
 // 内部绘制逻辑 (Clay/ImGui)
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,

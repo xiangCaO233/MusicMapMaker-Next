@@ -92,6 +92,16 @@ private:
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
 
+    /// @brief 计算设置窗口当前内容所需的最小整窗尺寸。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return ImGui 窗口最小尺寸。
+    ImVec2 getMinWindowSize(float dpiScale) const;
+
+    /// @brief 计算设置分类侧栏中不可再换行文本所需的宽度。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 分类侧栏宽度。
+    float getCategorySidebarWidth(float dpiScale) const;
+
     /// @brief 绘制软件设置页。
     void drawSoftwareSettings();
 
