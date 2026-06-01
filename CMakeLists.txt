@@ -21,6 +21,11 @@ enable_testing()
 # 从源码编译依赖 默认开启
 option(SOURCES_BUILD "Build Deps from sources." ON)
 
+# Windows 原生文件对话框默认会用最近访问目录覆盖 defaultPath；
+# 另存为需要强制打开当前项目目录。
+set(NFD_OVERRIDE_RECENT_WITH_DEFAULT ON CACHE BOOL
+    "Use NFD defaultPath instead of Windows recent folders." FORCE)
+
 find_package(Vulkan REQUIRED)
 
 add_subdirectory("3rdpty")
