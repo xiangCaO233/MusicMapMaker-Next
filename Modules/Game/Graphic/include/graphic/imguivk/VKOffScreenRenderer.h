@@ -74,6 +74,12 @@ protected:
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };
 
+    /// @brief 发光后处理缓冲的物理宽度。
+    uint32_t m_glowWidth{ 0 };
+
+    /// @brief 发光后处理缓冲的物理高度。
+    uint32_t m_glowHeight{ 0 };
+
     // UI 请求的目标尺寸
     uint32_t m_targetWidth{ 0 };
     uint32_t m_targetHeight{ 0 };
@@ -132,18 +138,25 @@ protected:
     /// @brief 将逻辑裁剪矩形转换为物理裁剪矩形 (Vulkan Scissor 使用物理坐标)
     inline vk::Rect2D getPhysicalScissor(const vk::Rect2D& logicalScissor) const
     {
-        float      scale = getDpiScale();
+        float scaleX = m_scissorScaleX > 0.0f ? m_scissorScaleX : getDpiScale();
+        float scaleY = m_scissorScaleY > 0.0f ? m_scissorScaleY : getDpiScale();
         vk::Rect2D physical;
         physical.offset.x =
-            static_cast<int32_t>(logicalScissor.offset.x * scale);
+            static_cast<int32_t>(logicalScissor.offset.x * scaleX);
         physical.offset.y =
-            static_cast<int32_t>(logicalScissor.offset.y * scale);
+            static_cast<int32_t>(logicalScissor.offset.y * scaleY);
         physical.extent.width =
-            static_cast<uint32_t>(logicalScissor.extent.width * scale);
+            static_cast<uint32_t>(logicalScissor.extent.width * scaleX);
         physical.extent.height =
-            static_cast<uint32_t>(logicalScissor.extent.height * scale);
+            static_cast<uint32_t>(logicalScissor.extent.height * scaleY);
         return physical;
     }
+
+    /// @brief 当前命令录制阶段临时覆盖的裁剪 X 轴缩放。
+    float m_scissorScaleX{ 0.0f };
+
+    /// @brief 当前命令录制阶段临时覆盖的裁剪 Y 轴缩放。
+    float m_scissorScaleY{ 0.0f };
 
     /// @brief 是否需要重建
     /// @warning 热路径/原子：渲染准备阶段读取、UI 尺寸变化写入；仅为离屏
@@ -183,6 +196,12 @@ protected:
                                   uint32_t                frameIndex)
     {
     }
+
+    /// @brief 判断当前帧是否存在需要发光后处理的绘制命令。
+    /// @return 存在发光命令时返回 true。
+    /// @warning
+    /// 渲染热路径：每帧离屏命令录制时执行，只能读取已生成快照中的缓存状态。
+    virtual bool hasGlowDrawCmds() const { return false; }
 
 private:
     // --- 1. 物理资源 (独占) ---

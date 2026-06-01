@@ -73,7 +73,11 @@ local Skin = {
 		beat_lines_width = {
 			beat_1 = 4.0,
 			default = 2.0
-		}
+		},
+		glow = {
+			-- 发光后处理分辨率倍率，低于 1 可降低 hover 光效的 GPU 片元开销
+			resolution_scale = 0.5,
+		},
 	},
 
     -- UI 默认主题
@@ -95,7 +99,7 @@ local Skin = {
 	effects = {
 		glow = {
 			passes = 6,
-			intensity = 0.5 
+			intensity = 0.5,
 		}
 	},
 

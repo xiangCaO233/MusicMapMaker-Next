@@ -192,6 +192,14 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
     }
 }
 
+/// @brief 判断当前快照是否包含发光绘制命令。
+/// @return 当前快照存在发光命令时返回 true。
+/// @warning 渲染热路径：每帧离屏命令录制前执行，只读取快照命令数量。
+bool Basic2DCanvas::hasGlowDrawCmds() const
+{
+    return m_currentSnapshot && !m_currentSnapshot->glowCmds.empty();
+}
+
 std::vector<std::string> Basic2DCanvas::getShaderSources(
     const std::string& shader_name)
 {

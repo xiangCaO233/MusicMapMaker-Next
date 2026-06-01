@@ -7,6 +7,9 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 
 #ifdef _WIN32
 #    define GLFW_EXPOSE_NATIVE_WIN32
@@ -23,6 +26,194 @@
 
 namespace MMM::Graphic
 {
+namespace
+{
+/// @brief 渲染性能统计使用的单调时钟。
+using RenderProfileClock = std::chrono::steady_clock;
+
+/// @brief 渲染性能统计日志输出间隔。
+constexpr auto RENDER_PROFILE_LOG_INTERVAL = std::chrono::seconds(2);
+
+/// @brief 单个渲染阶段在统计窗口内的累计耗时。
+struct RenderStageStat {
+    /// @brief 阶段累计耗时，单位为毫秒。
+    double totalMs{ 0.0 };
+
+    /// @brief 阶段单帧最大耗时，单位为毫秒。
+    double maxMs{ 0.0 };
+
+    /// @brief 追加一次阶段耗时。
+    /// @param elapsedMs 本帧该阶段耗时，单位为毫秒。
+    /// @warning 渲染热路径：每帧执行，只能做常量时间浮点累加。
+    void add(double elapsedMs)
+    {
+        totalMs += elapsedMs;
+        maxMs = std::max(maxMs, elapsedMs);
+    }
+
+    /// @brief 获取统计窗口内的平均耗时。
+    /// @param frameCount 统计窗口内累计的完整帧数。
+    /// @return 平均耗时，单位为毫秒。
+    double average(uint64_t frameCount) const
+    {
+        return frameCount == 0 ? 0.0
+                               : totalMs / static_cast<double>(frameCount);
+    }
+
+    /// @brief 清空阶段统计数据。
+    void reset()
+    {
+        totalMs = 0.0;
+        maxMs   = 0.0;
+    }
+};
+
+/// @brief 渲染主循环的分阶段累计性能统计。
+struct RenderProfileAccumulator {
+    /// @brief 当前统计窗口的起始时间。
+    RenderProfileClock::time_point windowStart{ RenderProfileClock::now() };
+
+    /// @brief 当前统计窗口内累计的完整帧数。
+    uint64_t frameCount{ 0 };
+
+    /// @brief 单帧总耗时统计。
+    RenderStageStat total;
+
+    /// @brief 等待和重置 Fence 的耗时统计。
+    RenderStageStat fence;
+
+    /// @brief acquireNextImageKHR 的耗时统计。
+    RenderStageStat acquire;
+
+    /// @brief GLFW 事件轮询的耗时统计。
+    RenderStageStat pollEvents;
+
+    /// @brief ImGui 新帧准备和光标模式同步的耗时统计。
+    RenderStageStat newFrame;
+
+    /// @brief 图形钩子资源准备的耗时统计。
+    RenderStageStat prepareResources;
+
+    /// @brief UI 更新和 ImGui 绘制列表生成前逻辑的耗时统计。
+    RenderStageStat updateUi;
+
+    /// @brief ImGui::Render 的耗时统计。
+    RenderStageStat imguiRender;
+
+    /// @brief 命令缓冲开始录制前准备的耗时统计。
+    RenderStageStat commandSetup;
+
+    /// @brief 离屏画布命令录制的耗时统计。
+    RenderStageStat offscreenRecord;
+
+    /// @brief 主 RenderPass 与 ImGui Vulkan 绘制命令录制的耗时统计。
+    RenderStageStat mainRecord;
+
+    /// @brief 图形队列提交的耗时统计。
+    RenderStageStat submit;
+
+    /// @brief presentKHR 的耗时统计。
+    RenderStageStat present;
+
+    /// @brief ImGui 多视口平台窗口更新和渲染的耗时统计。
+    RenderStageStat platformWindows;
+
+    /// @brief 清空统计窗口。
+    /// @param nextStart 下一个统计窗口的起始时间。
+    void reset(RenderProfileClock::time_point nextStart)
+    {
+        windowStart = nextStart;
+        frameCount  = 0;
+        total.reset();
+        fence.reset();
+        acquire.reset();
+        pollEvents.reset();
+        newFrame.reset();
+        prepareResources.reset();
+        updateUi.reset();
+        imguiRender.reset();
+        commandSetup.reset();
+        offscreenRecord.reset();
+        mainRecord.reset();
+        submit.reset();
+        present.reset();
+        platformWindows.reset();
+    }
+
+    /// @brief 到达统计间隔后输出一次累计结果。
+    /// @param now 当前时间。
+    /// @warning 渲染热路径：每帧只做时间间隔判断；到达间隔后才写日志。
+    void logIfReady(RenderProfileClock::time_point now)
+    {
+        const double elapsedSeconds =
+            std::chrono::duration<double>(now - windowStart).count();
+        const double logIntervalSeconds =
+            std::chrono::duration<double>(RENDER_PROFILE_LOG_INTERVAL).count();
+        if ( elapsedSeconds < logIntervalSeconds || frameCount == 0 ) {
+            return;
+        }
+
+        const double averageFps = static_cast<double>(frameCount) /
+                                  std::max(elapsedSeconds, 0.000001);
+        XINFO(
+            "RenderProfile {:.2f}s frames={} fps={:.1f} "
+            "total(avg/max)={:.3f}/{:.3f}ms",
+            elapsedSeconds,
+            frameCount,
+            averageFps,
+            total.average(frameCount),
+            total.maxMs);
+        XINFO(
+            "RenderStages avg/max ms: fence {:.3f}/{:.3f}, acquire "
+            "{:.3f}/{:.3f}, poll {:.3f}/{:.3f}, newFrame {:.3f}/{:.3f}, "
+            "prepare {:.3f}/{:.3f}, updateUI {:.3f}/{:.3f}",
+            fence.average(frameCount),
+            fence.maxMs,
+            acquire.average(frameCount),
+            acquire.maxMs,
+            pollEvents.average(frameCount),
+            pollEvents.maxMs,
+            newFrame.average(frameCount),
+            newFrame.maxMs,
+            prepareResources.average(frameCount),
+            prepareResources.maxMs,
+            updateUi.average(frameCount),
+            updateUi.maxMs);
+        XINFO(
+            "RenderStages avg/max ms: imguiRender {:.3f}/{:.3f}, cmdSetup "
+            "{:.3f}/{:.3f}, offscreen {:.3f}/{:.3f}, mainPass {:.3f}/{:.3f}, "
+            "submit {:.3f}/{:.3f}, present {:.3f}/{:.3f}, platform "
+            "{:.3f}/{:.3f}",
+            imguiRender.average(frameCount),
+            imguiRender.maxMs,
+            commandSetup.average(frameCount),
+            commandSetup.maxMs,
+            offscreenRecord.average(frameCount),
+            offscreenRecord.maxMs,
+            mainRecord.average(frameCount),
+            mainRecord.maxMs,
+            submit.average(frameCount),
+            submit.maxMs,
+            present.average(frameCount),
+            present.maxMs,
+            platformWindows.average(frameCount),
+            platformWindows.maxMs);
+
+        reset(now);
+    }
+};
+
+/// @brief 计算两个时间点之间的毫秒差。
+/// @param begin 起始时间点。
+/// @param end 结束时间点。
+/// @return 时间差，单位为毫秒。
+double elapsedMilliseconds(RenderProfileClock::time_point begin,
+                           RenderProfileClock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+}  // namespace
+
 // clang-format off
 /**
  * @brief 执行单帧渲染
@@ -35,6 +226,9 @@ namespace MMM::Graphic
 void VKRenderer::render(NativeWindow&                window,
                         std::span<IGraphicUserHook*> graphicUserHooks)
 {
+    static RenderProfileAccumulator profile;
+    const auto frameProfileStart = RenderProfileClock::now();
+
     // 检查窗口是否完成了缩放操作（消抖）
     if ( window.shouldRecreate() ) {
         m_vkSwapChain.markDirty();
@@ -53,7 +247,8 @@ void VKRenderer::render(NativeWindow&                window,
     }
 
     // 等待cmd完成
-    auto waitResult = m_vkLogicalDevice.waitForFences(
+    const auto fenceStart = RenderProfileClock::now();
+    auto       waitResult = m_vkLogicalDevice.waitForFences(
         m_cmdAvailableFences[m_currentFrameIndex],
         true,
         std::numeric_limits<uint64_t>::max());
@@ -64,15 +259,18 @@ void VKRenderer::render(NativeWindow&                window,
     // 恢复fence
     (void)m_vkLogicalDevice.resetFences(
         m_cmdAvailableFences[m_currentFrameIndex]);
+    const auto fenceEnd = RenderProfileClock::now();
 
     // --- [优化] 在准备新帧之前获取图像 ---
     // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
     // 在 FIFO (VSync) 模式下，这里是主要的阻塞点，会等待垂直同步
+    const auto                acquireStart = RenderProfileClock::now();
     vk::ResultValue<uint32_t> imageResult =
         m_vkLogicalDevice.acquireNextImageKHR(
             m_vkSwapChain.m_swapchain,
             std::numeric_limits<uint64_t>::max(),
             m_imageAvailableSems[m_currentFrameIndex]);
+    const auto acquireEnd = RenderProfileClock::now();
 
     if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
         triggerRecreate(window);
@@ -95,9 +293,12 @@ void VKRenderer::render(NativeWindow&                window,
 
     // --- [关键优化] 在 VSync 阻塞解除后立即处理输入 ---
     // 这样能保证本帧使用的输入数据是最新鲜的
+    const auto pollStart = RenderProfileClock::now();
     window.pollEvents();
+    const auto pollEnd = RenderProfileClock::now();
 
     // --- 1. ImGui 准备新帧 ---
+    const auto newFrameStart = RenderProfileClock::now();
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -112,8 +313,10 @@ void VKRenderer::render(NativeWindow&                window,
         glfwSetInputMode(
             window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
+    const auto newFrameEnd = RenderProfileClock::now();
 
     // 准备所有资源
+    const auto prepareStart = RenderProfileClock::now();
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onPrepareResources(m_vkPhysicalDevice,
                                             m_vkLogicalDevice,
@@ -121,8 +324,10 @@ void VKRenderer::render(NativeWindow&                window,
                                             m_vkCommandPool,
                                             m_LogicDeviceGraphicsQueue);
     }
+    const auto prepareEnd = RenderProfileClock::now();
 
     // 录制所有ui
+    const auto updateUiStart = RenderProfileClock::now();
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onUpdateUI();
     }
@@ -135,8 +340,13 @@ void VKRenderer::render(NativeWindow&                window,
          editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
         m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
     }
+    const auto updateUiEnd = RenderProfileClock::now();
 
+    const auto imguiRenderStart = RenderProfileClock::now();
     ImGui::Render();  // 生成imgui绘制顶点数据
+    const auto imguiRenderEnd = RenderProfileClock::now();
+
+    const auto commandSetupStart = RenderProfileClock::now();
 
     // 重置命令缓冲
     auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
@@ -163,13 +373,17 @@ void VKRenderer::render(NativeWindow&                window,
 
     // 命令录制
     (void)currentCmdBuffer.begin(commandBufferBeginInfo);
+    const auto commandSetupEnd = RenderProfileClock::now();
 
     // 录制所有离屏渲染命令
+    const auto offscreenStart = RenderProfileClock::now();
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onRecordOffscreen(currentCmdBuffer,
                                            (uint32_t)m_currentFrameIndex);
     }
+    const auto offscreenEnd = RenderProfileClock::now();
 
+    const auto mainRecordStart = RenderProfileClock::now();
     {
         vk::Rect2D renderArea;
         renderArea = { { 0,
@@ -201,6 +415,7 @@ void VKRenderer::render(NativeWindow&                window,
         currentCmdBuffer.endRenderPass();
     }
     (void)currentCmdBuffer.end();  // 结束命令录制
+    const auto mainRecordEnd = RenderProfileClock::now();
 
     // 准备等待的阶段掩码
     // 这表示：在流水线的“颜色附件输出”阶段等待信号量
@@ -220,8 +435,10 @@ void VKRenderer::render(NativeWindow&                window,
         .setWaitDstStageMask(waitStages)
         // 发出信号量
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
+    const auto submitStart = RenderProfileClock::now();
     (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
+    const auto submitEnd = RenderProfileClock::now();
 
     // 呈现
     vk::PresentInfoKHR presentInfo;
@@ -233,8 +450,10 @@ void VKRenderer::render(NativeWindow&                window,
         // 等待信号量
         .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
 
+    const auto presentStart = RenderProfileClock::now();
     vk::Result presentResult =
         m_LogicDevicePresentQueue.presentKHR(presentInfo);
+    const auto presentEnd = RenderProfileClock::now();
 
     if ( presentResult == vk::Result::eErrorOutOfDateKHR ||
          presentResult == vk::Result::eSuboptimalKHR ) {
@@ -247,7 +466,8 @@ void VKRenderer::render(NativeWindow&                window,
     ++m_currentFrameIndex %= MAX_FRAMES_IN_FLIGHT;
 
     // 更新并渲染所有的多视口 (Viewports)
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO&   io            = ImGui::GetIO();
+    const auto platformStart = RenderProfileClock::now();
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         ImGui::UpdatePlatformWindows();
 #ifdef _WIN32
@@ -274,6 +494,29 @@ void VKRenderer::render(NativeWindow&                window,
 #endif
         ImGui::RenderPlatformWindowsDefault();
     }
+    const auto platformEnd     = RenderProfileClock::now();
+    const auto frameProfileEnd = RenderProfileClock::now();
+
+    ++profile.frameCount;
+    profile.total.add(elapsedMilliseconds(frameProfileStart, frameProfileEnd));
+    profile.fence.add(elapsedMilliseconds(fenceStart, fenceEnd));
+    profile.acquire.add(elapsedMilliseconds(acquireStart, acquireEnd));
+    profile.pollEvents.add(elapsedMilliseconds(pollStart, pollEnd));
+    profile.newFrame.add(elapsedMilliseconds(newFrameStart, newFrameEnd));
+    profile.prepareResources.add(elapsedMilliseconds(prepareStart, prepareEnd));
+    profile.updateUi.add(elapsedMilliseconds(updateUiStart, updateUiEnd));
+    profile.imguiRender.add(
+        elapsedMilliseconds(imguiRenderStart, imguiRenderEnd));
+    profile.commandSetup.add(
+        elapsedMilliseconds(commandSetupStart, commandSetupEnd));
+    profile.offscreenRecord.add(
+        elapsedMilliseconds(offscreenStart, offscreenEnd));
+    profile.mainRecord.add(elapsedMilliseconds(mainRecordStart, mainRecordEnd));
+    profile.submit.add(elapsedMilliseconds(submitStart, submitEnd));
+    profile.present.add(elapsedMilliseconds(presentStart, presentEnd));
+    profile.platformWindows.add(
+        elapsedMilliseconds(platformStart, platformEnd));
+    profile.logIfReady(frameProfileEnd);
 }
 
 }  // namespace MMM::Graphic

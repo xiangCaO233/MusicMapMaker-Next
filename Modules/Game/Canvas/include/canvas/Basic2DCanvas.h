@@ -112,6 +112,11 @@ protected:
                           vk::DescriptorSet       defaultDescriptor,
                           uint32_t                frameIndex) override;
 
+    /// @brief 判断当前快照是否包含发光绘制命令。
+    /// @return 当前快照存在发光命令时返回 true。
+    /// @warning 渲染热路径：每帧离屏命令录制前执行，只能读取快照命令数量。
+    bool hasGlowDrawCmds() const override;
+
 private:
     /// @brief 画布名称
     std::string m_canvasName;
