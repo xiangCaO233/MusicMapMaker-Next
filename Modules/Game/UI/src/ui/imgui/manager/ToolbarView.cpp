@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/ToolbarView.h"
+#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -10,6 +11,9 @@
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -220,12 +224,17 @@ void ToolbarView::update(UIManager* sourceManager)
                 engine.setSyncSameMainAudioCanvases(enabled);
             });
 
-        float bottomButtonsH = btnSize * 2.0f + itemSpacing;
+        float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
         float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
         }
+
+        auto applyPlaybackSpeed = [&engine](double speed) {
+            engine.pushCommand(
+                Logic::CmdSetPlaybackSpeed{ std::clamp(speed, 0.25, 2.0) });
+        };
 
         {
             std::lock_guard<std::recursive_mutex> sessionLock(
@@ -244,21 +253,87 @@ void ToolbarView::update(UIManager* sourceManager)
                 ImGui::BeginDisabled();
             }
 
+            {
+                pushBtnStyle(m_showSpeedPopup);
+                ImFont* contentFont = skinCfg.getFont("content");
+                if ( contentFont ) ImGui::PushFont(contentFont);
+
+                const double currentSpeed =
+                    Audio::AudioManager::instance().getPlaybackSpeed();
+                char speedBuf[64];
+                if ( hasBeatmap ) {
+                    snprintf(speedBuf,
+                             sizeof(speedBuf),
+                             "%.2g##ToolbarPlaybackSpeed",
+                             currentSpeed);
+                } else {
+                    snprintf(
+                        speedBuf, sizeof(speedBuf), "--##ToolbarPlaybackSpeed");
+                }
+
+                if ( ImGui::Button(speedBuf, ImVec2(btnSize, btnSize)) ) {
+                    m_showSpeedPopup = !m_showSpeedPopup;
+                    if ( m_showSpeedPopup ) {
+                        m_showKeyPopup     = false;
+                        m_showDivisorPopup = false;
+                    }
+                }
+                m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
+
+                if ( hasBeatmap && ImGui::IsItemHovered() ) {
+                    float wheel = ImGui::GetIO().MouseWheel;
+                    if ( std::abs(wheel) > 0.1f ) {
+                        constexpr std::array<double, 4> presets = {
+                            0.25, 0.5, 0.75, 1.0
+                        };
+                        size_t bestIdx = 0;
+                        double minDiff = std::abs(currentSpeed - presets[0]);
+                        for ( size_t i = 1; i < presets.size(); ++i ) {
+                            double diff = std::abs(currentSpeed - presets[i]);
+                            if ( diff < minDiff ) {
+                                minDiff = diff;
+                                bestIdx = i;
+                            }
+                        }
+
+                        if ( wheel > 0.0f && bestIdx + 1 < presets.size() ) {
+                            ++bestIdx;
+                        } else if ( wheel < 0.0f && bestIdx > 0 ) {
+                            --bestIdx;
+                        }
+
+                        double newSpeed = presets[bestIdx];
+                        if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
+                            applyPlaybackSpeed(newSpeed);
+                        }
+                    }
+                    drawTooltip(TR("ui.toolbar.playback_speed").data());
+                }
+
+                if ( contentFont ) ImGui::PopFont();
+                ImGui::PopStyleColor(3);
+            }
+            advanceItem();
+
             pushBtnStyle(m_showKeyPopup);
             ImFont* contentFont = skinCfg.getFont("content");
             if ( contentFont ) ImGui::PushFont(contentFont);
 
-            char keyBuf[16];
+            char keyBuf[64];
             if ( hasBeatmap ) {
-                snprintf(keyBuf, sizeof(keyBuf), "%dK", currentTracks);
+                snprintf(keyBuf,
+                         sizeof(keyBuf),
+                         "%dK##ToolbarKeyCount",
+                         currentTracks);
             } else {
-                snprintf(keyBuf, sizeof(keyBuf), "--");
+                snprintf(keyBuf, sizeof(keyBuf), "--##ToolbarKeyCount");
             }
 
             if ( ImGui::Button(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
                     m_showDivisorPopup = false;
+                    m_showSpeedPopup   = false;
                 }
             }
             m_lastKeyBtnY = ImGui::GetItemRectMin().y;
@@ -293,12 +368,16 @@ void ToolbarView::update(UIManager* sourceManager)
             pushBtnStyle(m_showDivisorPopup);
             ImFont* contentFont = skinCfg.getFont("content");
             if ( contentFont ) ImGui::PushFont(contentFont);
-            char divisorBuf[16];
-            snprintf(divisorBuf, sizeof(divisorBuf), "%d", currentDivisor);
+            char divisorBuf[64];
+            snprintf(divisorBuf,
+                     sizeof(divisorBuf),
+                     "%d##ToolbarBeatDivisor",
+                     currentDivisor);
             if ( ImGui::Button(divisorBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
-                    m_showKeyPopup = false;
+                    m_showKeyPopup   = false;
+                    m_showSpeedPopup = false;
                 }
             }
             m_lastBtnY = ImGui::GetItemRectMin().y;
@@ -423,6 +502,113 @@ void ToolbarView::update(UIManager* sourceManager)
             ImVec2 sz     = ImGui::GetWindowSize();
             m_popupWidth  = sz.x;
             m_popupHeight = sz.y;
+        }
+        ImGui::End();
+
+        ImGui::PopStyleVar(4);
+    }
+
+    // --- 绘制主音轨倍速设置悬浮窗 ---
+    if ( m_showSpeedPopup ) {
+        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
+
+        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+        float          viewportTop  = mainViewport->Pos.y;
+        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+        float viewportLeft   = mainViewport->Pos.x;
+
+        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
+        float targetY = m_lastSpeedBtnY;
+
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
+        float padding = std::floor(8.0f * dpiScale);
+
+        targetX = std::max(targetX, viewportLeft + popupW + padding);
+        targetY = std::min(targetY, viewportBottom - popupH - padding);
+        targetY = std::max(targetY, viewportTop + padding);
+
+        ImVec2 popupPos = ImVec2(targetX, targetY);
+
+        ImGui::SetNextWindowViewport(mainViewport->ID);
+        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+
+        ImGuiWindowFlags popupFlags =
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_AlwaysAutoResize;
+
+        auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        float winPadding    = std::floor(aesthetics.windowPadding * dpiScale);
+        float winRounding   = std::floor(aesthetics.windowRounding * dpiScale);
+        float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
+        float itemSpacing   = std::floor(aesthetics.itemSpacing * dpiScale);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, winRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(winPadding, winPadding));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(itemSpacing, itemSpacing));
+
+        if ( ImGui::Begin("##PlaybackSpeedPopup", nullptr, popupFlags) ) {
+            auto& engine = Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            auto session = engine.getActiveSession();
+
+            if ( session && session->getContext().currentBeatmap ) {
+                auto applyPopupSpeed = [&engine](double speed) {
+                    engine.pushCommand(Logic::CmdSetPlaybackSpeed{
+                        std::clamp(speed, 0.25, 2.0) });
+                };
+
+                float currentSpeed = static_cast<float>(std::clamp(
+                    Audio::AudioManager::instance().getPlaybackSpeed(),
+                    0.25,
+                    2.0));
+
+                ImGui::TextUnformatted(TR("ui.toolbar.playback_speed").data());
+                ImGui::Separator();
+
+                ImGui::SetNextItemWidth(std::floor(140.0f * dpiScale));
+                if ( ImGui::SliderFloat("##PlaybackSpeedSlider",
+                                        &currentSpeed,
+                                        0.25f,
+                                        2.0f,
+                                        "%.2fx",
+                                        ImGuiSliderFlags_AlwaysClamp) ) {
+                    applyPopupSpeed(static_cast<double>(currentSpeed));
+                }
+
+                constexpr std::array<double, 4> presets = {
+                    0.25, 0.5, 0.75, 1.0
+                };
+                const float presetButtonH = std::floor(26.0f * dpiScale);
+                const float presetButtonW =
+                    std::max(std::floor(64.0f * dpiScale),
+                             ImGui::CalcTextSize("0.75x").x +
+                                 ImGui::GetStyle().FramePadding.x * 2.0f);
+                for ( size_t i = 0; i < presets.size(); ++i ) {
+                    if ( i > 0 && i % 2 != 0 ) ImGui::SameLine();
+                    char buf[16];
+                    snprintf(buf, sizeof(buf), "%.2gx", presets[i]);
+                    if ( ImGui::Button(buf,
+                                       ImVec2(presetButtonW, presetButtonH)) ) {
+                        applyPopupSpeed(presets[i]);
+                    }
+                }
+            } else {
+                m_showSpeedPopup = false;
+            }
+
+            ImVec2 sz          = ImGui::GetWindowSize();
+            m_speedPopupWidth  = sz.x;
+            m_speedPopupHeight = sz.y;
         }
         ImGui::End();
 

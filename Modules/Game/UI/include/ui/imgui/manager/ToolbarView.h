@@ -32,6 +32,14 @@ private:
     float           m_lastKeyBtnY      = 0.0f;
     float           m_keyPopupWidth    = 160.0f;
     float           m_keyPopupHeight   = 120.0f;
+    /// @brief 是否显示主音轨倍速详细调整弹窗。
+    bool m_showSpeedPopup{ false };
+    /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
+    float m_lastSpeedBtnY{ 0.0f };
+    /// @brief 主音轨倍速弹窗上一帧宽度，用于防止视口越界。
+    float m_speedPopupWidth{ 160.0f };
+    /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
+    float m_speedPopupHeight{ 120.0f };
 
     /**
      * @brief 绘制工具按钮
