@@ -361,14 +361,17 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             if ( recent.empty() ) {
                 ImGui::MenuItem(TR("ui.file.no_recent"), nullptr, false, false);
             } else {
-                for ( const auto& path : recent ) {
-                    std::filesystem::path p = Config::utf8ToPath(path);
-                    std::string name        = Config::pathToUtf8(p.filename());
+                for ( size_t i = 0; i < recent.size(); ++i ) {
+                    const auto&           path = recent[i];
+                    std::filesystem::path p    = Config::utf8ToPath(path);
+                    std::string name = Config::pathToUtf8(p.filename());
+                    ImGui::PushID(static_cast<int>(i));
                     if ( ImGui::MenuItem(name.c_str(), path.c_str()) ) {
                         Event::OpenProjectEvent ev;
                         ev.m_projectPath = p;
                         Event::EventBus::instance().publish(ev);
                     }
+                    ImGui::PopID();
                 }
             }
             ImGui::EndMenu();

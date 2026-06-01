@@ -487,8 +487,12 @@ void ToolbarView::update(UIManager* sourceManager)
                 Config::SkinManager::instance().getCommonDivisors();
             for ( size_t i = 0; i < commonDivisors.size(); ++i ) {
                 if ( i > 0 && i % 4 != 0 ) ImGui::SameLine();
-                char buf[16];
-                snprintf(buf, sizeof(buf), "1/%d", commonDivisors[i]);
+                char buf[64];
+                snprintf(buf,
+                         sizeof(buf),
+                         "1/%d##ToolbarDivisorPreset%zu",
+                         commonDivisors[i],
+                         i);
                 if ( ImGui::Button(buf,
                                    ImVec2(std::floor(35.0f * dpiScale),
                                           std::floor(24.0f * dpiScale))) ) {
@@ -595,8 +599,12 @@ void ToolbarView::update(UIManager* sourceManager)
                                  ImGui::GetStyle().FramePadding.x * 2.0f);
                 for ( size_t i = 0; i < presets.size(); ++i ) {
                     if ( i > 0 && i % 2 != 0 ) ImGui::SameLine();
-                    char buf[16];
-                    snprintf(buf, sizeof(buf), "%.2gx", presets[i]);
+                    char buf[64];
+                    snprintf(buf,
+                             sizeof(buf),
+                             "%.2gx##ToolbarSpeedPreset%zu",
+                             presets[i],
+                             i);
                     if ( ImGui::Button(buf,
                                        ImVec2(presetButtonW, presetButtonH)) ) {
                         applyPopupSpeed(presets[i]);
@@ -688,8 +696,12 @@ void ToolbarView::update(UIManager* sourceManager)
                 const std::vector<int> commonKeys = { 4, 5, 6, 7, 8 };
                 for ( size_t i = 0; i < commonKeys.size(); ++i ) {
                     if ( i > 0 ) ImGui::SameLine();
-                    char buf[16];
-                    snprintf(buf, sizeof(buf), "%dK", commonKeys[i]);
+                    char buf[64];
+                    snprintf(buf,
+                             sizeof(buf),
+                             "%dK##ToolbarKeyPreset%zu",
+                             commonKeys[i],
+                             i);
                     if ( ImGui::Button(buf,
                                        ImVec2(std::floor(28.0f * dpiScale),
                                               std::floor(24.0f * dpiScale))) ) {
