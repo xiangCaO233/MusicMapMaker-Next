@@ -23,6 +23,38 @@
 
 namespace MMM::Audio
 {
+namespace
+{
+/** @brief 将项目声道模式转换为 IonCachyEngine 声道模式。 */
+ice::MixBusChannelMode toIceChannelMode(MixerChannelMode mode)
+{
+    switch ( mode ) {
+    case MixerChannelMode::MuteLeft: return ice::MixBusChannelMode::MuteLeft;
+    case MixerChannelMode::MuteRight: return ice::MixBusChannelMode::MuteRight;
+    case MixerChannelMode::CopyLeftToRight:
+        return ice::MixBusChannelMode::CopyLeftToRight;
+    case MixerChannelMode::CopyRightToLeft:
+        return ice::MixBusChannelMode::CopyRightToLeft;
+    case MixerChannelMode::Stereo: return ice::MixBusChannelMode::Stereo;
+    }
+    return ice::MixBusChannelMode::Stereo;
+}
+
+/** @brief 将 IonCachyEngine 声道模式转换为项目声道模式。 */
+MixerChannelMode fromIceChannelMode(ice::MixBusChannelMode mode)
+{
+    switch ( mode ) {
+    case ice::MixBusChannelMode::MuteLeft: return MixerChannelMode::MuteLeft;
+    case ice::MixBusChannelMode::MuteRight: return MixerChannelMode::MuteRight;
+    case ice::MixBusChannelMode::CopyLeftToRight:
+        return MixerChannelMode::CopyLeftToRight;
+    case ice::MixBusChannelMode::CopyRightToLeft:
+        return MixerChannelMode::CopyRightToLeft;
+    case ice::MixBusChannelMode::Stereo: return MixerChannelMode::Stereo;
+    }
+    return MixerChannelMode::Stereo;
+}
+}  // namespace
 /// @brief 设置主音轨音量并立即应用到音频节点。
 /// @param volume 目标音量。
 void AudioManager::setMainTrackVolume(float volume)
@@ -218,6 +250,23 @@ bool AudioManager::isMainMixerRightMuted() const
         return m_mainMixer->is_mute_right();
     }
     return false;
+}
+
+/** @brief 设置主混音器双声道输出模式。 */
+void AudioManager::setMainMixerChannelMode(MixerChannelMode mode)
+{
+    if ( m_mainMixer ) {
+        m_mainMixer->set_channel_mode(toIceChannelMode(mode));
+    }
+}
+
+/** @brief 获取主混音器双声道输出模式。 */
+MixerChannelMode AudioManager::getMainMixerChannelMode() const
+{
+    if ( m_mainMixer ) {
+        return fromIceChannelMode(m_mainMixer->get_channel_mode());
+    }
+    return MixerChannelMode::Stereo;
 }
 
 /// @brief 设置 BGM 全局增益、保存配置并刷新主音轨音量。

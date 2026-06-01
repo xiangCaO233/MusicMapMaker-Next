@@ -55,6 +55,15 @@ enum class EQPreset {
     FifteenBand
 };
 
+/** @brief 主混音器双声道输出模式。 */
+enum class MixerChannelMode {
+    Stereo,           ///< 保持原始立体声输出。
+    MuteLeft,         ///< 静音左声道，仅保留右声道。
+    MuteRight,        ///< 静音右声道，仅保留左声道。
+    CopyLeftToRight,  ///< 将左声道复制到右声道，两侧都播放左声道。
+    CopyRightToLeft   ///< 将右声道复制到左声道，两侧都播放右声道。
+};
+
 /**
  * @brief 音频管理器，封装 IonCachyEngine 的核心功能
  */
@@ -177,6 +186,14 @@ public:
     void setMainMixerRightMute(bool muted);
     /// @brief 获取主混音器右声道是否静音
     bool isMainMixerRightMuted() const;
+
+    /// @brief 设置主混音器双声道输出模式。
+    /// @param mode 目标声道输出模式。
+    void setMainMixerChannelMode(MixerChannelMode mode);
+
+    /// @brief 获取主混音器双声道输出模式。
+    /// @return 当前声道输出模式。
+    MixerChannelMode getMainMixerChannelMode() const;
 
     /// @brief 设置播放倍率 (0.5 ~ 2.0)
     void setPlaybackSpeed(double speed);

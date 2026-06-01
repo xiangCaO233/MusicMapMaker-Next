@@ -216,11 +216,13 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     const float lrButtonW =
         std::max({ measureTrackControllerText("L", font, snapshot.fontSize),
                    measureTrackControllerText("R", font, snapshot.fontSize),
+                   measureTrackControllerText("LL", font, snapshot.fontSize),
+                   measureTrackControllerText("RR", font, snapshot.fontSize),
                    24.0f });
 
     float widgetWidth = muteButtonW + snapshot.itemSpacing + sliderMinW;
     if ( trackType == TrackType::Main ) {
-        widgetWidth += snapshot.itemSpacing + lrButtonW * 2.0f + 2.0f;
+        widgetWidth += lrButtonW * 4.0f + 2.0f * 4.0f;
 
         const std::array<const char*, 4> speedPresets{
             TR_CACHE("ui.audio_manager.speed_025x").data(),
@@ -455,10 +457,12 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             float             btnHeight  = ImGui::GetFrameHeight();
             float             lrPaddingX = 3.0f;
             float             lrGap      = 2.0f;
-            float             lrButtonW = std::max(ImGui::CalcTextSize("L").x,
-                                                   ImGui::CalcTextSize("R").x) +
-                                          lrPaddingX * 2.0f;
-            lrButtonW                   = std::max(lrButtonW, 24.0f);
+            float lrButtonW = std::max({ ImGui::CalcTextSize("L").x,
+                                         ImGui::CalcTextSize("R").x,
+                                         ImGui::CalcTextSize("LL").x,
+                                         ImGui::CalcTextSize("RR").x }) +
+                              lrPaddingX * 2.0f;
+            lrButtonW       = std::max(lrButtonW, 24.0f);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             Utils::pushFixedButtonStyleVars();
             if ( ImGui::Button(icon, ImVec2(btnWidth, btnHeight)) ) {
@@ -480,10 +484,9 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
 
             ImGui::SameLine();
 
-            float lrWidth =
-                (m_type == TrackType::Main)
-                    ? (style.ItemSpacing.x + lrButtonW * 2.0f + lrGap)
-                    : 0.0f;
+            float lrWidth = (m_type == TrackType::Main)
+                                ? (lrButtonW * 4.0f + lrGap * 4.0f)
+                                : 0.0f;
             float sliderWidth =
                 r.width - btnWidth - style.ItemSpacing.x - lrWidth;
             sliderWidth = std::max(sliderWidth, 40.0f);
@@ -496,53 +499,52 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             }
 
             if ( m_type == TrackType::Main ) {
-                bool muteL = audio.isMainMixerLeftMuted();
-                bool muteR = audio.isMainMixerRightMuted();
+                auto         channelMode = audio.getMainMixerChannelMode();
+                const ImVec4 copyModeColor{ 0.45f, 1.0f, 0.48f, 1.0f };
+                auto drawChannelButton = [&](const char*             id,
+                                             Audio::MixerChannelMode mode,
+                                             const char*             tooltip,
+                                             const ImVec4& activeColor) {
+                    const bool active = channelMode == mode;
+                    ImGui::SameLine(0, lrGap);
+                    if ( active ) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, activeColor);
+                    }
+                    ImGui::PushStyleVar(
+                        ImGuiStyleVar_FramePadding,
+                        ImVec2(lrPaddingX, style.FramePadding.y));
+                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                        ImVec2(0.5f, 0.5f));
+                    if ( ImGui::Button(id, ImVec2(lrButtonW, btnHeight)) ) {
+                        channelMode =
+                            active ? Audio::MixerChannelMode::Stereo : mode;
+                        audio.setMainMixerChannelMode(channelMode);
+                    }
+                    ImGui::PopStyleVar(2);
+                    if ( active ) {
+                        ImGui::PopStyleColor();
+                    }
+                    if ( ImGui::IsItemHovered() ) {
+                        ImGui::SetTooltip("%s", tooltip);
+                    }
+                };
 
-                ImGui::SameLine();
-                if ( muteL ) {
-                    ImGui::PushStyleColor(
-                        ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
-                }
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                    ImVec2(lrPaddingX, style.FramePadding.y));
-                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
-                                    ImVec2(0.5f, 0.5f));
-                if ( ImGui::Button("L##MainMixerMuteL",
-                                   ImVec2(lrButtonW, btnHeight)) ) {
-                    audio.setMainMixerLeftMute(!muteL);
-                }
-                ImGui::PopStyleVar(2);
-                if ( muteL ) {
-                    ImGui::PopStyleColor();
-                }
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.audio_manager.mute_l").data());
-                }
-
-                ImGui::SameLine(0, 2);
-
-                if ( muteR ) {
-                    ImGui::PushStyleColor(
-                        ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
-                }
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                    ImVec2(lrPaddingX, style.FramePadding.y));
-                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
-                                    ImVec2(0.5f, 0.5f));
-                if ( ImGui::Button("R##MainMixerMuteR",
-                                   ImVec2(lrButtonW, btnHeight)) ) {
-                    audio.setMainMixerRightMute(!muteR);
-                }
-                ImGui::PopStyleVar(2);
-                if ( muteR ) {
-                    ImGui::PopStyleColor();
-                }
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s",
-                                      TR("ui.audio_manager.mute_r").data());
-                }
+                drawChannelButton("L##MainMixerMuteL",
+                                  Audio::MixerChannelMode::MuteLeft,
+                                  TR("ui.audio_manager.mute_l").data(),
+                                  Utils::UIThemeUtils::getDangerColor());
+                drawChannelButton("R##MainMixerMuteR",
+                                  Audio::MixerChannelMode::MuteRight,
+                                  TR("ui.audio_manager.mute_r").data(),
+                                  Utils::UIThemeUtils::getDangerColor());
+                drawChannelButton("LL##MainMixerCopyL",
+                                  Audio::MixerChannelMode::CopyLeftToRight,
+                                  "LL",
+                                  copyModeColor);
+                drawChannelButton("RR##MainMixerCopyR",
+                                  Audio::MixerChannelMode::CopyRightToLeft,
+                                  "RR",
+                                  copyModeColor);
             }
         });
 }
