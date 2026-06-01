@@ -168,8 +168,7 @@ void FileManagerView::openFolderPicker()
         nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
             Event::OpenProjectEvent ev;
-            ev.m_projectPath = std::filesystem::path(
-                reinterpret_cast<const char8_t*>(outPath));
+            ev.m_projectPath = Config::utf8ToPath(outPath);
             Event::EventBus::instance().publish(ev);
             NFD_FreePath(outPath);
         }

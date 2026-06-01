@@ -73,7 +73,8 @@ void SettingsView::drawBeatmapSettings()
 
     bool isImd = false;
     if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
-        auto ext = beatmap.m_baseMapMetadata.map_path.extension().string();
+        auto ext =
+            Config::pathToUtf8(beatmap.m_baseMapMetadata.map_path.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
         if ( ext == ".imd" ) {
             isImd = true;
@@ -556,9 +557,9 @@ void SettingsView::drawBeatmapSettings()
                                 meta.main_cover_path = chosenPath;
                                 changed              = true;
 
-                                // Auto set cover if cover is empty and chosen
-                                // background is an image
-                                auto ext = chosenPath.extension().string();
+                                // 如果背景是图片且封面为空，则自动沿用同一张图片。
+                                auto ext =
+                                    Config::pathToUtf8(chosenPath.extension());
                                 std::transform(ext.begin(),
                                                ext.end(),
                                                ext.begin(),

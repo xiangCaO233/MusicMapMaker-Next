@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/BeatMapManagerView.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -110,10 +111,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 Utils::renderScrollingSelectable(
                     beatmap.m_filePath, labelStr, availW, rowHeight, [&]() {
                         XINFO("Request to load beatmap: {}", beatmap.m_name);
-                        auto fullPath      = project->m_projectRoot /
-                                             std::filesystem::path(
-                                                 reinterpret_cast<const char8_t*>(
-                                                     beatmap.m_filePath.c_str()));
+                        auto fullPath = project->m_projectRoot /
+                                        Config::utf8ToPath(beatmap.m_filePath);
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(fullPath));
                         engine.createSession(loadedBeatmap, beatmap.m_name);

@@ -231,10 +231,9 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
                     m_selectedCoverPath = resPath;
 
-                    // If selected bg is an image, and cover is empty,
-                    // automatically set cover to the same
-                    auto ext =
-                        std::filesystem::path(resPath).extension().string();
+                    // 如果背景是图片且封面为空，则自动沿用同一张图片。
+                    auto ext = Config::pathToUtf8(
+                        Config::utf8ToPath(resPath).extension());
                     std::transform(
                         ext.begin(), ext.end(), ext.begin(), ::tolower);
                     if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
