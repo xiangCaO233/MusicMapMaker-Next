@@ -14,6 +14,8 @@
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
 
+#include <cmath>
+
 namespace MMM::UI
 {
 
@@ -62,9 +64,16 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
     m_pendingDrops.clear();
 }
 
+/// @brief 渲染未打开项目时的文件浏览器占位内容。
+/// @warning UI 热路径：未打开项目且子视图可见时每帧执行。
+/// 避免文件系统扫描或高开销所有权操作。
 void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
 {
-    CLayVBox rootVBox;
+    CLayVBox    rootVBox;
+    const char* openDirectoryLabel = TR("ui.file_manager.open_directory");
+    const float openButtonWidth =
+        std::ceil(ImGui::CalcTextSize(openDirectoryLabel).x +
+                  ImGui::GetStyle().FramePadding.x * 2.0f + 2.0f);
 
     CLayHBox labelHBox;
     auto     fh = ImGui::GetFrameHeight();
@@ -85,15 +94,16 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
 
     CLayHBox buttonHBox;
     buttonHBox.addSpring()
-        .addElement("OpenDirButton",
-                    Sizing::Grow(),
-                    Sizing::Fixed(fh),
-                    [this](Clay_BoundingBox r, bool isHovered) {
-                        if ( ImGui::Button(TR("ui.file_manager.open_directory"),
-                                           { r.width, r.height }) ) {
-                            this->openFolderPicker();
-                        }
-                    })
+        .addElement(
+            "OpenDirButton",
+            Sizing::Fixed(openButtonWidth),
+            Sizing::Fixed(fh),
+            [this, openDirectoryLabel](Clay_BoundingBox r, bool isHovered) {
+                if ( ImGui::Button(openDirectoryLabel,
+                                   { r.width, r.height }) ) {
+                    this->openFolderPicker();
+                }
+            })
         .addSpring();
 
     CLayVBox    recentVBox;

@@ -33,9 +33,11 @@ bool isBelowMinWindowSize(ImVec2 size, ImVec2 minWindowSize)
 /// @brief 判断是否已经越过本次低于最小尺寸起点后的收起缓冲距离。
 /// @warning UI 热路径：每帧仅做阈值计算。
 bool shouldCollapseAfterMinDragStart(float currentShortage, float startShortage,
-                                     float dpiScale)
+                                     ImVec2 minWindowSize, ImGuiAxis axis)
 {
-    const float collapseDistance = std::floor(72.0f * std::max(1.0f, dpiScale));
+    const float minAxisSize =
+        axis == ImGuiAxis_X ? minWindowSize.x : minWindowSize.y;
+    const float collapseDistance = std::floor(minAxisSize * 0.5f);
     return currentShortage - startShortage > collapseDistance;
 }
 
@@ -329,12 +331,13 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
              m_minResizeLockAxis != static_cast<int>(dockResizeOverrun.axis) ) {
             m_minResizeLockActive       = true;
             m_minResizeLockAxis         = dockResizeOverrun.axis;
-            m_minResizeLockStartOverrun = 0.0f;
+            m_minResizeLockStartOverrun = dockResizeOverrun.overrun;
         }
 
         if ( shouldCollapseAfterMinDragStart(dockResizeOverrun.overrun,
                                              m_minResizeLockStartOverrun,
-                                             dpiScale) ) {
+                                             minWindowSize,
+                                             dockResizeOverrun.axis) ) {
             hideCurrentSubView(sourceManager);
             restoreDockResizeMouseAfterDockSpace();
             return;
@@ -457,12 +460,13 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                      static_cast<int>(dockResizeOverrun.axis) ) {
                 m_minResizeLockActive       = true;
                 m_minResizeLockAxis         = dockResizeOverrun.axis;
-                m_minResizeLockStartOverrun = 0.0f;
+                m_minResizeLockStartOverrun = dockResizeOverrun.overrun;
             }
 
             if ( shouldCollapseAfterMinDragStart(dockResizeOverrun.overrun,
                                                  m_minResizeLockStartOverrun,
-                                                 dpiScale) ) {
+                                                 minWindowSize,
+                                                 dockResizeOverrun.axis) ) {
                 hideCurrentSubView(sourceManager);
                 return;
             }

@@ -34,10 +34,15 @@ public:
     /// @brief 获取文件管理器中不可再换行控件所需的最小内容尺寸。
     /// @param dpiScale 当前窗口内容缩放。
     /// @return 文件管理器最小内容尺寸。
+    /// @warning UI 热路径：子视图可见时每帧查询；仅保留配置读取和轻量文本测量。
     ImVec2 getMinContentSize(float dpiScale) const override;
 
 private:
     void handleDragDrop(UIManager* sourceManager);
+    /// @brief 渲染未打开项目时的文件浏览器占位内容。
+    /// @param layoutContext 当前 Clay/ImGui 布局上下文。
+    /// @warning UI 热路径：未打开项目且子视图可见时每帧执行。
+    /// 避免文件系统扫描或高开销所有权操作。
     void renderEmptyProjectView(LayoutContext& layoutContext);
     void renderActiveProjectView(LayoutContext& layoutContext,
                                  UIManager*     sourceManager);

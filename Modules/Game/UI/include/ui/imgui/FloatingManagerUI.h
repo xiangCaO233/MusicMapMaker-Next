@@ -89,7 +89,7 @@ private:
     /// @brief 最小尺寸锁定的 dock split 轴，-1 表示无锁定。
     int m_minResizeLockAxis{ -1 };
 
-    /// @brief 最小尺寸锁定时鼠标已经越过手柄的距离。
+    /// @brief 进入最小尺寸锁定时鼠标已经越过手柄的距离。
     float m_minResizeLockStartOverrun{ 0.0f };
 
     /// @brief 本帧 DockSpace 前是否临时钳住过 ImGui 鼠标坐标。

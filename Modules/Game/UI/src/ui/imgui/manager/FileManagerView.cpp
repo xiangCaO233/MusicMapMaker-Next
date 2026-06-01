@@ -31,6 +31,7 @@ FileManagerView::~FileManagerView()
 }
 
 /// @brief 获取文件管理器中不可再换行控件所需的最小内容尺寸。
+/// @warning UI 热路径：子视图可见时每帧查询；仅保留配置读取和轻量文本测量。
 ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
 {
     auto&       engine   = Logic::EditorEngine::instance();
@@ -55,7 +56,7 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
             Config::AppConfig::instance().getEditorConfig().recentProjects;
         const float openButtonWidth =
             ImGui::CalcTextSize(TR("ui.file_manager.open_directory")).x +
-            style.FramePadding.x * 2.0f;
+            style.FramePadding.x * 2.0f + 2.0f;
         minWidth =
             std::max(ImGui::CalcTextSize(TR("ui.file_manager.initial_hint")).x,
                      openButtonWidth);
