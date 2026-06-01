@@ -1279,6 +1279,10 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
     if ( sourceKey.empty() ) {
         return;
     }
+    // 被动 follower 的时间变化来自本地视觉插值，不能反向覆盖真正的播放源。
+    if ( sourceCtx.isMainAudioSyncFollower && !sourceCtx.isPlaying ) {
+        return;
+    }
 
     for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
         if ( i == sourceIndex || !sessions[static_cast<size_t>(i)].session ) {

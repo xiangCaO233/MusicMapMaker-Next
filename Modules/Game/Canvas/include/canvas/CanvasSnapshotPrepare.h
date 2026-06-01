@@ -30,6 +30,28 @@ inline double currentSteadySeconds()
         .count();
 }
 
+/// @brief 对快照动态顶点应用或还原 UI 侧播放插值偏移。
+/// @param snapshot 待修改的渲染快照。
+/// @param yOffset 需要叠加到动态顶点上的 Y 偏移。
+/// @warning 后台线程路径：只允许在快照仍由 UI 侧持有、尚未归还逻辑线程前调用。
+inline void applyDynamicVertexYOffset(Logic::RenderSnapshot* snapshot,
+                                      float                  yOffset)
+{
+    if ( !snapshot || std::abs(yOffset) <= 0.0001f ) {
+        return;
+    }
+
+    const uint32_t startVtx = snapshot->staticVertexCount;
+    auto&          vertices = snapshot->vertices;
+    const uint32_t endVtx   = snapshot->dynamicVertexCount > 0
+                                  ? (startVtx + snapshot->dynamicVertexCount)
+                                  : static_cast<uint32_t>(vertices.size());
+
+    for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
+        vertices[i].pos.y += yOffset;
+    }
+}
+
 /// @brief 拉取并准备画布渲染快照。
 /// @param syncBuffer 逻辑线程写入的同步缓冲区。
 /// @param lastOffsetSnapshot 上一帧应用过偏移的快照。
@@ -47,6 +69,10 @@ inline PreparedCanvasSnapshot prepareCanvasSnapshot(
     if ( !syncBuffer ) {
         return prepared;
     }
+
+    // 先还原上一帧偏移，再拉取新快照；resize 重建可能让旧读缓冲被
+    // 逻辑线程回收复用，不能只靠指针相等判断是否仍是同一帧数据。
+    applyDynamicVertexYOffset(lastOffsetSnapshot, -lastAppliedYOffset);
 
     prepared.snapshot = syncBuffer->pullLatestSnapshot();
     if ( !prepared.snapshot ) {
@@ -67,25 +93,7 @@ inline PreparedCanvasSnapshot prepareCanvasSnapshot(
         }
     }
 
-    const uint32_t startVtx = prepared.snapshot->staticVertexCount;
-    auto&          vertices = prepared.snapshot->vertices;
-    const uint32_t endVtx =
-        prepared.snapshot->dynamicVertexCount > 0
-            ? (startVtx + prepared.snapshot->dynamicVertexCount)
-            : static_cast<uint32_t>(vertices.size());
-
-    if ( lastOffsetSnapshot == prepared.snapshot &&
-         std::abs(lastAppliedYOffset) > 0.0001f ) {
-        for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
-            vertices[i].pos.y -= lastAppliedYOffset;
-        }
-    }
-
-    if ( std::abs(newYOffset) > 0.0001f ) {
-        for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
-            vertices[i].pos.y += newYOffset;
-        }
-    }
+    applyDynamicVertexYOffset(prepared.snapshot, newYOffset);
 
     prepared.offsetSnapshot = prepared.snapshot;
     prepared.appliedYOffset = newYOffset;
