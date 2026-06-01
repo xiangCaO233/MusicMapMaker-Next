@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/LogicCommands.h"
+#include "mmm/project/PackageFileTypes.h"
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -67,6 +68,15 @@ public:
     /// @return 应实际导出的目标路径。
     std::string applySaveAsSelectedFormatToPath(const std::string& path) const;
 
+    /// @brief 按当前打包目标格式规范化输出包路径。
+    /// @param path 文件选择器返回的输出路径。
+    /// @return 补齐目标打包扩展名后的输出路径。
+    std::string applyPackSelectedFormatToPath(const std::string& path) const;
+
+    /// @brief 请求打包当前已选择的项目文件。
+    /// @param path 输出包路径。
+    void requestPackBeatmapTo(std::string path);
+
     /// @brief 处理主菜单相关的全局快捷键。
     /// @param sourceManager 当前 UI 管理器。
     void handleHotkeys(UIManager* sourceManager);
@@ -132,6 +142,18 @@ private:
         std::string note2_desc;
     };
 
+    /// @brief 打包候选文件条目。
+    struct PackageCandidateFile {
+        /// @brief 项目相对路径，使用 UTF-8 编码和通用分隔符。
+        std::string relativePath;
+
+        /// @brief 用户界面显示的资源分类名称。
+        std::string typeLabel;
+
+        /// @brief 是否将该文件写入最终包。
+        bool selected{ true };
+    };
+
     /// @brief 扫描当前谱面中的重叠音符。
     void performOverlapScan();
 
@@ -140,6 +162,9 @@ private:
 
     /// @brief 打开谱面打包路径选择器。
     void openPackFilePicker();
+
+    /// @brief 打开打包输出路径选择器。
+    void openPackageOutputFilePicker();
 
     /// @brief 打开谱面导出路径选择器。
     /// @param ext 期望导出的文件扩展名；为空时展示全部支持格式。
@@ -176,6 +201,25 @@ private:
     /// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportFormatPickerPopup(float dpiScale);
+
+    /// @brief 渲染打包目标格式选择弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageFormatPickerPopup(float dpiScale);
+
+    /// @brief 渲染打包文件复选列表窗口。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageFileSelectionWindow(float dpiScale);
+
+    /// @brief 按当前目标打包格式重建候选文件列表。
+    void rebuildPackageCandidateFiles();
+
+    /// @brief 收集当前已勾选的项目相对文件路径。
+    /// @return 已勾选的项目相对文件路径列表。
+    std::vector<std::string> collectSelectedPackageRelativePaths() const;
+
+    /// @brief 生成当前打包目标格式的默认输出文件名。
+    /// @return 默认输出文件名。
+    std::string makePackageDefaultFileName() const;
 
     /// @brief 渲染帮助菜单。
     /// @param sourceManager 当前 UI 管理器。
@@ -239,6 +283,10 @@ private:
     bool m_showExportCompatibilityWarning = false;
     /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
     bool m_showExportFormatPicker = false;
+    /// @brief 是否在下一帧打开打包格式选择弹窗。
+    bool m_showPackageFormatPicker = false;
+    /// @brief 是否显示打包文件复选列表窗口。
+    bool m_showPackageFileSelectionWindow = false;
 
     /// @brief 是否已完成启动时的自动更新检查。
     bool m_hasCheckedOnStartup = false;
@@ -263,6 +311,13 @@ private:
     std::string m_pendingExportFormatName;
     /// @brief 待确认导出的兼容性警告消息。
     std::vector<std::string> m_pendingExportWarnings;
+
+    /// @brief 当前打包目标格式。
+    PackageFileType m_selectedPackageFileType{ PackageFileType::Osz };
+    /// @brief 当前打包格式下可选择的候选文件。
+    std::vector<PackageCandidateFile> m_packageCandidateFiles;
+    /// @brief 等待输出路径确认的已选项目相对文件路径。
+    std::vector<std::string> m_pendingPackageRelativePaths;
 
     /// @brief 更新检查器实例。
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;

@@ -1,6 +1,11 @@
 enable_language(C)
 
-add_library(3rd_miniz STATIC "${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz.c")
+add_library(
+    3rd_miniz STATIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz_tdef.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz_tinfl.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/miniz/miniz_zip.c")
 
 include(GenerateExportHeader)
 generate_export_header(

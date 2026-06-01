@@ -185,6 +185,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 std::string filePath =
                     ImGuiFileDialog::Instance()->GetFilePathName();
+                filePath =
+                    m_mainMenuview.applyPackSelectedFormatToPath(filePath);
 
                 auto config = engine.getEditorConfig();
                 config.settings.lastFilePickerPath =
@@ -193,16 +195,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
                 if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
                     m_pendingOverwritePath     = filePath;
-                    this->m_onOverwriteConfirm = [filePath]() {
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdPackBeatmap{ filePath }));
+                    this->m_onOverwriteConfirm = [this, filePath]() {
+                        m_mainMenuview.requestPackBeatmapTo(filePath);
                     };
                     m_showOverwriteModal = true;
                 } else {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdPackBeatmap{ filePath }));
+                    m_mainMenuview.requestPackBeatmapTo(filePath);
                 }
             }
             ImGuiFileDialog::Instance()->Close();

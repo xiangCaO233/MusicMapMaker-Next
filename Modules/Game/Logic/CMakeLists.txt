@@ -45,6 +45,7 @@ target_link_libraries(Logic
 		3rd_concurrentqueue
 		3rd_entt
 		3rd_glm
+		3rd_miniz
 		Audio
 		Config
 		Runtime

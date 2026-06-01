@@ -18,6 +18,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
 #include "mmm/note/Polyline.h"
+#include "mmm/project/PackageFileTypes.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
@@ -31,6 +32,8 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
+#include <string_view>
+#include <system_error>
 
 namespace MMM::UI
 {
@@ -162,6 +165,104 @@ std::string getSaveAsPickerDefaultPath(const Config::EditorSettings& settings)
     return settings.lastFilePickerPath.empty() ? std::string(".")
                                                : settings.lastFilePickerPath;
 }
+
+/// @brief 获取打包格式显示名称。
+/// @param type 打包格式。
+/// @return 用户界面显示的格式名称。
+std::string getPackageTypeDisplayName(PackageFileType type)
+{
+    const auto& types = getPackageSupportedFileTypes(type);
+    switch ( type ) {
+    case PackageFileType::Mcz:
+        return "Malody Chart Package (" +
+               std::string(types.m_packageExtension) + ")";
+    case PackageFileType::Osz:
+        return "osu! Beatmap Package (" +
+               std::string(types.m_packageExtension) + ")";
+    case PackageFileType::Mpk:
+        return "MusicMapMaker Package (" +
+               std::string(types.m_packageExtension) + ")";
+    }
+    return "MusicMapMaker Package (.mpk)";
+}
+
+/// @brief 取得打包格式扩展名。
+/// @param type 打包格式。
+/// @return 带前导点的扩展名。
+std::string getPackageExtension(PackageFileType type)
+{
+    return std::string(getPackageSupportedFileTypes(type).m_packageExtension);
+}
+
+/// @brief 取得原生文件选择器使用的扩展名过滤器。
+/// @param type 打包格式。
+/// @return 不带前导点的扩展名。
+const char* getNativePackageOutputFilterText(PackageFileType type)
+{
+    switch ( type ) {
+    case PackageFileType::Mcz: return "mcz";
+    case PackageFileType::Osz: return "osz";
+    case PackageFileType::Mpk: return "mpk";
+    }
+    return "mpk";
+}
+
+/// @brief 取得统一文件选择器使用的扩展名过滤器。
+/// @param type 打包格式。
+/// @return 带前导点的扩展名。
+const char* getUnifiedPackageOutputFilterText(PackageFileType type)
+{
+    switch ( type ) {
+    case PackageFileType::Mcz: return ".mcz";
+    case PackageFileType::Osz: return ".osz";
+    case PackageFileType::Mpk: return ".mpk";
+    }
+    return ".mpk";
+}
+
+/// @brief 判断扩展名是否为打包产物扩展名。
+/// @param extension 待检查扩展名。
+/// @return 是否应从候选资源列表中排除。
+bool isPackageArchiveExtension(const std::string& extension)
+{
+    return findPackageSupportedFileTypes(extension) != nullptr ||
+           packageExtensionEquals(extension, ".zip");
+}
+
+/// @brief 根据扩展名推断资源分类显示文本。
+/// @param types 当前打包格式规则。
+/// @param extension 待检查扩展名。
+/// @return 资源分类显示文本，空字符串表示不符合规则。
+std::string getPackageCandidateTypeLabel(const PackageSupportedFileTypes& types,
+                                         const std::string& extension)
+{
+    if ( isPackageResourceExtensionSupported(
+             types, PackageResourceType::Beatmap, extension) ) {
+        return "谱面";
+    }
+    if ( types.m_allowAllAudioFormats
+             ? isKnownPackageResourceExtension(PackageResourceType::Audio,
+                                               extension)
+             : isPackageResourceExtensionSupported(
+                   types, PackageResourceType::Audio, extension) ) {
+        return "音频";
+    }
+    if ( types.m_allowAllVideoFormats
+             ? isKnownPackageResourceExtension(PackageResourceType::Video,
+                                               extension)
+             : isPackageResourceExtensionSupported(
+                   types, PackageResourceType::Video, extension) ) {
+        return "视频";
+    }
+    if ( types.m_allowAllImageFormats
+             ? isKnownPackageResourceExtension(PackageResourceType::Image,
+                                               extension)
+             : isPackageResourceExtensionSupported(
+                   types, PackageResourceType::Image, extension) ) {
+        return "图片";
+    }
+    return {};
+}
 }  // namespace
 
 /// @brief 根据导出格式生成推荐文件名。
@@ -231,11 +332,43 @@ std::string MainMenuView::applySaveAsSelectedFormatToPath(
     return Config::pathToUtf8(outputPath);
 }
 
+/// @brief 按当前打包目标格式规范化输出包路径。
+/// @param path 文件选择器返回的输出路径。
+/// @return 补齐目标打包扩展名后的输出路径。
+std::string MainMenuView::applyPackSelectedFormatToPath(
+    const std::string& path) const
+{
+    if ( path.empty() ) return path;
+
+    std::filesystem::path outputPath = Config::utf8ToPath(path);
+    outputPath.replace_extension(
+        getPackageExtension(m_selectedPackageFileType));
+    return Config::pathToUtf8(outputPath);
+}
+
 /// @brief 直接分发谱面导出命令并显示保存提示。
 /// @param path 目标导出路径。
 void MainMenuView::dispatchSaveBeatmapAs(const std::string& path)
 {
     dispatchCommand(Logic::CmdSaveBeatmapAs{ path });
+}
+
+/// @brief 请求打包当前已选择的项目文件。
+/// @param path 输出包路径。
+void MainMenuView::requestPackBeatmapTo(std::string path)
+{
+    path = applyPackSelectedFormatToPath(path);
+    if ( path.empty() || m_pendingPackageRelativePaths.empty() ) {
+        m_statusMessage      = "没有可打包的已选文件";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    dispatchCommand(Logic::CmdPackBeatmap{
+        .exportPath                   = path,
+        .selectedProjectRelativePaths = m_pendingPackageRelativePaths,
+    });
+    m_pendingPackageRelativePaths.clear();
 }
 
 /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
@@ -459,6 +592,302 @@ void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
     }
 }
 
+/// @brief 渲染打包目标格式选择弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
+{
+    constexpr const char* popupId = "选择打包格式###PackageFormatPickerModal";
+    if ( m_showPackageFormatPicker ) {
+        ImGui::OpenPopup(popupId);
+        m_showPackageFormatPicker = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    ImGui::SetNextWindowSize(ImVec2(380.0f * dpiScale, 0.0f),
+                             ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+
+    bool            hasSelection = false;
+    PackageFileType selectedType = m_selectedPackageFileType;
+    if ( ImGui::BeginPopupModal(
+             popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        ImGui::TextUnformatted("选择目标打包格式：");
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const ImVec2 buttonSize(320.0f * dpiScale, 0.0f);
+        if ( ImGui::Button(
+                 getPackageTypeDisplayName(PackageFileType::Mcz).c_str(),
+                 buttonSize) ) {
+            selectedType = PackageFileType::Mcz;
+            hasSelection = true;
+        }
+        if ( ImGui::Button(
+                 getPackageTypeDisplayName(PackageFileType::Osz).c_str(),
+                 buttonSize) ) {
+            selectedType = PackageFileType::Osz;
+            hasSelection = true;
+        }
+        if ( ImGui::Button(
+                 getPackageTypeDisplayName(PackageFileType::Mpk).c_str(),
+                 buttonSize) ) {
+            selectedType = PackageFileType::Mpk;
+            hasSelection = true;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if ( ImGui::Button(TR("ui.common.cancel").data(),
+                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+
+        if ( hasSelection ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if ( hasSelection ) {
+        m_selectedPackageFileType = selectedType;
+        rebuildPackageCandidateFiles();
+        m_showPackageFileSelectionWindow = true;
+    }
+}
+
+/// @brief 渲染打包文件复选列表窗口。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
+{
+    constexpr const char* popupId = "选择打包文件###PackageFileSelectionModal";
+    if ( m_showPackageFileSelectionWindow ) {
+        ImGui::OpenPopup(popupId);
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    ImGui::SetNextWindowSize(ImVec2(760.0f * dpiScale, 540.0f * dpiScale),
+                             ImGuiCond_Appearing);
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
+                            ImGuiCond_Appearing,
+                            ImVec2(0.5f, 0.5f));
+
+    bool requestOutputPicker = false;
+    bool closePopup          = false;
+    if ( ImGui::BeginPopupModal(
+             popupId, nullptr, ImGuiWindowFlags_NoCollapse) ) {
+        const auto selectedCount = static_cast<int>(std::count_if(
+            m_packageCandidateFiles.begin(),
+            m_packageCandidateFiles.end(),
+            [](const PackageCandidateFile& file) { return file.selected; }));
+        ImGui::Text(
+            "目标格式：%s",
+            getPackageTypeDisplayName(m_selectedPackageFileType).c_str());
+        ImGui::SameLine();
+        ImGui::Text("已选择：%d / %d",
+                    selectedCount,
+                    static_cast<int>(m_packageCandidateFiles.size()));
+
+        if ( ImGui::Button("全选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+            for ( auto& file : m_packageCandidateFiles ) {
+                file.selected = true;
+            }
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button("全不选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+            for ( auto& file : m_packageCandidateFiles ) {
+                file.selected = false;
+            }
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if ( m_packageCandidateFiles.empty() ) {
+            ImGui::TextUnformatted("没有找到符合当前打包格式规则的文件。");
+        } else {
+            if ( ImGui::BeginChild("PackageCandidateFilesChild",
+                                   ImVec2(0.0f, 360.0f * dpiScale),
+                                   true) ) {
+                constexpr ImGuiTableFlags tableFlags =
+                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+                if ( ImGui::BeginTable("PackageCandidateFilesTable",
+                                       3,
+                                       tableFlags,
+                                       ImVec2(0.0f, 0.0f)) ) {
+                    ImGui::TableSetupColumn("打包",
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            64.0f * dpiScale);
+                    ImGui::TableSetupColumn("类型",
+                                            ImGuiTableColumnFlags_WidthFixed,
+                                            72.0f * dpiScale);
+                    ImGui::TableSetupColumn("文件",
+                                            ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+
+                    for ( std::size_t index = 0;
+                          index < m_packageCandidateFiles.size();
+                          ++index ) {
+                        auto& file = m_packageCandidateFiles[index];
+                        ImGui::PushID(static_cast<int>(index));
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Checkbox("##PackageFileSelected",
+                                        &file.selected);
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(file.typeLabel.c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(file.relativePath.c_str());
+                        ImGui::PopID();
+                    }
+
+                    ImGui::EndTable();
+                }
+            }
+            ImGui::EndChild();
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const bool canPack = selectedCount > 0;
+        if ( !canPack ) ImGui::BeginDisabled();
+        if ( ImGui::Button("打包到...", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            m_pendingPackageRelativePaths =
+                collectSelectedPackageRelativePaths();
+            requestOutputPicker = true;
+            closePopup          = true;
+        }
+        if ( !canPack ) ImGui::EndDisabled();
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.common.cancel").data(),
+                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            closePopup = true;
+            m_pendingPackageRelativePaths.clear();
+        }
+
+        if ( closePopup ) {
+            m_showPackageFileSelectionWindow = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if ( requestOutputPicker ) {
+        openPackageOutputFilePicker();
+    }
+}
+
+/// @brief 按当前目标打包格式重建候选文件列表。
+void MainMenuView::rebuildPackageCandidateFiles()
+{
+    m_packageCandidateFiles.clear();
+
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) return;
+
+    const auto& types = getPackageSupportedFileTypes(m_selectedPackageFileType);
+    const auto& projectRoot = project->m_projectRoot;
+
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(projectRoot, filesystemError) ||
+         filesystemError ||
+         !std::filesystem::is_directory(projectRoot, filesystemError) ||
+         filesystemError ) {
+        m_statusMessage      = "扫描项目文件失败";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    constexpr auto directoryOptions =
+        std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator iterator(
+        projectRoot, directoryOptions, filesystemError);
+    const std::filesystem::recursive_directory_iterator endIterator;
+    if ( filesystemError ) {
+        m_statusMessage      = "扫描项目文件失败";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    while ( iterator != endIterator ) {
+        const auto& entry = *iterator;
+        if ( entry.is_regular_file(filesystemError) && !filesystemError ) {
+            const auto path = entry.path();
+            const auto extension =
+                toLowerAscii(Config::pathToUtf8(path.extension()));
+            const auto typeLabel =
+                getPackageCandidateTypeLabel(types, extension);
+            std::error_code relativeError;
+            const auto      relativePath =
+                std::filesystem::relative(path, projectRoot, relativeError);
+            if ( !typeLabel.empty() && !isPackageArchiveExtension(extension) &&
+                 !relativeError ) {
+                m_packageCandidateFiles.push_back(PackageCandidateFile{
+                    .relativePath = Config::pathToUtf8Generic(relativePath),
+                    .typeLabel    = typeLabel,
+                    .selected     = true,
+                });
+            }
+        }
+        filesystemError.clear();
+
+        iterator.increment(filesystemError);
+        if ( filesystemError ) {
+            m_statusMessage      = "扫描项目文件失败";
+            m_statusMessageTimer = 3.0f;
+            break;
+        }
+    }
+
+    std::sort(
+        m_packageCandidateFiles.begin(),
+        m_packageCandidateFiles.end(),
+        [](const PackageCandidateFile& lhs, const PackageCandidateFile& rhs) {
+            if ( lhs.typeLabel != rhs.typeLabel ) {
+                return lhs.typeLabel < rhs.typeLabel;
+            }
+            return lhs.relativePath < rhs.relativePath;
+        });
+}
+
+/// @brief 收集当前已勾选的项目相对文件路径。
+/// @return 已勾选的项目相对文件路径列表。
+std::vector<std::string>
+MainMenuView::collectSelectedPackageRelativePaths() const
+{
+    std::vector<std::string> selectedPaths;
+    selectedPaths.reserve(m_packageCandidateFiles.size());
+    for ( const auto& file : m_packageCandidateFiles ) {
+        if ( file.selected ) {
+            selectedPaths.push_back(file.relativePath);
+        }
+    }
+    return selectedPaths;
+}
+
+/// @brief 生成当前打包目标格式的默认输出文件名。
+/// @return 默认输出文件名。
+std::string MainMenuView::makePackageDefaultFileName() const
+{
+    std::string baseName = "map";
+    auto*       project  = Logic::EditorEngine::instance().getCurrentProject();
+    if ( project && !project->m_projectRoot.empty() ) {
+        baseName = Config::pathToUtf8(project->m_projectRoot.filename());
+    }
+    if ( baseName.empty() ) baseName = "map";
+    return sanitizeExportFileNamePart(baseName) +
+           getPackageExtension(m_selectedPackageFileType);
+}
+
 /// @brief 打开项目目录选择器并发布打开项目事件。
 void MainMenuView::openFolderPicker()
 {
@@ -487,29 +916,44 @@ void MainMenuView::openFolderPicker()
     }
 }
 
-/// @brief 打开谱面打包保存路径选择器。
+/// @brief 打开谱面打包流程。
 void MainMenuView::openPackFilePicker()
 {
+    m_packageCandidateFiles.clear();
+    m_pendingPackageRelativePaths.clear();
+    m_showPackageFileSelectionWindow = false;
+    m_showPackageFormatPicker        = true;
+}
+
+/// @brief 打开打包输出路径选择器。
+void MainMenuView::openPackageOutputFilePicker()
+{
     auto& config = Config::AppConfig::instance().getEditorSettings();
+    const std::string defaultFileName = makePackageDefaultFileName();
+    const std::string defaultPath     = getSaveAsPickerDefaultPath(config);
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        nfdu8char_t*      outPath    = nullptr;
-        nfdu8filteritem_t filters[1] = { { "Beatmap Package", "osz,mcz,zip" } };
-        nfdresult_t       result =
-            NFD_SaveDialogU8(&outPath, filters, 1, nullptr, "map.osz");
+        nfdu8char_t* outPath = nullptr;
+        const char*  packageFilter =
+            getNativePackageOutputFilterText(m_selectedPackageFileType);
+        nfdu8filteritem_t filters[1] = { { "Beatmap Package", packageFilter } };
+        nfdresult_t       result     = NFD_SaveDialogU8(
+            &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
 
         if ( result == NFD_OKAY ) {
-            dispatchCommand(Logic::CmdPackBeatmap{ outPath });
+            requestPackBeatmapTo(outPath);
             NFD_FreePath(outPath);
         }
     } else {
         IGFD::FileDialogConfig fdConfig;
-        fdConfig.path              = config.lastFilePickerPath;
+        fdConfig.path              = defaultPath;
         fdConfig.countSelectionMax = 1;
-        fdConfig.fileName          = "map.osz";
+        fdConfig.fileName          = defaultFileName;
         fdConfig.flags =
             ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+        const char* packageFilter =
+            getUnifiedPackageOutputFilterText(m_selectedPackageFileType);
         ImGuiFileDialog::Instance()->OpenDialog(
-            "PackFilePicker", TR("ui.file.pack"), ".osz,.mcz,.zip", fdConfig);
+            "PackFilePicker", TR("ui.file.pack"), packageFilter, fdConfig);
     }
 }
 

@@ -14,12 +14,17 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/project/PackageFileTypes.h"
 #include <stb_image.h>
 
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fmt/format.h>
+#include <fstream>
+#include <miniz.h>
+#include <unordered_set>
+#include <vector>
 
 namespace
 {
@@ -106,6 +111,160 @@ std::string formatStatusTime(double timeSeconds)
     case MMM::Config::TimeFormatPreference::Seconds:
     default: return fmt::format("{:.3f} s", timeSeconds);
     }
+}
+
+/// @brief 判断项目相对路径是否包含越界片段。
+/// @param relativePath 待检查的相对路径。
+/// @return 路径是否会逃逸项目根目录。
+bool packageRelativePathEscapesRoot(const std::filesystem::path& relativePath)
+{
+    if ( relativePath.empty() || relativePath.is_absolute() ||
+         relativePath.has_root_name() ) {
+        return true;
+    }
+    const auto normalizedPath = relativePath.lexically_normal();
+    for ( const auto& part : normalizedPath ) {
+        if ( part == std::filesystem::path("..") ) return true;
+    }
+    return false;
+}
+
+/// @brief 读取完整二进制文件。
+/// @param path 待读取文件路径。
+/// @param outBytes 输出文件字节。
+/// @return 是否读取成功。
+bool readPackageSourceFile(const std::filesystem::path& path,
+                           std::vector<std::uint8_t>&   outBytes)
+{
+    outBytes.clear();
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if ( !file ) return false;
+
+    const auto fileSize = file.tellg();
+    if ( fileSize < 0 ) return false;
+    file.seekg(0, std::ios::beg);
+
+    outBytes.resize(static_cast<std::size_t>(fileSize));
+    if ( outBytes.empty() ) return true;
+
+    file.read(reinterpret_cast<char*>(outBytes.data()),
+              static_cast<std::streamsize>(fileSize));
+    return file.good();
+}
+
+/// @brief 向指定路径写入二进制文件。
+/// @param path 输出文件路径。
+/// @param data 待写入数据指针。
+/// @param size 待写入字节数。
+/// @return 是否写入成功。
+bool writePackageOutputFile(const std::filesystem::path& path, const void* data,
+                            std::size_t size)
+{
+    std::error_code filesystemError;
+    const auto      parentPath = path.parent_path();
+    if ( !parentPath.empty() ) {
+        std::filesystem::create_directories(parentPath, filesystemError);
+        if ( filesystemError ) return false;
+    }
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if ( !file ) return false;
+    if ( size > 0 ) {
+        file.write(static_cast<const char*>(data),
+                   static_cast<std::streamsize>(size));
+    }
+    return file.good();
+}
+
+/// @brief 写入 zip 兼容的谱面包。
+/// @param projectRoot 当前项目根目录。
+/// @param outputPath 输出包路径。
+/// @param selectedRelativePaths 需要打包的项目相对路径列表。
+/// @param packageTypes 输出包格式对应的文件类型规则。
+/// @return 是否打包成功。
+bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
+                         const std::filesystem::path&    outputPath,
+                         const std::vector<std::string>& selectedRelativePaths,
+                         const MMM::PackageSupportedFileTypes& packageTypes)
+{
+    if ( selectedRelativePaths.empty() ) return false;
+
+    mz_zip_archive zipArchive{};
+    if ( !mz_zip_writer_init_heap(&zipArchive, 0, 0) ) {
+        return false;
+    }
+
+    bool                            success = true;
+    std::vector<std::uint8_t>       fileBytes;
+    std::unordered_set<std::string> archivedNames;
+    for ( const auto& relativeUtf8 : selectedRelativePaths ) {
+        const auto relativePath =
+            MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+        if ( packageRelativePathEscapesRoot(relativePath) ) {
+            XERROR("PackBeatmap: path escapes project root: {}", relativeUtf8);
+            success = false;
+            break;
+        }
+
+        const auto extension =
+            MMM::Config::pathToUtf8(relativePath.extension());
+        if ( !isPackageCandidateExtensionSupported(packageTypes, extension) ) {
+            XERROR("PackBeatmap: unsupported file extension: {}", relativeUtf8);
+            success = false;
+            break;
+        }
+
+        const auto sourcePath = (projectRoot / relativePath).lexically_normal();
+        std::error_code filesystemError;
+        if ( !std::filesystem::is_regular_file(sourcePath, filesystemError) ||
+             filesystemError ) {
+            XERROR("PackBeatmap: source file not found: {}", relativeUtf8);
+            success = false;
+            break;
+        }
+
+        std::string archiveName = MMM::Config::pathToUtf8Generic(relativePath);
+        if ( archiveName.empty() ||
+             !archivedNames.insert(archiveName).second ) {
+            continue;
+        }
+
+        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+            XERROR("PackBeatmap: failed to read source file: {}", relativeUtf8);
+            success = false;
+            break;
+        }
+
+        const void* fileData = fileBytes.empty() ? nullptr : fileBytes.data();
+        if ( !mz_zip_writer_add_mem(&zipArchive,
+                                    archiveName.c_str(),
+                                    fileData,
+                                    fileBytes.size(),
+                                    MZ_DEFAULT_COMPRESSION) ) {
+            XERROR("PackBeatmap: failed to add file to archive: {}",
+                   relativeUtf8);
+            success = false;
+            break;
+        }
+    }
+
+    void*       archiveBuffer = nullptr;
+    std::size_t archiveSize   = 0;
+    if ( success && !mz_zip_writer_finalize_heap_archive(
+                        &zipArchive, &archiveBuffer, &archiveSize) ) {
+        success = false;
+    }
+
+    mz_zip_writer_end(&zipArchive);
+
+    if ( success ) {
+        success =
+            writePackageOutputFile(outputPath, archiveBuffer, archiveSize);
+    }
+    if ( archiveBuffer ) {
+        mz_free(archiveBuffer);
+    }
+    return success;
 }
 }  // namespace
 
@@ -380,7 +539,46 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 {
-    // TODO: 实现打包逻辑
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) {
+        XERROR("PackBeatmap: no project is opened");
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path     = cmd.exportPath,
+            .success  = false,
+            .isExport = true,
+        });
+        return;
+    }
+
+    const auto  outputPath   = Config::utf8ToPath(cmd.exportPath);
+    const auto  extension    = Config::pathToUtf8(outputPath.extension());
+    const auto* packageTypes = findPackageSupportedFileTypes(extension);
+    if ( !packageTypes ) {
+        XERROR("PackBeatmap: unsupported package extension: {}",
+               cmd.exportPath);
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path     = cmd.exportPath,
+            .success  = false,
+            .isExport = true,
+        });
+        return;
+    }
+
+    const bool success = writeBeatmapPackage(project->m_projectRoot,
+                                             outputPath,
+                                             cmd.selectedProjectRelativePaths,
+                                             *packageTypes);
+    if ( success ) {
+        XINFO("PackBeatmap: package written to {}", cmd.exportPath);
+    } else {
+        XERROR("PackBeatmap: failed to write package {}", cmd.exportPath);
+    }
+
+    Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+        .path     = cmd.exportPath,
+        .success  = success,
+        .isExport = true,
+    });
 }
 
 void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)

@@ -306,7 +306,11 @@ struct CmdSaveBeatmapAs {
  * @brief 打包谱面指令
  */
 struct CmdPackBeatmap {
+    /// @brief 打包输出路径，使用 UTF-8 编码。
     std::string exportPath;
+
+    /// @brief 需要写入包内的项目相对文件路径列表，使用 UTF-8 编码。
+    std::vector<std::string> selectedProjectRelativePaths;
 };
 
 /**

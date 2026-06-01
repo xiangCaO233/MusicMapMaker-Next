@@ -55,17 +55,24 @@ moodycamel::ConcurrentQueue<SaveTooltipPayload>& getSaveTooltipQueue()
 /// @brief 根据保存结果事件构建用户可见的提示文本。
 std::string buildSaveTooltipMessage(const SaveTooltipPayload& payload)
 {
+    auto       path      = Config::utf8ToPath(payload.path);
+    const bool isPackage = findPackageSupportedFileTypes(
+                               Config::pathToUtf8(path.extension())) != nullptr;
     if ( !payload.success ) {
+        if ( isPackage ) return "打包失败";
         return payload.isExport ? "导出失败" : "保存失败";
     }
     if ( !payload.isExport ) {
         return TR("ui.status.beatmap.saved").data();
     }
 
-    auto        path     = Config::utf8ToPath(payload.path);
     std::string fileName = Config::pathToUtf8(path.filename());
     if ( fileName.empty() ) {
+        if ( isPackage ) return "打包成功";
         return "导出成功";
+    }
+    if ( isPackage ) {
+        return "打包 " + fileName + " 成功";
     }
     return "导出 " + fileName + " 成功";
 }
@@ -385,7 +392,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             openExportFilePicker("");
         }
 
-        if ( MenuItemWithFontIcon(ICON_MMM_PACK, TR("ui.file.pack")) ) {
+        if ( MenuItemWithFontIcon(
+                 ICON_MMM_PACK, TR("ui.file.pack"), nullptr, hasProject) ) {
             openPackFilePicker();
         }
         ImGui::EndMenu();
@@ -543,6 +551,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderNoteMetadataEditorWindow();
     renderExportFormatPickerPopup(dpiScale);
     renderExportCompatibilityWarningPopup(dpiScale);
+    renderPackageFormatPickerPopup(dpiScale);
+    renderPackageFileSelectionWindow(dpiScale);
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
