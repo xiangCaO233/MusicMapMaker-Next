@@ -28,6 +28,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -39,6 +40,56 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief 文件流程弹窗使用的全局审美样式作用域。
+class FileDialogPopupStyleScope
+{
+public:
+    /// @brief 按当前全局审美设置推入弹窗样式。
+    /// @param dpiScale 当前窗口内容缩放。
+    explicit FileDialogPopupStyleScope(float dpiScale)
+    {
+        const auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        const float windowRound =
+            std::floor(aesthetics.windowRounding * dpiScale);
+        const float frameRound =
+            std::floor(aesthetics.frameRounding * dpiScale);
+        const ImVec2 windowPadding{
+            std::floor(aesthetics.windowPadding * dpiScale),
+            std::floor(aesthetics.windowPadding * dpiScale),
+        };
+        const ImVec2 itemSpacing{
+            std::floor(aesthetics.itemSpacing * dpiScale),
+            std::floor(aesthetics.itemSpacing * dpiScale),
+        };
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+    }
+
+    /// @brief 恢复进入作用域前的 ImGui 样式。
+    ~FileDialogPopupStyleScope() { ImGui::PopStyleVar(STYLE_VAR_COUNT); }
+
+    /// @brief 禁止拷贝构造，避免重复弹出同一组 ImGui 样式。
+    FileDialogPopupStyleScope(const FileDialogPopupStyleScope&) = delete;
+    /// @brief 禁止拷贝赋值，避免作用域所有权语义不清。
+    FileDialogPopupStyleScope& operator=(const FileDialogPopupStyleScope&) =
+        delete;
+    /// @brief 禁止移动构造，确保样式弹出顺序与局部作用域一致。
+    FileDialogPopupStyleScope(FileDialogPopupStyleScope&&) = delete;
+    /// @brief 禁止移动赋值，确保样式作用域不被转移。
+    FileDialogPopupStyleScope& operator=(FileDialogPopupStyleScope&&) = delete;
+
+private:
+    /// @brief 构造函数中推入的样式变量数量。
+    static constexpr int STYLE_VAR_COUNT = 7;
+};
+
 /// @brief 将 ASCII 字符串转换为小写，用于扩展名判断。
 std::string toLowerAscii(std::string value)
 {
@@ -495,6 +546,7 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                             ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 
+    FileDialogPopupStyleScope popupStyle(dpiScale);
     if ( ImGui::BeginPopupModal(
              popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
         ImGui::Text("导出 %s 前需要确认以下兼容性变化：",
@@ -551,7 +603,8 @@ void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
                             ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 
-    std::string selectedExtension;
+    std::string               selectedExtension;
+    FileDialogPopupStyleScope popupStyle(dpiScale);
     if ( ImGui::BeginPopupModal(
              popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
         ImGui::TextUnformatted("选择另存为格式：");
@@ -610,8 +663,9 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
                             ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 
-    bool            hasSelection = false;
-    PackageFileType selectedType = m_selectedPackageFileType;
+    bool                      hasSelection = false;
+    PackageFileType           selectedType = m_selectedPackageFileType;
+    FileDialogPopupStyleScope popupStyle(dpiScale);
     if ( ImGui::BeginPopupModal(
              popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
         ImGui::TextUnformatted("选择目标打包格式：");
@@ -677,8 +731,9 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                             ImGuiCond_Appearing,
                             ImVec2(0.5f, 0.5f));
 
-    bool requestOutputPicker = false;
-    bool closePopup          = false;
+    bool                      requestOutputPicker = false;
+    bool                      closePopup          = false;
+    FileDialogPopupStyleScope popupStyle(dpiScale);
     if ( ImGui::BeginPopupModal(
              popupId, nullptr, ImGuiWindowFlags_NoCollapse) ) {
         const auto selectedCount = static_cast<int>(std::count_if(
