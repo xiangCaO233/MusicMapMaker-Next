@@ -238,12 +238,18 @@ struct Batcher {
             float w = it->second.z;
             float h = it->second.w;
 
-            const float texSize    = 2048.0f;
-            const float halfPixelU = 0.5f / texSize;
-            const float halfPixelV = 0.5f / texSize;
+            if ( currentTex == TextureID::None ) {
+                // 纯色几何只需要采样白色贴图中心，避免线性过滤混到图集透明边缘。
+                uvMin = glm::vec2(u + w * 0.5f, v + h * 0.5f);
+                uvMax = uvMin;
+            } else {
+                const float texSize    = 2048.0f;
+                const float halfPixelU = 0.5f / texSize;
+                const float halfPixelV = 0.5f / texSize;
 
-            uvMin = glm::vec2(u + halfPixelU, v + halfPixelV);
-            uvMax = glm::vec2(u + w - halfPixelU, v + h - halfPixelV);
+                uvMin = glm::vec2(u + halfPixelU, v + halfPixelV);
+                uvMax = glm::vec2(u + w - halfPixelU, v + h - halfPixelV);
+            }
         }
 
         v1.uv = { uvMin.x, uvMax.y };
