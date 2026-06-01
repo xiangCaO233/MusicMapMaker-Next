@@ -11,11 +11,11 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -360,8 +360,10 @@ private:
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
     bool needsCanvasCloseBeforeProjectOpen() const;
 
-    /// @brief 逻辑线程
-    std::thread m_thread;
+    /// @brief 逻辑循环在线程池中的任务句柄。
+    /// @warning 生命周期路径：仅在 start/stop
+    /// 低频路径写入；逻辑循环本身长期占用一个共享线程池工作线程。
+    std::future<void> m_loopFuture;
 
     /// @brief 线程运行标志
     /// @warning 逻辑热路径/原子：loop 每次迭代读取、stop

@@ -15,6 +15,7 @@ add_library(Game STATIC
 target_link_libraries(Game
 	PUBLIC
 		Log
+		Runtime
 		Common
 		UI
 		Canvas

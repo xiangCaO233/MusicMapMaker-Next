@@ -18,6 +18,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/DebugWindowUI.h"
@@ -165,6 +166,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
     // 初始化窗口
     // VKContext 表面资源后续初始化
     if ( g_vkContext ) {
+        Runtime::AppThreadPool::instance().init();
+
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
@@ -327,6 +330,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
         context.release();
+        Runtime::AppThreadPool::instance().shutdown();
         return EXIT_NORMAL;
     } else {
         return EXIT_WINDOW_EXEPTION;

@@ -15,6 +15,7 @@ target_link_libraries(Audio
 		ICE::IonCachyEngine
 		Log
 		Event
+		Runtime
 		3rd_rubberband
 		MMM
 		Config

@@ -340,7 +340,9 @@ private:
     ~AudioManager();
 
     /// @brief 音频后台线程池。
-    std::unique_ptr<ice::ThreadPool> m_threadPool;
+    /// @warning 生命周期由 Runtime::AppThreadPool 和 GameLoop
+    /// 管理；AudioManager 只在低频加载/解码路径解引用，不拥有也不释放。
+    ice::ThreadPool* m_threadPool{ nullptr };
 
     /// @brief 音频资源池，负责加载和缓存音频文件。
     std::unique_ptr<ice::AudioPool> m_audioPool;

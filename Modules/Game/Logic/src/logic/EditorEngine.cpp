@@ -13,11 +13,14 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <ice/thread/ThreadPool.hpp>
+#include <thread>
 
 namespace MMM::Logic
 {
@@ -771,7 +774,14 @@ void EditorEngine::start()
 
     m_running.store(true, std::memory_order_release);
 
-    m_thread = std::thread(&EditorEngine::loop, this);
+    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        m_running.store(false, std::memory_order_release);
+        XERROR("AppThreadPool is not initialized before EditorEngine::start.");
+        return;
+    }
+
+    m_loopFuture = appThreadPool->enqueue([this]() { loop(); });
     XINFO("EditorEngine logic thread started.");
 }
 
@@ -780,8 +790,9 @@ void EditorEngine::stop()
     ProjectController::instance().stopDirectoryWatcher();
 
     if ( m_running.exchange(false, std::memory_order_acq_rel) ) {
-        if ( m_thread.joinable() ) {
-            m_thread.join();
+        if ( m_loopFuture.valid() ) {
+            m_loopFuture.wait();
+            m_loopFuture = std::future<void>{};
         }
         XINFO("EditorEngine logic thread stopped.");
     }

@@ -114,6 +114,20 @@ public:
     void onRecordOffscreen(vk::CommandBuffer& cmd,
                            uint32_t           frameIndex) override;
 
+    /// @brief 获取当前帧可并行录制的离屏视图数量。
+    /// @return 当前可渲染视图序列的数量。
+    /// @warning 渲染热路径：每帧命令录制前调用，只读取稳定序列长度。
+    uint32_t getOffscreenRecordTaskCount() const override;
+
+    /// @brief 录制指定可渲染视图的离屏命令。
+    /// @param cmd 当前任务独占的命令缓冲。
+    /// @param frameIndex 当前并发帧索引。
+    /// @param taskIndex 可渲染视图序列索引。
+    /// @warning 渲染热路径：可能在渲染线程池中执行，只能读取 UIManager
+    /// 的稳定视图表并录制对应视图。
+    void onRecordOffscreenTask(vk::CommandBuffer& cmd, uint32_t frameIndex,
+                               uint32_t taskIndex) override;
+
 private:
     /// @brief 无项目时应用一次默认侧边栏工作区。
     void applyNoProjectDefaultWorkspace();

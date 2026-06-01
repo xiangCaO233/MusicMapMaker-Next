@@ -21,6 +21,56 @@ void VKRenderer::releaseCursorManager()
     m_cursorManager.reset();
 }
 
+/// @brief 确保离屏录制任务槽数量足够。
+/// @param taskCount 当前帧需要的任务槽数量。
+/// @warning 渲染热路径低频分支：只有可渲染视图数量增加时才创建 Vulkan command
+/// pool。
+void VKRenderer::ensureOffscreenRecordSlots(size_t taskCount)
+{
+    if ( taskCount <= m_offscreenRecordSlots.size() ) {
+        return;
+    }
+
+    const size_t oldSize = m_offscreenRecordSlots.size();
+    m_offscreenRecordSlots.resize(taskCount);
+
+    for ( size_t slotIndex = oldSize; slotIndex < taskCount; ++slotIndex ) {
+        vk::CommandPoolCreateInfo commandPoolCreateInfo;
+        commandPoolCreateInfo.setFlags(
+            vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+        m_offscreenRecordSlots[slotIndex].commandPool =
+            m_vkLogicalDevice.createCommandPool(commandPoolCreateInfo).value;
+
+        vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
+        commandBufferAllocateInfo
+            .setCommandPool(m_offscreenRecordSlots[slotIndex].commandPool)
+            .setCommandBufferCount(MAX_FRAMES_IN_FLIGHT)
+            .setLevel(vk::CommandBufferLevel::ePrimary);
+        m_offscreenRecordSlots[slotIndex].commandBuffers =
+            m_vkLogicalDevice.allocateCommandBuffers(commandBufferAllocateInfo)
+                .value;
+    }
+
+    XDEBUG("Prepared {} offscreen record command slot(s).", taskCount);
+}
+
+/// @brief 释放离屏命令录制任务槽资源。
+/// @warning 不可中断操作：只能在 GPU idle 后的渲染器销毁路径调用。
+void VKRenderer::releaseOffscreenRecordResources()
+{
+    m_offscreenRecordTasks.clear();
+    m_frameSubmitCommandBuffers.clear();
+
+    for ( auto& slot : m_offscreenRecordSlots ) {
+        if ( slot.commandPool ) {
+            m_vkLogicalDevice.destroyCommandPool(slot.commandPool);
+            slot.commandPool = VK_NULL_HANDLE;
+        }
+        slot.commandBuffers.clear();
+    }
+    m_offscreenRecordSlots.clear();
+}
+
 /**
  * @brief 创建命令池
  */

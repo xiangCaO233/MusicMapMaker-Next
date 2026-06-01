@@ -9,13 +9,13 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace ice
@@ -454,8 +454,15 @@ private:
     /// @brief 频谱对数频率映射偏置。
     double m_logFrequencyBias{ 6.91 };
 
-    /// @brief 后台分析线程。
-    std::unique_ptr<std::jthread> m_analysisThread;
+    /// @brief 后台分析在线程池中的任务句柄。
+    /// @warning 生命周期路径：仅由重新分析或窗口销毁触发写入；任务体不在 UI
+    /// 热路径执行。
+    std::future<void> m_analysisFuture;
+
+    /// @brief 后台分析停止请求源。
+    /// @warning 跨线程停止信号：UI
+    /// 线程低频写入，后台分析任务分段读取，只承载取消标志。
+    std::stop_source m_analysisStopSource;
 
     /// @brief 后台分析结果互斥锁。
     mutable std::mutex m_pendingResultMutex;

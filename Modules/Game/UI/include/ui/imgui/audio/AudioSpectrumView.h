@@ -4,8 +4,9 @@
 #include "ui/ITextureLoader.h"
 #include <atomic>
 #include <fftw3.h>
+#include <future>
 #include <memory>
-#include <thread>
+#include <stop_token>
 #include <vector>
 
 namespace ice
@@ -70,8 +71,8 @@ private:
     /// @param detailLevel 计算时捕获的频谱精细度枚举。
     /// @param detailProfile 计算时捕获的频谱精细度参数。
     /// @warning 后台耗时路径：执行完整音频 FFT 计算，不在 UI/渲染热路径运行。
-    void backgroundRecalculate(const EQSettings& eq, float maxFreq,
-                               float                         logBias,
+    void backgroundRecalculate(std::stop_token stopToken, const EQSettings& eq,
+                               float maxFreq, float logBias,
                                Config::SpectrumDetailLevel   detailLevel,
                                Config::SpectrumDetailProfile detailProfile);
 
@@ -122,8 +123,15 @@ private:
 
     // --- 异步计算状态 ---
 
-    /// @brief 后台计算线程
-    std::unique_ptr<std::jthread> m_calcThread;
+    /// @brief 后台计算在线程池中的任务句柄。
+    /// @warning 生命周期路径：仅由用户触发重算或窗口销毁时写入；任务体不在 UI
+    /// 热路径执行。
+    std::future<void> m_calcFuture;
+
+    /// @brief 后台计算停止请求源。
+    /// @warning 跨线程停止信号：UI 线程低频写入，后台 FFT
+    /// 任务分段读取，只承载取消标志。
+    std::stop_source m_calcStopSource;
 
     /// @brief 是否正在后台计算
     std::atomic<bool> m_isCalculating{ false };

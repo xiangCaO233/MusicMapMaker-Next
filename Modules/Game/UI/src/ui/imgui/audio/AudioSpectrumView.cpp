@@ -11,18 +11,22 @@
 #include "implot.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <fftw3.h>
 #include <ice/config/config.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <ice/thread/ThreadPool.hpp>
+#include <latch>
 #include <mutex>
-#include <thread>
+#include <utility>
 
 #ifndef M_PI
 #    define M_PI 3.14159265358979323846
@@ -69,11 +73,11 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
 
 AudioSpectrumView::~AudioSpectrumView()
 {
-    if ( m_calcThread && m_calcThread->joinable() ) {
-        m_calcThread->request_stop();
-        m_calcThread->join();
+    if ( m_calcFuture.valid() ) {
+        m_calcStopSource.request_stop();
+        m_calcFuture.wait();
+        m_calcFuture = std::future<void>{};
     }
-    m_calcThread.reset();
 
     auto context = Graphic::VKContext::get();
     if ( context ) {
@@ -665,8 +669,9 @@ void AudioSpectrumView::startAsyncRecalculate()
 {
     if ( m_isCalculating.load() ) return;
 
-    if ( m_calcThread && m_calcThread->joinable() ) {
-        m_calcThread->join();
+    if ( m_calcFuture.valid() ) {
+        m_calcFuture.wait();
+        m_calcFuture = std::future<void>{};
     }
 
     auto&      audioManager = Audio::AudioManager::instance();
@@ -689,21 +694,37 @@ void AudioSpectrumView::startAsyncRecalculate()
         Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
     const auto detailProfile = Config::spectrumDetailProfile(detailLevel);
 
-    m_calcThread = std::make_unique<std::jthread>([this,
-                                                   eq      = std::move(eq),
-                                                   maxFreq = m_maxFreq,
-                                                   logBias = m_logBias,
-                                                   detailLevel,
-                                                   detailProfile]() {
-        backgroundRecalculate(eq, maxFreq, logBias, detailLevel, detailProfile);
+    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        m_isCalculating.store(false);
+        XERROR("AppThreadPool is not initialized before spectrum calculation.");
+        return;
+    }
+
+    m_calcStopSource                = std::stop_source{};
+    const std::stop_token stopToken = m_calcStopSource.get_token();
+    m_calcFuture = appThreadPool->enqueue([this,
+                                           stopToken,
+                                           eq      = std::move(eq),
+                                           maxFreq = m_maxFreq,
+                                           logBias = m_logBias,
+                                           detailLevel,
+                                           detailProfile]() {
+        backgroundRecalculate(
+            stopToken, eq, maxFreq, logBias, detailLevel, detailProfile);
     });
 }
 
 void AudioSpectrumView::backgroundRecalculate(
-    const EQSettings& eq, float maxFreq, float logBias,
-    Config::SpectrumDetailLevel   detailLevel,
+    std::stop_token stopToken, const EQSettings& eq, float maxFreq,
+    float logBias, Config::SpectrumDetailLevel detailLevel,
     Config::SpectrumDetailProfile detailProfile)
 {
+    if ( stopToken.stop_requested() ) {
+        m_isCalculating.store(false);
+        return;
+    }
+
     auto& audioManager = Audio::AudioManager::instance();
     auto  track        = audioManager.getBGMTrack();
     if ( !track ) {
@@ -721,9 +742,9 @@ void AudioSpectrumView::backgroundRecalculate(
     const int    fftSize = 2048;
     const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 
-    unsigned int hwThreads = std::thread::hardware_concurrency();
-    unsigned int numWorkers =
-        std::max(1u, static_cast<unsigned int>(hwThreads * 0.8));
+    auto*     appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
+    const int numWorkers    = std::max<int>(
+        1, MMM::Runtime::AppThreadPool::instance().requestedWorkerCount());
 
     XINFO(
         "Spectrum async recalculate: {} workers, {} segments, {} bins, "
@@ -781,6 +802,10 @@ void AudioSpectrumView::backgroundRecalculate(
         }
 
         for ( int t = startSeg; t < endSeg; ++t ) {
+            if ( stopToken.stop_requested() ) {
+                break;
+            }
+
             size_t startFrame = static_cast<size_t>(t) * hopSize;
             if ( startFrame + fftSize > track->num_frames() ) break;
 
@@ -849,25 +874,54 @@ void AudioSpectrumView::backgroundRecalculate(
     };
 
     auto runChannel = [&](int chIdx, std::vector<double>& heatmap) {
-        std::vector<std::thread> workers;
-        int segsPerWorker = (numTotalSegments + numWorkers - 1) / numWorkers;
+        if ( stopToken.stop_requested() ) {
+            return;
+        }
 
-        for ( unsigned int w = 0; w < numWorkers; ++w ) {
+        const int segsPerWorker =
+            (numTotalSegments + numWorkers - 1) / numWorkers;
+        std::vector<std::pair<int, int>> ranges;
+        ranges.reserve(static_cast<size_t>(numWorkers));
+
+        for ( int w = 0; w < numWorkers; ++w ) {
             int startSeg = w * segsPerWorker;
             int endSeg   = std::min(startSeg + segsPerWorker, numTotalSegments);
             if ( startSeg >= numTotalSegments ) break;
-
-            workers.emplace_back(
-                processChannel, chIdx, std::ref(heatmap), startSeg, endSeg);
+            ranges.emplace_back(startSeg, endSeg);
         }
 
-        for ( auto& t : workers ) t.join();
+        if ( ranges.empty() ) {
+            return;
+        }
+
+        if ( !appThreadPool || ranges.size() <= 1 ) {
+            const auto [startSeg, endSeg] = ranges.front();
+            processChannel(chIdx, heatmap, startSeg, endSeg);
+            return;
+        }
+
+        std::latch done(static_cast<std::ptrdiff_t>(ranges.size()));
+        for ( const auto [startSeg, endSeg] : ranges ) {
+            appThreadPool->enqueue_void([&, chIdx, startSeg, endSeg]() {
+                processChannel(chIdx, heatmap, startSeg, endSeg);
+                done.count_down();
+            });
+        }
+        done.wait();
     };
 
     runChannel(0, heatmapL);
+    if ( stopToken.stop_requested() ) {
+        m_isCalculating.store(false);
+        return;
+    }
 
     if ( numChannels > 1 ) {
         runChannel(1, heatmapR);
+        if ( stopToken.stop_requested() ) {
+            m_isCalculating.store(false);
+            return;
+        }
     } else {
         heatmapR = heatmapL;
     }

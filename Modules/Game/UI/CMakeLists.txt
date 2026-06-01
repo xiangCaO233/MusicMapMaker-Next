@@ -55,6 +55,7 @@ target_link_libraries(UI
     Event
     Config
     MMM
+    Runtime
     Graphic
     3rd_glm
     3rd_imgui

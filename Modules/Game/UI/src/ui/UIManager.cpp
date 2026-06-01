@@ -561,11 +561,43 @@ void UIManager::onUpdateUI()
 /// 热路径：每帧命令录制阶段执行；只允许遍历可渲染视图序列并委托录制命令。
 void UIManager::onRecordOffscreen(vk::CommandBuffer& cmd, uint32_t frameIndex)
 {
-    for ( const auto& name : m_renderableUiSequence ) {
-        auto renderableView = m_uiviews[name]->asRenderableView();
-        if ( renderableView ) {
-            renderableView->recordCmds(cmd, frameIndex);
-        }
+    const uint32_t taskCount = getOffscreenRecordTaskCount();
+    for ( uint32_t taskIndex = 0; taskIndex < taskCount; ++taskIndex ) {
+        onRecordOffscreenTask(cmd, frameIndex, taskIndex);
+    }
+}
+
+/// @brief 获取当前帧可并行录制的离屏视图数量。
+/// @return 当前可渲染视图序列的数量。
+/// @warning 渲染热路径：每帧命令录制前调用，只读取稳定序列长度。
+uint32_t UIManager::getOffscreenRecordTaskCount() const
+{
+    return static_cast<uint32_t>(m_renderableUiSequence.size());
+}
+
+/// @brief 录制指定可渲染视图的离屏命令。
+/// @param cmd 当前任务独占的命令缓冲。
+/// @param frameIndex 当前并发帧索引。
+/// @param taskIndex 可渲染视图序列索引。
+/// @warning 渲染热路径：可能在渲染线程池中执行，只能读取 UIManager
+/// 的稳定视图表并录制对应视图。
+void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
+                                      uint32_t frameIndex, uint32_t taskIndex)
+{
+    if ( taskIndex >= m_renderableUiSequence.size() ) {
+        return;
+    }
+
+    const auto& name  = m_renderableUiSequence[taskIndex];
+    const auto& views = m_uiviews;
+    auto        it    = views.find(name);
+    if ( it == views.end() ) {
+        return;
+    }
+
+    auto renderableView = it->second->asRenderableView();
+    if ( renderableView ) {
+        renderableView->recordCmds(cmd, frameIndex);
     }
 }
 

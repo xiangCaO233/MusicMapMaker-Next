@@ -7,9 +7,13 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <ice/thread/ThreadPool.hpp>
+#include <latch>
 
 #ifdef _WIN32
 #    define GLFW_EXPOSE_NATIVE_WIN32
@@ -346,6 +350,19 @@ void VKRenderer::render(NativeWindow&                window,
     ImGui::Render();  // 生成imgui绘制顶点数据
     const auto imguiRenderEnd = RenderProfileClock::now();
 
+    m_offscreenRecordTasks.clear();
+    for ( auto& graphicUserHook : graphicUserHooks ) {
+        if ( !graphicUserHook ) {
+            continue;
+        }
+
+        const uint32_t taskCount =
+            graphicUserHook->getOffscreenRecordTaskCount();
+        for ( uint32_t taskIndex = 0; taskIndex < taskCount; ++taskIndex ) {
+            m_offscreenRecordTasks.push_back({ graphicUserHook, taskIndex });
+        }
+    }
+
     const auto commandSetupStart = RenderProfileClock::now();
 
     // 重置命令缓冲
@@ -371,15 +388,53 @@ void VKRenderer::render(NativeWindow&                window,
     clearValues[0].setColor(clearColorValue);
     clearValues[1].setDepthStencil({ 1.0f, 0 });
 
+    auto* offscreenRecordThreadPool =
+        MMM::Runtime::AppThreadPool::instance().get();
+    const bool useParallelOffscreenRecord =
+        offscreenRecordThreadPool && m_offscreenRecordTasks.size() > 1;
+    if ( useParallelOffscreenRecord ) {
+        ensureOffscreenRecordSlots(m_offscreenRecordTasks.size());
+    }
+
     // 命令录制
     (void)currentCmdBuffer.begin(commandBufferBeginInfo);
     const auto commandSetupEnd = RenderProfileClock::now();
 
     // 录制所有离屏渲染命令
-    const auto offscreenStart = RenderProfileClock::now();
-    for ( auto& graphicUserHook : graphicUserHooks ) {
-        graphicUserHook->onRecordOffscreen(currentCmdBuffer,
-                                           (uint32_t)m_currentFrameIndex);
+    const auto     offscreenStart = RenderProfileClock::now();
+    const uint32_t recordFrameIndex =
+        static_cast<uint32_t>(m_currentFrameIndex);
+    if ( useParallelOffscreenRecord ) {
+        std::latch offscreenLatch(
+            static_cast<std::ptrdiff_t>(m_offscreenRecordTasks.size()));
+        for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
+              ++taskSlot ) {
+            const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
+            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
+                                            .commandBuffers[recordFrameIndex];
+            offscreenRecordThreadPool->enqueue_void(
+                [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {
+                    (void)taskCmd.reset();
+                    vk::CommandBufferBeginInfo taskBeginInfo;
+                    taskBeginInfo.setFlags(
+                        vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+                    (void)taskCmd.begin(taskBeginInfo);
+                    if ( task.hook ) {
+                        task.hook->onRecordOffscreenTask(
+                            taskCmd, recordFrameIndex, task.taskIndex);
+                    }
+                    (void)taskCmd.end();
+                    offscreenLatch.count_down();
+                });
+        }
+        offscreenLatch.wait();
+    } else {
+        for ( const auto& task : m_offscreenRecordTasks ) {
+            if ( task.hook ) {
+                task.hook->onRecordOffscreenTask(
+                    currentCmdBuffer, recordFrameIndex, task.taskIndex);
+            }
+        }
     }
     const auto offscreenEnd = RenderProfileClock::now();
 
@@ -417,6 +472,17 @@ void VKRenderer::render(NativeWindow&                window,
     (void)currentCmdBuffer.end();  // 结束命令录制
     const auto mainRecordEnd = RenderProfileClock::now();
 
+    m_frameSubmitCommandBuffers.clear();
+    if ( useParallelOffscreenRecord ) {
+        for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
+              ++taskSlot ) {
+            m_frameSubmitCommandBuffers.push_back(
+                m_offscreenRecordSlots[taskSlot]
+                    .commandBuffers[recordFrameIndex]);
+        }
+    }
+    m_frameSubmitCommandBuffers.push_back(currentCmdBuffer);
+
     // 准备等待的阶段掩码
     // 这表示：在流水线的“颜色附件输出”阶段等待信号量
     // 也就是说，可以在图像还没准备好时就开始执行顶点着色器，
@@ -428,7 +494,7 @@ void VKRenderer::render(NativeWindow&                window,
     vk::SubmitInfo submitInfo;
     submitInfo
         // 设置命令缓冲区
-        .setCommandBuffers(currentCmdBuffer)
+        .setCommandBuffers(m_frameSubmitCommandBuffers)
         // 等待信号量
         .setWaitSemaphores(m_imageAvailableSems[m_currentFrameIndex])
         // 设置等待的阶段掩码

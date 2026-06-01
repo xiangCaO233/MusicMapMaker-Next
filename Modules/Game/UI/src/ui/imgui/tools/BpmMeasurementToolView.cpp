@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -24,6 +25,7 @@
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <numeric>
 
@@ -1948,15 +1950,24 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
     const auto spectrumProfile = Config::spectrumDetailProfile(
         Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel);
 
-    m_analysisThread = std::make_unique<std::jthread>(
-        [this,
-         track    = std::move(track),
-         duration = m_duration,
-         autoMeasure,
-         spectrumProfile](std::stop_token stopToken) {
-            analyzeTrack(
-                stopToken, track, duration, autoMeasure, spectrumProfile);
-        });
+    auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !appThreadPool ) {
+        m_analysisRunning.store(false, std::memory_order_relaxed);
+        m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
+        XERROR("AppThreadPool is not initialized before BPM analysis.");
+        return;
+    }
+
+    m_analysisStopSource            = std::stop_source{};
+    const std::stop_token stopToken = m_analysisStopSource.get_token();
+    m_analysisFuture = appThreadPool->enqueue([this,
+                                               stopToken,
+                                               track    = std::move(track),
+                                               duration = m_duration,
+                                               autoMeasure,
+                                               spectrumProfile]() {
+        analyzeTrack(stopToken, track, duration, autoMeasure, spectrumProfile);
+    });
 }
 
 /// @brief 请求自动测量当前选择的音频轨道。
@@ -1997,11 +2008,11 @@ std::string BpmMeasurementToolView::defaultAudioTrackId() const
 /// 不可中断低频路径：会等待后台线程退出，只能在关闭窗口或重新选择音轨时执行。
 void BpmMeasurementToolView::stopAnalysisWorker()
 {
-    if ( m_analysisThread && m_analysisThread->joinable() ) {
-        m_analysisThread->request_stop();
-        m_analysisThread->join();
+    if ( m_analysisFuture.valid() ) {
+        m_analysisStopSource.request_stop();
+        m_analysisFuture.wait();
+        m_analysisFuture = std::future<void>{};
     }
-    m_analysisThread.reset();
     m_analysisRunning.store(false, std::memory_order_relaxed);
 }
 

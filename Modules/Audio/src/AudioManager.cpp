@@ -5,6 +5,7 @@
 #include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
+#include "runtime/AppThreadPool.h"
 
 #include <algorithm>
 #include <chrono>
@@ -19,7 +20,6 @@
 #include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/out/play/sdl/SDLPlayer.hpp>
-#include <ice/thread/ThreadPool.hpp>
 
 namespace MMM::Audio
 {
@@ -59,9 +59,12 @@ void AudioManager::init()
     XINFO("Initializing AudioManager...");
     ice::SDLPlayer::init_backend();
 
-    m_threadPool = std::make_unique<ice::ThreadPool>(4);
-    m_audioPool  = std::make_unique<ice::AudioPool>();
-    m_player     = std::make_unique<ice::SDLPlayer>();
+    m_threadPool = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !m_threadPool ) {
+        XERROR("AppThreadPool is not initialized before AudioManager::init.");
+    }
+    m_audioPool = std::make_unique<ice::AudioPool>();
+    m_player    = std::make_unique<ice::SDLPlayer>();
 
     m_mainMixer         = std::make_shared<ice::MixBus>();
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
@@ -93,7 +96,7 @@ void AudioManager::shutdown()
     m_preStretcherMixer.reset();
     m_player.reset();
     m_audioPool.reset();
-    m_threadPool.reset();
+    m_threadPool = nullptr;
     XINFO("AudioManager shutdown.");
 }
 
