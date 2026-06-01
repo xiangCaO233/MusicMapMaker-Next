@@ -2,7 +2,6 @@
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -21,19 +20,6 @@
 
 namespace MMM::UI
 {
-
-/// @brief 测量设置项标签文本的像素宽度。
-/// @param label 需要测量的标签文本。
-/// @return 标签文本在当前内容字体下的宽度。
-float SettingsView::measureLabelWidth(const char* label)
-{
-    auto&   skinMgr = Config::SkinManager::instance();
-    ImFont* font    = skinMgr.getFont("content");
-    if ( !font ) font = ImGui::GetFont();
-    float  fontSize = font->LegacySize * font->Scale;
-    ImVec2 sz       = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, label);
-    return sz.x;
-}
 
 /// @brief 添加一行标准设置项。
 /// @param parent 接收该行的父级纵向布局。

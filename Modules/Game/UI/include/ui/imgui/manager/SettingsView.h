@@ -59,6 +59,54 @@ public:
     void* getActualInstance() override { return this; }
 
 private:
+    /// @brief 设置窗口布局测量缓存。
+    struct LayoutMetricsCache {
+        /// @brief 缓存是否可用。
+        bool valid{ false };
+
+        /// @brief 缓存对应的设置页。
+        Event::SettingsTab tab{ Event::SettingsTab::Software };
+
+        /// @brief 缓存对应的窗口内容缩放。
+        float dpiScale{ 1.0f };
+
+        /// @brief 缓存对应的语言。
+        std::string language;
+
+        /// @brief 缓存对应的 ASCII 字体选择。
+        std::string preferredAsciiFont;
+
+        /// @brief 缓存对应的 CJK 字体选择。
+        std::string preferredCjkFont;
+
+        /// @brief 缓存对应的字体倍率。
+        float fontSizeMultiplier{ 1.0f };
+
+        /// @brief 缓存对应的 UI 缩放倍率。
+        float uiScaleMultiplier{ 1.0f };
+
+        /// @brief 缓存对应的窗口内边距。
+        float windowPadding{ 0.0f };
+
+        /// @brief 缓存对应的控件间距。
+        float itemSpacing{ 0.0f };
+
+        /// @brief 缓存对应的皮肤侧栏基础宽度。
+        std::string sidebarWidthConfig;
+
+        /// @brief 分类侧栏宽度。
+        float categorySidebarWidth{ 0.0f };
+
+        /// @brief 当前设置页标签列宽度。
+        float tabLabelWidth{ 0.0f };
+
+        /// @brief 当前设置页控件列最小宽度。
+        float tabWidgetWidth{ 0.0f };
+
+        /// @brief 当前设置页最小窗口尺寸。
+        ImVec2 minWindowSize{ 0.0f, 0.0f };
+    };
+
     /// @brief 当前激活的设置分类页。
     Event::SettingsTab m_currentTab = Event::SettingsTab::Software;
 
@@ -89,8 +137,22 @@ private:
     /// @brief 下一帧是否尝试将设置窗口停靠到主编辑区中心。
     bool m_dockToCenterNextFrame{ true };
 
+    /// @brief 布局测量缓存，避免设置窗口每帧重复测量大量文本。
+    mutable LayoutMetricsCache m_layoutMetricsCache;
+
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
+
+    /// @brief 获取当前设置页布局测量缓存。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 与当前语言、字体、缩放和设置页匹配的布局测量结果。
+    /// @warning UI 热路径：仅在语言、字体、缩放或设置页变化时重新测量。
+    const LayoutMetricsCache& getLayoutMetrics(float dpiScale) const;
+
+    /// @brief 获取当前设置页标签列宽度。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 当前设置页标签列宽度。
+    float getCurrentTabLabelWidth(float dpiScale) const;
 
     /// @brief 计算设置窗口当前内容所需的最小整窗尺寸。
     /// @param dpiScale 当前窗口内容缩放。
@@ -126,11 +188,6 @@ private:
     /// @param index 段落布局缓存索引。
     /// @return 可复用的纵向段落布局。
     CLayVBox& getSection(size_t index);
-
-    /// @brief 测量标签文本的像素宽度。
-    /// @param label 标签文本。
-    /// @return 当前字体下的标签宽度。
-    float measureLabelWidth(const char* label);
 
     /// @brief 添加一个设置项行（标签 + 控件）。
     /// @param parent 接收设置行的父级布局。

@@ -33,30 +33,9 @@ void SettingsView::drawEditorSettings()
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
-    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
-    // Seg 完美垂直对齐！
-    const char* allEditorLabels[] = {
-        TR_CACHE("ui.settings.editor.reverse_scroll").data(),
-        TR_CACHE("ui.settings.editor.scroll_snap").data(),
-        TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
-            .data(),
-        TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path").data(),
-        TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
-        TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
-        TR_CACHE("ui.settings.editor.beat_divisor").data(),
-        TR_CACHE("ui.settings.editor.selection").data(),
-        TR_CACHE("ui.settings.editor.selection.thickness").data(),
-        TR_CACHE("ui.settings.editor.selection.rounding").data(),
-        TR_CACHE("ui.settings.editor.sfx_strategy").data(),
-        TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
-        TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
-        TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
-    };
-    float maxLabelW = 0;
-    for ( auto* l : allEditorLabels ) {
-        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-    }
-    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
+    // 使用布局缓存中的统一标签列宽，避免设置页每帧重复测量全部标签。
+    const float maxLabelW = getCurrentTabLabelWidth(
+        Config::AppConfig::instance().getWindowContentScale());
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +

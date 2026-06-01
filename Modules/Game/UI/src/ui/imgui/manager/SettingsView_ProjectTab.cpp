@@ -111,8 +111,8 @@ void SettingsView::drawProjectSettings()
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.project.info").data(), true) ) {
         std::string projPath = Config::pathToUtf8(project->m_projectRoot);
-        float       labelW =
-            measureLabelWidth(TR_CACHE("ui.settings.project.path").data()) + 8;
+        const float labelW   = getCurrentTabLabelWidth(
+            Config::AppConfig::instance().getWindowContentScale());
         addSettingItem(
             *sec,
             rowIndex,

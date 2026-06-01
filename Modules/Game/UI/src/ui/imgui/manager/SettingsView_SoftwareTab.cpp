@@ -33,42 +33,9 @@ void SettingsView::drawSoftwareSettings()
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
-    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
-    // Seg 完美垂直对齐！
-    const char* allSoftwareLabels[] = {
-        TR_CACHE("ui.settings.software.language").data(),
-        TR_CACHE("ui.settings.software.framelimit").data(),
-        TR_CACHE("ui.settings.software.theme").data(),
-        TR_CACHE("ui.settings.software.font.ascii").data(),
-        TR_CACHE("ui.settings.software.font.cjk").data(),
-        TR_CACHE("ui.settings.software.ui_scale.multiplier").data(),
-        TR_CACHE("ui.settings.software.font.multiplier").data(),
-        TR_CACHE("ui.settings.editor.cursor_style").data(),
-        TR_CACHE("ui.settings.software.cursor_size").data(),
-        TR_CACHE("ui.settings.software.trail_size").data(),
-        TR_CACHE("ui.settings.software.trail_life").data(),
-        TR_CACHE("ui.settings.software.smoke_size").data(),
-        TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
-        TR_CACHE("ui.settings.software.smoke_life").data(),
-        TR_CACHE("ui.settings.software.aesthetics.window_rounding").data(),
-        TR_CACHE("ui.settings.software.aesthetics.frame_rounding").data(),
-        TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
-        TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
-        TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
-        TR_CACHE("ui.settings.software.picker_style").data(),
-        TR_CACHE("ui.settings.software.save_format").data(),
-        TR_CACHE("ui.settings.software.time_format").data(),
-        TR_CACHE("ui.settings.software.recent_limit").data(),
-        TR_CACHE("ui.settings.software.sync_mode").data(),
-        TR_CACHE("ui.settings.software.sync_factor").data(),
-        TR_CACHE("ui.settings.software.sync_buffer").data(),
-        TR_CACHE("ui.settings.software.sync_interval").data()
-    };
-    float maxLabelW = 0;
-    for ( auto* l : allSoftwareLabels ) {
-        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-    }
-    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
+    // 使用布局缓存中的统一标签列宽，避免设置页每帧重复测量全部标签。
+    const float maxLabelW = getCurrentTabLabelWidth(
+        Config::AppConfig::instance().getWindowContentScale());
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +

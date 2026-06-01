@@ -85,32 +85,9 @@ void SettingsView::drawBeatmapSettings()
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
-    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
-    // Seg 完美垂直对齐！
-    const char* allBeatmapLabels[] = {
-        TR_CACHE("ui.settings.beatmap.name").data(),
-        TR_CACHE("ui.settings.beatmap.title").data(),
-        TR_CACHE("ui.settings.beatmap.title_unicode").data(),
-        TR_CACHE("ui.settings.beatmap.artist").data(),
-        TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
-        TR_CACHE("ui.settings.beatmap.mapper").data(),
-        TR_CACHE("ui.settings.beatmap.version").data(),
-        TR_CACHE("ui.settings.beatmap.path").data(),
-        TR_CACHE("ui.settings.beatmap.cover_type").data(),
-        TR_CACHE("ui.settings.beatmap.video_start").data(),
-        TR_CACHE("ui.settings.beatmap.bg_offset").data(),
-        TR_CACHE("ui.settings.beatmap.bpm").data(),
-        TR_CACHE("ui.settings.beatmap.tracks").data(),
-        TR_CACHE("ui.settings.beatmap.length").data(),
-        TR_CACHE("ui.settings.beatmap.audio").data(),
-        TR_CACHE("ui.settings.beatmap.cover").data(),
-        TR_CACHE("ui.settings.beatmap.background").data()
-    };
-    float maxLabelW = 0;
-    for ( auto* l : allBeatmapLabels ) {
-        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-    }
-    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
+    // 使用布局缓存中的统一标签列宽，避免设置页每帧重复测量全部标签。
+    const float maxLabelW = getCurrentTabLabelWidth(
+        Config::AppConfig::instance().getWindowContentScale());
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +

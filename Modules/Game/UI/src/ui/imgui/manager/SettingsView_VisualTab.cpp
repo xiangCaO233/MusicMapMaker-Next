@@ -36,43 +36,9 @@ void SettingsView::drawVisualSettings()
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
 
-    // 收集本面板所有 Segments 的全部标签，计算统一的全局最大标签宽度，确保跨
-    // Seg 完美垂直对齐！
-    const char* allVisualLabels[] = {
-        TR_CACHE("ui.settings.visual.layout_left").data(),
-        TR_CACHE("ui.settings.visual.layout_top").data(),
-        TR_CACHE("ui.settings.visual.layout_right").data(),
-        TR_CACHE("ui.settings.visual.layout_bottom").data(),
-        TR_CACHE("ui.settings.visual.layout_box_width").data(),
-        TR_CACHE("ui.settings.visual.judgeline_pos").data(),
-        TR_CACHE("ui.settings.visual.beat_line_alpha").data(),
-        TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
-        TR_CACHE("ui.settings.visual.note_scale_x").data(),
-        TR_CACHE("ui.settings.visual.note_scale_y").data(),
-        TR_CACHE("ui.settings.visual.note_fill_mode").data(),
-        TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
-        TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
-        TR_CACHE("ui.settings.visual.bg_opaque").data(),
-        TR_CACHE("ui.settings.visual.bg_darken").data(),
-        TR_CACHE("ui.settings.visual.preview_ratio").data(),
-        TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity").data(),
-        TR_CACHE("ui.settings.visual.preview_margin_left").data(),
-        TR_CACHE("ui.settings.visual.preview_margin_top").data(),
-        TR_CACHE("ui.settings.visual.preview_margin_right").data(),
-        TR_CACHE("ui.settings.visual.preview_margin_bottom").data(),
-        TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
-        TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
-        TR_CACHE("ui.settings.visual.timeline_zoom").data(),
-        TR_CACHE("ui.settings.visual.linear_scroll").data(),
-        TR_CACHE("ui.settings.visual.snap_threshold").data(),
-        TR_CACHE("ui.settings.visual.spectrum_detail").data(),
-        TR_CACHE("ui.settings.visual.visual_offset").data()
-    };
-    float maxLabelW = 0;
-    for ( auto* l : allVisualLabels ) {
-        maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-    }
-    maxLabelW += 16.0f;  // 留出充足间距，确保高 DPI 和多语言下排版美观
+    // 使用布局缓存中的统一标签列宽，避免设置页每帧重复测量全部标签。
+    const float maxLabelW = getCurrentTabLabelWidth(
+        Config::AppConfig::instance().getWindowContentScale());
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +

@@ -298,14 +298,56 @@ CLayVBox& SettingsView::getSection(size_t index)
     return m_sectionBoxes[index];
 }
 
-/// @brief 计算设置分类侧栏中不可再换行文本所需的宽度。
-float SettingsView::getCategorySidebarWidth(float dpiScale) const
+/// @brief 获取当前设置页布局测量缓存。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 与当前语言、字体、缩放和设置页匹配的布局测量结果。
+/// @warning UI 热路径：仅在语言、字体、缩放或设置页变化时重新测量。
+const SettingsView::LayoutMetricsCache& SettingsView::getLayoutMetrics(
+    float dpiScale) const
 {
-    Config::SkinManager& skinCfg = Config::SkinManager::instance();
-    const float          scale   = std::max(1.0f, dpiScale);
-    const float          sidebarBaseW =
-        parseLayoutFloat(skinCfg.getLayoutConfig("side_bar.width"), 40.0f);
-    const float btnSize = std::floor(sidebarBaseW * scale);
+    const float       scale      = std::max(1.0f, dpiScale);
+    auto&             appConfig  = Config::AppConfig::instance();
+    const auto&       settings   = appConfig.getEditorSettings();
+    const auto&       aesthetics = settings.aesthetics;
+    const std::string sidebarWidthConfig =
+        Config::SkinManager::instance().getLayoutConfig("side_bar.width");
+
+    auto floatEqual = [](float lhs, float rhs) {
+        return std::abs(lhs - rhs) <= 0.0001f;
+    };
+
+    if ( m_layoutMetricsCache.valid &&
+         m_layoutMetricsCache.tab == m_currentTab &&
+         floatEqual(m_layoutMetricsCache.dpiScale, scale) &&
+         m_layoutMetricsCache.language == settings.language &&
+         m_layoutMetricsCache.preferredAsciiFont ==
+             settings.preferredAsciiFont &&
+         m_layoutMetricsCache.preferredCjkFont == settings.preferredCjkFont &&
+         floatEqual(m_layoutMetricsCache.fontSizeMultiplier,
+                    settings.fontSizeMultiplier) &&
+         floatEqual(m_layoutMetricsCache.uiScaleMultiplier,
+                    settings.uiScaleMultiplier) &&
+         floatEqual(m_layoutMetricsCache.windowPadding,
+                    aesthetics.windowPadding) &&
+         floatEqual(m_layoutMetricsCache.itemSpacing, aesthetics.itemSpacing) &&
+         m_layoutMetricsCache.sidebarWidthConfig == sidebarWidthConfig ) {
+        return m_layoutMetricsCache;
+    }
+
+    m_layoutMetricsCache.valid              = true;
+    m_layoutMetricsCache.tab                = m_currentTab;
+    m_layoutMetricsCache.dpiScale           = scale;
+    m_layoutMetricsCache.language           = settings.language;
+    m_layoutMetricsCache.preferredAsciiFont = settings.preferredAsciiFont;
+    m_layoutMetricsCache.preferredCjkFont   = settings.preferredCjkFont;
+    m_layoutMetricsCache.fontSizeMultiplier = settings.fontSizeMultiplier;
+    m_layoutMetricsCache.uiScaleMultiplier  = settings.uiScaleMultiplier;
+    m_layoutMetricsCache.windowPadding      = aesthetics.windowPadding;
+    m_layoutMetricsCache.itemSpacing        = aesthetics.itemSpacing;
+    m_layoutMetricsCache.sidebarWidthConfig = sidebarWidthConfig;
+
+    const float sidebarBaseW = parseLayoutFloat(sidebarWidthConfig, 40.0f);
+    const float btnSize      = std::floor(sidebarBaseW * scale);
 
     const std::array<const char*, 5> labels{
         getCategoryShortLabel(Event::SettingsTab::Software),
@@ -318,40 +360,52 @@ float SettingsView::getCategorySidebarWidth(float dpiScale) const
     const float sepAreaW      = std::floor(12.0f * scale);
     const float labelPadding  = std::floor(12.0f * scale);
     const float vboxPadding   = std::floor(12.0f * scale);
+    m_layoutMetricsCache.categorySidebarWidth = std::floor(
+        btnSize + sepAreaW + maxLabelWidth + labelPadding + vboxPadding);
 
-    return std::floor(btnSize + sepAreaW + maxLabelWidth + labelPadding +
-                      vboxPadding);
+    const float windowPad = std::floor(aesthetics.windowPadding * scale) * 2.0f;
+    const float categorySize    = std::floor(sidebarBaseW * scale);
+    const float categorySpacing = std::floor(aesthetics.itemSpacing * scale);
+    const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
+                                  categorySize * 5.0f + categorySpacing * 4.0f;
+
+    m_layoutMetricsCache.tabLabelWidth =
+        measureSettingsTabLabelWidth(m_currentTab) + std::floor(16.0f * scale);
+    m_layoutMetricsCache.tabWidgetWidth =
+        measureSettingsTabWidgetWidth(m_currentTab, scale);
+    const float contentDecorations = std::floor(15.0f * scale) * 2.0f +
+                                     std::floor(8.0f * scale) * 4.0f +
+                                     std::floor(8.0f * scale);
+    const float contentWidth       = m_layoutMetricsCache.tabLabelWidth +
+                                     m_layoutMetricsCache.tabWidgetWidth +
+                                     contentDecorations;
+    const float titleHeight        = ImGui::GetFrameHeightWithSpacing();
+
+    m_layoutMetricsCache.minWindowSize =
+        ImVec2(std::ceil(windowPad + m_layoutMetricsCache.categorySidebarWidth +
+                         1.0f + contentWidth),
+               std::ceil(windowPad + titleHeight + categoryHeight));
+    return m_layoutMetricsCache;
+}
+
+/// @brief 获取当前设置页标签列宽度。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 当前设置页标签列宽度。
+float SettingsView::getCurrentTabLabelWidth(float dpiScale) const
+{
+    return getLayoutMetrics(dpiScale).tabLabelWidth;
+}
+
+/// @brief 计算设置分类侧栏中不可再换行文本所需的宽度。
+float SettingsView::getCategorySidebarWidth(float dpiScale) const
+{
+    return getLayoutMetrics(dpiScale).categorySidebarWidth;
 }
 
 /// @brief 计算设置窗口当前内容所需的最小整窗尺寸。
 ImVec2 SettingsView::getMinWindowSize(float dpiScale) const
 {
-    const float scale = std::max(1.0f, dpiScale);
-    const auto& aesthetics =
-        Config::AppConfig::instance().getEditorSettings().aesthetics;
-    const float windowPad = std::floor(aesthetics.windowPadding * scale) * 2.0f;
-    const float sidebarWidth = getCategorySidebarWidth(scale);
-    const float categorySize = std::floor(
-        parseLayoutFloat(
-            Config::SkinManager::instance().getLayoutConfig("side_bar.width"),
-            40.0f) *
-        scale);
-    const float categorySpacing = std::floor(aesthetics.itemSpacing * scale);
-    const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 5.0f + categorySpacing * 4.0f;
-
-    const float labelWidth =
-        measureSettingsTabLabelWidth(m_currentTab) + std::floor(16.0f * scale);
-    const float widgetWidth =
-        measureSettingsTabWidgetWidth(m_currentTab, scale);
-    const float contentDecorations = std::floor(15.0f * scale) * 2.0f +
-                                     std::floor(8.0f * scale) * 4.0f +
-                                     std::floor(8.0f * scale);
-    const float contentWidth = labelWidth + widgetWidth + contentDecorations;
-    const float titleHeight  = ImGui::GetFrameHeightWithSpacing();
-
-    return ImVec2(std::ceil(windowPad + sidebarWidth + 1.0f + contentWidth),
-                  std::ceil(windowPad + titleHeight + categoryHeight));
+    return getLayoutMetrics(dpiScale).minWindowSize;
 }
 
 /// @brief 打开设置窗口并切换到指定设置页。
