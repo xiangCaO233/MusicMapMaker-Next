@@ -13,4 +13,4 @@ target_include_directories(Common PUBLIC
     ${PROJECT_SOURCE_DIR}/Modules/Log/include
 )
 
-target_link_libraries(Common PUBLIC Log)
+target_link_libraries(Common PUBLIC Log ICE::IonCachyEngine)
