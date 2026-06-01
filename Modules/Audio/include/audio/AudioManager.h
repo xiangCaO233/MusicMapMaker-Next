@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/EditorSettings.h"
 #include "mmm/project/AudioResource.h"
 #include <cstddef>
 #include <memory>
@@ -9,6 +10,8 @@
 namespace ice
 {
 class AudioPool;
+class ALPlayer;
+class IReceiver;
 class SDLPlayer;
 class AudioTrack;
 class SourceNode;
@@ -65,6 +68,24 @@ public:
 
     /// @brief 关闭音频引擎
     void shutdown();
+
+    /// @brief 切换音频播放后端。
+    /// @param backend 目标播放后端。
+    /// @return 切换成功时返回 true。
+    bool setPlaybackBackend(Config::AudioPlaybackBackend backend);
+
+    /// @brief 获取当前正在使用的音频播放后端。
+    /// @return 当前播放后端。
+    Config::AudioPlaybackBackend getPlaybackBackend() const;
+
+    /// @brief 设置 OpenAL 后端空间化输出参数。
+    /// @param config OpenAL 空间化配置。
+    /// @return 参数已接受时返回 true；非 OpenAL 后端会缓存参数并返回 false。
+    bool setOpenALSpatialConfig(const Config::OpenALSpatialConfig& config);
+
+    /// @brief 获取当前 OpenAL 空间化输出配置。
+    /// @return OpenAL 空间化配置。
+    const Config::OpenALSpatialConfig& getOpenALSpatialConfig() const;
 
     /// @brief 加载 BGM
     /// @param filePath 音频文件绝对路径
@@ -339,6 +360,18 @@ private:
     /// @brief 析构音频管理器。
     ~AudioManager();
 
+    /// @brief 创建并启动指定播放后端。
+    /// @param backend 目标播放后端。
+    /// @return 成功创建并启动时返回 true。
+    bool createPlaybackBackend(Config::AudioPlaybackBackend backend);
+
+    /// @brief 停止并释放当前播放后端。
+    void destroyPlaybackBackend();
+
+    /// @brief 将缓存的 OpenAL 空间化参数应用到当前后端。
+    /// @return 当前后端为 OpenAL 并成功应用时返回 true。
+    bool applyOpenALSpatialConfig();
+
     /// @brief 音频后台线程池。
     /// @warning 生命周期由 Runtime::AppThreadPool 和 GameLoop
     /// 管理；AudioManager 只在低频加载/解码路径解引用，不拥有也不释放。
@@ -347,8 +380,19 @@ private:
     /// @brief 音频资源池，负责加载和缓存音频文件。
     std::unique_ptr<ice::AudioPool> m_audioPool;
 
-    /// @brief SDL 播放器后端。
-    std::unique_ptr<ice::SDLPlayer> m_player;
+    /// @brief 当前播放后端抽象接收器。
+    std::unique_ptr<ice::IReceiver> m_player;
+
+    /// @brief 当前播放后端类型。
+    Config::AudioPlaybackBackend m_playbackBackend{
+        Config::AudioPlaybackBackend::SDL
+    };
+
+    /// @brief 当前 OpenAL 后端观察指针，不拥有对象。
+    ice::ALPlayer* m_openALPlayer{ nullptr };
+
+    /// @brief OpenAL 空间化输出配置缓存。
+    Config::OpenALSpatialConfig m_openALSpatialConfig;
 
     /// @brief 当前加载的主音轨数据。
     std::shared_ptr<ice::AudioTrack> m_bgmTrack;

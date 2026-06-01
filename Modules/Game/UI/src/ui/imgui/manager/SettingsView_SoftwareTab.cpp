@@ -16,6 +16,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <filesystem>
 #include <nfd.h>
 
@@ -159,7 +160,137 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
-        // 3. 渲染阶段耗时日志
+        // 3. 音频播放后端
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.audio_backend").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int backend = settings.audioPlaybackBackend ==
+                                      Config::AudioPlaybackBackend::OpenAL
+                                  ? 1
+                                  : 0;
+                const char* backends[] = {
+                    TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
+                    TR_CACHE("ui.settings.software.audio_backend.openal").data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::Combo("##AudioBackendCombo",
+                                  &backend,
+                                  backends,
+                                  IM_ARRAYSIZE(backends)) ) {
+                    auto target = backend == 1
+                                      ? Config::AudioPlaybackBackend::OpenAL
+                                      : Config::AudioPlaybackBackend::SDL;
+                    if ( Audio::AudioManager::instance().setPlaybackBackend(
+                             target) ) {
+                        settings.audioPlaybackBackend = target;
+                        changed                       = true;
+                    }
+                }
+            });
+
+        if ( settings.audioPlaybackBackend ==
+             Config::AudioPlaybackBackend::OpenAL ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.software.openal_spatial").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos(
+                        { r.x,
+                          r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                    if ( ImGui::Checkbox(
+                             "##OpenALSpatial",
+                             &settings.openALSpatialConfig.enabled) ) {
+                        Audio::AudioManager::instance().setOpenALSpatialConfig(
+                            settings.openALSpatialConfig);
+                        changed = true;
+                    }
+                });
+
+            if ( settings.openALSpatialConfig.enabled ) {
+                auto addSpatialSlider = [&](const char* label,
+                                            const char* id,
+                                            float*      value,
+                                            float       minValue,
+                                            float       maxValue,
+                                            const char* format) {
+                    addSettingItem(
+                        *sec,
+                        rowIndex,
+                        label,
+                        maxLabelW,
+                        [&, id, value, minValue, maxValue, format](
+                            Clay_BoundingBox r, bool) {
+                            ImGui::SetNextItemWidth(r.width);
+                            ImGui::SliderFloat(
+                                id, value, minValue, maxValue, format);
+                            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                                Audio::AudioManager::instance()
+                                    .setOpenALSpatialConfig(
+                                        settings.openALSpatialConfig);
+                                changed = true;
+                            }
+                        });
+                };
+
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_direction_x").data(),
+                    "##OpenALDirX",
+                    &settings.openALSpatialConfig.directionX,
+                    -1.0f,
+                    1.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_direction_y").data(),
+                    "##OpenALDirY",
+                    &settings.openALSpatialConfig.directionY,
+                    -1.0f,
+                    1.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_direction_z").data(),
+                    "##OpenALDirZ",
+                    &settings.openALSpatialConfig.directionZ,
+                    -1.0f,
+                    1.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_distance").data(),
+                    "##OpenALDistance",
+                    &settings.openALSpatialConfig.distance,
+                    0.0f,
+                    100.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_reference_distance")
+                        .data(),
+                    "##OpenALReferenceDistance",
+                    &settings.openALSpatialConfig.referenceDistance,
+                    0.01f,
+                    100.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_max_distance").data(),
+                    "##OpenALMaxDistance",
+                    &settings.openALSpatialConfig.maxDistance,
+                    0.01f,
+                    1000.0f,
+                    "%.2f");
+                addSpatialSlider(
+                    TR_CACHE("ui.settings.software.openal_rolloff").data(),
+                    "##OpenALRolloff",
+                    &settings.openALSpatialConfig.rolloffFactor,
+                    0.0f,
+                    10.0f,
+                    "%.2f");
+            }
+        }
+
+        // 4. 渲染阶段耗时日志
         addSettingItem(
             *sec,
             rowIndex,
@@ -240,7 +371,11 @@ void SettingsView::drawSoftwareSettings()
                         ? TR_CACHE("ui.settings.software.font.default").data()
                         : currentAscii;
 
-                ImGui::SetNextItemWidth(r.width - 40.0f);
+                const ImGuiStyle& style         = ImGui::GetStyle();
+                const float       browseButtonW = 35.0f;
+                const float       comboW        = std::max(
+                    1.0f, r.width - browseButtonW - style.ItemSpacing.x);
+                ImGui::SetNextItemWidth(comboW);
                 if ( ImGui::BeginCombo("##AsciiFontCombo", label.c_str()) ) {
                     // 1. 默认选项
                     {
@@ -272,7 +407,14 @@ void SettingsView::drawSoftwareSettings()
                     ImGui::EndCombo();
                 }
                 ImGui::SameLine();
-                if ( ImGui::Button("...##BrowseAscii", { 35, 0 }) ) {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(0.0f, style.FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                    ImVec2(0.5f, 0.5f));
+                const bool browseAsciiClicked =
+                    ImGui::Button("...##BrowseAscii", { browseButtonW, 0 });
+                ImGui::PopStyleVar(2);
+                if ( browseAsciiClicked ) {
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
                         nfdu8char_t*      outPath    = nullptr;
@@ -324,7 +466,11 @@ void SettingsView::drawSoftwareSettings()
                         ? TR_CACHE("ui.settings.software.font.default").data()
                         : currentCjk;
 
-                ImGui::SetNextItemWidth(r.width - 40.0f);
+                const ImGuiStyle& style         = ImGui::GetStyle();
+                const float       browseButtonW = 35.0f;
+                const float       comboW        = std::max(
+                    1.0f, r.width - browseButtonW - style.ItemSpacing.x);
+                ImGui::SetNextItemWidth(comboW);
                 if ( ImGui::BeginCombo("##CjkFontCombo", label.c_str()) ) {
                     // 1. 默认选项
                     {
@@ -356,7 +502,14 @@ void SettingsView::drawSoftwareSettings()
                     ImGui::EndCombo();
                 }
                 ImGui::SameLine();
-                if ( ImGui::Button("...##BrowseCjk", { 35, 0 }) ) {
+                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                    ImVec2(0.0f, style.FramePadding.y));
+                ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
+                                    ImVec2(0.5f, 0.5f));
+                const bool browseCjkClicked =
+                    ImGui::Button("...##BrowseCjk", { browseButtonW, 0 });
+                ImGui::PopStyleVar(2);
+                if ( browseCjkClicked ) {
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
                         nfdu8char_t*      outPath    = nullptr;

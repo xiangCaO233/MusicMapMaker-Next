@@ -213,6 +213,69 @@ NLOHMANN_JSON_SERIALIZE_ENUM(FrameLimitPreference,
                                { FrameLimitPreference::Unlimited,
                                  "Unlimited" } })
 
+/// @brief 音频播放后端偏好。
+enum class AudioPlaybackBackend {
+    SDL,    ///< SDL 音频后端。
+    OpenAL  ///< OpenAL Soft 音频后端。
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(AudioPlaybackBackend,
+                             {
+                                 { AudioPlaybackBackend::SDL, "SDL" },
+                                 { AudioPlaybackBackend::OpenAL, "OpenAL" },
+                             })
+
+/// @brief OpenAL 空间化输出配置。
+struct OpenALSpatialConfig {
+    /// @brief 是否启用 OpenAL 空间化输出。
+    bool enabled{ false };
+
+    /// @brief 声源方向 X 分量。
+    float directionX{ 0.0f };
+
+    /// @brief 声源方向 Y 分量。
+    float directionY{ 0.0f };
+
+    /// @brief 声源方向 Z 分量。
+    float directionZ{ -1.0f };
+
+    /// @brief 声源距离。
+    float distance{ 1.0f };
+
+    /// @brief OpenAL 参考距离。
+    float referenceDistance{ 1.0f };
+
+    /// @brief OpenAL 最大距离。
+    float maxDistance{ 100.0f };
+
+    /// @brief OpenAL 距离衰减倍率。
+    float rolloffFactor{ 1.0f };
+};
+
+inline void to_json(nlohmann::json& j, const OpenALSpatialConfig& c)
+{
+    j = nlohmann::json{ { "enabled", c.enabled },
+                        { "directionX", c.directionX },
+                        { "directionY", c.directionY },
+                        { "directionZ", c.directionZ },
+                        { "distance", c.distance },
+                        { "referenceDistance", c.referenceDistance },
+                        { "maxDistance", c.maxDistance },
+                        { "rolloffFactor", c.rolloffFactor } };
+}
+
+inline void from_json(const nlohmann::json& j, OpenALSpatialConfig& c)
+{
+    c.enabled           = j.value("enabled", false);
+    c.directionX        = j.value("directionX", 0.0f);
+    c.directionY        = j.value("directionY", 0.0f);
+    c.directionZ        = j.value("directionZ", -1.0f);
+    c.distance          = j.value("distance", 1.0f);
+    c.referenceDistance = j.value("referenceDistance", 1.0f);
+    c.maxDistance       = j.value("maxDistance", 100.0f);
+    c.rolloffFactor     = j.value("rolloffFactor", 1.0f);
+}
+
 enum class UITheme {
     Auto,
     DeepDark,
@@ -351,6 +414,12 @@ struct EditorSettings {
     /// @brief 帧数限制模式偏好
     FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 
+    /// @brief 音频播放后端偏好。
+    AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
+
+    /// @brief OpenAL 后端空间化输出配置。
+    OpenALSpatialConfig openALSpatialConfig;
+
     /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
     bool renderProfileLogging{ false };
 
@@ -440,6 +509,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "recentProjectsLimit", c.recentProjectsLimit },
                         { "language", c.language },
                         { "frameLimit", c.frameLimit },
+                        { "audioPlaybackBackend", c.audioPlaybackBackend },
+                        { "openALSpatialConfig", c.openALSpatialConfig },
                         { "renderProfileLogging", c.renderProfileLogging },
                         { "fontSizeMultiplier", c.fontSizeMultiplier },
                         { "uiScaleMultiplier", c.uiScaleMultiplier },
@@ -487,6 +558,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
                                            ? FrameLimitPreference::VSync
                                            : FrameLimitPreference::Unlimited)
                                     : FrameLimitPreference::Refresh2x);
+    c.audioPlaybackBackend =
+        j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
+    c.openALSpatialConfig =
+        j.value("openALSpatialConfig", OpenALSpatialConfig());
     c.renderProfileLogging  = j.value("renderProfileLogging", false);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
