@@ -30,7 +30,6 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
-#include <unordered_map>
 #include <vector>
 
 namespace MMM::UI
@@ -89,32 +88,6 @@ void MainMenuView::performOverlapScan()
                           desc });
     }
 
-    struct DSU {
-        std::vector<int> parent;
-
-        explicit DSU(size_t n)
-        {
-            parent.resize(n);
-            for ( size_t i = 0; i < n; ++i ) {
-                parent[i] = static_cast<int>(i);
-            }
-        }
-
-        int find(int i)
-        {
-            if ( parent[i] == i ) return i;
-            parent[i] = find(parent[i]);
-            return parent[i];
-        }
-
-        void unite(int i, int j)
-        {
-            int rootI = find(i);
-            int rootJ = find(j);
-            if ( rootI != rootJ ) parent[rootI] = rootJ;
-        }
-    };
-
     struct PairHit {
         size_t i{ 0 };
         size_t j{ 0 };
@@ -155,27 +128,14 @@ void MainMenuView::performOverlapScan()
         } else if ( item.type == ::MMM::NoteType::HOLD ) {
             points.push_back({ item.startTime, item.track, true });
             if ( item.endTime > item.startTime + timeEpsilon ) {
-                points.push_back({ item.endTime, item.track, false });
+                points.push_back({ item.endTime, item.track, true });
             }
         } else if ( item.type == ::MMM::NoteType::FLICK ) {
             points.push_back({ item.startTime, item.track, false });
             points.push_back(
-                { item.startTime, item.track + item.dtrack, false });
+                { item.startTime, item.track + item.dtrack, true });
         }
         return points;
-    };
-
-    auto isPointType = [](const CheckItem& item) {
-        return item.type == ::MMM::NoteType::NOTE ||
-               item.type == ::MMM::NoteType::FLICK ||
-               item.type == ::MMM::NoteType::HOLD;
-    };
-
-    auto holdContainsPoint = [](const CheckItem& hold, const CheckItem& point) {
-        return hold.type == ::MMM::NoteType::HOLD &&
-               point.track == hold.track &&
-               point.startTime > hold.startTime + 1e-7 &&
-               point.startTime < hold.endTime - 1e-7;
     };
 
     auto isOverlapPair = [&](const CheckItem& a,
@@ -254,17 +214,27 @@ void MainMenuView::performOverlapScan()
             return maxTrack > minTrack;
         }
 
-        if ( a.type == ::MMM::NoteType::HOLD && isPointType(b) &&
-             holdContainsPoint(a, b) ) {
-            overlapTrack = b.track;
-            overlapTime  = b.startTime;
-            return true;
+        auto holdBodyContainsPoint = [&](const CheckItem&  hold,
+                                         const PointProbe& point) {
+            return hold.type == ::MMM::NoteType::HOLD &&
+                   point.track == hold.track &&
+                   point.time > hold.startTime + timeEpsilon &&
+                   point.time < hold.endTime - timeEpsilon;
+        };
+
+        for ( const auto& point : bPoints ) {
+            if ( holdBodyContainsPoint(a, point) ) {
+                overlapTrack = point.track;
+                overlapTime  = point.time;
+                return true;
+            }
         }
-        if ( b.type == ::MMM::NoteType::HOLD && isPointType(a) &&
-             holdContainsPoint(b, a) ) {
-            overlapTrack = a.track;
-            overlapTime  = a.startTime;
-            return true;
+        for ( const auto& point : aPoints ) {
+            if ( holdBodyContainsPoint(b, point) ) {
+                overlapTrack = point.track;
+                overlapTime  = point.time;
+                return true;
+            }
         }
 
         auto holdFlickCrosses = [&](const CheckItem& hold,
@@ -293,8 +263,6 @@ void MainMenuView::performOverlapScan()
         return false;
     };
 
-    DSU                  dsu(items.size());
-    std::vector<bool>    hasAnyOverlap(items.size(), false);
     std::vector<PairHit> pairHits;
 
     for ( size_t i = 0; i < items.size(); ++i ) {
@@ -304,57 +272,57 @@ void MainMenuView::performOverlapScan()
             if ( !isOverlapPair(items[i], items[j], overlapTrack, overlapTime) )
                 continue;
 
-            dsu.unite(static_cast<int>(i), static_cast<int>(j));
-            hasAnyOverlap[i] = true;
-            hasAnyOverlap[j] = true;
             pairHits.push_back({ i, j, overlapTrack, overlapTime });
         }
     }
 
-    std::unordered_map<int, std::vector<size_t>> groups;
-    for ( size_t i = 0; i < items.size(); ++i ) {
-        if ( hasAnyOverlap[i] ) {
-            groups[dsu.find(static_cast<int>(i))].push_back(i);
-        }
-    }
+    std::sort(pairHits.begin(),
+              pairHits.end(),
+              [](const PairHit& a, const PairHit& b) {
+                  if ( a.track != b.track ) return a.track < b.track;
+                  return a.time < b.time;
+              });
 
-    for ( const auto& pair : groups ) {
-        const auto& indices = pair.second;
-        if ( indices.size() < 2 ) continue;
-
-        int    root    = pair.first;
-        double minTime = items[indices[0]].startTime;
-        int    track   = items[indices[0]].track;
-
-        for ( size_t idx : indices ) {
-            if ( items[idx].startTime < minTime ) {
-                minTime = items[idx].startTime;
-                track   = items[idx].track;
-            }
+    for ( size_t i = 0; i < pairHits.size(); ) {
+        size_t j = i + 1;
+        while ( j < pairHits.size() && pairHits[j].track == pairHits[i].track &&
+                pairHits[j].time <=
+                    pairHits[i].time + windowSeconds + timeEpsilon ) {
+            ++j;
         }
 
-        for ( const auto& hit : pairHits ) {
-            if ( dsu.find(static_cast<int>(hit.i)) != root ||
-                 dsu.find(static_cast<int>(hit.j)) != root )
-                continue;
-            if ( hit.time <= minTime + timeEpsilon ) {
-                minTime = hit.time;
-                track   = hit.track;
+        std::vector<size_t> indices;
+        indices.reserve((j - i) * 2);
+        auto addUniqueIndex = [&](size_t index) {
+            if ( std::find(indices.begin(), indices.end(), index) ==
+                 indices.end() ) {
+                indices.push_back(index);
             }
+        };
+
+        double minTime = pairHits[i].time;
+        for ( size_t k = i; k < j; ++k ) {
+            addUniqueIndex(pairHits[k].i);
+            addUniqueIndex(pairHits[k].j);
+            minTime = std::min(minTime, pairHits[k].time);
         }
 
         std::string desc1;
         std::string desc2;
-        if ( indices.size() == 2 ) {
-            desc1 = items[indices[0]].desc;
-            desc2 = items[indices[1]].desc;
+        if ( indices.size() == 2 && j == i + 1 ) {
+            desc1 = items[pairHits[i].i].desc;
+            desc2 = items[pairHits[i].j].desc;
         } else {
             desc1 = TR_FMT("ui.tools.multiple_objects", indices.size());
             desc2 = TR("ui.tools.each_other").data();
         }
 
-        m_overlapResults.push_back(
-            { true, minTime, static_cast<uint32_t>(track), desc1, desc2 });
+        m_overlapResults.push_back({ true,
+                                     minTime,
+                                     static_cast<uint32_t>(pairHits[i].track),
+                                     desc1,
+                                     desc2 });
+        i = j;
     }
 }
 

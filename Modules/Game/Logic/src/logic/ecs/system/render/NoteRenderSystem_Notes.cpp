@@ -887,24 +887,8 @@ void NoteRenderSystem::renderOverlapMasks(
         if ( x > rightX || x + w < leftX || y > bottomY || y + h < topY )
             return;
 
-        constexpr float mergeEpsilon = 0.75f;
-        for ( auto& mask : snapshot->overlapMasks ) {
-            bool intersects = x <= mask.x + mask.w + mergeEpsilon &&
-                              x + w + mergeEpsilon >= mask.x &&
-                              y <= mask.y + mask.h + mergeEpsilon &&
-                              y + h + mergeEpsilon >= mask.y;
-            if ( !intersects ) continue;
-
-            float right      = std::max(mask.x + mask.w, x + w);
-            float bottom     = std::max(mask.y + mask.h, y + h);
-            mask.x           = std::min(mask.x, x);
-            mask.y           = std::min(mask.y, y);
-            mask.w           = right - mask.x;
-            mask.h           = bottom - mask.y;
-            mask.objectCount = std::max(mask.objectCount, count);
-            return;
-        }
-
+        // 这里不能预先合并成外接矩形，否则相邻遮罩之间的空区域也会被误涂红。
+        // 后面的扫描线拆分会负责去掉重复覆盖并保证同一像素最多只画一层。
         snapshot->overlapMasks.push_back({ x, y, w, h, count });
     };
 
@@ -920,39 +904,34 @@ void NoteRenderSystem::renderOverlapMasks(
     std::vector<const OverlapItem*> notes;
     std::vector<const OverlapItem*> holds;
     std::vector<const OverlapItem*> flicks;
-    std::vector<const OverlapItem*> points;
     std::vector<OverlapPoint>       pointMarkers;
     notes.reserve(items.size());
     holds.reserve(items.size());
     flicks.reserve(items.size());
-    points.reserve(items.size());
     pointMarkers.reserve(items.size() * 2);
 
     for ( const auto& item : items ) {
         if ( item.type == ::MMM::NoteType::NOTE ) {
             notes.push_back(&item);
-            points.push_back(&item);
             pointMarkers.push_back(
                 { item.startTime, item.track, item.owner, 1.0f, true });
         } else if ( item.type == ::MMM::NoteType::HOLD ) {
             if ( item.endTime > item.startTime + timeEpsilon ) {
                 holds.push_back(&item);
                 pointMarkers.push_back(
-                    { item.endTime, item.track, item.owner, 1.0f, false });
+                    { item.endTime, item.track, item.owner, 1.0f, true });
             }
-            points.push_back(&item);
             pointMarkers.push_back(
                 { item.startTime, item.track, item.owner, 1.0f, true });
         } else if ( item.type == ::MMM::NoteType::FLICK ) {
             flicks.push_back(&item);
-            points.push_back(&item);
             pointMarkers.push_back(
                 { item.startTime, item.track, item.owner, 1.0f, false });
             pointMarkers.push_back({ item.startTime,
                                      item.track + item.dtrack,
                                      item.owner,
                                      1.0f,
-                                     false });
+                                     true });
         }
     }
 
@@ -1157,23 +1136,23 @@ void NoteRenderSystem::renderOverlapMasks(
         }
     }
 
-    for ( const auto* point : points ) {
+    for ( const auto& point : pointMarkers ) {
         std::unordered_set<entt::entity> owners;
-        owners.insert(point->owner);
+        owners.insert(point.owner);
 
         for ( const auto* hold : holds ) {
-            if ( sameOwner(*point, *hold) || point->track != hold->track )
+            if ( hold->owner == point.owner || point.track != hold->track )
                 continue;
-            if ( point->startTime > hold->startTime + timeEpsilon &&
-                 point->startTime < hold->endTime - timeEpsilon ) {
+            if ( point.time > hold->startTime + timeEpsilon &&
+                 point.time < hold->endTime - timeEpsilon ) {
                 owners.insert(hold->owner);
             }
         }
 
         if ( owners.size() >= 2 ) {
-            appendPointMask(point->startTime,
-                            point->track,
-                            1.0f,
+            appendPointMask(point.time,
+                            point.track,
+                            point.scale,
                             static_cast<int>(owners.size()));
         }
     }
@@ -1230,6 +1209,97 @@ void NoteRenderSystem::renderOverlapMasks(
         }
     }
 
+    if ( snapshot->overlapMasks.empty() ) return;
+
+    auto flattenOverlapMasks = [&]() {
+        if ( snapshot->overlapMasks.size() < 2 ) return;
+
+        std::vector<float> xs;
+        std::vector<float> ys;
+        xs.reserve(snapshot->overlapMasks.size() * 2);
+        ys.reserve(snapshot->overlapMasks.size() * 2);
+
+        for ( const auto& mask : snapshot->overlapMasks ) {
+            if ( mask.w <= 0.0f || mask.h <= 0.0f ) continue;
+            xs.push_back(mask.x);
+            xs.push_back(mask.x + mask.w);
+            ys.push_back(mask.y);
+            ys.push_back(mask.y + mask.h);
+        }
+
+        auto uniqueCoords = [](std::vector<float>& coords) {
+            std::sort(coords.begin(), coords.end());
+            coords.erase(std::unique(coords.begin(),
+                                     coords.end(),
+                                     [](float a, float b) {
+                                         return std::abs(a - b) < 0.01f;
+                                     }),
+                         coords.end());
+        };
+
+        uniqueCoords(xs);
+        uniqueCoords(ys);
+        if ( xs.size() < 2 || ys.size() < 2 ) return;
+
+        std::vector<RenderSnapshot::OverlapMask> flattened;
+        flattened.reserve(snapshot->overlapMasks.size());
+
+        // 将重叠矩形拆成互不相交的扫描线小矩形，避免同一像素被红色滤镜重复覆盖。
+        for ( size_t yIndex = 0; yIndex + 1 < ys.size(); ++yIndex ) {
+            const float y0 = ys[yIndex];
+            const float y1 = ys[yIndex + 1];
+            if ( y1 <= y0 + 0.01f ) continue;
+
+            bool  hasRun   = false;
+            float runStart = 0.0f;
+            int   runCount = 0;
+            auto  flushRun = [&](float runEnd) {
+                if ( !hasRun || runEnd <= runStart + 0.01f ) return;
+                flattened.push_back(
+                    { runStart, y0, runEnd - runStart, y1 - y0, runCount });
+                hasRun   = false;
+                runCount = 0;
+            };
+
+            for ( size_t xIndex = 0; xIndex + 1 < xs.size(); ++xIndex ) {
+                const float x0 = xs[xIndex];
+                const float x1 = xs[xIndex + 1];
+                if ( x1 <= x0 + 0.01f ) continue;
+
+                const float sampleX = (x0 + x1) * 0.5f;
+                const float sampleY = (y0 + y1) * 0.5f;
+                int         count   = 0;
+                for ( const auto& mask : snapshot->overlapMasks ) {
+                    if ( sampleX < mask.x || sampleX > mask.x + mask.w ||
+                         sampleY < mask.y || sampleY > mask.y + mask.h ) {
+                        continue;
+                    }
+                    count = std::max(count, mask.objectCount);
+                }
+
+                if ( count >= 2 ) {
+                    if ( !hasRun ) {
+                        hasRun   = true;
+                        runStart = x0;
+                        runCount = count;
+                    } else if ( runCount != count ) {
+                        flushRun(x0);
+                        hasRun   = true;
+                        runStart = x0;
+                        runCount = count;
+                    }
+                } else {
+                    flushRun(x0);
+                }
+            }
+
+            flushRun(xs.back());
+        }
+
+        snapshot->overlapMasks = std::move(flattened);
+    };
+
+    flattenOverlapMasks();
     if ( snapshot->overlapMasks.empty() ) return;
 
     Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
