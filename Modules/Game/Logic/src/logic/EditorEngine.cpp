@@ -42,6 +42,9 @@ constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
 /// @brief 同主音轨画布同步的逻辑时间变化阈值。
 constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 
+/// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
+constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
+
 /// @brief 为同主音轨后台跟随谱面推进视觉打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；只线性消费已排序 hitEvents
 /// 的新增区间，禁止文件系统访问或重新构建事件序列。
@@ -1299,7 +1302,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         const double previousVisualTime = ctx.visualTime;
         const bool   shouldClearHitEffects =
             wasFollowing != sourceCtx.isPlaying ||
-            sourceCtx.visualTime < previousVisualTime ||
+            sourceCtx.visualTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                previousVisualTime ||
             std::abs(sourceCtx.visualTime - previousVisualTime) > 0.2;
 
         ctx.currentTime             = sourceCtx.currentTime;
