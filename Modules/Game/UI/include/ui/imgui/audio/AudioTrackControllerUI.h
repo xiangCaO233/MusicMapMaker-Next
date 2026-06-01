@@ -1,8 +1,10 @@
 #pragma once
 
 #include "audio/AudioManager.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <cstdint>
 #include <deque>
 #include <string>
 
@@ -12,7 +14,8 @@ namespace MMM::UI
 /**
  * @brief 音轨控制器 UI，绑定一个音频音轨（BGM 或 SFX 池）
  */
-class AudioTrackControllerUI : virtual public IUIView
+class AudioTrackControllerUI : virtual public IUIView,
+                               public IParallelUiPreparable
 {
 public:
     enum class TrackType { Main, Effect };
@@ -44,6 +47,24 @@ public:
 
     void* getActualInstance() override { return this; }
 
+    /// @brief 安全转换为 UI 并行准备接口。
+    /// @return 当前音轨控制器的并行准备接口。
+    IParallelUiPreparable* asParallelUiPreparable() override { return this; }
+
+    /// @brief 判断当前帧音轨控制器是否需要准备布局测量数据。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @return 需要后台准备时返回 true。
+    /// @warning UI 热路径：每帧主线程调用，只检查缓存状态。
+    bool needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const override;
+
+    /// @brief 在线程池中准备音轨控制器布局测量数据。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @warning 后台线程路径：只计算文本宽度和窗口尺寸，禁止调用 ImGui API。
+    void prepareUiFrameData(const UiFrameSnapshot& snapshot) override;
+
+    /// @brief 将后台准备好的布局测量数据切换给主线程使用。
+    void swapPreparedUiFrameData() override;
+
     const std::string& getTrackId() const { return m_trackId; }
 
     /// @brief 请求下一次显示时停靠到指定 Dock 节点。
@@ -62,6 +83,66 @@ public:
     TrackType getTrackType() const { return m_type; }
 
 private:
+    /// @brief 音轨控制器布局测量缓存。
+    struct LayoutMetricsCache {
+        /// @brief 缓存是否可用。
+        bool valid{ false };
+
+        /// @brief 缓存对应的音轨类型。
+        TrackType trackType{ TrackType::Main };
+
+        /// @brief 缓存对应的窗口标题。
+        std::string trackName;
+
+        /// @brief 缓存对应的窗口内容缩放。
+        float dpiScale{ 1.0f };
+
+        /// @brief 缓存对应的字体尺寸。
+        float fontSize{ 0.0f };
+
+        /// @brief 缓存对应的 ImGui FramePadding。
+        ImVec2 framePadding{ 0.0f, 0.0f };
+
+        /// @brief 缓存对应的 ImGui 单帧控件高度。
+        float frameHeight{ 0.0f };
+
+        /// @brief 缓存对应的含间距控件高度。
+        float frameHeightWithSpacing{ 0.0f };
+
+        /// @brief 缓存对应的语言。
+        std::string language;
+
+        /// @brief 缓存对应的翻译版本。
+        uint32_t translationVersion{ 0 };
+
+        /// @brief 缓存对应的 ASCII 字体选择。
+        std::string preferredAsciiFont;
+
+        /// @brief 缓存对应的 CJK 字体选择。
+        std::string preferredCjkFont;
+
+        /// @brief 缓存对应的字体倍率。
+        float fontSizeMultiplier{ 1.0f };
+
+        /// @brief 缓存对应的 UI 缩放倍率。
+        float uiScaleMultiplier{ 1.0f };
+
+        /// @brief 缓存对应的窗口内边距。
+        float windowPadding{ 0.0f };
+
+        /// @brief 缓存对应的控件间距。
+        float itemSpacing{ 0.0f };
+
+        /// @brief 标签列宽度。
+        float labelWidth{ 0.0f };
+
+        /// @brief EQ 关闭时的最小窗口尺寸。
+        ImVec2 minWindowSize{ 0.0f, 0.0f };
+
+        /// @brief EQ 打开时的最小窗口尺寸。
+        ImVec2 minWindowSizeWithEq{ 0.0f, 0.0f };
+    };
+
     /// @brief 构建音量区域的 Clay 布局
     /// @warning UI 每帧绘制路径：仅允许轻量 ImGui 控件测量与样式栈操作。
     void buildVolumeSection(CLayVBox& parent, size_t& rowIndex,
@@ -90,6 +171,29 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     /// @return ImGui 窗口最小尺寸。
     ImVec2 getMinWindowSize(float dpiScale) const;
+    /// @brief 获取音轨控制器布局测量缓存。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 与当前语言、字体、缩放和音轨类型匹配的布局测量结果。
+    /// @warning UI 热路径：仅在缓存未命中时同步测量；通常由并行准备提前填充。
+    const LayoutMetricsCache& getLayoutMetrics(float dpiScale) const;
+    /// @brief 构造音轨控制器布局测量缓存。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @param trackType 当前音轨类型。
+    /// @param trackName 当前窗口标题。
+    /// @return 音轨控制器布局测量结果。
+    static LayoutMetricsCache buildLayoutMetrics(
+        const UiFrameSnapshot& snapshot, TrackType trackType,
+        const std::string& trackName);
+    /// @brief 判断布局测量缓存是否匹配当前帧状态。
+    /// @param cache 需要检查的布局缓存。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @param trackType 当前音轨类型。
+    /// @param trackName 当前窗口标题。
+    /// @return 完全匹配时返回 true。
+    static bool layoutMetricsMatch(const LayoutMetricsCache& cache,
+                                   const UiFrameSnapshot&    snapshot,
+                                   TrackType                 trackType,
+                                   const std::string&        trackName);
     /// @brief 添加一个设置项行（标签 + 控件）
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget,
@@ -112,6 +216,15 @@ private:
 
     /// @brief 下一帧是否请求窗口聚焦。
     bool m_shouldFocusNextFrame{ false };
+
+    /// @brief 布局测量缓存，避免每帧重复测量大量文本。
+    mutable LayoutMetricsCache m_layoutMetricsCache;
+
+    /// @brief 后台线程准备出的布局测量缓存。
+    LayoutMetricsCache m_preparedLayoutMetricsCache;
+
+    /// @brief 后台布局缓存是否等待主线程切换。
+    bool m_hasPreparedLayoutMetrics{ false };
 };
 
 }  // namespace MMM::UI

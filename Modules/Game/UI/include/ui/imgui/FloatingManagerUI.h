@@ -1,6 +1,7 @@
 #pragma once
 
 #include "event/core/EventBus.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/ISubView.h"
 #include "ui/ITextureLoader.h"
 #include <string>
@@ -9,7 +10,9 @@ namespace MMM::UI
 {
 class ISubView;
 
-class FloatingManagerUI : public ITextureLoader, virtual public IUIView
+class FloatingManagerUI : public ITextureLoader,
+                          virtual public IUIView,
+                          public IParallelUiPreparable
 {
 public:
     ///@brief 初始化时显示的的窗口id
@@ -53,6 +56,24 @@ public:
     void update(UIManager* sourceManager) override;
 
     void* getActualInstance() override { return this; }
+
+    /// @brief 安全转换为 UI 并行准备接口。
+    /// @return 当前浮动管理器的并行准备接口。
+    IParallelUiPreparable* asParallelUiPreparable() override { return this; }
+
+    /// @brief 判断当前可见子视图是否需要并行准备。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @return 当前子视图需要准备时返回 true。
+    /// @warning UI 热路径：每帧只查找当前子视图并检查脏位。
+    bool needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const override;
+
+    /// @brief 在线程池中准备当前可见子视图数据。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @warning 后台线程路径：仅委托子视图的纯数据准备逻辑。
+    void prepareUiFrameData(const UiFrameSnapshot& snapshot) override;
+
+    /// @brief 将当前子视图后台准备结果切换到主线程可读状态。
+    void swapPreparedUiFrameData() override;
 
     /// @brief 是否需要重载
     bool needReload() override;

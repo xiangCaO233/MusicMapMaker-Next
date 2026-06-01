@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -15,6 +16,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <utility>
 
 #include <fmt/core.h>
 
@@ -37,6 +39,14 @@ float measureTrackControllerText(const char* text)
         .x;
 }
 
+/// @brief 使用 UI 快照中的字体测量单行文本宽度。
+float measureTrackControllerText(const char* text, ImFont* font, float fontSize)
+{
+    if ( !text || !font ) return 0.0f;
+
+    return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text, nullptr).x;
+}
+
 /// @brief 测量一组音轨控制器文本中的最大单行宽度。
 template<size_t N>
 float measureTrackControllerTextList(const std::array<const char*, N>& labels)
@@ -46,6 +56,48 @@ float measureTrackControllerTextList(const std::array<const char*, N>& labels)
         maxWidth = std::max(maxWidth, measureTrackControllerText(label));
     }
     return maxWidth;
+}
+
+/// @brief 使用 UI 快照字体测量一组文本中的最大单行宽度。
+template<size_t N>
+float measureTrackControllerTextList(const std::array<const char*, N>& labels,
+                                     ImFont* font, float fontSize)
+{
+    float maxWidth = 0.0f;
+    for ( const char* label : labels ) {
+        maxWidth = std::max(maxWidth,
+                            measureTrackControllerText(label, font, fontSize));
+    }
+    return maxWidth;
+}
+
+/// @brief 捕获音轨控制器同步测量所需的当前帧快照。
+UiFrameSnapshot captureAudioTrackControllerUiFrameSnapshot(float dpiScale)
+{
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& settings   = appConfig.getEditorSettings();
+    const auto& aesthetics = settings.aesthetics;
+    auto&       skinCfg    = Config::SkinManager::instance();
+    const auto& style      = ImGui::GetStyle();
+
+    UiFrameSnapshot snapshot;
+    snapshot.dpiScale               = std::max(1.0f, dpiScale);
+    snapshot.framePadding           = style.FramePadding;
+    snapshot.frameHeight            = ImGui::GetFrameHeight();
+    snapshot.frameHeightWithSpacing = ImGui::GetFrameHeightWithSpacing();
+    snapshot.contentFont            = skinCfg.getFont("content");
+    snapshot.menuFont               = skinCfg.getFont("menu");
+    snapshot.fallbackFont           = ImGui::GetFont();
+    snapshot.fontSize               = ImGui::GetFontSize();
+    snapshot.translationVersion     = skinCfg.getTranslator().getVersion();
+    snapshot.language               = settings.language;
+    snapshot.preferredAsciiFont     = settings.preferredAsciiFont;
+    snapshot.preferredCjkFont       = settings.preferredCjkFont;
+    snapshot.fontSizeMultiplier     = settings.fontSizeMultiplier;
+    snapshot.uiScaleMultiplier      = settings.uiScaleMultiplier;
+    snapshot.windowPadding          = aesthetics.windowPadding;
+    snapshot.itemSpacing            = aesthetics.itemSpacing;
+    return snapshot;
 }
 }  // namespace
 
@@ -75,13 +127,71 @@ float AudioTrackControllerUI::measureLabelWidth(const char* label)
     return sz.x;
 }
 
-/// @brief 计算音轨控制器当前音轨类型所需的最小整窗尺寸。
-ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
+/// @brief 判断布局测量缓存是否匹配当前帧状态。
+/// @param cache 需要检查的布局缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param trackType 当前音轨类型。
+/// @param trackName 当前窗口标题。
+/// @return 完全匹配时返回 true。
+bool AudioTrackControllerUI::layoutMetricsMatch(const LayoutMetricsCache& cache,
+                                                const UiFrameSnapshot& snapshot,
+                                                TrackType          trackType,
+                                                const std::string& trackName)
 {
-    const float scale     = std::max(1.0f, dpiScale);
-    const auto& style     = ImGui::GetStyle();
-    const float rowHeight = ImGui::GetFrameHeight() + 8.0f;
-    const float rowGap    = 4.0f;
+    auto floatEqual = [](float lhs, float rhs) {
+        return std::abs(lhs - rhs) <= 0.0001f;
+    };
+
+    return cache.valid && cache.trackType == trackType &&
+           cache.trackName == trackName &&
+           floatEqual(cache.dpiScale, snapshot.dpiScale) &&
+           floatEqual(cache.fontSize, snapshot.fontSize) &&
+           floatEqual(cache.framePadding.x, snapshot.framePadding.x) &&
+           floatEqual(cache.framePadding.y, snapshot.framePadding.y) &&
+           floatEqual(cache.frameHeight, snapshot.frameHeight) &&
+           floatEqual(cache.frameHeightWithSpacing,
+                      snapshot.frameHeightWithSpacing) &&
+           cache.language == snapshot.language &&
+           cache.translationVersion == snapshot.translationVersion &&
+           cache.preferredAsciiFont == snapshot.preferredAsciiFont &&
+           cache.preferredCjkFont == snapshot.preferredCjkFont &&
+           floatEqual(cache.fontSizeMultiplier, snapshot.fontSizeMultiplier) &&
+           floatEqual(cache.uiScaleMultiplier, snapshot.uiScaleMultiplier) &&
+           floatEqual(cache.windowPadding, snapshot.windowPadding) &&
+           floatEqual(cache.itemSpacing, snapshot.itemSpacing);
+}
+
+/// @brief 构造音轨控制器布局测量缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param trackType 当前音轨类型。
+/// @param trackName 当前窗口标题。
+/// @return 音轨控制器布局测量结果。
+AudioTrackControllerUI::LayoutMetricsCache
+AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
+                                           TrackType              trackType,
+                                           const std::string&     trackName)
+{
+    LayoutMetricsCache cache;
+    cache.valid                  = true;
+    cache.trackType              = trackType;
+    cache.trackName              = trackName;
+    cache.dpiScale               = snapshot.dpiScale;
+    cache.fontSize               = snapshot.fontSize;
+    cache.framePadding           = snapshot.framePadding;
+    cache.frameHeight            = snapshot.frameHeight;
+    cache.frameHeightWithSpacing = snapshot.frameHeightWithSpacing;
+    cache.language               = snapshot.language;
+    cache.translationVersion     = snapshot.translationVersion;
+    cache.preferredAsciiFont     = snapshot.preferredAsciiFont;
+    cache.preferredCjkFont       = snapshot.preferredCjkFont;
+    cache.fontSizeMultiplier     = snapshot.fontSizeMultiplier;
+    cache.uiScaleMultiplier      = snapshot.uiScaleMultiplier;
+    cache.windowPadding          = snapshot.windowPadding;
+    cache.itemSpacing            = snapshot.itemSpacing;
+
+    const float scale = std::max(1.0f, snapshot.dpiScale);
+    ImFont*     font =
+        snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
 
     const std::array<const char*, 8> allLabels{
         TR_CACHE("ui.audio_manager.volume").data(),
@@ -93,18 +203,24 @@ ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
         TR_CACHE("ui.audio_manager.pitch_value").data(),
         TR_CACHE("ui.audio_manager.play_preview").data()
     };
-    const float labelWidth = measureTrackControllerTextList(allLabels) + 8.0f;
+    cache.labelWidth =
+        measureTrackControllerTextList(allLabels, font, snapshot.fontSize) +
+        8.0f;
 
-    const float sliderMinW  = measureTrackControllerText("0.0000") +
-                              style.FramePadding.x * 4.0f +
-                              std::floor(48.0f * scale);
+    const float rowHeight = snapshot.frameHeight + 8.0f;
+    const float rowGap    = 4.0f;
+    const float sliderMinW =
+        measureTrackControllerText("0.0000", font, snapshot.fontSize) +
+        snapshot.framePadding.x * 4.0f + std::floor(48.0f * scale);
     const float muteButtonW = 30.0f;
-    const float lrButtonW   = std::max({ measureTrackControllerText("L"),
-                                         measureTrackControllerText("R"),
-                                         24.0f });
-    float       widgetWidth = muteButtonW + style.ItemSpacing.x + sliderMinW;
-    if ( m_type == TrackType::Main ) {
-        widgetWidth += style.ItemSpacing.x + lrButtonW * 2.0f + 2.0f;
+    const float lrButtonW =
+        std::max({ measureTrackControllerText("L", font, snapshot.fontSize),
+                   measureTrackControllerText("R", font, snapshot.fontSize),
+                   24.0f });
+
+    float widgetWidth = muteButtonW + snapshot.itemSpacing + sliderMinW;
+    if ( trackType == TrackType::Main ) {
+        widgetWidth += snapshot.itemSpacing + lrButtonW * 2.0f + 2.0f;
 
         const std::array<const char*, 4> speedPresets{
             TR_CACHE("ui.audio_manager.speed_025x").data(),
@@ -118,18 +234,22 @@ ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
             TR_CACHE("ui.audio_manager.pitch_n5").data(),
             TR_CACHE("ui.audio_manager.pitch_0").data()
         };
-        const float speedButtonsW =
-            measureTrackControllerTextList(speedPresets) +
-            style.FramePadding.x * 2.0f;
-        const float pitchButtonsW =
-            measureTrackControllerTextList(pitchPresets) +
-            style.FramePadding.x * 2.0f;
+        const float speedButtonsW = measureTrackControllerTextList(
+                                        speedPresets, font, snapshot.fontSize) +
+                                    snapshot.framePadding.x * 2.0f;
+        const float pitchButtonsW = measureTrackControllerTextList(
+                                        pitchPresets, font, snapshot.fontSize) +
+                                    snapshot.framePadding.x * 2.0f;
         const float analysisButtonsW =
             measureTrackControllerText(
-                TR("ui.audio_manager.open_waveform").data()) +
+                TR("ui.audio_manager.open_waveform").data(),
+                font,
+                snapshot.fontSize) +
             measureTrackControllerText(
-                TR("ui.audio_manager.open_spectrum").data()) +
-            style.FramePadding.x * 4.0f + 8.0f;
+                TR("ui.audio_manager.open_spectrum").data(),
+                font,
+                snapshot.fontSize) +
+            snapshot.framePadding.x * 4.0f + 8.0f;
         widgetWidth = std::max({ widgetWidth,
                                  speedButtonsW,
                                  pitchButtonsW,
@@ -139,42 +259,111 @@ ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
         const float playButtonW =
             std::max(80.0f * scale,
                      measureTrackControllerText(
-                         TR("ui.audio_manager.resume_preview").data()) +
-                         style.FramePadding.x * 2.0f);
+                         TR("ui.audio_manager.resume_preview").data(),
+                         font,
+                         snapshot.fontSize) +
+                         snapshot.framePadding.x * 2.0f);
         const float pauseButtonW =
             std::max(80.0f * scale,
                      measureTrackControllerText(
-                         TR("ui.audio_manager.pause_preview").data()) +
-                         style.FramePadding.x * 2.0f);
+                         TR("ui.audio_manager.pause_preview").data(),
+                         font,
+                         snapshot.fontSize) +
+                         snapshot.framePadding.x * 2.0f);
         const float progressW =
-            measureTrackControllerText("000.00s / 000.00s") +
-            style.FramePadding.x * 2.0f;
+            measureTrackControllerText(
+                "000.00s / 000.00s", font, snapshot.fontSize) +
+            snapshot.framePadding.x * 2.0f;
         widgetWidth = std::max(widgetWidth,
                                playButtonW + pauseButtonW + progressW +
-                                   style.ItemSpacing.x * 2.0f);
+                                   snapshot.itemSpacing * 2.0f);
     }
 
     const float  rowDecorations = 8.0f * 2.0f + 8.0f + 4.0f * 2.0f;
-    const float  contentWidth   = labelWidth + widgetWidth + rowDecorations;
-    const size_t rowCount       = m_type == TrackType::Main ? 8U : 2U;
-    float        contentH = 2.0f * scale + 8.0f + rowCount * rowHeight +
-                            (rowCount > 0 ? (rowCount - 1) * rowGap : 0.0f);
+    const float  contentWidth = cache.labelWidth + widgetWidth + rowDecorations;
+    const size_t rowCount     = trackType == TrackType::Main ? 8U : 2U;
+    float        contentH     = 2.0f * scale + 8.0f + rowCount * rowHeight +
+                                (rowCount > 0 ? (rowCount - 1) * rowGap : 0.0f);
 
-    if ( m_type == TrackType::Main ) {
-        auto& audio = Audio::AudioManager::instance();
-        contentH += ImGui::GetFrameHeightWithSpacing() * 3.0f;
-        if ( audio.isMainTrackEQEnabled() ) {
-            contentH +=
-                150.0f + 220.0f + ImGui::GetFrameHeightWithSpacing() * 2.0f;
-        }
+    if ( trackType == TrackType::Main ) {
+        contentH += snapshot.frameHeightWithSpacing * 3.0f;
     }
 
-    float titleWidth = measureTrackControllerText(m_trackName.c_str()) +
-                       ImGui::GetFrameHeight() * 2.0f;
-    return ImVec2(std::ceil(std::max(contentWidth, titleWidth) +
-                            style.WindowPadding.x * 2.0f),
-                  std::ceil(contentH + style.WindowPadding.y * 2.0f +
-                            ImGui::GetFrameHeightWithSpacing()));
+    const float titleWidth =
+        measureTrackControllerText(trackName.c_str(), font, snapshot.fontSize) +
+        snapshot.frameHeight * 2.0f;
+    const float minWidth  = std::ceil(std::max(contentWidth, titleWidth) +
+                                      snapshot.windowPadding * 2.0f);
+    const float minHeight = std::ceil(contentH + snapshot.windowPadding * 2.0f +
+                                      snapshot.frameHeightWithSpacing);
+    cache.minWindowSize   = ImVec2(minWidth, minHeight);
+
+    if ( trackType == TrackType::Main ) {
+        cache.minWindowSizeWithEq =
+            ImVec2(minWidth,
+                   std::ceil(minHeight + 150.0f + 220.0f +
+                             snapshot.frameHeightWithSpacing * 2.0f));
+    } else {
+        cache.minWindowSizeWithEq = cache.minWindowSize;
+    }
+    return cache;
+}
+
+/// @brief 获取音轨控制器布局测量缓存。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 与当前语言、字体、缩放和音轨类型匹配的布局测量结果。
+const AudioTrackControllerUI::LayoutMetricsCache&
+AudioTrackControllerUI::getLayoutMetrics(float dpiScale) const
+{
+    UiFrameSnapshot snapshot =
+        captureAudioTrackControllerUiFrameSnapshot(dpiScale);
+    if ( !layoutMetricsMatch(
+             m_layoutMetricsCache, snapshot, m_type, m_trackName) ) {
+        m_layoutMetricsCache =
+            buildLayoutMetrics(snapshot, m_type, m_trackName);
+    }
+    return m_layoutMetricsCache;
+}
+
+/// @brief 判断当前帧音轨控制器是否需要准备布局测量数据。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 需要后台准备时返回 true。
+bool AudioTrackControllerUI::needsParallelUiPrepare(
+    const UiFrameSnapshot& snapshot) const
+{
+    return m_isOpen && !layoutMetricsMatch(
+                           m_layoutMetricsCache, snapshot, m_type, m_trackName);
+}
+
+/// @brief 在线程池中准备音轨控制器布局测量数据。
+/// @param snapshot 当前帧 UI 快照。
+void AudioTrackControllerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
+{
+    m_preparedLayoutMetricsCache =
+        buildLayoutMetrics(snapshot, m_type, m_trackName);
+    m_hasPreparedLayoutMetrics = true;
+}
+
+/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+void AudioTrackControllerUI::swapPreparedUiFrameData()
+{
+    if ( !m_hasPreparedLayoutMetrics ) {
+        return;
+    }
+
+    m_layoutMetricsCache       = std::move(m_preparedLayoutMetricsCache);
+    m_hasPreparedLayoutMetrics = false;
+}
+
+/// @brief 计算音轨控制器当前音轨类型所需的最小整窗尺寸。
+ImVec2 AudioTrackControllerUI::getMinWindowSize(float dpiScale) const
+{
+    const auto& cache = getLayoutMetrics(dpiScale);
+    if ( m_type == TrackType::Main &&
+         Audio::AudioManager::instance().isMainTrackEQEnabled() ) {
+        return cache.minWindowSizeWithEq;
+    }
+    return cache.minWindowSize;
 }
 
 void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,

@@ -29,6 +29,7 @@ namespace MMM::UI
 {
 class IRenderableView;
 class ITextureLoader;
+class IParallelUiPreparable;
 
 class UIManager : public MMM::Graphic::IGraphicUserHook
 {
@@ -169,6 +170,12 @@ private:
 
     /// @brief 纹理加载器接口注册顺序
     std::vector<std::string> m_textureLoaderSequence;
+
+    /// @brief 每帧可并行准备 UI 数据的候选视图缓存。
+    std::vector<IParallelUiPreparable*> m_uiPrepareCandidates;
+
+    /// @brief 当前帧实际需要执行准备任务的视图缓存。
+    std::vector<IParallelUiPreparable*> m_uiPrepareViews;
 
     /// @brief 主原生窗口观察指针，不持有所有权。
     Graphic::NativeWindow* m_nativeWindow{ nullptr };

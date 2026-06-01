@@ -10,7 +10,6 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <fmt/format.h>
 #include <utility>
@@ -106,70 +105,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    // 拉取快照
-    if ( m_syncBuffer ) {
-        m_currentSnapshot = m_syncBuffer->pullLatestSnapshot();
-    }
-
     if ( m_currentSnapshot ) {
         // 更新背景纹理
         /// @brief 仅在快照路径变化时同步背景纹理，避免热路径每帧访问文件系统。
         if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
             updateBackgroundTexture();
         }
-
-        // --- 亚帧时间补偿 (直接修改动态顶点 Y 坐标) ---
-        // 当播放中时，逻辑线程生成快照的时刻 (snapshotSysTime) 与 UI
-        // 线程实际渲染的时刻之间存在时间差。
-        // 在 effectTiming 段落中，由于可见物体更多导致逻辑线程帧率下降，
-        // 这个时间差被放大为可见的周期性停顿。
-        // 通过直接修改动态顶点（拍线、音符等）的 Y 坐标来补偿，
-        // 而静态顶点（轨道底板、判定区）保持不变。
-        float newYOffset = 0.0f;
-
-        if ( m_currentSnapshot->isPlaying &&
-             m_currentSnapshot->snapshotSysTime > 0.0 ) {
-            double now =
-                std::chrono::duration<double>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
-            double dt = now - m_currentSnapshot->snapshotSysTime;
-            if ( dt > 0.0 && dt < 0.1 ) {
-                newYOffset = static_cast<float>(
-                    m_currentSnapshot->getInterpolatedOffset(dt));
-            }
-        }
-
-        // 应用顶点级 Y 偏移 (仅修改动态顶点: 拍线、音符等)
-        uint32_t startVtx = m_currentSnapshot->staticVertexCount;
-        auto&    vertices = m_currentSnapshot->vertices;
-        uint32_t endVtx =
-            m_currentSnapshot->dynamicVertexCount > 0
-                ? (startVtx + m_currentSnapshot->dynamicVertexCount)
-                : static_cast<uint32_t>(vertices.size());
-
-        // 如果是同一个快照被复用，先撤销上一帧的偏移
-        if ( m_lastOffsetSnapshot == m_currentSnapshot &&
-             std::abs(m_lastAppliedYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
-                  ++i ) {
-                vertices[i].pos.y -= m_lastAppliedYOffset;
-            }
-        }
-
-        // 应用新偏移
-        if ( std::abs(newYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
-                  ++i ) {
-                vertices[i].pos.y += newYOffset;
-            }
-        }
-
-        m_lastOffsetSnapshot = m_currentSnapshot;
-        m_lastAppliedYOffset = newYOffset;
-    } else {
-        m_lastOffsetSnapshot = nullptr;
-        m_lastAppliedYOffset = 0.0f;
     }
 
     // 仅当当前画布是活动画布时才处理交互，防止后台画布发送干扰指令
@@ -262,6 +203,45 @@ void Basic2DCanvas::requestFocus()
 ImGuiID Basic2DCanvas::getDockId() const
 {
     return m_lastDockId;
+}
+
+/// @brief 判断当前帧是否需要准备画布快照。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 需要准备时返回 true。
+bool Basic2DCanvas::needsParallelUiPrepare(
+    const UI::UiFrameSnapshot& snapshot) const
+{
+    (void)snapshot;
+    return m_syncBuffer && (m_isOpen || m_showSaveConfirm ||
+                            (m_currentSnapshot && m_currentSnapshot->isDirty));
+}
+
+/// @brief 在线程池中拉取并准备画布渲染快照。
+/// @param snapshot 当前帧 UI 快照。
+void Basic2DCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
+{
+    (void)snapshot;
+    m_preparedSnapshot = prepareCanvasSnapshot(
+        m_syncBuffer.get(), m_lastOffsetSnapshot, m_lastAppliedYOffset, false);
+    m_hasPreparedSnapshot = true;
+}
+
+/// @brief 将准备好的画布快照切换到主线程可见状态。
+void Basic2DCanvas::swapPreparedUiFrameData()
+{
+    if ( !m_hasPreparedSnapshot ) {
+        return;
+    }
+
+    m_currentSnapshot     = m_preparedSnapshot.snapshot;
+    m_lastOffsetSnapshot  = m_preparedSnapshot.offsetSnapshot;
+    m_lastAppliedYOffset  = m_preparedSnapshot.appliedYOffset;
+    m_hasPreparedSnapshot = false;
+
+    if ( !m_currentSnapshot ) {
+        m_lastOffsetSnapshot = nullptr;
+        m_lastAppliedYOffset = 0.0f;
+    }
 }
 
 bool Basic2DCanvas::isDirty() const

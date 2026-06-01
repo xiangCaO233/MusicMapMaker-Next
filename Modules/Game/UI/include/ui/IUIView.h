@@ -12,6 +12,7 @@
 namespace MMM::UI
 {
 class UIManager;
+class IParallelUiPreparable;
 
 /// @brief 视图类型判别枚举,替代 dynamic_cast (支持 -fno-rtti)
 enum class ViewType : uint8_t {
@@ -46,6 +47,9 @@ public:
 
     /// @brief 安全转换为 IRenderableView
     virtual class IRenderableView* asRenderableView() { return nullptr; }
+
+    /// @brief 安全转换为可并行准备 UI 数据的接口
+    virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }
 
     /// @brief 获取实际实例指针，用于在禁用 RTTI 且存在虚继承时进行下行转换
     virtual void* getActualInstance() { return this; }

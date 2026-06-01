@@ -1,6 +1,7 @@
 #pragma once
 
 #include "imgui.h"
+#include "ui/IParallelUiPreparable.h"
 #include <string>
 namespace MMM::UI
 {
@@ -17,6 +18,10 @@ public:
     /// @brief 内部绘制逻辑 (Clay/ImGui)
     virtual void onUpdate(LayoutContext& layoutContext,
                           UIManager*     sourceManager) = 0;
+
+    /// @brief 安全转换为可并行准备 UI 数据的接口。
+    /// @return 默认子视图不提供并行准备接口。
+    virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }
 
     /// @brief 获取子视图名称
     inline const std::string& getSubViewName() const { return m_subViewName; }

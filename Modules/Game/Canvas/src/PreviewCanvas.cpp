@@ -17,7 +17,6 @@
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -48,62 +47,6 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     UI::LayoutContext lctx(m_layoutCtx, windowName);
     RenderContext rctx(this, windowName.c_str(), m_targetWidth, m_targetHeight);
-
-    // 拉取预览视口的快照
-    if ( m_syncBuffer ) {
-        m_currentSnapshot = m_syncBuffer->pullLatestSnapshot();
-    }
-
-    if ( m_currentSnapshot ) {
-        // --- 亚帧时间补偿 (直接修改动态顶点 Y 坐标) ---
-        float newYOffset = 0.0f;
-
-        if ( m_currentSnapshot->isPlaying &&
-             m_currentSnapshot->snapshotSysTime > 0.0 ) {
-            double now =
-                std::chrono::duration<double>(
-                    std::chrono::steady_clock::now().time_since_epoch())
-                    .count();
-            double dt = now - m_currentSnapshot->snapshotSysTime;
-            if ( dt > 0.0 && dt < 0.1 ) {
-                // 关键点：预览区的偏移需要乘上预览区的缩放倍率 renderScaleY
-                newYOffset = static_cast<float>(
-                    m_currentSnapshot->getInterpolatedOffset(dt) *
-                    m_currentSnapshot->renderScaleY);
-            }
-        }
-
-        // 应用顶点级 Y 偏移 (仅修改动态顶点: 标尺刻度、事件线等)
-        uint32_t startVtx = m_currentSnapshot->staticVertexCount;
-        auto&    vertices = m_currentSnapshot->vertices;
-        uint32_t endVtx =
-            m_currentSnapshot->dynamicVertexCount > 0
-                ? (startVtx + m_currentSnapshot->dynamicVertexCount)
-                : static_cast<uint32_t>(vertices.size());
-
-        // 如果是同一个快照被复用，先撤销上一帧的偏移
-        if ( m_lastOffsetSnapshot == m_currentSnapshot &&
-             std::abs(m_lastAppliedYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
-                  ++i ) {
-                vertices[i].pos.y -= m_lastAppliedYOffset;
-            }
-        }
-
-        // 应用新偏移
-        if ( std::abs(newYOffset) > 0.0001f ) {
-            for ( size_t i = startVtx; i < endVtx && i < vertices.size();
-                  ++i ) {
-                vertices[i].pos.y += newYOffset;
-            }
-        }
-
-        m_lastOffsetSnapshot = m_currentSnapshot;
-        m_lastAppliedYOffset = newYOffset;
-    } else {
-        m_lastOffsetSnapshot = nullptr;
-        m_lastAppliedYOffset = 0.0f;
-    }
 
     // --- 交互：发送鼠标位置指令给逻辑线程 ---
     ImVec2 mousePos      = ImGui::GetMousePos();
@@ -207,6 +150,44 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 bool PreviewCanvas::isDirty() const
 {
     return true;
+}
+
+/// @brief 判断当前帧是否需要准备预览快照。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 需要准备时返回 true。
+bool PreviewCanvas::needsParallelUiPrepare(
+    const UI::UiFrameSnapshot& snapshot) const
+{
+    (void)snapshot;
+    return m_syncBuffer && m_isOpen;
+}
+
+/// @brief 在线程池中拉取并准备预览画布快照。
+/// @param snapshot 当前帧 UI 快照。
+void PreviewCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
+{
+    (void)snapshot;
+    m_preparedSnapshot = prepareCanvasSnapshot(
+        m_syncBuffer.get(), m_lastOffsetSnapshot, m_lastAppliedYOffset, true);
+    m_hasPreparedSnapshot = true;
+}
+
+/// @brief 将准备好的预览快照切换到主线程可见状态。
+void PreviewCanvas::swapPreparedUiFrameData()
+{
+    if ( !m_hasPreparedSnapshot ) {
+        return;
+    }
+
+    m_currentSnapshot     = m_preparedSnapshot.snapshot;
+    m_lastOffsetSnapshot  = m_preparedSnapshot.offsetSnapshot;
+    m_lastAppliedYOffset  = m_preparedSnapshot.appliedYOffset;
+    m_hasPreparedSnapshot = false;
+
+    if ( !m_currentSnapshot ) {
+        m_lastOffsetSnapshot = nullptr;
+        m_lastAppliedYOffset = 0.0f;
+    }
 }
 
 void PreviewCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,

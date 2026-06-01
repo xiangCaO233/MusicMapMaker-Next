@@ -1,8 +1,10 @@
 #pragma once
 
+#include "canvas/CanvasSnapshotPrepare.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <glm/glm.hpp>
 #include <memory>
@@ -27,7 +29,8 @@ struct RenderSnapshot;
 
 namespace MMM::Canvas
 {
-class Basic2DCanvas : public UI::IRenderableView
+class Basic2DCanvas : public UI::IRenderableView,
+                      public UI::IParallelUiPreparable
 {
 public:
     Basic2DCanvas(const std::string& name, uint32_t w, uint32_t h,
@@ -64,6 +67,28 @@ public:
     /// @brief 获取画布当前所在的 ImGui Dock 节点。
     /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
     ImGuiID getDockId() const;
+
+    /// @brief 安全转换为 UI 并行准备接口。
+    /// @return 当前画布的并行准备接口。
+    UI::IParallelUiPreparable* asParallelUiPreparable() override
+    {
+        return this;
+    }
+
+    /// @brief 判断当前帧是否需要准备画布快照。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @return 需要准备时返回 true。
+    /// @warning UI 热路径：每帧主线程调用，只检查同步缓冲区和窗口状态。
+    bool needsParallelUiPrepare(
+        const UI::UiFrameSnapshot& snapshot) const override;
+
+    /// @brief 在线程池中拉取并准备画布渲染快照。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @warning 后台线程路径：只消费 BeatmapSyncBuffer 并处理动态顶点偏移。
+    void prepareUiFrameData(const UI::UiFrameSnapshot& snapshot) override;
+
+    /// @brief 将准备好的画布快照切换到主线程可见状态。
+    void swapPreparedUiFrameData() override;
 
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
@@ -164,6 +189,12 @@ private:
 
     /// @brief 上一次应用偏移的快照指针 (用于检测快照是否更新)
     Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+
+    /// @brief 后台准备出的画布快照消费结果。
+    PreparedCanvasSnapshot m_preparedSnapshot;
+
+    /// @brief 是否有后台准备结果等待主线程切换。
+    bool m_hasPreparedSnapshot{ false };
 
     /// @brief 是否显示保存确认弹窗
     bool m_showSaveConfirm{ false };

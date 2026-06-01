@@ -14,6 +14,8 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "runtime/AppThreadPool.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/FloatingManagerUI.h"
@@ -24,6 +26,9 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include <algorithm>
+#include <ice/thread/ThreadPool.hpp>
+#include <latch>
 #include <vector>
 
 namespace MMM::UI
@@ -86,6 +91,39 @@ bool resolveWorkspaceAudioTrack(const Project&                     project,
     }
 
     return false;
+}
+
+/// @brief 捕获当前帧可安全传给后台 UI 准备任务的只读快照。
+/// @return 当前帧 UI 快照。
+/// @warning UI 热路径：每帧调用，只复制轻量配置和观察指针。
+UiFrameSnapshot captureUiFrameSnapshot()
+{
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& settings   = appConfig.getEditorSettings();
+    const auto& aesthetics = settings.aesthetics;
+    auto&       skinCfg    = Config::SkinManager::instance();
+    const auto& style      = ImGui::GetStyle();
+
+    UiFrameSnapshot snapshot;
+    snapshot.dpiScale     = std::max(1.0f, appConfig.getWindowContentScale());
+    snapshot.framePadding = style.FramePadding;
+    snapshot.frameHeight  = ImGui::GetFrameHeight();
+    snapshot.frameHeightWithSpacing = ImGui::GetFrameHeightWithSpacing();
+    snapshot.contentFont            = skinCfg.getFont("content");
+    snapshot.menuFont               = skinCfg.getFont("menu");
+    snapshot.fileManagerFont        = skinCfg.getFont("filemanager");
+    snapshot.fallbackFont           = ImGui::GetFont();
+    snapshot.fontSize               = ImGui::GetFontSize();
+    snapshot.translationVersion     = skinCfg.getTranslator().getVersion();
+    snapshot.language               = settings.language;
+    snapshot.preferredAsciiFont     = settings.preferredAsciiFont;
+    snapshot.preferredCjkFont       = settings.preferredCjkFont;
+    snapshot.fontSizeMultiplier     = settings.fontSizeMultiplier;
+    snapshot.uiScaleMultiplier      = settings.uiScaleMultiplier;
+    snapshot.windowPadding          = aesthetics.windowPadding;
+    snapshot.itemSpacing            = aesthetics.itemSpacing;
+    snapshot.sidebarWidthConfig     = skinCfg.getLayoutConfig("side_bar.width");
+    return snapshot;
 }
 }  // namespace
 
@@ -540,6 +578,55 @@ void UIManager::onUpdateUI()
 
     // 派发 ImGui 事件 (每帧仅 1 次)
     DispatchGlobalUIEvents();
+
+    // 并行准备视图数据；这里只允许准备纯数据，实际 ImGui 绘制仍在主线程。
+    m_uiPrepareCandidates.clear();
+    m_uiPrepareViews.clear();
+    m_uiPrepareCandidates.reserve(m_uiSequence.size());
+    for ( const auto& name : m_uiSequence ) {
+        auto it = m_uiviews.find(name);
+        if ( it == m_uiviews.end() ) {
+            continue;
+        }
+
+        IParallelUiPreparable* preparable =
+            it->second->asParallelUiPreparable();
+        if ( preparable ) {
+            m_uiPrepareCandidates.push_back(preparable);
+        }
+    }
+
+    if ( !m_uiPrepareCandidates.empty() ) {
+        const UiFrameSnapshot snapshot = captureUiFrameSnapshot();
+        m_uiPrepareViews.clear();
+        m_uiPrepareViews.reserve(m_uiPrepareCandidates.size());
+        for ( IParallelUiPreparable* preparable : m_uiPrepareCandidates ) {
+            if ( preparable->needsParallelUiPrepare(snapshot) ) {
+                m_uiPrepareViews.push_back(preparable);
+            }
+        }
+
+        auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
+        if ( appThreadPool && m_uiPrepareViews.size() > 1 ) {
+            std::latch prepareLatch(
+                static_cast<std::ptrdiff_t>(m_uiPrepareViews.size()));
+            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+                appThreadPool->enqueue_void(
+                    [preparable, &snapshot, &prepareLatch]() {
+                        preparable->prepareUiFrameData(snapshot);
+                        prepareLatch.count_down();
+                    });
+            }
+            prepareLatch.wait();
+        } else {
+            for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+                preparable->prepareUiFrameData(snapshot);
+            }
+        }
+        for ( IParallelUiPreparable* preparable : m_uiPrepareViews ) {
+            preparable->swapPreparedUiFrameData();
+        }
+    }
 
     // 按注册顺序更新本帧开始前已存在的 UI。
     // update() 过程中可能注册新视图，使用索引和名称副本避免迭代器失效。

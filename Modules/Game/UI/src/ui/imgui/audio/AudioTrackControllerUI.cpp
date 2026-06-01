@@ -64,6 +64,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     auto& engine   = Logic::EditorEngine::instance();
     auto* project  = engine.getCurrentProject();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    const auto& layoutMetrics = getLayoutMetrics(dpiScale);
 
     if ( m_pendingDockId != 0 ) {
         ImGui::SetNextWindowDockID(m_pendingDockId, ImGuiCond_Always);
@@ -127,20 +128,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         m_contentVBox.setSpacing(4).setPadding(4, 4, 4, 4);
         size_t rowIndex = 0;
 
-        const char* allLabels[] = {
-            TR_CACHE("ui.audio_manager.volume").data(),
-            TR_CACHE("ui.audio_manager.speed_control").data(),
-            TR_CACHE("ui.audio_manager.speed_presets").data(),
-            TR_CACHE("ui.audio_manager.speed_value").data(),
-            TR_CACHE("ui.audio_manager.stretch_quality").data(),
-            TR_CACHE("ui.audio_manager.pitch_presets").data(),
-            TR_CACHE("ui.audio_manager.pitch_value").data(),
-            TR_CACHE("ui.audio_manager.play_preview").data(),
-        };
-        float maxLabelW = 0;
-        for ( auto* l : allLabels )
-            maxLabelW = std::max(maxLabelW, measureLabelWidth(l));
-        maxLabelW += 8.0f;
+        float maxLabelW = layoutMetrics.labelWidth;
 
         buildVolumeSection(
             m_contentVBox, rowIndex, maxLabelW, volume, muted, changed);

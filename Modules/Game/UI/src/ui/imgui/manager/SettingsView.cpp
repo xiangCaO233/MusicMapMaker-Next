@@ -14,6 +14,7 @@
 #include <cfloat>
 #include <charconv>
 #include <cmath>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -38,18 +39,12 @@ const char* getCategoryShortLabel(Event::SettingsTab tab)
 }
 
 /// @brief 使用指定字体测量单行文本宽度。
-float measureSettingsText(const char* text, const char* fontName)
+float measureSettingsText(const char* text, ImFont* font, float fontSize)
 {
     if ( !text ) return 0.0f;
+    if ( !font ) return 0.0f;
 
-    auto&   skinCfg = Config::SkinManager::instance();
-    ImFont* font    = skinCfg.getFont(fontName);
-    if ( !font ) {
-        font = ImGui::GetFont();
-    }
-    return font
-        ->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, 0.0f, text, nullptr)
-        .x;
+    return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text, nullptr).x;
 }
 
 /// @brief 无异常解析皮肤布局中的浮点值。
@@ -67,18 +62,22 @@ float parseLayoutFloat(const std::string& value, float fallback)
 /// @brief 测量一组设置文本中的最大单行宽度。
 template<size_t N>
 float measureSettingsTextList(const std::array<const char*, N>& labels,
-                              const char*                       fontName)
+                              ImFont* font, float fontSize)
 {
     float maxWidth = 0.0f;
     for ( const char* label : labels ) {
-        maxWidth = std::max(maxWidth, measureSettingsText(label, fontName));
+        maxWidth =
+            std::max(maxWidth, measureSettingsText(label, font, fontSize));
     }
     return maxWidth;
 }
 
 /// @brief 估算当前设置页标签列中的最大宽度。
-float measureSettingsTabLabelWidth(Event::SettingsTab tab)
+float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
+                                   const UiFrameSnapshot& snapshot)
 {
+    ImFont* font =
+        snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
         const std::array<const char*, 27> labels{
@@ -110,7 +109,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab tab)
             TR_CACHE("ui.settings.software.sync_buffer").data(),
             TR_CACHE("ui.settings.software.sync_interval").data()
         };
-        return measureSettingsTextList(labels, "content");
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
         const std::array<const char*, 28> labels{
@@ -144,7 +143,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab tab)
             TR_CACHE("ui.settings.visual.spectrum_detail").data(),
             TR_CACHE("ui.settings.visual.visual_offset").data()
         };
-        return measureSettingsTextList(labels, "content");
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Project: {
         const std::array<const char*, 3> labels{
@@ -152,7 +151,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab tab)
             TR_CACHE("ui.settings.project.path").data(),
             TR_CACHE("ui.settings.project.no_project").data()
         };
-        return measureSettingsTextList(labels, "content");
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Beatmap: {
         const std::array<const char*, 17> labels{
@@ -174,7 +173,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab tab)
             TR_CACHE("ui.settings.beatmap.cover").data(),
             TR_CACHE("ui.settings.beatmap.background").data()
         };
-        return measureSettingsTextList(labels, "content");
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
         const std::array<const char*, 14> labels{
@@ -195,25 +194,29 @@ float measureSettingsTabLabelWidth(Event::SettingsTab tab)
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
         };
-        return measureSettingsTextList(labels, "content");
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     }
     return 0.0f;
 }
 
 /// @brief 估算当前设置页右侧控件中不可再换行内容的宽度。
-float measureSettingsTabWidgetWidth(Event::SettingsTab tab, float dpiScale)
+float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
+                                    const UiFrameSnapshot& snapshot)
 {
-    const float scale      = std::max(1.0f, dpiScale);
-    const float framePad   = ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float comboArrow = ImGui::GetFrameHeight();
-    float       minWidth = measureSettingsText("0.0000", "content") + framePad +
-                           std::floor(48.0f * scale);
+    const float scale      = std::max(1.0f, snapshot.dpiScale);
+    const float framePad   = snapshot.framePadding.x * 2.0f;
+    const float comboArrow = snapshot.frameHeight;
+    ImFont*     font =
+        snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
+    float minWidth = measureSettingsText("0.0000", font, snapshot.fontSize) +
+                     framePad + std::floor(48.0f * scale);
 
     auto addOptions = [&](auto&& labels) {
-        minWidth = std::max(
-            minWidth,
-            measureSettingsTextList(labels, "content") + framePad + comboArrow);
+        minWidth =
+            std::max(minWidth,
+                     measureSettingsTextList(labels, font, snapshot.fontSize) +
+                         framePad + comboArrow);
     };
 
     switch ( tab ) {
@@ -253,6 +256,38 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab tab, float dpiScale)
     }
 
     return std::ceil(minWidth);
+}
+
+/// @brief 捕获设置窗口同步测量所需的当前帧快照。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 设置窗口布局测量快照。
+UiFrameSnapshot captureSettingsUiFrameSnapshot(float dpiScale)
+{
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& settings   = appConfig.getEditorSettings();
+    const auto& aesthetics = settings.aesthetics;
+    auto&       skinCfg    = Config::SkinManager::instance();
+    const auto& style      = ImGui::GetStyle();
+
+    UiFrameSnapshot snapshot;
+    snapshot.dpiScale               = std::max(1.0f, dpiScale);
+    snapshot.framePadding           = style.FramePadding;
+    snapshot.frameHeight            = ImGui::GetFrameHeight();
+    snapshot.frameHeightWithSpacing = ImGui::GetFrameHeightWithSpacing();
+    snapshot.contentFont            = skinCfg.getFont("content");
+    snapshot.menuFont               = skinCfg.getFont("menu");
+    snapshot.fallbackFont           = ImGui::GetFont();
+    snapshot.fontSize               = ImGui::GetFontSize();
+    snapshot.translationVersion     = skinCfg.getTranslator().getVersion();
+    snapshot.language               = settings.language;
+    snapshot.preferredAsciiFont     = settings.preferredAsciiFont;
+    snapshot.preferredCjkFont       = settings.preferredCjkFont;
+    snapshot.fontSizeMultiplier     = settings.fontSizeMultiplier;
+    snapshot.uiScaleMultiplier      = settings.uiScaleMultiplier;
+    snapshot.windowPadding          = aesthetics.windowPadding;
+    snapshot.itemSpacing            = aesthetics.itemSpacing;
+    snapshot.sidebarWidthConfig     = skinCfg.getLayoutConfig("side_bar.width");
+    return snapshot;
 }
 }  // namespace
 
@@ -298,56 +333,59 @@ CLayVBox& SettingsView::getSection(size_t index)
     return m_sectionBoxes[index];
 }
 
-/// @brief 获取当前设置页布局测量缓存。
-/// @param dpiScale 当前窗口内容缩放。
-/// @return 与当前语言、字体、缩放和设置页匹配的布局测量结果。
-/// @warning UI 热路径：仅在语言、字体、缩放或设置页变化时重新测量。
-const SettingsView::LayoutMetricsCache& SettingsView::getLayoutMetrics(
-    float dpiScale) const
+/// @brief 判断布局测量缓存是否匹配当前帧状态。
+/// @param cache 需要检查的布局缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param tab 当前设置页。
+/// @return 完全匹配时返回 true。
+bool SettingsView::layoutMetricsMatch(const LayoutMetricsCache& cache,
+                                      const UiFrameSnapshot&    snapshot,
+                                      Event::SettingsTab        tab)
 {
-    const float       scale      = std::max(1.0f, dpiScale);
-    auto&             appConfig  = Config::AppConfig::instance();
-    const auto&       settings   = appConfig.getEditorSettings();
-    const auto&       aesthetics = settings.aesthetics;
-    const std::string sidebarWidthConfig =
-        Config::SkinManager::instance().getLayoutConfig("side_bar.width");
-
     auto floatEqual = [](float lhs, float rhs) {
         return std::abs(lhs - rhs) <= 0.0001f;
     };
 
-    if ( m_layoutMetricsCache.valid &&
-         m_layoutMetricsCache.tab == m_currentTab &&
-         floatEqual(m_layoutMetricsCache.dpiScale, scale) &&
-         m_layoutMetricsCache.language == settings.language &&
-         m_layoutMetricsCache.preferredAsciiFont ==
-             settings.preferredAsciiFont &&
-         m_layoutMetricsCache.preferredCjkFont == settings.preferredCjkFont &&
-         floatEqual(m_layoutMetricsCache.fontSizeMultiplier,
-                    settings.fontSizeMultiplier) &&
-         floatEqual(m_layoutMetricsCache.uiScaleMultiplier,
-                    settings.uiScaleMultiplier) &&
-         floatEqual(m_layoutMetricsCache.windowPadding,
-                    aesthetics.windowPadding) &&
-         floatEqual(m_layoutMetricsCache.itemSpacing, aesthetics.itemSpacing) &&
-         m_layoutMetricsCache.sidebarWidthConfig == sidebarWidthConfig ) {
-        return m_layoutMetricsCache;
-    }
+    return cache.valid && cache.tab == tab &&
+           floatEqual(cache.dpiScale, snapshot.dpiScale) &&
+           cache.language == snapshot.language &&
+           cache.preferredAsciiFont == snapshot.preferredAsciiFont &&
+           cache.preferredCjkFont == snapshot.preferredCjkFont &&
+           floatEqual(cache.fontSizeMultiplier, snapshot.fontSizeMultiplier) &&
+           floatEqual(cache.uiScaleMultiplier, snapshot.uiScaleMultiplier) &&
+           floatEqual(cache.windowPadding, snapshot.windowPadding) &&
+           floatEqual(cache.itemSpacing, snapshot.itemSpacing) &&
+           cache.sidebarWidthConfig == snapshot.sidebarWidthConfig &&
+           cache.translationVersion == snapshot.translationVersion;
+}
 
-    m_layoutMetricsCache.valid              = true;
-    m_layoutMetricsCache.tab                = m_currentTab;
-    m_layoutMetricsCache.dpiScale           = scale;
-    m_layoutMetricsCache.language           = settings.language;
-    m_layoutMetricsCache.preferredAsciiFont = settings.preferredAsciiFont;
-    m_layoutMetricsCache.preferredCjkFont   = settings.preferredCjkFont;
-    m_layoutMetricsCache.fontSizeMultiplier = settings.fontSizeMultiplier;
-    m_layoutMetricsCache.uiScaleMultiplier  = settings.uiScaleMultiplier;
-    m_layoutMetricsCache.windowPadding      = aesthetics.windowPadding;
-    m_layoutMetricsCache.itemSpacing        = aesthetics.itemSpacing;
-    m_layoutMetricsCache.sidebarWidthConfig = sidebarWidthConfig;
+/// @brief 构造设置窗口布局测量缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param tab 需要测量的设置页。
+/// @return 设置窗口布局测量结果。
+SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
+    const UiFrameSnapshot& snapshot, Event::SettingsTab tab)
+{
+    LayoutMetricsCache cache;
+    cache.valid              = true;
+    cache.tab                = tab;
+    cache.dpiScale           = snapshot.dpiScale;
+    cache.language           = snapshot.language;
+    cache.preferredAsciiFont = snapshot.preferredAsciiFont;
+    cache.preferredCjkFont   = snapshot.preferredCjkFont;
+    cache.fontSizeMultiplier = snapshot.fontSizeMultiplier;
+    cache.uiScaleMultiplier  = snapshot.uiScaleMultiplier;
+    cache.windowPadding      = snapshot.windowPadding;
+    cache.itemSpacing        = snapshot.itemSpacing;
+    cache.sidebarWidthConfig = snapshot.sidebarWidthConfig;
+    cache.translationVersion = snapshot.translationVersion;
 
-    const float sidebarBaseW = parseLayoutFloat(sidebarWidthConfig, 40.0f);
-    const float btnSize      = std::floor(sidebarBaseW * scale);
+    const float scale = std::max(1.0f, snapshot.dpiScale);
+    ImFont*     menuFont =
+        snapshot.menuFont ? snapshot.menuFont : snapshot.fallbackFont;
+    const float sidebarBaseW =
+        parseLayoutFloat(cache.sidebarWidthConfig, 40.0f);
+    const float btnSize = std::floor(sidebarBaseW * scale);
 
     const std::array<const char*, 5> labels{
         getCategoryShortLabel(Event::SettingsTab::Software),
@@ -356,36 +394,76 @@ const SettingsView::LayoutMetricsCache& SettingsView::getLayoutMetrics(
         getCategoryShortLabel(Event::SettingsTab::Beatmap),
         getCategoryShortLabel(Event::SettingsTab::Editor)
     };
-    const float maxLabelWidth = measureSettingsTextList(labels, "menu");
-    const float sepAreaW      = std::floor(12.0f * scale);
-    const float labelPadding  = std::floor(12.0f * scale);
-    const float vboxPadding   = std::floor(12.0f * scale);
-    m_layoutMetricsCache.categorySidebarWidth = std::floor(
-        btnSize + sepAreaW + maxLabelWidth + labelPadding + vboxPadding);
+    const float maxLabelWidth =
+        measureSettingsTextList(labels, menuFont, snapshot.fontSize);
+    const float sepAreaW       = std::floor(12.0f * scale);
+    const float labelPadding   = std::floor(12.0f * scale);
+    const float vboxPadding    = std::floor(12.0f * scale);
+    cache.categorySidebarWidth = std::floor(btnSize + sepAreaW + maxLabelWidth +
+                                            labelPadding + vboxPadding);
 
-    const float windowPad = std::floor(aesthetics.windowPadding * scale) * 2.0f;
+    const float windowPad = std::floor(snapshot.windowPadding * scale) * 2.0f;
     const float categorySize    = std::floor(sidebarBaseW * scale);
-    const float categorySpacing = std::floor(aesthetics.itemSpacing * scale);
+    const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
                                   categorySize * 5.0f + categorySpacing * 4.0f;
 
-    m_layoutMetricsCache.tabLabelWidth =
-        measureSettingsTabLabelWidth(m_currentTab) + std::floor(16.0f * scale);
-    m_layoutMetricsCache.tabWidgetWidth =
-        measureSettingsTabWidgetWidth(m_currentTab, scale);
+    cache.tabLabelWidth =
+        measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
+    cache.tabWidgetWidth = measureSettingsTabWidgetWidth(tab, snapshot);
     const float contentDecorations = std::floor(15.0f * scale) * 2.0f +
                                      std::floor(8.0f * scale) * 4.0f +
                                      std::floor(8.0f * scale);
-    const float contentWidth       = m_layoutMetricsCache.tabLabelWidth +
-                                     m_layoutMetricsCache.tabWidgetWidth +
-                                     contentDecorations;
-    const float titleHeight        = ImGui::GetFrameHeightWithSpacing();
+    const float contentWidth =
+        cache.tabLabelWidth + cache.tabWidgetWidth + contentDecorations;
+    const float titleHeight = snapshot.frameHeightWithSpacing;
 
-    m_layoutMetricsCache.minWindowSize =
-        ImVec2(std::ceil(windowPad + m_layoutMetricsCache.categorySidebarWidth +
-                         1.0f + contentWidth),
-               std::ceil(windowPad + titleHeight + categoryHeight));
+    cache.minWindowSize = ImVec2(
+        std::ceil(windowPad + cache.categorySidebarWidth + 1.0f + contentWidth),
+        std::ceil(windowPad + titleHeight + categoryHeight));
+    return cache;
+}
+
+/// @brief 获取当前设置页布局测量缓存。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 与当前语言、字体、缩放和设置页匹配的布局测量结果。
+/// @warning UI 热路径：仅在缓存未命中时同步测量；通常由并行准备提前填充。
+const SettingsView::LayoutMetricsCache& SettingsView::getLayoutMetrics(
+    float dpiScale) const
+{
+    UiFrameSnapshot snapshot = captureSettingsUiFrameSnapshot(dpiScale);
+    if ( !layoutMetricsMatch(m_layoutMetricsCache, snapshot, m_currentTab) ) {
+        m_layoutMetricsCache = buildLayoutMetrics(snapshot, m_currentTab);
+    }
     return m_layoutMetricsCache;
+}
+
+/// @brief 判断当前帧设置窗口是否需要准备布局数据。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 需要后台准备时返回 true。
+bool SettingsView::needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const
+{
+    return m_isOpen &&
+           !layoutMetricsMatch(m_layoutMetricsCache, snapshot, m_currentTab);
+}
+
+/// @brief 在线程池中准备设置窗口布局数据。
+/// @param snapshot 当前帧 UI 快照。
+void SettingsView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
+{
+    m_preparedLayoutMetricsCache = buildLayoutMetrics(snapshot, m_currentTab);
+    m_hasPreparedLayoutMetrics   = true;
+}
+
+/// @brief 将后台准备好的布局数据切换给主线程使用。
+void SettingsView::swapPreparedUiFrameData()
+{
+    if ( !m_hasPreparedLayoutMetrics ) {
+        return;
+    }
+
+    m_layoutMetricsCache       = std::move(m_preparedLayoutMetricsCache);
+    m_hasPreparedLayoutMetrics = false;
 }
 
 /// @brief 获取当前设置页标签列宽度。

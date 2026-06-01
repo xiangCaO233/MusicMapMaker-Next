@@ -285,6 +285,54 @@ const std::string& FloatingManagerUI::getCurrentSubViewId() const
     return m_currentSubViewId;
 }
 
+/// @brief 判断当前可见子视图是否需要并行准备。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 当前子视图需要准备时返回 true。
+bool FloatingManagerUI::needsParallelUiPrepare(
+    const UiFrameSnapshot& snapshot) const
+{
+    if ( !m_isVisible ) {
+        return false;
+    }
+
+    auto it = m_subViews.find(m_currentSubViewId);
+    if ( it == m_subViews.end() ) {
+        return false;
+    }
+
+    IParallelUiPreparable* preparable = it->second->asParallelUiPreparable();
+    return preparable && preparable->needsParallelUiPrepare(snapshot);
+}
+
+/// @brief 在线程池中准备当前可见子视图数据。
+/// @param snapshot 当前帧 UI 快照。
+void FloatingManagerUI::prepareUiFrameData(const UiFrameSnapshot& snapshot)
+{
+    auto it = m_subViews.find(m_currentSubViewId);
+    if ( it == m_subViews.end() ) {
+        return;
+    }
+
+    if ( IParallelUiPreparable* preparable =
+             it->second->asParallelUiPreparable() ) {
+        preparable->prepareUiFrameData(snapshot);
+    }
+}
+
+/// @brief 将当前子视图后台准备结果切换到主线程可读状态。
+void FloatingManagerUI::swapPreparedUiFrameData()
+{
+    auto it = m_subViews.find(m_currentSubViewId);
+    if ( it == m_subViews.end() ) {
+        return;
+    }
+
+    if ( IParallelUiPreparable* preparable =
+             it->second->asParallelUiPreparable() ) {
+        preparable->swapPreparedUiFrameData();
+    }
+}
+
 /// @brief 在主 DockSpace 渲染前应用停靠最小尺寸约束。
 void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     UIManager* sourceManager)

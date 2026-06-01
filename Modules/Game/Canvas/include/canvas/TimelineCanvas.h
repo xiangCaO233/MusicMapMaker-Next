@@ -1,7 +1,9 @@
 #pragma once
 
+#include "canvas/CanvasSnapshotPrepare.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -23,7 +25,8 @@ namespace MMM::Canvas
  * @brief 时间线标尺画布类
  * 停靠在侧边栏与主画布之间，显示小节线、拍线以及 BPM/流速变更标记。
  */
-class TimelineCanvas : public UI::IRenderableView
+class TimelineCanvas : public UI::IRenderableView,
+                       public UI::IParallelUiPreparable
 {
 public:
     TimelineCanvas(const std::string& name, uint32_t w, uint32_t h,
@@ -32,6 +35,28 @@ public:
 
     // IUIView 接口
     void update(UI::UIManager* sourceManager) override;
+
+    /// @brief 安全转换为 UI 并行准备接口。
+    /// @return 当前时间线画布的并行准备接口。
+    UI::IParallelUiPreparable* asParallelUiPreparable() override
+    {
+        return this;
+    }
+
+    /// @brief 判断当前帧是否需要准备时间线快照。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @return 需要准备时返回 true。
+    /// @warning UI 热路径：每帧主线程调用，只检查同步缓冲区和窗口状态。
+    bool needsParallelUiPrepare(
+        const UI::UiFrameSnapshot& snapshot) const override;
+
+    /// @brief 在线程池中拉取并准备时间线快照。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @warning 后台线程路径：只消费 BeatmapSyncBuffer 并处理动态顶点偏移。
+    void prepareUiFrameData(const UI::UiFrameSnapshot& snapshot) override;
+
+    /// @brief 将准备好的时间线快照切换到主线程可见状态。
+    void swapPreparedUiFrameData() override;
 
     // IRenderableView 接口
     bool isDirty() const override;
@@ -154,6 +179,12 @@ private:
 
     /// @brief 上一次应用偏移的快照指针
     Logic::RenderSnapshot* m_lastOffsetSnapshot{ nullptr };
+
+    /// @brief 后台准备出的时间线快照消费结果。
+    PreparedCanvasSnapshot m_preparedSnapshot;
+
+    /// @brief 是否有后台准备结果等待主线程切换。
+    bool m_hasPreparedSnapshot{ false };
 };
 
 

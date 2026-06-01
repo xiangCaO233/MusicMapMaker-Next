@@ -242,7 +242,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // Logic::EditorEngine::instance().pushCommand(
         //     Logic::CmdLoadBeatmap{ map });
 
-        auto lastRenderTime = FrameLimitClock::now();
+        auto   nextRenderDeadline = FrameLimitClock::now();
+        double lastRenderTargetDt = 0.0;
 
         // 进入主循环
         while ( !window.shouldClose() ) {
@@ -273,18 +274,35 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             default: targetDt = 0.0; break;
             }
 
+            auto currentRenderTime = FrameLimitClock::now();
             if ( targetDt > 0.0 ) {
-                auto frameDeadline =
-                    lastRenderTime +
+                /// @brief 主渲染限帧使用累计 deadline，避免 Windows sleep
+                /// 过冲被逐帧累计到 fps 统计中。
+                /// @warning 渲染热路径：每帧只做时间计算和必要 sleep；禁止加入
+                /// 业务逻辑或资源操作。
+                const auto targetDuration =
                     std::chrono::duration_cast<FrameLimitClock::duration>(
                         std::chrono::duration<double>(targetDt));
-                if ( FrameLimitClock::now() < frameDeadline ) {
-                    sleepUntilFrameDeadline(frameDeadline);
-                    continue;
-                }
-            }
 
-            lastRenderTime = FrameLimitClock::now();
+                if ( targetDt != lastRenderTargetDt ) {
+                    nextRenderDeadline = currentRenderTime + targetDuration;
+                    lastRenderTargetDt = targetDt;
+                }
+
+                if ( currentRenderTime < nextRenderDeadline ) {
+                    sleepUntilFrameDeadline(nextRenderDeadline);
+                    currentRenderTime = FrameLimitClock::now();
+                }
+
+                if ( currentRenderTime - nextRenderDeadline > targetDuration ) {
+                    nextRenderDeadline = currentRenderTime + targetDuration;
+                } else {
+                    nextRenderDeadline += targetDuration;
+                }
+            } else {
+                nextRenderDeadline = currentRenderTime;
+                lastRenderTargetDt = targetDt;
+            }
 
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
             // 已移至渲染循环内以降低 VSync 延迟 window.pollEvents();

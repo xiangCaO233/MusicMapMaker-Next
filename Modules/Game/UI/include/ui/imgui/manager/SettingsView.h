@@ -3,9 +3,11 @@
 #include "event/ui/UISettingsTabEvent.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/IParallelUiPreparable.h"
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <string>
@@ -16,7 +18,7 @@ namespace MMM::UI
 {
 
 /// @brief 编辑器设置面板视图，负责设置分类导航和各设置页渲染。
-class SettingsView : virtual public IUIView
+class SettingsView : virtual public IUIView, public IParallelUiPreparable
 {
 public:
     /// @brief 构造设置面板视图。
@@ -58,6 +60,24 @@ public:
     /// @return 当前设置视图实例。
     void* getActualInstance() override { return this; }
 
+    /// @brief 安全转换为 UI 并行准备接口。
+    /// @return 当前设置视图的并行准备接口。
+    IParallelUiPreparable* asParallelUiPreparable() override { return this; }
+
+    /// @brief 判断当前帧设置窗口是否需要准备布局数据。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @return 需要后台准备时返回 true。
+    /// @warning UI 热路径：每帧主线程调用，只检查缓存状态。
+    bool needsParallelUiPrepare(const UiFrameSnapshot& snapshot) const override;
+
+    /// @brief 在线程池中准备设置窗口布局数据。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @warning 后台线程路径：只计算文本宽度和布局尺寸，禁止调用 ImGui API。
+    void prepareUiFrameData(const UiFrameSnapshot& snapshot) override;
+
+    /// @brief 将后台准备好的布局数据切换给主线程使用。
+    void swapPreparedUiFrameData() override;
+
 private:
     /// @brief 设置窗口布局测量缓存。
     struct LayoutMetricsCache {
@@ -72,6 +92,9 @@ private:
 
         /// @brief 缓存对应的语言。
         std::string language;
+
+        /// @brief 缓存对应的翻译版本。
+        uint32_t translationVersion{ 0 };
 
         /// @brief 缓存对应的 ASCII 字体选择。
         std::string preferredAsciiFont;
@@ -140,8 +163,30 @@ private:
     /// @brief 布局测量缓存，避免设置窗口每帧重复测量大量文本。
     mutable LayoutMetricsCache m_layoutMetricsCache;
 
+    /// @brief 后台线程准备出的布局测量缓存。
+    LayoutMetricsCache m_preparedLayoutMetricsCache;
+
+    /// @brief 后台布局缓存是否等待主线程切换。
+    bool m_hasPreparedLayoutMetrics{ false };
+
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
+
+    /// @brief 构造设置窗口布局测量缓存。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @param tab 需要测量的设置页。
+    /// @return 设置窗口布局测量结果。
+    static LayoutMetricsCache buildLayoutMetrics(
+        const UiFrameSnapshot& snapshot, Event::SettingsTab tab);
+
+    /// @brief 判断布局测量缓存是否匹配当前帧状态。
+    /// @param cache 需要检查的布局缓存。
+    /// @param snapshot 当前帧 UI 快照。
+    /// @param tab 当前设置页。
+    /// @return 完全匹配时返回 true。
+    static bool layoutMetricsMatch(const LayoutMetricsCache& cache,
+                                   const UiFrameSnapshot&    snapshot,
+                                   Event::SettingsTab        tab);
 
     /// @brief 获取当前设置页布局测量缓存。
     /// @param dpiScale 当前窗口内容缩放。

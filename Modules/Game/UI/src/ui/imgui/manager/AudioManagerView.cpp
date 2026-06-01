@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -22,6 +23,7 @@
 #include <cfloat>
 #include <cmath>
 #include <nfd.h>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -42,6 +44,14 @@ float measureAudioManagerText(const char* text)
     return ImGui::CalcTextSize(text).x;
 }
 
+/// @brief 使用 UI 快照中的文件管理器字体计算不可折行文本宽度。
+float measureAudioManagerText(const char* text, ImFont* font, float fontSize)
+{
+    if ( !text || !font ) return 0.0f;
+
+    return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text, nullptr).x;
+}
+
 /// @brief 向当前最小高度累加一行列表内容和列表间距。
 void addAudioManagerListRow(float& height, size_t& rowCount, float rowHeight,
                             float rowSpacing)
@@ -52,24 +62,140 @@ void addAudioManagerListRow(float& height, size_t& rowCount, float rowHeight,
     height += rowHeight;
     rowCount++;
 }
+
+/// @brief 捕获音频管理器同步测量所需的当前帧快照。
+UiFrameSnapshot captureAudioManagerUiFrameSnapshot(float dpiScale)
+{
+    auto&       appConfig  = Config::AppConfig::instance();
+    const auto& settings   = appConfig.getEditorSettings();
+    const auto& aesthetics = settings.aesthetics;
+    auto&       skinCfg    = Config::SkinManager::instance();
+    const auto& style      = ImGui::GetStyle();
+
+    UiFrameSnapshot snapshot;
+    snapshot.dpiScale               = std::max(1.0f, dpiScale);
+    snapshot.framePadding           = style.FramePadding;
+    snapshot.frameHeight            = ImGui::GetFrameHeight();
+    snapshot.frameHeightWithSpacing = ImGui::GetFrameHeightWithSpacing();
+    snapshot.contentFont            = skinCfg.getFont("content");
+    snapshot.menuFont               = skinCfg.getFont("menu");
+    snapshot.fileManagerFont        = skinCfg.getFont("filemanager");
+    snapshot.fallbackFont           = ImGui::GetFont();
+    snapshot.fontSize               = ImGui::GetFontSize();
+    snapshot.translationVersion     = skinCfg.getTranslator().getVersion();
+    snapshot.language               = settings.language;
+    snapshot.preferredAsciiFont     = settings.preferredAsciiFont;
+    snapshot.preferredCjkFont       = settings.preferredCjkFont;
+    snapshot.fontSizeMultiplier     = settings.fontSizeMultiplier;
+    snapshot.uiScaleMultiplier      = settings.uiScaleMultiplier;
+    snapshot.windowPadding          = aesthetics.windowPadding;
+    snapshot.itemSpacing            = aesthetics.itemSpacing;
+    return snapshot;
+}
 }  // namespace
 
-/// @brief 获取音频管理器中不可再换行控件所需的最小内容尺寸。
-ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
+/// @brief 捕获当前音频管理器布局输入。
+/// @return 当前项目、皮肤音效数量和展开状态。
+AudioManagerView::LayoutInputSnapshot
+AudioManagerView::captureLayoutInput() const
 {
-    const float scale       = std::max(1.0f, dpiScale);
-    auto&       engine      = Logic::EditorEngine::instance();
-    auto*       project     = engine.getCurrentProject();
-    const auto& skinData    = Config::SkinManager::instance().getData();
-    const float frameH      = ImGui::GetFrameHeight();
-    const float frameWithSp = ImGui::GetFrameHeightWithSpacing();
-    const float itemSpacing = ImGui::GetStyle().ItemSpacing.x;
+    LayoutInputSnapshot input;
+    auto&               engine  = Logic::EditorEngine::instance();
+    auto*               project = engine.getCurrentProject();
+    input.hasProject            = project != nullptr;
+    input.permanentSfxCount =
+        Config::SkinManager::instance().getData().audioPaths.size();
+    input.showGlobalSettings = m_showGlobalSettings;
+    input.showPermanentSFX   = m_showPermanentSFX;
+    input.showMainTracks     = m_showMainTracks;
+    input.showProjectSFX     = m_showProjectSFX;
+
+    if ( project ) {
+        for ( const auto& audio : project->m_audioResources ) {
+            if ( audio.m_type == AudioTrackType::Main ) {
+                input.mainTrackCount++;
+            } else {
+                input.effectTrackCount++;
+            }
+        }
+    }
+    return input;
+}
+
+/// @brief 判断布局测量缓存是否匹配当前帧状态。
+/// @param cache 需要检查的布局缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param input 当前布局输入。
+/// @return 完全匹配时返回 true。
+bool AudioManagerView::layoutMetricsMatch(const LayoutMetricsCache&  cache,
+                                          const UiFrameSnapshot&     snapshot,
+                                          const LayoutInputSnapshot& input)
+{
+    auto floatEqual = [](float lhs, float rhs) {
+        return std::abs(lhs - rhs) <= 0.0001f;
+    };
+    const bool inputMatch =
+        cache.input.hasProject == input.hasProject &&
+        cache.input.permanentSfxCount == input.permanentSfxCount &&
+        cache.input.mainTrackCount == input.mainTrackCount &&
+        cache.input.effectTrackCount == input.effectTrackCount &&
+        cache.input.showGlobalSettings == input.showGlobalSettings &&
+        cache.input.showPermanentSFX == input.showPermanentSFX &&
+        cache.input.showMainTracks == input.showMainTracks &&
+        cache.input.showProjectSFX == input.showProjectSFX;
+
+    return cache.valid && inputMatch &&
+           floatEqual(cache.dpiScale, snapshot.dpiScale) &&
+           floatEqual(cache.fontSize, snapshot.fontSize) &&
+           floatEqual(cache.framePadding.x, snapshot.framePadding.x) &&
+           floatEqual(cache.framePadding.y, snapshot.framePadding.y) &&
+           floatEqual(cache.frameHeight, snapshot.frameHeight) &&
+           floatEqual(cache.frameHeightWithSpacing,
+                      snapshot.frameHeightWithSpacing) &&
+           cache.language == snapshot.language &&
+           cache.translationVersion == snapshot.translationVersion &&
+           cache.preferredAsciiFont == snapshot.preferredAsciiFont &&
+           cache.preferredCjkFont == snapshot.preferredCjkFont &&
+           floatEqual(cache.fontSizeMultiplier, snapshot.fontSizeMultiplier) &&
+           floatEqual(cache.uiScaleMultiplier, snapshot.uiScaleMultiplier);
+}
+
+/// @brief 构造音频管理器布局测量缓存。
+/// @param snapshot 当前帧 UI 快照。
+/// @param input 当前布局输入。
+/// @return 音频管理器布局测量结果。
+AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
+    const UiFrameSnapshot& snapshot, const LayoutInputSnapshot& input)
+{
+    LayoutMetricsCache cache;
+    cache.valid                  = true;
+    cache.input                  = input;
+    cache.dpiScale               = snapshot.dpiScale;
+    cache.fontSize               = snapshot.fontSize;
+    cache.framePadding           = snapshot.framePadding;
+    cache.frameHeight            = snapshot.frameHeight;
+    cache.frameHeightWithSpacing = snapshot.frameHeightWithSpacing;
+    cache.language               = snapshot.language;
+    cache.translationVersion     = snapshot.translationVersion;
+    cache.preferredAsciiFont     = snapshot.preferredAsciiFont;
+    cache.preferredCjkFont       = snapshot.preferredCjkFont;
+    cache.fontSizeMultiplier     = snapshot.fontSizeMultiplier;
+    cache.uiScaleMultiplier      = snapshot.uiScaleMultiplier;
+
+    const float scale       = std::max(1.0f, snapshot.dpiScale);
+    const float frameH      = snapshot.frameHeight;
+    const float frameWithSp = snapshot.frameHeightWithSpacing;
+    const float itemSpacing = snapshot.itemSpacing;
     const float rowSpacingY = 4.0f;
     const float labelPad    = std::floor(12.0f * scale);
     const float footerPadX  = std::floor(16.0f * scale) * 2.0f;
     const float muteButtonW = std::floor(32.0f * scale);
     const float rootPadX    = std::floor(12.0f * scale) * 2.0f;
     const float rootPadY    = std::floor(12.0f * scale) * 2.0f;
+    ImFont*     font = snapshot.fileManagerFont
+                           ? snapshot.fileManagerFont
+                           : (snapshot.contentFont ? snapshot.contentFont
+                                                   : snapshot.fallbackFont);
 
     const std::array<const char*, 3> controlLabels{
         TR("ui.audio_manager.global_volume").data(),
@@ -79,15 +205,18 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
 
     float labelWidth = 0.0f;
     for ( const char* label : controlLabels ) {
-        labelWidth = std::max(labelWidth, measureAudioManagerText(label));
+        labelWidth =
+            std::max(labelWidth,
+                     measureAudioManagerText(label, font, snapshot.fontSize));
     }
     labelWidth += labelPad;
+    cache.footerLabelWidth = labelWidth;
 
-    const float sliderValueW = std::max(measureAudioManagerText("0.00"),
-                                        measureAudioManagerText("100%"));
-    const float sliderMinW   = sliderValueW +
-                               ImGui::GetStyle().FramePadding.x * 4.0f +
-                               std::floor(48.0f * scale);
+    const float sliderValueW =
+        std::max(measureAudioManagerText("0.00", font, snapshot.fontSize),
+                 measureAudioManagerText("100%", font, snapshot.fontSize));
+    const float sliderMinW = sliderValueW + snapshot.framePadding.x * 4.0f +
+                             std::floor(48.0f * scale);
 
     const std::array<const char*, 4> headers{
         TR("ui.audio_manager.global_settings").data(),
@@ -98,21 +227,10 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
 
     float headerWidth = 0.0f;
     for ( const char* header : headers ) {
-        headerWidth =
-            std::max(headerWidth,
-                     frameH + itemSpacing + measureAudioManagerText(header));
-    }
-
-    size_t mainTrackCount   = 0;
-    size_t effectTrackCount = 0;
-    if ( project ) {
-        for ( const auto& audio : project->m_audioResources ) {
-            if ( audio.m_type == AudioTrackType::Main ) {
-                mainTrackCount++;
-            } else {
-                effectTrackCount++;
-            }
-        }
+        headerWidth = std::max(
+            headerWidth,
+            frameH + itemSpacing +
+                measureAudioManagerText(header, font, snapshot.fontSize));
     }
 
     const float controlRowWidth = footerPadX + labelWidth + itemSpacing +
@@ -122,28 +240,28 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
 
     float  listHeight = 0.0f;
     size_t listRows   = 0;
-    if ( !skinData.audioPaths.empty() ) {
+    if ( input.permanentSfxCount > 0 ) {
         addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
-        if ( m_showPermanentSFX ) {
-            for ( size_t i = 0; i < skinData.audioPaths.size(); ++i ) {
+        if ( input.showPermanentSFX ) {
+            for ( size_t i = 0; i < input.permanentSfxCount; ++i ) {
                 addAudioManagerListRow(
                     listHeight, listRows, 28.0f * scale, rowSpacingY);
             }
         }
     }
 
-    if ( project ) {
+    if ( input.hasProject ) {
         addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
-        if ( m_showMainTracks ) {
-            for ( size_t i = 0; i < mainTrackCount; ++i ) {
+        if ( input.showMainTracks ) {
+            for ( size_t i = 0; i < input.mainTrackCount; ++i ) {
                 addAudioManagerListRow(
                     listHeight, listRows, 28.0f * scale, rowSpacingY);
             }
-            if ( effectTrackCount > 0 ) {
+            if ( input.effectTrackCount > 0 ) {
                 addAudioManagerListRow(
                     listHeight, listRows, frameH, rowSpacingY);
-                if ( m_showProjectSFX ) {
-                    for ( size_t i = 0; i < effectTrackCount; ++i ) {
+                if ( input.showProjectSFX ) {
+                    for ( size_t i = 0; i < input.effectTrackCount; ++i ) {
                         addAudioManagerListRow(
                             listHeight, listRows, 28.0f * scale, rowSpacingY);
                     }
@@ -156,13 +274,66 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
     }
 
     float footerH = frameWithSp;
-    if ( m_showGlobalSettings ) {
+    if ( input.showGlobalSettings ) {
         footerH += 3.0f * 32.0f + 3.0f * 2.0f + 16.0f;
     }
     footerH += 32.0f + 8.0f;
 
-    float minHeight = std::ceil(rootPadY + listHeight + footerH);
-    return ImVec2(minWidth, minHeight);
+    float minHeight      = std::ceil(rootPadY + listHeight + footerH);
+    cache.minContentSize = ImVec2(minWidth, minHeight);
+    return cache;
+}
+
+/// @brief 获取音频管理器布局测量缓存。
+/// @param dpiScale 当前窗口内容缩放。
+/// @return 与当前语言、字体、缩放和资源数量匹配的布局测量结果。
+const AudioManagerView::LayoutMetricsCache& AudioManagerView::getLayoutMetrics(
+    float dpiScale) const
+{
+    const LayoutInputSnapshot input = captureLayoutInput();
+    const UiFrameSnapshot     snapshot =
+        captureAudioManagerUiFrameSnapshot(dpiScale);
+    if ( !layoutMetricsMatch(m_layoutMetricsCache, snapshot, input) ) {
+        m_layoutMetricsCache = buildLayoutMetrics(snapshot, input);
+    }
+    return m_layoutMetricsCache;
+}
+
+/// @brief 判断当前帧是否需要准备音频管理器布局数据。
+/// @param snapshot 当前帧 UI 快照。
+/// @return 需要后台准备时返回 true。
+bool AudioManagerView::needsParallelUiPrepare(
+    const UiFrameSnapshot& snapshot) const
+{
+    m_prepareLayoutInput = captureLayoutInput();
+    return !layoutMetricsMatch(
+        m_layoutMetricsCache, snapshot, m_prepareLayoutInput);
+}
+
+/// @brief 在线程池中准备音频管理器布局测量数据。
+/// @param snapshot 当前帧 UI 快照。
+void AudioManagerView::prepareUiFrameData(const UiFrameSnapshot& snapshot)
+{
+    m_preparedLayoutMetricsCache =
+        buildLayoutMetrics(snapshot, m_prepareLayoutInput);
+    m_hasPreparedLayoutMetrics = true;
+}
+
+/// @brief 将后台准备好的布局测量数据切换给主线程使用。
+void AudioManagerView::swapPreparedUiFrameData()
+{
+    if ( !m_hasPreparedLayoutMetrics ) {
+        return;
+    }
+
+    m_layoutMetricsCache       = std::move(m_preparedLayoutMetricsCache);
+    m_hasPreparedLayoutMetrics = false;
+}
+
+/// @brief 获取音频管理器中不可再换行控件所需的最小内容尺寸。
+ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
+{
+    return getLayoutMetrics(dpiScale).minContentSize;
 }
 
 // 内部绘制逻辑 (Clay/ImGui)
@@ -175,6 +346,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto& audioManager = Audio::AudioManager::instance();
 
     float   dpiScale        = layoutContext.m_dpiScale;
+    float   maxLabelW       = getLayoutMetrics(dpiScale).footerLabelWidth;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
 
@@ -490,19 +662,6 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     if ( m_showGlobalSettings ) {
         footerVBox.addSpring();  // 顶部弹簧，实现垂直居中
-
-        // 计算标签宽度 (FixW)
-        float maxLabelW = 0;
-        maxLabelW       = std::max(
-            maxLabelW,
-            ImGui::CalcTextSize(TR("ui.audio_manager.global_volume").data()).x);
-        maxLabelW = std::max(
-            maxLabelW,
-            ImGui::CalcTextSize(TR("ui.audio_manager.bgm_gain").data()).x);
-        maxLabelW = std::max(
-            maxLabelW,
-            ImGui::CalcTextSize(TR("ui.audio_manager.sfx_gain").data()).x);
-        maxLabelW += 12.0f;  // 额外间距 (预留弹簧运动空间)
 
         addControlRow(
             footerVBox,
