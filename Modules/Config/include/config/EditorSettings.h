@@ -351,6 +351,9 @@ struct EditorSettings {
     /// @brief 帧数限制模式偏好
     FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
 
+    /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
+    bool renderProfileLogging{ false };
+
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
 
@@ -437,6 +440,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "recentProjectsLimit", c.recentProjectsLimit },
                         { "language", c.language },
                         { "frameLimit", c.frameLimit },
+                        { "renderProfileLogging", c.renderProfileLogging },
                         { "fontSizeMultiplier", c.fontSizeMultiplier },
                         { "uiScaleMultiplier", c.uiScaleMultiplier },
                         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
@@ -483,6 +487,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
                                            ? FrameLimitPreference::VSync
                                            : FrameLimitPreference::Unlimited)
                                     : FrameLimitPreference::Refresh2x);
+    c.renderProfileLogging  = j.value("renderProfileLogging", false);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);

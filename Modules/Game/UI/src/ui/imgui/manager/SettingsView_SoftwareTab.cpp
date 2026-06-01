@@ -159,7 +159,22 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
-        // 3. UI 主题
+        // 3. 渲染阶段耗时日志
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.render_profile_logging").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                if ( ImGui::Checkbox("##RenderProfileLogging",
+                                     &settings.renderProfileLogging) ) {
+                    changed = true;
+                }
+            });
+
+        // 4. UI 主题
         addSettingItem(
             *sec,
             rowIndex,

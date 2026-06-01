@@ -103,6 +103,7 @@ return {
 	["ui.settings.software.framelimit.4x"] = "4x 刷新率",
 	["ui.settings.software.framelimit.8x"] = "8x 刷新率",
 	["ui.settings.software.framelimit.unlimited"] = "无限制",
+	["ui.settings.software.render_profile_logging"] = "输出渲染阶段耗时日志",
 	["ui.settings.software.screen.fullscreen"] = "全屏模式",
 	["ui.settings.software.screen.windowed"] = "窗口化模式",
 	["ui.settings.software.theme"] = "UI 主题",

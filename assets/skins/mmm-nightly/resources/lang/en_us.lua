@@ -104,6 +104,7 @@ return {
 	["ui.settings.software.framelimit.4x"] = "4x Refresh Rate",
 	["ui.settings.software.framelimit.8x"] = "8x Refresh Rate",
 	["ui.settings.software.framelimit.unlimited"] = "Unlimited",
+	["ui.settings.software.render_profile_logging"] = "Log Render Stage Timings",
 	["ui.settings.software.screen.fullscreen"] = "Fullscreen Mode",
 	["ui.settings.software.screen.windowed"] = "Windowed Mode",
 	["ui.settings.software.theme"] = "UI Theme",

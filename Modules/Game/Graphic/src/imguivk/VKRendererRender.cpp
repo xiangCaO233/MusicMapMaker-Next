@@ -216,6 +216,16 @@ double elapsedMilliseconds(RenderProfileClock::time_point begin,
 {
     return std::chrono::duration<double, std::milli>(end - begin).count();
 }
+
+/// @brief 在启用渲染性能日志时读取当前时间点。
+/// @param enabled 是否启用渲染性能日志。
+/// @return 启用时返回当前时间点，关闭时返回空时间点。
+/// @warning 渲染热路径：每个阶段边界调用；关闭日志时不得调用系统时钟。
+RenderProfileClock::time_point profileTimePoint(bool enabled)
+{
+    return enabled ? RenderProfileClock::now()
+                   : RenderProfileClock::time_point{};
+}
 }  // namespace
 
 // clang-format off
@@ -231,7 +241,15 @@ void VKRenderer::render(NativeWindow&                window,
                         std::span<IGraphicUserHook*> graphicUserHooks)
 {
     static RenderProfileAccumulator profile;
-    const auto frameProfileStart = RenderProfileClock::now();
+    static bool                     lastRenderProfileLoggingEnabled = false;
+    const bool                      renderProfileLoggingEnabled =
+        Config::AppConfig::instance().getEditorSettings().renderProfileLogging;
+    if ( renderProfileLoggingEnabled && !lastRenderProfileLoggingEnabled ) {
+        profile.reset(RenderProfileClock::now());
+    }
+    lastRenderProfileLoggingEnabled = renderProfileLoggingEnabled;
+    const auto frameProfileStart =
+        profileTimePoint(renderProfileLoggingEnabled);
 
     // 检查窗口是否完成了缩放操作（消抖）
     if ( window.shouldRecreate() ) {
@@ -251,7 +269,7 @@ void VKRenderer::render(NativeWindow&                window,
     }
 
     // 等待cmd完成
-    const auto fenceStart = RenderProfileClock::now();
+    const auto fenceStart = profileTimePoint(renderProfileLoggingEnabled);
     auto       waitResult = m_vkLogicalDevice.waitForFences(
         m_cmdAvailableFences[m_currentFrameIndex],
         true,
@@ -263,18 +281,18 @@ void VKRenderer::render(NativeWindow&                window,
     // 恢复fence
     (void)m_vkLogicalDevice.resetFences(
         m_cmdAvailableFences[m_currentFrameIndex]);
-    const auto fenceEnd = RenderProfileClock::now();
+    const auto fenceEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // --- [优化] 在准备新帧之前获取图像 ---
     // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
     // 在 FIFO (VSync) 模式下，这里是主要的阻塞点，会等待垂直同步
-    const auto                acquireStart = RenderProfileClock::now();
+    const auto acquireStart = profileTimePoint(renderProfileLoggingEnabled);
     vk::ResultValue<uint32_t> imageResult =
         m_vkLogicalDevice.acquireNextImageKHR(
             m_vkSwapChain.m_swapchain,
             std::numeric_limits<uint64_t>::max(),
             m_imageAvailableSems[m_currentFrameIndex]);
-    const auto acquireEnd = RenderProfileClock::now();
+    const auto acquireEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
         triggerRecreate(window);
@@ -297,12 +315,12 @@ void VKRenderer::render(NativeWindow&                window,
 
     // --- [关键优化] 在 VSync 阻塞解除后立即处理输入 ---
     // 这样能保证本帧使用的输入数据是最新鲜的
-    const auto pollStart = RenderProfileClock::now();
+    const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
     window.pollEvents();
-    const auto pollEnd = RenderProfileClock::now();
+    const auto pollEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // --- 1. ImGui 准备新帧 ---
-    const auto newFrameStart = RenderProfileClock::now();
+    const auto newFrameStart = profileTimePoint(renderProfileLoggingEnabled);
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
@@ -317,10 +335,10 @@ void VKRenderer::render(NativeWindow&                window,
         glfwSetInputMode(
             window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
-    const auto newFrameEnd = RenderProfileClock::now();
+    const auto newFrameEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 准备所有资源
-    const auto prepareStart = RenderProfileClock::now();
+    const auto prepareStart = profileTimePoint(renderProfileLoggingEnabled);
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onPrepareResources(m_vkPhysicalDevice,
                                             m_vkLogicalDevice,
@@ -328,10 +346,10 @@ void VKRenderer::render(NativeWindow&                window,
                                             m_vkCommandPool,
                                             m_LogicDeviceGraphicsQueue);
     }
-    const auto prepareEnd = RenderProfileClock::now();
+    const auto prepareEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 录制所有ui
-    const auto updateUiStart = RenderProfileClock::now();
+    const auto updateUiStart = profileTimePoint(renderProfileLoggingEnabled);
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onUpdateUI();
     }
@@ -344,11 +362,11 @@ void VKRenderer::render(NativeWindow&                window,
          editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
         m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
     }
-    const auto updateUiEnd = RenderProfileClock::now();
+    const auto updateUiEnd = profileTimePoint(renderProfileLoggingEnabled);
 
-    const auto imguiRenderStart = RenderProfileClock::now();
+    const auto imguiRenderStart = profileTimePoint(renderProfileLoggingEnabled);
     ImGui::Render();  // 生成imgui绘制顶点数据
-    const auto imguiRenderEnd = RenderProfileClock::now();
+    const auto imguiRenderEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     m_offscreenRecordTasks.clear();
     for ( auto& graphicUserHook : graphicUserHooks ) {
@@ -363,7 +381,8 @@ void VKRenderer::render(NativeWindow&                window,
         }
     }
 
-    const auto commandSetupStart = RenderProfileClock::now();
+    const auto commandSetupStart =
+        profileTimePoint(renderProfileLoggingEnabled);
 
     // 重置命令缓冲
     auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
@@ -398,10 +417,10 @@ void VKRenderer::render(NativeWindow&                window,
 
     // 命令录制
     (void)currentCmdBuffer.begin(commandBufferBeginInfo);
-    const auto commandSetupEnd = RenderProfileClock::now();
+    const auto commandSetupEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 录制所有离屏渲染命令
-    const auto     offscreenStart = RenderProfileClock::now();
+    const auto offscreenStart = profileTimePoint(renderProfileLoggingEnabled);
     const uint32_t recordFrameIndex =
         static_cast<uint32_t>(m_currentFrameIndex);
     if ( useParallelOffscreenRecord ) {
@@ -436,9 +455,9 @@ void VKRenderer::render(NativeWindow&                window,
             }
         }
     }
-    const auto offscreenEnd = RenderProfileClock::now();
+    const auto offscreenEnd = profileTimePoint(renderProfileLoggingEnabled);
 
-    const auto mainRecordStart = RenderProfileClock::now();
+    const auto mainRecordStart = profileTimePoint(renderProfileLoggingEnabled);
     {
         vk::Rect2D renderArea;
         renderArea = { { 0,
@@ -470,7 +489,7 @@ void VKRenderer::render(NativeWindow&                window,
         currentCmdBuffer.endRenderPass();
     }
     (void)currentCmdBuffer.end();  // 结束命令录制
-    const auto mainRecordEnd = RenderProfileClock::now();
+    const auto mainRecordEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     m_frameSubmitCommandBuffers.clear();
     if ( useParallelOffscreenRecord ) {
@@ -501,10 +520,10 @@ void VKRenderer::render(NativeWindow&                window,
         .setWaitDstStageMask(waitStages)
         // 发出信号量
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
-    const auto submitStart = RenderProfileClock::now();
+    const auto submitStart = profileTimePoint(renderProfileLoggingEnabled);
     (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
-    const auto submitEnd = RenderProfileClock::now();
+    const auto submitEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 呈现
     vk::PresentInfoKHR presentInfo;
@@ -516,10 +535,10 @@ void VKRenderer::render(NativeWindow&                window,
         // 等待信号量
         .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
 
-    const auto presentStart = RenderProfileClock::now();
+    const auto presentStart = profileTimePoint(renderProfileLoggingEnabled);
     vk::Result presentResult =
         m_LogicDevicePresentQueue.presentKHR(presentInfo);
-    const auto presentEnd = RenderProfileClock::now();
+    const auto presentEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     if ( presentResult == vk::Result::eErrorOutOfDateKHR ||
          presentResult == vk::Result::eSuboptimalKHR ) {
@@ -533,7 +552,7 @@ void VKRenderer::render(NativeWindow&                window,
 
     // 更新并渲染所有的多视口 (Viewports)
     ImGuiIO&   io            = ImGui::GetIO();
-    const auto platformStart = RenderProfileClock::now();
+    const auto platformStart = profileTimePoint(renderProfileLoggingEnabled);
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         ImGui::UpdatePlatformWindows();
 #ifdef _WIN32
@@ -560,29 +579,34 @@ void VKRenderer::render(NativeWindow&                window,
 #endif
         ImGui::RenderPlatformWindowsDefault();
     }
-    const auto platformEnd     = RenderProfileClock::now();
-    const auto frameProfileEnd = RenderProfileClock::now();
+    const auto platformEnd     = profileTimePoint(renderProfileLoggingEnabled);
+    const auto frameProfileEnd = profileTimePoint(renderProfileLoggingEnabled);
 
-    ++profile.frameCount;
-    profile.total.add(elapsedMilliseconds(frameProfileStart, frameProfileEnd));
-    profile.fence.add(elapsedMilliseconds(fenceStart, fenceEnd));
-    profile.acquire.add(elapsedMilliseconds(acquireStart, acquireEnd));
-    profile.pollEvents.add(elapsedMilliseconds(pollStart, pollEnd));
-    profile.newFrame.add(elapsedMilliseconds(newFrameStart, newFrameEnd));
-    profile.prepareResources.add(elapsedMilliseconds(prepareStart, prepareEnd));
-    profile.updateUi.add(elapsedMilliseconds(updateUiStart, updateUiEnd));
-    profile.imguiRender.add(
-        elapsedMilliseconds(imguiRenderStart, imguiRenderEnd));
-    profile.commandSetup.add(
-        elapsedMilliseconds(commandSetupStart, commandSetupEnd));
-    profile.offscreenRecord.add(
-        elapsedMilliseconds(offscreenStart, offscreenEnd));
-    profile.mainRecord.add(elapsedMilliseconds(mainRecordStart, mainRecordEnd));
-    profile.submit.add(elapsedMilliseconds(submitStart, submitEnd));
-    profile.present.add(elapsedMilliseconds(presentStart, presentEnd));
-    profile.platformWindows.add(
-        elapsedMilliseconds(platformStart, platformEnd));
-    profile.logIfReady(frameProfileEnd);
+    if ( renderProfileLoggingEnabled ) {
+        ++profile.frameCount;
+        profile.total.add(
+            elapsedMilliseconds(frameProfileStart, frameProfileEnd));
+        profile.fence.add(elapsedMilliseconds(fenceStart, fenceEnd));
+        profile.acquire.add(elapsedMilliseconds(acquireStart, acquireEnd));
+        profile.pollEvents.add(elapsedMilliseconds(pollStart, pollEnd));
+        profile.newFrame.add(elapsedMilliseconds(newFrameStart, newFrameEnd));
+        profile.prepareResources.add(
+            elapsedMilliseconds(prepareStart, prepareEnd));
+        profile.updateUi.add(elapsedMilliseconds(updateUiStart, updateUiEnd));
+        profile.imguiRender.add(
+            elapsedMilliseconds(imguiRenderStart, imguiRenderEnd));
+        profile.commandSetup.add(
+            elapsedMilliseconds(commandSetupStart, commandSetupEnd));
+        profile.offscreenRecord.add(
+            elapsedMilliseconds(offscreenStart, offscreenEnd));
+        profile.mainRecord.add(
+            elapsedMilliseconds(mainRecordStart, mainRecordEnd));
+        profile.submit.add(elapsedMilliseconds(submitStart, submitEnd));
+        profile.present.add(elapsedMilliseconds(presentStart, presentEnd));
+        profile.platformWindows.add(
+            elapsedMilliseconds(platformStart, platformEnd));
+        profile.logIfReady(frameProfileEnd);
+    }
 }
 
 }  // namespace MMM::Graphic

@@ -80,9 +80,10 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 27> labels{
+        const std::array<const char*, 28> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
+            TR_CACHE("ui.settings.software.render_profile_logging").data(),
             TR_CACHE("ui.settings.software.theme").data(),
             TR_CACHE("ui.settings.software.font.ascii").data(),
             TR_CACHE("ui.settings.software.font.cjk").data(),
