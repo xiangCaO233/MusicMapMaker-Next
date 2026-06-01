@@ -29,16 +29,26 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
 {
     if ( width <= 0.5f || height <= 0.5f ) return;
 
-    constexpr glm::vec4 fillColor{ 1.0f, 0.35f, 0.86f, 0.16f };
-    constexpr glm::vec4 strokeColor{ 1.0f, 0.36f, 0.95f, 1.0f };
-    constexpr float     strokeWidth = 2.0f;
+    auto& skin        = Config::SkinManager::instance();
+    auto  fillColor   = skin.getColor("preview.judgment_guide.fill");
+    auto  borderColor = skin.getColor("preview.judgment_guide.border");
+    constexpr float strokeWidth = 2.0f;
 
     const float topY    = centerY - height * 0.5f;
     const float bottomY = centerY + height * 0.5f;
     batcher.setTexture(TextureID::None);
-    batcher.pushQuad(leftX, bottomY, width, height, fillColor);
+    batcher.pushQuad(leftX,
+                     bottomY,
+                     width,
+                     height,
+                     { fillColor.r, fillColor.g, fillColor.b, fillColor.a });
     batcher.pushStrokeRect(
-        leftX, topY, leftX + width, bottomY, strokeWidth, strokeColor);
+        leftX,
+        topY,
+        leftX + width,
+        bottomY,
+        strokeWidth,
+        { borderColor.r, borderColor.g, borderColor.b, borderColor.a });
 }
 
 }  // namespace
