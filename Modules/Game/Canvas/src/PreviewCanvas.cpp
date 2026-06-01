@@ -394,4 +394,61 @@ void PreviewCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     }
 }
 
+/// @brief 记录预览画布最终覆盖层离屏绘制命令。
+/// @warning 热路径：每帧命令录制末尾执行；仅遍历 overlay 命令并复用已有描述符。
+void PreviewCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                                        vk::PipelineLayout      pipelineLayout,
+                                        vk::DescriptorSetLayout setLayout,
+                                        vk::DescriptorSet defaultDescriptor,
+                                        uint32_t          frameIndex)
+{
+    if ( !m_currentSnapshot ) return;
+
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+    }
+
+    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
+    vk::Rect2D        lastScissor;
+
+    for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
+        vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
+                                    ? atlasDescriptor
+                                    : defaultDescriptor;
+
+        if ( tex != lastBound ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &tex,
+                                      0,
+                                      nullptr);
+            lastBound = tex;
+        }
+
+        if ( cmd.scissor != lastScissor ) {
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            cmdBuf.setScissor(0, 1, &physicalScissor);
+            lastScissor = cmd.scissor;
+        }
+
+        cmdBuf.drawIndexed(
+            cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
+    }
+}
+
+/// @brief 判断当前预览快照是否包含最终覆盖层绘制命令。
+/// @return 当前快照存在覆盖层命令时返回 true。
+/// @warning 渲染热路径：每帧离屏命令录制前执行，只读取快照命令数量。
+bool PreviewCanvas::hasOverlayDrawCmds() const
+{
+    return m_currentSnapshot && !m_currentSnapshot->overlayCmds.empty();
+}
+
 }  // namespace MMM::Canvas

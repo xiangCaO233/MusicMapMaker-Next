@@ -25,9 +25,13 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nfd.h>
+#include <unordered_map>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -44,12 +48,13 @@ void MainMenuView::performOverlapScan()
     if ( !session ) return;
 
     struct CheckItem {
-        ::MMM::NoteType type;
-        double          start_time;
-        double          end_time;
-        int             track;
-        entt::entity    entity;
-        entt::entity    parent_polyline;
+        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+        double          startTime{ 0.0 };
+        double          endTime{ 0.0 };
+        int             track{ 0 };
+        int             dtrack{ 0 };
+        entt::entity    entity{ entt::null };
+        entt::entity    parentPolyline{ entt::null };
         std::string     desc;
     };
 
@@ -59,15 +64,12 @@ void MainMenuView::performOverlapScan()
 
     for ( auto entity : view ) {
         const auto& nc = view.get<const Logic::NoteComponent>(entity);
-
-        // Skip Polyline container entities because its individual subnotes are
-        // separate entities checked below
         if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
 
         double startTime = nc.m_timestamp;
         double endTime   = startTime;
         if ( nc.m_type == ::MMM::NoteType::HOLD ) {
-            endTime = startTime + nc.m_duration;
+            endTime = startTime + std::max(0.0, nc.m_duration);
         }
 
         std::string desc = "Note";
@@ -81,125 +83,263 @@ void MainMenuView::performOverlapScan()
                           startTime,
                           endTime,
                           nc.m_trackIndex,
+                          nc.m_dtrack,
                           entity,
                           nc.m_parentPolyline,
                           desc });
     }
 
-    // Sort items by track, then by start_time
-    std::sort(
-        items.begin(), items.end(), [](const CheckItem& x, const CheckItem& y) {
-            if ( x.track != y.track ) return x.track < y.track;
-            return x.start_time < y.start_time;
-        });
-
-    // DSU structure for grouping contiguous overlapping notes
     struct DSU {
         std::vector<int> parent;
-        DSU(size_t n)
+
+        explicit DSU(size_t n)
         {
             parent.resize(n);
-            for ( size_t i = 0; i < n; ++i ) parent[i] = i;
+            for ( size_t i = 0; i < n; ++i ) {
+                parent[i] = static_cast<int>(i);
+            }
         }
+
         int find(int i)
         {
             if ( parent[i] == i ) return i;
-            return parent[i] = find(parent[i]);
+            parent[i] = find(parent[i]);
+            return parent[i];
         }
+
         void unite(int i, int j)
         {
-            int root_i = find(i);
-            int root_j = find(j);
-            if ( root_i != root_j ) {
-                parent[root_i] = root_j;
-            }
+            int rootI = find(i);
+            int rootJ = find(j);
+            if ( rootI != rootJ ) parent[rootI] = rootJ;
         }
     };
 
-    DSU               dsu(items.size());
-    std::vector<bool> isDefiniteOverlap(items.size(), false);
-    std::vector<bool> hasAnyOverlap(items.size(), false);
+    struct PairHit {
+        size_t i{ 0 };
+        size_t j{ 0 };
+        int    track{ 0 };
+        double time{ 0.0 };
+    };
 
-    // Sweep-line with sliding window of max 10ms (0.010s) suspicion window
+    struct PointProbe {
+        double time{ 0.0 };
+        int    track{ 0 };
+        bool   testsFlickBody{ false };
+    };
+
+    const double windowSeconds =
+        static_cast<double>(std::max(0.0f,
+                                     Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .overlapTimeWindowMs)) *
+        0.001;
+    constexpr double timeEpsilon = 1e-7;
+
+    auto samePolylineParent = [](const CheckItem& a, const CheckItem& b) {
+        return a.parentPolyline != entt::null &&
+               a.parentPolyline == b.parentPolyline;
+    };
+
+    auto flickMinTrack = [](const CheckItem& item) {
+        return std::min(item.track, item.track + item.dtrack);
+    };
+    auto flickMaxTrack = [](const CheckItem& item) {
+        return std::max(item.track, item.track + item.dtrack);
+    };
+
+    auto collectPoints = [&](const CheckItem& item) {
+        std::vector<PointProbe> points;
+        if ( item.type == ::MMM::NoteType::NOTE ) {
+            points.push_back({ item.startTime, item.track, true });
+        } else if ( item.type == ::MMM::NoteType::HOLD ) {
+            points.push_back({ item.startTime, item.track, true });
+            if ( item.endTime > item.startTime + timeEpsilon ) {
+                points.push_back({ item.endTime, item.track, false });
+            }
+        } else if ( item.type == ::MMM::NoteType::FLICK ) {
+            points.push_back({ item.startTime, item.track, false });
+            points.push_back(
+                { item.startTime, item.track + item.dtrack, false });
+        }
+        return points;
+    };
+
+    auto isPointType = [](const CheckItem& item) {
+        return item.type == ::MMM::NoteType::NOTE ||
+               item.type == ::MMM::NoteType::FLICK ||
+               item.type == ::MMM::NoteType::HOLD;
+    };
+
+    auto holdContainsPoint = [](const CheckItem& hold, const CheckItem& point) {
+        return hold.type == ::MMM::NoteType::HOLD &&
+               point.track == hold.track &&
+               point.startTime > hold.startTime + 1e-7 &&
+               point.startTime < hold.endTime - 1e-7;
+    };
+
+    auto isOverlapPair = [&](const CheckItem& a,
+                             const CheckItem& b,
+                             int&             overlapTrack,
+                             double&          overlapTime) {
+        if ( samePolylineParent(a, b) ) return false;
+
+        overlapTrack = a.track;
+        overlapTime  = std::min(a.startTime, b.startTime);
+
+        auto aPoints = collectPoints(a);
+        auto bPoints = collectPoints(b);
+        for ( const auto& aPoint : aPoints ) {
+            for ( const auto& bPoint : bPoints ) {
+                if ( aPoint.track != bPoint.track ) continue;
+                if ( std::abs(aPoint.time - bPoint.time) >
+                     windowSeconds + timeEpsilon )
+                    continue;
+
+                overlapTrack = aPoint.track;
+                overlapTime  = std::min(aPoint.time, bPoint.time);
+                return true;
+            }
+        }
+
+        auto flickBodyContainsPoint = [&](const CheckItem&  flick,
+                                          const PointProbe& point) {
+            if ( !point.testsFlickBody ||
+                 flick.type != ::MMM::NoteType::FLICK || flick.dtrack == 0 )
+                return false;
+            if ( std::abs(point.time - flick.startTime) >
+                 windowSeconds + timeEpsilon )
+                return false;
+            return point.track >= flickMinTrack(flick) &&
+                   point.track <= flickMaxTrack(flick);
+        };
+
+        for ( const auto& point : bPoints ) {
+            if ( flickBodyContainsPoint(a, point) ) {
+                overlapTrack = point.track;
+                overlapTime  = point.time;
+                return true;
+            }
+        }
+        for ( const auto& point : aPoints ) {
+            if ( flickBodyContainsPoint(b, point) ) {
+                overlapTrack = point.track;
+                overlapTime  = point.time;
+                return true;
+            }
+        }
+
+        if ( a.type == ::MMM::NoteType::NOTE &&
+             b.type == ::MMM::NoteType::NOTE ) {
+            return a.track == b.track &&
+                   std::abs(a.startTime - b.startTime) < windowSeconds;
+        }
+
+        if ( a.type == ::MMM::NoteType::HOLD &&
+             b.type == ::MMM::NoteType::HOLD && a.track == b.track ) {
+            double start = std::max(a.startTime, b.startTime);
+            double end   = std::min(a.endTime, b.endTime);
+            overlapTime  = start;
+            return end > start + timeEpsilon;
+        }
+
+        if ( a.type == ::MMM::NoteType::FLICK &&
+             b.type == ::MMM::NoteType::FLICK && a.dtrack != 0 &&
+             b.dtrack != 0 &&
+             std::abs(a.startTime - b.startTime) <=
+                 windowSeconds + timeEpsilon ) {
+            int minTrack = std::max(flickMinTrack(a), flickMinTrack(b));
+            int maxTrack = std::min(flickMaxTrack(a), flickMaxTrack(b));
+            overlapTrack = minTrack;
+            return maxTrack > minTrack;
+        }
+
+        if ( a.type == ::MMM::NoteType::HOLD && isPointType(b) &&
+             holdContainsPoint(a, b) ) {
+            overlapTrack = b.track;
+            overlapTime  = b.startTime;
+            return true;
+        }
+        if ( b.type == ::MMM::NoteType::HOLD && isPointType(a) &&
+             holdContainsPoint(b, a) ) {
+            overlapTrack = a.track;
+            overlapTime  = a.startTime;
+            return true;
+        }
+
+        auto holdFlickCrosses = [&](const CheckItem& hold,
+                                    const CheckItem& flick) {
+            if ( hold.type != ::MMM::NoteType::HOLD ||
+                 flick.type != ::MMM::NoteType::FLICK || flick.dtrack == 0 )
+                return false;
+            if ( flick.startTime <= hold.startTime + timeEpsilon ||
+                 flick.startTime >= hold.endTime - timeEpsilon )
+                return false;
+            return hold.track >= flickMinTrack(flick) &&
+                   hold.track <= flickMaxTrack(flick);
+        };
+
+        if ( holdFlickCrosses(a, b) ) {
+            overlapTrack = a.track;
+            overlapTime  = b.startTime;
+            return true;
+        }
+        if ( holdFlickCrosses(b, a) ) {
+            overlapTrack = b.track;
+            overlapTime  = a.startTime;
+            return true;
+        }
+
+        return false;
+    };
+
+    DSU                  dsu(items.size());
+    std::vector<bool>    hasAnyOverlap(items.size(), false);
+    std::vector<PairHit> pairHits;
+
     for ( size_t i = 0; i < items.size(); ++i ) {
-        const auto& a              = items[i];
-        double      max_check_time = std::max(a.start_time, a.end_time) + 0.010;
-
         for ( size_t j = i + 1; j < items.size(); ++j ) {
-            const auto& b = items[j];
-
-            // If we hit a different track, stop search since it's sorted by
-            // track
-            if ( a.track != b.track ) break;
-
-            // If start_time of b is beyond max_check_time, stop search since
-            // it's sorted by start_time
-            if ( b.start_time > max_check_time ) break;
-
-            // Must not belong to the same Polyline
-            if ( a.parent_polyline != entt::null &&
-                 a.parent_polyline == b.parent_polyline )
+            int    overlapTrack = 0;
+            double overlapTime  = 0.0;
+            if ( !isOverlapPair(items[i], items[j], overlapTrack, overlapTime) )
                 continue;
 
-            double t1_start = a.start_time;
-            double t1_end   = a.end_time;
-            double t2_start = b.start_time;
-            double t2_end   = b.end_time;
-
-            // Sorted order guarantees t1_start <= t2_start
-            double diff_start = t2_start - t1_start;
-
-            bool is_definite  = false;
-            bool is_suspected = false;
-
-            // Strict time check in seconds (1ms = 0.001s, 10ms = 0.010s)
-            if ( diff_start < 0.001 ) {
-                is_definite = true;
-            } else if ( t2_start > t1_start + 0.001 &&
-                        t2_start < t1_end - 0.001 ) {
-                is_definite = true;
-            } else if ( diff_start >= 0.001 && diff_start <= 0.010 ) {
-                is_suspected = true;
-            } else if ( std::abs(t1_end - t2_start) >= 0.001 &&
-                        std::abs(t1_end - t2_start) <= 0.010 ) {
-                is_suspected = true;
-            }
-
-            if ( is_definite || is_suspected ) {
-                dsu.unite(i, j);
-                hasAnyOverlap[i] = true;
-                hasAnyOverlap[j] = true;
-                if ( is_definite ) {
-                    isDefiniteOverlap[i] = true;
-                    isDefiniteOverlap[j] = true;
-                }
-            }
+            dsu.unite(static_cast<int>(i), static_cast<int>(j));
+            hasAnyOverlap[i] = true;
+            hasAnyOverlap[j] = true;
+            pairHits.push_back({ i, j, overlapTrack, overlapTime });
         }
     }
 
-    // Gather items into groups by DSU root
     std::unordered_map<int, std::vector<size_t>> groups;
     for ( size_t i = 0; i < items.size(); ++i ) {
         if ( hasAnyOverlap[i] ) {
-            groups[dsu.find(i)].push_back(i);
+            groups[dsu.find(static_cast<int>(i))].push_back(i);
         }
     }
 
-    // Build the finalized grouped overlap results
     for ( const auto& pair : groups ) {
         const auto& indices = pair.second;
         if ( indices.size() < 2 ) continue;
 
-        // Find the earliest start time, track, and whether the group is
-        // definite
-        double min_time    = items[indices[0]].start_time;
-        int    track       = items[indices[0]].track;
-        bool   is_definite = false;
+        int    root    = pair.first;
+        double minTime = items[indices[0]].startTime;
+        int    track   = items[indices[0]].track;
 
         for ( size_t idx : indices ) {
-            min_time = std::min(min_time, items[idx].start_time);
-            if ( isDefiniteOverlap[idx] ) {
-                is_definite = true;
+            if ( items[idx].startTime < minTime ) {
+                minTime = items[idx].startTime;
+                track   = items[idx].track;
+            }
+        }
+
+        for ( const auto& hit : pairHits ) {
+            if ( dsu.find(static_cast<int>(hit.i)) != root ||
+                 dsu.find(static_cast<int>(hit.j)) != root )
+                continue;
+            if ( hit.time <= minTime + timeEpsilon ) {
+                minTime = hit.time;
+                track   = hit.track;
             }
         }
 
@@ -213,11 +353,8 @@ void MainMenuView::performOverlapScan()
             desc2 = TR("ui.tools.each_other").data();
         }
 
-        m_overlapResults.push_back({ is_definite,
-                                     min_time,
-                                     static_cast<uint32_t>(track),
-                                     desc1,
-                                     desc2 });
+        m_overlapResults.push_back(
+            { true, minTime, static_cast<uint32_t>(track), desc1, desc2 });
     }
 }
 

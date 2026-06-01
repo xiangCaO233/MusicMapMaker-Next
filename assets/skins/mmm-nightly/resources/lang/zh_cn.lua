@@ -258,6 +258,7 @@ return {
 	["ui.settings.editor.cursor_software"] = "软件内置 (带拖尾)",
 	["ui.settings.editor.cursor_system"] = "系统原生",
 	["ui.settings.editor.beat_divisor"] = "全局分拍数设置",
+	["ui.settings.editor.overlap_time_window"] = "重叠检测时间窗口",
 	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "绘制物件(Shift)时屏蔽滚动加速",
 	["ui.settings.editor.remove_objects_on_polyline_path"] = "移除折线路径上的物件",
 	["ui.settings.editor.select_pasted_objects"] = "粘贴后选中粘贴的物件",

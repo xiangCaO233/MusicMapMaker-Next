@@ -187,6 +187,17 @@ private:
         float judgmentLineY, float leftX, float rightX, float topY,
         float bottomY, float singleTrackW, float renderScaleY);
 
+    /// @brief 生成并绘制当前快照中的重叠物件顶层遮罩。
+    /// @warning
+    /// 热路径：每次音符快照生成时执行；只允许处理已剔除的可见实体集合，不得全量遍历
+    /// ECS 或访问文件系统。
+    static void renderOverlapMasks(
+        entt::registry& registry, RenderSnapshot* snapshot,
+        const NoteRenderContext& ctx, const Config::EditorConfig& config,
+        const std::vector<entt::entity>& noteEntities, float judgmentLineY,
+        float leftX, float rightX, float topY, float bottomY,
+        float singleTrackW, float renderScaleY);
+
     /// @warning 热路径：单个 Tap 几何生成时执行；不得分配 GPU
     /// 资源或访问文件系统。
     static void renderTap(Batcher& batcher, const NoteComponent& note,

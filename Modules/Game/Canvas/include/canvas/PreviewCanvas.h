@@ -99,6 +99,19 @@ protected:
                           vk::DescriptorSet       defaultDescriptor,
                           uint32_t                frameIndex) override;
 
+    /// @brief 记录预览画布最终覆盖层离屏绘制命令。
+    /// @warning 热路径：最终覆盖层每帧命令录制时执行；只遍历 overlay 命令列表。
+    void onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                             vk::PipelineLayout      pipelineLayout,
+                             vk::DescriptorSetLayout setLayout,
+                             vk::DescriptorSet       defaultDescriptor,
+                             uint32_t                frameIndex) override;
+
+    /// @brief 判断当前快照是否包含最终覆盖层绘制命令。
+    /// @return 存在覆盖层命令时返回 true。
+    /// @warning 渲染热路径：每帧离屏命令录制时执行，只读取命令数量。
+    bool hasOverlayDrawCmds() const override;
+
 private:
     /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
     struct LastMouseCommand {

@@ -137,10 +137,23 @@ protected:
                           vk::DescriptorSet       defaultDescriptor,
                           uint32_t                frameIndex) override;
 
+    /// @brief 记录主画布最终覆盖层离屏绘制命令。
+    /// @warning 热路径：最终覆盖层每帧命令录制时执行；只遍历 overlay 命令列表。
+    void onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                             vk::PipelineLayout      pipelineLayout,
+                             vk::DescriptorSetLayout setLayout,
+                             vk::DescriptorSet       defaultDescriptor,
+                             uint32_t                frameIndex) override;
+
     /// @brief 判断当前快照是否包含发光绘制命令。
     /// @return 当前快照存在发光命令时返回 true。
     /// @warning 渲染热路径：每帧离屏命令录制前执行，只能读取快照命令数量。
     bool hasGlowDrawCmds() const override;
+
+    /// @brief 判断当前快照是否包含最终覆盖层绘制命令。
+    /// @return 存在覆盖层命令时返回 true。
+    /// @warning 渲染热路径：每帧离屏命令录制时执行，只读取命令数量。
+    bool hasOverlayDrawCmds() const override;
 
 private:
     /// @brief 画布名称

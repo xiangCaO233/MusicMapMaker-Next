@@ -10,6 +10,7 @@
 #include "logic/session/SessionUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MMM::Logic::System
@@ -101,6 +102,20 @@ void NoteRenderSystem::renderNotes(
                                              singleTrackW,
                                              renderScaleY);
     }
+
+    // 6. 顶层重叠遮罩
+    NoteRenderSystem::renderOverlapMasks(registry,
+                                         snapshot,
+                                         ctx,
+                                         config,
+                                         noteEntities,
+                                         judgmentLineY,
+                                         leftX,
+                                         rightX,
+                                         topY,
+                                         bottomY,
+                                         singleTrackW,
+                                         renderScaleY);
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
@@ -756,6 +771,477 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              glowIdx);
     }
     glowBatcher.flush();
+}
+
+void NoteRenderSystem::renderOverlapMasks(
+    entt::registry& registry, RenderSnapshot* snapshot,
+    const NoteRenderSystem::NoteRenderContext& ctx,
+    const Config::EditorConfig&                config,
+    const std::vector<entt::entity>& noteEntities, float judgmentLineY,
+    float leftX, float rightX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY)
+{
+    if ( !snapshot || !ctx.cache ) return;
+
+    struct OverlapItem {
+        ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+        double          startTime{ 0.0 };
+        double          endTime{ 0.0 };
+        int             track{ 0 };
+        int             dtrack{ 0 };
+        entt::entity    owner{ entt::null };
+        int             subIndex{ -1 };
+    };
+
+    struct OverlapPoint {
+        double       time{ 0.0 };
+        int          track{ 0 };
+        entt::entity owner{ entt::null };
+        float        scale{ 1.0f };
+        bool         testsFlickBody{ false };
+    };
+
+    auto makeEndTime =
+        [](double startTime, double duration, ::MMM::NoteType type) {
+            if ( type != ::MMM::NoteType::HOLD ) return startTime;
+            return startTime + std::max(0.0, duration);
+        };
+
+    std::vector<OverlapItem> items;
+    items.reserve(noteEntities.size());
+    for ( auto entity : noteEntities ) {
+        const auto& note = registry.get<const NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+
+        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( size_t i = 0; i < note.m_subNotes.size(); ++i ) {
+                const auto& sub = note.m_subNotes[i];
+                items.push_back(
+                    { sub.type,
+                      sub.timestamp,
+                      makeEndTime(sub.timestamp, sub.duration, sub.type),
+                      sub.trackIndex,
+                      sub.dtrack,
+                      entity,
+                      static_cast<int>(i) });
+            }
+            continue;
+        }
+
+        items.push_back(
+            { note.m_type,
+              note.m_timestamp,
+              makeEndTime(note.m_timestamp, note.m_duration, note.m_type),
+              note.m_trackIndex,
+              note.m_dtrack,
+              entity,
+              -1 });
+    }
+
+    if ( items.empty() ) return;
+
+    const double windowSeconds =
+        static_cast<double>(
+            std::max(0.0f, config.settings.overlapTimeWindowMs)) *
+        0.001;
+    constexpr double timeEpsilon = 1e-7;
+
+    auto textureSize = [snapshot](TextureID id, float baseW, float baseH) {
+        auto itBase =
+            snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
+        if ( itBase == snapshot->uvMap.end() ) return glm::vec2(baseW, baseH);
+
+        auto it = snapshot->uvMap.find(static_cast<uint32_t>(id));
+        if ( it == snapshot->uvMap.end() ) return glm::vec2(baseW, baseH);
+
+        return glm::vec2(baseW * (it->second.z / itBase->second.z),
+                         baseH * (it->second.w / itBase->second.w));
+    };
+
+    const glm::vec2 verticalBodySize =
+        textureSize(TextureID::HoldBodyVertical, ctx.noteW, ctx.noteH);
+    const glm::vec2 horizontalBodySize =
+        textureSize(TextureID::HoldBodyHorizontal, ctx.noteW, ctx.noteH);
+
+    auto timeToY = [&](double time) {
+        return judgmentLineY - static_cast<float>(ctx.cache->getDisplayDelta(
+                                   time, ctx.currentAbsY, time)) *
+                                   renderScaleY;
+    };
+
+    auto sameOwner = [](const OverlapItem& a, const OverlapItem& b) {
+        return a.owner != entt::null && a.owner == b.owner;
+    };
+
+    auto countUniqueOwners = [](const std::vector<const OverlapItem*>& group) {
+        std::unordered_set<entt::entity> owners;
+        owners.reserve(group.size());
+        for ( const auto* item : group ) {
+            owners.insert(item->owner);
+        }
+        return static_cast<int>(owners.size());
+    };
+
+    auto appendMask = [&](float x, float y, float w, float h, int count) {
+        if ( w <= 0.0f || h <= 0.0f || count < 2 ) return;
+        if ( x > rightX || x + w < leftX || y > bottomY || y + h < topY )
+            return;
+
+        constexpr float mergeEpsilon = 0.75f;
+        for ( auto& mask : snapshot->overlapMasks ) {
+            bool intersects = x <= mask.x + mask.w + mergeEpsilon &&
+                              x + w + mergeEpsilon >= mask.x &&
+                              y <= mask.y + mask.h + mergeEpsilon &&
+                              y + h + mergeEpsilon >= mask.y;
+            if ( !intersects ) continue;
+
+            float right      = std::max(mask.x + mask.w, x + w);
+            float bottom     = std::max(mask.y + mask.h, y + h);
+            mask.x           = std::min(mask.x, x);
+            mask.y           = std::min(mask.y, y);
+            mask.w           = right - mask.x;
+            mask.h           = bottom - mask.y;
+            mask.objectCount = std::max(mask.objectCount, count);
+            return;
+        }
+
+        snapshot->overlapMasks.push_back({ x, y, w, h, count });
+    };
+
+    auto appendPointMask = [&](double time, int track, float scale, int count) {
+        float w = ctx.noteW * scale;
+        float h = ctx.noteH * scale;
+        float x = leftX + static_cast<float>(track) * singleTrackW +
+                  (singleTrackW - w) * 0.5f;
+        float y = timeToY(time) - h * 0.5f;
+        appendMask(x, y, w, h, count);
+    };
+
+    std::vector<const OverlapItem*> notes;
+    std::vector<const OverlapItem*> holds;
+    std::vector<const OverlapItem*> flicks;
+    std::vector<const OverlapItem*> points;
+    std::vector<OverlapPoint>       pointMarkers;
+    notes.reserve(items.size());
+    holds.reserve(items.size());
+    flicks.reserve(items.size());
+    points.reserve(items.size());
+    pointMarkers.reserve(items.size() * 2);
+
+    for ( const auto& item : items ) {
+        if ( item.type == ::MMM::NoteType::NOTE ) {
+            notes.push_back(&item);
+            points.push_back(&item);
+            pointMarkers.push_back(
+                { item.startTime, item.track, item.owner, 1.0f, true });
+        } else if ( item.type == ::MMM::NoteType::HOLD ) {
+            if ( item.endTime > item.startTime + timeEpsilon ) {
+                holds.push_back(&item);
+                pointMarkers.push_back(
+                    { item.endTime, item.track, item.owner, 1.0f, false });
+            }
+            points.push_back(&item);
+            pointMarkers.push_back(
+                { item.startTime, item.track, item.owner, 1.0f, true });
+        } else if ( item.type == ::MMM::NoteType::FLICK ) {
+            flicks.push_back(&item);
+            points.push_back(&item);
+            pointMarkers.push_back(
+                { item.startTime, item.track, item.owner, 1.0f, false });
+            pointMarkers.push_back({ item.startTime,
+                                     item.track + item.dtrack,
+                                     item.owner,
+                                     1.0f,
+                                     false });
+        }
+    }
+
+    std::sort(notes.begin(),
+              notes.end(),
+              [](const OverlapItem* a, const OverlapItem* b) {
+                  if ( a->track != b->track ) return a->track < b->track;
+                  return a->startTime < b->startTime;
+              });
+
+    for ( size_t i = 0; i < notes.size(); ) {
+        size_t j = i + 1;
+        while ( j < notes.size() && notes[j]->track == notes[i]->track &&
+                notes[j]->startTime - notes[j - 1]->startTime <
+                    windowSeconds ) {
+            ++j;
+        }
+
+        if ( j - i >= 2 ) {
+            std::vector<const OverlapItem*> group;
+            group.reserve(j - i);
+            double minTime = notes[i]->startTime;
+            double maxTime = notes[i]->startTime;
+            for ( size_t k = i; k < j; ++k ) {
+                group.push_back(notes[k]);
+                minTime = std::min(minTime, notes[k]->startTime);
+                maxTime = std::max(maxTime, notes[k]->startTime);
+            }
+
+            int uniqueCount = countUniqueOwners(group);
+            if ( uniqueCount >= 2 ) {
+                float y0 = timeToY(minTime);
+                float y1 = timeToY(maxTime);
+                float x  = leftX + notes[i]->track * singleTrackW +
+                           (singleTrackW - ctx.noteW) * 0.5f;
+                float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
+                float h  = std::abs(y0 - y1) + ctx.noteH;
+                appendMask(x, y, ctx.noteW, h, uniqueCount);
+            }
+        }
+
+        i = j;
+    }
+
+    std::sort(pointMarkers.begin(),
+              pointMarkers.end(),
+              [](const OverlapPoint& a, const OverlapPoint& b) {
+                  if ( a.track != b.track ) return a.track < b.track;
+                  return a.time < b.time;
+              });
+
+    for ( size_t i = 0; i < pointMarkers.size(); ) {
+        size_t j = i + 1;
+        while ( j < pointMarkers.size() &&
+                pointMarkers[j].track == pointMarkers[i].track &&
+                pointMarkers[j].time - pointMarkers[j - 1].time <=
+                    windowSeconds + timeEpsilon ) {
+            ++j;
+        }
+
+        if ( j - i >= 2 ) {
+            std::unordered_set<entt::entity> owners;
+            double                           minTime  = pointMarkers[i].time;
+            double                           maxTime  = pointMarkers[i].time;
+            float                            maxScale = pointMarkers[i].scale;
+            for ( size_t k = i; k < j; ++k ) {
+                owners.insert(pointMarkers[k].owner);
+                minTime  = std::min(minTime, pointMarkers[k].time);
+                maxTime  = std::max(maxTime, pointMarkers[k].time);
+                maxScale = std::max(maxScale, pointMarkers[k].scale);
+            }
+
+            if ( owners.size() >= 2 ) {
+                float w  = ctx.noteW * maxScale;
+                float h0 = ctx.noteH * maxScale;
+                float y0 = timeToY(minTime);
+                float y1 = timeToY(maxTime);
+                float x  = leftX + pointMarkers[i].track * singleTrackW +
+                           (singleTrackW - w) * 0.5f;
+                float y  = std::min(y0, y1) - h0 * 0.5f;
+                float h  = std::abs(y0 - y1) + h0;
+                appendMask(x, y, w, h, static_cast<int>(owners.size()));
+            }
+        }
+
+        i = j;
+    }
+
+    std::sort(holds.begin(),
+              holds.end(),
+              [](const OverlapItem* a, const OverlapItem* b) {
+                  if ( a->track != b->track ) return a->track < b->track;
+                  if ( a->startTime != b->startTime )
+                      return a->startTime < b->startTime;
+                  return a->endTime < b->endTime;
+              });
+
+    for ( size_t i = 0; i < holds.size(); ) {
+        size_t j = i + 1;
+        while ( j < holds.size() && holds[j]->track == holds[i]->track ) ++j;
+
+        std::vector<double> bounds;
+        bounds.reserve((j - i) * 2);
+        for ( size_t k = i; k < j; ++k ) {
+            bounds.push_back(holds[k]->startTime);
+            bounds.push_back(holds[k]->endTime);
+        }
+        std::sort(bounds.begin(), bounds.end());
+        bounds.erase(std::unique(bounds.begin(),
+                                 bounds.end(),
+                                 [](double a, double b) {
+                                     return std::abs(a - b) < 1e-7;
+                                 }),
+                     bounds.end());
+
+        bool   hasOpenMask = false;
+        double openStart   = 0.0;
+        double openEnd     = 0.0;
+        int    openCount   = 0;
+
+        auto flushOpenMask = [&]() {
+            if ( !hasOpenMask ) return;
+            float y0 = timeToY(openStart);
+            float y1 = timeToY(openEnd);
+            float x  = leftX + holds[i]->track * singleTrackW +
+                       (singleTrackW - verticalBodySize.x) * 0.5f;
+            appendMask(x,
+                       std::min(y0, y1),
+                       verticalBodySize.x,
+                       std::abs(y0 - y1),
+                       openCount);
+            hasOpenMask = false;
+            openCount   = 0;
+        };
+
+        for ( size_t k = 0; k + 1 < bounds.size(); ++k ) {
+            double segStart = bounds[k];
+            double segEnd   = bounds[k + 1];
+            if ( segEnd <= segStart + timeEpsilon ) continue;
+
+            std::unordered_set<entt::entity> activeOwners;
+            for ( size_t h = i; h < j; ++h ) {
+                if ( holds[h]->startTime < segEnd - timeEpsilon &&
+                     holds[h]->endTime > segStart + timeEpsilon ) {
+                    activeOwners.insert(holds[h]->owner);
+                }
+            }
+
+            int activeCount = static_cast<int>(activeOwners.size());
+            if ( activeCount >= 2 ) {
+                if ( !hasOpenMask ) {
+                    hasOpenMask = true;
+                    openStart   = segStart;
+                    openEnd     = segEnd;
+                    openCount   = activeCount;
+                } else {
+                    openEnd   = segEnd;
+                    openCount = std::max(openCount, activeCount);
+                }
+            } else {
+                flushOpenMask();
+            }
+        }
+        flushOpenMask();
+
+        i = j;
+    }
+
+    auto flickBodyMinTrack = [](const OverlapItem& item) {
+        return std::min(item.track, item.track + item.dtrack);
+    };
+    auto flickBodyMaxTrack = [](const OverlapItem& item) {
+        return std::max(item.track, item.track + item.dtrack);
+    };
+
+    for ( size_t i = 0; i < flicks.size(); ++i ) {
+        const auto& a = *flicks[i];
+        if ( a.dtrack == 0 ) continue;
+
+        for ( size_t j = i + 1; j < flicks.size(); ++j ) {
+            const auto& b = *flicks[j];
+            if ( b.dtrack == 0 || sameOwner(a, b) ) continue;
+            if ( std::abs(a.startTime - b.startTime) >
+                 windowSeconds + timeEpsilon )
+                continue;
+
+            int overlapMin =
+                std::max(flickBodyMinTrack(a), flickBodyMinTrack(b));
+            int overlapMax =
+                std::min(flickBodyMaxTrack(a), flickBodyMaxTrack(b));
+            if ( overlapMax <= overlapMin ) continue;
+
+            float y0 = timeToY(a.startTime);
+            float y1 = timeToY(b.startTime);
+            float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
+                       singleTrackW * 0.5f;
+            float w =
+                static_cast<float>(overlapMax - overlapMin) * singleTrackW;
+            float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;
+            float h = std::abs(y0 - y1) + horizontalBodySize.y;
+            appendMask(x, y, w, h, 2);
+        }
+    }
+
+    for ( const auto* point : points ) {
+        std::unordered_set<entt::entity> owners;
+        owners.insert(point->owner);
+
+        for ( const auto* hold : holds ) {
+            if ( sameOwner(*point, *hold) || point->track != hold->track )
+                continue;
+            if ( point->startTime > hold->startTime + timeEpsilon &&
+                 point->startTime < hold->endTime - timeEpsilon ) {
+                owners.insert(hold->owner);
+            }
+        }
+
+        if ( owners.size() >= 2 ) {
+            appendPointMask(point->startTime,
+                            point->track,
+                            1.0f,
+                            static_cast<int>(owners.size()));
+        }
+    }
+
+    for ( const auto& point : pointMarkers ) {
+        if ( !point.testsFlickBody ) continue;
+
+        std::unordered_set<entt::entity> owners;
+        owners.insert(point.owner);
+
+        for ( const auto* flick : flicks ) {
+            if ( flick->owner == point.owner || flick->dtrack == 0 ) continue;
+            if ( std::abs(point.time - flick->startTime) >
+                 windowSeconds + timeEpsilon )
+                continue;
+
+            int minTrack = flickBodyMinTrack(*flick);
+            int maxTrack = flickBodyMaxTrack(*flick);
+            if ( point.track < minTrack || point.track > maxTrack ) continue;
+
+            owners.insert(flick->owner);
+        }
+
+        if ( owners.size() >= 2 ) {
+            appendPointMask(point.time,
+                            point.track,
+                            point.scale,
+                            static_cast<int>(owners.size()));
+        }
+    }
+
+    for ( const auto* flick : flicks ) {
+        if ( flick->dtrack == 0 ) continue;
+
+        std::unordered_map<int, std::unordered_set<entt::entity>> ownersByTrack;
+        int minTrack = flickBodyMinTrack(*flick);
+        int maxTrack = flickBodyMaxTrack(*flick);
+
+        for ( const auto* hold : holds ) {
+            if ( sameOwner(*flick, *hold) ) continue;
+            if ( flick->startTime <= hold->startTime + timeEpsilon ||
+                 flick->startTime >= hold->endTime - timeEpsilon )
+                continue;
+            if ( hold->track < minTrack || hold->track > maxTrack ) continue;
+
+            auto& owners = ownersByTrack[hold->track];
+            owners.insert(flick->owner);
+            owners.insert(hold->owner);
+        }
+
+        for ( const auto& [track, owners] : ownersByTrack ) {
+            appendPointMask(
+                flick->startTime, track, 0.7f, static_cast<int>(owners.size()));
+        }
+    }
+
+    if ( snapshot->overlapMasks.empty() ) return;
+
+    Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
+    overlayBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
+    overlayBatcher.setTexture(TextureID::None);
+
+    const glm::vec4 overlayColor{ 1.0f, 0.0f, 0.0f, 0.35f };
+    for ( const auto& mask : snapshot->overlapMasks ) {
+        overlayBatcher.pushQuad(
+            mask.x, mask.y + mask.h, mask.w, mask.h, overlayColor);
+    }
+    overlayBatcher.flush();
 }
 
 void NoteRenderSystem::renderBrushPreview(

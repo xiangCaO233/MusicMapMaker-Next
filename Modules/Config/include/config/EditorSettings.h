@@ -399,6 +399,9 @@ struct EditorSettings {
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
 
+    /// @brief 重叠物件检测的时间窗口，单位毫秒。
+    float overlapTimeWindowMs{ 5.0f };
+
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
 
@@ -504,6 +507,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "cursorStyle", c.cursorStyle },
                         { "theme", c.theme },
                         { "beatDivisor", c.beatDivisor },
+                        { "overlapTimeWindowMs", c.overlapTimeWindowMs },
                         { "reverseScroll", c.reverseScroll },
                         { "scrollSnap", c.scrollSnap },
                         { "recentProjectsLimit", c.recentProjectsLimit },
@@ -548,6 +552,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.cursorStyle         = j.value("cursorStyle", CursorStyle::Software);
     c.theme               = j.value("theme", UITheme::Auto);
     c.beatDivisor         = j.value("beatDivisor", 4);
+    c.overlapTimeWindowMs = j.value("overlapTimeWindowMs", 5.0f);
     c.reverseScroll       = j.value("reverseScroll", false);
     c.scrollSnap          = j.value("scrollSnap", false);
     c.recentProjectsLimit = j.value("recentProjectsLimit", 10);

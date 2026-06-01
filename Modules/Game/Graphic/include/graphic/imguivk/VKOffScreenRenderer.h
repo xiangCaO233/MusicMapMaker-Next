@@ -197,11 +197,27 @@ protected:
     {
     }
 
+    /// @brief 记录最终覆盖层绘制命令，覆盖层会在普通层与发光合成之后绘制。
+    /// @warning
+    /// 热路径：每帧离屏命令录制末尾执行；只允许遍历已经生成的覆盖层命令。
+    virtual void onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                                     vk::PipelineLayout      pipelineLayout,
+                                     vk::DescriptorSetLayout setLayout,
+                                     vk::DescriptorSet       defaultDescriptor,
+                                     uint32_t                frameIndex)
+    {
+    }
+
     /// @brief 判断当前帧是否存在需要发光后处理的绘制命令。
     /// @return 存在发光命令时返回 true。
     /// @warning
     /// 渲染热路径：每帧离屏命令录制时执行，只能读取已生成快照中的缓存状态。
     virtual bool hasGlowDrawCmds() const { return false; }
+
+    /// @brief 判断当前帧是否存在需要最终覆盖绘制的命令。
+    /// @return 存在覆盖层命令时返回 true。
+    /// @warning 渲染热路径：每帧离屏命令录制时执行，只能读取快照中的缓存状态。
+    virtual bool hasOverlayDrawCmds() const { return false; }
 
 private:
     // --- 1. 物理资源 (独占) ---

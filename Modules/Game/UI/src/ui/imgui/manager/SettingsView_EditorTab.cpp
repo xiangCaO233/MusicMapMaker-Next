@@ -16,6 +16,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <filesystem>
 #include <nfd.h>
 
@@ -193,6 +194,22 @@ void SettingsView::drawEditorSettings()
                         TR("ui.settings.editor.beat_divisor_tooltip").data(),
                         Utils::TooltipDir::Right);
                 }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.editor.overlap_time_window").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::DragFloat("##OverlapTimeWindowMs",
+                                            &settings.overlapTimeWindowMs,
+                                            0.1f,
+                                            0.0f,
+                                            100.0f,
+                                            "%.1f ms");
+                settings.overlapTimeWindowMs =
+                    std::max(0.0f, settings.overlapTimeWindowMs);
             });
     }
 

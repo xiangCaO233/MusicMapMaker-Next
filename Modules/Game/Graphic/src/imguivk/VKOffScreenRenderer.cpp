@@ -369,6 +369,67 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
             cmdBuf.endRenderPass();
         }
     }
+
+    // 8. 最终覆盖层：用于重叠检测等“滤镜”效果，保证绘制在发光合成之后。
+    if ( hasOverlayDrawCmds() && m_compositeRenderPass &&
+         m_mainBrushRenderPipeline && m_width > 0 && m_height > 0 &&
+         m_logicalWidth > 0 && m_logicalHeight > 0 ) {
+        const vk::Rect2D overlayRenderArea({ 0, 0 }, { m_width, m_height });
+        rpBegin.setRenderPass(m_compositeRenderPass->getRenderPass())
+            .setFramebuffer(m_framebuffer)
+            .setRenderArea(overlayRenderArea)
+            .setClearValues(clearValue);
+        cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+        {
+            glm::mat4    ortho = glm::ortho(0.0f,
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
+            vk::Viewport viewport(
+                0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
+            vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
+            cmdBuf.setViewport(0, 1, &viewport);
+            cmdBuf.setScissor(0, 1, &scissor);
+
+            cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                m_mainBrushRenderPipeline->m_graphicsPipeline);
+
+            cmdBuf.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                0,
+                1,
+                &m_offScreenDescriptorSets[frameIndex],
+                0,
+                nullptr);
+
+            cmdBuf.pushConstants(
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment,
+                0,
+                sizeof(glm::mat4),
+                &ortho);
+
+            cmdBuf.bindVertexBuffers(
+                0, m_vertexBuffers[frameIndex]->m_vkBuffer, { 0 });
+            cmdBuf.bindIndexBuffer(m_indexBuffers[frameIndex]->m_vkBuffer,
+                                   0,
+                                   vk::IndexType::eUint32);
+
+            m_scissorScaleX = 0.0f;
+            m_scissorScaleY = 0.0f;
+            onRecordOverlayCmds(
+                cmdBuf,
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                m_mainBrushRenderPipeline->getDescriptorSetLayout(),
+                m_offScreenDescriptorSets[frameIndex],
+                frameIndex);
+        }
+        cmdBuf.endRenderPass();
+    }
 }
 
 }  // namespace MMM::Graphic

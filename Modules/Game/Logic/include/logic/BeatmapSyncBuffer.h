@@ -102,6 +102,9 @@ struct HoverInspectInfo {
     bool showTrack{ false };
     /// @brief 当前部位轨道位置
     int32_t track{ 0 };
+
+    /// @brief 当前悬浮位置按重叠检测规则命中的物件数量。
+    int overlapCount{ 1 };
 };
 
 /**
@@ -144,10 +147,32 @@ struct RenderSnapshot {
     std::vector<uint32_t>                       indices;
     std::vector<UI::BrushDrawCmd>               cmds;
     std::vector<UI::BrushDrawCmd>               glowCmds;
+    std::vector<UI::BrushDrawCmd>               overlayCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
     std::vector<System::ScrollSegment>
         scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
+
+    /// @brief 重叠检测遮罩区域，使用当前快照的屏幕坐标。
+    struct OverlapMask {
+        /// @brief 遮罩左上角 X 坐标。
+        float x{ 0.0f };
+
+        /// @brief 遮罩左上角 Y 坐标。
+        float y{ 0.0f };
+
+        /// @brief 遮罩宽度。
+        float w{ 0.0f };
+
+        /// @brief 遮罩高度。
+        float h{ 0.0f };
+
+        /// @brief 该遮罩代表的重叠物件数量。
+        int objectCount{ 2 };
+    };
+
+    /// @brief 当前快照中需要覆盖显示的重叠遮罩。
+    std::vector<OverlapMask> overlapMasks;
 
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
@@ -298,7 +323,9 @@ struct RenderSnapshot {
         indices.clear();
         cmds.clear();
         glowCmds.clear();
+        overlayCmds.clear();
         hitboxes.clear();
+        overlapMasks.clear();
         timelineElements.clear();
         scrollSegments.clear();
         uvMap.clear();

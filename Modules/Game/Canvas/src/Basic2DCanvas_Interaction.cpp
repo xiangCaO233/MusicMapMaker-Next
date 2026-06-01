@@ -353,36 +353,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            inspect.track + 1);
                     }
 
-                    // 计算鼠标当前所在的唯一物件包围框个数
-                    std::vector<entt::entity> hoveredEntities;
-                    bool                      includeBodyHitboxes =
-                        inspect.kind == Logic::HoverInspectKind::HoldBody ||
-                        inspect.kind ==
-                            Logic::HoverInspectKind::PolylineHoldBody ||
-                        inspect.kind == Logic::HoverInspectKind::FlickBody ||
-                        inspect.kind ==
-                            Logic::HoverInspectKind::PolylineFlickBody;
-                    for ( const auto& hb : currentSnapshot->hitboxes ) {
-                        if ( hb.entity != entt::null ) {
-                            if ( !includeBodyHitboxes &&
-                                 hb.part == Logic::HoverPart::HoldBody ) {
-                                continue;
-                            }
-                            if ( localMousePos.x >= hb.x &&
-                                 localMousePos.x <= hb.x + hb.w &&
-                                 localMousePos.y >= hb.y &&
-                                 localMousePos.y <= hb.y + hb.h ) {
-                                if ( std::find(hoveredEntities.begin(),
-                                               hoveredEntities.end(),
-                                               hb.entity) ==
-                                     hoveredEntities.end() ) {
-                                    hoveredEntities.push_back(hb.entity);
-                                }
-                            }
+                    // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
+                    int overlappingCount = std::max(1, inspect.overlapCount);
+                    for ( const auto& mask : currentSnapshot->overlapMasks ) {
+                        if ( localMousePos.x >= mask.x &&
+                             localMousePos.x <= mask.x + mask.w &&
+                             localMousePos.y >= mask.y &&
+                             localMousePos.y <= mask.y + mask.h ) {
+                            overlappingCount =
+                                std::max(overlappingCount, mask.objectCount);
                         }
                     }
-                    int overlappingCount =
-                        static_cast<int>(hoveredEntities.size());
 
                     if ( overlappingCount > 1 ) {
                         ImGui::TextColored(
