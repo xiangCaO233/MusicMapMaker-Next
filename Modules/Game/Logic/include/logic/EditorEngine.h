@@ -209,6 +209,13 @@ public:
         return m_sessionRegistry.activeCameraId();
     }
 
+    /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
+    /// @param cameraId 目标主画布 cameraId。
+    /// @return 目标是当前活动画布，或与当前活动画布引用同一主音轨时返回 true。
+    /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
+    /// SessionRegistry 锁。
+    bool canHoverScrollCamera(const std::string& cameraId) const;
+
     /**
      * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态
 
@@ -348,6 +355,12 @@ private:
     /// @warning 逻辑热路径/原子：每次 Session update
     /// 后可能执行；只读取同步开关并遍历当前会话列表。
     void syncSameMainAudioCanvases();
+
+    /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
+    /// @param sourceIndex 源 Session 在注册表中的索引。
+    /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
+    /// relaxed，并只同步 mainAudioSyncKey 相同的 Session。
+    void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
     /// @brief 刷新已打开 Session 的主音轨同步路径键，调用者必须持有注册表锁。
     /// @warning 低频路径：会遍历当前 Session 列表并执行路径规范化。

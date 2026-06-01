@@ -149,6 +149,53 @@ float resolveActiveCursorSmokeLifeOverride(
     return -1.0f;
 }
 
+/// @brief 在已持锁的 Session 列表中按 cameraId 查找索引。
+/// @param sessions 当前 Session 条目列表。
+/// @param cameraId 目标画布 cameraId。
+/// @return 找到时返回 Session 索引，否则返回 -1。
+/// @warning 逻辑/UI 热路径辅助：调用者必须已经持有 SessionRegistry 锁。
+int32_t findSessionIndexByCameraIdUnsafe(
+    const std::vector<SessionEntry>& sessions, const std::string& cameraId)
+{
+    for ( int32_t index = 0; index < static_cast<int32_t>(sessions.size());
+          ++index ) {
+        if ( sessions[static_cast<size_t>(index)].cameraId == cameraId ) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+/// @brief 判断目标 Session 是否允许接收当前 hover 滚轮。
+/// @param sessions 当前 Session 条目列表。
+/// @param activeIndex 当前活动 Session 索引。
+/// @param targetIndex 鼠标悬停的目标 Session 索引。
+/// @return 目标为活动项或两者主音轨同步键相同时返回 true。
+/// @warning 逻辑/UI 热路径辅助：调用者必须已经持有 SessionRegistry 锁。
+bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
+                                   int32_t activeIndex, int32_t targetIndex)
+{
+    if ( targetIndex < 0 ||
+         targetIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[static_cast<size_t>(targetIndex)].session ) {
+        return false;
+    }
+    if ( targetIndex == activeIndex ) {
+        return true;
+    }
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[static_cast<size_t>(activeIndex)].session ) {
+        return false;
+    }
+
+    const auto& activeKey =
+        sessions[static_cast<size_t>(activeIndex)].mainAudioSyncKey;
+    const auto& targetKey =
+        sessions[static_cast<size_t>(targetIndex)].mainAudioSyncKey;
+    return !activeKey.empty() && activeKey == targetKey;
+}
+
 /// @brief 将持久化的项目相对路径解析为文件系统路径。
 std::filesystem::path resolveProjectPath(const Project&               project,
                                          const std::filesystem::path& path)
@@ -1013,6 +1060,34 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                                                { v.width, v.height });
     }
 
+    // 主画布滚轮按 cameraId 路由，以允许同主音轨后台画布在 hover
+    // 状态下接收滚动，但不同主音轨画布不会被滚轮同步或切换。
+    if ( std::holds_alternative<CmdScroll>(cmd) ) {
+        const auto& scroll = std::get<CmdScroll>(cmd);
+        if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
+            std::lock_guard<std::recursive_mutex> lock(
+                m_sessionRegistry.mutex());
+            /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            /// @brief 当前活动 Session 索引快照。
+            const int32_t activeIndex = m_sessionRegistry.activeIndex();
+            /// @brief 滚轮目标主画布对应的 Session 索引。
+            const int32_t targetIndex =
+                findSessionIndexByCameraIdUnsafe(sessions, scroll.cameraId);
+            if ( !canUseHoverScrollTargetUnsafe(
+                     sessions, activeIndex, targetIndex) ) {
+                return;
+            }
+
+            if ( targetIndex != activeIndex ) {
+                setActiveSessionIndex(targetIndex);
+            }
+            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
+                std::move(cmd));
+            return;
+        }
+    }
+
     // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
@@ -1052,6 +1127,26 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
     const std::string& cameraId) const
 {
     return m_renderSyncRegistry.getAtlasUVMap(cameraId);
+}
+
+/// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
+/// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
+/// SessionRegistry 锁。
+bool EditorEngine::canHoverScrollCamera(const std::string& cameraId) const
+{
+    if ( !SessionUtils::isMainCanvasCameraId(cameraId) ) {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    /// @brief 当前活动 Session 索引快照。
+    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    /// @brief hover 目标主画布对应的 Session 索引。
+    const int32_t targetIndex =
+        findSessionIndexByCameraIdUnsafe(sessions, cameraId);
+    return canUseHoverScrollTargetUnsafe(sessions, activeIndex, targetIndex);
 }
 
 /// @brief 获取当前工具类型。
@@ -1153,6 +1248,14 @@ void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
 /// relaxed，后续只遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvases()
 {
+    syncSameMainAudioCanvasesFromIndex(m_sessionRegistry.activeIndex());
+}
+
+/// @brief 从指定源 Session 同步同主音轨的其他画布时间。
+/// @warning 逻辑热路径/原子：每次 Session update 后可能执行；开关读取使用
+/// relaxed，后续只遍历已打开 Session 列表。
+void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
+{
     if ( !m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) ) {
         return;
     }
@@ -1163,41 +1266,42 @@ void EditorEngine::syncSameMainAudioCanvases()
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
-    /// @brief 当前活跃 Session 索引快照。
-    int32_t activeIndex = m_sessionRegistry.activeIndex();
-    if ( activeIndex < 0 ||
-         activeIndex >= static_cast<int32_t>(sessions.size()) ||
-         !sessions[activeIndex].session ) {
+    if ( sourceIndex < 0 ||
+         sourceIndex >= static_cast<int32_t>(sessions.size()) ||
+         !sessions[static_cast<size_t>(sourceIndex)].session ) {
         return;
     }
 
-    auto&       activeCtx = sessions[activeIndex].session->getContext();
-    const auto& activeKey = sessions[activeIndex].mainAudioSyncKey;
-    if ( activeKey.empty() ) {
+    auto& sourceCtx =
+        sessions[static_cast<size_t>(sourceIndex)].session->getContext();
+    const auto& sourceKey =
+        sessions[static_cast<size_t>(sourceIndex)].mainAudioSyncKey;
+    if ( sourceKey.empty() ) {
         return;
     }
 
     for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
-        if ( i == activeIndex || !sessions[i].session ) {
+        if ( i == sourceIndex || !sessions[static_cast<size_t>(i)].session ) {
             continue;
         }
 
-        auto& ctx = sessions[i].session->getContextMutable();
-        if ( sessions[i].mainAudioSyncKey != activeKey ) {
+        auto& ctx =
+            sessions[static_cast<size_t>(i)].session->getContextMutable();
+        if ( sessions[static_cast<size_t>(i)].mainAudioSyncKey != sourceKey ) {
             continue;
         }
 
         const bool   wasFollowing       = ctx.isMainAudioSyncFollower;
         const double previousVisualTime = ctx.visualTime;
         const bool   shouldClearHitEffects =
-            wasFollowing != activeCtx.isPlaying ||
-            activeCtx.visualTime < previousVisualTime ||
-            std::abs(activeCtx.visualTime - previousVisualTime) > 0.2;
+            wasFollowing != sourceCtx.isPlaying ||
+            sourceCtx.visualTime < previousVisualTime ||
+            std::abs(sourceCtx.visualTime - previousVisualTime) > 0.2;
 
-        ctx.currentTime             = activeCtx.currentTime;
-        ctx.visualTime              = activeCtx.visualTime;
+        ctx.currentTime             = sourceCtx.currentTime;
+        ctx.visualTime              = sourceCtx.visualTime;
         ctx.isPlaying               = false;
-        ctx.isMainAudioSyncFollower = activeCtx.isPlaying;
+        ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
         ctx.lastAudioPos            = 0.0;
         ctx.lastAudioSysTime        = 0.0;
         ctx.hasInitialAudioOffset   = false;
@@ -1729,6 +1833,8 @@ void EditorEngine::loop()
 
             const auto backgroundInterval =
                 backgroundSessionUpdateInterval(refreshRate);
+            /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
+            int32_t commandSyncSourceIndex = -1;
             for ( auto& entry : m_sessionUpdateSnapshot ) {
                 bool shouldUpdateSession = entry.index == activeIndex;
                 if ( !shouldUpdateSession ) {
@@ -1752,8 +1858,18 @@ void EditorEngine::loop()
                     continue;
                 }
 
+                const bool hadPendingCommands =
+                    entry.session->hasPendingCommands();
+                const double previousCurrentTime =
+                    entry.session->getContext().currentTime;
                 entry.session->update(
                     dt, m_editorConfig, entry.index == activeIndex);
+                if ( hadPendingCommands &&
+                     std::abs(entry.session->getContext().currentTime -
+                              previousCurrentTime) >
+                         MAIN_AUDIO_SYNC_TIME_EPSILON ) {
+                    commandSyncSourceIndex = entry.index;
+                }
                 if ( entry.index != activeIndex ) {
                     m_backgroundSessionUpdateTimes[static_cast<size_t>(
                         entry.index)] = currentTime;
@@ -1764,6 +1880,10 @@ void EditorEngine::loop()
                 m_pendingWorkspaceActiveIndex = -1;
                 setActiveSessionIndex(requestedActiveIndex);
                 activeIndex = m_sessionRegistry.activeIndex();
+            }
+
+            if ( commandSyncSourceIndex >= 0 ) {
+                syncSameMainAudioCanvasesFromIndex(commandSyncSourceIndex);
             }
 
             bool shouldSyncMainAudioCanvases = false;

@@ -16,6 +16,32 @@
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief 判断鼠标是否悬停在当前 ImGui 窗口的内容区域内。
+/// @return 鼠标位于当前窗口内容区域时返回 true。
+/// @warning UI 热路径：主画布每帧更新时调用，只读取当前 ImGui
+/// 窗口几何与鼠标位置。
+bool isMouseHoveringCurrentWindowContent()
+{
+    if ( !ImGui::IsWindowHovered(
+             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ) {
+        return false;
+    }
+
+    const ImVec2 mousePos    = ImGui::GetMousePos();
+    const ImVec2 contentPos  = ImGui::GetCursorScreenPos();
+    const ImVec2 contentSize = ImGui::GetContentRegionAvail();
+    if ( contentSize.x <= 0.0f || contentSize.y <= 0.0f ) {
+        return false;
+    }
+
+    return mousePos.x >= contentPos.x &&
+           mousePos.x <= contentPos.x + contentSize.x &&
+           mousePos.y >= contentPos.y &&
+           mousePos.y <= contentPos.y + contentSize.y;
+}
+}  // namespace
 
 Basic2DCanvas::Basic2DCanvas(
     const std::string& name, uint32_t w, uint32_t h,
@@ -37,7 +63,8 @@ Basic2DCanvas::Basic2DCanvas(
 Basic2DCanvas::~Basic2DCanvas() {}
 
 /// @brief 更新画布 ImGui 窗口和交互状态。
-/// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内。
+/// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内，
+/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     // 1. 检查保存确认拦截
@@ -113,10 +140,22 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    // 仅当当前画布是活动画布时才处理交互，防止后台画布发送干扰指令
+    // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
     if ( engine.getActiveCameraId() == m_cameraId ) {
         m_interaction->update(
             sourceManager, m_currentSnapshot, m_logicalWidth, m_logicalHeight);
+    } else {
+        /// @brief 本帧普通滚轮是否发生在当前后台主画布内容区。
+        const bool isHoverWheelScroll =
+            isMouseHoveringCurrentWindowContent() &&
+            std::abs(ImGui::GetIO().MouseWheel) > 0.01f &&
+            !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+        if ( isHoverWheelScroll && engine.canHoverScrollCamera(m_cameraId) ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdScroll{ m_cameraId,
+                                  -ImGui::GetIO().MouseWheel,
+                                  ImGui::GetIO().KeyShift }));
+        }
     }
 
     // --- 渲染保存确认弹窗 ---
