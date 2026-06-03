@@ -173,22 +173,21 @@ void Basic2DCanvasInteraction::handleHotkeys(
         Logic::EditTool::ColorEraser,
     };
 
+    bool handledShortcut = false;
     for ( Logic::EditTool tool : editableTools ) {
         if ( UI::ShortcutUtils::isShortcutPressed(
                  UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
+            handledShortcut = true;
             break;
         }
     }
 
-    // --- 快捷键：删除操作 ---
-    // 目前菜单栏没有 Delete，保留在这里
-    if ( !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_Delete, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
-        }
+    if ( !handledShortcut && UI::ShortcutUtils::isShortcutPressed(
+                                 settings.shortcutConfig.deleteSelected) ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
     }
 
     // 注意：Ctrl+C/V/X/Z/Y 和 Space (播放/暂停) 已由全局 MainMenuView 处理，

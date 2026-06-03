@@ -11,6 +11,7 @@ enum class SettingsTab {
     Project,   // 项目配置
     Beatmap,   // 谱面配置
     Editor,    // 编辑器配置
+    Shortcut,  // 快捷键配置
     Debug      // 调试配置
 };
 

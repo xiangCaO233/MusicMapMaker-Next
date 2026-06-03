@@ -94,6 +94,7 @@ private:
         ToolColorEraser,
         Mirror,
         MirrorPaste,
+        DeleteSelected,
         ToggleReverseScroll,
         ToggleScrollSnap,
         ToggleSnapFloor,
@@ -254,6 +255,11 @@ private:
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();
+
+    /// @brief 绘制快捷键设置页。
+    /// @warning UI 热路径：设置窗口打开且当前页为快捷键页时每帧执行；
+    /// 只查询当前帧键盘状态并更新配置。
+    void drawShortcutSettings();
 
     /// @brief 绘制单个快捷键录制控件。
     /// @param binding 正在编辑的快捷键绑定。

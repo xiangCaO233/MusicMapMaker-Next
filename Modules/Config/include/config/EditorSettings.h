@@ -316,6 +316,11 @@ struct ShortcutConfig {
     /// @brief 镜像粘贴剪贴板物件。
     ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
 
+    /// @brief 删除当前选中物件。
+    ShortcutBinding deleteSelected{
+        true, "Delete", false, false, false, false
+    };
+
     /// @brief 切换反转滚动方向。
     ShortcutBinding toggleReverseScroll{
         false, "", false, false, false, false
@@ -359,6 +364,7 @@ inline void to_json(nlohmann::json& j, const ShortcutConfig& c)
         { "toolColorEraser", c.toolColorEraser },
         { "mirror", c.mirror },
         { "mirrorPaste", c.mirrorPaste },
+        { "deleteSelected", c.deleteSelected },
         { "toggleReverseScroll", c.toggleReverseScroll },
         { "toggleScrollSnap", c.toggleScrollSnap },
         { "toggleSnapFloor", c.toggleSnapFloor },
@@ -382,6 +388,8 @@ inline void from_json(const nlohmann::json& j, ShortcutConfig& c)
         j.value("toolColorEraser", ShortcutConfig().toolColorEraser);
     c.mirror      = j.value("mirror", ShortcutConfig().mirror);
     c.mirrorPaste = j.value("mirrorPaste", ShortcutConfig().mirrorPaste);
+    c.deleteSelected =
+        j.value("deleteSelected", ShortcutConfig().deleteSelected);
     c.toggleReverseScroll =
         j.value("toggleReverseScroll", ShortcutConfig().toggleReverseScroll);
     c.toggleScrollSnap =

@@ -24,6 +24,7 @@ add_library(UI STATIC
     src/ui/imgui/manager/SettingsView_DebugTab.cpp
     src/ui/imgui/manager/SettingsView_EditorTab.cpp
     src/ui/imgui/manager/SettingsView_ProjectTab.cpp
+    src/ui/imgui/manager/SettingsView_ShortcutTab.cpp
     src/ui/imgui/manager/SettingsView_SoftwareTab.cpp
     src/ui/imgui/manager/SettingsView_Tabs.cpp
     src/ui/imgui/manager/SettingsView_VisualTab.cpp

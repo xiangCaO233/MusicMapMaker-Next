@@ -35,6 +35,8 @@ const char* getCategoryShortLabel(Event::SettingsTab tab)
         return TR_CACHE("ui.settings.beatmap.short").data();
     case Event::SettingsTab::Editor:
         return TR_CACHE("ui.settings.editor.short").data();
+    case Event::SettingsTab::Shortcut:
+        return TR_CACHE("ui.settings.shortcut.short").data();
     case Event::SettingsTab::Debug:
         return TR_CACHE("ui.settings.debug.short").data();
     }
@@ -178,7 +180,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 30> labels{
+        const std::array<const char*, 14> labels{
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
@@ -191,32 +193,34 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.selection").data(),
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
             TR_CACHE("ui.settings.editor.selection.rounding").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.tool_move").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.tool_marquee").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.tool_draw").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.tool_color_brush").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.tool_color_eraser").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.mirror").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.mirror_paste").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_reverse_scroll")
-                .data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_scroll_snap").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_snap_floor").data(),
-            TR_CACHE(
-                "ui.settings.editor.shortcuts.toggle_scroll_timing_mapping")
-                .data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_beat_lines").data(),
-            TR_CACHE(
-                "ui.settings.editor.shortcuts.toggle_stop_playback_on_scroll")
-                .data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_hit_sfx").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_hit_effects").data(),
-            TR_CACHE("ui.settings.editor.shortcuts.toggle_sync_same_main_audio")
-                .data(),
             TR_CACHE("ui.settings.editor.sfx_strategy").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data()
+        };
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
+    }
+    case Event::SettingsTab::Shortcut: {
+        const std::array<const char*, 17> labels{
+            TR_CACHE("ui.settings.shortcut.tool_move").data(),
+            TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
+            TR_CACHE("ui.settings.shortcut.tool_draw").data(),
+            TR_CACHE("ui.settings.shortcut.tool_color_brush").data(),
+            TR_CACHE("ui.settings.shortcut.tool_color_eraser").data(),
+            TR_CACHE("ui.settings.shortcut.mirror").data(),
+            TR_CACHE("ui.settings.shortcut.mirror_paste").data(),
+            TR_CACHE("ui.settings.shortcut.delete_selected").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_scroll_snap").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_snap_floor").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_scroll_timing_mapping")
+                .data(),
+            TR_CACHE("ui.settings.shortcut.toggle_beat_lines").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_stop_playback_on_scroll")
+                .data(),
+            TR_CACHE("ui.settings.shortcut.toggle_hit_sfx").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_hit_effects").data(),
+            TR_CACHE("ui.settings.shortcut.toggle_sync_same_main_audio").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
@@ -281,17 +285,18 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
         addOptions(std::array<const char*, 2>{
             TR_CACHE("ui.settings.editor.selection.strict").data(),
             TR_CACHE("ui.settings.editor.selection.intersection").data() });
+        break;
+    }
+    case Event::SettingsTab::Shortcut: {
         const float shortcutWidth =
             measureSettingsText(
                 "Ctrl+Shift+RightArrow", font, snapshot.fontSize) +
-            measureSettingsText(
-                TR_CACHE("ui.settings.editor.shortcuts.record").data(),
-                font,
-                snapshot.fontSize) +
-            measureSettingsText(
-                TR_CACHE("ui.settings.editor.shortcuts.clear").data(),
-                font,
-                snapshot.fontSize) +
+            measureSettingsText(TR_CACHE("ui.settings.shortcut.record").data(),
+                                font,
+                                snapshot.fontSize) +
+            measureSettingsText(TR_CACHE("ui.settings.shortcut.clear").data(),
+                                font,
+                                snapshot.fontSize) +
             framePad * 3.0f + std::floor(32.0f * scale);
         minWidth = std::max(minWidth, shortcutWidth);
         break;
@@ -432,12 +437,13 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
         parseLayoutFloat(cache.sidebarWidthConfig, 40.0f);
     const float btnSize = std::floor(sidebarBaseW * scale);
 
-    const std::array<const char*, 6> labels{
+    const std::array<const char*, 7> labels{
         getCategoryShortLabel(Event::SettingsTab::Software),
         getCategoryShortLabel(Event::SettingsTab::Visual),
         getCategoryShortLabel(Event::SettingsTab::Project),
         getCategoryShortLabel(Event::SettingsTab::Beatmap),
         getCategoryShortLabel(Event::SettingsTab::Editor),
+        getCategoryShortLabel(Event::SettingsTab::Shortcut),
         getCategoryShortLabel(Event::SettingsTab::Debug)
     };
     const float maxLabelWidth =
@@ -452,7 +458,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 6.0f + categorySpacing * 5.0f;
+                                  categorySize * 7.0f + categorySpacing * 6.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -540,7 +546,7 @@ void SettingsView::open(Event::SettingsTab tab)
     m_isOpen                = true;
     m_focusNextFrame        = true;
     m_dockToCenterNextFrame = true;
-    if ( tab != Event::SettingsTab::Editor ) {
+    if ( tab != Event::SettingsTab::Shortcut ) {
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
     }
@@ -647,6 +653,10 @@ void SettingsView::drawContent()
             std::string btnId = "##setting_tab_" + std::to_string((int)tab);
             if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
                 m_currentTab = tab;
+                if ( tab != Event::SettingsTab::Shortcut ) {
+                    m_recordingShortcutTarget = ShortcutRecordTarget::None;
+                    ShortcutUtils::setShortcutRecordingActive(false);
+                }
             }
 
             float iconAreaW = btnSize;
@@ -766,6 +776,17 @@ void SettingsView::drawContent()
                                 rect);
                         });
 
+        vbox.addElement("ShortcutTab",
+                        Sizing::Grow(),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryButton(
+                                Event::SettingsTab::Shortcut,
+                                ICON_MMM_KEYBOARD,
+                                TR_CACHE("ui.settings.shortcut").data(),
+                                rect);
+                        });
+
         vbox.addElement("DebugTab",
                         Sizing::Grow(),
                         Sizing::Fixed(btnSize),
@@ -815,6 +836,7 @@ void SettingsView::drawContent()
             case Event::SettingsTab::Project: drawProjectSettings(); break;
             case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
             case Event::SettingsTab::Editor: drawEditorSettings(); break;
+            case Event::SettingsTab::Shortcut: drawShortcutSettings(); break;
             case Event::SettingsTab::Debug: drawDebugSettings(); break;
             }
 

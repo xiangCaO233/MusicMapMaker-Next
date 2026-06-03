@@ -20,15 +20,16 @@ constexpr const char* ICON_MMM_FOLDER_OPEN =
     "\xef\x81\xbc";  ///< \uf07c folder-open
 constexpr const char* ICON_MMM_PEN =
     "\xef\x81\x80";  ///< \uf040 pencil (Draw Tool) - NerdFont Safe
-constexpr const char* ICON_MMM_FILE   = "\xef\x85\x9b";  ///< \uf15b file
-constexpr const char* ICON_MMM_MUSIC  = "\xef\x80\x81";  ///< \uf001 music
-constexpr const char* ICON_MMM_COG    = "\xef\x80\x93";  ///< \uf013 cog
-constexpr const char* ICON_MMM_SEARCH = "\xef\x80\x82";  ///< \uf002 search
-constexpr const char* ICON_MMM_SAVE   = "\xef\x83\x87";  ///< \uf0c7 floppy-disk
-constexpr const char* ICON_MMM_PACK   = "\xef\x86\x87";  ///< \uf187 box-archive
-constexpr const char* ICON_MMM_BOOK   = "\xef\x80\xad";  ///< \uf02d book
-constexpr const char* ICON_MMM_PLUS   = "\xef\x81\xa7";  ///< \uf067 plus
-constexpr const char* ICON_MMM_BUG    = "\xef\x86\x88";  ///< \uf188 bug
+constexpr const char* ICON_MMM_FILE     = "\xef\x85\x9b";  ///< \uf15b file
+constexpr const char* ICON_MMM_MUSIC    = "\xef\x80\x81";  ///< \uf001 music
+constexpr const char* ICON_MMM_COG      = "\xef\x80\x93";  ///< \uf013 cog
+constexpr const char* ICON_MMM_KEYBOARD = "\xef\x84\x9c";  ///< \uf11c keyboard
+constexpr const char* ICON_MMM_SEARCH   = "\xef\x80\x82";  ///< \uf002 search
+constexpr const char* ICON_MMM_SAVE = "\xef\x83\x87";  ///< \uf0c7 floppy-disk
+constexpr const char* ICON_MMM_PACK = "\xef\x86\x87";  ///< \uf187 box-archive
+constexpr const char* ICON_MMM_BOOK = "\xef\x80\xad";  ///< \uf02d book
+constexpr const char* ICON_MMM_PLUS = "\xef\x81\xa7";  ///< \uf067 plus
+constexpr const char* ICON_MMM_BUG  = "\xef\x86\x88";  ///< \uf188 bug
 constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
 constexpr const char* ICON_MMM_LINK = "\xef\x83\x81";  ///< \uf0c1 link
