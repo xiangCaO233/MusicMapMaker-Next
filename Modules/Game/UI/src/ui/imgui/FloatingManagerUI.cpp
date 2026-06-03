@@ -41,6 +41,17 @@ bool shouldCollapseAfterMinDragStart(float currentShortage, float startShortage,
     return currentShortage - startShortage > collapseDistance;
 }
 
+/// @brief 判断原生 dock 分隔线是否已经拉出超过当前内容最小尺寸的一半。
+/// @warning UI 热路径：侧边栏收回后拖拽时每帧仅做阈值计算。
+bool shouldExpandAfterCollapsedDragStart(float currentSize, float startSize,
+                                         ImVec2 minWindowSize, ImGuiAxis axis)
+{
+    const float minAxisSize =
+        axis == ImGuiAxis_X ? minWindowSize.x : minWindowSize.y;
+    const float expandDistance = std::floor(minAxisSize * 0.5f);
+    return currentSize - startSize > expandDistance;
+}
+
 /// @brief 读取 ImVec2 在指定轴上的值。
 float getAxisValue(ImVec2 value, ImGuiAxis axis)
 {
@@ -55,6 +66,126 @@ void setAxisValue(ImVec2& value, ImGuiAxis axis, float axisValue)
     } else {
         value.y = axisValue;
     }
+}
+
+/// @brief 设置指定 dock 节点轴向尺寸，并同步补偿同一父 split 的兄弟节点。
+/// @warning UI 热路径：仅在自动收回拖拽续接期间更新当前 DockNode 几何。
+float resizeDockNodeAxis(ImGuiDockNode* node, ImGuiAxis axis, float targetSize,
+                         float nodeMinSize)
+{
+    if ( !node ) {
+        return targetSize;
+    }
+
+    ImGuiDockNode* parent = node->ParentNode;
+    if ( !parent || parent->SplitAxis != axis ) {
+        const float clampedSize = std::max(nodeMinSize, targetSize);
+        setAxisValue(node->Size, axis, clampedSize);
+        setAxisValue(node->SizeRef, axis, clampedSize);
+        return clampedSize;
+    }
+
+    ImGuiDockNode* sibling = parent->ChildNodes[0] == node
+                                 ? parent->ChildNodes[1]
+                                 : parent->ChildNodes[0];
+    if ( !sibling ) {
+        return targetSize;
+    }
+
+    const float siblingMin = 1.0f;
+    const float parentPos  = getAxisValue(parent->Pos, axis);
+    const float parentSize =
+        std::max(nodeMinSize + siblingMin, getAxisValue(parent->Size, axis));
+    const float clampedSize =
+        std::clamp(targetSize, nodeMinSize, parentSize - siblingMin);
+    const float siblingSize  = std::max(siblingMin, parentSize - clampedSize);
+    const bool  isFirstChild = parent->ChildNodes[0] == node;
+
+    setAxisValue(node->Size, axis, clampedSize);
+    setAxisValue(node->SizeRef, axis, clampedSize);
+    setAxisValue(sibling->Size, axis, siblingSize);
+    setAxisValue(sibling->SizeRef, axis, siblingSize);
+
+    if ( isFirstChild ) {
+        setAxisValue(node->Pos, axis, parentPos);
+        setAxisValue(sibling->Pos, axis, parentPos + clampedSize);
+    } else {
+        setAxisValue(sibling->Pos, axis, parentPos);
+        setAxisValue(node->Pos, axis, parentPos + siblingSize);
+    }
+
+    if ( node->HostWindow ) {
+        ImGui::MarkIniSettingsDirty(node->HostWindow);
+    }
+
+    return clampedSize;
+}
+
+/// @brief 将正在续接的自动收回拖拽距离换算为当前侧边栏宽度。
+/// @warning UI 热路径：仅在鼠标按下拖拽时做一维距离计算。
+float getCollapsedResumeDragSize(float mouseAxis, bool isFirstChild,
+                                 float startMouseAxis)
+{
+    const float dragDistance =
+        isFirstChild ? mouseAxis - startMouseAxis : startMouseAxis - mouseAxis;
+    return std::max(1.0f, dragDistance);
+}
+
+/// @brief 获取自动收回透明拖拽热区宽度。
+/// @warning UI 热路径：侧边栏收回后每帧只读取 ImGui 样式和 DPI。
+float getCollapsedOverlayHitSize(float dpiScale)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    return std::ceil(std::max(
+        8.0f * std::max(1.0f, dpiScale),
+        style.DockingSeparatorSize + style.WindowBorderHoverPadding * 2.0f));
+}
+
+/// @brief 计算自动收回透明拖拽热区的屏幕矩形。
+/// @warning UI 热路径：仅根据 DockHost 窗口几何和收回侧向计算一个矩形。
+ImRect makeCollapsedOverlayRect(const ImGuiWindow* hostWindow, ImGuiAxis axis,
+                                bool isFirstChild, float hitSize)
+{
+    if ( !hostWindow ) {
+        return ImRect();
+    }
+
+    if ( axis == ImGuiAxis_Y ) {
+        const float boundary = isFirstChild
+                                   ? hostWindow->Pos.y
+                                   : hostWindow->Pos.y + hostWindow->Size.y;
+        return ImRect(ImVec2(hostWindow->Pos.x, boundary - hitSize * 0.5f),
+                      ImVec2(hostWindow->Pos.x + hostWindow->Size.x,
+                             boundary + hitSize * 0.5f));
+    }
+
+    const float boundary = isFirstChild
+                               ? hostWindow->Pos.x
+                               : hostWindow->Pos.x + hostWindow->Size.x;
+    return ImRect(ImVec2(boundary - hitSize * 0.5f, hostWindow->Pos.y),
+                  ImVec2(boundary + hitSize * 0.5f,
+                         hostWindow->Pos.y + hostWindow->Size.y));
+}
+
+/// @brief 计算自动收回分隔线 hover/active 样式的可见矩形。
+/// @warning UI 热路径：仅根据主 DockHost 几何和鼠标拖拽位置计算绘制矩形。
+ImRect makeCollapsedSeparatorRect(const ImGuiWindow* hostWindow, ImGuiAxis axis,
+                                  float separatorAxis, float thickness)
+{
+    if ( !hostWindow ) {
+        return ImRect();
+    }
+
+    if ( axis == ImGuiAxis_Y ) {
+        return ImRect(
+            ImVec2(hostWindow->Pos.x, separatorAxis - thickness * 0.5f),
+            ImVec2(hostWindow->Pos.x + hostWindow->Size.x,
+                   separatorAxis + thickness * 0.5f));
+    }
+
+    return ImRect(ImVec2(separatorAxis - thickness * 0.5f, hostWindow->Pos.y),
+                  ImVec2(separatorAxis + thickness * 0.5f,
+                         hostWindow->Pos.y + hostWindow->Size.y));
 }
 
 /// @brief 夹住指定 dock 节点轴向尺寸，并补偿同一父 split 中的兄弟节点。
@@ -244,7 +375,8 @@ FloatingManagerUI::FloatingManagerUI(const std::string& name)
                               e.targetFloatManagerName,
                               e.subViewId);
                           // 核心逻辑：只处理发给“我”的指令
-                          if ( e.targetFloatManagerName == this->m_name ) {
+                          if ( e.targetFloatManagerName == this->m_name &&
+                               e.sourceUiName != this->m_name ) {
                               if ( e.showSubView ) {
                                   this->restoreSubViewState(e.subViewId, true);
                               } else {
@@ -272,25 +404,37 @@ void FloatingManagerUI::registerSubView(const std::string&        subViewId,
 void FloatingManagerUI::toggleSubView(const std::string& subViewId)
 {
     if ( m_currentSubViewId == subViewId && m_isVisible ) {
-        m_isVisible                  = false;  // 已激活再点击 -> 隐藏
-        m_hasSeenUsableSize          = false;
-        m_requestShowSizeReset       = false;
-        m_wasDocked                  = false;
-        m_minResizeLockActive        = false;
-        m_minResizeLockAxis          = -1;
-        m_dockResizeGestureActive    = false;
-        m_dockResizeGestureAxis      = -1;
-        m_restoreMouseAfterDockSpace = false;
+        m_isVisible                        = false;  // 已激活再点击 -> 隐藏
+        m_hasSeenUsableSize                = false;
+        m_requestShowSizeReset             = false;
+        m_wasDocked                        = false;
+        m_minResizeLockActive              = false;
+        m_isAutoCollapsed                  = false;
+        m_minResizeLockAxis                = -1;
+        m_dockResizeGestureActive          = false;
+        m_dockResizeGestureAxis            = -1;
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+        m_collapsedDockId                  = 0;
+        m_restoreMouseAfterDockSpace       = false;
     } else {
-        m_currentSubViewId           = subViewId;
-        m_isVisible                  = true;  // 切换或显示
-        m_hasSeenUsableSize          = false;
-        m_requestShowSizeReset       = true;
-        m_minResizeLockActive        = false;
-        m_minResizeLockAxis          = -1;
-        m_dockResizeGestureActive    = false;
-        m_dockResizeGestureAxis      = -1;
-        m_restoreMouseAfterDockSpace = false;
+        m_currentSubViewId                 = subViewId;
+        m_isVisible                        = true;  // 切换或显示
+        m_hasSeenUsableSize                = false;
+        m_requestShowSizeReset             = true;
+        m_minResizeLockActive              = false;
+        m_isAutoCollapsed                  = false;
+        m_minResizeLockAxis                = -1;
+        m_dockResizeGestureActive          = false;
+        m_dockResizeGestureAxis            = -1;
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+        m_collapsedDockId                  = 0;
+        m_restoreMouseAfterDockSpace       = false;
     }
 }
 
@@ -299,30 +443,43 @@ void FloatingManagerUI::restoreSubViewState(const std::string& subViewId,
 {
     const bool willShow =
         visible && m_subViews.find(subViewId) != m_subViews.end();
-    const bool changedVisibility = willShow != m_isVisible;
-    const bool changedSubView    = subViewId != m_currentSubViewId;
-    m_currentSubViewId           = subViewId;
-    m_isVisible                  = willShow;
-    if ( changedVisibility || changedSubView ) {
-        m_hasSeenUsableSize          = false;
-        m_requestShowSizeReset       = willShow;
-        m_wasDocked                  = false;
-        m_minResizeLockActive        = false;
-        m_minResizeLockAxis          = -1;
-        m_dockResizeGestureActive    = false;
-        m_dockResizeGestureAxis      = -1;
-        m_restoreMouseAfterDockSpace = false;
+    const bool changedVisibility         = willShow != m_isVisible;
+    const bool changedSubView            = subViewId != m_currentSubViewId;
+    const bool clearCollapsedPlaceholder = !willShow && m_isAutoCollapsed;
+    m_currentSubViewId                   = subViewId;
+    m_isVisible                          = willShow;
+    if ( changedVisibility || changedSubView || clearCollapsedPlaceholder ) {
+        m_hasSeenUsableSize                = false;
+        m_requestShowSizeReset             = willShow;
+        m_wasDocked                        = false;
+        m_minResizeLockActive              = false;
+        m_isAutoCollapsed                  = false;
+        m_minResizeLockAxis                = -1;
+        m_dockResizeGestureActive          = false;
+        m_dockResizeGestureAxis            = -1;
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+        m_collapsedDockId                  = 0;
+        m_restoreMouseAfterDockSpace       = false;
     }
 }
 
 void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
 {
-    if ( !dockNode || !dockNode->ParentNode ||
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    const bool mouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    if ( !dockNode || !dockNode->ParentNode || !mouseDown ) {
         m_dockResizeGestureActive = false;
         m_dockResizeGestureAxis   = -1;
         m_minResizeLockActive     = false;
         m_minResizeLockAxis       = -1;
+        if ( !mouseDown ) {
+            m_collapsedResizeDragActive        = false;
+            m_collapsedResizeDragAxis          = -1;
+            m_collapsedResizeResumeStateLogged = false;
+            m_collapsedResizeResumeApplyLogged = false;
+        }
         return;
     }
 
@@ -338,6 +495,23 @@ void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
     }
+}
+
+/// @brief 记录自动收回前所在 DockNode 的分割轴和侧向。
+void FloatingManagerUI::rememberCollapsedDockPlacement(ImGuiDockNode* dockNode)
+{
+    if ( !dockNode || !dockNode->ParentNode ) {
+        m_collapsedDockAxis         = ImGuiAxis_X;
+        m_collapsedDockId           = dockNode ? dockNode->ID : 0;
+        m_collapsedDockIsFirstChild = true;
+        return;
+    }
+
+    const ImGuiAxis axis = dockNode->ParentNode->SplitAxis;
+    m_collapsedDockAxis  = axis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    m_collapsedDockId    = dockNode->ID;
+    m_collapsedDockIsFirstChild =
+        dockNode->ParentNode->ChildNodes[0] == dockNode;
 }
 
 bool FloatingManagerUI::isVisible() const
@@ -403,6 +577,10 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     UIManager* sourceManager)
 {
     if ( !m_isVisible ) return;
+    if ( m_collapsedResizeDragActive &&
+         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        return;
+    }
 
     const float dpiScale =
         MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -453,7 +631,8 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
                                              m_minResizeLockStartOverrun,
                                              minWindowSize,
                                              dockResizeOverrun.axis) ) {
-            hideCurrentSubView(sourceManager);
+            rememberCollapsedDockPlacement(dockNode);
+            hideCurrentSubView(sourceManager, true);
             restoreDockResizeMouseAfterDockSpace();
             return;
         }
@@ -486,10 +665,14 @@ void FloatingManagerUI::restoreDockResizeMouseAfterDockSpace()
 }
 
 /// @brief 隐藏当前子视图并同步取消侧边栏选中状态。
-void FloatingManagerUI::hideCurrentSubView(UIManager* sourceManager)
+void FloatingManagerUI::hideCurrentSubView(UIManager* sourceManager,
+                                           bool       keepCollapsedPlaceholder)
 {
     if ( !m_isVisible || m_currentSubViewId.empty() ) {
         m_isVisible = false;
+        m_isAutoCollapsed =
+            keepCollapsedPlaceholder && !m_currentSubViewId.empty() &&
+            m_subViews.find(m_currentSubViewId) != m_subViews.end();
         return;
     }
 
@@ -500,20 +683,199 @@ void FloatingManagerUI::hideCurrentSubView(UIManager* sourceManager)
     evt.subViewId              = m_currentSubViewId;
     evt.showSubView            = false;
     MMM::Event::EventBus::instance().publish(evt);
-    m_isVisible                  = false;
-    m_hasSeenUsableSize          = false;
-    m_requestShowSizeReset       = false;
-    m_wasDocked                  = false;
-    m_minResizeLockActive        = false;
-    m_minResizeLockAxis          = -1;
-    m_dockResizeGestureActive    = false;
-    m_dockResizeGestureAxis      = -1;
-    m_restoreMouseAfterDockSpace = false;
+    m_isVisible                        = false;
+    m_hasSeenUsableSize                = false;
+    m_requestShowSizeReset             = false;
+    m_wasDocked                        = false;
+    m_minResizeLockActive              = false;
+    m_isAutoCollapsed                  = keepCollapsedPlaceholder;
+    m_minResizeLockAxis                = -1;
+    m_dockResizeGestureActive          = false;
+    m_dockResizeGestureAxis            = -1;
+    m_collapsedResizeDragActive        = false;
+    m_collapsedResizeDragAxis          = -1;
+    m_collapsedResizeResumeStateLogged = false;
+    m_collapsedResizeResumeApplyLogged = false;
+    m_restoreMouseAfterDockSpace       = false;
+}
+
+/// @brief 从自动收回透明拖拽热区恢复当前子视图并同步侧边栏选中状态。
+void FloatingManagerUI::showCurrentSubViewFromCollapsedOverlay(
+    UIManager* sourceManager)
+{
+    if ( m_currentSubViewId.empty() ||
+         m_subViews.find(m_currentSubViewId) == m_subViews.end() ) {
+        m_isAutoCollapsed = false;
+        return;
+    }
+
+    MMM::Event::UISubViewToggleEvent evt;
+    evt.sourceUiName           = m_name;
+    evt.uiManager              = sourceManager;
+    evt.targetFloatManagerName = m_name;
+    evt.subViewId              = m_currentSubViewId;
+    evt.showSubView            = true;
+    MMM::Event::EventBus::instance().publish(evt);
+
+    m_isVisible                        = true;
+    m_hasSeenUsableSize                = true;
+    m_requestShowSizeReset             = false;
+    m_wasDocked                        = true;
+    m_minResizeLockActive              = false;
+    m_isAutoCollapsed                  = false;
+    m_minResizeLockAxis                = -1;
+    m_dockResizeGestureActive          = true;
+    m_dockResizeGestureAxis            = m_collapsedResizeDragAxis;
+    m_collapsedResizeDragActive        = true;
+    m_collapsedResizeResumeStateLogged = false;
+    m_collapsedResizeResumeApplyLogged = false;
+    m_restoreMouseAfterDockSpace       = false;
+}
+
+/// @brief 绘制自动收回后的透明拖拽热区，并在拖出阈值后恢复子视图。
+bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
+{
+    if ( !m_isAutoCollapsed || m_currentSubViewId.empty() ) {
+        return false;
+    }
+
+    auto it = m_subViews.find(m_currentSubViewId);
+    if ( it == m_subViews.end() ) {
+        m_isAutoCollapsed = false;
+        return false;
+    }
+
+    const float dpiScale =
+        MMM::Config::AppConfig::instance().getWindowContentScale();
+    const ImVec2 minWindowSize =
+        toWindowMinSize(it->second->getMinContentSize(dpiScale), dpiScale);
+    ImGuiWindow* hostWindow = ImGui::FindWindowByName("RightDockHost");
+    if ( !hostWindow ) {
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+        return false;
+    }
+
+    const ImGuiAxis axis =
+        m_collapsedDockAxis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    const float  hitSize = getCollapsedOverlayHitSize(dpiScale);
+    const ImRect hitRect = makeCollapsedOverlayRect(
+        hostWindow, axis, m_collapsedDockIsFirstChild, hitSize);
+    if ( hitRect.GetWidth() <= 0.0f || hitRect.GetHeight() <= 0.0f ) {
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+        return false;
+    }
+
+    ImGui::SetNextWindowPos(hitRect.Min, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(hitRect.GetSize(), ImGuiCond_Always);
+    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+
+    const std::string overlayName = "##CollapsedResizeOverlay_" + m_name;
+    ImGuiWindowFlags  overlayFlags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoNavFocus;
+    ImGui::Begin(overlayName.c_str(), nullptr, overlayFlags);
+    ImGui::SetCursorScreenPos(hitRect.Min);
+    ImGui::InvisibleButton("##CollapsedResizeHotZone", hitRect.GetSize());
+
+    const bool overlayActive =
+        ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool overlayHovered = ImGui::IsItemHovered();
+    if ( overlayHovered || overlayActive ) {
+        ImGui::SetMouseCursor(axis == ImGuiAxis_Y ? ImGuiMouseCursor_ResizeNS
+                                                  : ImGuiMouseCursor_ResizeEW);
+    }
+
+    bool  shouldShowSubView = false;
+    float mouseAxis         = 0.0f;
+    float dragDistance      = 0.0f;
+    float separatorAxis = axis == ImGuiAxis_Y
+                              ? (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.y
+                                     : hostWindow->Pos.y + hostWindow->Size.y)
+                              : (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.x
+                                     : hostWindow->Pos.x + hostWindow->Size.x);
+
+    if ( !overlayActive ) {
+        m_collapsedResizeDragActive        = false;
+        m_collapsedResizeDragAxis          = -1;
+        m_collapsedResizeResumeStateLogged = false;
+        m_collapsedResizeResumeApplyLogged = false;
+    } else {
+        mouseAxis = getAxisValue(ImGui::GetMousePos(), axis);
+        if ( !m_collapsedResizeDragActive ||
+             m_collapsedResizeDragAxis != static_cast<int>(axis) ) {
+            m_collapsedResizeDragActive         = true;
+            m_collapsedResizeDragAxis           = axis;
+            m_collapsedResizeDragStartMouseAxis = mouseAxis;
+        }
+
+        dragDistance = m_collapsedDockIsFirstChild
+                           ? mouseAxis - m_collapsedResizeDragStartMouseAxis
+                           : m_collapsedResizeDragStartMouseAxis - mouseAxis;
+        separatorAxis += (m_collapsedDockIsFirstChild ? 1.0f : -1.0f) *
+                         std::max(0.0f, dragDistance);
+        if ( shouldExpandAfterCollapsedDragStart(
+                 std::max(0.0f, dragDistance), 0.0f, minWindowSize, axis) ) {
+            shouldShowSubView = true;
+        }
+    }
+
+    if ( overlayHovered || overlayActive ) {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float       thickness =
+            std::max(1.0f, std::floor(style.DockingSeparatorSize));
+        const ImRect separatorRect = makeCollapsedSeparatorRect(
+            hostWindow, axis, separatorAxis, thickness);
+        const ImU32 separatorColor =
+            ImGui::GetColorU32(overlayActive ? ImGuiCol_SeparatorActive
+                                             : ImGuiCol_SeparatorHovered);
+        ImGui::GetForegroundDrawList()->AddRectFilled(
+            separatorRect.Min, separatorRect.Max, separatorColor);
+    }
+
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+
+    if ( shouldShowSubView ) {
+        XINFO(
+            "Sidebar collapsed resize threshold: manager={}, subView={}, "
+            "axis={}, dockId={}, firstChild={}, dragDistance={}, "
+            "minAxisSize={}, startMouseAxis={}, mouseAxis={}",
+            m_name,
+            m_currentSubViewId,
+            static_cast<int>(axis),
+            m_collapsedDockId,
+            m_collapsedDockIsFirstChild,
+            std::max(0.0f, dragDistance),
+            getAxisValue(minWindowSize, axis),
+            m_collapsedResizeDragStartMouseAxis,
+            mouseAxis);
+        showCurrentSubViewFromCollapsedOverlay(sourceManager);
+        return true;
+    }
+    return false;
 }
 
 void FloatingManagerUI::update(UIManager* sourceManager)
 {
-    if ( !m_isVisible ) return;
+    if ( !m_isVisible ) {
+        if ( !renderCollapsedResizeOverlay(sourceManager) ) {
+            return;
+        }
+    }
 
     const float dpiScale =
         MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -525,32 +887,126 @@ void FloatingManagerUI::update(UIManager* sourceManager)
 
     const ImVec2 minWindowSize =
         toWindowMinSize(it->second->getMinContentSize(dpiScale), dpiScale);
-    ImGui::SetNextWindowSizeConstraints(minWindowSize,
+    const bool resumeCollapsedResize =
+        m_collapsedResizeDragActive &&
+        ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        (m_collapsedResizeDragAxis == ImGuiAxis_X ||
+         m_collapsedResizeDragAxis == ImGuiAxis_Y);
+    const ImGuiAxis resumeAxis =
+        m_collapsedResizeDragAxis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    const float resumeMouseAxis =
+        resumeCollapsedResize ? getAxisValue(ImGui::GetMousePos(), resumeAxis)
+                              : 0.0f;
+    const float requestedAxisSize =
+        resumeCollapsedResize
+            ? getCollapsedResumeDragSize(resumeMouseAxis,
+                                         m_collapsedDockIsFirstChild,
+                                         m_collapsedResizeDragStartMouseAxis)
+            : 0.0f;
+    const ImVec2 activeMinWindowSize =
+        resumeCollapsedResize ? ImVec2(1.0f, 1.0f) : minWindowSize;
+    ImGui::SetNextWindowSizeConstraints(activeMinWindowSize,
                                         ImVec2(FLT_MAX, FLT_MAX));
-    if ( m_requestShowSizeReset || !m_hasSeenUsableSize ) {
+    if ( !resumeCollapsedResize &&
+         (m_requestShowSizeReset || !m_hasSeenUsableSize) ) {
         ImGui::SetNextWindowSize(minWindowSize, ImGuiCond_Always);
     }
 
     // 使用 ### 后缀强制固定 ImGui 内部窗口
     // ID，即使显示的标题变化也不会丢失停靠状态
-    std::string    windowName = m_currentSubViewId + "###" + m_name;
-    LayoutContext  lctx{ m_layoutCtx, windowName };
+    std::string    windowName   = m_currentSubViewId + "###" + m_name;
+    const ImGuiID  resumeDockId = resumeCollapsedResize ? m_collapsedDockId : 0;
+    LayoutContext  lctx{ m_layoutCtx,     windowName,
+                         false,           ImGuiWindowFlags_NoTitleBar,
+                         nullptr,         resumeDockId,
+                         ImGuiCond_Always };
     ImVec2         currentWindowSize = ImGui::GetWindowSize();
     const bool     isDocked          = ImGui::IsWindowDocked();
     ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();
     ImGuiDockNode* dockNode =
         isDocked && currentWindow ? currentWindow->DockNode : nullptr;
-    updateDockResizeGesture(dockNode);
+    if ( resumeCollapsedResize ) {
+        m_dockResizeGestureActive = true;
+        m_dockResizeGestureAxis   = resumeAxis;
+        m_minResizeLockActive     = false;
+        m_minResizeLockAxis       = -1;
+        if ( !m_collapsedResizeResumeStateLogged ) {
+            XINFO(
+                "Sidebar collapsed resize resume begin: manager={}, "
+                "subView={}, axis={}, savedDockId={}, windowDockId={}, "
+                "dockNodeId={}, isDocked={}, hasDockNode={}, hasParent={}, "
+                "firstChild={}, requestedAxisSize={}, startMouseAxis={}, "
+                "mouseAxis={}",
+                m_name,
+                m_currentSubViewId,
+                static_cast<int>(resumeAxis),
+                m_collapsedDockId,
+                currentWindow ? currentWindow->DockId : 0,
+                dockNode ? dockNode->ID : 0,
+                isDocked,
+                dockNode != nullptr,
+                dockNode && dockNode->ParentNode,
+                m_collapsedDockIsFirstChild,
+                requestedAxisSize,
+                m_collapsedResizeDragStartMouseAxis,
+                resumeMouseAxis);
+            m_collapsedResizeResumeStateLogged = true;
+        }
+    } else {
+        updateDockResizeGesture(dockNode);
+    }
     const DockResizeOverrun dockResizeOverrun =
         getDockResizeOverrun(dockNode, minWindowSize, ImGui::GetMousePos());
-    if ( m_wasDocked && !isDocked ) {
+    if ( resumeCollapsedResize && isDocked && dockNode ) {
+        const float appliedAxisSize =
+            resizeDockNodeAxis(dockNode, resumeAxis, requestedAxisSize, 1.0f);
+        setAxisValue(currentWindow->Size, resumeAxis, appliedAxisSize);
+        setAxisValue(currentWindow->SizeFull, resumeAxis, appliedAxisSize);
+        currentWindowSize = dockNode->Size;
+        if ( !m_collapsedResizeResumeApplyLogged ) {
+            XINFO(
+                "Sidebar collapsed resize resume applied: manager={}, "
+                "subView={}, axis={}, dockNodeId={}, parentAxis={}, "
+                "requestedAxisSize={}, appliedAxisSize={}, nodeAxisSize={}",
+                m_name,
+                m_currentSubViewId,
+                static_cast<int>(resumeAxis),
+                dockNode->ID,
+                dockNode->ParentNode
+                    ? static_cast<int>(dockNode->ParentNode->SplitAxis)
+                    : -1,
+                requestedAxisSize,
+                appliedAxisSize,
+                getAxisValue(dockNode->Size, resumeAxis));
+            m_collapsedResizeResumeApplyLogged = true;
+        }
+        ImGui::SetMouseCursor(resumeAxis == ImGuiAxis_Y
+                                  ? ImGuiMouseCursor_ResizeNS
+                                  : ImGuiMouseCursor_ResizeEW);
+        if ( ImGuiWindow* hostWindow = dockNode->HostWindow ) {
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float       thickness =
+                std::max(1.0f, std::floor(style.DockingSeparatorSize));
+            const float separatorAxis =
+                m_collapsedDockIsFirstChild
+                    ? getAxisValue(dockNode->Pos, resumeAxis) + appliedAxisSize
+                    : getAxisValue(dockNode->Pos, resumeAxis);
+            const ImRect separatorRect = makeCollapsedSeparatorRect(
+                hostWindow, resumeAxis, separatorAxis, thickness);
+            ImGui::GetForegroundDrawList()->AddRectFilled(
+                separatorRect.Min,
+                separatorRect.Max,
+                ImGui::GetColorU32(ImGuiCol_SeparatorActive));
+        }
+    }
+    if ( !resumeCollapsedResize && m_wasDocked && !isDocked ) {
         currentWindowSize.x = std::max(currentWindowSize.x, minWindowSize.x);
         currentWindowSize.y = minWindowSize.y;
         ImGui::SetWindowSize(currentWindowSize, ImGuiCond_Always);
     }
-    m_wasDocked            = isDocked;
+    m_wasDocked = resumeCollapsedResize ? (m_wasDocked || isDocked) : isDocked;
     m_requestShowSizeReset = false;
-    if ( isDocked ) {
+    if ( isDocked && !resumeCollapsedResize ) {
         currentWindowSize = clampDockNodeToMinSize(
             currentWindow, currentWindowSize, minWindowSize);
     }
@@ -586,7 +1042,8 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                                                  m_minResizeLockStartOverrun,
                                                  minWindowSize,
                                                  dockResizeOverrun.axis) ) {
-                hideCurrentSubView(sourceManager);
+                rememberCollapsedDockPlacement(dockNode);
+                hideCurrentSubView(sourceManager, true);
                 return;
             }
         } else if ( m_minResizeLockActive &&

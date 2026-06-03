@@ -55,6 +55,10 @@ public:
     /// @warning UI 热路径：每帧 DockSpace 绘制后执行；只在曾钳住鼠标时写回。
     void restoreDockResizeMouseAfterDockSpace();
 
+    /// @brief 更新当前浮动子视图，或维持自动收回后的透明拖拽热区。
+    /// @param sourceManager 当前 UIManager。
+    /// @warning UI 热路径：每帧执行；仅允许当前子视图绘制、DockNode
+    /// 几何修正和轻量鼠标交互处理。
     void update(UIManager* sourceManager) override;
 
     void* getActualInstance() override { return this; }
@@ -89,7 +93,25 @@ public:
 private:
     /// @brief 隐藏当前子视图并同步取消侧边栏选中状态。
     /// @param sourceManager 当前 UIManager。
-    void hideCurrentSubView(UIManager* sourceManager);
+    /// @param keepCollapsedPlaceholder 是否保留自动收回后的透明拖拽热区。
+    void hideCurrentSubView(UIManager* sourceManager,
+                            bool       keepCollapsedPlaceholder = false);
+
+    /// @brief 绘制自动收回后的透明拖拽热区，并在拖出阈值后恢复子视图。
+    /// @param sourceManager 当前 UIManager。
+    /// @return 本帧是否已经恢复子视图并需要立刻继续绘制真实 dock 窗口。
+    /// @warning UI 热路径：侧边栏自动收回后每帧执行；只处理主 DockHost
+    /// 边界、鼠标拖拽和阈值判断，禁止加入文件系统或复杂遍历。
+    bool renderCollapsedResizeOverlay(UIManager* sourceManager);
+
+    /// @brief 从自动收回透明拖拽热区恢复当前子视图并同步侧边栏选中状态。
+    /// @param sourceManager 当前 UIManager。
+    void showCurrentSubViewFromCollapsedOverlay(UIManager* sourceManager);
+
+    /// @brief 记录自动收回前所在 DockNode 的分割轴和侧向。
+    /// @param dockNode 当前子视图所在 DockNode。
+    /// @warning UI 热路径：仅在触发自动收回时读取一次 DockNode 父子关系。
+    void rememberCollapsedDockPlacement(ImGuiDockNode* dockNode);
 
     /// @brief 更新当前左键手势是否从 dock 分割线开始。
     /// @param dockNode 当前子视图所在 DockNode。
@@ -114,6 +136,9 @@ private:
     /// @brief 当前是否锁定在最小尺寸边界并等待继续拖拽触发收起。
     bool m_minResizeLockActive{ false };
 
+    /// @brief 当前子视图是否自动收回为透明拖拽热区。
+    bool m_isAutoCollapsed{ false };
+
     /// @brief 最小尺寸锁定的 dock split 轴，-1 表示无锁定。
     int m_minResizeLockAxis{ -1 };
 
@@ -125,6 +150,30 @@ private:
 
     /// @brief 当前 dock resize 手势所在轴，-1 表示无手势。
     int m_dockResizeGestureAxis{ -1 };
+
+    /// @brief 自动收回透明热区当前是否正在拖拽展开。
+    bool m_collapsedResizeDragActive{ false };
+
+    /// @brief 自动收回透明热区拖拽所在轴，-1 表示无拖拽。
+    int m_collapsedResizeDragAxis{ -1 };
+
+    /// @brief 自动收回透明热区开始拖拽时鼠标在拖拽轴上的位置。
+    float m_collapsedResizeDragStartMouseAxis{ 0.0f };
+
+    /// @brief 自动收回拖拽恢复真实 dock 窗口后的首帧状态是否已经输出。
+    bool m_collapsedResizeResumeStateLogged{ false };
+
+    /// @brief 自动收回拖拽成功续接 DockNode 尺寸后是否已经输出。
+    bool m_collapsedResizeResumeApplyLogged{ false };
+
+    /// @brief 自动收回前所在 dock split 轴，默认按左侧栏处理。
+    int m_collapsedDockAxis{ 0 };
+
+    /// @brief 自动收回前所在 DockNode ID，用于同帧恢复时强制回到原停靠节点。
+    ImGuiID m_collapsedDockId{ 0 };
+
+    /// @brief 自动收回前是否位于 split 第一个子节点，决定从左/上还是右/下拉出。
+    bool m_collapsedDockIsFirstChild{ true };
 
     /// @brief 本帧 DockSpace 前是否临时钳住过 ImGui 鼠标坐标。
     bool m_restoreMouseAfterDockSpace{ false };
