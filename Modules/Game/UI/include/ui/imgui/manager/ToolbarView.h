@@ -57,6 +57,14 @@ private:
     std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT> m_paletteColors{};
     /// @brief 调色盘颜色是否已从皮肤初始化。
     bool m_colorPaletteInitialized{ false };
+    /// @brief 颜色选择器是否使用 HSV 显示模式。
+    bool m_colorPickerUseHsv{ false };
+    /// @brief 当前活动颜色的 HEX 输入缓冲区。
+    std::array<char, 16> m_colorHexBuffer{};
+    /// @brief HEX 输入缓冲区当前对应的颜色槽位。
+    Logic::NoteColorSlot m_colorHexBufferSlot{ Logic::NoteColorSlot::Tap };
+    /// @brief HEX 输入框是否正处于编辑状态。
+    bool m_colorHexInputActive{ false };
     /// @brief 当前选中的持久化调色盘方案索引；-1 表示未使用保存方案。
     int m_activePaletteSchemeIndex{ -1 };
     /// @brief 当前调色盘方案名称编辑缓冲区。
@@ -96,6 +104,11 @@ private:
     /// @param name 方案名。
     void setPaletteSchemeNameBuffer(const std::string& name);
 
+    /// @brief 将颜色写入 HEX 输入缓冲区。
+    /// @param slot 颜色槽位。
+    /// @param color 当前颜色。
+    void setColorHexBuffer(Logic::NoteColorSlot slot, glm::vec4 color);
+
     /// @brief 读取当前方案名输入框内容。
     /// @return 合法方案名。
     std::string currentPaletteSchemeName() const;
@@ -104,9 +117,9 @@ private:
     /// @param slot 颜色槽位。
     /// @param color 自定义颜色；空值表示清除并使用皮肤默认色。
     /// @param applyToSelection 是否同时应用到当前选中物件。
-    void pushColorCommands(Logic::NoteColorSlot slot,
+    void pushColorCommands(Logic::NoteColorSlot     slot,
                            std::optional<glm::vec4> color,
-                           bool applyToSelection);
+                           bool                     applyToSelection);
 
     /// @brief 绘制音符颜色调色盘弹窗。
     /// @param dpiScale 当前 DPI 缩放。

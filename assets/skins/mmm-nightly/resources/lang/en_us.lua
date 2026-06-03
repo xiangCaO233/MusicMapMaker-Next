@@ -431,6 +431,8 @@ return {
 	["ui.toolbar.note_palette.note_end"] = "note_end",
 	["ui.toolbar.note_palette.note_flick_arrow"] = "note_flick_arrow",
 	["ui.toolbar.note_palette.note_node"] = "note_node",
+	["ui.toolbar.note_palette.color_mode"] = "Mode",
+	["ui.toolbar.note_palette.hex"] = "HEX",
 	["ui.toolbar.note_palette.skin_defaults"] = "Skin Defaults",
 	["ui.toolbar.note_palette.apply_selected"] = "Apply Selected",
 	["ui.toolbar.note_palette.clear_custom"] = "Use Skin Default",

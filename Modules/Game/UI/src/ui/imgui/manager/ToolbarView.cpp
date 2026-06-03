@@ -14,9 +14,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <utility>
 
 namespace MMM::UI
@@ -96,6 +99,88 @@ std::array<float, 4> toStoredColor(glm::vec4 color)
 glm::vec4 fromStoredColor(const std::array<float, 4>& color)
 {
     return { color[0], color[1], color[2], color[3] };
+}
+
+/// @brief 将 0 到 1 的颜色通道转换为 8 位整数。
+int colorChannelToByte(float value)
+{
+    return static_cast<int>(
+        std::clamp(std::round(value * 255.0f), 0.0f, 255.0f));
+}
+
+/// @brief 将颜色转换为 #RRGGBBAA 文本。
+std::string colorToHexString(glm::vec4 color)
+{
+    char buffer[10]{};
+    std::snprintf(buffer,
+                  sizeof(buffer),
+                  "#%02X%02X%02X%02X",
+                  colorChannelToByte(color.r),
+                  colorChannelToByte(color.g),
+                  colorChannelToByte(color.b),
+                  colorChannelToByte(color.a));
+    return std::string(buffer);
+}
+
+/// @brief 判断字符是否为空白。
+bool isHexInputSpace(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+/// @brief 获取单个十六进制字符值。
+int hexDigitValue(char ch)
+{
+    if ( ch >= '0' && ch <= '9' ) return ch - '0';
+    if ( ch >= 'a' && ch <= 'f' ) return ch - 'a' + 10;
+    if ( ch >= 'A' && ch <= 'F' ) return ch - 'A' + 10;
+    return -1;
+}
+
+/// @brief 解析两个十六进制字符为 8 位通道值。
+bool parseHexByte(std::string_view text, std::size_t offset, int& value)
+{
+    int hi = hexDigitValue(text[offset]);
+    int lo = hexDigitValue(text[offset + 1]);
+    if ( hi < 0 || lo < 0 ) return false;
+    value = hi * 16 + lo;
+    return true;
+}
+
+/// @brief 解析 #RRGGBB 或 #RRGGBBAA 颜色文本。
+bool parseHexColor(std::string_view text, glm::vec4& color)
+{
+    std::size_t begin = 0;
+    std::size_t end   = text.size();
+    while ( begin < end && isHexInputSpace(text[begin]) ) {
+        ++begin;
+    }
+    while ( end > begin && isHexInputSpace(text[end - 1]) ) {
+        --end;
+    }
+    text = text.substr(begin, end - begin);
+    if ( !text.empty() && text.front() == '#' ) {
+        text.remove_prefix(1);
+    }
+    if ( text.size() != 6 && text.size() != 8 ) return false;
+
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    int a = 255;
+    if ( !parseHexByte(text, 0, r) || !parseHexByte(text, 2, g) ||
+         !parseHexByte(text, 4, b) ) {
+        return false;
+    }
+    if ( text.size() == 8 && !parseHexByte(text, 6, a) ) {
+        return false;
+    }
+
+    color = { static_cast<float>(r) / 255.0f,
+              static_cast<float>(g) / 255.0f,
+              static_cast<float>(b) / 255.0f,
+              static_cast<float>(a) / 255.0f };
+    return true;
 }
 
 /// @brief 获取默认调色盘方案名。
@@ -951,6 +1036,15 @@ void ToolbarView::setPaletteSchemeNameBuffer(const std::string& name)
     std::copy_n(name.begin(), count, m_paletteSchemeNameBuffer.begin());
 }
 
+void ToolbarView::setColorHexBuffer(Logic::NoteColorSlot slot, glm::vec4 color)
+{
+    m_colorHexBuffer.fill('\0');
+    std::string text  = colorToHexString(color);
+    std::size_t count = std::min(text.size(), m_colorHexBuffer.size() - 1);
+    std::copy_n(text.begin(), count, m_colorHexBuffer.begin());
+    m_colorHexBufferSlot = slot;
+}
+
 std::string ToolbarView::currentPaletteSchemeName() const
 {
     std::string name(m_paletteSchemeNameBuffer.data());
@@ -1113,9 +1207,54 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         glm::vec4& activeColor =
             m_paletteColors[colorSlotIndex(m_activeColorSlot)];
-        ImGuiColorEditFlags pickerFlags = ImGuiColorEditFlags_AlphaBar |
-                                          ImGuiColorEditFlags_AlphaPreviewHalf |
-                                          ImGuiColorEditFlags_DisplayRGB;
+        if ( m_colorHexBufferSlot != m_activeColorSlot ||
+             !m_colorHexInputActive ) {
+            setColorHexBuffer(m_activeColorSlot, activeColor);
+        }
+
+        ImGui::TextUnformatted(TR("ui.toolbar.note_palette.color_mode").data());
+        ImGui::SameLine();
+        if ( ImGui::RadioButton("RGB##NotePaletteMode",
+                                !m_colorPickerUseHsv) ) {
+            m_colorPickerUseHsv = false;
+        }
+        ImGui::SameLine();
+        if ( ImGui::RadioButton("HSV##NotePaletteMode", m_colorPickerUseHsv) ) {
+            m_colorPickerUseHsv = true;
+        }
+
+        ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
+        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+                                           m_colorHexBuffer.data(),
+                                           m_colorHexBuffer.size(),
+                                           ImGuiInputTextFlags_CharsNoBlank);
+        m_colorHexInputActive = ImGui::IsItemActive();
+        if ( hexChanged ) {
+            glm::vec4 parsedColor;
+            if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
+                activeColor = parsedColor;
+                pushPaletteToBrush();
+            }
+        }
+        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+            glm::vec4 parsedColor;
+            if ( parseHexColor(m_colorHexBuffer.data(), parsedColor) ) {
+                activeColor = parsedColor;
+                setColorHexBuffer(m_activeColorSlot, activeColor);
+                pushPaletteToSelection();
+            } else {
+                setColorHexBuffer(m_activeColorSlot, activeColor);
+            }
+            m_colorHexInputActive = false;
+        }
+
+        ImGuiColorEditFlags pickerFlags =
+            ImGuiColorEditFlags_AlphaBar |
+            ImGuiColorEditFlags_AlphaPreviewHalf |
+            (m_colorPickerUseHsv ? ImGuiColorEditFlags_DisplayHSV
+                                 : ImGuiColorEditFlags_DisplayRGB);
 
         if ( ImGui::ColorPicker4(
                  "##NoteColorPicker", &activeColor.r, pickerFlags) ) {

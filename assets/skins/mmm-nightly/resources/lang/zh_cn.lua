@@ -435,6 +435,8 @@ return {
 	["ui.toolbar.note_palette.note_end"] = "note_end",
 	["ui.toolbar.note_palette.note_flick_arrow"] = "note_flick_arrow",
 	["ui.toolbar.note_palette.note_node"] = "note_node",
+	["ui.toolbar.note_palette.color_mode"] = "模式",
+	["ui.toolbar.note_palette.hex"] = "HEX",
 	["ui.toolbar.note_palette.skin_defaults"] = "皮肤默认色盘",
 	["ui.toolbar.note_palette.apply_selected"] = "应用到选中",
 	["ui.toolbar.note_palette.clear_custom"] = "使用皮肤默认",
