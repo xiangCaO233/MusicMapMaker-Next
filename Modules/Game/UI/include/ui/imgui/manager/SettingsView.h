@@ -14,6 +14,11 @@
 #include <unordered_map>
 #include <vector>
 
+namespace MMM::Config
+{
+struct ShortcutBinding;
+}  // namespace MMM::Config
+
 namespace MMM::UI
 {
 
@@ -79,6 +84,27 @@ public:
     void swapPreparedUiFrameData() override;
 
 private:
+    /// @brief 设置页快捷键录制目标。
+    enum class ShortcutRecordTarget {
+        None,
+        ToolMove,
+        ToolMarquee,
+        ToolDraw,
+        ToolColorBrush,
+        ToolColorEraser,
+        Mirror,
+        MirrorPaste,
+        ToggleReverseScroll,
+        ToggleScrollSnap,
+        ToggleSnapFloor,
+        ToggleScrollTimingMapping,
+        ToggleBeatLines,
+        ToggleStopPlaybackOnScroll,
+        ToggleHitSfx,
+        ToggleHitEffects,
+        ToggleSyncSameMainAudio,
+    };
+
     /// @brief 设置窗口布局测量缓存。
     struct LayoutMetricsCache {
         /// @brief 缓存是否可用。
@@ -169,6 +195,11 @@ private:
     /// @brief 后台布局缓存是否等待主线程切换。
     bool m_hasPreparedLayoutMetrics{ false };
 
+    /// @brief 当前正在录制的快捷键目标。
+    ShortcutRecordTarget m_recordingShortcutTarget{
+        ShortcutRecordTarget::None
+    };
+
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
 
@@ -223,6 +254,16 @@ private:
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();
+
+    /// @brief 绘制单个快捷键录制控件。
+    /// @param binding 正在编辑的快捷键绑定。
+    /// @param target 当前控件对应的录制目标。
+    /// @param id ImGui 控件 ID 后缀。
+    /// @param width 控件可用宽度。
+    /// @param changed 发生修改时写入 true。
+    void drawShortcutBindingControl(Config::ShortcutBinding& binding,
+                                    ShortcutRecordTarget target, const char* id,
+                                    float width, bool& changed);
 
     /// @brief 绘制调试设置页。
     /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。

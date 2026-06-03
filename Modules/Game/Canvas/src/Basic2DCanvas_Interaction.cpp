@@ -16,8 +16,10 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -162,25 +164,22 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1-5
     // 工具切换键)
     if ( io.WantTextInput ) return;
+    if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
 
-    // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw, 4: ColorBrush,
-    // 5: ColorEraser) ---
-    // 这些是画布特有的，保留在这里
-    if ( ImGui::IsKeyPressed(ImGuiKey_1, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Move }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_2, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_3, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Draw }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_4, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::ColorBrush }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_5, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::ColorEraser }));
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const std::array<Logic::EditTool, 5> editableTools{
+        Logic::EditTool::Move,        Logic::EditTool::Marquee,
+        Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
+        Logic::EditTool::ColorEraser,
+    };
+
+    for ( Logic::EditTool tool : editableTools ) {
+        if ( UI::ShortcutUtils::isShortcutPressed(
+                 UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
+            break;
+        }
     }
 
     // --- 快捷键：删除操作 ---
@@ -272,8 +271,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 ImGui::BeginTooltip();
 
                 if ( currentSnapshot->hoverInspect.show ) {
-                    const auto& inspect   = currentSnapshot->hoverInspect;
-                    auto        drawPoint = [currentSnapshot](
+                    const auto& inspect = currentSnapshot->hoverInspect;
+                    auto drawPoint = [currentSnapshot](
                                          const char*                  labelKey,
                                          const Logic::HoverBeatPoint& point,
                                          bool showTrack) {

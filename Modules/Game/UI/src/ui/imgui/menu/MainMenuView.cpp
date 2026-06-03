@@ -23,6 +23,7 @@
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <ImGuiFileDialog.h>
@@ -140,9 +141,21 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键处理以防冲突 (如 Ctrl+A
     // 全选)
     if ( io.WantTextInput ) return;
+    if ( ShortcutUtils::isShortcutRecordingActive() ) return;
 
     // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
+
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( ShortcutUtils::isShortcutPressed(
+             settings.shortcutConfig.mirrorPaste) ) {
+        dispatchCommand(Logic::CmdPaste{ true, settings.selectPastedObjects });
+        return;
+    }
+    if ( ShortcutUtils::isShortcutPressed(settings.shortcutConfig.mirror) ) {
+        dispatchCommand(Logic::CmdMirrorSelected{});
+        return;
+    }
 
     if ( io.KeyCtrl ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
@@ -180,20 +193,15 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
             dispatchCommand(Logic::CmdCopy{});
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-            dispatchCommand(Logic::CmdPaste{ io.KeyShift,
-                                             Config::AppConfig::instance()
-                                                 .getEditorSettings()
-                                                 .selectPastedObjects });
+        if ( !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+            dispatchCommand(
+                Logic::CmdPaste{ false, settings.selectPastedObjects });
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
             dispatchCommand(Logic::CmdCut{});
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
             dispatchCommand(Logic::CmdSelectAll{});
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_M, false) ) {
-            dispatchCommand(Logic::CmdMirrorSelected{});
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
             dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
@@ -436,16 +444,26 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                                                  .getEditorSettings()
                                                  .selectPastedObjects });
         }
+        const auto& shortcutConfig =
+            Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+        std::string mirrorPasteShortcut =
+            ShortcutUtils::formatShortcut(shortcutConfig.mirrorPaste);
         if ( MenuItemWithFontIcon(ICON_MMM_MIRROR,
                                   TR("ui.edit.mirror_paste"),
-                                  "Ctrl+Shift+V") ) {
+                                  mirrorPasteShortcut.empty()
+                                      ? nullptr
+                                      : mirrorPasteShortcut.c_str()) ) {
             dispatchCommand(Logic::CmdPaste{ true,
                                              Config::AppConfig::instance()
                                                  .getEditorSettings()
                                                  .selectPastedObjects });
         }
+        std::string mirrorShortcut =
+            ShortcutUtils::formatShortcut(shortcutConfig.mirror);
         if ( MenuItemWithFontIcon(
-                 ICON_MMM_MIRROR, TR("ui.edit.mirror"), "Ctrl+M") ) {
+                 ICON_MMM_MIRROR,
+                 TR("ui.edit.mirror"),
+                 mirrorShortcut.empty() ? nullptr : mirrorShortcut.c_str()) ) {
             dispatchCommand(Logic::CmdMirrorSelected{});
         }
         ImGui::Separator();

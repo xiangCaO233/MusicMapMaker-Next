@@ -252,6 +252,157 @@ inline void from_json(const nlohmann::json& j, NoteColorPaletteConfig& c)
     }
 }
 
+/// @brief 单个自定义快捷键绑定。
+struct ShortcutBinding {
+    /// @brief 是否启用该快捷键；关闭时该动作没有键盘入口。
+    bool enabled{ true };
+
+    /// @brief 稳定按键名称，由 UI 层映射到 ImGuiKey。
+    std::string key;
+
+    /// @brief 是否要求 Ctrl 修饰键。
+    bool ctrl{ false };
+
+    /// @brief 是否要求 Shift 修饰键。
+    bool shift{ false };
+
+    /// @brief 是否要求 Alt 修饰键。
+    bool alt{ false };
+
+    /// @brief 是否要求 Super/Command 修饰键。
+    bool super{ false };
+};
+
+inline void to_json(nlohmann::json& j, const ShortcutBinding& c)
+{
+    j = nlohmann::json{ { "enabled", c.enabled }, { "key", c.key },
+                        { "ctrl", c.ctrl },       { "shift", c.shift },
+                        { "alt", c.alt },         { "super", c.super } };
+}
+
+inline void from_json(const nlohmann::json& j, ShortcutBinding& c)
+{
+    c.enabled = j.value("enabled", true);
+    c.key     = j.value("key", std::string());
+    c.ctrl    = j.value("ctrl", false);
+    c.shift   = j.value("shift", false);
+    c.alt     = j.value("alt", false);
+    c.super   = j.value("super", false);
+    if ( c.key.empty() ) {
+        c.enabled = false;
+    }
+}
+
+/// @brief 编辑器可自定义快捷键配置。
+struct ShortcutConfig {
+    /// @brief 切换到移动工具。
+    ShortcutBinding toolMove{ true, "1", false, false, false, false };
+
+    /// @brief 切换到框选工具。
+    ShortcutBinding toolMarquee{ true, "2", false, false, false, false };
+
+    /// @brief 切换到绘制工具。
+    ShortcutBinding toolDraw{ true, "3", false, false, false, false };
+
+    /// @brief 切换到配色笔刷工具。
+    ShortcutBinding toolColorBrush{ true, "4", false, false, false, false };
+
+    /// @brief 切换到配色橡皮工具。
+    ShortcutBinding toolColorEraser{ true, "5", false, false, false, false };
+
+    /// @brief 镜像当前选中物件。
+    ShortcutBinding mirror{ true, "M", true, false, false, false };
+
+    /// @brief 镜像粘贴剪贴板物件。
+    ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
+
+    /// @brief 切换反转滚动方向。
+    ShortcutBinding toggleReverseScroll{
+        false, "", false, false, false, false
+    };
+
+    /// @brief 切换滚动磁吸。
+    ShortcutBinding toggleScrollSnap{ false, "", false, false, false, false };
+
+    /// @brief 切换吸附向下取整。
+    ShortcutBinding toggleSnapFloor{ false, "", false, false, false, false };
+
+    /// @brief 切换 SCROLLTIMING 视觉映射。
+    ShortcutBinding toggleScrollTimingMapping{ false, "",    false,
+                                               false, false, false };
+
+    /// @brief 切换分拍线显示。
+    ShortcutBinding toggleBeatLines{ false, "", false, false, false, false };
+
+    /// @brief 切换播放时滚动停止播放。
+    ShortcutBinding toggleStopPlaybackOnScroll{ false, "",    false,
+                                                false, false, false };
+
+    /// @brief 切换打击音效。
+    ShortcutBinding toggleHitSfx{ false, "", false, false, false, false };
+
+    /// @brief 切换打击特效。
+    ShortcutBinding toggleHitEffects{ false, "", false, false, false, false };
+
+    /// @brief 切换同主音轨画布同步。
+    ShortcutBinding toggleSyncSameMainAudio{ false, "",    false,
+                                             false, false, false };
+};
+
+inline void to_json(nlohmann::json& j, const ShortcutConfig& c)
+{
+    j = nlohmann::json{
+        { "toolMove", c.toolMove },
+        { "toolMarquee", c.toolMarquee },
+        { "toolDraw", c.toolDraw },
+        { "toolColorBrush", c.toolColorBrush },
+        { "toolColorEraser", c.toolColorEraser },
+        { "mirror", c.mirror },
+        { "mirrorPaste", c.mirrorPaste },
+        { "toggleReverseScroll", c.toggleReverseScroll },
+        { "toggleScrollSnap", c.toggleScrollSnap },
+        { "toggleSnapFloor", c.toggleSnapFloor },
+        { "toggleScrollTimingMapping", c.toggleScrollTimingMapping },
+        { "toggleBeatLines", c.toggleBeatLines },
+        { "toggleStopPlaybackOnScroll", c.toggleStopPlaybackOnScroll },
+        { "toggleHitSfx", c.toggleHitSfx },
+        { "toggleHitEffects", c.toggleHitEffects },
+        { "toggleSyncSameMainAudio", c.toggleSyncSameMainAudio }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, ShortcutConfig& c)
+{
+    c.toolMove    = j.value("toolMove", ShortcutConfig().toolMove);
+    c.toolMarquee = j.value("toolMarquee", ShortcutConfig().toolMarquee);
+    c.toolDraw    = j.value("toolDraw", ShortcutConfig().toolDraw);
+    c.toolColorBrush =
+        j.value("toolColorBrush", ShortcutConfig().toolColorBrush);
+    c.toolColorEraser =
+        j.value("toolColorEraser", ShortcutConfig().toolColorEraser);
+    c.mirror      = j.value("mirror", ShortcutConfig().mirror);
+    c.mirrorPaste = j.value("mirrorPaste", ShortcutConfig().mirrorPaste);
+    c.toggleReverseScroll =
+        j.value("toggleReverseScroll", ShortcutConfig().toggleReverseScroll);
+    c.toggleScrollSnap =
+        j.value("toggleScrollSnap", ShortcutConfig().toggleScrollSnap);
+    c.toggleSnapFloor =
+        j.value("toggleSnapFloor", ShortcutConfig().toggleSnapFloor);
+    c.toggleScrollTimingMapping =
+        j.value("toggleScrollTimingMapping",
+                ShortcutConfig().toggleScrollTimingMapping);
+    c.toggleBeatLines =
+        j.value("toggleBeatLines", ShortcutConfig().toggleBeatLines);
+    c.toggleStopPlaybackOnScroll =
+        j.value("toggleStopPlaybackOnScroll",
+                ShortcutConfig().toggleStopPlaybackOnScroll);
+    c.toggleHitSfx = j.value("toggleHitSfx", ShortcutConfig().toggleHitSfx);
+    c.toggleHitEffects =
+        j.value("toggleHitEffects", ShortcutConfig().toggleHitEffects);
+    c.toggleSyncSameMainAudio = j.value(
+        "toggleSyncSameMainAudio", ShortcutConfig().toggleSyncSameMainAudio);
+}
+
 enum class FrameLimitPreference {
     VSync,
     Refresh2x,
@@ -555,6 +706,9 @@ struct EditorSettings {
 
     /// @brief 音符调色盘方案配置。
     NoteColorPaletteConfig noteColorPalettes;
+
+    /// @brief 编辑器自定义快捷键配置。
+    ShortcutConfig shortcutConfig;
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
@@ -600,7 +754,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
                         { "snapFloor", c.snapFloor },
                         { "aesthetics", c.aesthetics },
-                        { "noteColorPalettes", c.noteColorPalettes } };
+                        { "noteColorPalettes", c.noteColorPalettes },
+                        { "shortcutConfig", c.shortcutConfig } };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -659,6 +814,7 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
     c.noteColorPalettes =
         j.value("noteColorPalettes", NoteColorPaletteConfig());
+    c.shortcutConfig = j.value("shortcutConfig", ShortcutConfig());
 }
 
 }  // namespace MMM::Config

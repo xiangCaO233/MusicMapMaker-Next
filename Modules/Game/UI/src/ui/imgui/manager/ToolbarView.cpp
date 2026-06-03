@@ -9,6 +9,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -257,6 +258,92 @@ void ToolbarView::update(UIManager* sourceManager)
         const float itemSpacing = std::floor(aesthetics.itemSpacing * dpiScale);
         auto&       engine      = Logic::EditorEngine::instance();
         const auto& editorCfg   = engine.getEditorConfig();
+        const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
+
+        auto tooltipWithShortcut =
+            [](const char*                    tooltip,
+               const Config::ShortcutBinding& binding) -> std::string {
+            std::string tooltipText  = tooltip ? tooltip : "";
+            std::string shortcutText = ShortcutUtils::formatShortcut(binding);
+            if ( !shortcutText.empty() ) {
+                tooltipText += " (";
+                tooltipText += shortcutText;
+                tooltipText += ")";
+            }
+            return tooltipText;
+        };
+
+        auto applyConfigToggleShortcut =
+            [&](const Config::ShortcutBinding& binding,
+                auto                           applyChange) -> bool {
+            if ( !ShortcutUtils::isShortcutPressed(binding) ) {
+                return false;
+            }
+            auto newConfig = editorCfg;
+            applyChange(newConfig);
+            engine.setEditorConfig(newConfig);
+            return true;
+        };
+
+        if ( !ImGui::GetIO().WantTextInput &&
+             !ShortcutUtils::isShortcutRecordingActive() &&
+             !ImGui::IsAnyItemActive() ) {
+            bool handledShortcut   = false;
+            auto tryToggleShortcut = [&](const Config::ShortcutBinding& binding,
+                                         auto applyChange) {
+                if ( handledShortcut ) {
+                    return;
+                }
+                handledShortcut =
+                    applyConfigToggleShortcut(binding, applyChange);
+            };
+            tryToggleShortcut(shortcutConfig.toggleReverseScroll,
+                              [](Config::EditorConfig& config) {
+                                  config.settings.reverseScroll =
+                                      !config.settings.reverseScroll;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleScrollSnap,
+                              [](Config::EditorConfig& config) {
+                                  config.settings.scrollSnap =
+                                      !config.settings.scrollSnap;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleSnapFloor,
+                              [](Config::EditorConfig& config) {
+                                  config.settings.snapFloor =
+                                      !config.settings.snapFloor;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleScrollTimingMapping,
+                              [](Config::EditorConfig& config) {
+                                  config.visual.enableLinearScrollMapping =
+                                      !config.visual.enableLinearScrollMapping;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleBeatLines,
+                              [](Config::EditorConfig& config) {
+                                  config.visual.drawBeatLines =
+                                      !config.visual.drawBeatLines;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
+                              [](Config::EditorConfig& config) {
+                                  config.settings.stopPlaybackOnScroll =
+                                      !config.settings.stopPlaybackOnScroll;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleHitSfx,
+                              [](Config::EditorConfig& config) {
+                                  config.settings.sfxConfig.enableHitSfx =
+                                      !config.settings.sfxConfig.enableHitSfx;
+                              });
+            tryToggleShortcut(shortcutConfig.toggleHitEffects,
+                              [](Config::EditorConfig& config) {
+                                  config.visual.enableHitEffects =
+                                      !config.visual.enableHitEffects;
+                              });
+            if ( !handledShortcut &&
+                 ShortcutUtils::isShortcutPressed(
+                     shortcutConfig.toggleSyncSameMainAudio) ) {
+                engine.setSyncSameMainAudioCanvases(
+                    !engine.isSyncSameMainAudioCanvasesEnabled());
+            }
+        }
 
         auto advanceItem = [&]() {
             if ( itemSpacing > 0.0f ) {
@@ -264,10 +351,11 @@ void ToolbarView::update(UIManager* sourceManager)
             }
         };
 
-        auto drawToggleButton = [&](const char* icon,
-                                    bool        active,
-                                    const char* tooltip,
-                                    auto        applyChange) {
+        auto drawToggleButton = [&](const char*                    icon,
+                                    bool                           active,
+                                    const char*                    tooltip,
+                                    const Config::ShortcutBinding& binding,
+                                    auto applyChange) {
             pushBtnStyle(active);
             ImGui::PushID(tooltip);
             if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
@@ -276,25 +364,29 @@ void ToolbarView::update(UIManager* sourceManager)
                 engine.setEditorConfig(newConfig);
             }
             ImGui::PopID();
-            drawTooltip(tooltip);
+            std::string tooltipText = tooltipWithShortcut(tooltip, binding);
+            drawTooltip(tooltipText.c_str());
             ImGui::PopStyleColor(3);
             advanceItem();
         };
 
-        auto drawRuntimeToggleButton = [&](const char* icon,
-                                           bool        active,
-                                           const char* tooltip,
-                                           auto        applyChange) {
-            pushBtnStyle(active);
-            ImGui::PushID(tooltip);
-            if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
-                applyChange(!active);
-            }
-            ImGui::PopID();
-            drawTooltip(tooltip);
-            ImGui::PopStyleColor(3);
-            advanceItem();
-        };
+        auto drawRuntimeToggleButton =
+            [&](const char*                    icon,
+                bool                           active,
+                const char*                    tooltip,
+                const Config::ShortcutBinding& binding,
+                auto                           applyChange) {
+                pushBtnStyle(active);
+                ImGui::PushID(tooltip);
+                if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+                    applyChange(!active);
+                }
+                ImGui::PopID();
+                std::string tooltipText = tooltipWithShortcut(tooltip, binding);
+                drawTooltip(tooltipText.c_str());
+                ImGui::PopStyleColor(3);
+                advanceItem();
+            };
 
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
@@ -356,6 +448,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_ARROWS_UP_DOWN,
                          editorCfg.settings.reverseScroll,
                          TR("ui.toolbar.reverse_scroll").data(),
+                         shortcutConfig.toggleReverseScroll,
                          [](Config::EditorConfig& config) {
                              config.settings.reverseScroll =
                                  !config.settings.reverseScroll;
@@ -364,6 +457,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_MAGNET,
                          editorCfg.settings.scrollSnap,
                          TR("ui.toolbar.scroll_snap").data(),
+                         shortcutConfig.toggleScrollSnap,
                          [](Config::EditorConfig& config) {
                              config.settings.scrollSnap =
                                  !config.settings.scrollSnap;
@@ -372,6 +466,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_ARROW_DOWN,
                          editorCfg.settings.snapFloor,
                          TR("ui.toolbar.snap_floor").data(),
+                         shortcutConfig.toggleSnapFloor,
                          [](Config::EditorConfig& config) {
                              config.settings.snapFloor =
                                  !config.settings.snapFloor;
@@ -380,6 +475,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_EYE,
                          !editorCfg.visual.enableLinearScrollMapping,
                          TR("ui.toolbar.scroll_timing_mapping").data(),
+                         shortcutConfig.toggleScrollTimingMapping,
                          [](Config::EditorConfig& config) {
                              config.visual.enableLinearScrollMapping =
                                  !config.visual.enableLinearScrollMapping;
@@ -388,6 +484,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_BARS,
                          editorCfg.visual.drawBeatLines,
                          TR("ui.toolbar.draw_beat_lines").data(),
+                         shortcutConfig.toggleBeatLines,
                          [](Config::EditorConfig& config) {
                              config.visual.drawBeatLines =
                                  !config.visual.drawBeatLines;
@@ -396,6 +493,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_STOP,
                          editorCfg.settings.stopPlaybackOnScroll,
                          TR("ui.toolbar.stop_on_scroll").data(),
+                         shortcutConfig.toggleStopPlaybackOnScroll,
                          [](Config::EditorConfig& config) {
                              config.settings.stopPlaybackOnScroll =
                                  !config.settings.stopPlaybackOnScroll;
@@ -404,6 +502,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_HIT_SFX,
                          editorCfg.settings.sfxConfig.enableHitSfx,
                          TR("ui.toolbar.hit_sfx").data(),
+                         shortcutConfig.toggleHitSfx,
                          [](Config::EditorConfig& config) {
                              config.settings.sfxConfig.enableHitSfx =
                                  !config.settings.sfxConfig.enableHitSfx;
@@ -412,6 +511,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
                          editorCfg.visual.enableHitEffects,
                          TR("ui.toolbar.hit_effects").data(),
+                         shortcutConfig.toggleHitEffects,
                          [](Config::EditorConfig& config) {
                              config.visual.enableHitEffects =
                                  !config.visual.enableHitEffects;
@@ -421,12 +521,13 @@ void ToolbarView::update(UIManager* sourceManager)
             ICON_MMM_LINK,
             engine.isSyncSameMainAudioCanvasesEnabled(),
             TR("ui.toolbar.sync_same_main_audio").data(),
+            shortcutConfig.toggleSyncSameMainAudio,
             [&engine](bool enabled) {
                 engine.setSyncSameMainAudioCanvases(enabled);
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -727,11 +828,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1226,7 +1327,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1315,8 +1416,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
                                  const char* tooltip, float width)
 {
-    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
-    bool                 isActive = (m_currentTool == tool);
+    bool isActive = (m_currentTool == tool);
 
     // 按钮高度与宽度保持一致，形成正方形
     float btnSize = width;
@@ -1342,7 +1442,16 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         }
     }
 
-    drawTooltip(tooltip);
+    std::string tooltipText = tooltip ? tooltip : "";
+    const auto& settings    = Config::AppConfig::instance().getEditorSettings();
+    std::string shortcutText = ShortcutUtils::formatShortcut(
+        ShortcutUtils::getToolShortcut(settings, tool));
+    if ( !shortcutText.empty() ) {
+        tooltipText += " (";
+        tooltipText += shortcutText;
+        tooltipText += ")";
+    }
+    drawTooltip(tooltipText.c_str());
 
     ImGui::PopStyleColor(3);
 }

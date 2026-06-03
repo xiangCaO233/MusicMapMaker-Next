@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "ui/Icons.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -177,7 +178,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 14> labels{
+        const std::array<const char*, 30> labels{
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
@@ -190,6 +191,28 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.selection").data(),
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
             TR_CACHE("ui.settings.editor.selection.rounding").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.tool_move").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.tool_marquee").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.tool_draw").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.tool_color_brush").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.tool_color_eraser").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.mirror").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.mirror_paste").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_reverse_scroll")
+                .data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_scroll_snap").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_snap_floor").data(),
+            TR_CACHE(
+                "ui.settings.editor.shortcuts.toggle_scroll_timing_mapping")
+                .data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_beat_lines").data(),
+            TR_CACHE(
+                "ui.settings.editor.shortcuts.toggle_stop_playback_on_scroll")
+                .data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_hit_sfx").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_hit_effects").data(),
+            TR_CACHE("ui.settings.editor.shortcuts.toggle_sync_same_main_audio")
+                .data(),
             TR_CACHE("ui.settings.editor.sfx_strategy").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
@@ -258,6 +281,19 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
         addOptions(std::array<const char*, 2>{
             TR_CACHE("ui.settings.editor.selection.strict").data(),
             TR_CACHE("ui.settings.editor.selection.intersection").data() });
+        const float shortcutWidth =
+            measureSettingsText(
+                "Ctrl+Shift+RightArrow", font, snapshot.fontSize) +
+            measureSettingsText(
+                TR_CACHE("ui.settings.editor.shortcuts.record").data(),
+                font,
+                snapshot.fontSize) +
+            measureSettingsText(
+                TR_CACHE("ui.settings.editor.shortcuts.clear").data(),
+                font,
+                snapshot.fontSize) +
+            framePad * 3.0f + std::floor(32.0f * scale);
+        minWidth = std::max(minWidth, shortcutWidth);
         break;
     }
     case Event::SettingsTab::Project: break;
@@ -504,6 +540,10 @@ void SettingsView::open(Event::SettingsTab tab)
     m_isOpen                = true;
     m_focusNextFrame        = true;
     m_dockToCenterNextFrame = true;
+    if ( tab != Event::SettingsTab::Editor ) {
+        m_recordingShortcutTarget = ShortcutRecordTarget::None;
+        ShortcutUtils::setShortcutRecordingActive(false);
+    }
 }
 
 /// @brief 请求下一帧将设置窗口停靠到主编辑区中心标签页。
@@ -553,6 +593,10 @@ void SettingsView::update(UIManager* sourceManager)
     }
 
     drawContent();
+    if ( !m_isOpen ) {
+        m_recordingShortcutTarget = ShortcutRecordTarget::None;
+        ShortcutUtils::setShortcutRecordingActive(false);
+    }
 }
 
 /// @brief 绘制设置视图内容。
