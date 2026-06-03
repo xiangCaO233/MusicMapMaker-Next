@@ -152,7 +152,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                 MMM::BeatMap::loadFromFile(p));
                             engine.createSession(loadedBeatmap, displayName);
                         } else if ( ext == ".mp3" || ext == ".wav" ||
-                                    ext == ".ogg" || ext == ".flac" ) {
+                                    ext == ".ogg" || ext == ".flac" ||
+                                    ext == ".opus" || ext == ".aac" ||
+                                    ext == ".m4a" ) {
                             publishToggleEvent(SideBarTab::AudioExplorer);
                             for ( const auto& audio :
                                   project->m_audioResources ) {
@@ -161,9 +163,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                         audio.m_id,
                                         audio.m_id,
                                         audio.m_type == AudioTrackType::Main
-                                            ? AudioTrackControllerUI::
+                                             ? AudioTrackControllerUI::
                                                   TrackType::Main
-                                            : AudioTrackControllerUI::
+                                             : AudioTrackControllerUI::
                                                   TrackType::Effect);
                                     break;
                                 }

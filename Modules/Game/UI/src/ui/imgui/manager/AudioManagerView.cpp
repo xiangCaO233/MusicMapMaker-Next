@@ -192,10 +192,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float muteButtonW = std::floor(32.0f * scale);
     const float rootPadX    = std::floor(12.0f * scale) * 2.0f;
     const float rootPadY    = std::floor(12.0f * scale) * 2.0f;
-    ImFont*     font = snapshot.fileManagerFont
-                           ? snapshot.fileManagerFont
-                           : (snapshot.contentFont ? snapshot.contentFont
-                                                   : snapshot.fallbackFont);
+    ImFont*     font        = snapshot.fileManagerFont
+                                  ? snapshot.fileManagerFont
+                                  : (snapshot.contentFont ? snapshot.contentFont
+                                                          : snapshot.fallbackFont);
 
     const std::array<const char*, 3> controlLabels{
         TR("ui.audio_manager.global_volume").data(),
@@ -235,7 +235,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
 
     const float controlRowWidth = footerPadX + labelWidth + itemSpacing +
                                   muteButtonW + itemSpacing + sliderMinW;
-    float       minWidth =
+    float minWidth =
         std::ceil(rootPadX + std::max({ controlRowWidth, headerWidth }));
 
     float  listHeight = 0.0f;
@@ -803,7 +803,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          Config::FilePickerStyle::Native ) {
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = {
-                            { "Audio Files", "mp3,ogg,wav,flac" }
+                            { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
                         };
                         nfdresult_t result =
                             NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
@@ -826,7 +826,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AudioImportPicker",
                             TR("ui.audio_manager.import_audio").data(),
-                            ".mp3,.ogg,.wav,.flac",
+                            ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a",
                             fdConfig);
                     }
                 }

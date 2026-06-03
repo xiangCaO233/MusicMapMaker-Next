@@ -87,7 +87,8 @@ bool ProjectDirectoryScanner::isAudioFile(const std::filesystem::path& path)
     /// @brief 规范化后的文件扩展名。
     const auto extension = normalizedExtension(path);
     return extension == ".mp3" || extension == ".ogg" || extension == ".wav" ||
-           extension == ".flac";
+           extension == ".flac" || extension == ".opus" ||
+           extension == ".aac" || extension == ".m4a";
 }
 
 /// @brief 将路径扩展名转换为小写 UTF-8 字符串。

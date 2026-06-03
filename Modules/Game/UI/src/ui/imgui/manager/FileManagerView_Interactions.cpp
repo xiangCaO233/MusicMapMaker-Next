@@ -47,7 +47,8 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
                 if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
                     targetTab = SideBarTab::BeatMapExplorer;
                 } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
-                            ext == ".flac" ) {
+                            ext == ".flac" || ext == ".opus" || ext == ".aac" ||
+                            ext == ".m4a" ) {
                     targetTab = SideBarTab::AudioExplorer;
                 }
 

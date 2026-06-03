@@ -339,11 +339,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title    = !meta.title_unicode.empty()
-                           ? meta.title_unicode
-                           : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount = meta.track_count;
-            version  = meta.version.empty() ? "default" : meta.version;
+            title            = !meta.title_unicode.empty()
+                                   ? meta.title_unicode
+                                   : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount         = meta.track_count;
+            version          = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -1021,7 +1021,7 @@ void MainMenuView::openAudioImportPicker()
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "Audio Files",
-                                           "mp3,ogg,wav,flac" } };
+                                           "mp3,ogg,wav,flac,opus,aac,m4a" } };
         nfdresult_t result = NFD_OpenDialogU8(&outPath, filters, 1, nullptr);
 
         if ( result == NFD_OKAY ) {
@@ -1037,12 +1037,12 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                     ImGuiFileDialogFlags_HideColumnType |
-                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                         ImGuiFileDialogFlags_HideColumnType |
+                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),
-            ".mp3,.ogg,.wav,.flac",
+            ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a",
             fdConfig);
     }
 }
