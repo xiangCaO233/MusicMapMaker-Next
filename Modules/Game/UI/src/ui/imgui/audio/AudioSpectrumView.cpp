@@ -174,11 +174,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         if ( m_calcFinished.load() ) {
             m_calcFinished.store(false);
             m_isCalculating.store(false);
-            m_spectrumDetailLevel    = m_pendingSpectrumDetailLevel;
-            m_cacheSegmentsPerSecond = m_pendingCacheSegmentsPerSecond;
-            m_numFrequencyBins       = m_pendingNumFrequencyBins;
-            // 计算完成，立即触发全量光栅化
-            prepareFullGlobalTextures();
+            m_spectrumDetailLevel         = m_pendingSpectrumDetailLevel;
+            m_cacheSegmentsPerSecond      = m_pendingCacheSegmentsPerSecond;
+            m_numFrequencyBins            = m_pendingNumFrequencyBins;
+            m_textureReloadStarted        = false;
+            m_nextTextureChunkUploadIndex = 0;
+            m_texturesNeedReload          = !m_pendingChunksL.empty();
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -610,33 +611,64 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 {
     if ( !m_texturesNeedReload ) return;
 
-    // 清理旧纹理
-    (void)logicalDevice.waitIdle();
-    m_texturesL.clear();
-    m_texturesR.clear();
+    if ( !m_textureReloadStarted ) {
+        if ( !m_texturesL.empty() || !m_texturesR.empty() ) {
+            (void)logicalDevice.waitIdle();
+        }
+        m_texturesL.clear();
+        m_texturesR.clear();
+        m_texturesL.reserve(m_pendingChunksL.size());
+        m_texturesR.reserve(m_pendingChunksR.size());
+        m_nextTextureChunkUploadIndex = 0;
+        m_textureReloadStarted        = true;
+    }
 
-    // 上传新分块
-    auto upload =
+    constexpr size_t MAX_UPLOAD_CHUNKS_PER_FRAME = 1;
+    size_t           uploadedThisFrame           = 0;
+    const size_t     maxChunks =
+        std::max(m_pendingChunksL.size(), m_pendingChunksR.size());
+
+    auto uploadChunk =
         [&](const std::vector<TextureChunkData>&              chunks,
-            std::vector<std::unique_ptr<Graphic::VKTexture>>& target) {
-            for ( const auto& chunk : chunks ) {
-                target.push_back(
-                    std::make_unique<Graphic::VKTexture>(chunk.pixels.data(),
-                                                         chunk.width,
-                                                         chunk.height,
-                                                         physicalDevice,
-                                                         logicalDevice,
-                                                         cmdPool,
-                                                         queue));
+            std::vector<std::unique_ptr<Graphic::VKTexture>>& target,
+            size_t                                            index) {
+            if ( index >= chunks.size() ) {
+                return;
             }
+
+            const auto& chunk = chunks[index];
+            if ( chunk.pixels.empty() || chunk.width == 0 ||
+                 chunk.height == 0 ) {
+                return;
+            }
+
+            target.push_back(
+                std::make_unique<Graphic::VKTexture>(chunk.pixels.data(),
+                                                     chunk.width,
+                                                     chunk.height,
+                                                     physicalDevice,
+                                                     logicalDevice,
+                                                     cmdPool,
+                                                     queue));
         };
 
-    upload(m_pendingChunksL, m_texturesL);
-    upload(m_pendingChunksR, m_texturesR);
+    while ( m_nextTextureChunkUploadIndex < maxChunks &&
+            uploadedThisFrame < MAX_UPLOAD_CHUNKS_PER_FRAME ) {
+        uploadChunk(
+            m_pendingChunksL, m_texturesL, m_nextTextureChunkUploadIndex);
+        uploadChunk(
+            m_pendingChunksR, m_texturesR, m_nextTextureChunkUploadIndex);
+        ++m_nextTextureChunkUploadIndex;
+        ++uploadedThisFrame;
+    }
 
-    m_pendingChunksL.clear();
-    m_pendingChunksR.clear();
-    m_texturesNeedReload = false;
+    if ( m_nextTextureChunkUploadIndex >= maxChunks ) {
+        m_pendingChunksL.clear();
+        m_pendingChunksR.clear();
+        m_nextTextureChunkUploadIndex = 0;
+        m_textureReloadStarted        = false;
+        m_texturesNeedReload          = false;
+    }
 }
 
 void AudioSpectrumView::syncEQ()
@@ -689,6 +721,11 @@ void AudioSpectrumView::startAsyncRecalculate()
     m_isCalculating.store(true);
     m_calcProgress.store(0.0f);
     m_calcFinished.store(false);
+    m_texturesNeedReload          = false;
+    m_textureReloadStarted        = false;
+    m_nextTextureChunkUploadIndex = 0;
+    m_pendingChunksL.clear();
+    m_pendingChunksR.clear();
 
     const auto detailLevel =
         Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
@@ -742,14 +779,17 @@ void AudioSpectrumView::backgroundRecalculate(
     const int    fftSize = 2048;
     const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 
-    auto*     appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
-    const int numWorkers    = std::max<int>(
+    auto*     appThreadPool    = MMM::Runtime::AppThreadPool::instance().get();
+    const int requestedWorkers = std::max<int>(
         1, MMM::Runtime::AppThreadPool::instance().requestedWorkerCount());
+    const int numWorkers = std::max(1, requestedWorkers / 2);
 
     XINFO(
-        "Spectrum async recalculate: {} workers, {} segments, {} bins, "
+        "Spectrum async recalculate: {} workers reserved from {}, {} "
+        "segments, {} bins, "
         "maxFreq: {}, logBias: {}",
         numWorkers,
+        requestedWorkers,
         numTotalSegments,
         frequencyBins,
         maxFreq,
@@ -758,6 +798,42 @@ void AudioSpectrumView::backgroundRecalculate(
     std::vector<double> window(fftSize);
     for ( int i = 0; i < fftSize; ++i ) {
         window[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (fftSize - 1)));
+    }
+
+    struct FrequencyBinRange {
+        int start{ 0 };
+        int end{ 0 };
+    };
+    std::vector<FrequencyBinRange> binRanges(
+        static_cast<size_t>(frequencyBins));
+    {
+        const double fmin       = 20.0;
+        const double fmax       = static_cast<double>(maxFreq);
+        const double k          = static_cast<double>(logBias);
+        const double fRange     = fmax - fmin;
+        const double expKMinus1 = std::exp(k) - 1.0;
+
+        auto getFreq = [&](double progress) {
+            if ( std::abs(k) < 1e-4 ) {
+                return fmin + fRange * progress;
+            }
+            return fmin + fRange * (std::exp(k * progress) - 1.0) / expKMinus1;
+        };
+
+        for ( int b = 0; b < frequencyBins; ++b ) {
+            const double freqStart =
+                getFreq(static_cast<double>(b) / frequencyBins);
+            const double freqEnd =
+                getFreq(static_cast<double>(b + 1) / frequencyBins);
+            const int bStart =
+                static_cast<int>(freqStart * fftSize / sampleRate);
+            const int bEnd = std::min(
+                static_cast<int>(freqEnd * fftSize / sampleRate), fftSize / 2);
+            const int clampedStart = std::clamp(bStart, 0, fftSize / 2);
+            const int clampedEnd =
+                std::clamp(std::max(bStart, bEnd), 0, fftSize / 2);
+            binRanges[static_cast<size_t>(b)] = { clampedStart, clampedEnd };
+        }
     }
 
     std::vector<double> heatmapL(
@@ -770,108 +846,87 @@ void AudioSpectrumView::backgroundRecalculate(
 
     static std::mutex s_fftwPlanMutex;
 
-    auto processChannel = [&](int                  chIdx,
-                              std::vector<double>& heatmap,
-                              int                  startSeg,
-                              int                  endSeg) {
-        double*       localIn  = (double*)fftw_malloc(sizeof(double) * fftSize);
-        fftw_complex* localOut = (fftw_complex*)fftw_malloc(
-            sizeof(fftw_complex) * (fftSize / 2 + 1));
+    auto processChannel =
+        [&](int chIdx, std::vector<double>& heatmap, int startSeg, int endSeg) {
+            double* localIn = (double*)fftw_malloc(sizeof(double) * fftSize);
+            fftw_complex* localOut = (fftw_complex*)fftw_malloc(
+                sizeof(fftw_complex) * (fftSize / 2 + 1));
 
-        fftw_plan localPlan;
-        {
-            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
-            localPlan =
-                fftw_plan_dft_r2c_1d(fftSize, localIn, localOut, FFTW_MEASURE);
-        }
-
-        auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
-        auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
-        localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-        localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-
-        auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
-        std::shared_ptr<ice::GraphicEqualizer> localEQ;
-        if ( eq.enabled ) {
-            localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
-            localEQ->set_inputnode(localBufferSource);
-            for ( size_t i = 0; i < eq.gains.size(); ++i ) {
-                localEQ->set_band_gain_db(i, eq.gains[i]);
-                localEQ->set_band_q_factor(i, eq.qs[i]);
-            }
-        }
-
-        for ( int t = startSeg; t < endSeg; ++t ) {
-            if ( stopToken.stop_requested() ) {
-                break;
+            fftw_plan localPlan;
+            {
+                std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+                localPlan = fftw_plan_dft_r2c_1d(
+                    fftSize, localIn, localOut, FFTW_ESTIMATE);
             }
 
-            size_t startFrame = static_cast<size_t>(t) * hopSize;
-            if ( startFrame + fftSize > track->num_frames() ) break;
+            auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
+            auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
+            localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+            localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
 
-            track->read(*localRawBuffer, startFrame, fftSize);
-
-            float* chanData = localRawBuffer->raw_ptrs()[chIdx];
-            if ( localEQ ) {
-                localBufferSource->setBuffer(localRawBuffer.get());
-                localEQ->process(*localProcBuffer);
-                chanData = localProcBuffer->raw_ptrs()[chIdx];
-            }
-
-            for ( int i = 0; i < fftSize; ++i )
-                localIn[i] = chanData[i] * window[i];
-
-            fftw_execute(localPlan);
-
-            double fmin       = 20.0;
-            double fmax       = static_cast<double>(maxFreq);
-            double k          = static_cast<double>(logBias);
-            double fRange     = fmax - fmin;
-            double expKMinus1 = std::exp(k) - 1.0;
-
-            for ( int b = 0; b < frequencyBins; ++b ) {
-                auto getFreq = [&](double progress) {
-                    if ( std::abs(k) < 1e-4 ) {
-                        return fmin + fRange * progress;
-                    }
-                    return fmin +
-                           fRange * (std::exp(k * progress) - 1.0) / expKMinus1;
-                };
-
-                double freqStart = getFreq((double)b / frequencyBins);
-                double freqEnd   = getFreq((double)(b + 1) / frequencyBins);
-                int bStart = static_cast<int>(freqStart * fftSize / sampleRate);
-                int bEnd =
-                    std::min(static_cast<int>(freqEnd * fftSize / sampleRate),
-                             fftSize / 2);
-
-                double maxMag = 0;
-                for ( int i = bStart; i <= bEnd; ++i ) {
-                    double magSq = localOut[i][0] * localOut[i][0] +
-                                   localOut[i][1] * localOut[i][1];
-                    if ( magSq > maxMag ) maxMag = magSq;
+            auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
+            std::shared_ptr<ice::GraphicEqualizer> localEQ;
+            if ( eq.enabled ) {
+                localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
+                localEQ->set_inputnode(localBufferSource);
+                for ( size_t i = 0; i < eq.gains.size(); ++i ) {
+                    localEQ->set_band_gain_db(i, eq.gains[i]);
+                    localEQ->set_band_q_factor(i, eq.qs[i]);
                 }
-                double db = (maxMag > 1e-9)
-                                ? 20.0 * std::log10(std::sqrt(maxMag) / fftSize)
-                                : -100.0;
-                heatmap[static_cast<size_t>(b) * numTotalSegments + t] =
-                    std::clamp(db, -100.0, 0.0);
             }
 
-            completedSegments.fetch_add(1, std::memory_order_relaxed);
-            m_calcProgress.store(static_cast<float>(completedSegments.load(
-                                     std::memory_order_relaxed)) /
-                                     totalWork,
-                                 std::memory_order_relaxed);
-        }
+            for ( int t = startSeg; t < endSeg; ++t ) {
+                if ( stopToken.stop_requested() ) {
+                    break;
+                }
 
-        {
-            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
-            fftw_destroy_plan(localPlan);
-        }
-        fftw_free(localIn);
-        fftw_free(localOut);
-    };
+                size_t startFrame = static_cast<size_t>(t) * hopSize;
+                if ( startFrame + fftSize > track->num_frames() ) break;
+
+                track->read(*localRawBuffer, startFrame, fftSize);
+
+                float* chanData = localRawBuffer->raw_ptrs()[chIdx];
+                if ( localEQ ) {
+                    localBufferSource->setBuffer(localRawBuffer.get());
+                    localEQ->process(*localProcBuffer);
+                    chanData = localProcBuffer->raw_ptrs()[chIdx];
+                }
+
+                for ( int i = 0; i < fftSize; ++i )
+                    localIn[i] = chanData[i] * window[i];
+
+                fftw_execute(localPlan);
+
+                for ( int b = 0; b < frequencyBins; ++b ) {
+                    const auto& range  = binRanges[static_cast<size_t>(b)];
+                    double      maxMag = 0;
+                    for ( int i = range.start; i <= range.end; ++i ) {
+                        double magSq = localOut[i][0] * localOut[i][0] +
+                                       localOut[i][1] * localOut[i][1];
+                        if ( magSq > maxMag ) maxMag = magSq;
+                    }
+                    double db =
+                        (maxMag > 1e-9)
+                            ? 20.0 * std::log10(std::sqrt(maxMag) / fftSize)
+                            : -100.0;
+                    heatmap[static_cast<size_t>(b) * numTotalSegments + t] =
+                        std::clamp(db, -100.0, 0.0);
+                }
+
+                completedSegments.fetch_add(1, std::memory_order_relaxed);
+                m_calcProgress.store(static_cast<float>(completedSegments.load(
+                                         std::memory_order_relaxed)) /
+                                         totalWork,
+                                     std::memory_order_relaxed);
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+                fftw_destroy_plan(localPlan);
+            }
+            fftw_free(localIn);
+            fftw_free(localOut);
+        };
 
     auto runChannel = [&](int chIdx, std::vector<double>& heatmap) {
         if ( stopToken.stop_requested() ) {
@@ -926,8 +981,17 @@ void AudioSpectrumView::backgroundRecalculate(
         heatmapR = heatmapL;
     }
 
-    m_cachedHeatmapL                = std::move(heatmapL);
-    m_cachedHeatmapR                = std::move(heatmapR);
+    std::vector<TextureChunkData> chunksL;
+    std::vector<TextureChunkData> chunksR;
+    prepareTextureChunks(
+        heatmapL, heatmapR, numTotalSegments, frequencyBins, chunksL, chunksR);
+    if ( stopToken.stop_requested() ) {
+        m_isCalculating.store(false);
+        return;
+    }
+
+    m_pendingChunksL                = std::move(chunksL);
+    m_pendingChunksR                = std::move(chunksR);
     m_cachedNumTotalSegments        = numTotalSegments;
     m_pendingSpectrumDetailLevel    = detailLevel;
     m_pendingCacheSegmentsPerSecond = segmentsPerSecond;
@@ -937,15 +1001,19 @@ void AudioSpectrumView::backgroundRecalculate(
     m_calcFinished.store(true);
 }
 
-void AudioSpectrumView::prepareFullGlobalTextures()
+void AudioSpectrumView::prepareTextureChunks(
+    const std::vector<double>& heatmapL, const std::vector<double>& heatmapR,
+    int totalSegments, int frequencyBins,
+    std::vector<TextureChunkData>& chunksL,
+    std::vector<TextureChunkData>& chunksR) const
 {
-    if ( m_cachedHeatmapL.empty() ) return;
+    if ( heatmapL.empty() || heatmapR.empty() || totalSegments <= 0 ||
+         frequencyBins <= 0 ) {
+        return;
+    }
 
-    int totalW = m_cachedNumTotalSegments;
-    int texH   = m_numFrequencyBins;
-
-    m_pendingChunksL.clear();
-    m_pendingChunksR.clear();
+    chunksL.clear();
+    chunksR.clear();
 
     const double scaleMin = -80.0;
     const double scaleMax = -10.0;
@@ -957,41 +1025,44 @@ void AudioSpectrumView::prepareFullGlobalTextures()
         return static_cast<int>(t * 255.0f);
     };
 
-    int numChunks = (totalW + MAX_TEXTURE_W - 1) / MAX_TEXTURE_W;
+    const int numChunks = (totalSegments + MAX_TEXTURE_W - 1) / MAX_TEXTURE_W;
+    chunksL.reserve(static_cast<size_t>(numChunks));
+    chunksR.reserve(static_cast<size_t>(numChunks));
 
     for ( int c = 0; c < numChunks; ++c ) {
-        uint32_t chunkStart = c * MAX_TEXTURE_W;
-        uint32_t chunkW =
-            std::min(MAX_TEXTURE_W, (uint32_t)totalW - chunkStart);
+        uint32_t chunkStart = static_cast<uint32_t>(c) * MAX_TEXTURE_W;
+        uint32_t chunkW     = std::min(
+            MAX_TEXTURE_W, static_cast<uint32_t>(totalSegments) - chunkStart);
 
         TextureChunkData chunkL, chunkR;
         chunkL.width = chunkR.width = chunkW;
-        chunkL.height = chunkR.height = texH;
-        chunkL.pixels.resize(chunkW * texH * 4);
-        chunkR.pixels.resize(chunkW * texH * 4);
+        chunkL.height = chunkR.height = static_cast<uint32_t>(frequencyBins);
+        chunkL.pixels.resize(chunkW * static_cast<uint32_t>(frequencyBins) * 4);
+        chunkR.pixels.resize(chunkW * static_cast<uint32_t>(frequencyBins) * 4);
 
-        for ( uint32_t py = 0; py < (uint32_t)texH; ++py ) {
-            int b = texH - 1 - py;
+        for ( uint32_t py = 0; py < static_cast<uint32_t>(frequencyBins);
+              ++py ) {
+            int b = frequencyBins - 1 - static_cast<int>(py);
             for ( uint32_t px = 0; px < chunkW; ++px ) {
                 uint32_t globalX = chunkStart + px;
                 size_t   offset  = (py * chunkW + px) * 4;
 
-                double valL =
-                    m_cachedHeatmapL[b * m_cachedNumTotalSegments + globalX];
-                auto& colL = m_colormapLUT[dbToIdx(valL)];
+                double valL = heatmapL[static_cast<size_t>(b) *
+                                           static_cast<size_t>(totalSegments) +
+                                       globalX];
+                auto&  colL = m_colormapLUT[dbToIdx(valL)];
                 std::memcpy(&chunkL.pixels[offset], colL.data(), 4);
 
-                double valR =
-                    m_cachedHeatmapR[b * m_cachedNumTotalSegments + globalX];
-                auto& colR = m_colormapLUT[dbToIdx(valR)];
+                double valR = heatmapR[static_cast<size_t>(b) *
+                                           static_cast<size_t>(totalSegments) +
+                                       globalX];
+                auto&  colR = m_colormapLUT[dbToIdx(valR)];
                 std::memcpy(&chunkR.pixels[offset], colR.data(), 4);
             }
         }
-        m_pendingChunksL.push_back(std::move(chunkL));
-        m_pendingChunksR.push_back(std::move(chunkR));
+        chunksL.push_back(std::move(chunkL));
+        chunksR.push_back(std::move(chunkR));
     }
-
-    m_texturesNeedReload = true;
 }
 
 }  // namespace MMM::UI

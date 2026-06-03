@@ -2,7 +2,10 @@
 
 #include "config/VisualConfig.h"
 #include "ui/ITextureLoader.h"
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <fftw3.h>
 #include <future>
 #include <memory>
@@ -90,12 +93,6 @@ private:
     int                 m_currentFFTSize{ 0 };
     std::vector<double> m_window;
 
-    // --- 全局缓存数据 ---
-    /// @brief 高分辨率缓存 (频率 bins × 时间段)，行优先 [bin * totalSegments +
-    /// t]
-    std::vector<double> m_cachedHeatmapL;
-    std::vector<double> m_cachedHeatmapR;
-
     /// @brief 当前缓存时间分辨率，单位为段/秒。
     double m_cacheSegmentsPerSecond{ 100.0 };
 
@@ -157,14 +154,31 @@ private:
     std::vector<TextureChunkData> m_pendingChunksL;
     std::vector<TextureChunkData> m_pendingChunksR;
 
-    /// @brief 纹理是否需要重新加载 (全量)
+    /// @brief 纹理是否需要继续分块重载。
     bool m_texturesNeedReload{ false };
+
+    /// @brief 当前分块纹理上传是否已经开始。
+    bool m_textureReloadStarted{ false };
+
+    /// @brief 下一帧需要上传的频谱纹理块索引。
+    size_t m_nextTextureChunkUploadIndex{ 0 };
 
     /// @brief 分块宽度 (通常取 16384 或更小以适配硬件限制)
     static constexpr uint32_t MAX_TEXTURE_W{ 16384 };
 
-    /// @brief 构建全量像素缓冲并准备上传
-    void prepareFullGlobalTextures();
+    /// @brief 从热力图构建待上传的 RGBA 纹理块。
+    /// @param heatmapL 左声道热力图。
+    /// @param heatmapR 右声道热力图。
+    /// @param totalSegments 时间分段数。
+    /// @param frequencyBins 频率分箱数。
+    /// @param chunksL 输出左声道纹理块。
+    /// @param chunksR 输出右声道纹理块。
+    /// @warning 后台耗时路径：执行全量像素转换，不在 UI/渲染热路径运行。
+    void prepareTextureChunks(const std::vector<double>& heatmapL,
+                              const std::vector<double>& heatmapR,
+                              int totalSegments, int frequencyBins,
+                              std::vector<TextureChunkData>& chunksL,
+                              std::vector<TextureChunkData>& chunksR) const;
 
     // --- 色图查找表 ---
     /// @brief 256 级预计算颜色表 (RGBA u8 × 4)
