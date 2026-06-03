@@ -150,7 +150,7 @@ SelectionRect makeRect(float left, float top, float right, float bottom)
 }
 
 /// @brief 将一个矩形合并进目标矩形。
-/// @warning 逻辑热路径：Polyline 包围盒生成时调用，只做常量比较。
+/// @warning 逻辑热路径：包围盒生成时调用，只做常量比较。
 void includeRect(SelectionRect& target, SelectionRect source)
 {
     if ( !source.valid ) return;
@@ -163,6 +163,16 @@ void includeRect(SelectionRect& target, SelectionRect source)
     target.top    = std::min(target.top, source.top);
     target.right  = std::max(target.right, source.right);
     target.bottom = std::max(target.bottom, source.bottom);
+}
+
+/// @brief 按当前框选模式判断两个屏幕矩形是否命中。
+/// @warning 逻辑热路径：框选重算时按候选包围盒调用，只做常量比较。
+bool selectionMatchesRect(SelectionRect selection, SelectionRect candidate,
+                          Config::SelectionMode mode)
+{
+    return mode == Config::SelectionMode::Strict
+               ? rectContains(selection, candidate)
+               : rectIntersects(selection, candidate);
 }
 
 /// @brief 获取图集纹理宽高比。
@@ -480,32 +490,47 @@ SelectionRect makeNoteScreenRect(const NoteComponent&          note,
     return rect;
 }
 
-/// @brief 计算 Polyline 物件的屏幕选择包围盒。
+/// @brief 判断 Polyline 是否与框选区域命中。
 /// @warning 逻辑热路径：框选重算时只遍历当前 Polyline 的子物件列表。
-SelectionRect makePolylineScreenRect(const NoteComponent&          note,
-                                     const SelectionScreenContext& screen)
+bool polylineMatchesSelection(const NoteComponent&          note,
+                              const SelectionScreenContext& screen,
+                              SelectionRect                 selection,
+                              Config::SelectionMode         mode)
 {
-    SelectionRect rect;
-    if ( !screen.valid || note.m_subNotes.empty() ) return rect;
+    if ( !screen.valid || note.m_subNotes.empty() ) return false;
 
     for ( size_t i = 0; i < note.m_subNotes.size(); ++i ) {
         const auto& sub = note.m_subNotes[i];
-        includeRect(rect,
-                    makeTextureRect(screen,
-                                    i == 0 ? TextureID::Note : TextureID::Node,
-                                    static_cast<float>(sub.trackIndex),
-                                    sub.timestamp,
-                                    sub.timestamp));
-        includeCarrierRect(rect,
+        if ( selectionMatchesRect(
+                 selection,
+                 makeTextureRect(screen,
+                                 i == 0 ? TextureID::Note : TextureID::Node,
+                                 static_cast<float>(sub.trackIndex),
+                                 sub.timestamp,
+                                 sub.timestamp),
+                 mode) ) {
+            return true;
+        }
+
+        SelectionRect carrierRect;
+        includeCarrierRect(carrierRect,
                            screen,
                            sub.type,
                            sub.timestamp,
                            sub.duration,
                            sub.trackIndex,
                            sub.dtrack);
+        if ( selectionMatchesRect(selection, carrierRect, mode) ) {
+            return true;
+        }
+
         if ( i + 1 < note.m_subNotes.size() ) {
+            SelectionRect transitionRect;
             includePolylineTransitionRect(
-                rect, screen, sub, note.m_subNotes[i + 1]);
+                transitionRect, screen, sub, note.m_subNotes[i + 1]);
+            if ( selectionMatchesRect(selection, transitionRect, mode) ) {
+                return true;
+            }
         }
     }
 
@@ -513,34 +538,39 @@ SelectionRect makePolylineScreenRect(const NoteComponent&          note,
     if ( last.type == ::MMM::NoteType::FLICK && last.dtrack != 0 ) {
         const TextureID arrowId = last.dtrack < 0 ? TextureID::FlickArrowLeft
                                                   : TextureID::FlickArrowRight;
-        includeRect(
-            rect,
+        return selectionMatchesRect(
+            selection,
             makeTextureRect(screen,
                             arrowId,
                             static_cast<float>(last.trackIndex + last.dtrack),
                             last.timestamp,
-                            last.timestamp));
+                            last.timestamp),
+            mode);
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
-        includeRect(rect,
-                    makeTextureRect(screen,
-                                    TextureID::HoldEnd,
-                                    static_cast<float>(last.trackIndex),
-                                    last.timestamp + last.duration,
-                                    last.timestamp));
+        return selectionMatchesRect(
+            selection,
+            makeTextureRect(screen,
+                            TextureID::HoldEnd,
+                            static_cast<float>(last.trackIndex),
+                            last.timestamp + last.duration,
+                            last.timestamp),
+            mode);
     }
 
-    return rect;
+    return false;
 }
 
-/// @brief 根据物件类型计算其屏幕选择包围盒。
+/// @brief 根据物件类型判断是否与框选区域命中。
 /// @warning 逻辑热路径：框选重算时按候选物件调用，不做 ECS 查询。
-SelectionRect makeNoteSelectionScreenRect(const NoteComponent&          note,
-                                          const SelectionScreenContext& screen)
+bool noteMatchesSelection(const NoteComponent&          note,
+                          const SelectionScreenContext& screen,
+                          SelectionRect selection, Config::SelectionMode mode)
 {
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-        return makePolylineScreenRect(note, screen);
+        return polylineMatchesSelection(note, screen, selection, mode);
     }
-    return makeNoteScreenRect(note, screen);
+    return selectionMatchesRect(
+        selection, makeNoteScreenRect(note, screen), mode);
 }
 
 /// @brief 准备所有有效框选区域的屏幕矩形。
@@ -884,13 +914,7 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
 
         bool isSelectedInAny = false;
         for ( const auto& box : preparedBoxes ) {
-            const SelectionRect noteRect =
-                makeNoteSelectionScreenRect(note, box.screen);
-            const bool insideThis = mode == Config::SelectionMode::Strict
-                                        ? rectContains(box.rect, noteRect)
-                                        : rectIntersects(box.rect, noteRect);
-
-            if ( insideThis ) {
+            if ( noteMatchesSelection(note, box.screen, box.rect, mode) ) {
                 isSelectedInAny = true;
                 break;
             }
