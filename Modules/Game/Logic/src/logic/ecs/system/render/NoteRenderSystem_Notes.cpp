@@ -2,8 +2,8 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
-#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -142,10 +142,9 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     auto  color_tap = skin.getColor("note_tap");
     ctx.colorTap    = { color_tap.r, color_tap.g, color_tap.b, color_tap.a };
 
-    auto color_head =
-        skin.getData().colors.contains("note_head")
-            ? skin.getColor("note_head")
-            : skin.getColor("note_hold");
+    auto color_head = skin.getData().colors.contains("note_head")
+                          ? skin.getColor("note_head")
+                          : skin.getColor("note_hold");
     ctx.colorHead = { color_head.r, color_head.g, color_head.b, color_head.a };
 
     auto color_hold = skin.getColor("note_hold");
@@ -154,7 +153,7 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     auto color_end = skin.getData().colors.contains("note_end")
                          ? skin.getColor("note_end")
                          : skin.getColor("note_hold");
-    ctx.colorEnd = { color_end.r, color_end.g, color_end.b, color_end.a };
+    ctx.colorEnd   = { color_end.r, color_end.g, color_end.b, color_end.a };
 
     auto color_node = skin.getColor("note_node");
     ctx.colorNode = { color_node.r, color_node.g, color_node.b, color_node.a };
@@ -561,14 +560,12 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const auto&  transform = registry.get<const TransformComponent>(entity);
         const auto&  note      = registry.get<const NoteComponent>(entity);
 
-        // 处理拖拽/选中/剪切时的视觉反馈
-        float alphaMul   = 1.0f;
-        bool  isSelected = false;
+        // 处理拖拽/剪切时的视觉反馈；选中反馈由发光层按当前颜色绘制。
+        float alphaMul = 1.0f;
         if ( auto* ic = registry.try_get<InteractionComponent>(entity) ) {
             if ( ic->isDragging || ic->isCut ) {
                 alphaMul = 0.5f;
             }
-            isSelected = ic->isSelected;
         }
 
         float screenY =
@@ -583,26 +580,19 @@ void NoteRenderSystem::renderNoteBaseLayer(
                         renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
-        // 应用自定义颜色、Alpha 与选中高亮。
+        // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
             resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
-        glm::vec4 curColorHead = resolveNoteColor(
-            note, NoteColorSlot::Head, ctx.colorHead);
+        glm::vec4 curColorHead =
+            resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
         glm::vec4 curColorHoldBody =
             resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
         glm::vec4 curColorHoldEnd =
             resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
-        glm::vec4 curColorNode = resolveNoteColor(
-            note, NoteColorSlot::Node, ctx.colorNode);
+        glm::vec4 curColorNode =
+            resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
         glm::vec4 curColorArrow =
             resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
-
-        if ( isSelected && !hasAnyNoteColorOverride(note.m_customColors) ) {
-            curColorNote     = { 1.0f, 1.0f, 0.4f, 1.0f };
-            curColorHead     = { 1.0f, 1.0f, 0.4f, 1.0f };
-            curColorHoldBody = { 1.0f, 1.0f, 0.4f, 1.0f };
-            curColorHoldEnd  = { 1.0f, 1.0f, 0.4f, 1.0f };
-        }
 
         bool isFullErasing = snapshot->erasingEntities.count(entity) &&
                              (snapshot->erasingSubIndex == -1);
@@ -691,8 +681,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
     batcher.flush();
 }
 
-/// @brief 绘制悬浮音符的发光层，并使用轨道框限制可见区域。
-/// @warning 热路径：悬浮音符每帧绘制；只允许使用已缓存的实体列表和纹理信息。
+/// @brief 绘制悬浮/选中音符的发光层，并使用轨道框限制可见区域。
+/// @warning
+/// 热路径：悬浮/选中音符每帧绘制；只允许使用已缓存的实体列表和纹理信息。
 void NoteRenderSystem::renderNoteGlowLayer(
     entt::registry& registry, RenderSnapshot* snapshot,
     const NoteRenderSystem::NoteRenderContext& ctx,
@@ -701,24 +692,23 @@ void NoteRenderSystem::renderNoteGlowLayer(
     float judgmentLineY, float leftX, float rightX, float topY, float bottomY,
     float singleTrackW, float renderScaleY)
 {
-    std::vector<entt::entity> hoveredEntities;
-    hoveredEntities.reserve(noteEntities.size());
+    std::vector<entt::entity> glowEntities;
+    glowEntities.reserve(noteEntities.size());
     for ( auto entity : noteEntities ) {
         /// @brief 当前可见实体的交互状态；不存在时跳过发光层。
         const auto* ic = registry.try_get<const InteractionComponent>(entity);
         if ( !ic ) continue;
-        if ( ic->isHovered ) hoveredEntities.push_back(entity);
+        if ( ic->isHovered || ic->isSelected ) glowEntities.push_back(entity);
     }
 
-    if ( hoveredEntities.empty() ) return;
+    if ( glowEntities.empty() ) return;
 
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
     glowBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
-    /// @brief hoveredEntities
+    /// @brief glowEntities
     /// 继承可见实体时间升序，反向绘制即可获得原先的后到前覆盖顺序。
-    for ( auto it = hoveredEntities.rbegin(); it != hoveredEntities.rend();
-          ++it ) {
-        /// @brief 当前反向遍历到的悬浮音符实体。
+    for ( auto it = glowEntities.rbegin(); it != glowEntities.rend(); ++it ) {
+        /// @brief 当前反向遍历到的发光音符实体。
         entt::entity entity    = *it;
         const auto&  transform = registry.get<const TransformComponent>(entity);
         const auto&  note      = registry.get<const NoteComponent>(entity);
@@ -736,6 +726,10 @@ void NoteRenderSystem::renderNoteGlowLayer(
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
+        if ( ic.isSelected ) {
+            glowPart = HoverPart::None;
+            glowIdx  = -1;
+        }
         glm::vec4 glowNote =
             resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
         glm::vec4 glowHead =
@@ -1379,23 +1373,23 @@ void NoteRenderSystem::renderBrushPreview(
     float trackX = leftX + brush.track * singleTrackW;
 
     NoteComponent tempNote;
-    tempNote.m_type       = brush.type;
-    tempNote.m_timestamp  = brush.time;
-    tempNote.m_duration   = brush.duration;
-    tempNote.m_trackIndex = brush.track;
-    tempNote.m_dtrack     = brush.dtrack;
+    tempNote.m_type         = brush.type;
+    tempNote.m_timestamp    = brush.time;
+    tempNote.m_duration     = brush.duration;
+    tempNote.m_trackIndex   = brush.track;
+    tempNote.m_dtrack       = brush.dtrack;
     tempNote.m_customColors = brush.customColors;
 
     glm::vec4 previewNote =
         resolveNoteColor(tempNote, NoteColorSlot::Tap, ctx.colorTap);
-    glm::vec4 previewHead = resolveNoteColor(
-        tempNote, NoteColorSlot::Head, ctx.colorHead);
+    glm::vec4 previewHead =
+        resolveNoteColor(tempNote, NoteColorSlot::Head, ctx.colorHead);
     glm::vec4 previewBody =
         resolveNoteColor(tempNote, NoteColorSlot::Hold, ctx.colorHold);
     glm::vec4 previewEnd =
         resolveNoteColor(tempNote, NoteColorSlot::End, ctx.colorEnd);
-    glm::vec4 previewNode = resolveNoteColor(
-        tempNote, NoteColorSlot::Node, ctx.colorNode);
+    glm::vec4 previewNode =
+        resolveNoteColor(tempNote, NoteColorSlot::Node, ctx.colorNode);
     glm::vec4 previewArrow =
         resolveNoteColor(tempNote, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
@@ -1457,26 +1451,25 @@ void NoteRenderSystem::renderBrushPreview(
         float topY    = 0.0f;
         float bottomY = judgmentLineY * 2.0f;  // 简单包围盒
 
-        NoteRenderSystem::renderPolyline(
-            ctx.cache,
-            batcher,
-            tempNote,
-            config,
-            snapshot,
-            ctx.currentAbsY,
-            ctx.currentTime,
-            judgmentLineY,
-            leftX,
-            rightX,
-            topY,
-            bottomY,
-            singleTrackW,
-            renderScaleY,
-            previewHead,
-            previewBody,
-            previewEnd,
-            previewNode,
-            previewArrow);
+        NoteRenderSystem::renderPolyline(ctx.cache,
+                                         batcher,
+                                         tempNote,
+                                         config,
+                                         snapshot,
+                                         ctx.currentAbsY,
+                                         ctx.currentTime,
+                                         judgmentLineY,
+                                         leftX,
+                                         rightX,
+                                         topY,
+                                         bottomY,
+                                         singleTrackW,
+                                         renderScaleY,
+                                         previewHead,
+                                         previewBody,
+                                         previewEnd,
+                                         previewNode,
+                                         previewArrow);
     } else {
         // Fallback debug drawing
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;
