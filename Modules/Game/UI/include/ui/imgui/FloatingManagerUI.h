@@ -6,6 +6,8 @@
 #include "ui/ITextureLoader.h"
 #include <string>
 
+struct ImGuiDockNode;
+
 namespace MMM::UI
 {
 class ISubView;
@@ -89,6 +91,11 @@ private:
     /// @param sourceManager 当前 UIManager。
     void hideCurrentSubView(UIManager* sourceManager);
 
+    /// @brief 更新当前左键手势是否从 dock 分割线开始。
+    /// @param dockNode 当前子视图所在 DockNode。
+    /// @warning UI 热路径：每帧最多读取鼠标状态和 DockNode 几何，不做遍历。
+    void updateDockResizeGesture(ImGuiDockNode* dockNode);
+
     ///@brief 是否需要重载
     bool m_needReload{ true };
 
@@ -112,6 +119,12 @@ private:
 
     /// @brief 进入最小尺寸锁定时鼠标已经越过手柄的距离。
     float m_minResizeLockStartOverrun{ 0.0f };
+
+    /// @brief 当前左键手势是否从 dock 分割线开始。
+    bool m_dockResizeGestureActive{ false };
+
+    /// @brief 当前 dock resize 手势所在轴，-1 表示无手势。
+    int m_dockResizeGestureAxis{ -1 };
 
     /// @brief 本帧 DockSpace 前是否临时钳住过 ImGui 鼠标坐标。
     bool m_restoreMouseAfterDockSpace{ false };

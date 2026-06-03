@@ -195,6 +195,40 @@ DockResizeOverrun getDockResizeOverrun(ImGuiDockNode* node,
     result.overrun  = std::max(0.0f, overrun);
     return result;
 }
+
+/// @brief 判断鼠标位置是否落在当前 DockNode 所属 split 的分割条交互范围内。
+/// @warning UI 热路径：仅读取当前 DockNode 几何和 ImGui 样式。
+bool isDockResizeSplitterHit(ImGuiDockNode* node, ImVec2 mousePos)
+{
+    if ( !node || !node->ParentNode ) {
+        return false;
+    }
+
+    ImGuiDockNode* parent = node->ParentNode;
+    ImGuiDockNode* child0 = parent->ChildNodes[0];
+    ImGuiDockNode* child1 = parent->ChildNodes[1];
+    if ( !child0 || !child1 ) {
+        return false;
+    }
+
+    const ImGuiAxis axis = parent->SplitAxis;
+    if ( axis != ImGuiAxis_X && axis != ImGuiAxis_Y ) {
+        return false;
+    }
+
+    ImRect splitterRect;
+    splitterRect.Min = child0->Pos;
+    splitterRect.Max = child1->Pos;
+    splitterRect.Min[axis] += child0->Size[axis];
+    splitterRect.Max[axis ^ 1] += child1->Size[axis ^ 1];
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float       hoverExtend =
+        std::max(style.WindowBorderHoverPadding, style.DockingSeparatorSize);
+    splitterRect.Expand(axis == ImGuiAxis_Y ? ImVec2(0.0f, hoverExtend)
+                                            : ImVec2(hoverExtend, 0.0f));
+    return splitterRect.Contains(mousePos);
+}
 }  // namespace
 
 FloatingManagerUI::FloatingManagerUI(const std::string& name)
@@ -244,6 +278,8 @@ void FloatingManagerUI::toggleSubView(const std::string& subViewId)
         m_wasDocked                  = false;
         m_minResizeLockActive        = false;
         m_minResizeLockAxis          = -1;
+        m_dockResizeGestureActive    = false;
+        m_dockResizeGestureAxis      = -1;
         m_restoreMouseAfterDockSpace = false;
     } else {
         m_currentSubViewId           = subViewId;
@@ -252,6 +288,8 @@ void FloatingManagerUI::toggleSubView(const std::string& subViewId)
         m_requestShowSizeReset       = true;
         m_minResizeLockActive        = false;
         m_minResizeLockAxis          = -1;
+        m_dockResizeGestureActive    = false;
+        m_dockResizeGestureAxis      = -1;
         m_restoreMouseAfterDockSpace = false;
     }
 }
@@ -271,7 +309,34 @@ void FloatingManagerUI::restoreSubViewState(const std::string& subViewId,
         m_wasDocked                  = false;
         m_minResizeLockActive        = false;
         m_minResizeLockAxis          = -1;
+        m_dockResizeGestureActive    = false;
+        m_dockResizeGestureAxis      = -1;
         m_restoreMouseAfterDockSpace = false;
+    }
+}
+
+void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
+{
+    if ( !dockNode || !dockNode->ParentNode ||
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        m_dockResizeGestureActive = false;
+        m_dockResizeGestureAxis   = -1;
+        m_minResizeLockActive     = false;
+        m_minResizeLockAxis       = -1;
+        return;
+    }
+
+    if ( !ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        return;
+    }
+
+    const ImVec2 clickPos     = ImGui::GetIO().MouseClickedPos[0];
+    m_dockResizeGestureActive = isDockResizeSplitterHit(dockNode, clickPos);
+    m_dockResizeGestureAxis =
+        m_dockResizeGestureActive ? dockNode->ParentNode->SplitAxis : -1;
+    if ( !m_dockResizeGestureActive ) {
+        m_minResizeLockActive = false;
+        m_minResizeLockAxis   = -1;
     }
 }
 
@@ -356,12 +421,14 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     }
 
     ImGuiDockNode* dockNode = window->DockNode;
-    ImVec2         currentWindowSize =
+    updateDockResizeGesture(dockNode);
+    ImVec2 currentWindowSize =
         clampDockNodeToMinSize(window, dockNode->Size, minWindowSize);
     const DockResizeOverrun dockResizeOverrun =
         getDockResizeOverrun(dockNode, minWindowSize, ImGui::GetMousePos());
 
-    if ( !dockResizeOverrun.valid ||
+    if ( !dockResizeOverrun.valid || !m_dockResizeGestureActive ||
+         m_dockResizeGestureAxis != static_cast<int>(dockResizeOverrun.axis) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
@@ -439,6 +506,8 @@ void FloatingManagerUI::hideCurrentSubView(UIManager* sourceManager)
     m_wasDocked                  = false;
     m_minResizeLockActive        = false;
     m_minResizeLockAxis          = -1;
+    m_dockResizeGestureActive    = false;
+    m_dockResizeGestureAxis      = -1;
     m_restoreMouseAfterDockSpace = false;
 }
 
@@ -471,6 +540,7 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();
     ImGuiDockNode* dockNode =
         isDocked && currentWindow ? currentWindow->DockNode : nullptr;
+    updateDockResizeGesture(dockNode);
     const DockResizeOverrun dockResizeOverrun =
         getDockResizeOverrun(dockNode, minWindowSize, ImGui::GetMousePos());
     if ( m_wasDocked && !isDocked ) {
@@ -491,7 +561,8 @@ void FloatingManagerUI::update(UIManager* sourceManager)
         m_hasSeenUsableSize = true;
     }
 
-    if ( !isDocked || !dockResizeOverrun.valid ||
+    if ( !isDocked || !dockResizeOverrun.valid || !m_dockResizeGestureActive ||
+         m_dockResizeGestureAxis != static_cast<int>(dockResizeOverrun.axis) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
