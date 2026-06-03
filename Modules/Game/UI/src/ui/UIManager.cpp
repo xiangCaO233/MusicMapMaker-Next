@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
+#include <string_view>
 #include <vector>
 
 namespace MMM::UI
@@ -91,6 +92,60 @@ bool resolveWorkspaceAudioTrack(const Project&                     project,
     }
 
     return false;
+}
+
+/// @brief 判断文本是否拥有指定前缀。
+/// @param text 被检查文本。
+/// @param prefix 需要匹配的前缀。
+/// @return 文本以该前缀开头时返回 true。
+bool startsWith(std::string_view text, std::string_view prefix)
+{
+    return text.size() >= prefix.size() &&
+           text.substr(0, prefix.size()) == prefix;
+}
+
+/// @brief 过滤项目工作区 ImGui ini 中跨项目不稳定的多视口平台状态。
+/// @param iniData 原始 ImGui ini 数据。
+/// @return 移除平台 viewport 段和字段后的 ImGui ini 数据。
+std::string sanitizeProjectWorkspaceIni(std::string_view iniData)
+{
+    std::string sanitized;
+    sanitized.reserve(iniData.size());
+
+    bool   skipViewportSection = false;
+    size_t lineStart           = 0;
+    while ( lineStart < iniData.size() ) {
+        const size_t nextLine = iniData.find('\n', lineStart);
+        const size_t lineEnd =
+            nextLine == std::string_view::npos ? iniData.size() : nextLine + 1;
+        std::string_view line = iniData.substr(lineStart, lineEnd - lineStart);
+
+        std::string_view lineWithoutEnd = line;
+        if ( !lineWithoutEnd.empty() && lineWithoutEnd.back() == '\n' ) {
+            lineWithoutEnd.remove_suffix(1);
+        }
+        if ( !lineWithoutEnd.empty() && lineWithoutEnd.back() == '\r' ) {
+            lineWithoutEnd.remove_suffix(1);
+        }
+
+        if ( startsWith(lineWithoutEnd, "[Viewport][") ) {
+            skipViewportSection = true;
+        } else if ( startsWith(lineWithoutEnd, "[") ) {
+            skipViewportSection = false;
+        }
+
+        if ( !skipViewportSection &&
+             !startsWith(lineWithoutEnd, "ViewportId=") &&
+             !startsWith(lineWithoutEnd, "ViewportPos=") &&
+             !startsWith(lineWithoutEnd, "ViewportSize=") &&
+             !startsWith(lineWithoutEnd, "ViewportOwned=") ) {
+            sanitized.append(line.data(), line.size());
+        }
+
+        lineStart = lineEnd;
+    }
+
+    return sanitized;
 }
 
 /// @brief 捕获当前帧可安全传给后台 UI 准备任务的只读快照。
@@ -287,9 +342,13 @@ void UIManager::syncProjectWorkspaceState()
 
         const auto& workspace = project->m_settings.m_workspace;
         if ( !workspace.m_imguiIniData.empty() ) {
-            ImGui::LoadIniSettingsFromMemory(workspace.m_imguiIniData.data(),
-                                             workspace.m_imguiIniData.size());
-            MainDockSpaceUI::markProjectWorkspaceLayoutLoaded();
+            std::string sanitizedIni =
+                sanitizeProjectWorkspaceIni(workspace.m_imguiIniData);
+            if ( !sanitizedIni.empty() ) {
+                ImGui::LoadIniSettingsFromMemory(sanitizedIni.data(),
+                                                 sanitizedIni.size());
+                MainDockSpaceUI::markProjectWorkspaceLayoutLoaded();
+            }
         }
 
         if ( m_nativeWindow && workspace.m_mainWindow.m_valid ) {

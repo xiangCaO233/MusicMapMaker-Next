@@ -315,6 +315,15 @@ struct GlfwCursorState {
     ImGuiMouseCursor cursor{ ImGuiMouseCursor_COUNT };
 };
 
+/// @brief GLFW 主窗口焦点状态缓存。
+struct MainWindowFocusState {
+    /// @brief 当前缓存所属 GLFW 主窗口。
+    GLFWwindow* window{ nullptr };
+
+    /// @brief 上一帧主窗口是否拥有焦点。
+    bool focused{ false };
+};
+
 /// @brief 对 GLFW 主窗口应用光标模式，并跳过重复状态写入。
 /// @param window GLFW 窗口句柄。
 /// @param cursorMode GLFW 光标模式。
@@ -371,6 +380,108 @@ void applyNativeCursor(GLFWwindow* window, ImGuiMouseCursor cursor)
     }
 
     applyGlfwCursorMode(window, GLFW_CURSOR_NORMAL, cursor);
+}
+
+/// @brief 消费主窗口从未聚焦到聚焦的激活边沿。
+/// @param window GLFW 主窗口句柄。
+/// @return 本帧主窗口刚获得焦点时返回 true。
+/// @warning 渲染热路径：每帧调用；只读取 GLFW 窗口属性和更新静态缓存。
+bool consumeMainWindowActivation(GLFWwindow* window)
+{
+    static MainWindowFocusState state;
+
+    if ( !window ) {
+        state.window  = nullptr;
+        state.focused = false;
+        return false;
+    }
+
+    const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+    if ( state.window != window ) {
+        state.window  = window;
+        state.focused = focused;
+        return focused;
+    }
+
+    const bool activated = focused && !state.focused;
+    state.focused        = focused;
+    return activated;
+}
+
+/// @brief 将 GLFW 窗口恢复并提升到当前窗口组顶层。
+/// @param window GLFW 窗口句柄。
+/// @param activate 是否请求系统前台焦点。
+/// @warning 低频平台操作：只在主窗口被任务栏/系统激活时调用。
+void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
+{
+    if ( !window ) {
+        return;
+    }
+
+    if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
+        glfwRestoreWindow(window);
+    }
+
+#ifdef _WIN32
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        return;
+    }
+
+    if ( IsIconic(hwnd) ) {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+
+    UINT flags = SWP_NOMOVE | SWP_NOSIZE;
+    if ( !activate ) {
+        flags |= SWP_NOACTIVATE;
+    }
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
+    if ( activate ) {
+        SetForegroundWindow(hwnd);
+    }
+#else
+    (void)activate;
+    glfwFocusWindow(window);
+#endif
+}
+
+/// @brief 主窗口被系统激活时同步提升所有 ImGui 多视口窗口。
+/// @param mainWindow GLFW 主窗口句柄。
+/// @warning 低频平台操作：只在主窗口焦点激活边沿触发，避免每帧提窗。
+void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
+{
+    if ( !mainWindow ) {
+        return;
+    }
+
+#ifdef _WIN32
+    raiseGlfwWindowToTop(mainWindow, true);
+#endif
+
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    for ( int i = 0; i < platformIo.Viewports.Size; ++i ) {
+        ImGuiViewport* viewport = platformIo.Viewports[i];
+        if ( !viewport || !viewport->PlatformHandle ) {
+            continue;
+        }
+
+        GLFWwindow* viewportWindow =
+            static_cast<GLFWwindow*>(viewport->PlatformHandle);
+        if ( !viewportWindow || viewportWindow == mainWindow ) {
+            continue;
+        }
+
+#ifdef _WIN32
+        raiseGlfwWindowToTop(viewportWindow, false);
+#else
+        raiseGlfwWindowToTop(viewportWindow, true);
+#endif
+    }
+
+#ifndef _WIN32
+    raiseGlfwWindowToTop(mainWindow, true);
+#endif
 }
 }  // namespace
 
@@ -584,7 +695,7 @@ void VKRenderer::render(NativeWindow&                window,
         for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
               ++taskSlot ) {
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {
@@ -706,10 +817,16 @@ void VKRenderer::render(NativeWindow&                window,
     ++m_currentFrameIndex %= MAX_FRAMES_IN_FLIGHT;
 
     // 更新并渲染所有的多视口 (Viewports)
-    ImGuiIO&   io            = ImGui::GetIO();
+    ImGuiIO&    io               = ImGui::GetIO();
+    GLFWwindow* mainWindowHandle = window.getWindowHandle();
+    const bool  mainWindowActivated =
+        consumeMainWindowActivation(mainWindowHandle);
     const auto platformStart = profileTimePoint(renderProfileLoggingEnabled);
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         ImGui::UpdatePlatformWindows();
+        if ( mainWindowActivated ) {
+            raiseImGuiViewportGroup(mainWindowHandle);
+        }
 #ifdef _WIN32
         // 对所有多视口平台窗口应用 Win32 DWM 圆角和阴影，确保视觉一致性
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
