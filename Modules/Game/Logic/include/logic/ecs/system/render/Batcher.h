@@ -147,7 +147,11 @@ struct Batcher {
         currentCmd.indexCount += 6;
     }
 
-    /// @brief 推送一个矩形，根据填充模式自动计算 UV
+    /// @brief 推送一个矩形，根据填充模式自动计算 UV。
+    /// @param texSize 背景纹理传入原始像素尺寸；音符纹理可传入
+    /// `{aspect, 1.0f}` 作为比例基准。
+    /// @warning 热路径：每次音符、背景或特效几何生成时执行；禁止加入资源加载、
+    /// 文件系统访问、阻塞等待或 shared_ptr 所有权复制。
     void pushFilledQuad(float x, float y, float w, float h, glm::vec2 texSize,
                         BackgroundFillMode fillMode, glm::vec4 color)
     {
@@ -160,6 +164,9 @@ struct Batcher {
             return;
         }
 
+        const bool usesAbsoluteTextureSize =
+            currentTex == TextureID::Background || texSize.y > 1.0f;
+
         float     viewAspect = actualW / actualH;
         float     texAspect  = texSize.x / texSize.y;
         glm::vec2 uvMin(0.0f, 0.0f);
@@ -170,11 +177,11 @@ struct Batcher {
         case BackgroundFillMode::Stretch: break;
         case BackgroundFillMode::AspectFit:
             if ( texAspect > viewAspect ) {
-                drawH = w / texAspect;
-                drawY -= (h - drawH) * 0.5f;  // 向上偏移调整
+                drawH = actualW / texAspect;
+                drawY -= (actualH - drawH) * 0.5f;
             } else {
-                drawW = h * texAspect;
-                drawX += (w - drawW) * 0.5f;
+                drawW = actualH * texAspect;
+                drawX += (actualW - drawW) * 0.5f;
             }
             break;
         case BackgroundFillMode::AspectFill:
@@ -189,10 +196,12 @@ struct Batcher {
             }
             break;
         case BackgroundFillMode::Center:
-            drawW = texSize.x;
-            drawH = texSize.y;
-            drawX += (w - drawW) * 0.5f;
-            drawY -= (h - drawH) * 0.5f;
+            if ( usesAbsoluteTextureSize ) {
+                drawW = texSize.x;
+                drawH = texSize.y;
+            }
+            drawX += (actualW - drawW) * 0.5f;
+            drawY -= (actualH - drawH) * 0.5f;
             break;
         }
 
