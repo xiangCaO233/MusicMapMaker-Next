@@ -539,10 +539,24 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastHoveredSubIndex = hoveredSubIndex;
     }
 
+    auto processColorToolTarget = [&](Logic::EditTool tool) {
+        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ) return;
+        if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;
+
+        if ( tool == Logic::EditTool::ColorBrush ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdApplyBrushPaletteToEntity{ hoveredEntity }));
+        } else if ( tool == Logic::EditTool::ColorEraser ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdClearNoteColorOverrides{ hoveredEntity }));
+        }
+    };
+
     if ( ImGui::IsMouseClicked(0) ) {
         m_leftPressStartedOnCanvas = isHovered;
         m_leftPressStartedOnEntity = hoveredEntity != entt::null;
         m_leftPressDragged         = false;
+        m_colorStrokeEntities.clear();
 
         if ( isHovered ) {
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
@@ -582,22 +596,10 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
-                if ( !currentSnapshot->isPlaying &&
-                     hoveredEntity != entt::null ) {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdApplyBrushPaletteToEntity{
-                                hoveredEntity }));
-                }
+                processColorToolTarget(Logic::EditTool::ColorBrush);
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorEraser ) {
-                if ( !currentSnapshot->isPlaying &&
-                     hoveredEntity != entt::null ) {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdClearNoteColorOverrides{
-                                hoveredEntity }));
-                }
+                processColorToolTarget(Logic::EditTool::ColorEraser);
             }
         }
     }
@@ -623,6 +625,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                                       localMousePos.x,
                                       localMousePos.y,
                                       ImGui::GetIO().KeyCtrl }));
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorBrush ) {
+            processColorToolTarget(Logic::EditTool::ColorBrush);
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorEraser ) {
+            processColorToolTarget(Logic::EditTool::ColorEraser);
         }
     }
 
@@ -647,6 +657,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnCanvas = false;
         m_leftPressStartedOnEntity = false;
         m_leftPressDragged         = false;
+        m_colorStrokeEntities.clear();
     }
 
     // --- 右键交互：画笔工具下为擦除 ---

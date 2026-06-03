@@ -5,6 +5,7 @@
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace MMM::Logic
@@ -87,6 +88,8 @@ private:
     bool m_leftPressStartedOnEntity{ false };
     /// @brief 当前左键手势是否已经发生拖动。
     bool m_leftPressDragged{ false };
+    /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
+    std::unordered_set<entt::entity> m_colorStrokeEntities;
 };
 
 }  // namespace MMM::Canvas

@@ -83,6 +83,28 @@ entt::entity resolveNoteColorTargetEntity(SessionContext& ctx,
     return entity;
 }
 
+/// @brief 判断两个可选颜色是否完全相同。
+bool isSameOptionalColor(const std::optional<glm::vec4>& lhs,
+                         const std::optional<glm::vec4>& rhs)
+{
+    if ( lhs.has_value() != rhs.has_value() ) return false;
+    if ( !lhs.has_value() ) return true;
+    return lhs->r == rhs->r && lhs->g == rhs->g && lhs->b == rhs->b &&
+           lhs->a == rhs->a;
+}
+
+/// @brief 判断两个音符配色覆写缓存是否完全相同。
+bool isSameNoteColorOverrides(const NoteColorOverrides& lhs,
+                              const NoteColorOverrides& rhs)
+{
+    return isSameOptionalColor(lhs.tap, rhs.tap) &&
+           isSameOptionalColor(lhs.head, rhs.head) &&
+           isSameOptionalColor(lhs.hold, rhs.hold) &&
+           isSameOptionalColor(lhs.end, rhs.end) &&
+           isSameOptionalColor(lhs.flickArrow, rhs.flickArrow) &&
+           isSameOptionalColor(lhs.node, rhs.node);
+}
+
 // --- Editing Handlers ---
 
 void ActionController::handleCommand(const CmdUndo& cmd)
@@ -318,6 +340,9 @@ void ActionController::handleCommand(const CmdApplyBrushPaletteToEntity& cmd)
     const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
     auto        newNote = oldNote;
     applyNoteColorOverrides(newNote, colors);
+    if ( isSameNoteColorOverrides(oldNote.m_customColors,
+                                  newNote.m_customColors) )
+        return;
 
     std::vector<BatchNoteAction::Entry> entries;
     entries.push_back({ target, oldNote, newNote });
@@ -337,6 +362,9 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
     auto               newNote = oldNote;
     NoteColorOverrides emptyColors;
     applyNoteColorOverrides(newNote, emptyColors);
+    if ( isSameNoteColorOverrides(oldNote.m_customColors,
+                                  newNote.m_customColors) )
+        return;
 
     std::vector<BatchNoteAction::Entry> entries;
     entries.push_back({ target, oldNote, newNote });
