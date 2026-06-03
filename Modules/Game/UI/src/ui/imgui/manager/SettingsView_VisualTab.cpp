@@ -272,15 +272,6 @@ void SettingsView::drawVisualSettings()
                     changed = true;
                 }
             });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox, bool) {
-                changed |= ImGui::Checkbox("##DebugDrawHitboxes",
-                                           &visual.debugDrawHitboxes);
-            });
     }
 
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.visual.background").data(),

@@ -21,6 +21,7 @@ add_library(UI STATIC
     src/ui/imgui/manager/NewBeatmapWizard.cpp
     src/ui/imgui/manager/SettingsView.cpp
     src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+    src/ui/imgui/manager/SettingsView_DebugTab.cpp
     src/ui/imgui/manager/SettingsView_EditorTab.cpp
     src/ui/imgui/manager/SettingsView_ProjectTab.cpp
     src/ui/imgui/manager/SettingsView_SoftwareTab.cpp

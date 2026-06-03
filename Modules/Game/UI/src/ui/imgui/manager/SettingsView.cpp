@@ -34,6 +34,8 @@ const char* getCategoryShortLabel(Event::SettingsTab tab)
         return TR_CACHE("ui.settings.beatmap.short").data();
     case Event::SettingsTab::Editor:
         return TR_CACHE("ui.settings.editor.short").data();
+    case Event::SettingsTab::Debug:
+        return TR_CACHE("ui.settings.debug.short").data();
     }
     return "";
 }
@@ -80,10 +82,9 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 28> labels{
+        const std::array<const char*, 27> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
-            TR_CACHE("ui.settings.software.render_profile_logging").data(),
             TR_CACHE("ui.settings.software.theme").data(),
             TR_CACHE("ui.settings.software.font.ascii").data(),
             TR_CACHE("ui.settings.software.font.cjk").data(),
@@ -113,7 +114,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 28> labels{
+        const std::array<const char*, 27> labels{
             TR_CACHE("ui.settings.visual.layout_left").data(),
             TR_CACHE("ui.settings.visual.layout_top").data(),
             TR_CACHE("ui.settings.visual.layout_right").data(),
@@ -125,7 +126,6 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.visual.note_scale_x").data(),
             TR_CACHE("ui.settings.visual.note_scale_y").data(),
             TR_CACHE("ui.settings.visual.note_fill_mode").data(),
-            TR_CACHE("ui.settings.visual.debug_draw_hitboxes").data(),
             TR_CACHE("ui.settings.visual.bg_fill_mode").data(),
             TR_CACHE("ui.settings.visual.bg_opaque").data(),
             TR_CACHE("ui.settings.visual.bg_darken").data(),
@@ -197,6 +197,13 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
+    case Event::SettingsTab::Debug: {
+        const std::array<const char*, 2> labels{
+            TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
+            TR_CACHE("ui.settings.debug.render_profile_logging").data()
+        };
+        return measureSettingsTextList(labels, font, snapshot.fontSize);
+    }
     }
     return 0.0f;
 }
@@ -254,6 +261,7 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
         break;
     }
     case Event::SettingsTab::Project: break;
+    case Event::SettingsTab::Debug: break;
     }
 
     return std::ceil(minWidth);
@@ -388,12 +396,13 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
         parseLayoutFloat(cache.sidebarWidthConfig, 40.0f);
     const float btnSize = std::floor(sidebarBaseW * scale);
 
-    const std::array<const char*, 5> labels{
+    const std::array<const char*, 6> labels{
         getCategoryShortLabel(Event::SettingsTab::Software),
         getCategoryShortLabel(Event::SettingsTab::Visual),
         getCategoryShortLabel(Event::SettingsTab::Project),
         getCategoryShortLabel(Event::SettingsTab::Beatmap),
-        getCategoryShortLabel(Event::SettingsTab::Editor)
+        getCategoryShortLabel(Event::SettingsTab::Editor),
+        getCategoryShortLabel(Event::SettingsTab::Debug)
     };
     const float maxLabelWidth =
         measureSettingsTextList(labels, menuFont, snapshot.fontSize);
@@ -407,7 +416,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 5.0f + categorySpacing * 4.0f;
+                                  categorySize * 6.0f + categorySpacing * 5.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -713,6 +722,17 @@ void SettingsView::drawContent()
                                 rect);
                         });
 
+        vbox.addElement("DebugTab",
+                        Sizing::Grow(),
+                        Sizing::Fixed(btnSize),
+                        [&](Clay_BoundingBox rect, bool) {
+                            DrawCategoryButton(
+                                Event::SettingsTab::Debug,
+                                ICON_MMM_BUG,
+                                TR_CACHE("ui.settings.debug").data(),
+                                rect);
+                        });
+
         ImVec2 startPos = ImGui::GetCursorScreenPos();
         vbox.renderInCurrent(
             startPos, { sidebarWidth, ImGui::GetContentRegionAvail().y });
@@ -751,6 +771,7 @@ void SettingsView::drawContent()
             case Event::SettingsTab::Project: drawProjectSettings(); break;
             case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
             case Event::SettingsTab::Editor: drawEditorSettings(); break;
+            case Event::SettingsTab::Debug: drawDebugSettings(); break;
             }
 
             ImGui::Dummy(ImVec2(0, 50));

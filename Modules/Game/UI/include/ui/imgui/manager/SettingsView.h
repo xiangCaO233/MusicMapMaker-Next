@@ -224,6 +224,11 @@ private:
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();
 
+    /// @brief 绘制调试设置页。
+    /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。
+    /// 禁止加入文件系统扫描或重型资源重建。
+    void drawDebugSettings();
+
     /// @brief 获取或创建一个行布局。
     /// @param index 行布局缓存索引。
     /// @return 可复用的横向行布局。
