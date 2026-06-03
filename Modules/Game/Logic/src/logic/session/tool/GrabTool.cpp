@@ -1,6 +1,7 @@
 #include "logic/session/tool/GrabTool.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -470,13 +471,14 @@ void GrabTool::syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
              subNC.m_subIndex >= (int)note.m_subNotes.size() )
             continue;
 
-        const auto& sub    = note.m_subNotes[subNC.m_subIndex];
-        subNC.m_type       = sub.type;
-        subNC.m_timestamp  = sub.timestamp;
-        subNC.m_duration   = sub.duration;
-        subNC.m_trackIndex = sub.trackIndex;
-        subNC.m_dtrack     = sub.dtrack;
-        subNC.m_metadata   = sub.metadata;
+        const auto& sub      = note.m_subNotes[subNC.m_subIndex];
+        subNC.m_type         = sub.type;
+        subNC.m_timestamp    = sub.timestamp;
+        subNC.m_duration     = sub.duration;
+        subNC.m_trackIndex   = sub.trackIndex;
+        subNC.m_dtrack       = sub.dtrack;
+        subNC.m_metadata     = sub.metadata;
+        subNC.m_customColors = sub.customColors;
     }
 }
 
@@ -518,6 +520,7 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
         merged.trackIndex       = newSubNotes[subIdx - 2].trackIndex;
         merged.dtrack           = 0;
         merged.metadata         = newSubNotes[subIdx - 2].metadata;
+        merged.customColors     = newSubNotes[subIdx - 2].customColors;
         newSubNotes[subIdx - 2] = merged;
     } else {
         NoteComponent::SubNote merged;
@@ -529,6 +532,7 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
             newSubNotes[subIdx - 2].trackIndex;
         merged.duration         = 0.0;
         merged.metadata         = newSubNotes[subIdx - 2].metadata;
+        merged.customColors     = newSubNotes[subIdx - 2].customColors;
         newSubNotes[subIdx - 2] = merged;
     }
     newSubNotes.erase(newSubNotes.begin() + subIdx - 1,
@@ -559,6 +563,7 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
             after.m_trackIndex   = merged.trackIndex;
             after.m_dtrack       = merged.dtrack;
             after.m_metadata     = merged.metadata;
+            after.m_customColors = merged.customColors;
             entries.push_back({ subEnt, initNC, after });
         } else if ( oldIdx > subIdx ) {
             NoteComponent after = initNC;

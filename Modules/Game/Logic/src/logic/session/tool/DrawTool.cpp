@@ -1,8 +1,8 @@
 #include "logic/session/tool/DrawTool.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
-#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
@@ -212,6 +212,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 s.trackIndex                    = parentNote.m_trackIndex;
                 s.dtrack                        = parentNote.m_dtrack;
                 s.metadata                      = parentNote.m_metadata;
+                s.customColors                  = parentNote.m_customColors;
                 ctx.brushState.polylineSegments = { s };
 
                 // 如果是 Hold，则根据当前点击位置缩短/伸长它
@@ -670,12 +671,13 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 【1-1 不同类型】末尾 subHold + 目标 Flick
                             // → 将 Flick 作为最后一个 seg 加入
                             NoteComponent::SubNote flickSeg;
-                            flickSeg.type       = ::MMM::NoteType::FLICK;
-                            flickSeg.timestamp  = tailTime;  // 修复微小时间差
-                            flickSeg.duration   = 0.0;
-                            flickSeg.trackIndex = tailTrack;
-                            flickSeg.dtrack     = nc.m_dtrack;
-                            flickSeg.metadata   = nc.m_metadata;
+                            flickSeg.type         = ::MMM::NoteType::FLICK;
+                            flickSeg.timestamp    = tailTime;  // 修复微小时间差
+                            flickSeg.duration     = 0.0;
+                            flickSeg.trackIndex   = tailTrack;
+                            flickSeg.dtrack       = nc.m_dtrack;
+                            flickSeg.metadata     = nc.m_metadata;
+                            flickSeg.customColors = nc.m_customColors;
                             segments.push_back(flickSeg);
 
                             mergeDeleteEntries.push_back(
@@ -713,12 +715,13 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 【1-1 不同类型】末尾 subFlick + 目标 Hold
                             // → 将 Hold 作为最后一个 seg 加入
                             NoteComponent::SubNote holdSeg;
-                            holdSeg.type       = ::MMM::NoteType::HOLD;
-                            holdSeg.timestamp  = tailTime;  // 修复微小时间差
-                            holdSeg.duration   = nc.m_duration;
-                            holdSeg.trackIndex = tailTrack;
-                            holdSeg.dtrack     = 0;
-                            holdSeg.metadata   = nc.m_metadata;
+                            holdSeg.type         = ::MMM::NoteType::HOLD;
+                            holdSeg.timestamp    = tailTime;  // 修复微小时间差
+                            holdSeg.duration     = nc.m_duration;
+                            holdSeg.trackIndex   = tailTrack;
+                            holdSeg.dtrack       = 0;
+                            holdSeg.metadata     = nc.m_metadata;
+                            holdSeg.customColors = nc.m_customColors;
                             segments.push_back(holdSeg);
 
                             mergeDeleteEntries.push_back(
@@ -983,17 +986,9 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         mergeDeleteEntries.push_back({ parentEnt, std::nullopt, note });
 
         for ( size_t i = 0; i < note.m_subNotes.size(); ++i ) {
-            const auto&   s = note.m_subNotes[i];
-            NoteComponent subNC;
-            subNC.m_type           = s.type;
-            subNC.m_timestamp      = s.timestamp;
-            subNC.m_duration       = s.duration;
-            subNC.m_trackIndex     = s.trackIndex;
-            subNC.m_dtrack         = s.dtrack;
-            subNC.m_metadata       = s.metadata;
-            subNC.m_isSubNote      = true;
-            subNC.m_parentPolyline = parentEnt;
-            subNC.m_subIndex       = static_cast<int>(i);
+            const auto&   s     = note.m_subNotes[i];
+            NoteComponent subNC = makeNoteComponentFromSubNote(
+                s, true, parentEnt, static_cast<int>(i));
 
             entt::entity subEnt = ctx.noteRegistry.create();
             mergeDeleteEntries.push_back({ subEnt, std::nullopt, subNC });
@@ -1163,16 +1158,18 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                     if ( part.empty() ) return;
                                     if ( part.size() == 1 ) {
                                         auto          s = part[0];
-                                        NoteComponent nextNC;
-                                        nextNC.m_type           = s.type;
-                                        nextNC.m_timestamp      = s.timestamp;
-                                        nextNC.m_duration       = s.duration;
-                                        nextNC.m_trackIndex     = s.trackIndex;
-                                        nextNC.m_dtrack         = s.dtrack;
-                                        nextNC.m_metadata       = s.metadata;
-                                        nextNC.m_isSubNote      = false;
-                                        nextNC.m_parentPolyline = entt::null;
-                                        nextNC.m_subIndex       = -1;
+                                        NoteComponent nextNC =
+                                            makeNoteComponentFromSubNote(
+                                                s, false, entt::null, -1);
+                                        if ( !hasAnyNoteColorOverride(
+                                                 nextNC.m_customColors) &&
+                                             hasAnyNoteColorOverride(
+                                                 nc.m_customColors) ) {
+                                            nextNC.m_customColors =
+                                                nc.m_customColors;
+                                            writeNoteColorOverridesToMetadata(
+                                                nextNC);
+                                        }
 
                                         entt::entity newEnt =
                                             ctx.noteRegistry.create();
@@ -1186,9 +1183,11 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                             part.front().timestamp;
                                         nextNC.m_trackIndex =
                                             part.front().trackIndex;
-                                        nextNC.m_duration       = 0.0;
-                                        nextNC.m_dtrack         = 0;
-                                        nextNC.m_metadata       = nc.m_metadata;
+                                        nextNC.m_duration = 0.0;
+                                        nextNC.m_dtrack   = 0;
+                                        nextNC.m_metadata = nc.m_metadata;
+                                        nextNC.m_customColors =
+                                            nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
@@ -1203,17 +1202,12 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         for ( size_t i = 0; i < part.size();
                                               ++i ) {
                                             const auto&   s = part[i];
-                                            NoteComponent subNC;
-                                            subNC.m_type       = s.type;
-                                            subNC.m_timestamp  = s.timestamp;
-                                            subNC.m_duration   = s.duration;
-                                            subNC.m_trackIndex = s.trackIndex;
-                                            subNC.m_dtrack     = s.dtrack;
-                                            subNC.m_metadata   = s.metadata;
-                                            subNC.m_isSubNote  = true;
-                                            subNC.m_parentPolyline = parentEnt;
-                                            subNC.m_subIndex =
-                                                static_cast<int>(i);
+                                            NoteComponent subNC =
+                                                makeNoteComponentFromSubNote(
+                                                    s,
+                                                    true,
+                                                    parentEnt,
+                                                    static_cast<int>(i));
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();
@@ -1294,16 +1288,18 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                     if ( part.empty() ) return;
                                     if ( part.size() == 1 ) {
                                         auto          s = part[0];
-                                        NoteComponent nextNC;
-                                        nextNC.m_type           = s.type;
-                                        nextNC.m_timestamp      = s.timestamp;
-                                        nextNC.m_duration       = s.duration;
-                                        nextNC.m_trackIndex     = s.trackIndex;
-                                        nextNC.m_dtrack         = s.dtrack;
-                                        nextNC.m_metadata       = s.metadata;
-                                        nextNC.m_isSubNote      = false;
-                                        nextNC.m_parentPolyline = entt::null;
-                                        nextNC.m_subIndex       = -1;
+                                        NoteComponent nextNC =
+                                            makeNoteComponentFromSubNote(
+                                                s, false, entt::null, -1);
+                                        if ( !hasAnyNoteColorOverride(
+                                                 nextNC.m_customColors) &&
+                                             hasAnyNoteColorOverride(
+                                                 nc.m_customColors) ) {
+                                            nextNC.m_customColors =
+                                                nc.m_customColors;
+                                            writeNoteColorOverridesToMetadata(
+                                                nextNC);
+                                        }
 
                                         entt::entity newEnt =
                                             ctx.noteRegistry.create();
@@ -1317,9 +1313,11 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                             part.front().timestamp;
                                         nextNC.m_trackIndex =
                                             part.front().trackIndex;
-                                        nextNC.m_duration       = 0.0;
-                                        nextNC.m_dtrack         = 0;
-                                        nextNC.m_metadata       = nc.m_metadata;
+                                        nextNC.m_duration = 0.0;
+                                        nextNC.m_dtrack   = 0;
+                                        nextNC.m_metadata = nc.m_metadata;
+                                        nextNC.m_customColors =
+                                            nc.m_customColors;
                                         nextNC.m_isSubNote      = false;
                                         nextNC.m_parentPolyline = entt::null;
                                         nextNC.m_subIndex       = -1;
@@ -1334,17 +1332,12 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         for ( size_t i = 0; i < part.size();
                                               ++i ) {
                                             const auto&   s = part[i];
-                                            NoteComponent subNC;
-                                            subNC.m_type       = s.type;
-                                            subNC.m_timestamp  = s.timestamp;
-                                            subNC.m_duration   = s.duration;
-                                            subNC.m_trackIndex = s.trackIndex;
-                                            subNC.m_dtrack     = s.dtrack;
-                                            subNC.m_metadata   = s.metadata;
-                                            subNC.m_isSubNote  = true;
-                                            subNC.m_parentPolyline = parentEnt;
-                                            subNC.m_subIndex =
-                                                static_cast<int>(i);
+                                            NoteComponent subNC =
+                                                makeNoteComponentFromSubNote(
+                                                    s,
+                                                    true,
+                                                    parentEnt,
+                                                    static_cast<int>(i));
 
                                             entt::entity subEnt =
                                                 ctx.noteRegistry.create();

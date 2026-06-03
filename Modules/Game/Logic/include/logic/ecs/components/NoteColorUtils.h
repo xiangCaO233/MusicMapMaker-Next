@@ -29,8 +29,7 @@ inline std::string_view noteColorMetadataKey(NoteColorSlot slot)
 }
 
 /// @brief 判断颜色槽位是否属于指定物件类型。
-inline bool noteColorSlotAppliesToType(::MMM::NoteType type,
-                                       NoteColorSlot    slot)
+inline bool noteColorSlotAppliesToType(::MMM::NoteType type, NoteColorSlot slot)
 {
     switch ( type ) {
     case ::MMM::NoteType::NOTE: return slot == NoteColorSlot::Tap;
@@ -143,8 +142,8 @@ inline std::optional<glm::vec4> getNoteMetadataColor(
 }
 
 /// @brief 写入或清除 NoteMetadata 中的可选自定义颜色。
-inline void setNoteMetadataColor(::MMM::NoteMetadata& metadata,
-                                 NoteColorSlot        slot,
+inline void setNoteMetadataColor(::MMM::NoteMetadata&     metadata,
+                                 NoteColorSlot            slot,
                                  std::optional<glm::vec4> color)
 {
     auto key = std::string(noteColorMetadataKey(slot));
@@ -179,9 +178,8 @@ inline std::optional<glm::vec4> getNoteColorOverride(
 }
 
 /// @brief 设置某个槽位的缓存自定义颜色。
-inline void setNoteColorOverride(NoteColorOverrides&        colors,
-                                 NoteColorSlot              slot,
-                                 std::optional<glm::vec4>   color)
+inline void setNoteColorOverride(NoteColorOverrides& colors, NoteColorSlot slot,
+                                 std::optional<glm::vec4> color)
 {
     switch ( slot ) {
     case NoteColorSlot::Tap: colors.tap = color; break;
@@ -202,16 +200,15 @@ inline bool hasAnyNoteColorOverride(const NoteColorOverrides& colors)
 }
 
 /// @brief 读取 NoteComponent 上某个槽位的缓存自定义颜色。
-inline std::optional<glm::vec4> getNoteColorOverride(
-    const NoteComponent& note, NoteColorSlot slot)
+inline std::optional<glm::vec4> getNoteColorOverride(const NoteComponent& note,
+                                                     NoteColorSlot        slot)
 {
     return getNoteColorOverride(note.m_customColors, slot);
 }
 
 /// @brief 按槽位解析颜色；没有自定义颜色时返回 fallback。
-inline glm::vec4 resolveNoteColor(const NoteComponent& note,
-                                  NoteColorSlot        slot,
-                                  glm::vec4            fallback)
+inline glm::vec4 resolveNoteColor(const NoteComponent& note, NoteColorSlot slot,
+                                  glm::vec4 fallback)
 {
     if ( auto color = getNoteColorOverride(note, slot) ) return *color;
     return fallback;
@@ -231,37 +228,121 @@ inline void writeNoteColorOverridesToMetadata(NoteComponent& note)
     }
 }
 
+/// @brief 将折线子物件的自定义颜色同步写入 metadata。
+/// @param note 需要同步颜色 metadata 的子物件数据。
+inline void writeNoteColorOverridesToMetadata(NoteComponent::SubNote& note)
+{
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        setNoteMetadataColor(note.metadata,
+                             slot,
+                             noteColorSlotAppliesToType(note.type, slot)
+                                 ? getNoteColorOverride(note.customColors, slot)
+                                 : std::nullopt);
+    }
+}
+
 /// @brief 将 metadata 中的颜色解析到 NoteComponent 缓存。
 inline void loadNoteColorOverridesFromMetadata(NoteComponent& note)
 {
     for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
         auto slot = static_cast<NoteColorSlot>(i);
+        setNoteColorOverride(note.m_customColors,
+                             slot,
+                             getNoteMetadataColor(note.m_metadata, slot));
+    }
+}
+
+/// @brief 将 metadata 中的颜色解析到折线子物件缓存。
+/// @param note 需要解析颜色 metadata 的子物件数据。
+inline void loadNoteColorOverridesFromMetadata(NoteComponent::SubNote& note)
+{
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
         setNoteColorOverride(
-            note.m_customColors, slot, getNoteMetadataColor(note.m_metadata, slot));
+            note.customColors, slot, getNoteMetadataColor(note.metadata, slot));
     }
 }
 
 /// @brief 设置 NoteComponent 的自定义颜色，同时保持 metadata 同步。
-inline void setNoteColorOverride(NoteComponent&            note,
-                                 NoteColorSlot             slot,
-                                 std::optional<glm::vec4>  color)
+inline void setNoteColorOverride(NoteComponent& note, NoteColorSlot slot,
+                                 std::optional<glm::vec4> color)
 {
     setNoteColorOverride(note.m_customColors, slot, color);
     setNoteMetadataColor(note.m_metadata, slot, color);
 }
 
+/// @brief 设置折线子物件的自定义颜色，同时保持 metadata 同步。
+/// @param note 需要修改的折线子物件。
+/// @param slot 颜色槽位。
+/// @param color 自定义颜色；为空时清除该槽位。
+inline void setNoteColorOverride(NoteComponent::SubNote&  note,
+                                 NoteColorSlot            slot,
+                                 std::optional<glm::vec4> color)
+{
+    setNoteColorOverride(note.customColors, slot, color);
+    setNoteMetadataColor(note.metadata, slot, color);
+}
+
 /// @brief 将一组颜色覆盖应用到 NoteComponent，并写入 metadata。
-inline void applyNoteColorOverrides(NoteComponent&              note,
-                                    const NoteColorOverrides&   colors)
+inline void applyNoteColorOverrides(NoteComponent&            note,
+                                    const NoteColorOverrides& colors)
 {
     for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
         auto slot = static_cast<NoteColorSlot>(i);
         if ( noteColorSlotAppliesToType(note.m_type, slot) ) {
-            setNoteColorOverride(note, slot, getNoteColorOverride(colors, slot));
+            setNoteColorOverride(
+                note, slot, getNoteColorOverride(colors, slot));
         } else {
             setNoteColorOverride(note, slot, std::nullopt);
         }
     }
+}
+
+/// @brief 将一组颜色覆盖应用到折线子物件，并写入 metadata。
+/// @param note 需要修改的折线子物件。
+/// @param colors 新的颜色覆盖表。
+inline void applyNoteColorOverrides(NoteComponent::SubNote&   note,
+                                    const NoteColorOverrides& colors)
+{
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        if ( noteColorSlotAppliesToType(note.type, slot) ) {
+            setNoteColorOverride(
+                note, slot, getNoteColorOverride(colors, slot));
+        } else {
+            setNoteColorOverride(note, slot, std::nullopt);
+        }
+    }
+}
+
+/// @brief 将折线子物件数据转换为可注册的 NoteComponent。
+/// @param sub 子物件数据源。
+/// @param isSubNote 是否作为折线子实体注册。
+/// @param parentPolyline 父折线实体。
+/// @param subIndex 子物件索引。
+/// @return 带完整颜色缓存和 metadata 的音符组件。
+inline NoteComponent makeNoteComponentFromSubNote(
+    const NoteComponent::SubNote& sub, bool isSubNote,
+    entt::entity parentPolyline, int subIndex)
+{
+    NoteComponent::SubNote normalizedSub = sub;
+    if ( !hasAnyNoteColorOverride(normalizedSub.customColors) ) {
+        loadNoteColorOverridesFromMetadata(normalizedSub);
+    }
+
+    NoteComponent note;
+    note.m_type           = normalizedSub.type;
+    note.m_timestamp      = normalizedSub.timestamp;
+    note.m_duration       = normalizedSub.duration;
+    note.m_trackIndex     = normalizedSub.trackIndex;
+    note.m_dtrack         = normalizedSub.dtrack;
+    note.m_metadata       = normalizedSub.metadata;
+    note.m_customColors   = normalizedSub.customColors;
+    note.m_isSubNote      = isSubNote;
+    note.m_parentPolyline = parentPolyline;
+    note.m_subIndex       = subIndex;
+    return note;
 }
 
 }  // namespace MMM::Logic
