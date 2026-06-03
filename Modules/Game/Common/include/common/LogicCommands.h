@@ -1,11 +1,15 @@
 #pragma once
 
 #include "config/EditorConfig.h"
+#include "common/NoteColor.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
+#include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -230,6 +234,34 @@ struct CmdChangeTool {
     EditTool tool;
 };
 
+/// @brief 设置画笔当前使用的自定义音符颜色。
+struct CmdSetBrushNoteColor {
+    /// @brief 要修改的音符颜色槽位。
+    NoteColorSlot             slot;
+    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    std::optional<glm::vec4>  color;
+};
+
+/// @brief 将自定义音符颜色应用到当前选中物件。
+struct CmdApplyNoteColorToSelection {
+    /// @brief 要修改的音符颜色槽位。
+    NoteColorSlot             slot;
+    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    std::optional<glm::vec4>  color;
+};
+
+/// @brief 设置画笔当前使用的完整音符调色盘。
+struct CmdSetBrushNotePalette {
+    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
+/// @brief 将完整音符调色盘应用到当前选中物件。
+struct CmdApplyNotePaletteToSelection {
+    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
 /**
  * @brief 撤销指令
  */
@@ -400,12 +432,14 @@ using LogicCommand = std::variant<
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
     CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
-    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSaveBeatmap,
-    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdImportAudio, CmdUpdateAudioResource,
-    CmdRemoveAudioResource, CmdRemoveBeatmap>;
+    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
+    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdApplyNotePaletteToSelection, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
+    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
+    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
+    CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

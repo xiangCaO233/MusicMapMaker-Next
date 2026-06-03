@@ -1799,7 +1799,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                     [](const ::MMM::NoteMetadata& meta) -> std::string {
                     std::string result;
                     // 按 NoteMetadataType 排序遍历
-                    for ( int typeIdx = 0; typeIdx < 3; ++typeIdx ) {
+                    for ( int typeIdx = 0; typeIdx < 4; ++typeIdx ) {
                         auto metaType =
                             static_cast<::MMM::NoteMetadataType>(typeIdx);
                         auto it = meta.note_properties.find(metaType);

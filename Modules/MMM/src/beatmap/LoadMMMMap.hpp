@@ -49,6 +49,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         mtype = NoteMetadataType::OSU;
                     else if ( it.key() == "malody" )
                         mtype = NoteMetadataType::MALODY;
+                    else if ( it.key() == "mmm" )
+                        mtype = NoteMetadataType::MMM;
                     else
                         continue;
                     auto& props = note.m_metadata.note_properties[mtype];

@@ -809,6 +809,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->brush.track    = m_ctx->brushState.track;
             snapshot->brush.dtrack   = m_ctx->brushState.dtrack;
             snapshot->brush.type     = m_ctx->brushState.type;
+            snapshot->brush.customColors = m_ctx->brushState.customColors;
             snapshot->brush.polylineSegments =
                 m_ctx->brushState.polylineSegments;
         }

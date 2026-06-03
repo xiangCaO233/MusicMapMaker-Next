@@ -2,6 +2,7 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
@@ -541,6 +542,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_trackIndex = ctx.brushState.track;
     note.m_dtrack     = ctx.brushState.dtrack;
     note.m_type       = ctx.brushState.type;
+    applyNoteColorOverrides(note, ctx.brushState.customColors);
 
     // 折线尾部结合所需的删除条目列表 (声明在外部以便后续使用)
     std::vector<BatchNoteAction::Entry> mergeDeleteEntries;

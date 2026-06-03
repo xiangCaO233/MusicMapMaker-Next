@@ -245,6 +245,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 sourceName = "osu";
             else if ( type == NoteMetadataType::MALODY )
                 sourceName = "malody";
+            else if ( type == NoteMetadataType::MMM )
+                sourceName = "mmm";
 
             if ( sourceName.empty() ) continue;
 

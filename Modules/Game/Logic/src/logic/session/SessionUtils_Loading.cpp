@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -127,6 +128,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             0.0,
             track);
         nc.m_metadata = note.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -148,6 +150,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             hold.m_duration / 1000.0,   // 毫秒转秒
             track);
         nc.m_metadata = hold.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -170,6 +173,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                                     track,
                                                     flick.m_dtrack);
         nc.m_metadata = flick.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -186,6 +190,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         auto& comp = ctx.noteRegistry.emplace<NoteComponent>(
             entity, polyline.m_type, polyline.m_timestamp / 1000.0, 0.0, track);
         comp.m_metadata = polyline.m_metadata;
+        loadNoteColorOverridesFromMetadata(comp);
 
         // 填充子物件并标记它们为 SubNote
         for ( const auto& subNoteRef : polyline.m_subNotes ) {

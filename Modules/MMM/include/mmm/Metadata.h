@@ -116,6 +116,7 @@ enum class NoteMetadataType {
     OSU,
     MALODY,
     RM,
+    MMM,
 };
 
 class NoteMetadata

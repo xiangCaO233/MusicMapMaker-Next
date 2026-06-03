@@ -5,6 +5,7 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/render/Batcher.h"
@@ -252,6 +253,21 @@ void InteractionController::handleCommand(const CmdUpdateTrackCount& cmd)
 void InteractionController::handleCommand(const CmdChangeTool& cmd)
 {
     m_ctx.currentTool = cmd.tool;
+}
+
+void InteractionController::handleCommand(const CmdSetBrushNoteColor& cmd)
+{
+    setNoteColorOverride(m_ctx.brushState.customColors, cmd.slot, cmd.color);
+}
+
+void InteractionController::handleCommand(const CmdSetBrushNotePalette& cmd)
+{
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        setNoteColorOverride(m_ctx.brushState.customColors,
+                             slot,
+                             cmd.colors[i]);
+    }
 }
 
 void InteractionController::handleCommand(const CmdStartMarquee& cmd)

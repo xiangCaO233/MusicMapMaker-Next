@@ -43,6 +43,14 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdChangeTool& cmd);
 
+    /// @brief 处理设置画笔自定义颜色的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdSetBrushNoteColor& cmd);
+
+    /// @brief 处理设置画笔完整调色盘的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdSetBrushNotePalette& cmd);
+
     /// @brief 处理更新鼠标位置的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetMousePosition& cmd);

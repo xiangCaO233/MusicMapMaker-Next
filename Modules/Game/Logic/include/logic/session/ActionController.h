@@ -42,6 +42,14 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdAlignSelectedToCommonBeats& cmd);
 
+    /// @brief 处理将自定义颜色应用到选中音符的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdApplyNoteColorToSelection& cmd);
+
+    /// @brief 处理将完整调色盘应用到选中音符的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdApplyNotePaletteToSelection& cmd);
+
     /// @brief 处理粘贴实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdPaste& cmd);

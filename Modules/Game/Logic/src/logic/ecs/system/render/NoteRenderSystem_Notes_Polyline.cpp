@@ -42,9 +42,10 @@ void NoteRenderSystem::renderPolyline(
     const Config::EditorConfig& config, RenderSnapshot* snapshot,
     double currentAbsY, double currentTime, float judgmentLineY, float leftX,
     float rightX, float topY, float bottomY, float singleTrackW,
-    float renderScaleY, glm::vec4 colorHold, glm::vec4 colorNode,
-    glm::vec4 colorArrow, entt::entity entity, bool generateHitboxes,
-    HoverPart glowPart, int glowSubIndex)
+    float renderScaleY, glm::vec4 colorHead, glm::vec4 colorHoldBody,
+    glm::vec4 colorHoldEnd, glm::vec4 colorNode, glm::vec4 colorArrow,
+    entt::entity entity, bool generateHitboxes, HoverPart glowPart,
+    int glowSubIndex)
 {
     if ( !cache ) return;
 
@@ -67,7 +68,7 @@ void NoteRenderSystem::renderPolyline(
                      bottomY,
                      noteW,
                      noteH,
-                     colorHold,
+                     colorHoldBody,
                      entity,
                      generateHitboxes,
                      glowPart,
@@ -110,7 +111,7 @@ void NoteRenderSystem::renderPolyline(
                      bottomY,
                      noteW,
                      noteH,
-                     colorHold,
+                     colorHead,
                      config,
                      entity,
                      generateHitboxes,
@@ -132,7 +133,7 @@ void NoteRenderSystem::renderPolyline(
                            bottomY,
                            noteW,
                            noteH,
-                           colorHold,
+                           colorHoldEnd,
                            colorArrow,
                            config,
                            entity,
@@ -425,7 +426,7 @@ void NoteRenderSystem::drawPolylineHead(
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
-    glm::vec4 colorHold, const Config::EditorConfig& config,
+    glm::vec4 colorHead, const Config::EditorConfig& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex)
 {
@@ -463,10 +464,10 @@ void NoteRenderSystem::drawPolylineHead(
     float     headX    = leftX + firstSub.trackIndex * singleTrackW +
                          (singleTrackW - headSize.x) * 0.5f;
 
-    glm::vec4 finalHeadColor = colorHold;
+    glm::vec4 finalHeadColor = colorHead;
     if ( snapshot->erasingEntities.count(entity) &&
          (snapshot->erasingSubIndex == 0 || snapshot->erasingSubIndex == -1) ) {
-        finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+        finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHead.a * 0.5f };
     }
 
     batcher.setTexture(TextureID::Note);
@@ -494,7 +495,7 @@ void NoteRenderSystem::drawPolylineDecoration(
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
-    glm::vec4 colorHold, glm::vec4 colorArrow,
+    glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
     const Config::EditorConfig& config, entt::entity entity,
     bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
 {
@@ -586,12 +587,12 @@ void NoteRenderSystem::drawPolylineDecoration(
             float endX = leftX + last.trackIndex * singleTrackW +
                          (singleTrackW - endSize.x) * 0.5f;
 
-            glm::vec4 finalEndColor = colorHold;
+            glm::vec4 finalEndColor = colorHoldEnd;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
                   snapshot->erasingSubIndex == 0 ||
                   snapshot->erasingSubIndex == -1) ) {
-                finalEndColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+                finalEndColor = { 1.0f, 0.2f, 0.2f, colorHoldEnd.a * 0.5f };
             }
 
             batcher.setTexture(TextureID::HoldEnd);

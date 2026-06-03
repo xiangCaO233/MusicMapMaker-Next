@@ -5,12 +5,14 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -49,6 +51,18 @@ void mirrorNoteComponent(NoteComponent& note, int trackCount)
             }
         }
     }
+}
+
+/// @brief 将调色盘命令颜色转换为 NoteColorOverrides。
+NoteColorOverrides makeNoteColorOverrides(
+    const std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT>& colors)
+{
+    NoteColorOverrides overrides;
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        setNoteColorOverride(overrides, slot, colors[i]);
+    }
+    return overrides;
 }
 
 // --- Editing Handlers ---
@@ -219,6 +233,60 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
                                               count,
                                               TR("ui.status.info.items"));
     }
+}
+
+void ActionController::handleCommand(const CmdApplyNoteColorToSelection& cmd)
+{
+    std::vector<BatchNoteAction::Entry> entries;
+
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( !ic.isSelected ) continue;
+
+        const auto& oldNote = view.get<NoteComponent>(entity);
+        if ( oldNote.m_isSubNote ) continue;
+
+        auto newNote = oldNote;
+        setNoteColorOverride(newNote, cmd.slot, cmd.color);
+        entries.push_back({ entity, oldNote, newNote });
+    }
+
+    if ( entries.empty() ) return;
+
+    auto actionName =
+        cmd.color.has_value() ? "Set Note Color" : "Clear Note Color";
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    actionName);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage =
+        cmd.color.has_value() ? "Note color applied" : "Note color cleared";
+}
+
+void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
+{
+    std::vector<BatchNoteAction::Entry> entries;
+    auto colors = makeNoteColorOverrides(cmd.colors);
+
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( !ic.isSelected ) continue;
+
+        const auto& oldNote = view.get<NoteComponent>(entity);
+        if ( oldNote.m_isSubNote ) continue;
+
+        auto newNote = oldNote;
+        applyNoteColorOverrides(newNote, colors);
+        entries.push_back({ entity, oldNote, newNote });
+    }
+
+    if ( entries.empty() ) return;
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Set Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette applied";
 }
 
 void ActionController::handleCommand(const CmdPaste& cmd)

@@ -49,7 +49,8 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                                   const Config::EditorConfig&        config,
                                   RenderSnapshot* snapshot, float x, float w,
                                   float h, float singleTrackW,
-                                  glm::vec4 color, const ScrollCache* cache,
+                                  glm::vec4 headColor, glm::vec4 bodyColor,
+                                  glm::vec4 endColor, const ScrollCache* cache,
                                   double currentAbsY, float judgmentLineY,
                                   float renderScaleY,
                                   HoverPart glowPart)
@@ -84,7 +85,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                              { bodyX + bodySize.x, sy },
                              { bodyX + bodySize.x, ey },
                              { bodyX, ey },
-                             color);
+                             bodyColor);
     }
 
     // 2. Head
@@ -97,7 +98,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
             headSize.y,
             { getTexAspect(snapshot, TextureID::Note), 1.0f },
             config.visual.noteFillMode,
-            color);
+            headColor);
     }
 
     // 3. End
@@ -110,7 +111,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
             endSize.y,
             { getTexAspect(snapshot, TextureID::HoldEnd), 1.0f },
             config.visual.noteFillMode,
-            color);
+            endColor);
     }
 }
 
@@ -119,7 +120,8 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    const Config::EditorConfig&        config,
                                    RenderSnapshot* snapshot, float x, float y,
                                    float w, float h, float singleTrackW,
-                                   glm::vec4 color, glm::vec4 arrowColor,
+                                   glm::vec4 headColor, glm::vec4 bodyColor,
+                                   glm::vec4 arrowColor,
                                    HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
@@ -139,7 +141,8 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                startTrack * singleTrackW + singleTrackW * 0.5f;
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
-            batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, color);
+            batcher.pushQuad(
+                bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
         }
     }
 
@@ -153,7 +156,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
             headSize.y,
             { getTexAspect(snapshot, TextureID::Note), 1.0f },
             config.visual.noteFillMode,
-            color);
+            headColor);
     }
 
     // 3. Arrow

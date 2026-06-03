@@ -1,7 +1,10 @@
 #pragma once
+#include <array>
+#include <cstddef>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 namespace MMM::Config
 {
@@ -195,6 +198,58 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowGap      = j.value("windowGap", 8.0f);
     c.itemSpacing    = j.value("itemSpacing", 8.0f);
     c.windowPadding  = j.value("windowPadding", 8.0f);
+}
+
+/// @brief 音符调色盘方案中的颜色槽位数量。
+inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
+
+/// @brief 用户保存的音符调色盘方案。
+struct NoteColorPaletteScheme {
+    /// @brief 方案显示名称。
+    std::string name{ "Palette" };
+
+    /// @brief 方案颜色，顺序与工具栏音符颜色槽位一致。
+    std::vector<std::array<float, 4>> colors;
+};
+
+inline void to_json(nlohmann::json& j, const NoteColorPaletteScheme& c)
+{
+    j = nlohmann::json{ { "name", c.name }, { "colors", c.colors } };
+}
+
+inline void from_json(const nlohmann::json& j, NoteColorPaletteScheme& c)
+{
+    c.name   = j.value("name", std::string("Palette"));
+    c.colors = j.value("colors", std::vector<std::array<float, 4>>());
+    if ( c.colors.size() > NOTE_COLOR_PALETTE_SLOT_COUNT ) {
+        c.colors.resize(NOTE_COLOR_PALETTE_SLOT_COUNT);
+    }
+}
+
+/// @brief 音符调色盘持久化配置。
+struct NoteColorPaletteConfig {
+    /// @brief 当前选中的方案索引。
+    std::size_t activeSchemeIndex{ 0 };
+
+    /// @brief 用户保存的调色盘方案列表。
+    std::vector<NoteColorPaletteScheme> schemes;
+};
+
+inline void to_json(nlohmann::json& j, const NoteColorPaletteConfig& c)
+{
+    j = nlohmann::json{ { "activeSchemeIndex", c.activeSchemeIndex },
+                        { "schemes", c.schemes } };
+}
+
+inline void from_json(const nlohmann::json& j, NoteColorPaletteConfig& c)
+{
+    c.activeSchemeIndex = j.value("activeSchemeIndex", std::size_t{ 0 });
+    c.schemes = j.value("schemes", std::vector<NoteColorPaletteScheme>());
+    if ( c.schemes.empty() ) {
+        c.activeSchemeIndex = 0;
+    } else if ( c.activeSchemeIndex >= c.schemes.size() ) {
+        c.activeSchemeIndex = 0;
+    }
 }
 
 enum class FrameLimitPreference {
@@ -497,6 +552,9 @@ struct EditorSettings {
 
     /// @brief UI 审美/视觉表现配置
     UIAestheticsConfig aesthetics;
+
+    /// @brief 音符调色盘方案配置。
+    NoteColorPaletteConfig noteColorPalettes;
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
@@ -541,7 +599,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "preferredCjkFont", c.preferredCjkFont },
                         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
                         { "snapFloor", c.snapFloor },
-                        { "aesthetics", c.aesthetics } };
+                        { "aesthetics", c.aesthetics },
+                        { "noteColorPalettes", c.noteColorPalettes } };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -598,6 +657,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
     c.snapFloor            = j.value("snapFloor", false);
     c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
+    c.noteColorPalettes =
+        j.value("noteColorPalettes", NoteColorPaletteConfig());
 }
 
 }  // namespace MMM::Config

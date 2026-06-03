@@ -294,6 +294,10 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdMirrorSelected> ||
                                std::is_same_v<T,
                                               CmdAlignSelectedToCommonBeats> ||
+                               std::is_same_v<T,
+                                              CmdApplyNoteColorToSelection> ||
+                               std::is_same_v<T,
+                                              CmdApplyNotePaletteToSelection> ||
                                std::is_same_v<T, CmdEndBrush> ||
                                std::is_same_v<T, CmdEndErase> ||
                                std::is_same_v<T, CmdLoadBeatmap> ||
@@ -406,6 +410,9 @@ bool BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdChangeTool> ||
                                     std::is_same_v<T, CmdSetMousePosition> ||
                                     std::is_same_v<T, CmdUpdateTrackCount> ||
+                                    std::is_same_v<T, CmdSetBrushNoteColor> ||
+                                    std::is_same_v<T,
+                                                   CmdSetBrushNotePalette> ||
                                     std::is_same_v<T, CmdStartMarquee> ||
                                     std::is_same_v<T, CmdUpdateMarquee> ||
                                     std::is_same_v<T, CmdEndMarquee> ||
@@ -426,6 +433,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdApplyNoteColorToSelection> ||
+                    std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
                     std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||

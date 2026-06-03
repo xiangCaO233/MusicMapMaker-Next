@@ -38,7 +38,6 @@ int main(int argc, char* argv[])
     SkinManager::instance().loadSkin(
         Config::pathToUtf8(Config::AppPaths::defaultSkinFilePath()));
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
-    XINFO("background color:[{},{},{},{}]", r, g, b, a);
 
     XINFO(TR("tips.welcome"));
 

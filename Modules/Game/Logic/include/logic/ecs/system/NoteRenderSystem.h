@@ -145,7 +145,9 @@ private:
         float              noteH;
         float              baseAspect;
         glm::vec4          colorTap;
+        glm::vec4          colorHead;
         glm::vec4          colorHold;
+        glm::vec4          colorEnd;
         glm::vec4          colorNode;
         glm::vec4          colorArrow;
         const ScrollCache* cache;
@@ -209,7 +211,8 @@ private:
     static void renderHold(Batcher& batcher, const NoteComponent& note,
                            const Config::EditorConfig& config,
                            RenderSnapshot* snapshot, float x, float w, float h,
-                           float singleTrackW, glm::vec4 color,
+                           float singleTrackW, glm::vec4 headColor,
+                           glm::vec4 bodyColor, glm::vec4 endColor,
                            const ScrollCache* cache, double currentAbsY,
                            float judgmentLineY, float renderScaleY,
                            HoverPart glowPart = HoverPart::None);
@@ -219,8 +222,8 @@ private:
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
                             const Config::EditorConfig& config,
                             RenderSnapshot* snapshot, float x, float y, float w,
-                            float h, float singleTrackW, glm::vec4 color,
-                            glm::vec4 arrowColor,
+                            float h, float singleTrackW, glm::vec4 headColor,
+                            glm::vec4 bodyColor, glm::vec4 arrowColor,
                             HoverPart glowPart = HoverPart::None);
 
     /// @warning 热路径：单个 Polyline
@@ -230,7 +233,8 @@ private:
         const Config::EditorConfig& config, RenderSnapshot* snapshot,
         double currentAbsY, double currentTime, float judgmentLineY,
         float leftX, float rightX, float topY, float bottomY,
-        float singleTrackW, float renderScaleY, glm::vec4 colorHold,
+        float singleTrackW, float renderScaleY, glm::vec4 colorHead,
+        glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd,
         glm::vec4 colorNode, glm::vec4 colorArrow,
         entt::entity entity = entt::null, bool generateHitboxes = false,
         HoverPart glowPart = HoverPart::None, int glowSubIndex = -1);
@@ -284,7 +288,7 @@ private:
                                  float leftX, float singleTrackW,
                                  float renderScaleY, double currentAbsY,
                                  double currentTime, float topY, float bottomY,
-                                 float noteW, float noteH, glm::vec4 colorHold,
+                                 float noteW, float noteH, glm::vec4 colorHead,
                                  const Config::EditorConfig& config,
                                  entt::entity entity, bool generateHitboxes,
                                  HoverPart glowPart, int glowSubIndex);
@@ -295,7 +299,7 @@ private:
         RenderSnapshot* snapshot, float judgmentLineY, float leftX,
         float singleTrackW, float renderScaleY, double currentAbsY,
         double currentTime, float topY, float bottomY, float noteW, float noteH,
-        glm::vec4 colorHold, glm::vec4 colorArrow,
+        glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
         const Config::EditorConfig& config, entt::entity entity,
         bool generateHitboxes, HoverPart glowPart, int glowSubIndex);
 

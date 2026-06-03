@@ -250,6 +250,9 @@ struct RenderSnapshot {
         int             dtrack{ 0 };                    ///< Flick 偏移轨道
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };  ///< 物件类型
 
+        /// @brief 笔刷预览使用的自定义颜色。
+        NoteColorOverrides customColors;
+
         // Polyline 子物件预览
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brush;

@@ -3,6 +3,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -141,8 +142,19 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     auto  color_tap = skin.getColor("note_tap");
     ctx.colorTap    = { color_tap.r, color_tap.g, color_tap.b, color_tap.a };
 
+    auto color_head =
+        skin.getData().colors.contains("note_head")
+            ? skin.getColor("note_head")
+            : skin.getColor("note_hold");
+    ctx.colorHead = { color_head.r, color_head.g, color_head.b, color_head.a };
+
     auto color_hold = skin.getColor("note_hold");
     ctx.colorHold = { color_hold.r, color_hold.g, color_hold.b, color_hold.a };
+
+    auto color_end = skin.getData().colors.contains("note_end")
+                         ? skin.getColor("note_end")
+                         : skin.getColor("note_hold");
+    ctx.colorEnd = { color_end.r, color_end.g, color_end.b, color_end.a };
 
     auto color_node = skin.getColor("note_node");
     ctx.colorNode = { color_node.r, color_node.g, color_node.b, color_node.a };
@@ -571,29 +583,43 @@ void NoteRenderSystem::renderNoteBaseLayer(
                         renderScaleY;
         float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
-        // 应用 Alpha 与 选中高亮
-        glm::vec4 curColorTap   = ctx.colorTap;
-        glm::vec4 curColorHold  = ctx.colorHold;
-        glm::vec4 curColorNode  = ctx.colorNode;
-        glm::vec4 curColorArrow = ctx.colorArrow;
+        // 应用自定义颜色、Alpha 与选中高亮。
+        glm::vec4 curColorNote =
+            resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
+        glm::vec4 curColorHead = resolveNoteColor(
+            note, NoteColorSlot::Head, ctx.colorHead);
+        glm::vec4 curColorHoldBody =
+            resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
+        glm::vec4 curColorHoldEnd =
+            resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
+        glm::vec4 curColorNode = resolveNoteColor(
+            note, NoteColorSlot::Node, ctx.colorNode);
+        glm::vec4 curColorArrow =
+            resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
-        if ( isSelected ) {
-            curColorTap  = { 1.0f, 1.0f, 0.4f, 1.0f };
-            curColorHold = { 1.0f, 1.0f, 0.4f, 1.0f };
+        if ( isSelected && !hasAnyNoteColorOverride(note.m_customColors) ) {
+            curColorNote     = { 1.0f, 1.0f, 0.4f, 1.0f };
+            curColorHead     = { 1.0f, 1.0f, 0.4f, 1.0f };
+            curColorHoldBody = { 1.0f, 1.0f, 0.4f, 1.0f };
+            curColorHoldEnd  = { 1.0f, 1.0f, 0.4f, 1.0f };
         }
 
         bool isFullErasing = snapshot->erasingEntities.count(entity) &&
                              (snapshot->erasingSubIndex == -1);
         if ( isFullErasing ) {
-            curColorTap   = { 1.0f, 0.2f, 0.2f, 1.0f };
-            curColorHold  = { 1.0f, 0.2f, 0.2f, 1.0f };
-            curColorNode  = { 1.0f, 0.2f, 0.2f, 1.0f };
-            curColorArrow = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorNote     = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorHead     = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorHoldBody = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorHoldEnd  = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorNode     = { 1.0f, 0.2f, 0.2f, 1.0f };
+            curColorArrow    = { 1.0f, 0.2f, 0.2f, 1.0f };
             alphaMul *= 0.5f;
         }
 
-        curColorTap.a *= alphaMul;
-        curColorHold.a *= alphaMul;
+        curColorNote.a *= alphaMul;
+        curColorHead.a *= alphaMul;
+        curColorHoldBody.a *= alphaMul;
+        curColorHoldEnd.a *= alphaMul;
         curColorNode.a *= alphaMul;
         curColorArrow.a *= alphaMul;
 
@@ -607,7 +633,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteW,
                 ctx.noteH,
                 ctx.baseAspect,
-                curColorTap);
+                curColorNote);
         else if ( note.m_type == ::MMM::NoteType::HOLD )
             NoteRenderSystem::renderHold(
                 batcher,
@@ -618,7 +644,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteW,
                 ctx.noteH,
                 singleTrackW,
-                curColorHold,
+                curColorHead,
+                curColorHoldBody,
+                curColorHoldEnd,
                 ctx.cache,
                 ctx.currentAbsY,
                 judgmentLineY,
@@ -634,7 +662,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 ctx.noteW,
                 ctx.noteH,
                 singleTrackW,
-                curColorHold,
+                curColorHead,
+                curColorHoldBody,
                 curColorArrow);
         else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(ctx.cache,
@@ -651,7 +680,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             curColorHold,
+                                             curColorHead,
+                                             curColorHoldBody,
+                                             curColorHoldEnd,
                                              curColorNode,
                                              curColorArrow,
                                              entity,
@@ -705,6 +736,18 @@ void NoteRenderSystem::renderNoteGlowLayer(
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
+        glm::vec4 glowNote =
+            resolveNoteColor(note, NoteColorSlot::Tap, ctx.colorTap);
+        glm::vec4 glowHead =
+            resolveNoteColor(note, NoteColorSlot::Head, ctx.colorHead);
+        glm::vec4 glowBody =
+            resolveNoteColor(note, NoteColorSlot::Hold, ctx.colorHold);
+        glm::vec4 glowEnd =
+            resolveNoteColor(note, NoteColorSlot::End, ctx.colorEnd);
+        glm::vec4 glowNode =
+            resolveNoteColor(note, NoteColorSlot::Node, ctx.colorNode);
+        glm::vec4 glowArrow =
+            resolveNoteColor(note, NoteColorSlot::FlickArrow, ctx.colorArrow);
 
         if ( note.m_type == ::MMM::NoteType::NOTE )
             NoteRenderSystem::renderTap(
@@ -716,7 +759,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 ctx.noteW,
                 ctx.noteH,
                 ctx.baseAspect,
-                ctx.colorTap);
+                glowNote);
         else if ( note.m_type == ::MMM::NoteType::HOLD )
             NoteRenderSystem::renderHold(
                 glowBatcher,
@@ -727,7 +770,9 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 ctx.noteW,
                 ctx.noteH,
                 singleTrackW,
-                ctx.colorHold,
+                glowHead,
+                glowBody,
+                glowEnd,
                 ctx.cache,
                 ctx.currentAbsY,
                 judgmentLineY,
@@ -744,8 +789,9 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 ctx.noteW,
                 ctx.noteH,
                 singleTrackW,
-                ctx.colorHold,
-                ctx.colorArrow,
+                glowHead,
+                glowBody,
+                glowArrow,
                 glowPart);
         else if ( note.m_type == ::MMM::NoteType::POLYLINE )
             NoteRenderSystem::renderPolyline(ctx.cache,
@@ -762,9 +808,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             ctx.colorHold,
-                                             ctx.colorNode,
-                                             ctx.colorArrow,
+                                             glowHead,
+                                             glowBody,
+                                             glowEnd,
+                                             glowNode,
+                                             glowArrow,
                                              entity,
                                              false,
                                              glowPart,
@@ -1330,19 +1378,33 @@ void NoteRenderSystem::renderBrushPreview(
 
     float trackX = leftX + brush.track * singleTrackW;
 
-    glm::vec4 color = ctx.colorTap;
-    if ( brush.type == ::MMM::NoteType::HOLD ||
-         brush.type == ::MMM::NoteType::POLYLINE ) {
-        color = ctx.colorHold;
-    }
-    color.a *= 0.5f;  // 半透明效果
-
     NoteComponent tempNote;
     tempNote.m_type       = brush.type;
     tempNote.m_timestamp  = brush.time;
     tempNote.m_duration   = brush.duration;
     tempNote.m_trackIndex = brush.track;
     tempNote.m_dtrack     = brush.dtrack;
+    tempNote.m_customColors = brush.customColors;
+
+    glm::vec4 previewNote =
+        resolveNoteColor(tempNote, NoteColorSlot::Tap, ctx.colorTap);
+    glm::vec4 previewHead = resolveNoteColor(
+        tempNote, NoteColorSlot::Head, ctx.colorHead);
+    glm::vec4 previewBody =
+        resolveNoteColor(tempNote, NoteColorSlot::Hold, ctx.colorHold);
+    glm::vec4 previewEnd =
+        resolveNoteColor(tempNote, NoteColorSlot::End, ctx.colorEnd);
+    glm::vec4 previewNode = resolveNoteColor(
+        tempNote, NoteColorSlot::Node, ctx.colorNode);
+    glm::vec4 previewArrow =
+        resolveNoteColor(tempNote, NoteColorSlot::FlickArrow, ctx.colorArrow);
+
+    previewNote.a *= 0.5f;
+    previewHead.a *= 0.5f;
+    previewBody.a *= 0.5f;
+    previewEnd.a *= 0.5f;
+    previewNode.a *= 0.5f;
+    previewArrow.a *= 0.5f;
 
     if ( brush.type == ::MMM::NoteType::NOTE ) {
         NoteRenderSystem::renderTap(batcher,
@@ -1353,7 +1415,7 @@ void NoteRenderSystem::renderBrushPreview(
                                     ctx.noteW,
                                     ctx.noteH,
                                     ctx.baseAspect,
-                                    color);
+                                    previewNote);
     } else if ( brush.type == ::MMM::NoteType::HOLD ) {
         NoteRenderSystem::renderHold(batcher,
                                      tempNote,
@@ -1363,7 +1425,9 @@ void NoteRenderSystem::renderBrushPreview(
                                      ctx.noteW,
                                      ctx.noteH,
                                      singleTrackW,
-                                     color,
+                                     previewHead,
+                                     previewBody,
+                                     previewEnd,
                                      ctx.cache,
                                      ctx.currentAbsY,
                                      judgmentLineY,
@@ -1379,8 +1443,9 @@ void NoteRenderSystem::renderBrushPreview(
             ctx.noteW,
             ctx.noteH,
             singleTrackW,
-            color,
-            ctx.colorArrow * glm::vec4(1, 1, 1, 0.5f));
+            previewHead,
+            previewBody,
+            previewArrow);
     } else if ( brush.type == ::MMM::NoteType::POLYLINE ) {
         tempNote.m_subNotes = brush.polylineSegments;
         if ( !tempNote.m_subNotes.empty() ) {
@@ -1407,9 +1472,11 @@ void NoteRenderSystem::renderBrushPreview(
             bottomY,
             singleTrackW,
             renderScaleY,
-            ctx.colorHold * glm::vec4(1, 1, 1, 0.5f),
-            ctx.colorNode * glm::vec4(1, 1, 1, 0.5f),
-            ctx.colorArrow * glm::vec4(1, 1, 1, 0.5f));
+            previewHead,
+            previewBody,
+            previewEnd,
+            previewNode,
+            previewArrow);
     } else {
         // Fallback debug drawing
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;

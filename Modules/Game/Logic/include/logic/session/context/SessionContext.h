@@ -135,6 +135,9 @@ struct SessionContext {
         float  segmentStartMouseY{ 0.0f };  ///< 当前子段开始时的鼠标 Y 坐标
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
 
+        /// @brief 当前画笔应用到新建物件的自定义颜色。
+        NoteColorOverrides customColors;
+
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brushState;
