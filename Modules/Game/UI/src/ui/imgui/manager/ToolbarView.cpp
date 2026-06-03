@@ -14,10 +14,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <optional>
-#include <utility>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <optional>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -226,6 +226,16 @@ void ToolbarView::update(UIManager* sourceManager)
                        TR("ui.toolbar.draw"),
                        btnSize);
         advanceItem();
+        drawToolButton(ICON_MMM_PAINT_BRUSH,
+                       Logic::EditTool::ColorBrush,
+                       TR("ui.toolbar.color_brush"),
+                       btnSize);
+        advanceItem();
+        drawToolButton(ICON_MMM_ERASER,
+                       Logic::EditTool::ColorEraser,
+                       TR("ui.toolbar.color_eraser"),
+                       btnSize);
+        advanceItem();
 
         ImVec2 sepPos = ImGui::GetCursorScreenPos();
         float  sepH   = 2.0f * dpiScale;
@@ -240,7 +250,8 @@ void ToolbarView::update(UIManager* sourceManager)
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
 
         ImGuiColorEditFlags colorButtonFlags =
-            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_AlphaPreviewHalf;
+            ImGuiColorEditFlags_NoTooltip |
+            ImGuiColorEditFlags_AlphaPreviewHalf;
         if ( ImGui::ColorButton(
                  "##ToolbarNoteColor",
                  toImVec4(m_paletteColors[colorSlotIndex(m_activeColorSlot)]),
@@ -330,7 +341,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -631,11 +642,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -834,7 +845,7 @@ void ToolbarView::update(UIManager* sourceManager)
 void ToolbarView::initializeColorPalette()
 {
     for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-        auto slot = static_cast<Logic::NoteColorSlot>(i);
+        auto slot          = static_cast<Logic::NoteColorSlot>(i);
         m_paletteColors[i] = toVec4(skinColorForSlot(slot));
     }
 
@@ -847,6 +858,7 @@ void ToolbarView::initializeColorPalette()
     } else {
         m_activePaletteSchemeIndex = -1;
         setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
+        pushPaletteToBrush();
     }
     m_colorPaletteInitialized = true;
 }
@@ -870,18 +882,17 @@ void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
     if ( schemeIndex >= paletteConfig.schemes.size() ) return;
 
     for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-        auto slot = static_cast<Logic::NoteColorSlot>(i);
+        auto slot          = static_cast<Logic::NoteColorSlot>(i);
         m_paletteColors[i] = toVec4(skinColorForSlot(slot));
     }
 
     const auto& scheme = paletteConfig.schemes[schemeIndex];
-    std::size_t count =
-        std::min(scheme.colors.size(), m_paletteColors.size());
+    std::size_t count  = std::min(scheme.colors.size(), m_paletteColors.size());
     for ( std::size_t i = 0; i < count; ++i ) {
         m_paletteColors[i] = fromStoredColor(scheme.colors[i]);
     }
 
-    m_activePaletteSchemeIndex = static_cast<int>(schemeIndex);
+    m_activePaletteSchemeIndex      = static_cast<int>(schemeIndex);
     paletteConfig.activeSchemeIndex = schemeIndex;
     setPaletteSchemeNameBuffer(scheme.name);
     pushPaletteToBrush();
@@ -908,8 +919,9 @@ void ToolbarView::savePaletteScheme(bool createNew)
         m_activePaletteSchemeIndex =
             static_cast<int>(paletteConfig.schemes.size() - 1);
     } else {
-        paletteConfig.schemes[static_cast<std::size_t>(
-            m_activePaletteSchemeIndex)] = std::move(scheme);
+        paletteConfig
+            .schemes[static_cast<std::size_t>(m_activePaletteSchemeIndex)] =
+            std::move(scheme);
     }
 
     paletteConfig.activeSchemeIndex =
@@ -946,7 +958,7 @@ std::string ToolbarView::currentPaletteSchemeName() const
     return name;
 }
 
-void ToolbarView::pushColorCommands(Logic::NoteColorSlot      slot,
+void ToolbarView::pushColorCommands(Logic::NoteColorSlot     slot,
                                     std::optional<glm::vec4> color,
                                     bool                     applyToSelection)
 {
@@ -966,20 +978,18 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
     ImVec2 toolbarPos = toolbarWindow->Pos;
 
-    ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    float          viewportTop  = mainViewport->Pos.y;
-    float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    float viewportLeft   = mainViewport->Pos.x;
+    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
+    float          viewportTop    = mainViewport->Pos.y;
+    float          viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
+    float          viewportLeft   = mainViewport->Pos.x;
 
     float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
     float targetY = m_lastColorBtnY;
 
-    float popupW = m_colorPopupWidth > 0.0f
-                       ? m_colorPopupWidth
-                       : std::floor(360.0f * dpiScale);
-    float popupH = m_colorPopupHeight > 0.0f
-                       ? m_colorPopupHeight
-                       : std::floor(360.0f * dpiScale);
+    float popupW  = m_colorPopupWidth > 0.0f ? m_colorPopupWidth
+                                             : std::floor(360.0f * dpiScale);
+    float popupH  = m_colorPopupHeight > 0.0f ? m_colorPopupHeight
+                                              : std::floor(360.0f * dpiScale);
     float padding = std::floor(8.0f * dpiScale);
 
     targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1013,9 +1023,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.title").data());
         ImGui::Separator();
 
-        auto& paletteConfig = Config::AppConfig::instance()
-                                  .getEditorSettings()
-                                  .noteColorPalettes;
+        auto& paletteConfig =
+            Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
         std::string previewName = defaultPaletteSchemeName();
         if ( m_activePaletteSchemeIndex >= 0 ) {
             std::size_t activeIndex =
@@ -1054,22 +1063,22 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                          m_paletteSchemeNameBuffer.size());
 
         const float schemeButtonH = std::floor(24.0f * dpiScale);
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.save_scheme").data(),
-                           ImVec2(std::floor(84.0f * dpiScale),
-                                  schemeButtonH)) ) {
+        if ( ImGui::Button(
+                 TR("ui.toolbar.note_palette.save_scheme").data(),
+                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
             savePaletteScheme(false);
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.new_scheme").data(),
-                           ImVec2(std::floor(84.0f * dpiScale),
-                                  schemeButtonH)) ) {
+        if ( ImGui::Button(
+                 TR("ui.toolbar.note_palette.new_scheme").data(),
+                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
             savePaletteScheme(true);
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(m_activePaletteSchemeIndex < 0);
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.rename_scheme").data(),
-                           ImVec2(std::floor(84.0f * dpiScale),
-                                  schemeButtonH)) ) {
+        if ( ImGui::Button(
+                 TR("ui.toolbar.note_palette.rename_scheme").data(),
+                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
             renamePaletteScheme();
         }
         ImGui::EndDisabled();
@@ -1078,7 +1087,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         const float swatchSize = std::floor(24.0f * dpiScale);
         for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-            auto slot = static_cast<Logic::NoteColorSlot>(i);
+            auto slot   = static_cast<Logic::NoteColorSlot>(i);
             bool active = slot == m_activeColorSlot;
             ImGui::PushID(static_cast<int>(i));
             if ( ImGui::ColorButton("##SlotColor",
@@ -1090,11 +1099,11 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 m_activeColorSlot = slot;
             }
             ImGui::SameLine();
-            if ( ImGui::Selectable(TR(colorSlotLabelKey(slot)).data(),
-                                   active,
-                                   0,
-                                   ImVec2(std::floor(150.0f * dpiScale),
-                                          swatchSize)) ) {
+            if ( ImGui::Selectable(
+                     TR(colorSlotLabelKey(slot)).data(),
+                     active,
+                     0,
+                     ImVec2(std::floor(150.0f * dpiScale), swatchSize)) ) {
                 m_activeColorSlot = slot;
             }
             ImGui::PopID();
@@ -1104,10 +1113,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         glm::vec4& activeColor =
             m_paletteColors[colorSlotIndex(m_activeColorSlot)];
-        ImGuiColorEditFlags pickerFlags =
-            ImGuiColorEditFlags_AlphaBar |
-            ImGuiColorEditFlags_AlphaPreviewHalf |
-            ImGuiColorEditFlags_DisplayRGB;
+        ImGuiColorEditFlags pickerFlags = ImGuiColorEditFlags_AlphaBar |
+                                          ImGuiColorEditFlags_AlphaPreviewHalf |
+                                          ImGuiColorEditFlags_DisplayRGB;
 
         if ( ImGui::ColorPicker4(
                  "##NoteColorPicker", &activeColor.r, pickerFlags) ) {
@@ -1132,7 +1140,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                                         ImGuiColorEditFlags_NoPicker |
                                         ImGuiColorEditFlags_AlphaPreviewHalf,
                                     ImVec2(swatchSize, swatchSize)) ) {
-                m_activeColorSlot = slot;
+                m_activeColorSlot  = slot;
                 m_paletteColors[i] = defaultColor;
                 pushPaletteToBrush();
                 pushPaletteToSelection();
@@ -1151,7 +1159,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.toolbar.note_palette.clear_custom").data(),
                            ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
-            auto slot = m_activeColorSlot;
+            auto slot   = m_activeColorSlot;
             activeColor = toVec4(skinColorForSlot(slot));
             pushColorCommands(slot, std::nullopt, true);
         }
@@ -1187,6 +1195,9 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
     if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
         if ( m_currentTool != tool ) {
             m_currentTool = tool;
+            if ( tool == Logic::EditTool::ColorBrush ) {
+                pushPaletteToBrush();
+            }
             Logic::EditorEngine::instance().pushCommand(
                 Logic::CmdChangeTool{ tool });
         }

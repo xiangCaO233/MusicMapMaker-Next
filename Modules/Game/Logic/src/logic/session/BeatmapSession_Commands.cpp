@@ -283,30 +283,28 @@ bool BeatmapSession::processCommands()
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
                 }
-                if constexpr ( std::is_same_v<T, CmdStartDrag> ||
-                               std::is_same_v<T, CmdUpdateDrag> ||
-                               std::is_same_v<T, CmdEndDrag> ||
-                               std::is_same_v<T, CmdUndo> ||
-                               std::is_same_v<T, CmdRedo> ||
-                               std::is_same_v<T, CmdPaste> ||
-                               std::is_same_v<T, CmdCut> ||
-                               std::is_same_v<T, CmdDeleteSelected> ||
-                               std::is_same_v<T, CmdMirrorSelected> ||
-                               std::is_same_v<T,
-                                              CmdAlignSelectedToCommonBeats> ||
-                               std::is_same_v<T,
-                                              CmdApplyNoteColorToSelection> ||
-                               std::is_same_v<T,
-                                              CmdApplyNotePaletteToSelection> ||
-                               std::is_same_v<T, CmdEndBrush> ||
-                               std::is_same_v<T, CmdEndErase> ||
-                               std::is_same_v<T, CmdLoadBeatmap> ||
-                               std::is_same_v<T, CmdCreateBeatmap> ||
-                               std::is_same_v<T, CmdRemoveBeatmap> ||
-                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
-                               std::is_same_v<T, CmdUpdateTimelineEvent> ||
-                               std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                               std::is_same_v<T, CmdCreateTimelineEvent> ) {
+                if constexpr (
+                    std::is_same_v<T, CmdStartDrag> ||
+                    std::is_same_v<T, CmdUpdateDrag> ||
+                    std::is_same_v<T, CmdEndDrag> ||
+                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
+                    std::is_same_v<T, CmdPaste> || std::is_same_v<T, CmdCut> ||
+                    std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdMirrorSelected> ||
+                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
+                    std::is_same_v<T, CmdApplyNoteColorToSelection> ||
+                    std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
+                    std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
+                    std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                    std::is_same_v<T, CmdEndBrush> ||
+                    std::is_same_v<T, CmdEndErase> ||
+                    std::is_same_v<T, CmdLoadBeatmap> ||
+                    std::is_same_v<T, CmdCreateBeatmap> ||
+                    std::is_same_v<T, CmdRemoveBeatmap> ||
+                    std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
                     m_ctx->isTransformDirty = true;
                 }
 
@@ -322,6 +320,12 @@ bool BeatmapSession::processCommands()
                         break;
                     case EditTool::Draw:
                         toolName = TR("ui.status.tool.draw_brush").pStr;
+                        break;
+                    case EditTool::ColorBrush:
+                        toolName = TR("ui.status.tool.color_brush").pStr;
+                        break;
+                    case EditTool::ColorEraser:
+                        toolName = TR("ui.status.tool.color_eraser").pStr;
                         break;
                     }
                     m_ctx->lastActionMessage = fmt::format(
@@ -411,8 +415,7 @@ bool BeatmapSession::processCommands()
                                     std::is_same_v<T, CmdSetMousePosition> ||
                                     std::is_same_v<T, CmdUpdateTrackCount> ||
                                     std::is_same_v<T, CmdSetBrushNoteColor> ||
-                                    std::is_same_v<T,
-                                                   CmdSetBrushNotePalette> ||
+                                    std::is_same_v<T, CmdSetBrushNotePalette> ||
                                     std::is_same_v<T, CmdStartMarquee> ||
                                     std::is_same_v<T, CmdUpdateMarquee> ||
                                     std::is_same_v<T, CmdEndMarquee> ||
@@ -435,6 +438,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
+                    std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
+                    std::is_same_v<T, CmdClearNoteColorOverrides> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
                     std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||

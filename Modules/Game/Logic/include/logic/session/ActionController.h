@@ -50,6 +50,14 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdApplyNotePaletteToSelection& cmd);
 
+    /// @brief 处理将当前画笔调色盘应用到单个音符的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdApplyBrushPaletteToEntity& cmd);
+
+    /// @brief 处理清除单个音符自定义配色的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdClearNoteColorOverrides& cmd);
+
     /// @brief 处理粘贴实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdPaste& cmd);

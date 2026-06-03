@@ -1,13 +1,13 @@
 #pragma once
 
-#include "config/EditorConfig.h"
 #include "common/NoteColor.h"
+#include "config/EditorConfig.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
+#include <array>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
-#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -222,9 +222,11 @@ struct CmdSetPlaybackSpeed {
  * @brief 编辑工具类型
  */
 enum class EditTool {
-    Move,     // 移动工具
-    Marquee,  // 矩形选取
-    Draw,     // 绘制工具
+    Move,         ///< 移动工具
+    Marquee,      ///< 矩形选取
+    Draw,         ///< 绘制工具
+    ColorBrush,   ///< 配色笔刷工具
+    ColorEraser,  ///< 配色橡皮工具
 };
 
 /**
@@ -237,17 +239,17 @@ struct CmdChangeTool {
 /// @brief 设置画笔当前使用的自定义音符颜色。
 struct CmdSetBrushNoteColor {
     /// @brief 要修改的音符颜色槽位。
-    NoteColorSlot             slot;
+    NoteColorSlot slot;
     /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
-    std::optional<glm::vec4>  color;
+    std::optional<glm::vec4> color;
 };
 
 /// @brief 将自定义音符颜色应用到当前选中物件。
 struct CmdApplyNoteColorToSelection {
     /// @brief 要修改的音符颜色槽位。
-    NoteColorSlot             slot;
+    NoteColorSlot slot;
     /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
-    std::optional<glm::vec4>  color;
+    std::optional<glm::vec4> color;
 };
 
 /// @brief 设置画笔当前使用的完整音符调色盘。
@@ -260,6 +262,18 @@ struct CmdSetBrushNotePalette {
 struct CmdApplyNotePaletteToSelection {
     /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
+/// @brief 将当前画笔调色盘应用到指定音符物件。
+struct CmdApplyBrushPaletteToEntity {
+    /// @brief 目标音符实体。
+    entt::entity entity{ entt::null };
+};
+
+/// @brief 清除指定音符物件的自定义配色覆写。
+struct CmdClearNoteColorOverrides {
+    /// @brief 目标音符实体。
+    entt::entity entity{ entt::null };
 };
 
 /**
@@ -434,7 +448,8 @@ using LogicCommand = std::variant<
     CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
-    CmdApplyNotePaletteToSelection, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
+    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
     CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
     CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,

@@ -4,16 +4,16 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
-#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -63,6 +63,24 @@ NoteColorOverrides makeNoteColorOverrides(
         setNoteColorOverride(overrides, slot, colors[i]);
     }
     return overrides;
+}
+
+/// @brief 将折线子物件点击目标解析到父折线实体。
+entt::entity resolveNoteColorTargetEntity(SessionContext& ctx,
+                                          entt::entity    entity)
+{
+    if ( entity == entt::null || !ctx.noteRegistry.valid(entity) ||
+         !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+        return entt::null;
+    }
+
+    const auto& note = ctx.noteRegistry.get<NoteComponent>(entity);
+    if ( note.m_isSubNote && note.m_parentPolyline != entt::null &&
+         ctx.noteRegistry.valid(note.m_parentPolyline) &&
+         ctx.noteRegistry.all_of<NoteComponent>(note.m_parentPolyline) ) {
+        return note.m_parentPolyline;
+    }
+    return entity;
 }
 
 // --- Editing Handlers ---
@@ -170,7 +188,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Delete Selected");
+                                                        "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -223,7 +241,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Mirror Selected");
+                                                        "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -256,8 +274,8 @@ void ActionController::handleCommand(const CmdApplyNoteColorToSelection& cmd)
 
     auto actionName =
         cmd.color.has_value() ? "Set Note Color" : "Clear Note Color";
-    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                    actionName);
+    auto action =
+        std::make_unique<BatchNoteAction>(std::move(entries), actionName);
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.lastActionMessage =
         cmd.color.has_value() ? "Note color applied" : "Note color cleared";
@@ -287,6 +305,46 @@ void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
                                                     "Set Note Palette");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.lastActionMessage = "Note palette applied";
+}
+
+void ActionController::handleCommand(const CmdApplyBrushPaletteToEntity& cmd)
+{
+    entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
+    if ( target == entt::null ) return;
+
+    const auto& colors = m_ctx.brushState.customColors;
+    if ( !hasAnyNoteColorOverride(colors) ) return;
+
+    const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    auto        newNote = oldNote;
+    applyNoteColorOverrides(newNote, colors);
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ target, oldNote, newNote });
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Set Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette applied";
+}
+
+void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
+{
+    entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
+    if ( target == entt::null ) return;
+
+    const auto&        oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    auto               newNote = oldNote;
+    NoteColorOverrides emptyColors;
+    applyNoteColorOverrides(newNote, emptyColors);
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ target, oldNote, newNote });
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Clear Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette cleared";
 }
 
 void ActionController::handleCommand(const CmdPaste& cmd)
@@ -704,7 +762,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Align Selected");
+                                                        "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

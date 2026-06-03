@@ -47,6 +47,10 @@ constexpr const char* ICON_MMM_HAND =
     "\xef\x89\x96";  ///< \uf256 hand-back-fist (Move tool)
 constexpr const char* ICON_MMM_SQUARE_SELECT =
     "\xef\x83\x88";  ///< \uf0c8 square (Marquee Tool)
+constexpr const char* ICON_MMM_PAINT_BRUSH =
+    "\xef\x87\xbc";  ///< \uf1fc paint-brush (Color Brush Tool)
+constexpr const char* ICON_MMM_ERASER =
+    "\xef\x84\xad";  ///< \uf12d eraser (Color Eraser Tool)
 constexpr const char* ICON_MMM_SCISSORS =
     "\xef\x83\x84";  ///< \uf0c4 scissors (Cut Tool)
 constexpr const char* ICON_MMM_UNDO  = "\xef\x8b\xaa";  ///< \uf2ea rotate-left

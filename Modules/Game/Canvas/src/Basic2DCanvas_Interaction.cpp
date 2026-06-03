@@ -150,16 +150,21 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
     m_pendingDrops.clear();
 }
 
+/// @brief 处理主画布工具切换和编辑快捷键。
+/// @param currentSnapshot 当前渲染快照。
+/// @warning UI 热路径：每帧检查输入状态；禁止加入文件系统访问、ECS
+/// 全量遍历或阻塞操作。
 void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
     auto& io = ImGui::GetIO();
 
-    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1/2/3
+    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1-5
     // 工具切换键)
     if ( io.WantTextInput ) return;
 
-    // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw) ---
+    // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw, 4: ColorBrush,
+    // 5: ColorEraser) ---
     // 这些是画布特有的，保留在这里
     if ( ImGui::IsKeyPressed(ImGuiKey_1, false) ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -170,6 +175,12 @@ void Basic2DCanvasInteraction::handleHotkeys(
     } else if ( ImGui::IsKeyPressed(ImGuiKey_3, false) ) {
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
             Logic::CmdChangeTool{ Logic::EditTool::Draw }));
+    } else if ( ImGui::IsKeyPressed(ImGuiKey_4, false) ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::ColorBrush }));
+    } else if ( ImGui::IsKeyPressed(ImGuiKey_5, false) ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::ColorEraser }));
     }
 
     // --- 快捷键：删除操作 ---
@@ -185,6 +196,12 @@ void Basic2DCanvasInteraction::handleHotkeys(
     // 在此处移除以防止重复触发。
 }
 
+/// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
+/// @param currentSnapshot 当前渲染快照。
+/// @param targetWidth 画布宽度。
+/// @param targetHeight 画布高度。
+/// @warning UI
+/// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
@@ -255,8 +272,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 ImGui::BeginTooltip();
 
                 if ( currentSnapshot->hoverInspect.show ) {
-                    const auto& inspect = currentSnapshot->hoverInspect;
-                    auto drawPoint = [currentSnapshot](
+                    const auto& inspect   = currentSnapshot->hoverInspect;
+                    auto        drawPoint = [currentSnapshot](
                                          const char*                  labelKey,
                                          const Logic::HoverBeatPoint& point,
                                          bool showTrack) {
@@ -563,6 +580,24 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                   ImGui::GetIO().KeyShift,
                                                   ImGui::GetIO().KeyCtrl }));
                 }
+            } else if ( currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorBrush ) {
+                if ( !currentSnapshot->isPlaying &&
+                     hoveredEntity != entt::null ) {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdApplyBrushPaletteToEntity{
+                                hoveredEntity }));
+                }
+            } else if ( currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorEraser ) {
+                if ( !currentSnapshot->isPlaying &&
+                     hoveredEntity != entt::null ) {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdClearNoteColorOverrides{
+                                hoveredEntity }));
+                }
             }
         }
     }
@@ -581,7 +616,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                                        localMousePos.y,
                                        ImGui::GetIO().KeyShift,
                                        ImGui::GetIO().KeyCtrl }));
-        } else if ( !currentSnapshot->isPlaying ) {
+        } else if ( !currentSnapshot->isPlaying &&
+                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateDrag{ m_cameraId,
                                       localMousePos.x,
@@ -597,7 +633,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-        } else {
+        } else if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
