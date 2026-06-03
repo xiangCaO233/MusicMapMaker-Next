@@ -8,7 +8,6 @@
 
 namespace MMM::Graphic
 {
-
 CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                              vk::Device&         logicalDevice,
                              vk::CommandPool commandPool, vk::Queue queue)
@@ -22,10 +21,10 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                                               commandPool,
                                               queue);
     m_texTrail  = std::make_unique<VKTexture>(skin.getAssetPath("cursortrail"),
-                                              phyDevice,
-                                              logicalDevice,
-                                              commandPool,
-                                              queue);
+                                             phyDevice,
+                                             logicalDevice,
+                                             commandPool,
+                                             queue);
 
     m_texSmoke = std::make_unique<VKTexture>(skin.getAssetPath("cursor_smoke"),
                                              phyDevice,
@@ -45,7 +44,10 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
 
 CursorManager::~CursorManager() {}
 
-// 渲染更新函数，每帧调用一次
+/// @brief 更新并绘制软件光标。
+/// @param smokeLifeOverride 烟雾存活时间覆盖值，小于等于 0 时使用配置值。
+/// @warning UI 热路径：每帧调用；只更新光标粒子缓存并提交固定类型 ImGui
+/// 绘制命令。
 void CursorManager::UpdateAndDraw(float smokeLifeOverride)
 {
     ImGuiIO& io        = ImGui::GetIO();

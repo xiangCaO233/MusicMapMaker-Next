@@ -79,6 +79,21 @@ public:
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
                             float statusBarHeight, float sidebarWidth,
                             float toolbarWidth);
+
+    /// @brief 处理无边框主窗口边缘缩放命中。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：主窗口每帧执行；只做常量规模鼠标命中检测。
+    void handleNativeWindowFrameInteraction(UIManager* sourceManager,
+                                            float      dpiScale);
+
+    /// @brief 绘制无边框主窗口的自绘外框、内阴影和圆角轮廓。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：主窗口每帧执行；只提交固定数量 ImGui 绘制命令。
+    void renderNativeWindowFrameOverlay(UIManager* sourceManager,
+                                        float      dpiScale) const;
+
     /// @brief 渲染底部状态栏。
     /// @param sourceManager 当前 UI 管理器。
     /// @param statusBarHeight 状态栏高度。

@@ -132,6 +132,16 @@ void UIManager::setNativeWindow(Graphic::NativeWindow* window)
     m_nativeWindow = window;
 }
 
+Graphic::NativeWindow* UIManager::getNativeWindow() const
+{
+    return m_nativeWindow;
+}
+
+Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
+{
+    return m_nativeWindow ? m_nativeWindow->getWindowFrameAdapter() : nullptr;
+}
+
 void UIManager::captureProjectWorkspaceState()
 {
     auto* project = Logic::EditorEngine::instance().getCurrentProject();

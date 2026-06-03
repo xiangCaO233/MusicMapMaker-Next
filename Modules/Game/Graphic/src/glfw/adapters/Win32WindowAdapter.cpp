@@ -68,6 +68,55 @@ Win32WindowAdapter::~Win32WindowAdapter()
     }
 }
 
+bool Win32WindowAdapter::requestMove()
+{
+    return false;
+}
+
+bool Win32WindowAdapter::requestResize(WindowFrameResizeEdge edge)
+{
+    (void)edge;
+    return false;
+}
+
+bool Win32WindowAdapter::supportsClientFrameRequests() const
+{
+    return false;
+}
+
+bool Win32WindowAdapter::usesClientFrameOverlay() const
+{
+    return false;
+}
+
+void Win32WindowAdapter::refreshFrameShape()
+{
+    if ( !m_hwnd ) {
+        return;
+    }
+
+    DWORD count = DWMWCP_ROUND;
+    DwmSetWindowAttribute(
+        m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &count, sizeof(count));
+}
+
+bool Win32WindowAdapter::handleClientMouseButton(int button, int action,
+                                                 double cursorX, double cursorY)
+{
+    (void)button;
+    (void)action;
+    (void)cursorX;
+    (void)cursorY;
+    return false;
+}
+
+bool Win32WindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
+{
+    (void)cursorX;
+    (void)cursorY;
+    return false;
+}
+
 void Win32WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& e)
 {
     // 更新拖拽区域缓存

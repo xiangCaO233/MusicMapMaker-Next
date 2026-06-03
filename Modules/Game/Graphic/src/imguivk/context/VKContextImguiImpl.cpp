@@ -55,8 +55,6 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     // Enable Docking
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // No Auto Change Cursor
-    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     // 禁用保存
     // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 

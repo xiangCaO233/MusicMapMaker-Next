@@ -11,8 +11,9 @@
 
 namespace MMM::Graphic
 {
+class IWindowFrameAdapter;
 class NativeWindow;
-}
+}  // namespace MMM::Graphic
 
 namespace MMM
 {
@@ -57,6 +58,16 @@ public:
     /// @brief 绑定主原生窗口，用于项目工作区保存和恢复窗口位置。
     /// @param window 主原生窗口指针，生命周期由 GameLoop 持有。
     void setNativeWindow(Graphic::NativeWindow* window);
+
+    /// @brief 获取主原生窗口观察指针。
+    /// @return 主原生窗口指针；未绑定时返回 nullptr。
+    /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
+    [[nodiscard]] Graphic::NativeWindow* getNativeWindow() const;
+
+    /// @brief 获取无原生装饰窗口的平台行为适配器。
+    /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
+    /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
+    [[nodiscard]] Graphic::IWindowFrameAdapter* getWindowFrameAdapter() const;
 
     /// @brief 捕获当前项目工作区 UI 状态到内存中的项目配置。
     void captureProjectWorkspaceState();

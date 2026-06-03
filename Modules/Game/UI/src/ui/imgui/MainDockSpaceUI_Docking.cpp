@@ -123,7 +123,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGuiID dock_id_timeline;
         dock_id_timeline = ImGui::DockBuilderSplitNode(dock_id_center_canvas,
                                                        ImGuiDir_Right,
-                                                       0.20f,
+                                                       0.28f,
                                                        nullptr,
                                                        &dock_id_center);
 

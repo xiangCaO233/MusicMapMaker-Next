@@ -9,6 +9,7 @@
 #include "event/input/translators/GLFWTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
 #include <filesystem>
@@ -19,6 +20,10 @@
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
+#endif
+
+#if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+#    include "graphic/glfw/window/adapters/X11WindowAdapter.h"
 #endif
 
 namespace MMM::Graphic
@@ -168,7 +173,11 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     // 在 glfwCreateWindow 之后调用
 #ifdef _WIN32
-    m_win32Adapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
+    m_windowFrameAdapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
+#elif defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+    if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
+        m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
+    }
 #endif
 
     // 隐藏系统原生光标
@@ -211,6 +220,12 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
                   xscale,
                   xscale / fbScaleX);
 
+            auto app =
+                reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
+            if ( app ) {
+                app->refreshWindowFrameShape();
+            }
+
             // 发布事件，通知 UI 重载资源
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type           = Event::NativeEventType::GLFW_WINDOW_RESIZED,
@@ -222,8 +237,11 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
         m_windowHandle, [](GLFWwindow* w, int maximized) {
             auto app =
                 reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
-            if ( app && maximized == GLFW_FALSE ) {
-                app->rememberCurrentWindowPlacement();
+            if ( app ) {
+                if ( maximized == GLFW_FALSE ) {
+                    app->rememberCurrentWindowPlacement();
+                }
+                app->refreshWindowFrameShape();
             }
 
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
@@ -235,6 +253,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     // 1. 鼠标点击事件封装
     glfwSetMouseButtonCallback(
         m_windowHandle, [](GLFWwindow* w, int button, int action, int mods) {
+            auto app =
+                reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
+
             MMM::Event::GLFWMouseButtonEvent e;
 
             // 转换平台特定的参数
@@ -247,12 +268,30 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             glfwGetCursorPos(w, &xpos, &ypos);
             e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
 
-            MMM::Event::EventBus::instance().publish(e);
+            bool frameInteractionStarted = false;
+            if ( app && app->m_windowFrameAdapter ) {
+                frameInteractionStarted =
+                    app->m_windowFrameAdapter->handleClientMouseButton(
+                        button, action, xpos, ypos);
+            }
+
+            if ( !frameInteractionStarted ) {
+                MMM::Event::EventBus::instance().publish(e);
+            }
         });
 
     // 2. 鼠标移动事件封装 (含 Delta 计算)
     glfwSetCursorPosCallback(
         m_windowHandle, [](GLFWwindow* w, double xpos, double ypos) {
+            auto app =
+                reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
+            bool frameInteractionStarted = false;
+            if ( app && app->m_windowFrameAdapter ) {
+                frameInteractionStarted =
+                    app->m_windowFrameAdapter->handleClientCursorPos(xpos,
+                                                                     ypos);
+            }
+
             if ( s_firstMouse ) {
                 s_lastMouseX = xpos;
                 s_lastMouseY = ypos;
@@ -270,8 +309,10 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             s_lastMouseX = xpos;
             s_lastMouseY = ypos;
 
-            // 鼠标移动通常不需要修饰键，如果需要，可以调用 glfwGetKey 判定
-            MMM::Event::EventBus::instance().publish(e);
+            if ( !frameInteractionStarted ) {
+                // 鼠标移动通常不需要修饰键，如果需要，可以调用 glfwGetKey 判定
+                MMM::Event::EventBus::instance().publish(e);
+            }
         });
 
     // 3. 鼠标滚轮事件封装
@@ -294,23 +335,7 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
             switch ( e.type ) {
             case Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE: {
-                // 获取当前最大化状态
-                int maximized =
-                    glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
-                if ( maximized ) {
-                    glfwRestoreWindow(m_windowHandle);
-                    XINFO("Window restored.");
-                } else {
-                    rememberCurrentWindowPlacement();
-                    const int restoreX      = m_normalWindowPos[0];
-                    const int restoreY      = m_normalWindowPos[1];
-                    const int restoreWidth  = m_normalWindowSize[0];
-                    const int restoreHeight = m_normalWindowSize[1];
-                    glfwMaximizeWindow(m_windowHandle);
-                    rememberWindowPlacement(
-                        restoreX, restoreY, restoreWidth, restoreHeight);
-                    XINFO("Window maximized.");
-                }
+                toggleMaximized();
                 break;
             }
             case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
@@ -328,10 +353,13 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
                 break;
             }
         });
+
+    refreshWindowFrameShape();
 }
 
 NativeWindow::~NativeWindow()
 {
+    m_windowFrameAdapter.reset();
     if ( m_windowHandle ) {
         glfwDestroyWindow(m_windowHandle);
     }
@@ -395,6 +423,56 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
         rememberWindowPlacement(
             restoreX, restoreY, restoreWidth, restoreHeight);
     }
+    refreshWindowFrameShape();
+}
+
+void NativeWindow::toggleMaximized()
+{
+    if ( !m_windowHandle ) {
+        return;
+    }
+
+    const int maximized = glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
+    if ( maximized ) {
+        glfwRestoreWindow(m_windowHandle);
+        XINFO("Window restored.");
+        refreshWindowFrameShape();
+        return;
+    }
+
+    rememberCurrentWindowPlacement();
+    const int restoreX      = m_normalWindowPos[0];
+    const int restoreY      = m_normalWindowPos[1];
+    const int restoreWidth  = m_normalWindowSize[0];
+    const int restoreHeight = m_normalWindowSize[1];
+    glfwMaximizeWindow(m_windowHandle);
+    rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
+    XINFO("Window maximized.");
+    refreshWindowFrameShape();
+}
+
+IWindowFrameAdapter* NativeWindow::getWindowFrameAdapter() const
+{
+    return m_windowFrameAdapter.get();
+}
+
+GLFWwindow* NativeWindow::getFrameWindowHandle() const
+{
+    return m_windowHandle;
+}
+
+void NativeWindow::getNormalFramePlacement(int& x, int& y, int& width,
+                                           int& height) const
+{
+    x      = m_normalWindowPos[0];
+    y      = m_normalWindowPos[1];
+    width  = m_normalWindowSize[0];
+    height = m_normalWindowSize[1];
+}
+
+void NativeWindow::setNormalFramePlacement(int x, int y, int width, int height)
+{
+    rememberWindowPlacement(x, y, width, height);
 }
 
 void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)
@@ -431,6 +509,7 @@ void NativeWindow::windowSizeCallback(GLFWwindow* window, int width, int height)
     int y = 0;
     glfwGetWindowPos(window, &x, &y);
     app->rememberWindowPlacement(x, y, width, height);
+    app->refreshWindowFrameShape();
 }
 
 bool NativeWindow::canRememberCurrentWindowPlacement() const
@@ -485,6 +564,13 @@ void NativeWindow::rememberCurrentWindowPlacement()
     glfwGetWindowPos(m_windowHandle, &x, &y);
     glfwGetWindowSize(m_windowHandle, &width, &height);
     rememberWindowPlacement(x, y, width, height);
+}
+
+void NativeWindow::refreshWindowFrameShape()
+{
+    if ( m_windowFrameAdapter ) {
+        m_windowFrameAdapter->refreshFrameShape();
+    }
 }
 
 void NativeWindow::rememberWindowPlacement(int x, int y, int width, int height)
@@ -599,6 +685,7 @@ void NativeWindow::ToggleFullscreen()
                              mode->refreshRate);
         XINFO("Entered fullscreen mode.");
     }
+    refreshWindowFrameShape();
 }
 
 }  // namespace MMM::Graphic

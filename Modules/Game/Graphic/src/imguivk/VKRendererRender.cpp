@@ -9,6 +9,7 @@
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -226,6 +227,151 @@ RenderProfileClock::time_point profileTimePoint(bool enabled)
     return enabled ? RenderProfileClock::now()
                    : RenderProfileClock::time_point{};
 }
+
+/// @brief 判断当前 ImGui 光标是否应使用原生窗口缩放光标。
+/// @param cursor 当前 ImGui 光标类型。
+/// @return 是缩放光标时返回 true。
+bool isNativeResizeCursor(ImGuiMouseCursor cursor)
+{
+    return cursor == ImGuiMouseCursor_ResizeNS ||
+           cursor == ImGuiMouseCursor_ResizeEW ||
+           cursor == ImGuiMouseCursor_ResizeNESW ||
+           cursor == ImGuiMouseCursor_ResizeNWSE;
+}
+
+/// @brief 获取对应 ImGui 光标类型的 GLFW 标准光标。
+/// @param cursor 当前 ImGui 光标类型。
+/// @return GLFW 标准光标句柄，不支持时返回 nullptr。
+/// @warning 渲染热路径低频分支：首次遇到某个光标类型时创建 GLFW cursor。
+GLFWcursor* getGlfwStandardCursor(ImGuiMouseCursor cursor)
+{
+    constexpr size_t IMGUI_MOUSE_CURSOR_COUNT =
+        static_cast<size_t>(ImGuiMouseCursor_COUNT);
+    static std::array<GLFWcursor*, IMGUI_MOUSE_CURSOR_COUNT> cursors{};
+
+    if ( cursor < 0 || cursor >= ImGuiMouseCursor_COUNT ) {
+        return nullptr;
+    }
+    if ( cursors[static_cast<size_t>(cursor)] ) {
+        return cursors[static_cast<size_t>(cursor)];
+    }
+
+    int glfwCursor = GLFW_ARROW_CURSOR;
+    switch ( cursor ) {
+    case ImGuiMouseCursor_TextInput: glfwCursor = GLFW_IBEAM_CURSOR; break;
+    case ImGuiMouseCursor_Hand:
+#if defined(GLFW_POINTING_HAND_CURSOR)
+        glfwCursor = GLFW_POINTING_HAND_CURSOR;
+#elif defined(GLFW_HAND_CURSOR)
+        glfwCursor = GLFW_HAND_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNS:
+#if defined(GLFW_RESIZE_NS_CURSOR)
+        glfwCursor = GLFW_RESIZE_NS_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeEW:
+#if defined(GLFW_RESIZE_EW_CURSOR)
+        glfwCursor = GLFW_RESIZE_EW_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNESW:
+#if defined(GLFW_RESIZE_NESW_CURSOR)
+        glfwCursor = GLFW_RESIZE_NESW_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNWSE:
+#if defined(GLFW_RESIZE_NWSE_CURSOR)
+        glfwCursor = GLFW_RESIZE_NWSE_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeAll:
+#if defined(GLFW_RESIZE_ALL_CURSOR)
+        glfwCursor = GLFW_RESIZE_ALL_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_NotAllowed:
+#if defined(GLFW_NOT_ALLOWED_CURSOR)
+        glfwCursor = GLFW_NOT_ALLOWED_CURSOR;
+#endif
+        break;
+    default: break;
+    }
+
+    cursors[static_cast<size_t>(cursor)] = glfwCreateStandardCursor(glfwCursor);
+    return cursors[static_cast<size_t>(cursor)];
+}
+
+/// @brief GLFW 主窗口光标状态缓存。
+struct GlfwCursorState {
+    /// @brief 当前缓存所属窗口。
+    GLFWwindow* window{ nullptr };
+
+    /// @brief 当前 GLFW 光标模式。
+    int mode{ -1 };
+
+    /// @brief 当前 GLFW 标准光标类型。
+    ImGuiMouseCursor cursor{ ImGuiMouseCursor_COUNT };
+};
+
+/// @brief 对 GLFW 主窗口应用光标模式，并跳过重复状态写入。
+/// @param window GLFW 窗口句柄。
+/// @param cursorMode GLFW 光标模式。
+/// @param cursor 当前 ImGui 光标类型。
+/// @warning 渲染热路径：每帧调用；只有状态变化时才触发 GLFW API。
+void applyGlfwCursorMode(GLFWwindow* window, int cursorMode,
+                         ImGuiMouseCursor cursor)
+{
+    static GlfwCursorState state;
+
+    if ( !window ) {
+        return;
+    }
+
+    if ( state.window != window ) {
+        state.window = window;
+        state.mode   = -1;
+        state.cursor = ImGuiMouseCursor_COUNT;
+    }
+
+    if ( state.mode != cursorMode ) {
+        glfwSetInputMode(window, GLFW_CURSOR, cursorMode);
+        state.mode = cursorMode;
+    }
+
+    if ( cursorMode != GLFW_CURSOR_NORMAL ) {
+        state.cursor = ImGuiMouseCursor_COUNT;
+        return;
+    }
+
+    if ( state.cursor != cursor ) {
+        glfwSetCursor(window, getGlfwStandardCursor(cursor));
+        state.cursor = cursor;
+    }
+}
+
+/// @brief 隐藏 GLFW 原生光标。
+/// @param window GLFW 窗口句柄。
+/// @warning 渲染热路径：软件光标模式下每帧调用；内部会过滤重复写入。
+void hideNativeCursor(GLFWwindow* window)
+{
+    applyGlfwCursorMode(window, GLFW_CURSOR_HIDDEN, ImGuiMouseCursor_None);
+}
+
+/// @brief 对 GLFW 主窗口应用当前 ImGui 光标。
+/// @param window GLFW 窗口句柄。
+/// @param cursor 当前 ImGui 光标类型。
+/// @warning 渲染热路径：每帧最多一次；内部会过滤重复 GLFW 状态写入。
+void applyNativeCursor(GLFWwindow* window, ImGuiMouseCursor cursor)
+{
+    if ( cursor < 0 || cursor >= ImGuiMouseCursor_COUNT ) {
+        hideNativeCursor(window);
+        return;
+    }
+
+    applyGlfwCursorMode(window, GLFW_CURSOR_NORMAL, cursor);
+}
 }  // namespace
 
 // clang-format off
@@ -325,15 +471,9 @@ void VKRenderer::render(NativeWindow&                window,
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // 根据配置决定是否隐藏系统光标
     auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
     if ( editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        glfwSetInputMode(
-            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
-    } else {
-        glfwSetInputMode(
-            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
     const auto newFrameEnd = profileTimePoint(renderProfileLoggingEnabled);
 
@@ -357,9 +497,24 @@ void VKRenderer::render(NativeWindow&                window,
     // 绘制中央临时通知
     VKContext::get().value().get().drawCenterNotification();
 
+    const ImGuiMouseCursor currentMouseCursor = ImGui::GetMouseCursor();
+    const bool             useNativeResizeCursor =
+        editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
+        isNativeResizeCursor(currentMouseCursor);
+
+    if ( useNativeResizeCursor ) {
+        applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
+    } else if ( editorCfg.settings.cursorStyle ==
+                Config::CursorStyle::Software ) {
+        hideNativeCursor(window.getWindowHandle());
+    } else {
+        applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
+    }
+
     // 更新光标管理器
     if ( m_cursorManager &&
-         editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
+         editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
+         !useNativeResizeCursor ) {
         m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
     }
     const auto updateUiEnd = profileTimePoint(renderProfileLoggingEnabled);
@@ -429,7 +584,7 @@ void VKRenderer::render(NativeWindow&                window,
         for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
               ++taskSlot ) {
             const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
-            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
+            vk::CommandBuffer         taskCmd = m_offscreenRecordSlots[taskSlot]
                                             .commandBuffers[recordFrameIndex];
             offscreenRecordThreadPool->enqueue_void(
                 [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {

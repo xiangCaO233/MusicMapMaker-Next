@@ -6,10 +6,12 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
@@ -19,6 +21,106 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 无边框窗口缩放热区基础宽度。
+constexpr float NATIVE_FRAME_RESIZE_HIT_THICKNESS = 7.0f;
+
+/// @brief 无边框窗口自绘边框基础宽度。
+constexpr float NATIVE_FRAME_BORDER_THICKNESS = 1.0f;
+
+/// @brief 无边框窗口自绘内阴影层数。
+constexpr int NATIVE_FRAME_SHADOW_LAYERS = 5;
+
+/// @brief 无边框窗口自绘圆角基础半径。
+constexpr float NATIVE_FRAME_ROUNDING = 10.0f;
+
+/// @brief 无边框窗口边缘命中结果。
+struct NativeFrameHit {
+    /// @brief 是否命中可缩放边缘。
+    bool m_hit{ false };
+
+    /// @brief 命中的缩放方向。
+    Graphic::WindowFrameResizeEdge m_edge{
+        Graphic::WindowFrameResizeEdge::Right
+    };
+
+    /// @brief 命中方向对应的 ImGui 鼠标光标。
+    ImGuiMouseCursor m_cursor{ ImGuiMouseCursor_Arrow };
+};
+
+/// @brief 根据主视口和鼠标位置解析无边框窗口缩放命中。
+/// @param viewport 主 ImGui 视口。
+/// @param dpiScale 当前 DPI 缩放。
+/// @return 缩放命中结果。
+/// @warning UI 热路径：每帧主窗口边缘检测调用；只做常量规模几何判断。
+NativeFrameHit resolveNativeFrameHit(const ImGuiViewport& viewport,
+                                     float                dpiScale)
+{
+    if ( !ImGui::IsMousePosValid() ) {
+        return {};
+    }
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const ImVec2 min   = viewport.Pos;
+    const ImVec2 max   = { viewport.Pos.x + viewport.Size.x,
+                           viewport.Pos.y + viewport.Size.y };
+    if ( mouse.x < min.x || mouse.y < min.y || mouse.x > max.x ||
+         mouse.y > max.y ) {
+        return {};
+    }
+
+    const float thickness = std::max(
+        4.0f, std::floor(NATIVE_FRAME_RESIZE_HIT_THICKNESS * dpiScale));
+    const bool left   = mouse.x <= min.x + thickness;
+    const bool right  = mouse.x >= max.x - thickness;
+    const bool top    = mouse.y <= min.y + thickness;
+    const bool bottom = mouse.y >= max.y - thickness;
+
+    if ( top && left ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::TopLeft,
+                 ImGuiMouseCursor_ResizeNWSE };
+    }
+    if ( top && right ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::TopRight,
+                 ImGuiMouseCursor_ResizeNESW };
+    }
+    if ( bottom && left ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::BottomLeft,
+                 ImGuiMouseCursor_ResizeNESW };
+    }
+    if ( bottom && right ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::BottomRight,
+                 ImGuiMouseCursor_ResizeNWSE };
+    }
+    if ( left ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::Left,
+                 ImGuiMouseCursor_ResizeEW };
+    }
+    if ( right ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::Right,
+                 ImGuiMouseCursor_ResizeEW };
+    }
+    if ( top ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::Top,
+                 ImGuiMouseCursor_ResizeNS };
+    }
+    if ( bottom ) {
+        return { true,
+                 Graphic::WindowFrameResizeEdge::Bottom,
+                 ImGuiMouseCursor_ResizeNS };
+    }
+
+    return {};
+}
+}  // namespace
 
 void MainDockSpaceUI::update(UIManager* sourceManager)
 {
@@ -26,7 +128,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     auto&                engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGuiViewport*       viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
     // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
@@ -68,6 +170,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
     float statusBarHeight = menuBarHeight;
 
+    handleNativeWindowFrameInteraction(sourceManager, dpiScale);
+
     // --- 1. 顶部菜单栏 ---
     renderMenuBar(
         sourceManager, menuBarHeight, sidebarWidth, toolbarWidth, dpiScale);
@@ -96,6 +200,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         ImGui::SetNextWindowViewport(viewport->ID);
         m_toolbarView.update(sourceManager);
     }
+
+    renderNativeWindowFrameOverlay(sourceManager, dpiScale);
 
     // --- 4. 全局弹出式对话框 ---
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
@@ -444,6 +550,88 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
         ImGui::EndPopup();
     }
+}
+
+void MainDockSpaceUI::handleNativeWindowFrameInteraction(
+    UIManager* sourceManager, float dpiScale)
+{
+    if ( !sourceManager || m_isMaximized ) {
+        return;
+    }
+
+    auto* frameAdapter = sourceManager->getWindowFrameAdapter();
+    if ( !frameAdapter || !frameAdapter->supportsClientFrameRequests() ) {
+        return;
+    }
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if ( !viewport ) {
+        return;
+    }
+
+    const NativeFrameHit hit = resolveNativeFrameHit(*viewport, dpiScale);
+    if ( !hit.m_hit ) {
+        return;
+    }
+
+    ImGui::SetMouseCursor(hit.m_cursor);
+}
+
+void MainDockSpaceUI::renderNativeWindowFrameOverlay(UIManager* sourceManager,
+                                                     float      dpiScale) const
+{
+    auto* frameAdapter =
+        sourceManager ? sourceManager->getWindowFrameAdapter() : nullptr;
+    if ( !frameAdapter || !frameAdapter->usesClientFrameOverlay() ) {
+        return;
+    }
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if ( !viewport ) {
+        return;
+    }
+
+    ImDrawList* drawList = ImGui::GetForegroundDrawList(viewport);
+    if ( !drawList ) {
+        return;
+    }
+
+    const ImVec2 min = viewport->Pos;
+    const ImVec2 max = { viewport->Pos.x + viewport->Size.x,
+                         viewport->Pos.y + viewport->Size.y };
+    const float  borderThickness =
+        std::max(1.0f, std::floor(NATIVE_FRAME_BORDER_THICKNESS * dpiScale));
+    const float rounding =
+        m_isMaximized
+            ? 0.0f
+            : std::floor(NATIVE_FRAME_ROUNDING * std::max(1.0f, dpiScale));
+
+    if ( !m_isMaximized ) {
+        for ( int layer = NATIVE_FRAME_SHADOW_LAYERS; layer > 0; --layer ) {
+            const float inset = static_cast<float>(layer);
+            const float alpha =
+                0.035f *
+                (static_cast<float>(NATIVE_FRAME_SHADOW_LAYERS - layer + 1) /
+                 static_cast<float>(NATIVE_FRAME_SHADOW_LAYERS));
+            const ImU32 shadowColor =
+                ImGui::GetColorU32(ImVec4(0.0f, 0.0f, 0.0f, alpha));
+            drawList->AddRect({ min.x + inset, min.y + inset },
+                              { max.x - inset, max.y - inset },
+                              shadowColor,
+                              std::max(0.0f, rounding - inset),
+                              0,
+                              borderThickness);
+        }
+    }
+
+    ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
+    border.w      = std::max(border.w, 0.55f);
+    drawList->AddRect({ min.x + 0.5f, min.y + 0.5f },
+                      { max.x - 0.5f, max.y - 0.5f },
+                      ImGui::GetColorU32(border),
+                      rounding,
+                      0,
+                      borderThickness);
 }
 
 bool MainDockSpaceUI::needReload()

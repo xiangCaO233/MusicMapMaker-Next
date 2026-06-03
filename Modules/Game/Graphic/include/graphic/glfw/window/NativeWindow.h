@@ -1,19 +1,26 @@
 #pragma once
 
 #include "graphic/glfw/GLFWHeader.h"
+#include "graphic/glfw/window/adapters/IWindowFrameHost.h"
 #include <atomic>
 #include <chrono>
 #include <memory>
 
 namespace MMM::Graphic
 {
-class Win32WindowAdapter;
+class IWindowFrameAdapter;
 
-class NativeWindow
+/// @brief GLFW 主窗口封装，负责窗口生命周期和平台 frame adapter 转发。
+class NativeWindow : public IWindowFrameHost
 {
-
 public:
+    /// @brief 构造主窗口。
+    /// @param w 初始窗口宽度。
+    /// @param h 初始窗口高度。
+    /// @param wtitle 初始窗口标题。
     NativeWindow(int w, int h, const char* wtitle);
+
+    /// @brief 析构主窗口并释放平台 frame adapter。
     ~NativeWindow();
 
     // 禁用拷贝和移动
@@ -22,12 +29,20 @@ public:
     NativeWindow& operator=(NativeWindow&&)      = delete;
     NativeWindow& operator=(const NativeWindow&) = delete;
 
+    /// @brief 判断窗口是否收到关闭请求。
+    /// @return 收到关闭请求时返回 true。
     bool shouldClose() const;
+
+    /// @brief 轮询 GLFW 窗口事件。
     void pollEvents() const;  // 替换 update，窗口只负责处理事件
 
+    /// @brief 获取 GLFW 主窗口句柄。
+    /// @return GLFW 窗口句柄；未创建时返回 nullptr。
     GLFWwindow* getWindowHandle() const;
 
-    // 获取窗口宽高，用于 Swapchain 重建
+    /// @brief 获取 framebuffer 尺寸，用于 swapchain 重建。
+    /// @param width 输出 framebuffer 宽度。
+    /// @param height 输出 framebuffer 高度。
     void getFramebufferSize(int& width, int& height) const;
 
     /// @brief 获取窗口位置、尺寸和最大化状态。
@@ -47,6 +62,32 @@ public:
     /// @param maximized 是否恢复为最大化窗口。
     void applyWindowPlacement(int x, int y, int width, int height,
                               bool maximized);
+
+    /// @brief 切换窗口最大化或还原状态。
+    void toggleMaximized();
+
+    /// @brief 获取无原生装饰窗口的平台适配器。
+    /// @return 平台适配器观察指针；当前平台无适配器时返回 nullptr。
+    [[nodiscard]] IWindowFrameAdapter* getWindowFrameAdapter() const;
+
+    /// @brief 获取 GLFW 主窗口句柄。
+    /// @return GLFW 窗口句柄；未创建时返回 nullptr。
+    [[nodiscard]] GLFWwindow* getFrameWindowHandle() const override;
+
+    /// @brief 获取普通窗口模式下的还原矩形。
+    /// @param x 输出左上角 X 坐标。
+    /// @param y 输出左上角 Y 坐标。
+    /// @param width 输出窗口宽度。
+    /// @param height 输出窗口高度。
+    void getNormalFramePlacement(int& x, int& y, int& width,
+                                 int& height) const override;
+
+    /// @brief 写入普通窗口模式下的还原矩形。
+    /// @param x 左上角 X 坐标。
+    /// @param y 左上角 Y 坐标。
+    /// @param width 窗口宽度。
+    /// @param height 窗口高度。
+    void setNormalFramePlacement(int x, int y, int width, int height) override;
 
     /**
      * @brief 全屏
@@ -106,6 +147,9 @@ private:
     /// @brief 从 GLFW 当前状态更新普通窗口还原矩形。
     void rememberCurrentWindowPlacement();
 
+    /// @brief 刷新无原生装饰窗口的平台外形。
+    void refreshWindowFrameShape();
+
     /// @brief 写入普通窗口还原矩形。
     /// @param x 窗口左上角 X 坐标。
     /// @param y 窗口左上角 Y 坐标。
@@ -134,10 +178,8 @@ private:
     /// @brief 全屏切换前的窗口尺寸备份。
     int m_backupSize[2] = { 1400, 900 };
 
-#ifdef _WIN32
-    std::unique_ptr<Win32WindowAdapter>
-        m_win32Adapter;  ///< Win32 窗口事件适配器
-#endif
+    /// @brief 无原生装饰窗口的平台行为适配器。
+    std::unique_ptr<IWindowFrameAdapter> m_windowFrameAdapter;
 };
 
 }  // namespace MMM::Graphic

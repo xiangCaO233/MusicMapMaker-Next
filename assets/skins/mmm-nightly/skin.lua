@@ -208,7 +208,7 @@ local Skin = {
 			window1 = {
 				initial_title = "title.FileManager",
 				initial_side = "left",
-				initial_ratio = 0.325,
+				initial_ratio = 0.26,
 			},
 		},
 	},
