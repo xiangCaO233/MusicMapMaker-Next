@@ -578,50 +578,49 @@ void SettingsView::drawSoftwareSettings()
 
         // 处理文件选择器结果 (保持在 Clay 之后，因为它们开启新窗口)
         {
-            static bool wasOpen = false;
-            bool        isOpen =
-                ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker");
-            if ( isOpen && !wasOpen ) {
-                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                        ImGuiCond_Always,
-                                        ImVec2(0.5f, 0.5f));
+            const float dpiScale =
+                Config::AppConfig::instance().getWindowContentScale();
+            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+            if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
+                Utils::prepareCenteredModalWindow({ 600, 400 });
             }
-            wasOpen = isOpen;
-        }
-        if ( ImGuiFileDialog::Instance()->Display("AsciiFontPicker",
-                                                  ImGuiWindowFlags_NoCollapse,
-                                                  { 600, 400 }) ) {
-            if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                settings.preferredAsciiFont =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-                if ( auto ctx = Graphic::VKContext::get() )
-                    ctx->get().requestFontRebuild();
-                changed = true;
+            if ( ImGuiFileDialog::Instance()->Display(
+                     "AsciiFontPicker",
+                     ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoSavedSettings,
+                     { 600, 400 }) ) {
+                if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                    settings.preferredAsciiFont =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().requestFontRebuild();
+                    changed = true;
+                }
+                ImGuiFileDialog::Instance()->Close();
             }
-            ImGuiFileDialog::Instance()->Close();
         }
 
         {
-            static bool wasOpen = false;
-            bool        isOpen =
-                ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker");
-            if ( isOpen && !wasOpen ) {
-                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                        ImGuiCond_Always,
-                                        ImVec2(0.5f, 0.5f));
+            const float dpiScale =
+                Config::AppConfig::instance().getWindowContentScale();
+            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+            if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
+                Utils::prepareCenteredModalWindow({ 600, 400 });
             }
-            wasOpen = isOpen;
-        }
-        if ( ImGuiFileDialog::Instance()->Display(
-                 "CjkFontPicker", ImGuiWindowFlags_NoCollapse, { 600, 400 }) ) {
-            if ( ImGuiFileDialog::Instance()->IsOk() ) {
-                settings.preferredCjkFont =
-                    ImGuiFileDialog::Instance()->GetFilePathName();
-                if ( auto ctx = Graphic::VKContext::get() )
-                    ctx->get().requestFontRebuild();
-                changed = true;
+            if ( ImGuiFileDialog::Instance()->Display(
+                     "CjkFontPicker",
+                     ImGuiWindowFlags_NoCollapse |
+                         ImGuiWindowFlags_NoSavedSettings,
+                     { 600, 400 }) ) {
+                if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                    settings.preferredCjkFont =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                    if ( auto ctx = Graphic::VKContext::get() )
+                        ctx->get().requestFontRebuild();
+                    changed = true;
+                }
+                ImGuiFileDialog::Instance()->Close();
             }
-            ImGuiFileDialog::Instance()->Close();
         }
     }
 

@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "audio/AudioManager.h"
 #include "common/AudioInfoUtils.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -11,6 +12,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 
 namespace MMM::UI
@@ -31,20 +33,13 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         XINFO("NewBeatmapWizard: Opening popup modal...");
     }
 
-    {
-        static bool wasOpen = false;
-        bool        isOpen =
-            ImGui::IsPopupOpen(TR("ui.wizard.new_beatmap.title").data());
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                    ImGuiCond_Always,
-                                    ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-    ImGui::SetNextWindowSize(ImVec2(600, 700), ImGuiCond_Appearing);
-    if ( ImGui::BeginPopupModal(TR("ui.wizard.new_beatmap.title").data(),
-                                &m_isOpen) ) {
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin(TR("ui.wizard.new_beatmap.title").data(),
+                          &m_isOpen,
+                          ImGuiWindowFlags_None,
+                          ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
+                          false) ) {
 
         auto DrawInput = [&](const char* label, char* buf, size_t bufSize) {
             ImGui::InputText(label, buf, bufSize);

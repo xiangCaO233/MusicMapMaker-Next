@@ -24,6 +24,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <fmt/core.h>
 #include <imgui.h>
@@ -604,13 +605,13 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
 
     if ( !state.open ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(680.0f * dpiScale, 560.0f * dpiScale),
-                             ImGuiCond_FirstUseEver);
-    bool popupOpen = state.open;
-    if ( ImGui::BeginPopupModal(
-             "OSU 元数据文本编辑###OsuMetadataTextEditorPopup",
-             &popupOpen,
-             ImGuiWindowFlags_None) ) {
+    bool                           popupOpen = state.open;
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin("OSU 元数据文本编辑###OsuMetadataTextEditorPopup",
+                          &popupOpen,
+                          ImGuiWindowFlags_None,
+                          ImVec2(680.0f * dpiScale, 560.0f * dpiScale),
+                          false) ) {
         ImGui::TextUnformatted(
             "按 .osu 文件的 General / Editor / Metadata / Difficulty / Events "
             "格式编辑。");
@@ -791,12 +792,13 @@ void renderMetadataJsonEditorPopup(float dpiScale)
 
     if ( !state.open ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(620.0f * dpiScale, 520.0f * dpiScale),
-                             ImGuiCond_FirstUseEver);
-    bool popupOpen = state.open;
-    if ( ImGui::BeginPopupModal("字段 JSON 编辑###MetadataJsonEditorPopup",
-                                &popupOpen,
-                                ImGuiWindowFlags_None) ) {
+    bool                           popupOpen = state.open;
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin("字段 JSON 编辑###MetadataJsonEditorPopup",
+                          &popupOpen,
+                          ImGuiWindowFlags_None,
+                          ImVec2(620.0f * dpiScale, 520.0f * dpiScale),
+                          false) ) {
         ImGui::Text("字段: %s", state.displayPath.c_str());
         ImGui::TextColored(ImVec4(0.55f, 0.55f, 0.55f, 1.0f),
                            "%s",

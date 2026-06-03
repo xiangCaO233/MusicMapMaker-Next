@@ -11,6 +11,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <ice/config/config.hpp>
@@ -78,18 +79,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
     if ( m_isCalculating ) {
         ImGui::OpenPopup("ProcessingWaveform");
-        {
-            static bool wasOpen = false;
-            bool        isOpen  = ImGui::IsPopupOpen("ProcessingWaveform");
-            if ( isOpen && !wasOpen ) {
-                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                        ImGuiCond_Always,
-                                        ImVec2(0.5f, 0.5f));
-            }
-            wasOpen = isOpen;
-        }
-        if ( ImGui::BeginPopupModal(
-                 "ProcessingWaveform", nullptr, ImGuiWindowFlags_None) ) {
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin("ProcessingWaveform") ) {
             ImGui::Text("%s", TR("ui.waveform.processing.text").data());
             ImGui::EndPopup();
         }

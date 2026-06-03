@@ -14,6 +14,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -150,41 +151,33 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     }
 
     {
-        static bool wasOpen = false;
-        bool        isOpen  = ImGui::IsPopupOpen("###SpectrumCalcModal");
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                    ImGuiCond_Always,
-                                    ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-    if ( ImGui::BeginPopupModal(
-             (std::string(TR("ui.spectrum.calc_modal.title").data()) +
-              "###SpectrumCalcModal")
-                 .c_str(),
-             nullptr,
-             ImGuiWindowFlags_None) ) {
-        float progress = m_calcProgress.load();
-        ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
-        ImGui::Spacing();
-        ImGui::ProgressBar(progress, ImVec2(400, 0));
-        ImGui::Text("%.0f%%", progress * 100.0f);
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin(
+                 (std::string(TR("ui.spectrum.calc_modal.title").data()) +
+                  "###SpectrumCalcModal")
+                     .c_str()) ) {
+            float progress = m_calcProgress.load();
+            ImGui::Text("%s", TR("ui.spectrum.calc_modal.text").data());
+            ImGui::Spacing();
+            ImGui::ProgressBar(progress, ImVec2(400, 0));
+            ImGui::Text("%.0f%%", progress * 100.0f);
 
-        if ( m_calcFinished.load() ) {
-            m_calcFinished.store(false);
-            m_isCalculating.store(false);
-            m_spectrumDetailLevel         = m_pendingSpectrumDetailLevel;
-            m_cacheSegmentsPerSecond      = m_pendingCacheSegmentsPerSecond;
-            m_numFrequencyBins            = m_pendingNumFrequencyBins;
-            m_textureReloadStarted        = false;
-            m_nextTextureChunkUploadIndex = 0;
-            m_texturesNeedReload          = !m_pendingChunksL.empty();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
+            if ( m_calcFinished.load() ) {
+                m_calcFinished.store(false);
+                m_isCalculating.store(false);
+                m_spectrumDetailLevel         = m_pendingSpectrumDetailLevel;
+                m_cacheSegmentsPerSecond      = m_pendingCacheSegmentsPerSecond;
+                m_numFrequencyBins            = m_pendingNumFrequencyBins;
+                m_textureReloadStarted        = false;
+                m_nextTextureChunkUploadIndex = 0;
+                m_texturesNeedReload          = !m_pendingChunksL.empty();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
 
-        if ( m_isCalculating.load() ) return;
+            if ( m_isCalculating.load() ) return;
+        }
     }
 
     float  visualOffset = Config::AppConfig::instance()

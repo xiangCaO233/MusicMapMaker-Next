@@ -9,6 +9,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
@@ -163,22 +164,15 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         ImGui::OpenPopup("Save Confirmation###SaveConfirmModal");
     }
 
-    // 强制设置弹窗显示位置在屏幕中央
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-
-    if ( ImGui::BeginPopupModal("Save Confirmation###SaveConfirmModal",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    ::MMM::UI::Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin("Save Confirmation###SaveConfirmModal") ) {
         std::string mapName =
             m_currentSnapshot ? m_currentSnapshot->beatmapName : "Unknown";
         ImGui::Text("%s", TR_FMT("ui.exit.confirm_msg_fmt", mapName).c_str());
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
-
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
         if ( ImGui::Button(TR("ui.file.save").data(),
                            ImVec2(120 * dpiScale, 0)) ) {

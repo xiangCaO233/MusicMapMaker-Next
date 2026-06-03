@@ -25,6 +25,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
@@ -40,56 +41,6 @@ namespace MMM::UI
 {
 namespace
 {
-/// @brief 文件流程弹窗使用的全局审美样式作用域。
-class FileDialogPopupStyleScope
-{
-public:
-    /// @brief 按当前全局审美设置推入弹窗样式。
-    /// @param dpiScale 当前窗口内容缩放。
-    explicit FileDialogPopupStyleScope(float dpiScale)
-    {
-        const auto& aesthetics =
-            Config::AppConfig::instance().getEditorSettings().aesthetics;
-        const float windowRound =
-            std::floor(aesthetics.windowRounding * dpiScale);
-        const float frameRound =
-            std::floor(aesthetics.frameRounding * dpiScale);
-        const ImVec2 windowPadding{
-            std::floor(aesthetics.windowPadding * dpiScale),
-            std::floor(aesthetics.windowPadding * dpiScale),
-        };
-        const ImVec2 itemSpacing{
-            std::floor(aesthetics.itemSpacing * dpiScale),
-            std::floor(aesthetics.itemSpacing * dpiScale),
-        };
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
-    }
-
-    /// @brief 恢复进入作用域前的 ImGui 样式。
-    ~FileDialogPopupStyleScope() { ImGui::PopStyleVar(STYLE_VAR_COUNT); }
-
-    /// @brief 禁止拷贝构造，避免重复弹出同一组 ImGui 样式。
-    FileDialogPopupStyleScope(const FileDialogPopupStyleScope&) = delete;
-    /// @brief 禁止拷贝赋值，避免作用域所有权语义不清。
-    FileDialogPopupStyleScope& operator=(const FileDialogPopupStyleScope&) =
-        delete;
-    /// @brief 禁止移动构造，确保样式弹出顺序与局部作用域一致。
-    FileDialogPopupStyleScope(FileDialogPopupStyleScope&&) = delete;
-    /// @brief 禁止移动赋值，确保样式作用域不被转移。
-    FileDialogPopupStyleScope& operator=(FileDialogPopupStyleScope&&) = delete;
-
-private:
-    /// @brief 构造函数中推入的样式变量数量。
-    static constexpr int STYLE_VAR_COUNT = 7;
-};
-
 /// @brief 将 ASCII 字符串转换为小写，用于扩展名判断。
 std::string toLowerAscii(std::string value)
 {
@@ -105,6 +56,29 @@ std::string getLowerExtension(const std::string& path)
 {
     return toLowerAscii(
         Config::pathToUtf8(Config::utf8ToPath(path).extension()));
+}
+
+/// @brief 将下一项控件放到当前内容区域的水平中心。
+/// @param itemWidth 控件宽度。
+/// @warning UI 绘制路径：只调整当前 ImGui 游标位置。
+void centerNextItem(float itemWidth)
+{
+    const float availableWidth = ImGui::GetContentRegionAvail().x;
+    if ( availableWidth > itemWidth ) {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                             (availableWidth - itemWidth) * 0.5f);
+    }
+}
+
+/// @brief 绘制水平居中的按钮。
+/// @param label 按钮文本和 ImGui ID。
+/// @param size 按钮尺寸。
+/// @return 按钮被点击时返回 true。
+/// @warning UI 绘制路径：只调整游标并调用 ImGui::Button。
+bool drawCenteredButton(const char* label, ImVec2 size)
+{
+    centerNextItem(size.x);
+    return ImGui::Button(label, size);
 }
 
 /// @brief 从文件选择器过滤器文本中解析扩展名。
@@ -339,11 +313,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title            = !meta.title_unicode.empty()
-                                   ? meta.title_unicode
-                                   : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount         = meta.track_count;
-            version          = meta.version.empty() ? "default" : meta.version;
+            title    = !meta.title_unicode.empty()
+                           ? meta.title_unicode
+                           : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount = meta.track_count;
+            version  = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -540,48 +514,50 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
 
     if ( !ImGui::IsPopupOpen(popupId) ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(520.0f * dpiScale, 0.0f),
-                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(520.0f * dpiScale, 0.0f)) ) {
+            ImGui::Text("导出 %s 前需要确认以下兼容性变化：",
+                        m_pendingExportFormatName.c_str());
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
 
-    FileDialogPopupStyleScope popupStyle(dpiScale);
-    if ( ImGui::BeginPopupModal(
-             popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
-        ImGui::Text("导出 %s 前需要确认以下兼容性变化：",
-                    m_pendingExportFormatName.c_str());
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+            for ( const auto& warning : m_pendingExportWarnings ) {
+                ImGui::BulletText("%s", warning.c_str());
+            }
 
-        for ( const auto& warning : m_pendingExportWarnings ) {
-            ImGui::BulletText("%s", warning.c_str());
+            ImGui::Spacing();
+            ImGui::TextWrapped("目标文件：%s", m_pendingExportPath.c_str());
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const ImVec2 actionButtonSize(120.0f * dpiScale, 0.0f);
+            const float  actionButtonRowWidth =
+                actionButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            centerNextItem(actionButtonRowWidth);
+            if ( ImGui::Button("继续导出", actionButtonSize) ) {
+                dispatchSaveBeatmapAs(m_pendingExportPath);
+                m_pendingExportPath.clear();
+                m_pendingExportFormatName.clear();
+                m_pendingExportWarnings.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(),
+                               actionButtonSize) ) {
+                m_pendingExportPath.clear();
+                m_pendingExportFormatName.clear();
+                m_pendingExportWarnings.clear();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
         }
-
-        ImGui::Spacing();
-        ImGui::TextWrapped("目标文件：%s", m_pendingExportPath.c_str());
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        if ( ImGui::Button("继续导出", ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            dispatchSaveBeatmapAs(m_pendingExportPath);
-            m_pendingExportPath.clear();
-            m_pendingExportFormatName.clear();
-            m_pendingExportWarnings.clear();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            m_pendingExportPath.clear();
-            m_pendingExportFormatName.clear();
-            m_pendingExportWarnings.clear();
-            ImGui::CloseCurrentPopup();
-        }
-
-        ImGui::EndPopup();
     }
 }
 
@@ -597,47 +573,46 @@ void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
 
     if ( !ImGui::IsPopupOpen(popupId) ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(360.0f * dpiScale, 0.0f),
-                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    std::string selectedExtension;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(360.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextUnformatted("选择另存为格式：");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
 
-    std::string               selectedExtension;
-    FileDialogPopupStyleScope popupStyle(dpiScale);
-    if ( ImGui::BeginPopupModal(
-             popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
-        ImGui::TextUnformatted("选择另存为格式：");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+            const ImVec2 buttonSize(300.0f * dpiScale, 0.0f);
+            if ( drawCenteredButton("MusicMapMaker Beatmap (.mmm)",
+                                    buttonSize) ) {
+                selectedExtension = ".mmm";
+            }
+            if ( drawCenteredButton("osu!mania Beatmap (.osu)", buttonSize) ) {
+                selectedExtension = ".osu";
+            }
+            if ( drawCenteredButton("RM Beatmap (.imd)", buttonSize) ) {
+                selectedExtension = ".imd";
+            }
+            if ( drawCenteredButton("Malody Chart (.mc)", buttonSize) ) {
+                selectedExtension = ".mc";
+            }
 
-        const ImVec2 buttonSize(300.0f * dpiScale, 0.0f);
-        if ( ImGui::Button("MusicMapMaker Beatmap (.mmm)", buttonSize) ) {
-            selectedExtension = ".mmm";
-        }
-        if ( ImGui::Button("osu!mania Beatmap (.osu)", buttonSize) ) {
-            selectedExtension = ".osu";
-        }
-        if ( ImGui::Button("RM Beatmap (.imd)", buttonSize) ) {
-            selectedExtension = ".imd";
-        }
-        if ( ImGui::Button("Malody Chart (.mc)", buttonSize) ) {
-            selectedExtension = ".mc";
-        }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            if ( drawCenteredButton(TR("ui.common.cancel").data(),
+                                    ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                ImGui::CloseCurrentPopup();
+            }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            ImGui::CloseCurrentPopup();
+            if ( !selectedExtension.empty() ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
-
-        if ( !selectedExtension.empty() ) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
     }
 
     if ( !selectedExtension.empty() ) {
@@ -657,54 +632,52 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
 
     if ( !ImGui::IsPopupOpen(popupId) ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(380.0f * dpiScale, 0.0f),
-                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    bool            hasSelection = false;
+    PackageFileType selectedType = m_selectedPackageFileType;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(380.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextUnformatted("选择目标打包格式：");
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
 
-    bool                      hasSelection = false;
-    PackageFileType           selectedType = m_selectedPackageFileType;
-    FileDialogPopupStyleScope popupStyle(dpiScale);
-    if ( ImGui::BeginPopupModal(
-             popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
-        ImGui::TextUnformatted("选择目标打包格式：");
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+            const ImVec2 buttonSize(320.0f * dpiScale, 0.0f);
+            if ( drawCenteredButton(
+                     getPackageTypeDisplayName(PackageFileType::Mcz).c_str(),
+                     buttonSize) ) {
+                selectedType = PackageFileType::Mcz;
+                hasSelection = true;
+            }
+            if ( drawCenteredButton(
+                     getPackageTypeDisplayName(PackageFileType::Osz).c_str(),
+                     buttonSize) ) {
+                selectedType = PackageFileType::Osz;
+                hasSelection = true;
+            }
+            if ( drawCenteredButton(
+                     getPackageTypeDisplayName(PackageFileType::Mpk).c_str(),
+                     buttonSize) ) {
+                selectedType = PackageFileType::Mpk;
+                hasSelection = true;
+            }
 
-        const ImVec2 buttonSize(320.0f * dpiScale, 0.0f);
-        if ( ImGui::Button(
-                 getPackageTypeDisplayName(PackageFileType::Mcz).c_str(),
-                 buttonSize) ) {
-            selectedType = PackageFileType::Mcz;
-            hasSelection = true;
-        }
-        if ( ImGui::Button(
-                 getPackageTypeDisplayName(PackageFileType::Osz).c_str(),
-                 buttonSize) ) {
-            selectedType = PackageFileType::Osz;
-            hasSelection = true;
-        }
-        if ( ImGui::Button(
-                 getPackageTypeDisplayName(PackageFileType::Mpk).c_str(),
-                 buttonSize) ) {
-            selectedType = PackageFileType::Mpk;
-            hasSelection = true;
-        }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            if ( drawCenteredButton(TR("ui.common.cancel").data(),
+                                    ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                ImGui::CloseCurrentPopup();
+            }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            ImGui::CloseCurrentPopup();
+            if ( hasSelection ) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
-
-        if ( hasSelection ) {
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
     }
 
     if ( hasSelection ) {
@@ -725,115 +698,122 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
 
     if ( !ImGui::IsPopupOpen(popupId) ) return;
 
-    ImGui::SetNextWindowSize(ImVec2(760.0f * dpiScale, 540.0f * dpiScale),
-                             ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                            ImGuiCond_Appearing,
-                            ImVec2(0.5f, 0.5f));
+    bool requestOutputPicker = false;
+    bool closePopup          = false;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_NoCollapse,
+                              ImVec2(760.0f * dpiScale, 540.0f * dpiScale),
+                              false) ) {
+            const auto selectedCount = static_cast<int>(
+                std::count_if(m_packageCandidateFiles.begin(),
+                              m_packageCandidateFiles.end(),
+                              [](const PackageCandidateFile& file) {
+                                  return file.selected;
+                              }));
+            ImGui::Text(
+                "目标格式：%s",
+                getPackageTypeDisplayName(m_selectedPackageFileType).c_str());
+            ImGui::SameLine();
+            ImGui::Text("已选择：%d / %d",
+                        selectedCount,
+                        static_cast<int>(m_packageCandidateFiles.size()));
 
-    bool                      requestOutputPicker = false;
-    bool                      closePopup          = false;
-    FileDialogPopupStyleScope popupStyle(dpiScale);
-    if ( ImGui::BeginPopupModal(
-             popupId, nullptr, ImGuiWindowFlags_NoCollapse) ) {
-        const auto selectedCount = static_cast<int>(std::count_if(
-            m_packageCandidateFiles.begin(),
-            m_packageCandidateFiles.end(),
-            [](const PackageCandidateFile& file) { return file.selected; }));
-        ImGui::Text(
-            "目标格式：%s",
-            getPackageTypeDisplayName(m_selectedPackageFileType).c_str());
-        ImGui::SameLine();
-        ImGui::Text("已选择：%d / %d",
-                    selectedCount,
-                    static_cast<int>(m_packageCandidateFiles.size()));
-
-        if ( ImGui::Button("全选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
-            for ( auto& file : m_packageCandidateFiles ) {
-                file.selected = true;
-            }
-        }
-        ImGui::SameLine();
-        if ( ImGui::Button("全不选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
-            for ( auto& file : m_packageCandidateFiles ) {
-                file.selected = false;
-            }
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        if ( m_packageCandidateFiles.empty() ) {
-            ImGui::TextUnformatted("没有找到符合当前打包格式规则的文件。");
-        } else {
-            if ( ImGui::BeginChild("PackageCandidateFilesChild",
-                                   ImVec2(0.0f, 360.0f * dpiScale),
-                                   true) ) {
-                constexpr ImGuiTableFlags tableFlags =
-                    ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
-                if ( ImGui::BeginTable("PackageCandidateFilesTable",
-                                       3,
-                                       tableFlags,
-                                       ImVec2(0.0f, 0.0f)) ) {
-                    ImGui::TableSetupColumn("打包",
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            64.0f * dpiScale);
-                    ImGui::TableSetupColumn("类型",
-                                            ImGuiTableColumnFlags_WidthFixed,
-                                            72.0f * dpiScale);
-                    ImGui::TableSetupColumn("文件",
-                                            ImGuiTableColumnFlags_WidthStretch);
-                    ImGui::TableHeadersRow();
-
-                    for ( std::size_t index = 0;
-                          index < m_packageCandidateFiles.size();
-                          ++index ) {
-                        auto& file = m_packageCandidateFiles[index];
-                        ImGui::PushID(static_cast<int>(index));
-                        ImGui::TableNextRow();
-                        ImGui::TableSetColumnIndex(0);
-                        ImGui::Checkbox("##PackageFileSelected",
-                                        &file.selected);
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::TextUnformatted(file.typeLabel.c_str());
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::TextUnformatted(file.relativePath.c_str());
-                        ImGui::PopID();
-                    }
-
-                    ImGui::EndTable();
+            if ( ImGui::Button("全选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+                for ( auto& file : m_packageCandidateFiles ) {
+                    file.selected = true;
                 }
             }
-            ImGui::EndChild();
-        }
+            ImGui::SameLine();
+            if ( ImGui::Button("全不选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+                for ( auto& file : m_packageCandidateFiles ) {
+                    file.selected = false;
+                }
+            }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
 
-        const bool canPack = selectedCount > 0;
-        if ( !canPack ) ImGui::BeginDisabled();
-        if ( ImGui::Button("打包到...", ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            m_pendingPackageRelativePaths =
-                collectSelectedPackageRelativePaths();
-            requestOutputPicker = true;
-            closePopup          = true;
-        }
-        if ( !canPack ) ImGui::EndDisabled();
-        ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
-            closePopup = true;
-            m_pendingPackageRelativePaths.clear();
-        }
+            if ( m_packageCandidateFiles.empty() ) {
+                ImGui::TextUnformatted("没有找到符合当前打包格式规则的文件。");
+            } else {
+                if ( ImGui::BeginChild("PackageCandidateFilesChild",
+                                       ImVec2(0.0f, 360.0f * dpiScale),
+                                       true) ) {
+                    constexpr ImGuiTableFlags tableFlags =
+                        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
+                        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+                    if ( ImGui::BeginTable("PackageCandidateFilesTable",
+                                           3,
+                                           tableFlags,
+                                           ImVec2(0.0f, 0.0f)) ) {
+                        ImGui::TableSetupColumn(
+                            "打包",
+                            ImGuiTableColumnFlags_WidthFixed,
+                            64.0f * dpiScale);
+                        ImGui::TableSetupColumn(
+                            "类型",
+                            ImGuiTableColumnFlags_WidthFixed,
+                            72.0f * dpiScale);
+                        ImGui::TableSetupColumn(
+                            "文件", ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableHeadersRow();
 
-        if ( closePopup ) {
-            m_showPackageFileSelectionWindow = false;
-            ImGui::CloseCurrentPopup();
+                        for ( std::size_t index = 0;
+                              index < m_packageCandidateFiles.size();
+                              ++index ) {
+                            auto& file = m_packageCandidateFiles[index];
+                            ImGui::PushID(static_cast<int>(index));
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Checkbox("##PackageFileSelected",
+                                            &file.selected);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextUnformatted(file.typeLabel.c_str());
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(file.relativePath.c_str());
+                            ImGui::PopID();
+                        }
+
+                        ImGui::EndTable();
+                    }
+                }
+                ImGui::EndChild();
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const bool   canPack = selectedCount > 0;
+            const ImVec2 footerButtonSize(120.0f * dpiScale, 0.0f);
+            const float  footerButtonRowWidth =
+                footerButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+            centerNextItem(footerButtonRowWidth);
+            if ( !canPack ) ImGui::BeginDisabled();
+            if ( ImGui::Button("打包到...", footerButtonSize) ) {
+                m_pendingPackageRelativePaths =
+                    collectSelectedPackageRelativePaths();
+                requestOutputPicker = true;
+                closePopup          = true;
+            }
+            if ( !canPack ) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(),
+                               footerButtonSize) ) {
+                closePopup = true;
+                m_pendingPackageRelativePaths.clear();
+            }
+
+            if ( closePopup ) {
+                m_showPackageFileSelectionWindow = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
-        ImGui::EndPopup();
     }
 
     if ( requestOutputPicker ) {
@@ -1037,8 +1017,8 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                         ImGuiFileDialogFlags_HideColumnType |
-                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                     ImGuiFileDialogFlags_HideColumnType |
+                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),

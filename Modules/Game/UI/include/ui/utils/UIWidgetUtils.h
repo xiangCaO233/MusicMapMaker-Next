@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace MMM::UI::Utils
@@ -152,6 +153,141 @@ static bool renderScrollingTreeNode(const std::string& id,
 }
 
 enum class TooltipDir { Left, Right };
+
+/// @brief 将下一个弹出式窗口固定到主视口中心。
+/// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
+/// @warning UI 热路径：只写入 ImGui 下一窗口状态。
+static void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f))
+{
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(
+        viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
+        ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
+    }
+}
+
+/// @brief 全局审美配置驱动的居中模态弹窗作用域。
+/// @warning UI 热路径：仅在模态弹窗绘制帧中使用，只做 ImGui next-window
+/// 状态、字体栈和样式栈操作。
+class CenteredModalPopupScope
+{
+public:
+    /// @brief 推入全局窗口样式。
+    /// @param dpiScale 当前窗口内容缩放。
+    explicit CenteredModalPopupScope(
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale())
+    {
+        const auto& aesthetics =
+            Config::AppConfig::instance().getEditorSettings().aesthetics;
+        const float windowRound =
+            std::floor(aesthetics.windowRounding * dpiScale);
+        const float frameRound =
+            std::floor(aesthetics.frameRounding * dpiScale);
+        const ImVec2 windowPadding{
+            std::floor(aesthetics.windowPadding * dpiScale),
+            std::floor(aesthetics.windowPadding * dpiScale),
+        };
+        const ImVec2 itemSpacing{
+            std::floor(aesthetics.itemSpacing * dpiScale),
+            std::floor(aesthetics.itemSpacing * dpiScale),
+        };
+
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+    }
+
+    /// @brief 恢复进入作用域前的字体与样式栈。
+    ~CenteredModalPopupScope()
+    {
+        popTitleFontIfNeeded();
+        ImGui::PopStyleVar(STYLE_VAR_COUNT);
+    }
+
+    /// @brief 禁止拷贝，避免重复弹出样式栈。
+    CenteredModalPopupScope(const CenteredModalPopupScope&) = delete;
+    /// @brief 禁止拷贝赋值，避免重复弹出样式栈。
+    CenteredModalPopupScope& operator=(const CenteredModalPopupScope&) = delete;
+    /// @brief 禁止移动，确保样式栈生命周期与局部作用域一致。
+    CenteredModalPopupScope(CenteredModalPopupScope&&) = delete;
+    /// @brief 禁止移动赋值，确保样式栈生命周期与局部作用域一致。
+    CenteredModalPopupScope& operator=(CenteredModalPopupScope&&) = delete;
+
+    /// @brief 开始一个居中的模态弹窗。
+    /// @param name 弹窗标题和 ImGui ID。
+    /// @param pOpen 可选打开状态指针。
+    /// @param flags 额外窗口标志。
+    /// @param desiredSize 期望尺寸，任意轴为 0 时交给内容自适应。
+    /// @param autoResize 是否按内容自动调整尺寸。
+    /// @return 弹窗本帧成功开始时返回 true。
+    /// @warning UI 热路径：每帧只设置下一窗口状态，不执行阻塞操作。
+    bool begin(const char* name, bool* pOpen = nullptr,
+               ImGuiWindowFlags flags = ImGuiWindowFlags_None,
+               ImVec2 desiredSize = ImVec2(0.0f, 0.0f), bool autoResize = true)
+    {
+        prepareCenteredModalWindow(desiredSize);
+
+        flags |= ImGuiWindowFlags_NoSavedSettings;
+        if ( autoResize ) {
+            flags |= ImGuiWindowFlags_AlwaysAutoResize;
+        }
+
+        m_titleFont = Config::SkinManager::instance().getFont("title");
+        if ( m_titleFont ) ImGui::PushFont(m_titleFont);
+        const bool opened = ImGui::BeginPopupModal(name, pOpen, flags);
+        popTitleFontIfNeeded();
+        return opened;
+    }
+
+    /// @brief 开始一个使用模态样式的普通弹出窗口。
+    /// @param name 窗口标题和 ImGui ID。
+    /// @param pOpen 可选打开状态指针。
+    /// @param flags 额外窗口标志。
+    /// @param desiredSize 期望尺寸，任意轴为 0 时交给内容自适应。
+    /// @param autoResize 是否按内容自动调整尺寸。
+    /// @return 窗口本帧成功开始时返回 true。
+    /// @warning UI 热路径：每帧只设置下一窗口状态，不执行阻塞操作。
+    bool beginWindow(const char* name, bool* pOpen = nullptr,
+                     ImGuiWindowFlags flags       = ImGuiWindowFlags_None,
+                     ImVec2           desiredSize = ImVec2(0.0f, 0.0f),
+                     bool             autoResize  = true)
+    {
+        prepareCenteredModalWindow(desiredSize);
+
+        flags |= ImGuiWindowFlags_NoSavedSettings;
+        if ( autoResize ) {
+            flags |= ImGuiWindowFlags_AlwaysAutoResize;
+        }
+
+        m_titleFont = Config::SkinManager::instance().getFont("title");
+        if ( m_titleFont ) ImGui::PushFont(m_titleFont);
+        const bool opened = ImGui::Begin(name, pOpen, flags);
+        popTitleFontIfNeeded();
+        return opened;
+    }
+
+private:
+    /// @brief 弹出 Begin 前推入的标题字体。
+    void popTitleFontIfNeeded()
+    {
+        if ( m_titleFont ) {
+            ImGui::PopFont();
+            m_titleFont = nullptr;
+        }
+    }
+
+    /// @brief 构造函数中推入的样式变量数量。
+    static constexpr int STYLE_VAR_COUNT = 7;
+
+    /// @brief Begin 前临时推入的标题字体。
+    ImFont* m_titleFont{ nullptr };
+};
 
 /// @brief 压入固定尺寸按钮的样式隔离变量，避免主题文字按钮内边距影响图标居中。
 /// @warning 每帧 UI 绘制路径调用，只允许保留轻量 ImGui 样式栈操作。

@@ -192,10 +192,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float muteButtonW = std::floor(32.0f * scale);
     const float rootPadX    = std::floor(12.0f * scale) * 2.0f;
     const float rootPadY    = std::floor(12.0f * scale) * 2.0f;
-    ImFont*     font        = snapshot.fileManagerFont
-                                  ? snapshot.fileManagerFont
-                                  : (snapshot.contentFont ? snapshot.contentFont
-                                                          : snapshot.fallbackFont);
+    ImFont*     font = snapshot.fileManagerFont
+                           ? snapshot.fileManagerFont
+                           : (snapshot.contentFont ? snapshot.contentFont
+                                                   : snapshot.fallbackFont);
 
     const std::array<const char*, 3> controlLabels{
         TR("ui.audio_manager.global_volume").data(),
@@ -235,7 +235,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
 
     const float controlRowWidth = footerPadX + labelWidth + itemSpacing +
                                   muteButtonW + itemSpacing + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPadX + std::max({ controlRowWidth, headerWidth }));
 
     float  listHeight = 0.0f;
@@ -849,16 +849,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             fmt::format("{} {}",
                         TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Appearing,
-                                ImVec2(0.5f, 0.5f));
         if ( m_openManageModal ) {
-            ImGui::SetNextWindowSize({ 420 * dpiScale, 0 });
             m_openManageModal = false;
         }
-        if ( ImGui::Begin(windowTitle.c_str(),
-                          &showManageModal,
-                          ImGuiWindowFlags_NoCollapse) ) {
+        Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
+        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
+                                           &showManageModal,
+                                           ImGuiWindowFlags_NoCollapse,
+                                           { 420 * dpiScale, 0.0f }) ) {
             if ( !showManageModal ) {
                 m_manageTrackId = "";
             }
@@ -970,32 +968,24 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
             // 二次确认弹窗
             {
-                static bool wasOpen = false;
-                bool        isOpen  = ImGui::IsPopupOpen("RemoveTrackConfirm");
-                if ( isOpen && !wasOpen ) {
-                    ImGui::SetNextWindowPos(
-                        ImGui::GetMainViewport()->GetCenter(),
-                        ImGuiCond_Always,
-                        ImVec2(0.5f, 0.5f));
+                Utils::CenteredModalPopupScope removeModalScope(dpiScale);
+                if ( removeModalScope.begin("RemoveTrackConfirm") ) {
+                    ImGui::Text("%s",
+                                TR("ui.audio_manager.remove_confirm").data());
+                    ImGui::Spacing();
+                    if ( ImGui::Button(TR("ui.common.confirm").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        engine.pushCommand(
+                            Logic::CmdRemoveAudioResource{ m_manageTrackId });
+                        m_manageTrackId = "";
+                    }
+                    ImGui::SameLine();
+                    if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
-                wasOpen = isOpen;
-            }
-            if ( ImGui::BeginPopupModal(
-                     "RemoveTrackConfirm", nullptr, ImGuiWindowFlags_None) ) {
-                ImGui::Text("%s", TR("ui.audio_manager.remove_confirm").data());
-                ImGui::Spacing();
-                if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    engine.pushCommand(
-                        Logic::CmdRemoveAudioResource{ m_manageTrackId });
-                    m_manageTrackId = "";
-                }
-                ImGui::SameLine();
-                if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
             }
 
             ImGui::End();

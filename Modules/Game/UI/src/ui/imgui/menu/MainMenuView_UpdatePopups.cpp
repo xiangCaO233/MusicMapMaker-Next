@@ -24,6 +24,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cmath>
@@ -97,25 +98,12 @@ void MainMenuView::renderAboutPopup()
         m_showAboutPopup = false;
     }
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    {
-        static bool wasOpen = false;
-        bool        isOpen  = ImGui::IsPopupOpen(TR("ui.help.about_title"));
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(
-                center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-
     /// @brief 当前窗口内容缩放倍率，用于将全局审美配置换算为实际像素。
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     /// @brief 当前 ImGui 主视口，用于按可见工作区限制关于弹窗尺寸。
     ImGuiViewport* mainViewport = ImGui::GetMainViewport();
     /// @brief 关于弹窗与主视口边缘保留的最小空隙。
     const float aboutWindowMargin = 32.0f * dpiScale;
-    /// @brief 关于弹窗的目标尺寸，按当前内容预留足够高度避免鸣谢区被裁切。
-    const ImVec2 desiredAboutWindowSize{ 680.0f * dpiScale, 520.0f * dpiScale };
     /// @brief 关于弹窗允许占用的最大尺寸，防止小窗口或高 DPI 下完全越界。
     const ImVec2 availableAboutWindowSize{
         std::max(360.0f * dpiScale,
@@ -123,46 +111,23 @@ void MainMenuView::renderAboutPopup()
         std::max(360.0f * dpiScale,
                  mainViewport->WorkSize.y - aboutWindowMargin),
     };
-    /// @brief 本次弹出实际应用的尺寸，优先满足内容完整展示。
+    /// @brief 关于弹窗目标宽度；高度交给内容自适应，避免底部按钮被裁切。
     const ImVec2 aboutWindowSize{
-        std::min(desiredAboutWindowSize.x, availableAboutWindowSize.x),
-        std::min(desiredAboutWindowSize.y, availableAboutWindowSize.y),
+        std::min(680.0f * dpiScale, availableAboutWindowSize.x),
+        0.0f,
     };
-    /// @brief 编辑器全局审美配置，关于弹窗也必须遵循同一套窗口样式。
-    const auto& aesthetics =
-        Config::AppConfig::instance().getEditorSettings().aesthetics;
-    /// @brief 全局窗口圆角的 DPI 后像素值。
-    float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
-    /// @brief 全局控件圆角的 DPI 后像素值。
-    float frameRound = std::floor(aesthetics.frameRounding * dpiScale);
-    /// @brief 全局窗口内边距的 DPI 后像素值。
-    ImVec2 windowPadding{ std::floor(aesthetics.windowPadding * dpiScale),
-                          std::floor(aesthetics.windowPadding * dpiScale) };
-    /// @brief 全局控件间距的 DPI 后像素值。
-    ImVec2 itemSpacing{ std::floor(aesthetics.itemSpacing * dpiScale),
-                        std::floor(aesthetics.itemSpacing * dpiScale) };
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, windowPadding);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(std::min(360.0f * dpiScale, aboutWindowSize.x), 0.0f),
+        availableAboutWindowSize);
 
-    /// @brief 标题字体仅用于 ImGui 窗口标题栏，Begin 后立即恢复内容字体。
-    ImFont* windowTitleFont = Config::SkinManager::instance().getFont("title");
-    /// @brief 关于弹窗窗口标志，禁用历史尺寸缓存并根据内容自动调整窗口大小。
-    const ImGuiWindowFlags aboutPopupFlags =
-        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
-    ImGui::SetNextWindowSize(aboutWindowSize, ImGuiCond_Appearing);
-    ImGui::SetNextWindowSizeConstraints(aboutWindowSize,
-                                        availableAboutWindowSize);
-    if ( windowTitleFont ) ImGui::PushFont(windowTitleFont);
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
     /// @brief 关于弹窗是否已成功开始渲染。
-    bool popupOpen = ImGui::BeginPopupModal(
-        TR("ui.help.about_title"), nullptr, aboutPopupFlags);
-    if ( windowTitleFont ) ImGui::PopFont();
+    bool popupOpen = modalScope.begin(TR("ui.help.about_title"),
+                                      nullptr,
+                                      ImGuiWindowFlags_None,
+                                      aboutWindowSize,
+                                      true);
 
     if ( popupOpen ) {
 
@@ -456,7 +421,6 @@ void MainMenuView::renderAboutPopup()
 
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar(7);
 }
 
 /// @brief 渲染更新检查中的状态弹窗。
@@ -467,28 +431,12 @@ void MainMenuView::renderUpdateCheckingPopup()
         m_showCheckingPopup = false;
     }
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    {
-        static bool wasOpen = false;
-        bool        isOpen  = ImGui::IsPopupOpen(TR("ui.help.check_update"));
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(
-                center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-
-    bool open = true;
-    if ( ImGui::BeginPopupModal(
-             TR("ui.help.check_update"), &open, ImGuiWindowFlags_None) ) {
+    bool  open     = true;
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin(TR("ui.help.check_update"), &open) ) {
         if ( !open ) ImGui::CloseCurrentPopup();
-        auto  info     = m_updateChecker->getInfo();
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
+        auto info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
             float textWidth =
@@ -537,7 +485,6 @@ void MainMenuView::renderUpdateCheckingPopup()
             }
         }
 
-        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 
@@ -560,34 +507,18 @@ void MainMenuView::renderUpdatePopup()
             ImGui::OpenPopup(TR("ui.help.update_found"));
     }
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    {
-        static bool wasOpen = false;
-        bool        isOpen  = ImGui::IsPopupOpen(TR("ui.help.update_found"));
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(
-                center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-
     bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
                       info.status == MMM::Network::UpdateStatus::kDownloaded);
     bool open      = true;
-    if ( ImGui::BeginPopupModal(TR("ui.help.update_found"),
-                                isWorking ? nullptr : &open,
-                                ImGuiWindowFlags_None) ) {
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin(TR("ui.help.update_found"),
+                          isWorking ? nullptr : &open) ) {
         if ( !open ) {
             ImGui::CloseCurrentPopup();
             m_updatePopupCanceled = true;
         }
-        info           = m_updateChecker->getInfo();
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
+        info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
             // --- Info Table ---
@@ -751,7 +682,6 @@ void MainMenuView::renderUpdatePopup()
             }
         }
 
-        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 }
@@ -764,25 +694,9 @@ void MainMenuView::renderUpdateSuccessPopup()
         m_showUpdateSuccessPopup = false;
     }
 
-    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-    {
-        static bool wasOpen = false;
-        bool        isOpen  = ImGui::IsPopupOpen(TR("ui.help.update_success"));
-        if ( isOpen && !wasOpen ) {
-            ImGui::SetNextWindowPos(
-                center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        }
-        wasOpen = isOpen;
-    }
-
-    if ( ImGui::BeginPopupModal(
-             TR("ui.help.update_success"), nullptr, ImGuiWindowFlags_None) ) {
-        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                            ImVec2(32.0f * dpiScale, 24.0f * dpiScale));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
-                            ImVec2(8.0f * dpiScale, 16.0f * dpiScale));
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin(TR("ui.help.update_success")) ) {
 
         ImVec4 greenColor(0.3f, 1.0f, 0.3f, 1.0f);
         float  textWidth =
@@ -820,7 +734,6 @@ void MainMenuView::renderUpdateSuccessPopup()
             ImGui::CloseCurrentPopup();
         }
 
-        ImGui::PopStyleVar(2);
         ImGui::EndPopup();
     }
 }

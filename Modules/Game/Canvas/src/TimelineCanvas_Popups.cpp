@@ -9,6 +9,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -350,32 +351,13 @@ void TimelineCanvas::finishKeepSpeedBinding()
 
 void TimelineCanvas::renderEventEditorPopup()
 {
-    static bool wasOpen = false;
-    bool        isOpen  = ImGui::IsPopupOpen("TimelineEventEditor");
-    if ( isOpen && !wasOpen ) {
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Always,
-                                ImVec2(0.5f, 0.5f));
-    }
-    wasOpen = isOpen;
-
-    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-    float windowRound =
-        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
-    float frameRound =
-        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
-    float windowPaddingVal =
-        std::floor(editorSettings.aesthetics.windowPadding * dpiScale);
 
-    ImGui::SetNextWindowSize(ImVec2(300 * dpiScale, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                        ImVec2(windowPaddingVal, windowPaddingVal));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-
-    if ( ImGui::BeginPopupModal(
-             "TimelineEventEditor", &m_isPopupOpen, ImGuiWindowFlags_None) ) {
+    ::MMM::UI::Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin("TimelineEventEditor",
+                          &m_isPopupOpen,
+                          ImGuiWindowFlags_None,
+                          ImVec2(300 * dpiScale, 0.0f)) ) {
         std::string typeTitle = m_editType;
 
         ImGui::Text(
@@ -443,38 +425,17 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar(3);
 }
 
 void TimelineCanvas::renderEventCreationPopup()
 {
-    static bool wasOpen = false;
-    bool        isOpen  = ImGui::IsPopupOpen("TimelineCreateEvent");
-    if ( isOpen && !wasOpen ) {
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Always,
-                                ImVec2(0.5f, 0.5f));
-    }
-    wasOpen = isOpen;
-
-    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-    float windowRound =
-        std::floor(editorSettings.aesthetics.windowRounding * dpiScale);
-    float frameRound =
-        std::floor(editorSettings.aesthetics.frameRounding * dpiScale);
-    float windowPaddingVal =
-        std::floor(editorSettings.aesthetics.windowPadding * dpiScale);
 
-    ImGui::SetNextWindowSize(ImVec2(350 * dpiScale, 0));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                        ImVec2(windowPaddingVal, windowPaddingVal));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
-    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
-
-    if ( ImGui::BeginPopupModal("TimelineCreateEvent",
-                                &m_isCreatePopupOpen,
-                                ImGuiWindowFlags_None) ) {
+    ::MMM::UI::Utils::CenteredModalPopupScope modalScope(dpiScale);
+    if ( modalScope.begin("TimelineCreateEvent",
+                          &m_isCreatePopupOpen,
+                          ImGuiWindowFlags_None,
+                          ImVec2(350 * dpiScale, 0.0f)) ) {
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::Separator();
         ImGui::Spacing();
@@ -612,7 +573,6 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::EndPopup();
     }
-    ImGui::PopStyleVar(3);
 }
 
 /// @brief 渲染可批量编辑时间点的表格窗口（非模态）

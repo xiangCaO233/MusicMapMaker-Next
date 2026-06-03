@@ -189,16 +189,14 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             fmt::format("{} {}",
                         TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Appearing,
-                                ImVec2(0.5f, 0.5f));
         if ( m_openManageModal ) {
-            ImGui::SetNextWindowSize({ 420 * dpiScale, 0 });
             m_openManageModal = false;
         }
-        if ( ImGui::Begin(windowTitle.c_str(),
-                          &showBMModal,
-                          ImGuiWindowFlags_NoCollapse) ) {
+        Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
+        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
+                                           &showBMModal,
+                                           ImGuiWindowFlags_NoCollapse,
+                                           { 420 * dpiScale, 0.0f }) ) {
             if ( !showBMModal ) {
                 m_manageBeatmapPath = "";
             }
@@ -264,33 +262,24 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
             // --- 二次确认弹窗 ---
             {
-                static bool wasOpen = false;
-                bool        isOpen = ImGui::IsPopupOpen("RemoveBeatmapConfirm");
-                if ( isOpen && !wasOpen ) {
-                    ImGui::SetNextWindowPos(
-                        ImGui::GetMainViewport()->GetCenter(),
-                        ImGuiCond_Always,
-                        ImVec2(0.5f, 0.5f));
+                Utils::CenteredModalPopupScope removeModalScope(dpiScale);
+                if ( removeModalScope.begin("RemoveBeatmapConfirm") ) {
+                    ImGui::Text("%s",
+                                TR("ui.beatmap_manager.remove_confirm").data());
+                    ImGui::Spacing();
+                    if ( ImGui::Button(TR("ui.common.confirm").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        engine.pushCommand(
+                            Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
+                        m_manageBeatmapPath = "";
+                    }
+                    ImGui::SameLine();
+                    if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
-                wasOpen = isOpen;
-            }
-            if ( ImGui::BeginPopupModal(
-                     "RemoveBeatmapConfirm", nullptr, ImGuiWindowFlags_None) ) {
-                ImGui::Text("%s",
-                            TR("ui.beatmap_manager.remove_confirm").data());
-                ImGui::Spacing();
-                if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    engine.pushCommand(
-                        Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
-                    m_manageBeatmapPath = "";
-                }
-                ImGui::SameLine();
-                if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
             }
 
             ImGui::End();
