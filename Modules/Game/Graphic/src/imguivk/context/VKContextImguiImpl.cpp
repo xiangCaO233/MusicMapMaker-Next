@@ -433,8 +433,8 @@ void VKContext::applyTheme()
             appliedTheme = Config::UITheme::CleanDark;
         else if ( skinTheme == "Moonlight" )
             appliedTheme = Config::UITheme::Moonlight;
-        else if ( skinTheme == "MmmDefault" )
-            appliedTheme = Config::UITheme::MmmDefault;
+        else if ( skinTheme == "Cecilia" || skinTheme == "MmmDefault" )
+            appliedTheme = Config::UITheme::Cecilia;
         else if ( skinTheme == "ComfortableLight" )
             appliedTheme = Config::UITheme::ComfortableLight;
         else if ( skinTheme == "HazyDark" )
@@ -474,7 +474,7 @@ void VKContext::applyTheme()
     case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
     case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
     case Config::UITheme::Moonlight: setMoonlightStyle(); break;
-    case Config::UITheme::MmmDefault: setMmmDefaultStyle(); break;
+    case Config::UITheme::Cecilia: setCeciliaStyle(); break;
     case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
     case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
     case Config::UITheme::Everforest: setEverforestStyle(); break;
@@ -3202,9 +3202,9 @@ void VKContext::setMoonlightStyle()
 }
 
 /**
- * @brief 设置 mmm-default 塞西莉娅配色派生样式。
+ * @brief 设置 Cecilia 塞西莉娅配色派生样式。
  */
-void VKContext::setMmmDefaultStyle()
+void VKContext::setCeciliaStyle()
 {
     setMoonlightStyle();
 

@@ -22,7 +22,7 @@ local divisor_list = { 1, 2, 3, 4, 6, 8, 12, 16 }
 
 local Skin = {
 	meta = {
-		name = "MMM Default",
+		name = "Cecilia",
 		author = "xiang",
 		version = "1.0",
 		effectbasefps = 60,
@@ -83,7 +83,7 @@ local Skin = {
 	},
 
     -- UI 默认主题
-    theme = "MmmDefault",
+    theme = "Cecilia",
 
 	-- 音频配置
 	audios = {

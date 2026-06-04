@@ -439,9 +439,9 @@ private:
     void setMoonlightStyle();
 
     /**
-     * @brief 设置 mmm-default 塞西莉娅配色派生样式。
+     * @brief 设置 Cecilia 塞西莉娅配色派生样式。
      */
-    void setMmmDefaultStyle();
+    void setCeciliaStyle();
 
     /**
      * @brief 设置ComfortableLight样式

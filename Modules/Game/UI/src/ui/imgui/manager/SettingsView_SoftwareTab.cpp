@@ -320,7 +320,7 @@ void SettingsView::drawSoftwareSettings()
                     "FutureDark",
                     "CleanDark",
                     "Moonlight",
-                    "MMM Default",
+                    "Cecilia",
                     "ComfortableLight",
                     "HazyDark",
                     "Everforest",
