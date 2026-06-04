@@ -5,6 +5,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include <algorithm>
 
 namespace MMM::UI
 {
@@ -19,6 +20,8 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     auto& aesthetics =
         Config::AppConfig::instance().getEditorSettings().aesthetics;
+    const bool fixedToolWindow =
+        Config::AppConfig::instance().getEditorSettings().fixedToolWindow;
     float floatGap = std::floor(aesthetics.windowGap * dpiScale);
 
     ImGui::SetNextWindowPos(
@@ -76,27 +79,36 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
     if ( titleFont ) ImGui::PopFont();
 
-    static float lastDpiScale  = -1.0f;
-    static bool  is_first_time = true;
-    bool shouldResetLayout     = (std::abs(dpiScale - lastDpiScale) > 0.001f);
+    static float lastDpiScale           = -1.0f;
+    static bool  lastFixedToolWindow    = true;
+    static bool  hasLastFixedToolWindow = false;
+    static bool  is_first_time          = true;
+    bool shouldResetLayout = (std::abs(dpiScale - lastDpiScale) > 0.001f) ||
+                             !hasLastFixedToolWindow ||
+                             lastFixedToolWindow != fixedToolWindow;
     bool projectLayoutLoaded =
         MainDockSpaceUI::consumeProjectWorkspaceLayoutLoaded();
     if ( projectLayoutLoaded ) {
-        is_first_time     = false;
-        lastDpiScale      = dpiScale;
-        shouldResetLayout = false;
+        is_first_time          = false;
+        lastDpiScale           = dpiScale;
+        lastFixedToolWindow    = fixedToolWindow;
+        hasLastFixedToolWindow = true;
+        shouldResetLayout      = false;
     }
 
     if ( is_first_time || shouldResetLayout ) {
-        is_first_time = false;
-        lastDpiScale  = dpiScale;
+        is_first_time          = false;
+        lastDpiScale           = dpiScale;
+        lastFixedToolWindow    = fixedToolWindow;
+        hasLastFixedToolWindow = true;
 
         ImGui::DockBuilderRemoveNode(dockspace_id);
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        const float dockspaceWidth = viewport->WorkSize.x - sidebarWidth -
+                                     toolbarWidth - 4.0f * floatGap;
         ImGui::DockBuilderSetNodeSize(
             dockspace_id,
-            ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth -
-                       4.0f * floatGap,
+            ImVec2(dockspaceWidth,
                    viewport->WorkSize.y - menuBarHeight - statusBarHeight -
                        2.0f * floatGap));
 
@@ -111,9 +123,29 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         dock_id_left = ImGui::DockBuilderSplitNode(
             dockspace_id, sidebarDir, sidebarRatio, nullptr, &dock_id_right);
 
+        ImGuiID dock_id_work = dock_id_right;
+        if ( !fixedToolWindow ) {
+            const float toolNodeRatio = std::clamp(
+                (std::floor(32.0f * dpiScale) +
+                 2.0f * std::floor(aesthetics.windowPadding * dpiScale)) /
+                    std::max(dockspaceWidth, 1.0f),
+                0.035f,
+                0.12f);
+            ImGuiID dock_id_tool = 0;
+            dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
+                                                               ImGuiDir_Right,
+                                                               toolNodeRatio,
+                                                               nullptr,
+                                                               &dock_id_work);
+            ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
+            MainDockSpaceUI::setToolDockId(dock_id_tool);
+        } else {
+            MainDockSpaceUI::setToolDockId(0);
+        }
+
         ImGuiID dock_id_center_canvas;
         ImGuiID dock_id_preview;
-        dock_id_preview = ImGui::DockBuilderSplitNode(dock_id_right,
+        dock_id_preview = ImGui::DockBuilderSplitNode(dock_id_work,
                                                       ImGuiDir_Right,
                                                       0.20f,
                                                       nullptr,

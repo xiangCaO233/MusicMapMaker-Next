@@ -68,12 +68,30 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
+    auto& engine           = Logic::EditorEngine::instance();
+    auto  findSessionIndex = [this, &engine]() -> int32_t {
+        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
+            const auto* entry = engine.getSessionEntry(i);
+            if ( entry && entry->cameraId == m_cameraId ) {
+                return i;
+            }
+        }
+        return -1;
+    };
+
     // 1. 检查保存确认拦截
     if ( !m_isOpen ) {
         if ( !m_closeConfirmed && m_currentSnapshot &&
              m_currentSnapshot->isDirty ) {
             m_isOpen          = true;
             m_showSaveConfirm = true;
+        } else if ( shouldKeepOpenForLastSessionReset() ) {
+            if ( int32_t myIdx = findSessionIndex(); myIdx != -1 ) {
+                engine.resetSessionToLogoPlaceholder(myIdx,
+                                                     TR("canvas.welcome").pStr);
+            }
+            m_isOpen         = true;
+            m_closeConfirmed = false;
         }
     }
 
@@ -86,17 +104,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
     }
 
-    auto& engine           = Logic::EditorEngine::instance();
-    bool  showClose        = engine.getSessionCount() > 1;
-    auto  findSessionIndex = [this, &engine]() -> int32_t {
-        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
-            const auto* entry = engine.getSessionEntry(i);
-            if ( entry && entry->cameraId == m_cameraId ) {
-                return i;
-            }
-        }
-        return -1;
-    };
+    bool    showClose = false;
+    int32_t myIndex   = findSessionIndex();
+    if ( myIndex != -1 ) {
+        const auto* entry = engine.getSessionEntry(myIndex);
+        showClose         = entry && !entry->isLogoPlaceholder;
+    }
 
     ImGuiID dockId =
         m_shouldDockToCenter ? UI::MainDockSpaceUI::getCenterDockId() : 0;
@@ -284,11 +297,29 @@ bool Basic2DCanvas::isDirty() const
 
 bool Basic2DCanvas::isOpen() const
 {
+    if ( shouldKeepOpenForLastSessionReset() ) {
+        return true;
+    }
     if ( !m_isOpen && !m_closeConfirmed && m_currentSnapshot &&
          m_currentSnapshot->isDirty ) {
         return true;
     }
     return m_isOpen;
+}
+
+bool Basic2DCanvas::shouldKeepOpenForLastSessionReset() const
+{
+    if ( m_isOpen ) {
+        return false;
+    }
+
+    auto& engine = Logic::EditorEngine::instance();
+    if ( engine.getSessionCount() != 1 ) {
+        return false;
+    }
+
+    const auto* entry = engine.getSessionEntry(0);
+    return entry && entry->cameraId == m_cameraId && !entry->isLogoPlaceholder;
 }
 
 void Basic2DCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,

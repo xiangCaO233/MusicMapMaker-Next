@@ -17,6 +17,11 @@ class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 public:
     static ImGuiID getCenterDockId() { return s_centerDockId; }
     static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
+    /// @brief 获取解除固定时工具窗口使用的右侧停靠节点。
+    static ImGuiID getToolDockId() { return s_toolDockId; }
+    /// @brief 设置解除固定时工具窗口使用的右侧停靠节点。
+    /// @param id 右侧工具停靠节点 ID。
+    static void setToolDockId(ImGuiID id) { s_toolDockId = id; }
     /// @brief 标记本帧已加载项目专属 ImGui 布局，跳过默认 DockBuilder 重置。
     static void markProjectWorkspaceLayoutLoaded()
     {
@@ -32,6 +37,7 @@ public:
 
 private:
     static inline ImGuiID s_centerDockId{ 0 };
+    static inline ImGuiID s_toolDockId{ 0 };
     static inline bool    s_projectWorkspaceLayoutLoaded{ false };
 
 public:

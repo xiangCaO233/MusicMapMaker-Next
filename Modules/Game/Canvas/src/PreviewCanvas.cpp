@@ -1,6 +1,7 @@
 #include "canvas/PreviewCanvas.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
@@ -41,11 +42,23 @@ PreviewCanvas::PreviewCanvas(
 /// 热路径：主渲染线程每帧执行；只发送变化后的鼠标命令，避免每帧重复事件。
 void PreviewCanvas::update(UI::UIManager* sourceManager)
 {
+    auto& appConfig      = Config::AppConfig::instance();
+    auto& editorSettings = appConfig.getEditorSettings();
+    if ( !editorSettings.showPreviewWindow ) {
+        return;
+    }
+
     // 预览窗口专用 ID：###PreviewWindow
     std::string windowName =
         fmt::format("{}###PreviewWindow", TR("canvas.preview"));
+    bool windowOpen = editorSettings.showPreviewWindow;
 
-    UI::LayoutContext lctx(m_layoutCtx, windowName);
+    UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
+    if ( !windowOpen ) {
+        editorSettings.showPreviewWindow = false;
+        appConfig.save();
+        return;
+    }
     RenderContext rctx(this, windowName.c_str(), m_targetWidth, m_targetHeight);
 
     // --- 交互：发送鼠标位置指令给逻辑线程 ---
@@ -149,7 +162,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
 bool PreviewCanvas::isDirty() const
 {
-    return true;
+    return Config::AppConfig::instance().getEditorSettings().showPreviewWindow;
 }
 
 /// @brief 判断当前帧是否需要准备预览快照。
@@ -159,7 +172,8 @@ bool PreviewCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
     (void)snapshot;
-    return m_syncBuffer && m_isOpen;
+    return m_syncBuffer && m_isOpen &&
+           Config::AppConfig::instance().getEditorSettings().showPreviewWindow;
 }
 
 /// @brief 在线程池中拉取并准备预览画布快照。

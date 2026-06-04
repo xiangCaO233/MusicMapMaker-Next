@@ -78,9 +78,25 @@ private:
      * @param tool 对应的工具类型
      * @param tooltip 悬停提示
      * @param width 按钮宽度
+     * @param height 按钮高度
+     * @param shortLabel 图标下方显示的短标签
+     * @param showLabel 是否显示短标签
      */
     void drawToolButton(const char* icon, Logic::EditTool tool,
-                        const char* tooltip, float width);
+                        const char* tooltip, float width, float height,
+                        const char* shortLabel, bool showLabel);
+
+    /// @brief 绘制带可选短标签的图标按钮。
+    /// @param icon 图标字符串。
+    /// @param id 不显示的 ImGui ID。
+    /// @param shortLabel 图标下方显示的短标签。
+    /// @param width 按钮宽度。
+    /// @param height 按钮高度。
+    /// @param showLabel 是否显示短标签。
+    /// @return 被点击时返回 true。
+    bool drawIconButton(const char* icon, const char* id,
+                        const char* shortLabel, float width, float height,
+                        bool showLabel) const;
 
     /// @brief 从当前皮肤初始化调色盘默认颜色。
     void initializeColorPalette();

@@ -13,6 +13,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <limits>
 #include <lunasvg.h>
 
 namespace MMM::UI
@@ -114,6 +115,10 @@ void SideBarUI::update(UIManager* sourceManager)
     float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
     float sidebarWidth = GetSidebarWidth(dpiScale);
     float btnSize      = std::floor(sidebarBaseW * dpiScale);
+    bool  showManagerLabels =
+        Config::AppConfig::instance().getEditorSettings().showManagerLabels;
+    float btnHeight =
+        showManagerLabels ? std::floor(48.0f * dpiScale) : btnSize;
     float expandedBtnW = sidebarWidth;
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
@@ -212,16 +217,19 @@ void SideBarUI::update(UIManager* sourceManager)
                 }
             }
 
-            // --- 绘制内容 (图标 + 分隔线 + 文本) ---
-            float iconAreaW = btnSize;
-            float sepX      = rect.x + iconAreaW;
+            // --- 绘制内容 (图标 + 可选短标签) ---
+            float iconAreaW = rect.width;
 
             // [A] 绘制图标
             ImFont* sideBarFont = skinCfg.getFont("pure_icons");
             if ( sideBarFont ) ImGui::PushFont(sideBarFont);
             ImVec2 iconSize = ImGui::CalcTextSize(iconStr);
-            ImVec2 iconPos  = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                                rect.y + (rect.height - iconSize.y) * 0.5f };
+            float  iconY    = rect.y + (rect.height - iconSize.y) * 0.5f;
+            if ( showManagerLabels ) {
+                iconY = rect.y + std::floor(5.0f * dpiScale);
+            }
+            ImVec2 iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
+                               iconY };
             ImGui::GetWindowDrawList()->AddText(
                 sideBarFont,
                 ImGui::GetFontSize(),
@@ -230,32 +238,29 @@ void SideBarUI::update(UIManager* sourceManager)
                 iconStr);
             if ( sideBarFont ) ImGui::PopFont();
 
-            // 2. 分隔线
-            ImVec4 sepCol = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-            sepCol.w *= 0.3f;
-            ImGui::GetWindowDrawList()->AddLine(
-                { sepX, rect.y + rect.height * 0.25f },
-                { sepX, rect.y + rect.height * 0.75f },
-                ImGui::GetColorU32(sepCol),
-                std::floor(1.0f * dpiScale));
-
-            // 3. 文本描述
-            std::string label    = TabToShortLabel(tab);
-            ImFont*     menuFont = skinCfg.getFont("menu");
-            if ( menuFont ) {
-                ImGui::PushFont(menuFont);
-                ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
-                float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
-                ImGui::GetWindowDrawList()->AddText(
-                    menuFont,
-                    ImGui::GetFontSize(),
-                    labelPos,
-                    ImGui::GetColorU32(ImGuiCol_Text),
-                    label.c_str());
-                ImGui::PopFont();
+            if ( showManagerLabels ) {
+                std::string label    = TabToShortLabel(tab);
+                ImFont*     menuFont = skinCfg.getFont("menu");
+                if ( menuFont ) {
+                    float labelFontSize = std::floor(
+                        std::min(ImGui::GetFontSize(), rect.width * 0.42f));
+                    ImVec2 labelSize = menuFont->CalcTextSizeA(
+                        labelFontSize,
+                        std::numeric_limits<float>::max(),
+                        0.0f,
+                        label.c_str());
+                    ImVec2 labelPos = {
+                        rect.x + (rect.width - labelSize.x) * 0.5f,
+                        rect.y + rect.height - labelSize.y -
+                            std::floor(4.0f * dpiScale),
+                    };
+                    ImGui::GetWindowDrawList()->AddText(
+                        menuFont,
+                        labelFontSize,
+                        labelPos,
+                        ImGui::GetColorU32(ImGuiCol_Text),
+                        label.c_str());
+                }
             }
 
             // --- 悬停提示 (保留以增强可用性) ---
@@ -276,14 +281,14 @@ void SideBarUI::update(UIManager* sourceManager)
             .setSpacing(std::floor(aesthetics.itemSpacing * dpiScale))
             .addElement("SearchButton",
                         Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnHeight),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(
                                 ICON_MMM_SEARCH, SideBarTab::Search, rect);
                         })
             .addElement("FileExplorerButton",
                         Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnHeight),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_FOLDER_OPEN,
                                               SideBarTab::FileExplorer,
@@ -291,7 +296,7 @@ void SideBarUI::update(UIManager* sourceManager)
                         })
             .addElement("AudioExplorerButton",
                         Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnHeight),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_MUSIC,
                                               SideBarTab::AudioExplorer,
@@ -299,7 +304,7 @@ void SideBarUI::update(UIManager* sourceManager)
                         })
             .addElement("BeatMapExplorerButton",
                         Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnHeight),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(ICON_MMM_FILE,
                                               SideBarTab::BeatMapExplorer,
@@ -308,7 +313,7 @@ void SideBarUI::update(UIManager* sourceManager)
             .addSpring()
             .addElement("SettingsButton",
                         Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
+                        Sizing::Fixed(btnHeight),
                         [&](Clay_BoundingBox rect, bool isHovered) {
                             DrawSidebarButton(
                                 ICON_MMM_COG, SideBarTab::Settings, rect);

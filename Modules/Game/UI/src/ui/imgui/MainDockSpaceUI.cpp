@@ -149,6 +149,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     float sidebarWidth =
         SideBarUI::GetSidebarWidth(dpiScale) + 2.0f * windowPaddingVal;
     float toolbarWidth = std::floor(32.0f * dpiScale) + 2.0f * windowPaddingVal;
+    float toolbarLayoutWidth =
+        editorSettings.fixedToolWindow ? toolbarWidth : 0.0f;
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
     ImGuiStyle& style         = ImGui::GetStyle();
@@ -174,15 +176,18 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     handleNativeWindowFrameInteraction(sourceManager, dpiScale);
 
     // --- 1. 顶部菜单栏 ---
-    renderMenuBar(
-        sourceManager, menuBarHeight, sidebarWidth, toolbarWidth, dpiScale);
+    renderMenuBar(sourceManager,
+                  menuBarHeight,
+                  sidebarWidth,
+                  toolbarLayoutWidth,
+                  dpiScale);
 
     // --- 2. 停靠空间 ---
     renderDockingSpace(sourceManager,
                        menuBarHeight,
                        statusBarHeight,
                        sidebarWidth,
-                       toolbarWidth);
+                       toolbarLayoutWidth);
 
     // --- 3. 底部状态栏 ---
     renderStatusBar(sourceManager, statusBarHeight, dpiScale);
@@ -190,14 +195,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     // --- 4. 右侧工具栏 (保持原样调用的简易块) ---
     {
         float floatGap = std::floor(aesthetics.windowGap * dpiScale);
-        ImGui::SetNextWindowPos(
-            ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - toolbarWidth -
-                       floatGap,
-                   viewport->WorkPos.y + menuBarHeight + floatGap),
-            ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(toolbarWidth,
-                                        viewport->WorkSize.y - menuBarHeight -
-                                            statusBarHeight - 2.0f * floatGap));
+        if ( editorSettings.fixedToolWindow ) {
+            ImGui::SetNextWindowPos(
+                ImVec2(viewport->WorkPos.x + viewport->WorkSize.x -
+                           toolbarWidth - floatGap,
+                       viewport->WorkPos.y + menuBarHeight + floatGap),
+                ImGuiCond_Always);
+            ImGui::SetNextWindowSize(
+                ImVec2(toolbarWidth,
+                       viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+                           2.0f * floatGap));
+        }
         ImGui::SetNextWindowViewport(viewport->ID);
         m_toolbarView.update(sourceManager);
     }

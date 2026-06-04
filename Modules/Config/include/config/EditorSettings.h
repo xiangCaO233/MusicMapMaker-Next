@@ -716,6 +716,21 @@ struct EditorSettings {
     /// @brief 吸附向下取整 (总是吸附到早于鼠标位置的分拍线)
     bool snapFloor{ false };
 
+    /// @brief 是否显示时间线窗口。
+    bool showTimelineWindow{ true };
+
+    /// @brief 是否显示预览窗口。
+    bool showPreviewWindow{ true };
+
+    /// @brief 是否在工具栏图标下方显示简短标签。
+    bool showToolLabels{ false };
+
+    /// @brief 是否将工具窗口固定在主窗口右侧。
+    bool fixedToolWindow{ true };
+
+    /// @brief 是否在左侧管理器图标下方显示简短标签。
+    bool showManagerLabels{ true };
+
     /// @brief UI 审美/视觉表现配置
     UIAestheticsConfig aesthetics;
 
@@ -773,6 +788,11 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "preferredCjkFont", c.preferredCjkFont },
                         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
                         { "snapFloor", c.snapFloor },
+                        { "showTimelineWindow", c.showTimelineWindow },
+                        { "showPreviewWindow", c.showPreviewWindow },
+                        { "showToolLabels", c.showToolLabels },
+                        { "fixedToolWindow", c.fixedToolWindow },
+                        { "showManagerLabels", c.showManagerLabels },
                         { "aesthetics", c.aesthetics },
                         { "noteColorPalettes", c.noteColorPalettes },
                         { "defaultNoteColorPaletteSchemeName",
@@ -833,6 +853,11 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
     c.snapFloor            = j.value("snapFloor", false);
+    c.showTimelineWindow   = j.value("showTimelineWindow", true);
+    c.showPreviewWindow    = j.value("showPreviewWindow", true);
+    c.showToolLabels       = j.value("showToolLabels", false);
+    c.fixedToolWindow      = j.value("fixedToolWindow", true);
+    c.showManagerLabels    = j.value("showManagerLabels", true);
     c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
     c.noteColorPalettes =
         j.value("noteColorPalettes", NoteColorPaletteConfig());

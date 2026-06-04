@@ -147,6 +147,14 @@ public:
      */
     void closeSession(int32_t index, bool updateWorkspace = true);
 
+    /// @brief 将指定 Session 原地重置为 Logo 占位画布。
+    /// @param index 要重置的 Session 索引。
+    /// @param displayName Logo 占位画布的显示名称。
+    /// @param updateWorkspace 是否在重置后刷新项目工作区中的打开谱面列表。
+    void resetSessionToLogoPlaceholder(int32_t            index,
+                                       const std::string& displayName,
+                                       bool updateWorkspace = true);
+
     /**
      * @brief 设置当前活跃（前台）的 Session 索引
      * @param index 目标 Session 索引

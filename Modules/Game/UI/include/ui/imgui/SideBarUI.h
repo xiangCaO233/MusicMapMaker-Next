@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
@@ -104,6 +105,13 @@ public:
         float       sidebarBaseW =
             sidebarBaseWStr.empty() ? 32.0f : std::stof(sidebarBaseWStr);
 
+        float iconAreaW = std::floor(sidebarBaseW * dpiScale);
+        if ( !Config::AppConfig::instance()
+                  .getEditorSettings()
+                  .showManagerLabels ) {
+            return iconAreaW;
+        }
+
         float   maxLabelWidth = 0.0f;
         ImFont* menuFont      = skinCfg.getFont("menu");
         if ( menuFont && ImGui::GetCurrentContext() ) {
@@ -128,16 +136,8 @@ public:
             maxLabelWidth = std::floor(40.0f * dpiScale);
         }
 
-        // 宽度 = 左内边距(6) + 图标区(sidebarBaseW) + 分隔区域(12) + 文本宽度 +
-        // 右内边距(6)
-        float iconAreaW = std::floor(sidebarBaseW * dpiScale);
-        float sepAreaW  = std::floor(12.0f * dpiScale);
-        float labelPadding =
-            std::floor(12.0f * dpiScale);  // 文字右侧预留一点空间
-        float vboxPadding = std::floor(12.0f * dpiScale);  // Left(6) + Right(6)
-
-        return std::floor(iconAreaW + sepAreaW + maxLabelWidth + labelPadding +
-                          vboxPadding);
+        float labelPadding = std::floor(12.0f * dpiScale);
+        return std::floor(std::max(iconAreaW, maxLabelWidth + labelPadding));
     }
 
     SideBarUI(const std::string& name);

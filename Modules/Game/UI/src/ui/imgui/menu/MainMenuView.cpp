@@ -101,10 +101,12 @@ MainMenuView::MainMenuView()
     : m_openFileMenuNextFrame(false)
     , m_openEditMenuNextFrame(false)
     , m_openToolsMenuNextFrame(false)
+    , m_openViewMenuNextFrame(false)
     , m_openHelpMenuNextFrame(false)
     , m_closeFileMenuNextFrame(false)
     , m_closeEditMenuNextFrame(false)
     , m_closeToolsMenuNextFrame(false)
+    , m_closeViewMenuNextFrame(false)
     , m_closeHelpMenuNextFrame(false)
     , m_showOverlapCheckWindow(false)
     , m_showMetadataEditorWindow(false)
@@ -226,6 +228,13 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 m_closeToolsMenuNextFrame = true;
             } else {
                 m_openToolsMenuNextFrame = true;
+            }
+        }
+        if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+            if ( ImGui::IsPopupOpen(TR("ui.view")) ) {
+                m_closeViewMenuNextFrame = true;
+            } else {
+                m_openViewMenuNextFrame = true;
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
@@ -556,6 +565,44 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
         }
 
+        ImGui::EndMenu();
+    }
+
+    // ========== View Menu ==========
+    if ( m_openViewMenuNextFrame ) {
+        ImGui::OpenPopup(TR("ui.view"));
+        m_openViewMenuNextFrame = false;
+    }
+    if ( ImGui::BeginMenu(TR("ui.view")) ) {
+        if ( m_closeViewMenuNextFrame ) {
+            ImGui::CloseCurrentPopup();
+            m_closeViewMenuNextFrame = false;
+        }
+
+        auto& appConfig      = Config::AppConfig::instance();
+        auto& editorSettings = appConfig.getEditorSettings();
+        bool  viewChanged    = false;
+
+        viewChanged |= ImGui::MenuItem(TR("ui.view.timeline").data(),
+                                       nullptr,
+                                       &editorSettings.showTimelineWindow);
+        viewChanged |= ImGui::MenuItem(TR("ui.view.preview").data(),
+                                       nullptr,
+                                       &editorSettings.showPreviewWindow);
+        ImGui::Separator();
+        viewChanged |= ImGui::MenuItem(TR("ui.view.show_tool_labels").data(),
+                                       nullptr,
+                                       &editorSettings.showToolLabels);
+        viewChanged |= ImGui::MenuItem(TR("ui.view.fixed_tool_window").data(),
+                                       nullptr,
+                                       &editorSettings.fixedToolWindow);
+        viewChanged |= ImGui::MenuItem(TR("ui.view.show_manager_labels").data(),
+                                       nullptr,
+                                       &editorSettings.showManagerLabels);
+
+        if ( viewChanged ) {
+            appConfig.save();
+        }
         ImGui::EndMenu();
     }
 

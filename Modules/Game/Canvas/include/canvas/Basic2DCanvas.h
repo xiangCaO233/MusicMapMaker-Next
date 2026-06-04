@@ -229,6 +229,12 @@ private:
     /// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
     /// GPU；只能在背景路径变化时调用，严禁每帧执行。
     void updateBackgroundTexture();
+
+    /// @brief 判断已关闭窗口是否应保留并重置为 Logo 占位画布。
+    /// @return 唯一真实谱面正在关闭时返回 true。
+    /// @warning UI 热路径辅助：UIManager 每帧关闭检查时可能调用；只读取
+    /// SessionRegistry 的常量规模状态。
+    bool shouldKeepOpenForLastSessionReset() const;
 };
 
 }  // namespace MMM::Canvas

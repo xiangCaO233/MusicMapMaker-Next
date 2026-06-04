@@ -114,7 +114,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -691,10 +691,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1415,10 +1415,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -1534,6 +1534,53 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
     }
 }
 
+/// @brief 将指定 Session 原地重置为 Logo 占位画布。
+void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
+                                                 const std::string& displayName,
+                                                 bool updateWorkspace)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+
+    if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
+        XWARN("resetSessionToLogoPlaceholder: invalid index {}", index);
+        return;
+    }
+
+    /// @brief 即将保留并重置的 Session 条目。
+    auto& entry = sessions[static_cast<size_t>(index)];
+    if ( entry.isLogoPlaceholder ) {
+        return;
+    }
+
+    /// @brief 新占位会话，用于清空原谱面状态但保留 UI 画布。
+    auto newSession = std::make_shared<BeatmapSession>();
+    for ( const auto& [cid, size] :
+          m_renderSyncRegistry.getSharedViewportSizes() ) {
+        newSession->pushCommand(CmdUpdateViewport{ cid, size.x, size.y });
+    }
+    newSession->pushCommand(
+        LogicCommand(CmdUpdateEditorConfig{ m_editorConfig }));
+    newSession->pushCommand(LogicCommand(
+        CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+
+    entry.session     = std::move(newSession);
+    entry.displayName = displayName.empty() ? "Welcome" : displayName;
+    entry.beatmapPathKey.clear();
+    entry.mainAudioSyncKey.clear();
+    entry.isLogoPlaceholder        = true;
+    entry.restoreDockFromWorkspace = false;
+
+    m_sessionRegistry.setActiveIndex(index);
+    refreshMainAudioSyncPeerStateUnsafe();
+    m_lastMainAudioSyncActiveIndex = -1;
+
+    if ( updateWorkspace ) {
+        captureProjectWorkspaceState();
+    }
+}
+
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1632,7 +1679,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             }
             ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
             ctx.visualTime  = ctx.currentTime +
-                             m_editorConfig.visual.getEffectiveVisualOffset();
+                              m_editorConfig.visual.getEffectiveVisualOffset();
             ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
             ctx.isPlaying   = false;
             ctx.isMainAudioSyncFollower = false;

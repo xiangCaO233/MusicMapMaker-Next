@@ -49,14 +49,29 @@ TimelineCanvas::TimelineCanvas(
 
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
+    auto& appConfig      = Config::AppConfig::instance();
+    auto& editorSettings = appConfig.getEditorSettings();
+    if ( !editorSettings.showTimelineWindow ) {
+        return;
+    }
+
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float                dpiScale = viewport->DpiScale;
 
     std::string windowName =
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
+    bool windowOpen = editorSettings.showTimelineWindow;
 
-    UI::LayoutContext lctx(
-        m_layoutCtx, windowName, true, ImGuiWindowFlags_NoScrollbar);
+    UI::LayoutContext lctx(m_layoutCtx,
+                           windowName,
+                           true,
+                           ImGuiWindowFlags_NoScrollbar,
+                           &windowOpen);
+    if ( !windowOpen ) {
+        editorSettings.showTimelineWindow = false;
+        appConfig.save();
+        return;
+    }
 
     ImVec2 size = ImGui::GetContentRegionAvail();
 
@@ -315,7 +330,7 @@ const std::vector<uint32_t>& TimelineCanvas::getIndices() const
 
 bool TimelineCanvas::isDirty() const
 {
-    return true;
+    return Config::AppConfig::instance().getEditorSettings().showTimelineWindow;
 }
 
 /// @brief 判断当前帧是否需要准备时间线快照。
@@ -325,7 +340,8 @@ bool TimelineCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
     (void)snapshot;
-    return m_syncBuffer && m_isOpen;
+    return m_syncBuffer && m_isOpen &&
+           Config::AppConfig::instance().getEditorSettings().showTimelineWindow;
 }
 
 /// @brief 在线程池中拉取并准备时间线快照。

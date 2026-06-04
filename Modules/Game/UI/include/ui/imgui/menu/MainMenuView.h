@@ -249,6 +249,8 @@ private:
     bool m_openEditMenuNextFrame = false;
     /// @brief 下一帧是否打开工具菜单。
     bool m_openToolsMenuNextFrame = false;
+    /// @brief 下一帧是否打开查看菜单。
+    bool m_openViewMenuNextFrame = false;
     /// @brief 下一帧是否打开帮助菜单。
     bool m_openHelpMenuNextFrame = false;
     /// @brief 下一帧是否关闭文件菜单。
@@ -257,6 +259,8 @@ private:
     bool m_closeEditMenuNextFrame = false;
     /// @brief 下一帧是否关闭工具菜单。
     bool m_closeToolsMenuNextFrame = false;
+    /// @brief 下一帧是否关闭查看菜单。
+    bool m_closeViewMenuNextFrame = false;
     /// @brief 下一帧是否关闭帮助菜单。
     bool m_closeHelpMenuNextFrame = false;
 

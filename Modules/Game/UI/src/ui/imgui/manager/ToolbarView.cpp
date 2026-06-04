@@ -10,6 +10,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -20,6 +21,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -204,8 +206,10 @@ void ToolbarView::update(UIManager* sourceManager)
     m_currentTool = Logic::EditorEngine::instance().getCurrentTool();
 
     // 样式锁定
-    auto& aesthetics =
-        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    auto& aesthetics     = editorSettings.aesthetics;
+    const bool showToolLabels  = editorSettings.showToolLabels;
+    const bool fixedToolWindow = editorSettings.fixedToolWindow;
 
     float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
 
@@ -214,18 +218,24 @@ void ToolbarView::update(UIManager* sourceManager)
     float toolbarBaseW = fixedBaseW * dpiScale;
     float fixedW       = std::floor(fixedBaseW * dpiScale);
     float btnSize      = toolbarBaseW;
-    float totalFixedW  = fixedW + 2.0f * windowPadding;
+    float btnHeight   = showToolLabels ? std::floor(46.0f * dpiScale) : btnSize;
+    float totalFixedW = fixedW + 2.0f * windowPadding;
 
     // 2. 锁定窗口尺寸约束
     ImGui::SetNextWindowSizeConstraints(ImVec2(totalFixedW, -1),
                                         ImVec2(totalFixedW, -1));
 
     // 3. 核心标志
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoResize |
-        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoDocking;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
+                             ImGuiWindowFlags_NoScrollbar |
+                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoResize;
+    if ( fixedToolWindow ) {
+        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+                 ImGuiWindowFlags_NoDocking;
+    } else if ( ImGuiID toolDockId = MainDockSpaceUI::getToolDockId();
+                toolDockId != 0 ) {
+        ImGui::SetNextWindowDockID(toolDockId, ImGuiCond_Always);
+    }
 
     float rounding = std::floor(aesthetics.frameRounding * dpiScale);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
@@ -356,11 +366,17 @@ void ToolbarView::update(UIManager* sourceManager)
         auto drawToggleButton = [&](const char*                    icon,
                                     bool                           active,
                                     const char*                    tooltip,
+                                    const char*                    shortLabel,
                                     const Config::ShortcutBinding& binding,
                                     auto applyChange) {
             pushBtnStyle(active);
             ImGui::PushID(tooltip);
-            if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+            if ( drawIconButton(icon,
+                                "##ToolbarToggleButton",
+                                shortLabel,
+                                btnSize,
+                                btnHeight,
+                                showToolLabels) ) {
                 auto newConfig = editorCfg;
                 applyChange(newConfig);
                 engine.setEditorConfig(newConfig);
@@ -376,11 +392,17 @@ void ToolbarView::update(UIManager* sourceManager)
             [&](const char*                    icon,
                 bool                           active,
                 const char*                    tooltip,
+                const char*                    shortLabel,
                 const Config::ShortcutBinding& binding,
                 auto                           applyChange) {
                 pushBtnStyle(active);
                 ImGui::PushID(tooltip);
-                if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+                if ( drawIconButton(icon,
+                                    "##ToolbarRuntimeToggleButton",
+                                    shortLabel,
+                                    btnSize,
+                                    btnHeight,
+                                    showToolLabels) ) {
                     applyChange(!active);
                 }
                 ImGui::PopID();
@@ -393,27 +415,42 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToolButton(ICON_MMM_HAND,
                        Logic::EditTool::Move,
                        TR("ui.toolbar.move"),
-                       btnSize);
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.move").data(),
+                       showToolLabels);
         advanceItem();
         drawToolButton(ICON_MMM_SQUARE_SELECT,
                        Logic::EditTool::Marquee,
                        TR("ui.toolbar.marquee"),
-                       btnSize);
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.marquee").data(),
+                       showToolLabels);
         advanceItem();
         drawToolButton(ICON_MMM_PEN,
                        Logic::EditTool::Draw,
                        TR("ui.toolbar.draw"),
-                       btnSize);
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.draw").data(),
+                       showToolLabels);
         advanceItem();
         drawToolButton(ICON_MMM_PAINT_BRUSH,
                        Logic::EditTool::ColorBrush,
                        TR("ui.toolbar.color_brush"),
-                       btnSize);
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.color_brush").data(),
+                       showToolLabels);
         advanceItem();
         drawToolButton(ICON_MMM_ERASER,
                        Logic::EditTool::ColorEraser,
                        TR("ui.toolbar.color_eraser"),
-                       btnSize);
+                       btnSize,
+                       btnHeight,
+                       TR("ui.toolbar.short.color_eraser").data(),
+                       showToolLabels);
         advanceItem();
 
         ImVec2 sepPos = ImGui::GetCursorScreenPos();
@@ -429,14 +466,8 @@ void ToolbarView::update(UIManager* sourceManager)
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
         applyProjectPalettePreference();
 
-        ImGuiColorEditFlags colorButtonFlags =
-            ImGuiColorEditFlags_NoTooltip |
-            ImGuiColorEditFlags_AlphaPreviewHalf;
-        if ( ImGui::ColorButton(
-                 "##ToolbarNoteColor",
-                 toImVec4(m_paletteColors[colorSlotIndex(m_activeColorSlot)]),
-                 colorButtonFlags,
-                 ImVec2(btnSize, btnSize)) ) {
+        pushBtnStyle(m_showColorPopup);
+        if ( ImGui::Button("##ToolbarNoteColor", ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
                 m_showDivisorPopup = false;
@@ -444,13 +475,64 @@ void ToolbarView::update(UIManager* sourceManager)
                 m_showSpeedPopup   = false;
             }
         }
+        {
+            ImDrawList*  drawList   = ImGui::GetWindowDrawList();
+            ImVec2       minPos     = ImGui::GetItemRectMin();
+            ImVec2       maxPos     = ImGui::GetItemRectMax();
+            const float  swatchSize = showToolLabels
+                                          ? std::floor(btnSize * 0.62f)
+                                          : std::floor(btnSize * 0.72f);
+            const ImVec2 swatchMin  = {
+                minPos.x + (btnSize - swatchSize) * 0.5f,
+                minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
+                                           : (btnHeight - swatchSize) * 0.5f),
+            };
+            const ImVec2 swatchMax = { swatchMin.x + swatchSize,
+                                       swatchMin.y + swatchSize };
+            drawList->AddRectFilled(
+                swatchMin,
+                swatchMax,
+                ImGui::ColorConvertFloat4ToU32(toImVec4(
+                    m_paletteColors[colorSlotIndex(m_activeColorSlot)])),
+                rounding);
+            drawList->AddRect(swatchMin,
+                              swatchMax,
+                              ImGui::GetColorU32(ImGuiCol_Text),
+                              rounding,
+                              0,
+                              std::floor(1.0f * dpiScale));
+            if ( showToolLabels ) {
+                if ( ImFont* labelFont = skinCfg.getFont("menu") ) {
+                    const char* label =
+                        TR("ui.toolbar.short.note_palette").data();
+                    const float  labelFontSize = std::floor(std::min(
+                        btnSize * 0.38f, ImGui::GetFontSize() * 0.72f));
+                    const ImVec2 labelSize     = labelFont->CalcTextSizeA(
+                        labelFontSize,
+                        std::numeric_limits<float>::max(),
+                        0.0f,
+                        label);
+                    const ImVec2 labelPos = {
+                        minPos.x + (btnSize - labelSize.x) * 0.5f,
+                        maxPos.y - labelSize.y - std::floor(3.0f * dpiScale),
+                    };
+                    drawList->AddText(labelFont,
+                                      labelFontSize,
+                                      labelPos,
+                                      ImGui::GetColorU32(ImGuiCol_Text),
+                                      label);
+                }
+            }
+        }
         m_lastColorBtnY = ImGui::GetItemRectMin().y;
         drawTooltip(TR("ui.toolbar.note_palette").data());
+        ImGui::PopStyleColor(3);
         advanceItem();
 
         drawToggleButton(ICON_MMM_ARROWS_UP_DOWN,
                          editorCfg.settings.reverseScroll,
                          TR("ui.toolbar.reverse_scroll").data(),
+                         TR("ui.toolbar.short.reverse_scroll").data(),
                          shortcutConfig.toggleReverseScroll,
                          [](Config::EditorConfig& config) {
                              config.settings.reverseScroll =
@@ -460,6 +542,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_MAGNET,
                          editorCfg.settings.scrollSnap,
                          TR("ui.toolbar.scroll_snap").data(),
+                         TR("ui.toolbar.short.scroll_snap").data(),
                          shortcutConfig.toggleScrollSnap,
                          [](Config::EditorConfig& config) {
                              config.settings.scrollSnap =
@@ -469,6 +552,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_ARROW_DOWN,
                          editorCfg.settings.snapFloor,
                          TR("ui.toolbar.snap_floor").data(),
+                         TR("ui.toolbar.short.snap_floor").data(),
                          shortcutConfig.toggleSnapFloor,
                          [](Config::EditorConfig& config) {
                              config.settings.snapFloor =
@@ -478,6 +562,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_EYE,
                          !editorCfg.visual.enableLinearScrollMapping,
                          TR("ui.toolbar.scroll_timing_mapping").data(),
+                         TR("ui.toolbar.short.scroll_timing_mapping").data(),
                          shortcutConfig.toggleScrollTimingMapping,
                          [](Config::EditorConfig& config) {
                              config.visual.enableLinearScrollMapping =
@@ -487,6 +572,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_BARS,
                          editorCfg.visual.drawBeatLines,
                          TR("ui.toolbar.draw_beat_lines").data(),
+                         TR("ui.toolbar.short.draw_beat_lines").data(),
                          shortcutConfig.toggleBeatLines,
                          [](Config::EditorConfig& config) {
                              config.visual.drawBeatLines =
@@ -496,6 +582,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_STOP,
                          editorCfg.settings.stopPlaybackOnScroll,
                          TR("ui.toolbar.stop_on_scroll").data(),
+                         TR("ui.toolbar.short.stop_on_scroll").data(),
                          shortcutConfig.toggleStopPlaybackOnScroll,
                          [](Config::EditorConfig& config) {
                              config.settings.stopPlaybackOnScroll =
@@ -505,6 +592,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_HIT_SFX,
                          editorCfg.settings.sfxConfig.enableHitSfx,
                          TR("ui.toolbar.hit_sfx").data(),
+                         TR("ui.toolbar.short.hit_sfx").data(),
                          shortcutConfig.toggleHitSfx,
                          [](Config::EditorConfig& config) {
                              config.settings.sfxConfig.enableHitSfx =
@@ -514,6 +602,7 @@ void ToolbarView::update(UIManager* sourceManager)
         drawToggleButton(ICON_MMM_VISUAL_EFFECTS,
                          editorCfg.visual.enableHitEffects,
                          TR("ui.toolbar.hit_effects").data(),
+                         TR("ui.toolbar.short.hit_effects").data(),
                          shortcutConfig.toggleHitEffects,
                          [](Config::EditorConfig& config) {
                              config.visual.enableHitEffects =
@@ -524,13 +613,14 @@ void ToolbarView::update(UIManager* sourceManager)
             ICON_MMM_LINK,
             engine.isSyncSameMainAudioCanvasesEnabled(),
             TR("ui.toolbar.sync_same_main_audio").data(),
+            TR("ui.toolbar.short.sync_same_main_audio").data(),
             shortcutConfig.toggleSyncSameMainAudio,
             [&engine](bool enabled) {
                 engine.setSyncSameMainAudioCanvases(enabled);
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -831,11 +921,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1389,7 +1479,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1475,14 +1565,57 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
     ImGui::PopStyleVar(4);
 }
 
+bool ToolbarView::drawIconButton(const char* icon, const char* id,
+                                 const char* shortLabel, float width,
+                                 float height, bool showLabel) const
+{
+    const bool clicked = ImGui::Button(id, ImVec2(width, height));
+
+    Config::SkinManager& skinCfg   = Config::SkinManager::instance();
+    ImFont*              iconFont  = skinCfg.getFont("pure_icons");
+    ImFont*              labelFont = skinCfg.getFont("menu");
+    ImDrawList*          drawList  = ImGui::GetWindowDrawList();
+    const ImVec2         minPos    = ImGui::GetItemRectMin();
+    const ImVec2         maxPos    = ImGui::GetItemRectMax();
+    const ImU32          textCol   = ImGui::GetColorU32(ImGuiCol_Text);
+    const float          dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+
+    if ( icon && iconFont ) {
+        const float iconFontSize =
+            showLabel ? std::floor(width * 0.58f) : ImGui::GetFontSize();
+        const ImVec2 iconSize = iconFont->CalcTextSizeA(
+            iconFontSize, std::numeric_limits<float>::max(), 0.0f, icon);
+        const float  iconTopPadding = showLabel ? std::floor(4.0f * dpiScale)
+                                                : (height - iconSize.y) * 0.5f;
+        const ImVec2 iconPos        = {
+            minPos.x + (width - iconSize.x) * 0.5f,
+            minPos.y + iconTopPadding,
+        };
+        drawList->AddText(iconFont, iconFontSize, iconPos, textCol, icon);
+    }
+
+    if ( showLabel && shortLabel && shortLabel[0] != '\0' && labelFont ) {
+        const float labelFontSize =
+            std::floor(std::min(width * 0.38f, ImGui::GetFontSize() * 0.72f));
+        const ImVec2 labelSize = labelFont->CalcTextSizeA(
+            labelFontSize, std::numeric_limits<float>::max(), 0.0f, shortLabel);
+        const ImVec2 labelPos = {
+            minPos.x + (width - labelSize.x) * 0.5f,
+            maxPos.y - labelSize.y - std::floor(3.0f * dpiScale),
+        };
+        drawList->AddText(
+            labelFont, labelFontSize, labelPos, textCol, shortLabel);
+    }
+
+    return clicked;
+}
+
 void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
-                                 const char* tooltip, float width)
+                                 const char* tooltip, float width, float height,
+                                 const char* shortLabel, bool showLabel)
 {
     bool isActive = (m_currentTool == tool);
-
-    // 按钮高度与宽度保持一致，形成正方形
-    float btnSize = width;
-
 
     if ( isActive ) {
         ImVec4 activeCol = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
@@ -1493,7 +1626,13 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         Utils::UIThemeUtils::pushTransparentButtonStyles();
     }
 
-    if ( ImGui::Button(icon, ImVec2(btnSize, btnSize)) ) {
+    ImGui::PushID(static_cast<int>(tool));
+    if ( drawIconButton(icon,
+                        "##ToolbarToolButton",
+                        shortLabel,
+                        width,
+                        height,
+                        showLabel) ) {
         if ( m_currentTool != tool ) {
             m_currentTool = tool;
             if ( tool == Logic::EditTool::ColorBrush ) {
@@ -1503,6 +1642,7 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
                 Logic::CmdChangeTool{ tool });
         }
     }
+    ImGui::PopID();
 
     std::string tooltipText = tooltip ? tooltip : "";
     const auto& settings    = Config::AppConfig::instance().getEditorSettings();
