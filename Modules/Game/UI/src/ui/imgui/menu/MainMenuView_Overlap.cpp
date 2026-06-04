@@ -357,7 +357,7 @@ void MainMenuView::renderOverlapCheckWindow()
 
     auto&   skinMgr   = Config::SkinManager::instance();
     ImFont* titleFont = skinMgr.getFont("title");
-    if ( titleFont ) ImGui::PushFont(titleFont);
+    if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
     std::string windowTitle =
         std::string(TR("ui.tools.overlap_check_title").data()) +

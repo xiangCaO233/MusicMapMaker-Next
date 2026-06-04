@@ -666,7 +666,7 @@ void SettingsView::drawContent()
             if ( !iconFont ) {
                 iconFont = skinCfg.getFont("setting_internal");
             }
-            if ( iconFont ) ImGui::PushFont(iconFont);
+            if ( iconFont ) ImGui::PushFont(iconFont, iconFont->LegacySize);
             ImFont* drawIconFont = iconFont ? iconFont : ImGui::GetFont();
             ImVec2  iconSize     = ImGui::CalcTextSize(iconStr);
             ImVec2  iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
@@ -690,7 +690,7 @@ void SettingsView::drawContent()
             std::string label    = getCategoryShortLabel(tab);
             ImFont*     menuFont = skinCfg.getFont("menu");
             if ( menuFont ) {
-                ImGui::PushFont(menuFont);
+                ImGui::PushFont(menuFont, menuFont->LegacySize);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
                 ImVec2 labelPos = { sepX + textLeftPadding,
@@ -828,7 +828,9 @@ void SettingsView::drawContent()
 
         if ( ImGui::BeginChild("SettingsContent", { 0, 0 }, false) ) {
             ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
+            if ( contentFont ) {
+                ImGui::PushFont(contentFont, contentFont->LegacySize);
+            }
 
             switch ( m_currentTab ) {
             case Event::SettingsTab::Software: drawSoftwareSettings(); break;

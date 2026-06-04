@@ -115,7 +115,7 @@ public:
         float   maxLabelWidth = 0.0f;
         ImFont* menuFont      = skinCfg.getFont("menu");
         if ( menuFont && ImGui::GetCurrentContext() ) {
-            ImGui::PushFont(menuFont);
+            ImGui::PushFont(menuFont, menuFont->LegacySize);
             std::vector<SideBarTab> tabs = { SideBarTab::Search,
                                              SideBarTab::FileExplorer,
                                              SideBarTab::AudioExplorer,

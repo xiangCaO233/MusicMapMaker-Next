@@ -132,7 +132,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         // 3. 标题：MusicMapMaker-Next (严格居中)
         const char* titleText = "MusicMapMaker-Next";
-        if ( menuFont ) ImGui::PushFont(menuFont);
+        if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
         float titleWidth = ImGui::CalcTextSize(titleText).x;
         float titleX     = (barWidth - titleWidth) * 0.5f;
         ImGui::SetCursorPosX(titleX);

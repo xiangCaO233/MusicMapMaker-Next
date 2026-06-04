@@ -89,7 +89,7 @@ public:
         // 应用窗口标题字体
         auto&   skinMgr   = Config::SkinManager::instance();
         ImFont* titleFont = skinMgr.getFont("title");
-        if ( titleFont ) ImGui::PushFont(titleFont);
+        if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
         auto& editorSettings =

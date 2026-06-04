@@ -222,7 +222,9 @@ void SideBarUI::update(UIManager* sourceManager)
 
             // [A] 绘制图标
             ImFont* sideBarFont = skinCfg.getFont("pure_icons");
-            if ( sideBarFont ) ImGui::PushFont(sideBarFont);
+            if ( sideBarFont ) {
+                ImGui::PushFont(sideBarFont, sideBarFont->LegacySize);
+            }
             ImVec2 iconSize = ImGui::CalcTextSize(iconStr);
             float  iconY    = rect.y + (rect.height - iconSize.y) * 0.5f;
             if ( showManagerLabels ) {

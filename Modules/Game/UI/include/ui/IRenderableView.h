@@ -64,7 +64,7 @@ public:
             // 应用窗口标题字体
             auto&   skinMgr   = Config::SkinManager::instance();
             ImFont* titleFont = skinMgr.getFont("title");
-            if ( titleFont ) ImGui::PushFont(titleFont);
+            if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
             ImGui::Begin(window_title, p_open);
 

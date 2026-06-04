@@ -254,6 +254,7 @@ bool drawTimeEditor(const char* id, double& value,
     auto preference =
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputDouble(id, &value, 0.001, 0.01, "%.3f");
         return ImGui::IsItemDeactivatedAfterEdit();
     }
@@ -275,6 +276,27 @@ bool drawTimeEditor(const char* id, double& value,
         ImGui::EndPopup();
     }
     return changed;
+}
+
+/// @brief 绘制占满弹窗内容区宽度的双精度输入框。
+/// @warning UI 热路径：仅写入 ImGui 下一控件宽度并绘制输入框。
+bool drawFullWidthInputDouble(const char* id, double& value, double step,
+                              double stepFast, const char* format)
+{
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputDouble(id, &value, step, stepFast, format);
+    return ImGui::IsItemDeactivatedAfterEdit();
+}
+
+/// @brief 计算横向按钮行的等宽按钮宽度。
+/// @warning UI 热路径：只读取当前内容区宽度和样式间距。
+float calcButtonRowWidth(int buttonCount, float minWidth)
+{
+    if ( buttonCount <= 0 ) return minWidth;
+    const float spacing     = ImGui::GetStyle().ItemSpacing.x;
+    const float usableWidth = ImGui::GetContentRegionAvail().x -
+                              spacing * static_cast<float>(buttonCount - 1);
+    return std::max(minWidth, usableWidth / static_cast<float>(buttonCount));
 }
 }  // namespace
 
@@ -349,15 +371,19 @@ void TimelineCanvas::finishKeepSpeedBinding()
     m_keepSpeedBindingFocusBpm     = false;
 }
 
+/// @brief 渲染 Timeline 时间点编辑弹窗。
+/// @warning UI 热路径：弹窗打开期间每帧执行，仅进行 ImGui
+/// 控件绘制和用户提交时的事件发布。
 void TimelineCanvas::renderEventEditorPopup()
 {
-    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale   = Config::AppConfig::instance().getWindowContentScale();
+    float popupWidth = std::floor(380.0f * dpiScale);
 
     ::MMM::UI::Utils::CenteredModalPopupScope modalScope(dpiScale);
     if ( modalScope.begin("TimelineEventEditor",
                           &m_isPopupOpen,
                           ImGuiWindowFlags_None,
-                          ImVec2(300 * dpiScale, 0.0f)) ) {
+                          ImVec2(popupWidth, 0.0f)) ) {
         std::string typeTitle = m_editType;
 
         ImGui::Text(
@@ -376,17 +402,17 @@ void TimelineCanvas::renderEventEditorPopup()
 
         if ( editEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
-            ImGui::InputDouble("##Value", &m_editValue, 0.1, 1.0, "%.2f");
+            drawFullWidthInputDouble("##Value", m_editValue, 0.1, 1.0, "%.2f");
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
-            ImGui::InputDouble("##Value", &m_editValue, 1.0, 10.0, "%.3f");
+            drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.3f");
         } else if ( editEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
-            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.4f");
+            drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
-            ImGui::InputDouble("##Value", &m_editValue, 0.01, 0.1, "%.4f");
+            drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -395,8 +421,10 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        const float actionButtonWidth =
+            calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
         if ( ImGui::Button(TR("ui.timeline.event_editor.apply").data(),
-                           ImVec2(80, 0)) ) {
+                           ImVec2(actionButtonWidth, 0)) ) {
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
@@ -409,7 +437,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.timeline.event_editor.delete").data(),
-                           ImVec2(80, 0)) ) {
+                           ImVec2(actionButtonWidth, 0)) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
             ImGui::CloseCurrentPopup();
@@ -418,7 +446,7 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.timeline.event_editor.cancel").data(),
-                           ImVec2(80, 0)) ) {
+                           ImVec2(actionButtonWidth, 0)) ) {
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
@@ -427,15 +455,19 @@ void TimelineCanvas::renderEventEditorPopup()
     }
 }
 
+/// @brief 渲染 Timeline 时间点创建弹窗。
+/// @warning UI 热路径：弹窗打开期间每帧执行，仅进行 ImGui
+/// 控件绘制和用户提交时的事件发布。
 void TimelineCanvas::renderEventCreationPopup()
 {
-    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale   = Config::AppConfig::instance().getWindowContentScale();
+    float popupWidth = std::floor(430.0f * dpiScale);
 
     ::MMM::UI::Utils::CenteredModalPopupScope modalScope(dpiScale);
     if ( modalScope.begin("TimelineCreateEvent",
                           &m_isCreatePopupOpen,
                           ImGuiWindowFlags_None,
-                          ImVec2(350 * dpiScale, 0.0f)) ) {
+                          ImVec2(popupWidth, 0.0f)) ) {
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::Separator();
         ImGui::Spacing();
@@ -518,22 +550,24 @@ void TimelineCanvas::renderEventCreationPopup()
         ::MMM::TimingEffect createEffect = getCreateEffect(m_createType);
         if ( createEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());
-            ImGui::InputDouble("##BPMValue", &m_createValue, 0.1, 1.0, "%.2f");
+            drawFullWidthInputDouble(
+                "##BPMValue", m_createValue, 0.1, 1.0, "%.2f");
             ImGui::Spacing();
             ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
                             &m_keepSpeedOnBpmChange);
         } else if ( createEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
-            ImGui::InputDouble(
-                "##JumpValue", &m_createValue, 1.0, 10.0, "%.3f");
+            drawFullWidthInputDouble(
+                "##JumpValue", m_createValue, 1.0, 10.0, "%.3f");
         } else if ( createEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
-            ImGui::InputDouble("##HSValue", &m_createValue, 0.01, 0.1, "%.4f");
+            drawFullWidthInputDouble(
+                "##HSValue", m_createValue, 0.01, 0.1, "%.4f");
         } else {
             ImGui::TextUnformatted(
                 TR("ui.timeline.event_editor.scroll").data());
-            ImGui::InputDouble(
-                "##ScrollValue", &m_createValue, 0.01, 0.1, "%.3f");
+            drawFullWidthInputDouble(
+                "##ScrollValue", m_createValue, 0.01, 0.1, "%.3f");
             ImGui::TextDisabled(
                 "%s", TR("ui.timeline.event_editor.scroll_hint").data());
         }
@@ -542,8 +576,10 @@ void TimelineCanvas::renderEventCreationPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        const float actionButtonWidth =
+            calcButtonRowWidth(2, std::floor(100.0f * dpiScale));
         if ( ImGui::Button(TR("ui.timeline.event_creator.create").data(),
-                           ImVec2(100, 0)) ) {
+                           ImVec2(actionButtonWidth, 0)) ) {
             ::MMM::TimingEffect type = getCreateEffect(m_createType);
             double finalValue        = getStoredValue(type, m_createValue);
 
@@ -566,7 +602,7 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::SameLine();
         if ( ImGui::Button(TR("ui.timeline.event_editor.cancel").data(),
-                           ImVec2(100, 0)) ) {
+                           ImVec2(actionButtonWidth, 0)) ) {
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }

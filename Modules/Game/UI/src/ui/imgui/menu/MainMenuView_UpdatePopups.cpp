@@ -133,7 +133,7 @@ void MainMenuView::renderAboutPopup()
 
         // --- Logo & Title ---
         ImFont* titleFont = Config::SkinManager::instance().getFont("menu");
-        if ( titleFont ) ImGui::PushFont(titleFont, 0.0f);
+        if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
         std::string appLabel =
             std::string(ICON_MMM_MUSIC) + "  " + TR("ui.help.app_name").data();

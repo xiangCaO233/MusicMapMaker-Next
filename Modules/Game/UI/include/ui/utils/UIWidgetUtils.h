@@ -238,8 +238,7 @@ public:
             flags |= ImGuiWindowFlags_AlwaysAutoResize;
         }
 
-        m_titleFont = Config::SkinManager::instance().getFont("title");
-        if ( m_titleFont ) ImGui::PushFont(m_titleFont);
+        pushTitleFont();
         const bool opened = ImGui::BeginPopupModal(name, pOpen, flags);
         popTitleFontIfNeeded();
         return opened;
@@ -265,14 +264,24 @@ public:
             flags |= ImGuiWindowFlags_AlwaysAutoResize;
         }
 
-        m_titleFont = Config::SkinManager::instance().getFont("title");
-        if ( m_titleFont ) ImGui::PushFont(m_titleFont);
+        pushTitleFont();
         const bool opened = ImGui::Begin(name, pOpen, flags);
         popTitleFontIfNeeded();
         return opened;
     }
 
 private:
+    /// @brief 使用字体加载时的固定尺寸压入弹窗标题字体。
+    /// @warning UI 热路径：仅做字体栈操作；显式传入 LegacySize
+    /// 以避免动态字号触发字体图集重排。
+    void pushTitleFont()
+    {
+        m_titleFont = Config::SkinManager::instance().getFont("title");
+        if ( m_titleFont ) {
+            ImGui::PushFont(m_titleFont, m_titleFont->LegacySize);
+        }
+    }
+
     /// @brief 弹出 Begin 前推入的标题字体。
     void popTitleFontIfNeeded()
     {
@@ -340,7 +349,8 @@ static void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right)
 
         ImFont* contentFont =
             Config::SkinManager::instance().getFont("content");
-        if ( contentFont ) ImGui::PushFont(contentFont);
+        if ( contentFont )
+            ImGui::PushFont(contentFont, contentFont->LegacySize);
 
         if ( ImGui::BeginTooltip() ) {
             ImGui::TextUnformatted(text);

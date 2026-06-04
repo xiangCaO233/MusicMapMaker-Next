@@ -334,7 +334,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     };
 
     ImFont* menuFont = skinCfg.getFont("menu");
-    if ( menuFont ) ImGui::PushFont(menuFont);
+    if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
 
     // ========== File Menu ==========
     if ( m_openFileMenuNextFrame ) {

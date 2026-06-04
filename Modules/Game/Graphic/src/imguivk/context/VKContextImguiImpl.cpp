@@ -317,8 +317,7 @@ void VKContext::setupFonts()
         float atlasSize          = std::max(1.0f, size * native_scale);
         iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
-        const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
-        ImFont*       iconFont =
+        ImFont* iconFont =
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
                                            atlasSize * 0.9f,

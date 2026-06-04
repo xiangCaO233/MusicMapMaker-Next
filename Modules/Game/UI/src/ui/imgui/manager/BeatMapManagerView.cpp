@@ -54,7 +54,9 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
     float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
-    if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
+    if ( fileManagerFont ) {
+        ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
+    }
 
     const float panelPadding = 12.0f * dpiScale;
     const float rowHeight    = 28.0f * dpiScale;

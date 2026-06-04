@@ -86,7 +86,9 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
     auto& skinCfg = Config::SkinManager::instance();
 
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
-    if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
+    if ( fileManagerFont ) {
+        ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
+    }
 
     if ( !project ) {
         renderEmptyProjectView(layoutContext);

@@ -263,7 +263,7 @@ void ToolbarView::update(UIManager* sourceManager)
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
         bool pushedIconFont = false;
         if ( auto f = skinCfg.getFont("pure_icons") ) {
-            ImGui::PushFont(f);
+            ImGui::PushFont(f, f->LegacySize);
             pushedIconFont = true;
         }
 
@@ -651,7 +651,9 @@ void ToolbarView::update(UIManager* sourceManager)
             {
                 pushBtnStyle(m_showSpeedPopup);
                 ImFont* contentFont = skinCfg.getFont("content");
-                if ( contentFont ) ImGui::PushFont(contentFont);
+                if ( contentFont ) {
+                    ImGui::PushFont(contentFont, contentFont->LegacySize);
+                }
 
                 const double currentSpeed =
                     Audio::AudioManager::instance().getPlaybackSpeed();
@@ -712,7 +714,9 @@ void ToolbarView::update(UIManager* sourceManager)
 
             pushBtnStyle(m_showKeyPopup);
             ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
+            if ( contentFont ) {
+                ImGui::PushFont(contentFont, contentFont->LegacySize);
+            }
 
             char keyBuf[64];
             if ( hasBeatmap ) {
@@ -762,7 +766,9 @@ void ToolbarView::update(UIManager* sourceManager)
             int currentDivisor = editorCfg.settings.beatDivisor;
             pushBtnStyle(m_showDivisorPopup);
             ImFont* contentFont = skinCfg.getFont("content");
-            if ( contentFont ) ImGui::PushFont(contentFont);
+            if ( contentFont ) {
+                ImGui::PushFont(contentFont, contentFont->LegacySize);
+            }
             char divisorBuf[64];
             snprintf(divisorBuf,
                      sizeof(divisorBuf),

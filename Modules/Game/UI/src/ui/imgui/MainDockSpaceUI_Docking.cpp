@@ -57,7 +57,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
 
     ImFont* titleFont = skinCfg.getFont("title");
-    if ( titleFont ) ImGui::PushFont(titleFont);
+    if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
     ImGui::Begin("RightDockHost", nullptr, dock_flags);
     // 立即弹出 WindowPadding，防止其应用到停靠在其中的子窗口

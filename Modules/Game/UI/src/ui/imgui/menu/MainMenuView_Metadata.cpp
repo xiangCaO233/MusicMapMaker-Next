@@ -990,7 +990,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
     auto&   skinMgr   = Config::SkinManager::instance();
     ImFont* titleFont = skinMgr.getFont("title");
-    if ( titleFont ) ImGui::PushFont(titleFont);
+    if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
     bool opened = ImGui::Begin("谱面额外元数据编辑###MetadataEditorWindow",
                                &m_showMetadataEditorWindow,
@@ -1749,7 +1749,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
 
     auto&   skinMgr   = Config::SkinManager::instance();
     ImFont* titleFont = skinMgr.getFont("title");
-    if ( titleFont ) ImGui::PushFont(titleFont);
+    if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
     std::string windowTitle =
         std::string(TR("ui.edit.note_metadata.title").data()) +

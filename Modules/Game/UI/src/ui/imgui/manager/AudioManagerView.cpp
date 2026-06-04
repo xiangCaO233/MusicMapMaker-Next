@@ -348,7 +348,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     float   dpiScale        = layoutContext.m_dpiScale;
     float   maxLabelW       = getLayoutMetrics(dpiScale).footerLabelWidth;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
-    if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
+    if ( fileManagerFont ) {
+        ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
+    }
 
     CLayVBox rootVBox;
 
