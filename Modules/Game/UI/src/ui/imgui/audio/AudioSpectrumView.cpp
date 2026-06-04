@@ -145,12 +145,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    float visualOffset = Config::AppConfig::instance()
-                             .getVisualConfig()
-                             .getEffectiveVisualOffset();
-    double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
-    double totalTime  = audioManager.getTotalTime();
+    float  visualOffset = Config::AppConfig::instance()
+                              .getVisualConfig()
+                              .getEffectiveVisualOffset();
+    double audioTime    = audioManager.getCurrentTime();
+    double visualTime   = audioTime + visualOffset;
+    double totalTime    = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     std::string activeCameraId =
@@ -437,9 +437,9 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
@@ -622,7 +622,7 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
             logicalDevice,
             cmdPool,
             queue,
-            Graphic::VKTexturePixelFormat::R8Red));
+            Graphic::VKTexturePixelFormat::Rgba8));
         m_loadingTexturesR.push_back(std::make_unique<Graphic::VKTexture>(
             chunkR.pixels.data(),
             chunkR.width,
@@ -631,7 +631,7 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
             logicalDevice,
             cmdPool,
             queue,
-            Graphic::VKTexturePixelFormat::R8Red));
+            Graphic::VKTexturePixelFormat::Rgba8));
     }
 
     if ( m_nextChunkUploadIndex >= m_pendingChunksL.size() ) {
@@ -717,7 +717,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
+    m_calcFuture = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1002,6 +1002,22 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksL.reserve(static_cast<size_t>(numChunks));
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
+    constexpr size_t rgbaBytesPerPixel = 4U;
+    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
+                                        size_t                      offset,
+                                        std::uint8_t                intensity) {
+        const float t      = static_cast<float>(intensity) / 255.0f;
+        auto        toByte = [](float value) {
+            const float clamped = std::clamp(value, 0.0f, 1.0f);
+            return static_cast<unsigned char>(std::lround(clamped * 255.0f));
+        };
+
+        pixels[offset]      = toByte(t * 3.0f);
+        pixels[offset + 1U] = toByte(t * 3.0f - 1.0f);
+        pixels[offset + 2U] = toByte(t * 3.0f - 2.0f);
+        pixels[offset + 3U] = 255U;
+    };
+
     for ( int c = 0; c < numChunks; ++c ) {
         uint32_t chunkStart = static_cast<uint32_t>(c) * MAX_TEXTURE_W;
         uint32_t chunkW =
@@ -1010,19 +1026,24 @@ void AudioSpectrumView::prepareFullGlobalTextures()
         TextureChunkData chunkL, chunkR;
         chunkL.width = chunkR.width = chunkW;
         chunkL.height = chunkR.height = texH;
-        chunkL.pixels.resize(chunkW * texH);
-        chunkR.pixels.resize(chunkW * texH);
+        chunkL.pixels.resize(chunkW * texH * rgbaBytesPerPixel);
+        chunkR.pixels.resize(chunkW * texH * rgbaBytesPerPixel);
 
         for ( uint32_t py = 0; py < static_cast<uint32_t>(texH); ++py ) {
             int b = texH - 1 - static_cast<int>(py);
             for ( uint32_t px = 0; px < chunkW; ++px ) {
                 uint32_t globalX = chunkStart + px;
-                size_t   offset  = py * chunkW + px;
+                size_t   offset =
+                    (static_cast<size_t>(py) * chunkW + px) * rgbaBytesPerPixel;
 
-                chunkL.pixels[offset] =
-                    m_cachedIntensityL[b * m_cachedNumTotalSegments + globalX];
-                chunkR.pixels[offset] =
-                    m_cachedIntensityR[b * m_cachedNumTotalSegments + globalX];
+                writeHotPixel(
+                    chunkL.pixels,
+                    offset,
+                    m_cachedIntensityL[b * m_cachedNumTotalSegments + globalX]);
+                writeHotPixel(
+                    chunkR.pixels,
+                    offset,
+                    m_cachedIntensityR[b * m_cachedNumTotalSegments + globalX]);
             }
         }
         m_pendingChunksL.push_back(std::move(chunkL));

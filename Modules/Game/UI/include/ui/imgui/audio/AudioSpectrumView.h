@@ -33,8 +33,8 @@ namespace MMM::UI
 {
 
 /// @brief 高频谱概览视图。
-/// 通过后台 CPU FFT 生成 R8 强度纹理，再由离屏 Vulkan 管线绘制并叠加 ImGui
-/// 交互层。
+/// 通过后台 CPU FFT 生成 R8 强度缓存，再转换为 RGBA8 色图纹理并由离屏
+/// Vulkan 管线绘制。
 class AudioSpectrumView : public IRenderableView
 {
 public:
@@ -178,9 +178,9 @@ private:
     std::vector<std::unique_ptr<Graphic::VKTexture>> m_retiredTexturesL;
     std::vector<std::unique_ptr<Graphic::VKTexture>> m_retiredTexturesR;
 
-    /// @brief 纹理分块的 R8 强度数据缓冲区 (待上传)。
+    /// @brief 纹理分块的 RGBA8 色图数据缓冲区 (待上传)。
     struct TextureChunkData {
-        /// @brief R8 强度像素数据。
+        /// @brief RGBA8 像素数据。
         std::vector<unsigned char> pixels;
 
         /// @brief 分块宽度。
