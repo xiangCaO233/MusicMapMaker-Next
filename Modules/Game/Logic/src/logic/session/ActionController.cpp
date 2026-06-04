@@ -25,6 +25,20 @@ void ensureNoteAuxiliaryComponents(entt::registry& reg, entt::entity entity)
         reg.emplace<InteractionComponent>(entity);
     }
 }
+
+/// @brief 标记音符创建/更新后需要完整重建排序缓存。
+void markNoteOrderDirty(SessionContext& ctx)
+{
+    ctx.isNoteOrderDirty = true;
+    ctx.isNoteStatsDirty = true;
+}
+
+/// @brief 标记音符删除后只需从排序缓存中剔除失效实体。
+void markNotePruneDirty(SessionContext& ctx)
+{
+    ctx.isNotePruneDirty = true;
+    ctx.isNoteStatsDirty = true;
+}
 }  // namespace
 
 // --- TimelineAction Implementation ---
@@ -59,6 +73,7 @@ void TimelineAction::execute(SessionContext& ctx)
         }
     }
     ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
 }
 
 void TimelineAction::undo(SessionContext& ctx)
@@ -77,6 +92,7 @@ void TimelineAction::undo(SessionContext& ctx)
         }
     }
     ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
 }
 
 void TimelineAction::redo(SessionContext& ctx)
@@ -147,7 +163,12 @@ void NoteAction::execute(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    if ( m_type == Type::Delete ) {
+        markNotePruneDirty(ctx);
+    } else {
+        markNoteOrderDirty(ctx);
+    }
 }
 
 void NoteAction::undo(SessionContext& ctx)
@@ -168,7 +189,12 @@ void NoteAction::undo(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    if ( m_type == Type::Create ) {
+        markNotePruneDirty(ctx);
+    } else {
+        markNoteOrderDirty(ctx);
+    }
 }
 
 void NoteAction::redo(SessionContext& ctx)
@@ -219,7 +245,21 @@ void BatchNoteAction::execute(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    bool needsOrderRebuild = false;
+    bool needsPrune        = false;
+    for ( const auto& entry : m_entries ) {
+        if ( entry.after.has_value() ) {
+            needsOrderRebuild = true;
+        } else if ( entry.before.has_value() ) {
+            needsPrune = true;
+        }
+    }
+    if ( needsOrderRebuild ) {
+        markNoteOrderDirty(ctx);
+    } else if ( needsPrune ) {
+        markNotePruneDirty(ctx);
+    }
 }
 
 void BatchNoteAction::undo(SessionContext& ctx)
@@ -237,7 +277,21 @@ void BatchNoteAction::undo(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    bool needsOrderRebuild = false;
+    bool needsPrune        = false;
+    for ( const auto& entry : m_entries ) {
+        if ( entry.before.has_value() ) {
+            needsOrderRebuild = true;
+        } else if ( entry.after.has_value() ) {
+            needsPrune = true;
+        }
+    }
+    if ( needsOrderRebuild ) {
+        markNoteOrderDirty(ctx);
+    } else if ( needsPrune ) {
+        markNotePruneDirty(ctx);
+    }
 }
 
 void BatchNoteAction::redo(SessionContext& ctx)

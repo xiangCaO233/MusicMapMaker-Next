@@ -44,7 +44,25 @@ SnapResult getSnapResult(
 
 /// @brief 根据当前视觉时间同步打击事件的索引
 /// @param ctx 会话上下文引用
+/// @warning 逻辑热路径：播放、Seek
+/// 和滚动时调用；普通路径只二分查找，音符变更后的 脏分支会先重建 hitEvents。
 void syncHitIndex(SessionContext& ctx);
+
+/// @brief 确保 BPM 事件缓存已按时间排序并可直接用于热路径计算。
+/// @param ctx 会话上下文引用
+/// @warning 逻辑热路径脏分支：只有时间线变更后才允许完整遍历和排序 Timing
+/// ECS，普通绘制/滚动/渲染路径必须复用缓存结果。
+void ensureBpmEvents(SessionContext& ctx);
+
+/// @brief 标记打击事件序列需要在下次播放/索引消费前重建。
+/// @param ctx 会话上下文引用
+void markHitEventsDirty(SessionContext& ctx);
+
+/// @brief 确保打击事件序列已根据当前音符 ECS 重建。
+/// @param ctx 会话上下文引用
+/// @warning 逻辑热路径脏分支：只在音符变更后第一次播放、Seek
+/// 或索引同步前重建，禁止每次编辑 action 无条件调用。
+void ensureHitEvents(SessionContext& ctx);
 
 /// @brief 全量重建谱面的打击事件序列
 /// @param ctx 会话上下文引用

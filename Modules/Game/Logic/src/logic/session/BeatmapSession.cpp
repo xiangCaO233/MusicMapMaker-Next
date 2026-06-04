@@ -25,6 +25,12 @@ static void markScrollCacheDirty(entt::registry& reg, entt::entity)
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief Note 编辑后延迟同步 BeatMap 的空闲等待时间（秒）。
+constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
+}  // namespace
+
 BeatmapSession::BeatmapSession()
 {
     m_ctx         = std::make_unique<SessionContext>();
@@ -103,6 +109,39 @@ bool BeatmapSession::needsRealtimeUpdate() const
            std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
 }
 
+/// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
+/// @warning 逻辑热路径：每个 Session update
+/// 调用；普通路径只做常量级状态判断，只有空闲超时脏分支允许全量同步 BeatMap。
+void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
+                                              bool processed, bool isBusy)
+{
+    if ( !m_ctx->m_needsNotesSync ) {
+        m_hasDeferredBeatmapSyncTimer = false;
+        return;
+    }
+
+    if ( processed || isBusy ) {
+        m_lastDeferredBeatmapSyncTime = currentSysTime;
+        m_hasDeferredBeatmapSyncTimer = true;
+        return;
+    }
+
+    if ( !m_hasDeferredBeatmapSyncTimer ) {
+        m_lastDeferredBeatmapSyncTime = currentSysTime;
+        m_hasDeferredBeatmapSyncTimer = true;
+        return;
+    }
+
+    if ( currentSysTime - m_lastDeferredBeatmapSyncTime <
+         DEFERRED_BEATMAP_SYNC_IDLE_SECONDS ) {
+        return;
+    }
+
+    SessionUtils::syncBeatmap(*m_ctx);
+    m_hasDeferredBeatmapSyncTimer = m_ctx->m_needsNotesSync;
+    m_lastDeferredBeatmapSyncTime = currentSysTime;
+}
+
 /// @brief 会话逻辑每帧更新。
 /// @warning 逻辑热路径：由 EditorEngine::loop 按 UPS
 /// 调用；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
@@ -124,6 +163,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                          m_ctx->brushState.isActive ||
                          m_ctx->eraserState.isActive;
+    bool isBusy        = isInteracting || m_ctx->isPlaying ||
+                         m_ctx->isMainAudioSyncFollower || hasPendingCommands();
 
     if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
          !m_ctx->isPlaying && !isInteracting && !processed ) {
@@ -132,6 +173,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             return;
         }
     }
+    flushDeferredBeatmapSync(currentSysTime, processed, isBusy);
     m_ctx->lastSnapshotTime = currentSysTime;
 
     // --- 边缘自动滚动处理 ---
@@ -160,6 +202,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     const bool isVisualPlaybackActive =
         m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
     if ( isVisualPlaybackActive ) {
+        SessionUtils::ensureHitEvents(*m_ctx);
+
         float  speed = Audio::AudioManager::instance().getPlaybackSpeed();
         double currentSysTime =
             std::chrono::duration<double>(

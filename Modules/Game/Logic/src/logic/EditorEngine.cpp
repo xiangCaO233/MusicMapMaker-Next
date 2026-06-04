@@ -46,12 +46,14 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
 /// @brief 为同主音轨后台跟随谱面推进视觉打击特效事件。
-/// @warning 逻辑热路径：同主音轨同步时调用；只线性消费已排序 hitEvents
-/// 的新增区间，禁止文件系统访问或重新构建事件序列。
+/// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
+/// hitEvents，只有音符变更后的脏分支允许重建事件序列。
 void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
                               const Config::EditorConfig& config,
                               bool                        resetHitIndex)
 {
+    SessionUtils::ensureHitEvents(ctx);
+
     if ( resetHitIndex ) {
         SessionUtils::syncHitIndex(ctx);
         return;

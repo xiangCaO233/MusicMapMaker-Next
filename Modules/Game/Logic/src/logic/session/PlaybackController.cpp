@@ -136,22 +136,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         int beatDivisor = m_ctx.lastConfig.settings.beatDivisor;
         if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-        std::vector<const TimelineComponent*> bpmEvents;
-        auto tlView = m_ctx.timelineRegistry.view<const TimelineComponent>();
-        for ( auto entity : tlView ) {
-            const auto& tl = tlView.get<const TimelineComponent>(entity);
-            if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-                bpmEvents.push_back(&tl);
-            }
-        }
-
+        SessionUtils::ensureBpmEvents(m_ctx);
+        const auto& bpmEvents = m_ctx.bpmEvents;
         if ( !bpmEvents.empty() ) {
-            std::sort(bpmEvents.begin(),
-                      bpmEvents.end(),
-                      [](const auto* a, const auto* b) {
-                          return a->m_timestamp < b->m_timestamp;
-                      });
-
             double visualCurrentTime = m_ctx.currentTime + visualOffset;
             size_t currentIdx        = 0;
             for ( size_t i = 0; i < bpmEvents.size(); ++i ) {

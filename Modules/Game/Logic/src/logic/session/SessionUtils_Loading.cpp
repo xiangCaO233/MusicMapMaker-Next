@@ -25,6 +25,11 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.noteRegistry.clear();
     ctx.timelineRegistry.clear();
     ctx.actionStack.clear();
+    ctx.sortedNoteEntities.clear();
+    ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.isNoteOrderDirty = true;
+    ctx.isNotePruneDirty = false;
+    ctx.isNoteStatsDirty = true;
     Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
@@ -35,7 +40,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
     if ( !beatmap ) {
         ctx.hitEvents.clear();
-        ctx.nextHitIndex = 0;
+        ctx.nextHitIndex        = 0;
+        ctx.nextPredictHitIndex = 0;
+        ctx.isHitEventsDirty    = false;
         return;
     }
 
@@ -313,6 +320,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
+    ctx.isHitEventsDirty = false;
 
     XINFO(
         "Loaded new BeatMap with {} notes, {} holds, {} flicks, {} polylines "
@@ -325,6 +333,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
     ctx.m_needsTimingsSync = false;
     ctx.m_needsNotesSync   = false;
+    ctx.isNoteOrderDirty   = true;
+    ctx.isNotePruneDirty   = false;
+    ctx.isNoteStatsDirty   = true;
 }
 
 

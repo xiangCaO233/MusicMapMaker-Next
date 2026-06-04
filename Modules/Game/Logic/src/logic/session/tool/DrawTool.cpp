@@ -13,6 +13,73 @@
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief 判断批量操作条目中是否已经包含指定实体。
+bool hasBatchEntryForEntity(const std::vector<BatchNoteAction::Entry>& entries,
+                            entt::entity                               entity)
+{
+    for ( const auto& entry : entries ) {
+        if ( entry.entity == entity ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// @brief 将指定折线父实体的所有子物件删除条目追加到批量操作中。
+/// @param ctx 会话上下文引用。
+/// @param parentEntity 折线父实体。
+/// @param entries 待追加的批量操作条目列表。
+/// @warning 逻辑热路径低频分支：只在删除/合并折线时执行一次完整 note
+/// ECS 遍历，禁止在画笔移动更新中调用。
+void appendPolylineChildDeleteEntries(
+    SessionContext& ctx, entt::entity parentEntity,
+    std::vector<BatchNoteAction::Entry>& entries)
+{
+    auto subNoteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto subEnt : subNoteView ) {
+        const auto& subNC = subNoteView.get<NoteComponent>(subEnt);
+        if ( subNC.m_isSubNote && subNC.m_parentPolyline == parentEntity &&
+             !hasBatchEntryForEntity(entries, subEnt) ) {
+            entries.push_back({ subEnt, subNC, std::nullopt });
+        }
+    }
+}
+
+/// @brief 将多个折线父实体的子物件删除条目通过一次 ECS 扫描追加到批量操作中。
+/// @param ctx 会话上下文引用。
+/// @param parentEntities 需要删除子物件的折线父实体集合。
+/// @param entries 待追加的批量操作条目列表。
+/// @warning 逻辑热路径低频分支：橡皮擦结束时最多执行一次完整 note ECS
+/// 遍历，禁止在擦除拖动更新中调用。
+void appendPolylineChildDeleteEntries(
+    SessionContext& ctx, const std::unordered_set<entt::entity>& parentEntities,
+    std::vector<BatchNoteAction::Entry>& entries)
+{
+    if ( parentEntities.empty() ) return;
+
+    std::unordered_set<entt::entity> existingEntries;
+    existingEntries.reserve(entries.size());
+    for ( const auto& entry : entries ) {
+        if ( entry.entity != entt::null ) {
+            existingEntries.insert(entry.entity);
+        }
+    }
+
+    auto subNoteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto subEnt : subNoteView ) {
+        const auto& subNC = subNoteView.get<NoteComponent>(subEnt);
+        if ( subNC.m_isSubNote &&
+             parentEntities.find(subNC.m_parentPolyline) !=
+                 parentEntities.end() &&
+             existingEntries.insert(subEnt).second ) {
+            entries.push_back({ subEnt, subNC, std::nullopt });
+        }
+    }
+}
+}  // namespace
+
 void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 {
     auto itCamera = ctx.cameras.find(cmd.cameraId);
@@ -39,20 +106,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     ctx.brushState.dtrack   = 0;
 
     // 获取 BPM 事件供磁吸使用
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
-        }
-    }
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
+    SessionUtils::ensureBpmEvents(ctx);
+    const auto& bpmEvents = ctx.bpmEvents;
 
     // 计算逻辑时间
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
@@ -170,18 +225,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         deleteEntries.push_back(
                             { targetEntity, parentNote, std::nullopt });
 
-                        // 查找并加入所有子物件实体
-                        auto subNoteView =
-                            ctx.noteRegistry.view<NoteComponent>();
-                        for ( auto subEnt : subNoteView ) {
-                            const auto& subNC =
-                                subNoteView.get<NoteComponent>(subEnt);
-                            if ( subNC.m_isSubNote &&
-                                 subNC.m_parentPolyline == targetEntity ) {
-                                deleteEntries.push_back(
-                                    { subEnt, subNC, std::nullopt });
-                            }
-                        }
+                        appendPolylineChildDeleteEntries(
+                            ctx, targetEntity, deleteEntries);
 
                         auto deleteAction = std::make_unique<BatchNoteAction>(
                             std::move(deleteEntries), "Resume Polyline Edit");
@@ -273,18 +318,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     auto itCamera = ctx.cameras.find(cmd.cameraId);
     if ( itCamera == ctx.cameras.end() ) return;
 
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) bpmEvents.push_back(&tl);
-    }
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
+    SessionUtils::ensureBpmEvents(ctx);
+    const auto& bpmEvents = ctx.bpmEvents;
 
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     if ( !cache ) return;
@@ -774,17 +809,8 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 删除目标折线及其子物件实体
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
-                            auto subView =
-                                ctx.noteRegistry.view<NoteComponent>();
-                            for ( auto subEnt : subView ) {
-                                const auto& subNC =
-                                    subView.get<NoteComponent>(subEnt);
-                                if ( subNC.m_isSubNote &&
-                                     subNC.m_parentPolyline == entity ) {
-                                    mergeDeleteEntries.push_back(
-                                        { subEnt, subNC, std::nullopt });
-                                }
-                            }
+                            appendPolylineChildDeleteEntries(
+                                ctx, entity, mergeDeleteEntries);
                             XINFO(
                                 "Note merge [2-1]: appended {} segs "
                                 "from Polyline entity {}",
@@ -820,17 +846,8 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             // 删除目标折线及其子物件实体
                             mergeDeleteEntries.push_back(
                                 { entity, nc, std::nullopt });
-                            auto subView =
-                                ctx.noteRegistry.view<NoteComponent>();
-                            for ( auto subEnt : subView ) {
-                                const auto& subNC =
-                                    subView.get<NoteComponent>(subEnt);
-                                if ( subNC.m_isSubNote &&
-                                     subNC.m_parentPolyline == entity ) {
-                                    mergeDeleteEntries.push_back(
-                                        { subEnt, subNC, std::nullopt });
-                                }
-                            }
+                            appendPolylineChildDeleteEntries(
+                                ctx, entity, mergeDeleteEntries);
                             XINFO(
                                 "Note merge [2-2]: extended tail and "
                                 "appended {} remaining segs from Polyline "
@@ -1120,26 +1137,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                          k < static_cast<int>(nc.m_subNotes.size()) ) {
 
                         // 1. 收集并删除该 Polyline 的所有旧子物件实体
-                        auto subNoteView =
-                            ctx.noteRegistry.view<NoteComponent>();
-                        for ( auto subEnt : subNoteView ) {
-                            const auto& subNC =
-                                subNoteView.get<NoteComponent>(subEnt);
-                            if ( subNC.m_isSubNote &&
-                                 subNC.m_parentPolyline == entity ) {
-                                bool alreadyAdded = false;
-                                for ( auto& e : entries ) {
-                                    if ( e.entity == subEnt ) {
-                                        alreadyAdded = true;
-                                        break;
-                                    }
-                                }
-                                if ( !alreadyAdded ) {
-                                    entries.push_back(
-                                        { subEnt, subNC, std::nullopt });
-                                }
-                            }
-                        }
+                        appendPolylineChildDeleteEntries(ctx, entity, entries);
 
                         // 2. 删除原 Polyline 实体
                         entries.push_back({ entity, nc, std::nullopt });
@@ -1250,26 +1248,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                              k < static_cast<int>(nc.m_subNotes.size()) ) {
 
                             // 1. 收集并删除该 Polyline 的所有旧子物件实体
-                            auto subNoteView =
-                                ctx.noteRegistry.view<NoteComponent>();
-                            for ( auto subEnt : subNoteView ) {
-                                const auto& subNC =
-                                    subNoteView.get<NoteComponent>(subEnt);
-                                if ( subNC.m_isSubNote &&
-                                     subNC.m_parentPolyline == entity ) {
-                                    bool alreadyAdded = false;
-                                    for ( auto& e : entries ) {
-                                        if ( e.entity == subEnt ) {
-                                            alreadyAdded = true;
-                                            break;
-                                        }
-                                    }
-                                    if ( !alreadyAdded ) {
-                                        entries.push_back(
-                                            { subEnt, subNC, std::nullopt });
-                                    }
-                                }
-                            }
+                            appendPolylineChildDeleteEntries(
+                                ctx, entity, entries);
 
                             // 2. 删除原 Polyline 实体
                             entries.push_back({ entity, nc, std::nullopt });
@@ -1375,34 +1355,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                     erasedEntities.insert(entry.entity);
                 }
             }
-            for ( entt::entity parentEntity : erasedEntities ) {
-                if ( ctx.noteRegistry.all_of<NoteComponent>(parentEntity) ) {
-                    const auto& nc =
-                        ctx.noteRegistry.get<NoteComponent>(parentEntity);
-                    if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
-                         !nc.m_subNotes.empty() ) {
-                        for ( auto subEnt :
-                              ctx.noteRegistry.view<NoteComponent>() ) {
-                            const auto& subNC =
-                                ctx.noteRegistry.get<NoteComponent>(subEnt);
-                            if ( subNC.m_isSubNote &&
-                                 subNC.m_parentPolyline == parentEntity ) {
-                                bool alreadyAdded = false;
-                                for ( auto& e : entries ) {
-                                    if ( e.entity == subEnt ) {
-                                        alreadyAdded = true;
-                                        break;
-                                    }
-                                }
-                                if ( !alreadyAdded ) {
-                                    entries.push_back(
-                                        { subEnt, subNC, std::nullopt });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            appendPolylineChildDeleteEntries(ctx, erasedEntities, entries);
 
             auto action = std::make_unique<BatchNoteAction>(std::move(entries));
             ctx.actionStack.pushAndExecute(std::move(action), ctx);

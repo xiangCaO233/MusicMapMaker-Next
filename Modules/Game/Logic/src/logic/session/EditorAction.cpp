@@ -16,8 +16,9 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     action->execute(ctx);
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();
-    SessionUtils::syncBeatmap(ctx);
-    ctx.isTransformDirty = true;
+    if ( ctx.m_needsTimingsSync ) {
+        SessionUtils::syncBeatmap(ctx);
+    }
 }
 
 void EditorActionStack::undo(SessionContext& ctx)
@@ -29,8 +30,9 @@ void EditorActionStack::undo(SessionContext& ctx)
         fmt::format("{} {}", TR("ui.status.category.undo"), action->getName());
     action->undo(ctx);
     m_redoStack.push_back(std::move(action));
-    SessionUtils::syncBeatmap(ctx);
-    ctx.isTransformDirty = true;
+    if ( ctx.m_needsTimingsSync ) {
+        SessionUtils::syncBeatmap(ctx);
+    }
 }
 
 void EditorActionStack::redo(SessionContext& ctx)
@@ -42,8 +44,9 @@ void EditorActionStack::redo(SessionContext& ctx)
         fmt::format("{} {}", TR("ui.status.category.redo"), action->getName());
     action->redo(ctx);
     m_undoStack.push_back(std::move(action));
-    SessionUtils::syncBeatmap(ctx);
-    ctx.isTransformDirty = true;
+    if ( ctx.m_needsTimingsSync ) {
+        SessionUtils::syncBeatmap(ctx);
+    }
 }
 
 void EditorActionStack::clear()

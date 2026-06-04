@@ -283,28 +283,18 @@ bool BeatmapSession::processCommands()
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
                 }
-                if constexpr (
-                    std::is_same_v<T, CmdStartDrag> ||
-                    std::is_same_v<T, CmdUpdateDrag> ||
-                    std::is_same_v<T, CmdEndDrag> ||
-                    std::is_same_v<T, CmdUndo> || std::is_same_v<T, CmdRedo> ||
-                    std::is_same_v<T, CmdPaste> || std::is_same_v<T, CmdCut> ||
-                    std::is_same_v<T, CmdDeleteSelected> ||
-                    std::is_same_v<T, CmdMirrorSelected> ||
-                    std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
-                    std::is_same_v<T, CmdApplyNoteColorToSelection> ||
-                    std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
-                    std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
-                    std::is_same_v<T, CmdClearNoteColorOverrides> ||
-                    std::is_same_v<T, CmdEndBrush> ||
-                    std::is_same_v<T, CmdEndErase> ||
-                    std::is_same_v<T, CmdLoadBeatmap> ||
-                    std::is_same_v<T, CmdCreateBeatmap> ||
-                    std::is_same_v<T, CmdRemoveBeatmap> ||
-                    std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
-                    std::is_same_v<T, CmdUpdateTimelineEvent> ||
-                    std::is_same_v<T, CmdDeleteTimelineEvent> ||
-                    std::is_same_v<T, CmdCreateTimelineEvent> ) {
+                if constexpr ( std::is_same_v<T, CmdStartDrag> ||
+                               std::is_same_v<T, CmdUpdateDrag> ||
+                               std::is_same_v<T, CmdEndDrag> ||
+                               std::is_same_v<T, CmdUndo> ||
+                               std::is_same_v<T, CmdRedo> ||
+                               std::is_same_v<T, CmdLoadBeatmap> ||
+                               std::is_same_v<T, CmdCreateBeatmap> ||
+                               std::is_same_v<T, CmdRemoveBeatmap> ||
+                               std::is_same_v<T, CmdUpdateBeatmapMetadata> ||
+                               std::is_same_v<T, CmdUpdateTimelineEvent> ||
+                               std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                               std::is_same_v<T, CmdCreateTimelineEvent> ) {
                     m_ctx->isTransformDirty = true;
                 }
 
@@ -486,6 +476,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         m_ctx->m_needsTimingsSync = true;
         m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
+        SessionUtils::ensureHitEvents(*m_ctx);
 
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto savePath = resolveCurrentProjectPath(oldPath);
@@ -528,6 +519,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         m_ctx->m_needsTimingsSync = true;
         m_ctx->m_needsNotesSync   = true;
         SessionUtils::syncBeatmap(*m_ctx);
+        SessionUtils::ensureHitEvents(*m_ctx);
         auto savePath = resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
         bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {

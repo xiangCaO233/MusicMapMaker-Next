@@ -228,27 +228,25 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         bool isActiveSession)
 {
-    // Rebuild sorted note entities cache if needed
-    if ( m_ctx->sortedNoteEntities.empty() || m_ctx->isTransformDirty ) {
-        auto noteView = m_ctx->noteRegistry.view<const NoteComponent>();
-        m_ctx->sortedNoteEntities.assign(noteView.begin(), noteView.end());
-        std::sort(m_ctx->sortedNoteEntities.begin(),
-                  m_ctx->sortedNoteEntities.end(),
-                  [this](entt::entity a, entt::entity b) {
-                      return m_ctx->noteRegistry.get<const NoteComponent>(a)
-                                 .m_timestamp <
-                             m_ctx->noteRegistry.get<const NoteComponent>(b)
-                                 .m_timestamp;
-                  });
+    auto rebuildNotePrefixAndStats = [this](bool rebuildStats) {
         m_ctx->sortedNoteMaxEndPrefix.clear();
         m_ctx->sortedNoteMaxEndPrefix.reserve(m_ctx->sortedNoteEntities.size());
+
         BeatmapStatusStats stats;
         const auto*        beatmap    = m_ctx->currentBeatmap.get();
         double             maxEndTime = 0.0;
         for ( auto entity : m_ctx->sortedNoteEntities ) {
+            if ( !m_ctx->noteRegistry.valid(entity) ||
+                 !m_ctx->noteRegistry.all_of<NoteComponent>(entity) ) {
+                continue;
+            }
+
             const auto& note =
                 m_ctx->noteRegistry.get<const NoteComponent>(entity);
-            accumulateNoteStats(note, beatmap, stats);
+            if ( rebuildStats ) {
+                accumulateNoteStats(note, beatmap, stats);
+            }
+
             double noteEnd = note.m_timestamp + std::max(0.0, note.m_duration);
             if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
                 for ( const auto& sub : note.m_subNotes ) {
@@ -259,8 +257,43 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             maxEndTime = std::max(maxEndTime, noteEnd);
             m_ctx->sortedNoteMaxEndPrefix.push_back(maxEndTime);
         }
-        m_ctx->noteCount = stats.noteCount;
-        m_ctx->maxCombo  = stats.maxCombo;
+
+        if ( rebuildStats ) {
+            m_ctx->noteCount        = stats.noteCount;
+            m_ctx->maxCombo         = stats.maxCombo;
+            m_ctx->isNoteStatsDirty = false;
+        }
+    };
+
+    // Rebuild sorted note entities cache if needed
+    if ( m_ctx->isNoteOrderDirty ) {
+        auto noteView = m_ctx->noteRegistry.view<const NoteComponent>();
+        m_ctx->sortedNoteEntities.assign(noteView.begin(), noteView.end());
+        std::sort(m_ctx->sortedNoteEntities.begin(),
+                  m_ctx->sortedNoteEntities.end(),
+                  [this](entt::entity a, entt::entity b) {
+                      return m_ctx->noteRegistry.get<const NoteComponent>(a)
+                                 .m_timestamp <
+                             m_ctx->noteRegistry.get<const NoteComponent>(b)
+                                 .m_timestamp;
+                  });
+        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        m_ctx->isNoteOrderDirty = false;
+        m_ctx->isNotePruneDirty = false;
+    } else if ( m_ctx->isNotePruneDirty ) {
+        auto isEntityInvalid = [this](entt::entity entity) {
+            return !m_ctx->noteRegistry.valid(entity) ||
+                   !m_ctx->noteRegistry.all_of<NoteComponent>(entity);
+        };
+        m_ctx->sortedNoteEntities.erase(
+            std::remove_if(m_ctx->sortedNoteEntities.begin(),
+                           m_ctx->sortedNoteEntities.end(),
+                           isEntityInvalid),
+            m_ctx->sortedNoteEntities.end());
+        rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        m_ctx->isNotePruneDirty = false;
+    } else if ( m_ctx->isNoteStatsDirty && !m_ctx->m_needsNotesSync ) {
+        rebuildNotePrefixAndStats(true);
     }
 
     m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
@@ -281,23 +314,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     m_ctx->isTransformDirty = false;
 
     // 0. 更新 BPM 缓存（仅在脏时执行 O(N log N) 操作）
-    if ( m_ctx->isBpmEventsDirty ) {
-        m_ctx->bpmEvents.clear();
-        auto tlView = m_ctx->timelineRegistry.view<const TimelineComponent>();
-        for ( auto entity : tlView ) {
-            const auto& tl = tlView.get<const TimelineComponent>(entity);
-            if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-                m_ctx->bpmEvents.push_back(&tl);
-            }
-        }
-        std::stable_sort(
-            m_ctx->bpmEvents.begin(),
-            m_ctx->bpmEvents.end(),
-            [](const TimelineComponent* a, const TimelineComponent* b) {
-                return a->m_timestamp < b->m_timestamp;
-            });
-        m_ctx->isBpmEventsDirty = false;
-    }
+    SessionUtils::ensureBpmEvents(*m_ctx);
 
     // 筛选出所有 BPM 标记供后续视口处理（磁轴、智能拟合等）
     const auto& bpmEvents = m_ctx->bpmEvents;
@@ -803,12 +820,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // --- 注入画笔预览状态 ---
         if ( isActiveSession && m_ctx->brushState.isActive ) {
-            snapshot->brush.isActive = true;
-            snapshot->brush.time     = m_ctx->brushState.time;
-            snapshot->brush.duration = m_ctx->brushState.duration;
-            snapshot->brush.track    = m_ctx->brushState.track;
-            snapshot->brush.dtrack   = m_ctx->brushState.dtrack;
-            snapshot->brush.type     = m_ctx->brushState.type;
+            snapshot->brush.isActive     = true;
+            snapshot->brush.time         = m_ctx->brushState.time;
+            snapshot->brush.duration     = m_ctx->brushState.duration;
+            snapshot->brush.track        = m_ctx->brushState.track;
+            snapshot->brush.dtrack       = m_ctx->brushState.dtrack;
+            snapshot->brush.type         = m_ctx->brushState.type;
             snapshot->brush.customColors = m_ctx->brushState.customColors;
             snapshot->brush.polylineSegments =
                 m_ctx->brushState.polylineSegments;

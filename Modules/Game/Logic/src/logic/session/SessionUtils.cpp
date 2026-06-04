@@ -5,6 +5,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <numeric>
 
 namespace MMM::Logic::SessionUtils
@@ -148,12 +149,46 @@ SnapResult getSnapResult(
 
 void syncHitIndex(SessionContext& ctx)
 {
+    ensureHitEvents(ctx);
     auto it = std::lower_bound(
         ctx.hitEvents.begin(),
         ctx.hitEvents.end(),
         System::HitFXSystem::HitEvent{ ctx.visualTime, ::MMM::NoteType::NOTE });
     ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
     ctx.nextPredictHitIndex = ctx.nextHitIndex;
+}
+
+void ensureBpmEvents(SessionContext& ctx)
+{
+    if ( !ctx.isBpmEventsDirty ) return;
+
+    ctx.bpmEvents.clear();
+    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tl = tlView.get<const TimelineComponent>(entity);
+        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+            ctx.bpmEvents.push_back(&tl);
+        }
+    }
+    std::stable_sort(
+        ctx.bpmEvents.begin(),
+        ctx.bpmEvents.end(),
+        [](const TimelineComponent* a, const TimelineComponent* b) {
+            return a->m_timestamp < b->m_timestamp;
+        });
+    ctx.isBpmEventsDirty = false;
+}
+
+void markHitEventsDirty(SessionContext& ctx)
+{
+    ctx.isHitEventsDirty = true;
+}
+
+void ensureHitEvents(SessionContext& ctx)
+{
+    if ( ctx.isHitEventsDirty ) {
+        rebuildHitEvents(ctx);
+    }
 }
 
 void rebuildHitEvents(SessionContext& ctx)
@@ -221,6 +256,7 @@ void rebuildHitEvents(SessionContext& ctx)
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
+    ctx.isHitEventsDirty = false;
     syncHitIndex(ctx);
 
     if ( ctx.currentBeatmap ) {

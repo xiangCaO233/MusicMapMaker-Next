@@ -80,9 +80,13 @@ struct SessionContext {
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*>
-         bpmEvents;                 ///< 缓存并排序后的 BPM 事件
-    bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
-    bool isTransformDirty{ true };  ///< 坐标转换缓存脏标记
+         bpmEvents;                  ///< 缓存并排序后的 BPM 事件
+    bool isBpmEventsDirty{ true };   ///< BPM 缓存脏标记
+    bool isHitEventsDirty{ false };  ///< 打击事件序列是否需要按音符变更重建
+    bool isNoteOrderDirty{ true };   ///< 音符排序缓存是否需要完整重建
+    bool isNotePruneDirty{ false };  ///< 音符排序缓存是否只需剔除失效实体
+    bool isNoteStatsDirty{ true };   ///< 状态栏物件统计是否需要重算
+    bool isTransformDirty{ true };   ///< 坐标转换缓存脏标记
     std::vector<entt::entity>
         sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
     std::vector<double>

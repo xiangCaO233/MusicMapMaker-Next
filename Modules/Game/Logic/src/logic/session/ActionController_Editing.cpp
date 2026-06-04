@@ -105,6 +105,54 @@ bool isSameNoteColorOverrides(const NoteColorOverrides& lhs,
            isSameOptionalColor(lhs.node, rhs.node);
 }
 
+/// @brief 为待删除折线父实体批量追加其子物件删除条目。
+/// @param ctx 当前会话上下文。
+/// @param deletedEntities 已经加入删除操作的实体集合。
+/// @param entries 待追加的批量 note action 条目。
+/// @warning 逻辑热路径低频分支：删除命令执行时最多完整扫描一次 note ECS，禁止按
+/// 父折线数量重复扫描。
+void appendDeletedPolylineChildren(
+    SessionContext&                         ctx,
+    const std::unordered_set<entt::entity>& deletedEntities,
+    std::vector<BatchNoteAction::Entry>&    entries)
+{
+    if ( deletedEntities.empty() ) return;
+
+    std::unordered_set<entt::entity> polylineParents;
+    for ( auto entity : deletedEntities ) {
+        if ( !ctx.noteRegistry.valid(entity) ||
+             !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+            continue;
+        }
+
+        const auto& note = ctx.noteRegistry.get<NoteComponent>(entity);
+        if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+             !note.m_subNotes.empty() ) {
+            polylineParents.insert(entity);
+        }
+    }
+    if ( polylineParents.empty() ) return;
+
+    std::unordered_set<entt::entity> existingEntries;
+    existingEntries.reserve(entries.size());
+    for ( const auto& entry : entries ) {
+        if ( entry.entity != entt::null ) {
+            existingEntries.insert(entry.entity);
+        }
+    }
+
+    auto noteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : noteView ) {
+        const auto& note = noteView.get<NoteComponent>(entity);
+        if ( note.m_isSubNote &&
+             polylineParents.find(note.m_parentPolyline) !=
+                 polylineParents.end() &&
+             existingEntries.insert(entity).second ) {
+            entries.push_back({ entity, note, std::nullopt });
+        }
+    }
+}
+
 // --- Editing Handlers ---
 
 void ActionController::handleCommand(const CmdUndo& cmd)
@@ -188,29 +236,12 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 
     // 同时删除被删除折线下所有子物件实体，防止孤儿子实体残留
-    for ( entt::entity parentEntity : deletedEntities ) {
-        if ( m_ctx.noteRegistry.valid(parentEntity) &&
-             m_ctx.noteRegistry.all_of<NoteComponent>(parentEntity) ) {
-            const auto& nc =
-                m_ctx.noteRegistry.get<NoteComponent>(parentEntity);
-            if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
-                 !nc.m_subNotes.empty() ) {
-                for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
-                    const auto& subNC =
-                        m_ctx.noteRegistry.get<NoteComponent>(subEnt);
-                    if ( subNC.m_isSubNote &&
-                         subNC.m_parentPolyline == parentEntity ) {
-                        entries.push_back({ subEnt, subNC, std::nullopt });
-                    }
-                }
-            }
-        }
-    }
+    appendDeletedPolylineChildren(m_ctx, deletedEntities, entries);
 
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -263,7 +294,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -485,8 +516,6 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
                 true;
         }
-
-        m_ctx.isTransformDirty = true;
     }
 
     // 清除剪切状态
@@ -790,7 +819,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

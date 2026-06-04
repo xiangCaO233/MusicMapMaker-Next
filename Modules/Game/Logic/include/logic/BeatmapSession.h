@@ -61,6 +61,16 @@ public:
     bool needsRealtimeUpdate() const;
 
 private:
+    /// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
+    /// @param currentSysTime 当前单调系统时间（秒）。
+    /// @param processed 本轮是否处理了用户/逻辑命令。
+    /// @param isBusy 当前会话是否处于交互、播放或命令堆积状态。
+    /// @warning 逻辑热路径：每个 Session update
+    /// 调用；普通路径只做常量级状态判断，只有空闲超时脏分支允许全量同步
+    /// BeatMap。
+    void flushDeferredBeatmapSync(double currentSysTime, bool processed,
+                                  bool isBusy);
+
     /// @brief 消费并路由指令队列中的所有命令
     /// @return 如果处理了至少一个指令，则返回 true
     bool processCommands();
@@ -90,7 +100,11 @@ private:
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
 
-    bool m_wasPlaying{ false };  ///< 上一帧是否正在播放
+    bool   m_wasPlaying{ false };                   ///< 上一帧是否正在播放
+    bool   m_hasDeferredBeatmapSyncTimer{ false };  ///< 是否已有延迟同步计时点
+    double m_lastDeferredBeatmapSyncTime{
+        0.0
+    };  ///< 最近一次刷新延迟同步的时间
 };
 
 }  // namespace MMM::Logic
