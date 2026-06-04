@@ -212,7 +212,7 @@ return {
 	["ui.settings.visual.spectrum_detail.extreme"] = "极限",
 	["ui.settings.visual.spectrum_detail.experimental"] = "实验",
 	["ui.settings.visual.spectrum_detail.option"] = "{} - {:.0f} 段/秒 x {} 频段；显存约 {:.2f} MiB/分钟(双声道)，{:.2f} MiB/分钟(BPM 单声道)",
-	["ui.settings.visual.spectrum_detail.tooltip"] = "估算基于 RGBA8 频谱纹理，不含驱动对齐、描述符和 CPU 侧缓存。独立频谱窗口会为左右声道各上传一份；BPM 测量工具使用混合单声道频谱。",
+	["ui.settings.visual.spectrum_detail.tooltip"] = "估算不含驱动对齐、描述符和 CPU 侧缓存。独立频谱窗口上传 R8 强度纹理并通过 Vulkan 离屏表面渲染；BPM 测量工具使用混合单声道 RGBA8 频谱。",
 	["ui.settings.visual.offset"] = "视觉偏移",
 	["ui.settings.visual.visual_offset"] = "全局渲染偏移 (秒)",
 	["ui.settings.visual.snap_threshold"] = "磁吸阈值 (像素)",

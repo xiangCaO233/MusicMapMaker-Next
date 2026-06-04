@@ -209,7 +209,7 @@ return {
 	["ui.settings.visual.spectrum_detail.extreme"] = "Extreme",
 	["ui.settings.visual.spectrum_detail.experimental"] = "Experimental",
 	["ui.settings.visual.spectrum_detail.option"] = "{} - {:.0f} segments/s x {} bins; VRAM approx. {:.2f} MiB/min (stereo), {:.2f} MiB/min (BPM mono)",
-	["ui.settings.visual.spectrum_detail.tooltip"] = "Estimate assumes RGBA8 spectrum textures and excludes driver alignment, descriptor, and CPU-side cache overhead. The standalone spectrum window uploads one texture set per left/right channel; the BPM tool uses a mixed mono spectrum.",
+	["ui.settings.visual.spectrum_detail.tooltip"] = "Estimate excludes driver alignment, descriptor, and CPU-side cache overhead. The standalone spectrum window uploads R8 intensity textures and renders them through an offscreen Vulkan surface; the BPM tool uses a mixed mono RGBA8 spectrum.",
 	["ui.settings.visual.offset"] = "Visual Offset",
 	["ui.settings.visual.visual_offset"] = "Global Render Offset (s)",
 	["ui.settings.visual.snap_threshold"] = "Snap Threshold (px)",

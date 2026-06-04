@@ -2,13 +2,15 @@
 #include "audio/AudioManager.h"
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
+#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
-#include "implot.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "runtime/AppThreadPool.h"
@@ -20,6 +22,7 @@
 #include <cstddef>
 #include <cstring>
 #include <fftw3.h>
+#include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
@@ -57,7 +60,7 @@ private:
 };
 
 AudioSpectrumView::AudioSpectrumView(const std::string& name)
-    : IUIView(name), ITextureLoader(name)
+    : IUIView(name), IRenderableView(name)
 {
     m_spectrumDetailLevel =
         Config::AppConfig::instance().getVisualConfig().spectrumDetailLevel;
@@ -69,7 +72,6 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
     m_pendingNumFrequencyBins       = m_numFrequencyBins;
     m_processBuffer                 = std::make_unique<ice::AudioBuffer>();
     m_rawBuffer                     = std::make_unique<ice::AudioBuffer>();
-    buildColormapLUT();
 }
 
 AudioSpectrumView::~AudioSpectrumView()
@@ -83,43 +85,6 @@ AudioSpectrumView::~AudioSpectrumView()
     auto context = Graphic::VKContext::get();
     if ( context ) {
         (void)context->get().getLogicalDevice().waitIdle();
-    }
-
-    if ( m_fftPlan ) fftw_destroy_plan(m_fftPlan);
-    if ( m_fftIn ) fftw_free(m_fftIn);
-    if ( m_fftOut ) fftw_free(m_fftOut);
-}
-
-void AudioSpectrumView::buildColormapLUT()
-{
-    ImPlot::PushColormap(ImPlotColormap_Hot);
-    for ( int i = 0; i < 256; ++i ) {
-        float  t         = static_cast<float>(i) / 255.0f;
-        ImVec4 col       = ImPlot::SampleColormap(t, ImPlotColormap_Hot);
-        m_colormapLUT[i] = { static_cast<unsigned char>(col.x * 255.0f),
-                             static_cast<unsigned char>(col.y * 255.0f),
-                             static_cast<unsigned char>(col.z * 255.0f),
-                             255 };
-    }
-    ImPlot::PopColormap();
-}
-
-void AudioSpectrumView::prepareFFT(int fftSize)
-{
-    if ( m_currentFFTSize == fftSize && m_fftPlan ) return;
-    if ( m_fftPlan ) fftw_destroy_plan(m_fftPlan);
-    if ( m_fftIn ) fftw_free(m_fftIn);
-    if ( m_fftOut ) fftw_free(m_fftOut);
-
-    m_currentFFTSize = fftSize;
-    m_fftIn          = (double*)fftw_malloc(sizeof(double) * fftSize);
-    m_fftOut =
-        (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * (fftSize / 2 + 1));
-    m_fftPlan = fftw_plan_dft_r2c_1d(fftSize, m_fftIn, m_fftOut, FFTW_MEASURE);
-
-    m_window.resize(fftSize);
-    for ( int i = 0; i < fftSize; ++i ) {
-        m_window[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (fftSize - 1)));
     }
 }
 
@@ -166,12 +131,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             if ( m_calcFinished.load() ) {
                 m_calcFinished.store(false);
                 m_isCalculating.store(false);
-                m_spectrumDetailLevel         = m_pendingSpectrumDetailLevel;
-                m_cacheSegmentsPerSecond      = m_pendingCacheSegmentsPerSecond;
-                m_numFrequencyBins            = m_pendingNumFrequencyBins;
-                m_textureReloadStarted        = false;
-                m_nextTextureChunkUploadIndex = 0;
-                m_texturesNeedReload          = !m_pendingChunksL.empty();
+                m_spectrumDetailLevel    = m_pendingSpectrumDetailLevel;
+                m_cacheSegmentsPerSecond = m_pendingCacheSegmentsPerSecond;
+                m_numFrequencyBins       = m_pendingNumFrequencyBins;
+                m_textureReloadStarted   = false;
+                m_nextChunkUploadIndex   = 0;
+                prepareFullGlobalTextures();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -180,12 +145,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    float  visualOffset = Config::AppConfig::instance()
-                              .getVisualConfig()
-                              .getEffectiveVisualOffset();
-    double audioTime    = audioManager.getCurrentTime();
-    double visualTime   = audioTime + visualOffset;
-    double totalTime    = audioManager.getTotalTime();
+    float visualOffset = Config::AppConfig::instance()
+                             .getVisualConfig()
+                             .getEffectiveVisualOffset();
+    double audioTime  = audioManager.getCurrentTime();
+    double visualTime = audioTime + visualOffset;
+    double totalTime  = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     std::string activeCameraId =
@@ -327,268 +292,288 @@ void AudioSpectrumView::update(UIManager* sourceManager)
 
     syncEQ();
 
-    // --- 渲染逻辑：计算视口范围并绘制静态贴图块 ---
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    float  textH = ImGui::GetTextLineHeightWithSpacing();
-    float  plotH = (avail.y - 2.0f * textH) * 0.5f;
+    // --- 渲染逻辑：离屏 Vulkan 绘制频谱图，ImGui 叠加交互层 ---
+    ImVec2 surfacePos = ImGui::GetCursorScreenPos();
+    ImVec2 avail      = ImGui::GetContentRegionAvail();
+    if ( avail.x <= 1.0f || avail.y <= 1.0f ) return;
+
+    float textH    = ImGui::GetTextLineHeightWithSpacing();
+    float plotH    = std::max(1.0f, (avail.y - 2.0f * textH) * 0.5f);
+    float surfaceH = textH * 2.0f + plotH * 2.0f;
+    if ( surfaceH > avail.y ) {
+        surfaceH = avail.y;
+        plotH    = std::max(1.0f, (surfaceH - 2.0f * textH) * 0.5f);
+    }
 
     double viewStart = visualTime - m_zoom;
     double viewEnd   = visualTime + m_zoom;
 
-    auto renderChannelBank = [&](const std::vector<std::unique_ptr<
-                                     Graphic::VKTexture>>& textures) {
-        ImGui::BeginGroup();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    setTargetSize(static_cast<uint32_t>(std::max(1.0f, avail.x)),
+                  static_cast<uint32_t>(std::max(1.0f, surfaceH)),
+                  dpiScale);
 
-        // 捕获绘图区域在屏幕上的绝对起始位置
-        ImVec2 plotStartPos = ImGui::GetCursorScreenPos();
+    m_vertices.clear();
+    m_indices.clear();
+    m_spectrumDrawCmds.clear();
+    buildChannelGeometry(
+        m_texturesL, textH, avail.x, plotH, viewStart, viewEnd, visualOffset);
+    buildChannelGeometry(m_texturesR,
+                         textH + plotH + textH,
+                         avail.x,
+                         plotH,
+                         viewStart,
+                         viewEnd,
+                         visualOffset);
 
-        // 计算全局像素坐标范围（使用音频时间）
-        // 补偿 FFT 窗口造成的中心点偏移 (2048样本 @ 44100Hz =
-        // 约 46.4ms，中心点为 23.2ms)
-        double fftOffset      = (2048.0 / 2.0) / 44100.0;
-        double audioViewStart = viewStart - visualOffset - fftOffset;
-        double audioViewEnd   = viewEnd - visualOffset - fftOffset;
-        double pixelStart     = audioViewStart * m_cacheSegmentsPerSecond;
-        double pixelEnd       = audioViewEnd * m_cacheSegmentsPerSecond;
-        double pixelWidth     = pixelEnd - pixelStart;
+    vk::DescriptorSet surfaceTexture = getDescriptorSet();
+    if ( surfaceTexture != VK_NULL_HANDLE ) {
+        ImGui::Image(reinterpret_cast<ImTextureID>(
+                         static_cast<VkDescriptorSet>(surfaceTexture)),
+                     ImVec2(avail.x, surfaceH));
+    } else {
+        ImGui::Dummy(ImVec2(avail.x, surfaceH));
+    }
 
-        if ( pixelStart < 0.0 ) {
-            float emptyScreenW =
-                static_cast<float>((0.0 - pixelStart) / pixelWidth * avail.x);
-            ImGui::Dummy(ImVec2(emptyScreenW, plotH));
-            ImGui::SameLine(0, 0);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->AddText(surfacePos,
+                      ImGui::GetColorU32(ImGuiCol_Text),
+                      TR("ui.spectrum.channel_l").data());
+    drawList->AddText(ImVec2(surfacePos.x, surfacePos.y + textH + plotH),
+                      ImGui::GetColorU32(ImGuiCol_Text),
+                      TR("ui.spectrum.channel_r").data());
+
+    ImVec2 leftMin = ImVec2(surfacePos.x, surfacePos.y + textH);
+    ImVec2 leftMax = ImVec2(surfacePos.x + avail.x, leftMin.y + plotH);
+    ImVec2 rightMin =
+        ImVec2(surfacePos.x, surfacePos.y + textH + plotH + textH);
+    ImVec2 rightMax = ImVec2(surfacePos.x + avail.x, rightMin.y + plotH);
+
+    renderChannelInteractionOverlay("##SeekL",
+                                    leftMin,
+                                    leftMax,
+                                    viewStart,
+                                    viewEnd,
+                                    visualOffset,
+                                    totalTime,
+                                    visualTime,
+                                    snapshot);
+    renderChannelInteractionOverlay("##SeekR",
+                                    rightMin,
+                                    rightMax,
+                                    viewStart,
+                                    viewEnd,
+                                    visualOffset,
+                                    totalTime,
+                                    visualTime,
+                                    snapshot);
+
+    ImGui::SetCursorScreenPos(ImVec2(surfacePos.x, surfacePos.y + surfaceH));
+}
+
+void AudioSpectrumView::addSpectrumQuad(float x, float y, float w, float h,
+                                        float uv0X, float uv1X,
+                                        Graphic::VKTexture* texture)
+{
+    if ( !texture || w <= 0.0f || h <= 0.0f ) return;
+
+    const uint32_t baseIndex   = static_cast<uint32_t>(m_vertices.size());
+    const uint32_t indexOffset = static_cast<uint32_t>(m_indices.size());
+
+    m_vertices.push_back(
+        { { x, y, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { uv0X, 0.0f } });
+    m_vertices.push_back(
+        { { x + w, y, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { uv1X, 0.0f } });
+    m_vertices.push_back(
+        { { x, y + h, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { uv0X, 1.0f } });
+    m_vertices.push_back(
+        { { x + w, y + h, 0.0f }, { 1.0f, 1.0f, 1.0f, 1.0f }, { uv1X, 1.0f } });
+
+    m_indices.push_back(baseIndex + 0U);
+    m_indices.push_back(baseIndex + 1U);
+    m_indices.push_back(baseIndex + 2U);
+    m_indices.push_back(baseIndex + 1U);
+    m_indices.push_back(baseIndex + 3U);
+    m_indices.push_back(baseIndex + 2U);
+
+    m_spectrumDrawCmds.push_back({ texture, 6U, indexOffset });
+}
+
+void AudioSpectrumView::buildChannelGeometry(
+    const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
+    float plotY, float plotW, float plotH, double viewStart, double viewEnd,
+    float visualOffset)
+{
+    if ( textures.empty() || plotW <= 0.0f || plotH <= 0.0f ) return;
+
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    const double fftOffset =
+        sampleRate > 0.0 ? (2048.0 / 2.0) / sampleRate : 0.0;
+    const double audioViewStart = viewStart - visualOffset - fftOffset;
+    const double audioViewEnd   = viewEnd - visualOffset - fftOffset;
+    const double pixelStart     = audioViewStart * m_cacheSegmentsPerSecond;
+    const double pixelEnd       = audioViewEnd * m_cacheSegmentsPerSecond;
+    const double pixelWidth     = pixelEnd - pixelStart;
+    if ( pixelWidth <= 0.0 ) return;
+
+    for ( std::size_t i = 0; i < textures.size(); ++i ) {
+        auto* texture = textures[i].get();
+        if ( !texture ) continue;
+
+        const double texGlobalStart = static_cast<double>(i * MAX_TEXTURE_W);
+        const double texGlobalEnd   = texGlobalStart + texture->width();
+        if ( texGlobalEnd < pixelStart || texGlobalStart > pixelEnd ) {
+            continue;
         }
 
-        for ( size_t i = 0; i < textures.size(); ++i ) {
-            double texGlobalStart = static_cast<double>(i * MAX_TEXTURE_W);
-            double texGlobalEnd   = texGlobalStart + textures[i]->width();
+        const double intersectStart = std::max(texGlobalStart, pixelStart);
+        const double intersectEnd   = std::min(texGlobalEnd, pixelEnd);
+        if ( intersectEnd <= intersectStart ) continue;
 
-            // 检查贴图块是否在视口内
-            if ( texGlobalEnd < pixelStart || texGlobalStart > pixelEnd )
-                continue;
+        const float uv0X = static_cast<float>(
+            (intersectStart - texGlobalStart) / texture->width());
+        const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
+                                              texture->width());
+        const float x    = static_cast<float>((intersectStart - pixelStart) /
+                                           pixelWidth * plotW);
+        const float w    = static_cast<float>((intersectEnd - intersectStart) /
+                                           pixelWidth * plotW);
+        addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
+    }
+}
 
-            // 计算贴图在视口内的局部 UV
-            double intersectStart = std::max(texGlobalStart, pixelStart);
-            double intersectEnd   = std::min(texGlobalEnd, pixelEnd);
+void AudioSpectrumView::renderChannelInteractionOverlay(
+    const char* seekId, ImVec2 groupMin, ImVec2 groupMax, double viewStart,
+    double viewEnd, float visualOffset, double totalTime, double visualTime,
+    const Logic::RenderSnapshot* snapshot)
+{
+    const float width  = groupMax.x - groupMin.x;
+    const float height = groupMax.y - groupMin.y;
+    if ( width <= 0.0f || height <= 0.0f ) return;
 
-            float uv0_x = static_cast<float>((intersectStart - texGlobalStart) /
-                                             textures[i]->width());
-            float uv1_x = static_cast<float>((intersectEnd - texGlobalStart) /
-                                             textures[i]->width());
+    const double viewRange = viewEnd - viewStart;
+    if ( viewRange <= 0.001 ) return;
 
-            // 计算屏幕上的宽度比例
-            float screenW = static_cast<float>((intersectEnd - intersectStart) /
-                                               pixelWidth * avail.x);
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    if ( visualTime >= viewStart && visualTime <= viewEnd ) {
+        const float relativePos =
+            static_cast<float>((visualTime - viewStart) / viewRange);
+        const float lineX = groupMin.x + relativePos * width;
+        drawList->AddLine(ImVec2(lineX, groupMin.y),
+                          ImVec2(lineX, groupMax.y),
+                          IM_COL32(255, 0, 0, 255),
+                          2.0f);
+    }
 
-            // 绘制贴图块
-            ImGui::Image(textures[i]->getImTextureID(),
-                         ImVec2(screenW, plotH),
-                         ImVec2(uv0_x, 0),
-                         ImVec2(uv1_x, 1));
-            ImGui::SameLine(0, 0);
+    if ( snapshot && snapshot->hasBeatmap ) {
+        const float xStart =
+            groupMin.x +
+            static_cast<float>((snapshot->visibleTimeStart - viewStart) /
+                               viewRange) *
+                width;
+        const float xEnd =
+            groupMin.x +
+            static_cast<float>((snapshot->visibleTimeEnd - viewStart) /
+                               viewRange) *
+                width;
+        const float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
+        const float drawX2 = std::clamp(xEnd, groupMin.x, groupMax.x);
+
+        if ( drawX2 > drawX1 ) {
+            drawList->AddRectFilled(ImVec2(drawX1, groupMin.y),
+                                    ImVec2(drawX2, groupMax.y),
+                                    IM_COL32(128, 0, 255, 40));
+            drawList->AddRect(ImVec2(drawX1, groupMin.y),
+                              ImVec2(drawX2, groupMax.y),
+                              IM_COL32(128, 0, 255, 180),
+                              0.0f,
+                              0,
+                              1.5f);
         }
+    }
 
-        // --- 绘制游标 ---
-        if ( visualTime >= viewStart && visualTime <= viewEnd ) {
-            float relativePos = static_cast<float>((visualTime - viewStart) /
-                                                   (viewEnd - viewStart));
+    ImGui::SetCursorScreenPos(groupMin);
+    ImGui::InvisibleButton(seekId, ImVec2(width, height));
 
-            float lineX      = plotStartPos.x + (relativePos * avail.x);
-            float lineTop    = plotStartPos.y;
-            float lineBottom = plotStartPos.y + plotH;
+    if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+        const ImVec2 mousePos = ImGui::GetMousePos();
+        const float  relX =
+            std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
+        const double hoverVisualTime = viewStart + relX * viewRange;
+        const double hoverAudioTime  = hoverVisualTime - visualOffset;
 
-            ImDrawList* drawList = ImGui::GetWindowDrawList();
-            drawList->AddLine(ImVec2(lineX, lineTop),
-                              ImVec2(lineX, lineBottom),
-                              IM_COL32(255, 0, 0, 255),
-                              2.0f);
-        }
+        const auto timeText =
+            Canvas::formatCanvasTime(hoverVisualTime, snapshot);
+        ImGui::SetTooltip("%s", timeText.c_str());
 
-        ImGui::EndGroup();
+        const float hoverLineX = groupMin.x + relX * width;
+        drawList->AddLine(ImVec2(hoverLineX, groupMin.y),
+                          ImVec2(hoverLineX, groupMax.y),
+                          IM_COL32(0, 255, 0, 150),
+                          1.0f);
 
-        // 交互层：使用 InvisibleButton 捕获鼠标，防止拖动时移动窗口
-        ImVec2 groupMin = ImGui::GetItemRectMin();
-        ImVec2 groupMax = ImGui::GetItemRectMax();
-        ImGui::SetCursorScreenPos(groupMin);
-        std::string btnId =
-            std::string(textures == m_texturesL ? "##SeekL" : "##SeekR");
-        ImGui::InvisibleButton(btnId.c_str(),
-                               ImVec2(avail.x, groupMax.y - groupMin.y));
+        if ( ImGui::IsItemActive() ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetMousePosition{ "AudioSpectrum",
+                                            mousePos.x - groupMin.x,
+                                            mousePos.y - groupMin.y,
+                                            width,
+                                            height,
+                                            true,
+                                            true,
+                                            hoverVisualTime }));
 
-        if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
-            ImVec2 mousePos = ImGui::GetMousePos();
-            float  relX =
-                std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
-            double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-            double hoverAudioTime  = hoverVisualTime - visualOffset;
-
-            const auto timeText =
-                Canvas::formatCanvasTime(hoverVisualTime, snapshot);
-            ImGui::SetTooltip("%s", timeText.c_str());
-
-            // 绘制悬停绿色竖线
-            float hoverLineX = groupMin.x + relX * avail.x;
-            ImGui::GetWindowDrawList()->AddLine(ImVec2(hoverLineX, groupMin.y),
-                                                ImVec2(hoverLineX, groupMax.y),
-                                                IM_COL32(0, 255, 0, 150),
-                                                1.0f);
-
-            if ( ImGui::IsItemActive() ) {
-
-
-                // 发送预览同步指令给逻辑线程
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSetMousePosition{ "AudioSpectrum",
-                                                mousePos.x - groupMin.x,
-                                                mousePos.y - groupMin.y,
-                                                avail.x,
-                                                groupMax.y - groupMin.y,
-                                                true,
-                                                true,
-                                                hoverVisualTime }));
-
-                // 绘制预览包围框 (拖拽时跟随鼠标的预测框)
-                auto session =
-                    Logic::EditorEngine::instance().getActiveSession();
-                if ( session ) {
-                    std::string activeCameraId =
-                        Logic::EditorEngine::instance().getActiveCameraId();
-                    auto snapshot = Logic::EditorEngine::instance()
-                                        .getSyncBuffer(activeCameraId.empty()
-                                                           ? "Basic2DCanvas"
-                                                           : activeCameraId)
-                                        ->getReadingSnapshot();
-                    if ( snapshot && snapshot->hasBeatmap ) {
-                        double offsetStart =
-                            snapshot->visibleTimeStart - snapshot->currentTime;
-                        double offsetEnd =
-                            snapshot->visibleTimeEnd - snapshot->currentTime;
-                        float viewRange =
-                            static_cast<float>(viewEnd - viewStart);
-
-                        if ( viewRange > 0.001f ) {
-                            float preX1 =
-                                groupMin.x +
-                                (static_cast<float>(hoverVisualTime +
-                                                    offsetStart - viewStart) /
-                                 viewRange) *
-                                    avail.x;
-                            float preX2 =
-                                groupMin.x +
-                                (static_cast<float>(hoverVisualTime +
-                                                    offsetEnd - viewStart) /
-                                 viewRange) *
-                                    avail.x;
-
-                            // 裁剪并绘制
-                            float drawPreX1 =
-                                std::clamp(preX1, groupMin.x, groupMax.x);
-                            float drawPreX2 =
-                                std::clamp(preX2, groupMin.x, groupMax.x);
-
-                            if ( drawPreX2 > drawPreX1 ) {
-                                ImGui::GetWindowDrawList()->AddRectFilled(
-                                    ImVec2(drawPreX1, groupMin.y),
-                                    ImVec2(drawPreX2, groupMax.y),
-                                    IM_COL32(
-                                        128, 0, 255, 80));  // 较明显的预览紫色
-                                ImGui::GetWindowDrawList()->AddRect(
-                                    ImVec2(drawPreX1, groupMin.y),
-                                    ImVec2(drawPreX2, groupMax.y),
-                                    IM_COL32(128, 0, 255, 230),
-                                    0.0f,
-                                    0,
-                                    1.5f);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 绘制主画布可见范围包围框
-        auto session = Logic::EditorEngine::instance().getActiveSession();
-        if ( session ) {
-            std::string activeCameraId =
-                Logic::EditorEngine::instance().getActiveCameraId();
-            auto snapshot =
-                Logic::EditorEngine::instance()
-                    .getSyncBuffer(activeCameraId.empty() ? "Basic2DCanvas"
-                                                          : activeCameraId)
-                    ->getReadingSnapshot();
             if ( snapshot && snapshot->hasBeatmap ) {
-                float viewRange = static_cast<float>(viewEnd - viewStart);
-                if ( viewRange > 0.001f ) {
-                    float xStart =
-                        groupMin.x +
-                        (static_cast<float>(snapshot->visibleTimeStart -
-                                            viewStart) /
-                         viewRange) *
-                            avail.x;
-                    float xEnd = groupMin.x +
-                                 (static_cast<float>(snapshot->visibleTimeEnd -
-                                                     viewStart) /
-                                  viewRange) *
-                                     avail.x;
+                const double offsetStart =
+                    snapshot->visibleTimeStart - snapshot->currentTime;
+                const double offsetEnd =
+                    snapshot->visibleTimeEnd - snapshot->currentTime;
+                const float preX1 =
+                    groupMin.x + static_cast<float>((hoverVisualTime +
+                                                     offsetStart - viewStart) /
+                                                    viewRange) *
+                                     width;
+                const float preX2 =
+                    groupMin.x +
+                    static_cast<float>(
+                        (hoverVisualTime + offsetEnd - viewStart) / viewRange) *
+                        width;
+                const float drawPreX1 =
+                    std::clamp(preX1, groupMin.x, groupMax.x);
+                const float drawPreX2 =
+                    std::clamp(preX2, groupMin.x, groupMax.x);
 
-                    // 裁剪到组范围内显示
-                    float drawX1 = std::clamp(xStart, groupMin.x, groupMax.x);
-                    float drawX2 = std::clamp(xEnd, groupMin.x, groupMax.x);
-
-                    if ( drawX2 > drawX1 ) {
-                        ImGui::GetWindowDrawList()->AddRectFilled(
-                            ImVec2(drawX1, groupMin.y),
-                            ImVec2(drawX2, groupMax.y),
-                            IM_COL32(128, 0, 255, 40));  // 半透明紫色
-                        ImGui::GetWindowDrawList()->AddRect(
-                            ImVec2(drawX1, groupMin.y),
-                            ImVec2(drawX2, groupMax.y),
-                            IM_COL32(128, 0, 255, 180),
-                            0.0f,
-                            0,
-                            1.5f);
-                    }
+                if ( drawPreX2 > drawPreX1 ) {
+                    drawList->AddRectFilled(ImVec2(drawPreX1, groupMin.y),
+                                            ImVec2(drawPreX2, groupMax.y),
+                                            IM_COL32(128, 0, 255, 80));
+                    drawList->AddRect(ImVec2(drawPreX1, groupMin.y),
+                                      ImVec2(drawPreX2, groupMax.y),
+                                      IM_COL32(128, 0, 255, 230),
+                                      0.0f,
+                                      0,
+                                      1.5f);
                 }
             }
         }
 
         if ( ImGui::IsItemDeactivated() && ImGui::GetIO().MouseReleased[0] ) {
-            ImVec2 mousePos = ImGui::GetMousePos();
-            float  relX =
-                std::clamp((mousePos.x - groupMin.x) / avail.x, 0.0f, 1.0f);
-            double hoverVisualTime = viewStart + relX * (viewEnd - viewStart);
-            double hoverAudioTime  = hoverVisualTime - visualOffset;
-
-            audioManager.seek(std::clamp(hoverAudioTime, 0.0, totalTime));
-            // 核心修复：同步逻辑层时间
+            Audio::AudioManager::instance().seek(
+                std::clamp(hoverAudioTime, 0.0, totalTime));
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
-
-            // 停止预览状态
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetMousePosition{ "AudioSpectrum",
                                             mousePos.x - groupMin.x,
                                             mousePos.y - groupMin.y,
-                                            avail.x,
-                                            groupMax.y - groupMin.y,
+                                            width,
+                                            height,
                                             false,
                                             false,
                                             -1.0 }));
         }
-    };
-
-    ImGui::Text("%s", TR("ui.spectrum.channel_l").data());
-    if ( !m_texturesL.empty() ) {
-        renderChannelBank(m_texturesL);
-    } else {
-        ImGui::Dummy(ImVec2(avail.x, plotH));
-    }
-
-    ImGui::Text("%s", TR("ui.spectrum.channel_r").data());
-    if ( !m_texturesR.empty() ) {
-        renderChannelBank(m_texturesR);
-    } else {
-        ImGui::Dummy(ImVec2(avail.x, plotH));
     }
 }
 
@@ -605,62 +590,61 @@ void AudioSpectrumView::reloadTextures(vk::PhysicalDevice& physicalDevice,
     if ( !m_texturesNeedReload ) return;
 
     if ( !m_textureReloadStarted ) {
-        if ( !m_texturesL.empty() || !m_texturesR.empty() ) {
-            (void)logicalDevice.waitIdle();
-        }
-        m_texturesL.clear();
-        m_texturesR.clear();
-        m_texturesL.reserve(m_pendingChunksL.size());
-        m_texturesR.reserve(m_pendingChunksR.size());
-        m_nextTextureChunkUploadIndex = 0;
-        m_textureReloadStarted        = true;
+        m_retiredTexturesL.clear();
+        m_retiredTexturesR.clear();
+        m_loadingTexturesL.clear();
+        m_loadingTexturesR.clear();
+        m_loadingTexturesL.reserve(m_pendingChunksL.size());
+        m_loadingTexturesR.reserve(m_pendingChunksR.size());
+        m_nextChunkUploadIndex = 0;
+        m_textureReloadStarted = true;
     }
 
-    constexpr size_t MAX_UPLOAD_CHUNKS_PER_FRAME = 1;
-    size_t           uploadedThisFrame           = 0;
-    const size_t     maxChunks =
-        std::max(m_pendingChunksL.size(), m_pendingChunksR.size());
-
-    auto uploadChunk =
-        [&](const std::vector<TextureChunkData>&              chunks,
-            std::vector<std::unique_ptr<Graphic::VKTexture>>& target,
-            size_t                                            index) {
-            if ( index >= chunks.size() ) {
-                return;
-            }
-
-            const auto& chunk = chunks[index];
-            if ( chunk.pixels.empty() || chunk.width == 0 ||
-                 chunk.height == 0 ) {
-                return;
-            }
-
-            target.push_back(
-                std::make_unique<Graphic::VKTexture>(chunk.pixels.data(),
-                                                     chunk.width,
-                                                     chunk.height,
-                                                     physicalDevice,
-                                                     logicalDevice,
-                                                     cmdPool,
-                                                     queue));
-        };
-
-    while ( m_nextTextureChunkUploadIndex < maxChunks &&
-            uploadedThisFrame < MAX_UPLOAD_CHUNKS_PER_FRAME ) {
-        uploadChunk(
-            m_pendingChunksL, m_texturesL, m_nextTextureChunkUploadIndex);
-        uploadChunk(
-            m_pendingChunksR, m_texturesR, m_nextTextureChunkUploadIndex);
-        ++m_nextTextureChunkUploadIndex;
+    std::size_t uploadedThisFrame = 0;
+    while ( m_nextChunkUploadIndex < m_pendingChunksL.size() &&
+            uploadedThisFrame < MAX_UPLOAD_CHUNK_PAIRS_PER_FRAME ) {
+        const auto& chunkL = m_pendingChunksL[m_nextChunkUploadIndex];
+        const auto& chunkR = m_pendingChunksR[m_nextChunkUploadIndex];
+        ++m_nextChunkUploadIndex;
         ++uploadedThisFrame;
+
+        if ( chunkL.pixels.empty() || chunkR.pixels.empty() ||
+             chunkL.width == 0 || chunkL.height == 0 || chunkR.width == 0 ||
+             chunkR.height == 0 ) {
+            continue;
+        }
+
+        m_loadingTexturesL.push_back(std::make_unique<Graphic::VKTexture>(
+            chunkL.pixels.data(),
+            chunkL.width,
+            chunkL.height,
+            physicalDevice,
+            logicalDevice,
+            cmdPool,
+            queue,
+            Graphic::VKTexturePixelFormat::R8Red));
+        m_loadingTexturesR.push_back(std::make_unique<Graphic::VKTexture>(
+            chunkR.pixels.data(),
+            chunkR.width,
+            chunkR.height,
+            physicalDevice,
+            logicalDevice,
+            cmdPool,
+            queue,
+            Graphic::VKTexturePixelFormat::R8Red));
     }
 
-    if ( m_nextTextureChunkUploadIndex >= maxChunks ) {
+    if ( m_nextChunkUploadIndex >= m_pendingChunksL.size() ) {
+        m_retiredTexturesL = std::move(m_texturesL);
+        m_retiredTexturesR = std::move(m_texturesR);
+        m_texturesL        = std::move(m_loadingTexturesL);
+        m_texturesR        = std::move(m_loadingTexturesR);
+
         m_pendingChunksL.clear();
         m_pendingChunksR.clear();
-        m_nextTextureChunkUploadIndex = 0;
-        m_textureReloadStarted        = false;
-        m_texturesNeedReload          = false;
+        m_nextChunkUploadIndex = 0;
+        m_textureReloadStarted = false;
+        m_texturesNeedReload   = false;
     }
 }
 
@@ -714,9 +698,9 @@ void AudioSpectrumView::startAsyncRecalculate()
     m_isCalculating.store(true);
     m_calcProgress.store(0.0f);
     m_calcFinished.store(false);
-    m_texturesNeedReload          = false;
-    m_textureReloadStarted        = false;
-    m_nextTextureChunkUploadIndex = 0;
+    m_texturesNeedReload   = false;
+    m_textureReloadStarted = false;
+    m_nextChunkUploadIndex = 0;
     m_pendingChunksL.clear();
     m_pendingChunksR.clear();
 
@@ -733,7 +717,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture = appThreadPool->enqueue([this,
+    m_calcFuture                    = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -788,140 +772,155 @@ void AudioSpectrumView::backgroundRecalculate(
         maxFreq,
         logBias);
 
-    std::vector<double> window(fftSize);
+    std::vector<float> window(fftSize);
     for ( int i = 0; i < fftSize; ++i ) {
-        window[i] = 0.5 * (1.0 - std::cos(2.0 * M_PI * i / (fftSize - 1)));
+        window[i] =
+            0.5f * (1.0f - std::cos(2.0f * static_cast<float>(M_PI) *
+                                    static_cast<float>(i) / (fftSize - 1)));
     }
 
+    /// @brief 预计算的 FFT bin 范围。
     struct FrequencyBinRange {
+        /// @brief 起始 FFT bin。
         int start{ 0 };
+
+        /// @brief 结束 FFT bin。
         int end{ 0 };
     };
-    std::vector<FrequencyBinRange> binRanges(
-        static_cast<size_t>(frequencyBins));
-    {
-        const double fmin       = 20.0;
-        const double fmax       = static_cast<double>(maxFreq);
-        const double k          = static_cast<double>(logBias);
-        const double fRange     = fmax - fmin;
-        const double expKMinus1 = std::exp(k) - 1.0;
 
-        auto getFreq = [&](double progress) {
-            if ( std::abs(k) < 1e-4 ) {
-                return fmin + fRange * progress;
-            }
-            return fmin + fRange * (std::exp(k * progress) - 1.0) / expKMinus1;
-        };
-
-        for ( int b = 0; b < frequencyBins; ++b ) {
-            const double freqStart =
-                getFreq(static_cast<double>(b) / frequencyBins);
-            const double freqEnd =
-                getFreq(static_cast<double>(b + 1) / frequencyBins);
-            const int bStart =
-                static_cast<int>(freqStart * fftSize / sampleRate);
-            const int bEnd = std::min(
-                static_cast<int>(freqEnd * fftSize / sampleRate), fftSize / 2);
-            const int clampedStart = std::clamp(bStart, 0, fftSize / 2);
-            const int clampedEnd =
-                std::clamp(std::max(bStart, bEnd), 0, fftSize / 2);
-            binRanges[static_cast<size_t>(b)] = { clampedStart, clampedEnd };
+    const float fmin       = 20.0f;
+    const float fmax       = std::max(maxFreq, fmin + 1.0f);
+    const float k          = logBias;
+    const float fRange     = fmax - fmin;
+    const float expKMinus1 = std::exp(k) - 1.0f;
+    auto        getFreq    = [&](float progress) {
+        if ( std::abs(k) < 1e-4f ) {
+            return fmin + fRange * progress;
         }
+        return fmin + fRange * (std::exp(k * progress) - 1.0f) / expKMinus1;
+    };
+
+    std::vector<FrequencyBinRange> binRanges;
+    binRanges.reserve(static_cast<size_t>(frequencyBins));
+    for ( int b = 0; b < frequencyBins; ++b ) {
+        const float freqStart =
+            getFreq(static_cast<float>(b) / static_cast<float>(frequencyBins));
+        const float freqEnd = getFreq(static_cast<float>(b + 1) /
+                                      static_cast<float>(frequencyBins));
+        int         bStart = static_cast<int>(freqStart * fftSize / sampleRate);
+        int         bEnd   = static_cast<int>(freqEnd * fftSize / sampleRate);
+        bStart             = std::clamp(bStart, 0, fftSize / 2);
+        bEnd               = std::clamp(bEnd, bStart, fftSize / 2);
+        binRanges.push_back({ bStart, bEnd });
     }
 
-    std::vector<double> heatmapL(
-        static_cast<size_t>(frequencyBins) * numTotalSegments, -100.0);
-    std::vector<double> heatmapR(
-        static_cast<size_t>(frequencyBins) * numTotalSegments, -100.0);
+    const float scaleMin      = -80.0f;
+    const float scaleMax      = -10.0f;
+    const float scaleRange    = scaleMax - scaleMin;
+    auto        dbToIntensity = [&](float db) -> std::uint8_t {
+        const float t = std::clamp((db - scaleMin) / scaleRange, 0.0f, 1.0f);
+        return static_cast<std::uint8_t>(std::lround(t * 255.0f));
+    };
+
+    std::vector<std::uint8_t> heatmapL(
+        static_cast<size_t>(frequencyBins) * numTotalSegments, 0U);
+    std::vector<std::uint8_t> heatmapR(
+        static_cast<size_t>(frequencyBins) * numTotalSegments, 0U);
 
     std::atomic<int> completedSegments{ 0 };
     int              totalWork = numTotalSegments * (numChannels > 1 ? 2 : 1);
 
     static std::mutex s_fftwPlanMutex;
 
-    auto processChannel =
-        [&](int chIdx, std::vector<double>& heatmap, int startSeg, int endSeg) {
-            double* localIn = (double*)fftw_malloc(sizeof(double) * fftSize);
-            fftw_complex* localOut = (fftw_complex*)fftw_malloc(
-                sizeof(fftw_complex) * (fftSize / 2 + 1));
+    auto processChannel = [&](int                        chIdx,
+                              std::vector<std::uint8_t>& heatmap,
+                              int                        startSeg,
+                              int                        endSeg) {
+        double* localIn =
+            static_cast<double*>(fftw_malloc(sizeof(double) * fftSize));
+        fftw_complex* localOut = static_cast<fftw_complex*>(
+            fftw_malloc(sizeof(fftw_complex) * (fftSize / 2 + 1)));
 
-            fftw_plan localPlan;
-            {
-                std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
-                localPlan = fftw_plan_dft_r2c_1d(
-                    fftSize, localIn, localOut, FFTW_ESTIMATE);
+        fftw_plan localPlan;
+        {
+            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+            localPlan =
+                fftw_plan_dft_r2c_1d(fftSize, localIn, localOut, FFTW_ESTIMATE);
+        }
+
+        auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
+        auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
+        localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+        localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+
+        auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
+        std::shared_ptr<ice::GraphicEqualizer> localEQ;
+        if ( eq.enabled ) {
+            localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
+            localEQ->set_inputnode(localBufferSource);
+            for ( size_t i = 0; i < eq.gains.size(); ++i ) {
+                localEQ->set_band_gain_db(i, eq.gains[i]);
+                localEQ->set_band_q_factor(i, eq.qs[i]);
+            }
+        }
+
+        for ( int t = startSeg; t < endSeg; ++t ) {
+            if ( stopToken.stop_requested() ) {
+                break;
             }
 
-            auto localRawBuffer  = std::make_unique<ice::AudioBuffer>();
-            auto localProcBuffer = std::make_unique<ice::AudioBuffer>();
-            localRawBuffer->resize(ice::ICEConfig::internal_format, fftSize);
-            localProcBuffer->resize(ice::ICEConfig::internal_format, fftSize);
+            size_t startFrame = static_cast<size_t>(t) * hopSize;
+            if ( startFrame + fftSize > track->num_frames() ) break;
 
-            auto localBufferSource = std::make_shared<BufferSourceNodeProxy>();
-            std::shared_ptr<ice::GraphicEqualizer> localEQ;
-            if ( eq.enabled ) {
-                localEQ = std::make_shared<ice::GraphicEqualizer>(eq.freqs);
-                localEQ->set_inputnode(localBufferSource);
-                for ( size_t i = 0; i < eq.gains.size(); ++i ) {
-                    localEQ->set_band_gain_db(i, eq.gains[i]);
-                    localEQ->set_band_q_factor(i, eq.qs[i]);
-                }
+            track->read(*localRawBuffer, startFrame, fftSize);
+
+            float* chanData = localRawBuffer->raw_ptrs()[chIdx];
+            if ( localEQ ) {
+                localBufferSource->setBuffer(localRawBuffer.get());
+                localEQ->process(*localProcBuffer);
+                chanData = localProcBuffer->raw_ptrs()[chIdx];
             }
 
-            for ( int t = startSeg; t < endSeg; ++t ) {
-                if ( stopToken.stop_requested() ) {
-                    break;
+            for ( int i = 0; i < fftSize; ++i )
+                localIn[i] = static_cast<double>(chanData[i] * window[i]);
+
+            fftw_execute(localPlan);
+
+            for ( int b = 0; b < frequencyBins; ++b ) {
+                const auto [bStart, bEnd] = binRanges[b];
+
+                float maxMag = 0.0f;
+                for ( int i = bStart; i <= bEnd; ++i ) {
+                    const float real  = static_cast<float>(localOut[i][0]);
+                    const float imag  = static_cast<float>(localOut[i][1]);
+                    const float magSq = real * real + imag * imag;
+                    if ( magSq > maxMag ) maxMag = magSq;
                 }
-
-                size_t startFrame = static_cast<size_t>(t) * hopSize;
-                if ( startFrame + fftSize > track->num_frames() ) break;
-
-                track->read(*localRawBuffer, startFrame, fftSize);
-
-                float* chanData = localRawBuffer->raw_ptrs()[chIdx];
-                if ( localEQ ) {
-                    localBufferSource->setBuffer(localRawBuffer.get());
-                    localEQ->process(*localProcBuffer);
-                    chanData = localProcBuffer->raw_ptrs()[chIdx];
-                }
-
-                for ( int i = 0; i < fftSize; ++i )
-                    localIn[i] = chanData[i] * window[i];
-
-                fftw_execute(localPlan);
-
-                for ( int b = 0; b < frequencyBins; ++b ) {
-                    const auto& range  = binRanges[static_cast<size_t>(b)];
-                    double      maxMag = 0;
-                    for ( int i = range.start; i <= range.end; ++i ) {
-                        double magSq = localOut[i][0] * localOut[i][0] +
-                                       localOut[i][1] * localOut[i][1];
-                        if ( magSq > maxMag ) maxMag = magSq;
-                    }
-                    double db =
-                        (maxMag > 1e-9)
-                            ? 20.0 * std::log10(std::sqrt(maxMag) / fftSize)
-                            : -100.0;
-                    heatmap[static_cast<size_t>(b) * numTotalSegments + t] =
-                        std::clamp(db, -100.0, 0.0);
-                }
-
-                completedSegments.fetch_add(1, std::memory_order_relaxed);
-                m_calcProgress.store(static_cast<float>(completedSegments.load(
-                                         std::memory_order_relaxed)) /
-                                         totalWork,
-                                     std::memory_order_relaxed);
+                const float db =
+                    (maxMag > 1e-9f)
+                        ? 20.0f * std::log10(std::sqrt(maxMag) /
+                                             static_cast<float>(fftSize))
+                        : -100.0f;
+                heatmap[static_cast<size_t>(b) * numTotalSegments + t] =
+                    dbToIntensity(db);
             }
 
-            {
-                std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
-                fftw_destroy_plan(localPlan);
-            }
-            fftw_free(localIn);
-            fftw_free(localOut);
-        };
+            completedSegments.fetch_add(1, std::memory_order_relaxed);
+            m_calcProgress.store(static_cast<float>(completedSegments.load(
+                                     std::memory_order_relaxed)) /
+                                     totalWork,
+                                 std::memory_order_relaxed);
+        }
 
-    auto runChannel = [&](int chIdx, std::vector<double>& heatmap) {
+        {
+            std::lock_guard<std::mutex> lock(s_fftwPlanMutex);
+            fftw_destroy_plan(localPlan);
+        }
+        fftw_free(localIn);
+        fftw_free(localOut);
+    };
+
+    auto runChannel = [&](int chIdx, std::vector<std::uint8_t>& heatmap) {
         if ( stopToken.stop_requested() ) {
             return;
         }
@@ -974,17 +973,8 @@ void AudioSpectrumView::backgroundRecalculate(
         heatmapR = heatmapL;
     }
 
-    std::vector<TextureChunkData> chunksL;
-    std::vector<TextureChunkData> chunksR;
-    prepareTextureChunks(
-        heatmapL, heatmapR, numTotalSegments, frequencyBins, chunksL, chunksR);
-    if ( stopToken.stop_requested() ) {
-        m_isCalculating.store(false);
-        return;
-    }
-
-    m_pendingChunksL                = std::move(chunksL);
-    m_pendingChunksR                = std::move(chunksR);
+    m_cachedIntensityL              = std::move(heatmapL);
+    m_cachedIntensityR              = std::move(heatmapR);
     m_cachedNumTotalSegments        = numTotalSegments;
     m_pendingSpectrumDetailLevel    = detailLevel;
     m_pendingCacheSegmentsPerSecond = segmentsPerSecond;
@@ -994,67 +984,150 @@ void AudioSpectrumView::backgroundRecalculate(
     m_calcFinished.store(true);
 }
 
-void AudioSpectrumView::prepareTextureChunks(
-    const std::vector<double>& heatmapL, const std::vector<double>& heatmapR,
-    int totalSegments, int frequencyBins,
-    std::vector<TextureChunkData>& chunksL,
-    std::vector<TextureChunkData>& chunksR) const
+void AudioSpectrumView::prepareFullGlobalTextures()
 {
-    if ( heatmapL.empty() || heatmapR.empty() || totalSegments <= 0 ||
-         frequencyBins <= 0 ) {
-        return;
-    }
+    if ( m_cachedIntensityL.empty() ) return;
 
-    chunksL.clear();
-    chunksR.clear();
+    int totalW = m_cachedNumTotalSegments;
+    int texH   = m_numFrequencyBins;
 
-    const double scaleMin = -80.0;
-    const double scaleMax = -10.0;
-    const double range    = scaleMax - scaleMin;
+    m_pendingChunksL.clear();
+    m_pendingChunksR.clear();
+    m_loadingTexturesL.clear();
+    m_loadingTexturesR.clear();
+    m_nextChunkUploadIndex = 0;
+    m_textureReloadStarted = false;
 
-    auto dbToIdx = [&](double db) -> int {
-        float t =
-            static_cast<float>(std::clamp((db - scaleMin) / range, 0.0, 1.0));
-        return static_cast<int>(t * 255.0f);
-    };
-
-    const int numChunks = (totalSegments + MAX_TEXTURE_W - 1) / MAX_TEXTURE_W;
-    chunksL.reserve(static_cast<size_t>(numChunks));
-    chunksR.reserve(static_cast<size_t>(numChunks));
+    const int numChunks = (totalW + MAX_TEXTURE_W - 1) / MAX_TEXTURE_W;
+    m_pendingChunksL.reserve(static_cast<size_t>(numChunks));
+    m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     for ( int c = 0; c < numChunks; ++c ) {
         uint32_t chunkStart = static_cast<uint32_t>(c) * MAX_TEXTURE_W;
-        uint32_t chunkW     = std::min(
-            MAX_TEXTURE_W, static_cast<uint32_t>(totalSegments) - chunkStart);
+        uint32_t chunkW =
+            std::min(MAX_TEXTURE_W, static_cast<uint32_t>(totalW) - chunkStart);
 
         TextureChunkData chunkL, chunkR;
         chunkL.width = chunkR.width = chunkW;
-        chunkL.height = chunkR.height = static_cast<uint32_t>(frequencyBins);
-        chunkL.pixels.resize(chunkW * static_cast<uint32_t>(frequencyBins) * 4);
-        chunkR.pixels.resize(chunkW * static_cast<uint32_t>(frequencyBins) * 4);
+        chunkL.height = chunkR.height = texH;
+        chunkL.pixels.resize(chunkW * texH);
+        chunkR.pixels.resize(chunkW * texH);
 
-        for ( uint32_t py = 0; py < static_cast<uint32_t>(frequencyBins);
-              ++py ) {
-            int b = frequencyBins - 1 - static_cast<int>(py);
+        for ( uint32_t py = 0; py < static_cast<uint32_t>(texH); ++py ) {
+            int b = texH - 1 - static_cast<int>(py);
             for ( uint32_t px = 0; px < chunkW; ++px ) {
                 uint32_t globalX = chunkStart + px;
-                size_t   offset  = (py * chunkW + px) * 4;
+                size_t   offset  = py * chunkW + px;
 
-                double valL = heatmapL[static_cast<size_t>(b) *
-                                           static_cast<size_t>(totalSegments) +
-                                       globalX];
-                auto&  colL = m_colormapLUT[dbToIdx(valL)];
-                std::memcpy(&chunkL.pixels[offset], colL.data(), 4);
-
-                double valR = heatmapR[static_cast<size_t>(b) *
-                                           static_cast<size_t>(totalSegments) +
-                                       globalX];
-                auto&  colR = m_colormapLUT[dbToIdx(valR)];
-                std::memcpy(&chunkR.pixels[offset], colR.data(), 4);
+                chunkL.pixels[offset] =
+                    m_cachedIntensityL[b * m_cachedNumTotalSegments + globalX];
+                chunkR.pixels[offset] =
+                    m_cachedIntensityR[b * m_cachedNumTotalSegments + globalX];
             }
         }
-        chunksL.push_back(std::move(chunkL));
-        chunksR.push_back(std::move(chunkR));
+        m_pendingChunksL.push_back(std::move(chunkL));
+        m_pendingChunksR.push_back(std::move(chunkR));
+    }
+
+    m_texturesNeedReload = !m_pendingChunksL.empty();
+}
+
+bool AudioSpectrumView::isDirty() const
+{
+    return true;
+}
+
+void AudioSpectrumView::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
+                                   uint32_t h) const
+{
+    (void)oldW;
+    (void)oldH;
+    (void)w;
+    (void)h;
+}
+
+std::vector<std::string> AudioSpectrumView::getShaderSources(
+    const std::string& shaderName)
+{
+    if ( m_shaderSourceCache.count(shaderName) ) {
+        return m_shaderSourceCache[shaderName];
+    }
+
+    Config::SkinData::CanvasConfig canvasConfig =
+        Config::SkinManager::instance().getCanvasConfig("AudioSpectrumView");
+    if ( canvasConfig.canvas_name.empty() ) {
+        XERROR("AudioSpectrumView: failed to resolve shader config.");
+        return {};
+    }
+
+    auto shaderModuleIt = canvasConfig.canvas_shader_modules.find(shaderName);
+    if ( shaderModuleIt == canvasConfig.canvas_shader_modules.end() ) {
+        return {};
+    }
+
+    const auto shaderPath = shaderModuleIt->second;
+    if ( !std::filesystem::exists(shaderPath) ) {
+        XWARN("AudioSpectrumView shader module path not found: {}",
+              Config::pathToUtf8(shaderPath));
+        return {};
+    }
+
+    std::vector<std::string> result{
+        Graphic::VKShader::readFile(
+            Config::pathToUtf8(shaderPath / "VertexShader.spv")),
+        Graphic::VKShader::readFile(
+            Config::pathToUtf8(shaderPath / "FragmentShader.spv"))
+    };
+    m_shaderSourceCache[shaderName] = result;
+    return result;
+}
+
+std::string AudioSpectrumView::getShaderName(
+    const std::string& shaderModuleName)
+{
+    return "AudioSpectrumView:" + shaderModuleName;
+}
+
+const std::vector<Graphic::Vertex::VKBasicVertex>&
+AudioSpectrumView::getVertices() const
+{
+    return m_vertices;
+}
+
+const std::vector<uint32_t>& AudioSpectrumView::getIndices() const
+{
+    return m_indices;
+}
+
+void AudioSpectrumView::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                                         vk::PipelineLayout      pipelineLayout,
+                                         vk::DescriptorSetLayout setLayout,
+                                         vk::DescriptorSet defaultDescriptor,
+                                         uint32_t          frameIndex)
+{
+    (void)frameIndex;
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
+    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
+    for ( const auto& cmd : m_spectrumDrawCmds ) {
+        vk::DescriptorSet descriptor = defaultDescriptor;
+        if ( cmd.texture ) {
+            descriptor = cmd.texture->getNativeDescriptorSet(pool, setLayout);
+        }
+
+        if ( descriptor != lastBound ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &descriptor,
+                                      0,
+                                      nullptr);
+            lastBound = descriptor;
+        }
+
+        cmdBuf.drawIndexed(cmd.indexCount, 1, cmd.indexOffset, 0, 0);
     }
 }
 

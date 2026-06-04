@@ -1,15 +1,16 @@
 #pragma once
 
 #include "config/VisualConfig.h"
-#include "ui/ITextureLoader.h"
-#include <array>
+#include "graphic/imguivk/mesh/VKBasicVertex.h"
+#include "ui/IRenderableView.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <fftw3.h>
 #include <future>
 #include <memory>
 #include <stop_token>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ice
@@ -17,6 +18,11 @@ namespace ice
 class GraphicEqualizer;
 class AudioBuffer;
 }  // namespace ice
+
+namespace MMM::Logic
+{
+struct RenderSnapshot;
+}  // namespace MMM::Logic
 
 namespace MMM::Graphic
 {
@@ -26,11 +32,10 @@ class VKTexture;
 namespace MMM::UI
 {
 
-/// @brief 高精度频谱热力图视图
-/// 通过 CPU 侧光栅化到 RGBA 像素缓冲区，
-/// 再上传为 VKTexture 并以单张纹理绘制，
-/// 达到专业音频编辑器 (如 Adobe Audition) 级别的精度与性能。
-class AudioSpectrumView : public ITextureLoader
+/// @brief 高频谱概览视图。
+/// 通过后台 CPU FFT 生成 R8 强度纹理，再由离屏 Vulkan 管线绘制并叠加 ImGui
+/// 交互层。
+class AudioSpectrumView : public IRenderableView
 {
 public:
     AudioSpectrumView(const std::string& name);
@@ -48,14 +53,20 @@ public:
                         vk::Queue& queue) override;
 
 private:
-    /// @brief 更新当前视图的频谱数据 (从缓存切片并光栅化到像素缓冲)
-    void updateSpectrum(double currentTime, double totalTime);
+    /// @brief 离屏绘制频谱纹理分块时使用的命令。
+    struct SpectrumDrawCmd {
+        /// @brief 需要绑定的频谱纹理。
+        Graphic::VKTexture* texture{ nullptr };
+
+        /// @brief 索引数量。
+        uint32_t indexCount{ 0 };
+
+        /// @brief 索引偏移。
+        uint32_t indexOffset{ 0 };
+    };
 
     /// @brief 同步 EQ 参数到预览 EQ
     void syncEQ();
-
-    /// @brief 准备 FFTW 计划 (线程安全: 仅在主线程调用 plan 创建)
-    void prepareFFT(int fftSize);
 
     /// @brief 启动异步全局预计算 (非阻塞)
     void startAsyncRecalculate();
@@ -79,19 +90,33 @@ private:
                                Config::SpectrumDetailLevel   detailLevel,
                                Config::SpectrumDetailProfile detailProfile);
 
-    /// @brief 构建 "Hot" 色图查找表 (256 级)
-    void buildColormapLUT();
+    /// @brief 添加一个带自定义 UV 的频谱分块矩形。
+    void addSpectrumQuad(float x, float y, float w, float h, float uv0X,
+                         float uv1X, Graphic::VKTexture* texture);
+
+    /// @brief 构建指定通道的离屏绘制几何。
+    void buildChannelGeometry(
+        const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
+        float plotY, float plotW, float plotH, double viewStart, double viewEnd,
+        float visualOffset);
+
+    /// @brief 绘制指定通道的 ImGui 交互覆盖层。
+    void renderChannelInteractionOverlay(const char* seekId, ImVec2 groupMin,
+                                         ImVec2 groupMax, double viewStart,
+                                         double viewEnd, float visualOffset,
+                                         double totalTime, double visualTime,
+                                         const Logic::RenderSnapshot* snapshot);
 
     std::shared_ptr<ice::GraphicEqualizer> m_previewEQ;
     std::unique_ptr<ice::AudioBuffer>      m_processBuffer;
     std::unique_ptr<ice::AudioBuffer>      m_rawBuffer;
 
-    // FFTW 资源 (仅主线程或已完成的后台线程使用)
-    fftw_plan           m_fftPlan{ nullptr };
-    double*             m_fftIn{ nullptr };
-    fftw_complex*       m_fftOut{ nullptr };
-    int                 m_currentFFTSize{ 0 };
-    std::vector<double> m_window;
+    // --- 全局缓存数据 ---
+    /// @brief R8 高分辨率强度缓存，行优先 [bin * totalSegments + t]。
+    std::vector<std::uint8_t> m_cachedIntensityL;
+
+    /// @brief R8 高分辨率强度缓存，行优先 [bin * totalSegments + t]。
+    std::vector<std::uint8_t> m_cachedIntensityR;
 
     /// @brief 当前缓存时间分辨率，单位为段/秒。
     double m_cacheSegmentsPerSecond{ 100.0 };
@@ -141,48 +166,94 @@ private:
 
     // --- 像素缓冲与纹理 (全量静态存储) ---
 
-    /// @brief 纹理分块存储 (L/R 通道)
+    /// @brief 当前正在显示的纹理分块存储 (L/R 通道)。
     std::vector<std::unique_ptr<Graphic::VKTexture>> m_texturesL;
     std::vector<std::unique_ptr<Graphic::VKTexture>> m_texturesR;
 
-    /// @brief 纹理分块的数据缓冲区 (待上传)
+    /// @brief 当前正在逐帧上传的纹理分块存储 (L/R 通道)。
+    std::vector<std::unique_ptr<Graphic::VKTexture>> m_loadingTexturesL;
+    std::vector<std::unique_ptr<Graphic::VKTexture>> m_loadingTexturesR;
+
+    /// @brief 上一代纹理延迟释放缓存，避免切换帧销毁仍可能被 GPU 使用的资源。
+    std::vector<std::unique_ptr<Graphic::VKTexture>> m_retiredTexturesL;
+    std::vector<std::unique_ptr<Graphic::VKTexture>> m_retiredTexturesR;
+
+    /// @brief 纹理分块的 R8 强度数据缓冲区 (待上传)。
     struct TextureChunkData {
+        /// @brief R8 强度像素数据。
         std::vector<unsigned char> pixels;
-        uint32_t                   width;
-        uint32_t                   height;
+
+        /// @brief 分块宽度。
+        uint32_t width;
+
+        /// @brief 分块高度。
+        uint32_t height;
     };
     std::vector<TextureChunkData> m_pendingChunksL;
     std::vector<TextureChunkData> m_pendingChunksR;
 
-    /// @brief 纹理是否需要继续分块重载。
+    /// @brief 纹理是否需要继续分块上传。
     bool m_texturesNeedReload{ false };
 
-    /// @brief 当前分块纹理上传是否已经开始。
+    /// @brief 当前分块上传流程是否已经开始。
     bool m_textureReloadStarted{ false };
 
-    /// @brief 下一帧需要上传的频谱纹理块索引。
-    size_t m_nextTextureChunkUploadIndex{ 0 };
+    /// @brief 下一个要上传的纹理分块索引。
+    std::size_t m_nextChunkUploadIndex{ 0 };
 
     /// @brief 分块宽度 (通常取 16384 或更小以适配硬件限制)
     static constexpr uint32_t MAX_TEXTURE_W{ 16384 };
 
-    /// @brief 从热力图构建待上传的 RGBA 纹理块。
-    /// @param heatmapL 左声道热力图。
-    /// @param heatmapR 右声道热力图。
-    /// @param totalSegments 时间分段数。
-    /// @param frequencyBins 频率分箱数。
-    /// @param chunksL 输出左声道纹理块。
-    /// @param chunksR 输出右声道纹理块。
-    /// @warning 后台耗时路径：执行全量像素转换，不在 UI/渲染热路径运行。
-    void prepareTextureChunks(const std::vector<double>& heatmapL,
-                              const std::vector<double>& heatmapR,
-                              int totalSegments, int frequencyBins,
-                              std::vector<TextureChunkData>& chunksL,
-                              std::vector<TextureChunkData>& chunksR) const;
+    /// @brief 每帧最多上传的 L/R 分块对数量。
+    static constexpr std::size_t MAX_UPLOAD_CHUNK_PAIRS_PER_FRAME{ 1 };
 
-    // --- 色图查找表 ---
-    /// @brief 256 级预计算颜色表 (RGBA u8 × 4)
-    std::array<std::array<unsigned char, 4>, 256> m_colormapLUT;
+    /// @brief 构建全量像素缓冲并准备上传
+    void prepareFullGlobalTextures();
+
+    /// @brief 是否需要重新记录离屏绘制命令。
+    /// @warning 热路径：渲染准备阶段可能读取；当前频谱视图每帧都会更新播放头和
+    /// 覆盖层，因此恒定 dirty。
+    bool isDirty() const override;
+
+    /// @brief 频谱窗口尺寸变化回调。
+    void resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
+                    uint32_t h) const override;
+
+    /// @brief 获取频谱离屏 shader 源码。
+    std::vector<std::string> getShaderSources(
+        const std::string& shaderName) override;
+
+    /// @brief 获取频谱离屏 shader 名称。
+    std::string getShaderName(const std::string& shaderModuleName) override;
+
+    /// @brief 获取离屏绘制顶点。
+    const std::vector<Graphic::Vertex::VKBasicVertex>&
+    getVertices() const override;
+
+    /// @brief 获取离屏绘制索引。
+    const std::vector<uint32_t>& getIndices() const override;
+
+    /// @brief 录制频谱分块离屏绘制命令。
+    /// @warning 热路径：每帧离屏命令录制时执行；只遍历已生成的分块命令并复用
+    /// descriptor。
+    void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
+                          vk::PipelineLayout      pipelineLayout,
+                          vk::DescriptorSetLayout setLayout,
+                          vk::DescriptorSet       defaultDescriptor,
+                          uint32_t                frameIndex) override;
+
+    /// @brief 离屏绘制顶点缓存。
+    std::vector<Graphic::Vertex::VKBasicVertex> m_vertices;
+
+    /// @brief 离屏绘制索引缓存。
+    std::vector<uint32_t> m_indices;
+
+    /// @brief 离屏绘制命令缓存。
+    std::vector<SpectrumDrawCmd> m_spectrumDrawCmds;
+
+    /// @brief SPIR-V shader 源码缓存。
+    std::unordered_map<std::string, std::vector<std::string>>
+        m_shaderSourceCache;
 
     // --- 视图状态 ---
     float m_zoom{ 1.0f };

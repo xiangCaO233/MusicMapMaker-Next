@@ -43,7 +43,7 @@ void SettingsView::drawVisualSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -500,9 +500,9 @@ void SettingsView::drawVisualSettings()
                                    const char*                 name) {
             const auto   profile   = Config::spectrumDetailProfile(level);
             const double stereoMiB = bytesToMiB(
-                Config::estimateSpectrumTextureBytesPerMinute(level, 2));
+                Config::estimateSpectrumTextureBytesPerMinute(level, 2, 1));
             const double monoMiB = bytesToMiB(
-                Config::estimateSpectrumTextureBytesPerMinute(level, 1));
+                Config::estimateSpectrumTextureBytesPerMinute(level, 1, 4));
             return TR_FMT("ui.settings.visual.spectrum_detail.option",
                           name,
                           profile.segmentsPerSecond,

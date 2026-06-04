@@ -195,6 +195,12 @@ local Skin = {
 				effect = "shader/canvas/Basic2DCanvas/effect",
 			},
 		},
+		audio_spectrum_view = {
+			name = "AudioSpectrumView",
+			shader_modules = {
+				main = "shader/canvas/AudioSpectrumView/main",
+			},
+		},
 	},
 
 	-- 布局参数

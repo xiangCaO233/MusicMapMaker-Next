@@ -33,7 +33,8 @@ VKTexture::VKTexture(const std::filesystem::path& filePath,
                    static_cast<uint32_t>(texHeight),
                    physicalDevice,
                    commandPool,
-                   queue);
+                   queue,
+                   VKTexturePixelFormat::Rgba8);
 
     stbi_image_free(pixels);
     XDEBUG("Texture loaded from file: {}", utf8Path);
@@ -43,11 +44,12 @@ VKTexture::VKTexture(const std::filesystem::path& filePath,
 VKTexture::VKTexture(const unsigned char* pixels, uint32_t width,
                      uint32_t height, vk::PhysicalDevice& physicalDevice,
                      vk::Device& device, vk::CommandPool commandPool,
-                     vk::Queue queue)
+                     vk::Queue queue, VKTexturePixelFormat pixelFormat)
     : m_device(device)
 {
     // 直接调用共通逻辑
-    initFromPixels(pixels, width, height, physicalDevice, commandPool, queue);
+    initFromPixels(
+        pixels, width, height, physicalDevice, commandPool, queue, pixelFormat);
     XDEBUG("Texture created from memory buffer [{}x{}]", width, height);
 }
 
@@ -122,11 +124,19 @@ VKTexture::~VKTexture()
 // 【共通核心逻辑实现】
 void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
                                uint32_t height, vk::PhysicalDevice& physDevice,
-                               vk::CommandPool pool, vk::Queue queue)
+                               vk::CommandPool pool, vk::Queue queue,
+                               VKTexturePixelFormat pixelFormat)
 {
-    m_width                  = width;
-    m_height                 = height;
-    vk::DeviceSize imageSize = width * height * 4;
+    m_width  = width;
+    m_height = height;
+
+    const bool isSingleChannel = pixelFormat == VKTexturePixelFormat::R8 ||
+                                 pixelFormat == VKTexturePixelFormat::R8Red;
+    const vk::Format imageFormat =
+        isSingleChannel ? vk::Format::eR8Unorm : vk::Format::eR8G8B8A8Unorm;
+    const uint32_t bytesPerPixel = isSingleChannel ? 1U : 4U;
+    vk::DeviceSize imageSize =
+        static_cast<vk::DeviceSize>(width) * height * bytesPerPixel;
 
     // 1. 创建 Staging Buffer 并上传
     vk::BufferCreateInfo stagingBufferInfo(
@@ -153,7 +163,7 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
     vk::ImageCreateInfo imageInfo(
         {},
         vk::ImageType::e2D,
-        vk::Format::eR8G8B8A8Unorm,
+        imageFormat,
         { m_width, m_height, 1 },
         1,
         1,
@@ -189,12 +199,25 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
     m_device.freeMemory(stagingMemory);
 
     // 4. 创建 ImageView
+    vk::ComponentMapping componentMapping{};
+    if ( pixelFormat == VKTexturePixelFormat::R8 ) {
+        componentMapping = vk::ComponentMapping(vk::ComponentSwizzle::eR,
+                                                vk::ComponentSwizzle::eR,
+                                                vk::ComponentSwizzle::eR,
+                                                vk::ComponentSwizzle::eOne);
+    } else if ( pixelFormat == VKTexturePixelFormat::R8Red ) {
+        componentMapping = vk::ComponentMapping(vk::ComponentSwizzle::eR,
+                                                vk::ComponentSwizzle::eZero,
+                                                vk::ComponentSwizzle::eZero,
+                                                vk::ComponentSwizzle::eOne);
+    }
+
     vk::ImageViewCreateInfo viewInfo(
         {},
         m_image,
         vk::ImageViewType::e2D,
-        vk::Format::eR8G8B8A8Unorm,
-        {},
+        imageFormat,
+        componentMapping,
         { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
     m_imageView = m_device.createImageView(viewInfo).value;
 

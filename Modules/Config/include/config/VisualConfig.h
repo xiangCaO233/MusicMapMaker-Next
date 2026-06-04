@@ -57,28 +57,30 @@ struct SpectrumDetailProfile {
 inline SpectrumDetailProfile spectrumDetailProfile(SpectrumDetailLevel level)
 {
     switch ( level ) {
-    case SpectrumDetailLevel::Performance: return { 64.0, 96 };
-    case SpectrumDetailLevel::Balanced: return { 100.0, 128 };
-    case SpectrumDetailLevel::Fine: return { 200.0, 256 };
-    case SpectrumDetailLevel::Ultra: return { 400.0, 512 };
-    case SpectrumDetailLevel::Extreme: return { 800.0, 1024 };
-    case SpectrumDetailLevel::Experimental: return { 1600.0, 2048 };
+    case SpectrumDetailLevel::Performance: return { 40.0, 64 };
+    case SpectrumDetailLevel::Balanced: return { 64.0, 96 };
+    case SpectrumDetailLevel::Fine: return { 96.0, 128 };
+    case SpectrumDetailLevel::Ultra: return { 160.0, 192 };
+    case SpectrumDetailLevel::Extreme: return { 240.0, 256 };
+    case SpectrumDetailLevel::Experimental: return { 360.0, 384 };
     }
-    return { 100.0, 128 };
+    return { 64.0, 96 };
 }
 
-/// @brief 估算指定频谱图精细度每分钟需要的 RGBA8 纹理显存。
+/// @brief 估算指定频谱图精细度每分钟需要的纹理显存。
 /// @param level 频谱图精细度。
 /// @param channelCount 频谱图纹理通道数量。
+/// @param bytesPerTexel 每个纹理像素占用的字节数。
 /// @return 每分钟纹理显存字节数，不含驱动对齐和描述符开销。
 inline std::uint64_t estimateSpectrumTextureBytesPerMinute(
-    SpectrumDetailLevel level, std::uint32_t channelCount)
+    SpectrumDetailLevel level, std::uint32_t channelCount,
+    std::uint32_t bytesPerTexel = 1)
 {
     const auto profile = spectrumDetailProfile(level);
     return static_cast<std::uint64_t>(
         profile.segmentsPerSecond * 60.0 *
-        static_cast<double>(profile.frequencyBins) * 4.0 *
-        static_cast<double>(channelCount));
+        static_cast<double>(profile.frequencyBins) *
+        static_cast<double>(bytesPerTexel) * static_cast<double>(channelCount));
 }
 
 struct TrackLayout {

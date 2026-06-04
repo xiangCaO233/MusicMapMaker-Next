@@ -10,18 +10,34 @@
 namespace MMM::Graphic
 {
 
+/// @brief 从内存创建纹理时使用的像素格式。
+enum class VKTexturePixelFormat {
+    Rgba8,  ///< RGBA8 UNORM，每像素 4 字节。
+    R8,     ///< R8 UNORM，每像素 1 字节，采样时 R 通道映射到 RGB。
+    R8Red   ///< R8 UNORM，每像素 1 字节，采样时只映射到 R 通道。
+};
+
 class VKTexture
 {
 public:
-    // 构造方式 A：从文件加载
+    /// @brief 从文件加载 RGBA8 纹理。
     VKTexture(const std::filesystem::path& filePath,
               vk::PhysicalDevice& physicalDevice, vk::Device& device,
               vk::CommandPool commandPool, vk::Queue queue);
 
-    // 构造方式 B：直接从内存像素加载 (用于纯色或动态生成纹理)
+    /// @brief 从内存像素加载纹理。
+    /// @param pixels 像素数据起始地址。
+    /// @param width 纹理宽度。
+    /// @param height 纹理高度。
+    /// @param physicalDevice Vulkan 物理设备。
+    /// @param device Vulkan 逻辑设备。
+    /// @param commandPool 上传命令池。
+    /// @param queue 上传队列。
+    /// @param pixelFormat 像素格式，默认 RGBA8。
     VKTexture(const unsigned char* pixels, uint32_t width, uint32_t height,
               vk::PhysicalDevice& physicalDevice, vk::Device& device,
-              vk::CommandPool commandPool, vk::Queue queue);
+              vk::CommandPool commandPool, vk::Queue queue,
+              VKTexturePixelFormat pixelFormat = VKTexturePixelFormat::Rgba8);
 
     VKTexture(VKTexture&& other) noexcept;
     VKTexture& operator=(VKTexture&& other) noexcept;
@@ -60,10 +76,11 @@ public:
     uint32_t height() const { return m_height; }
 
 private:
-    // 【共通核心逻辑】
+    /// @brief 从内存像素初始化 Vulkan 纹理资源。
     void initFromPixels(const unsigned char* pixels, uint32_t width,
                         uint32_t height, vk::PhysicalDevice& physDevice,
-                        vk::CommandPool pool, vk::Queue queue);
+                        vk::CommandPool pool, vk::Queue queue,
+                        VKTexturePixelFormat pixelFormat);
 
     uint32_t findMemoryType(vk::PhysicalDevice& physDevice, uint32_t typeFilter,
                             vk::MemoryPropertyFlags properties);
