@@ -28,8 +28,10 @@ namespace MMM::UI
 /// @brief 渲染视觉设置页。
 void SettingsView::drawVisualSettings()
 {
-    auto& visual  = Config::AppConfig::instance().getVisualConfig();
-    bool  changed = false;
+    auto& appConfig = Config::AppConfig::instance();
+    auto& visual    = appConfig.getVisualConfig();
+    auto& settings  = appConfig.getEditorSettings();
+    bool  changed   = false;
 
     m_contentVBox.clear();
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
@@ -270,6 +272,52 @@ void SettingsView::drawVisualSettings()
                     visual.noteFillMode =
                         (Config::BackgroundFillMode)noteFillMode;
                     changed = true;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.note_palette_default").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                auto& paletteConfig = settings.noteColorPalettes;
+                auto& defaultScheme =
+                    settings.defaultNoteColorPaletteSchemeName;
+                std::string previewName =
+                    defaultScheme ==
+                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+                        ? std::string(
+                              TR_CACHE(
+                                  "ui.toolbar.note_palette.skin_default_scheme")
+                                  .data())
+                        : defaultScheme;
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##DefaultNotePalette",
+                                       previewName.c_str()) ) {
+                    const bool skinSelected =
+                        defaultScheme ==
+                        Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                    if ( ImGui::Selectable(
+                             TR_CACHE(
+                                 "ui.toolbar.note_palette.skin_default_scheme")
+                                 .data(),
+                             skinSelected) ) {
+                        defaultScheme =
+                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        changed = true;
+                    }
+                    if ( skinSelected ) ImGui::SetItemDefaultFocus();
+
+                    for ( const auto& scheme : paletteConfig.schemes ) {
+                        const bool selected = defaultScheme == scheme.name;
+                        if ( ImGui::Selectable(scheme.name.c_str(),
+                                               selected) ) {
+                            defaultScheme = scheme.name;
+                            changed       = true;
+                        }
+                        if ( selected ) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
                 }
             });
     }

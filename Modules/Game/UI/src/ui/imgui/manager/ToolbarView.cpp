@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/BeatmapSession.h"
@@ -18,6 +19,7 @@
 #include <cstdio>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -425,6 +427,7 @@ void ToolbarView::update(UIManager* sourceManager)
         advanceItem();
 
         if ( !m_colorPaletteInitialized ) initializeColorPalette();
+        applyProjectPalettePreference();
 
         ImGuiColorEditFlags colorButtonFlags =
             ImGuiColorEditFlags_NoTooltip |
@@ -527,7 +530,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -828,11 +831,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1030,10 +1033,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
 void ToolbarView::initializeColorPalette()
 {
-    for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-        auto slot          = static_cast<Logic::NoteColorSlot>(i);
-        m_paletteColors[i] = toVec4(skinColorForSlot(slot));
-    }
+    loadSkinDefaultPalette();
 
     auto& paletteConfig =
         Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
@@ -1047,6 +1047,68 @@ void ToolbarView::initializeColorPalette()
         pushPaletteToBrush();
     }
     m_colorPaletteInitialized = true;
+}
+
+void ToolbarView::loadSkinDefaultPalette()
+{
+    for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot          = static_cast<Logic::NoteColorSlot>(i);
+        m_paletteColors[i] = toVec4(skinColorForSlot(slot));
+    }
+    m_activePaletteSchemeIndex = -1;
+    setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
+    pushPaletteToBrush();
+}
+
+bool ToolbarView::loadPaletteSchemeByName(const std::string& schemeName)
+{
+    if ( schemeName.empty() ||
+         schemeName == Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+        loadSkinDefaultPalette();
+        return true;
+    }
+
+    auto& paletteConfig =
+        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+    auto it = std::find_if(paletteConfig.schemes.begin(),
+                           paletteConfig.schemes.end(),
+                           [&](const Config::NoteColorPaletteScheme& scheme) {
+                               return scheme.name == schemeName;
+                           });
+    if ( it == paletteConfig.schemes.end() ) return false;
+
+    loadPaletteScheme(static_cast<std::size_t>(
+        std::distance(paletteConfig.schemes.begin(), it)));
+    return true;
+}
+
+void ToolbarView::applyProjectPalettePreference()
+{
+    auto&       engine   = Logic::EditorEngine::instance();
+    const auto* project  = engine.getCurrentProject();
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+
+    std::string projectKey;
+    std::string schemeName = settings.defaultNoteColorPaletteSchemeName;
+    if ( project ) {
+        projectKey = Config::pathToUtf8(project->m_projectRoot);
+        if ( !project->m_settings.m_noteColorPaletteSchemeName.empty() ) {
+            schemeName = project->m_settings.m_noteColorPaletteSchemeName;
+        }
+    }
+    if ( schemeName.empty() ) {
+        schemeName = Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+    }
+
+    std::string applyKey = projectKey;
+    applyKey.push_back('\n');
+    applyKey += schemeName;
+    if ( applyKey == m_lastAppliedProjectPaletteKey ) return;
+
+    m_lastAppliedProjectPaletteKey = applyKey;
+    if ( !loadPaletteSchemeByName(schemeName) ) {
+        loadSkinDefaultPalette();
+    }
 }
 
 void ToolbarView::pushPaletteToBrush()
@@ -1327,7 +1389,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
+        bool hexChanged       = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);

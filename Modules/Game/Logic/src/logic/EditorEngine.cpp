@@ -1676,12 +1676,20 @@ int32_t EditorEngine::consumePendingFocusSessionIndex()
 
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 {
-    // 关键修复：从全局 AppConfig 中同步最新的最近项目列表，防止被 UI 设置覆盖
-    auto& globalRecent =
-        Config::AppConfig::instance().getEditorConfig().recentProjects;
+    // 关键修复：从全局 AppConfig 中同步软件级状态，防止被
+    // UI/项目工作区恢复覆盖。
+    const auto& globalConfig = Config::AppConfig::instance().getEditorConfig();
+    const auto& globalRecent = globalConfig.recentProjects;
+    const auto  globalNoteColorPalettes =
+        globalConfig.settings.noteColorPalettes;
+    const auto globalDefaultNoteColorPalette =
+        globalConfig.settings.defaultNoteColorPaletteSchemeName;
 
-    m_editorConfig                = config;
-    m_editorConfig.recentProjects = globalRecent;
+    m_editorConfig                            = config;
+    m_editorConfig.recentProjects             = globalRecent;
+    m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
+    m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
+        globalDefaultNoteColorPalette;
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {

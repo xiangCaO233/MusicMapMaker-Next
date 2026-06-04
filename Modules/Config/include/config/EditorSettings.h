@@ -203,6 +203,10 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
 /// @brief 音符调色盘方案中的颜色槽位数量。
 inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
 
+/// @brief 使用当前皮肤默认音符配色的调色盘方案标识。
+inline constexpr const char* NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
+    "__skin_default__";
+
 /// @brief 用户保存的音符调色盘方案。
 struct NoteColorPaletteScheme {
     /// @brief 方案显示名称。
@@ -715,6 +719,11 @@ struct EditorSettings {
     /// @brief 音符调色盘方案配置。
     NoteColorPaletteConfig noteColorPalettes;
 
+    /// @brief 打开项目时默认应用的音符调色盘方案名称。
+    std::string defaultNoteColorPaletteSchemeName{
+        NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+    };
+
     /// @brief 编辑器自定义快捷键配置。
     ShortcutConfig shortcutConfig;
 };
@@ -763,6 +772,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
                         { "snapFloor", c.snapFloor },
                         { "aesthetics", c.aesthetics },
                         { "noteColorPalettes", c.noteColorPalettes },
+                        { "defaultNoteColorPaletteSchemeName",
+                          c.defaultNoteColorPaletteSchemeName },
                         { "shortcutConfig", c.shortcutConfig } };
 }
 
@@ -822,6 +833,9 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
     c.noteColorPalettes =
         j.value("noteColorPalettes", NoteColorPaletteConfig());
+    c.defaultNoteColorPaletteSchemeName =
+        j.value("defaultNoteColorPaletteSchemeName",
+                std::string(NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
     c.shortcutConfig = j.value("shortcutConfig", ShortcutConfig());
 }
 

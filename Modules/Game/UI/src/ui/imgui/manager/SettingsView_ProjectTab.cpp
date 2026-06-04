@@ -39,11 +39,12 @@ void SettingsView::drawProjectSettings()
     m_contentVBox.setSpacing(6).setPadding(8, 8, 8, 8);
     size_t rowIndex     = 0;
     size_t sectionIndex = 0;
+    bool   changed      = false;
 
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "PRJ_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -157,12 +158,83 @@ void SettingsView::drawProjectSettings()
                     ImGui::PopClipRect();
                 }
             });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.project.note_palette").data(),
+            labelW,
+            [&](Clay_BoundingBox r, bool) {
+                auto& paletteConfig = Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .noteColorPalettes;
+                auto& projectScheme =
+                    project->m_settings.m_noteColorPaletteSchemeName;
+
+                std::string previewName;
+                if ( projectScheme.empty() ) {
+                    previewName =
+                        TR_CACHE("ui.settings.project.note_palette.inherit")
+                            .data();
+                } else if ( projectScheme ==
+                            Config::
+                                NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+                    previewName =
+                        TR_CACHE("ui.toolbar.note_palette.skin_default_scheme")
+                            .data();
+                } else {
+                    previewName = projectScheme;
+                }
+
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo("##ProjectNotePalette",
+                                       previewName.c_str()) ) {
+                    const bool inheritSelected = projectScheme.empty();
+                    if ( ImGui::Selectable(
+                             TR_CACHE(
+                                 "ui.settings.project.note_palette.inherit")
+                                 .data(),
+                             inheritSelected) ) {
+                        projectScheme.clear();
+                        changed = true;
+                    }
+                    if ( inheritSelected ) ImGui::SetItemDefaultFocus();
+
+                    const bool skinSelected =
+                        projectScheme ==
+                        Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                    if ( ImGui::Selectable(
+                             TR_CACHE(
+                                 "ui.toolbar.note_palette.skin_default_scheme")
+                                 .data(),
+                             skinSelected) ) {
+                        projectScheme =
+                            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        changed = true;
+                    }
+                    if ( skinSelected ) ImGui::SetItemDefaultFocus();
+
+                    for ( const auto& scheme : paletteConfig.schemes ) {
+                        const bool selected = projectScheme == scheme.name;
+                        if ( ImGui::Selectable(scheme.name.c_str(),
+                                               selected) ) {
+                            projectScheme = scheme.name;
+                            changed       = true;
+                        }
+                        if ( selected ) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            });
     }
 
     ImVec2 startPos = ImGui::GetCursorScreenPos();
     ImVec2 sz       = m_contentVBox.renderInCurrent(
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
+
+    if ( changed ) {
+        engine.saveProject();
+    }
 }
 
 }  // namespace MMM::UI

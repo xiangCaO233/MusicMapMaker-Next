@@ -69,6 +69,8 @@ private:
     int m_activePaletteSchemeIndex{ -1 };
     /// @brief 当前调色盘方案名称编辑缓冲区。
     std::array<char, 96> m_paletteSchemeNameBuffer{};
+    /// @brief 上次已应用项目调色方案的项目与方案组合键。
+    std::string m_lastAppliedProjectPaletteKey;
 
     /**
      * @brief 绘制工具按钮
@@ -82,6 +84,17 @@ private:
 
     /// @brief 从当前皮肤初始化调色盘默认颜色。
     void initializeColorPalette();
+
+    /// @brief 将调色盘重置为当前皮肤默认颜色。
+    void loadSkinDefaultPalette();
+
+    /// @brief 按方案名称加载软件级调色盘方案。
+    /// @param schemeName 方案名称或皮肤默认方案标识。
+    /// @return 成功应用方案时返回 true。
+    bool loadPaletteSchemeByName(const std::string& schemeName);
+
+    /// @brief 项目切换或默认方案变化后应用项目调色方案偏好。
+    void applyProjectPalettePreference();
 
     /// @brief 将当前调色盘颜色发送为画笔自定义颜色。
     void pushPaletteToBrush();
