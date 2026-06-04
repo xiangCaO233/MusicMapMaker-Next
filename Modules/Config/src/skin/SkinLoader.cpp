@@ -600,5 +600,10 @@ void SkinManager::setFont(const std::string& key, ImFont* font)
     m_data.runtimeFonts[key] = font;
 }
 
+void SkinManager::clearRuntimeFonts()
+{
+    m_data.runtimeFonts.clear();
+}
+
 }  // namespace Config
 }  // namespace MMM

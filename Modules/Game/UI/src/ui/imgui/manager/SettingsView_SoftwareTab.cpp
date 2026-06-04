@@ -41,7 +41,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -167,10 +167,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -545,8 +545,9 @@ void SettingsView::drawSoftwareSettings()
                     changed                    = true;
                     if ( auto ctx = Graphic::VKContext::get() ) {
                         ctx->get().applyTheme();
-                        ctx->get().updateFontScales();
-                        ctx->get().requestFontRebuild();
+                        ctx->get().showCenterNotification(
+                            TR_CACHE("ui.settings.software.font.restart")
+                                .data());
                     }
                 } else if ( !ImGui::IsItemActive() ) {
                     tmpUIScale = settings.uiScaleMultiplier;
@@ -568,8 +569,9 @@ void SettingsView::drawSoftwareSettings()
                     settings.fontSizeMultiplier = tmpFontScale;
                     changed                     = true;
                     if ( auto ctx = Graphic::VKContext::get() ) {
-                        ctx->get().updateFontScales();
-                        ctx->get().requestFontRebuild();
+                        ctx->get().showCenterNotification(
+                            TR_CACHE("ui.settings.software.font.restart")
+                                .data());
                     }
                 } else if ( !ImGui::IsItemActive() ) {
                     tmpFontScale = settings.fontSizeMultiplier;

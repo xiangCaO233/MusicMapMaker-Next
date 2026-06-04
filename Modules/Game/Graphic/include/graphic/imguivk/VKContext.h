@@ -117,7 +117,10 @@ public:
     void rebuildFonts();
 
     /**
-     * @brief 仅更新现有字体的 Scale，不触发重建 (用于实时倍率调节)
+     * @brief 恢复当前字体 atlas 生命周期内固定的字体缩放。
+     *
+     * @warning 低频设置路径：禁止在这里读取实时字体倍率并触发动态
+     * atlas 重烘焙；字体尺寸变更只能在下一次字体 atlas 重建后生效。
      */
     void updateFontScales();
 
@@ -165,6 +168,16 @@ private:
     /// @warning
     /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
     std::atomic<bool> m_fontRebuildRequested{ false };
+
+    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
+    /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
+    /// dynamic atlas 可能在渲染中重新打包字体纹理。
+    float m_fontAtlasScaleMain{ 1.0f };
+
+    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的字体 UI 缩放。
+    /// @warning 运行时设置变更不得直接修改该值，避免已有 ImFont
+    /// 在渲染中切换到新的动态烘焙尺寸。
+    float m_fontAtlasBaseScale{ 1.0f };
 
 private:
     /// @brief 根据帧率限制策略选择当前设备支持的呈现模式。

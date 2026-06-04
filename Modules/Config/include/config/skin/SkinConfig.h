@@ -179,6 +179,9 @@ public:
     ///@brief 设置运行时字体 (供渲染层初始化时调用)
     void setFont(const std::string& key, ImFont* font);
 
+    /// @brief 清空运行时字体指针缓存。
+    void clearRuntimeFonts();
+
 private:
     ///@brief 皮肤数据
     SkinData m_data;

@@ -10,6 +10,8 @@
 #include "imgui_impl_glfw.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <string>
 
@@ -142,9 +144,28 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 void VKContext::setupFonts()
 {
     ImGuiIO& io        = ImGui::GetIO();
+    auto&    settings  = Config::AppConfig::instance().getEditorSettings();
     float native_scale = Config::AppConfig::instance().getNativeContentScale();
     float ui_scale     = Config::AppConfig::instance().getUIScale();
     auto& skinMgr      = Config::SkinManager::instance();
+    if ( !std::isfinite(native_scale) || native_scale <= 0.0f ) {
+        native_scale = 1.0f;
+    }
+    if ( !std::isfinite(ui_scale) || ui_scale <= 0.0f ) {
+        ui_scale = 1.0f;
+    }
+    m_fontAtlasBaseScale = ui_scale / native_scale;
+    if ( !std::isfinite(m_fontAtlasBaseScale) ||
+         m_fontAtlasBaseScale <= 0.0f ) {
+        m_fontAtlasBaseScale = 1.0f;
+    }
+    m_fontAtlasScaleMain = settings.fontSizeMultiplier;
+    if ( !std::isfinite(m_fontAtlasScaleMain) ||
+         m_fontAtlasScaleMain <= 0.0f ) {
+        m_fontAtlasScaleMain = 1.0f;
+    }
+    m_fontAtlasScaleMain = std::clamp(m_fontAtlasScaleMain, 0.5f, 2.0f);
+    ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
 
     // --- 字体范围定义 ---
     static const ImWchar ascii_ranges[] = { 0x0020, 0x00FF, 0 };
@@ -193,12 +214,16 @@ void VKContext::setupFonts()
         }
 
         ImFontConfig config;
-        config.OversampleH = 2;
-        config.OversampleV = 2;
+        // ImGui 1.92 dynamic atlas may rasterize glyphs lazily while rendering.
+        // STB's oversample prefilter asserts on some CJK/OpenType glyph edges
+        // in debug builds, so keep oversampling disabled for runtime-loaded
+        // fonts.
+        config.OversampleH = 1;
+        config.OversampleV = 1;
         config.PixelSnapH  = true;
 
         // Load at physical pixel size for sharpness
-        float atlasSize = size * native_scale;
+        float atlasSize = std::max(1.0f, size * native_scale);
 
         // 1. 加载基础 ASCII 字体 (严格限制范围)
         ImFont* font = io.Fonts->AddFontFromFileTTF(
@@ -210,8 +235,10 @@ void VKContext::setupFonts()
         if ( font ) {
             // 2. 配置合并参数加载 CJK 字体 (严格限制范围)
             ImFontConfig mergeConfig;
-            mergeConfig.MergeMode  = true;
-            mergeConfig.PixelSnapH = true;
+            mergeConfig.MergeMode   = true;
+            mergeConfig.PixelSnapH  = true;
+            mergeConfig.OversampleH = 1;
+            mergeConfig.OversampleV = 1;
 
             io.Fonts->AddFontFromFileTTF(
                 Config::pathToUtf8(cjkFontPath).c_str(),
@@ -227,25 +254,18 @@ void VKContext::setupFonts()
             iconConfig.OversampleH          = 1;
             iconConfig.OversampleV          = 1;
 
-            // 补偿 font->Scale 的影响，使图标视觉大小不随文字倍率增大
-            // 确保图标大小仅受 ui_scale 和 native_scale 影响 (即仅随 UI
-            // 全局缩放而缩放)
-            float iconMultiplier = 1.0f / settings.fontSizeMultiplier;
-
             // 向上稍微偏移 (-0.05x)，并设置缩放为 0.9x
             // 缩小尺寸后，图标会靠近基准线（显得偏下），因此需要负向偏移来使其在按钮/行内视觉居中
-            iconConfig.GlyphOffset.y =
-                -(size * 0.05f) * native_scale * iconMultiplier;
+            iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
-                                           atlasSize * 0.9f * iconMultiplier,
+                                           atlasSize * 0.9f,
                                            &iconConfig,
                                            nerd_ranges);
 
-            // 设置缩放以匹配 UI 布局
-            font->Scale =
-                (ui_scale / native_scale) * settings.fontSizeMultiplier;
+            // 固定当前 atlas 生命周期的字体缩放，避免运行时切换动态烘焙尺寸。
+            font->Scale = m_fontAtlasBaseScale;
 
             skinMgr.setFont(key, font);
         }
@@ -278,7 +298,7 @@ void VKContext::setupFonts()
 
         // 这里的 size 使用 side_bar 的默认大小，确保视觉一致
         float size               = 16.0f;
-        float atlasSize          = size * native_scale;
+        float atlasSize          = std::max(1.0f, size * native_scale);
         iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
         const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
@@ -303,36 +323,25 @@ void VKContext::rebuildFonts()
 
     ImGuiIO& io = ImGui::GetIO();
 
+    Config::SkinManager::instance().clearRuntimeFonts();
+
     // 清除旧字体
     io.Fonts->Clear();
 
     // 重新运行字体加载
     setupFonts();
 
-    // 构建新 Atlas
-    // Backend will detect texture update automatically if RendererHasTextures
-    // is enabled
-    io.Fonts->Build();
-
     XINFO("Fonts rebuilt.");
 }
 
 void VKContext::updateFontScales()
 {
-    auto& settings     = Config::AppConfig::instance().getEditorSettings();
-    float native_scale = Config::AppConfig::instance().getNativeContentScale();
-    float ui_scale     = Config::AppConfig::instance().getUIScale();
-    float baseScale    = (ui_scale / native_scale) * settings.uiScaleMultiplier;
-    float targetScale  = baseScale * settings.fontSizeMultiplier;
+    ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
 
     auto& skinMgr = Config::SkinManager::instance();
     for ( auto& [key, font] : skinMgr.getData().runtimeFonts ) {
         if ( font ) {
-            if ( key == "pure_icons" ) {
-                font->Scale = baseScale;  // 图标不随文字倍率缩放
-            } else {
-                font->Scale = targetScale;
-            }
+            font->Scale = m_fontAtlasBaseScale;
         }
     }
 }
@@ -457,6 +466,7 @@ void VKContext::applyTheme()
     auto& aes         = settings.aesthetics;
 
     style.ScaleAllSizes(settings.uiScaleMultiplier);
+    style.FontScaleMain = m_fontAtlasScaleMain;
 
     // 应用审美设置 (防止 setStyle 重置了这些值)
     style.WindowRounding = std::floor(aes.windowRounding * dpiScale);
