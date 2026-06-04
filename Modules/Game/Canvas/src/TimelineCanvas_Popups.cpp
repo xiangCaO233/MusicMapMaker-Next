@@ -603,20 +603,6 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize,
-                        std::max(1.0f, std::floor(1.5f * dpiScale)));
-
-    ImVec4 floatingTitleBg = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
-    ImVec4 floatingBorder  = floatingTitleBg;
-    floatingBorder.w       = 0.78f;
-    ImVec4 floatingShadow  = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    floatingShadow.w       = 0.18f;
-
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, floatingTitleBg);
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, floatingTitleBg);
-    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, floatingTitleBg);
-    ImGui::PushStyleColor(ImGuiCol_Border, floatingBorder);
-    ImGui::PushStyleColor(ImGuiCol_BorderShadow, floatingShadow);
 
     ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
 
@@ -627,8 +613,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
             ImGui::TextDisabled("当前未加载任何谱面");
             ImGui::End();
-            ImGui::PopStyleColor(5);
-            ImGui::PopStyleVar(7);
+            ImGui::PopStyleVar(6);
             return;
         }
 
@@ -914,8 +899,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     }
     ImGui::End();
 
-    ImGui::PopStyleColor(5);
-    ImGui::PopStyleVar(7);
+    ImGui::PopStyleVar(6);
 }
 
 }  // namespace MMM::Canvas

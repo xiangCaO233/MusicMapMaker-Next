@@ -3227,36 +3227,40 @@ void VKContext::setCeciliaStyle()
                       1.0f);
     };
 
-    const ImVec4 titleTextColor    = rgb(0x36, 0x26, 0x28);
-    const ImVec4 detailTextColor   = rgb(0x5B, 0x48, 0x43);
-    const ImVec4 baseBgColor       = rgb(0xE8, 0xDF, 0xD6);
-    const ImVec4 viewBgColor       = rgb(0xEE, 0xE7, 0xDF);
-    const ImVec4 progressBgColor   = rgb(0xF7, 0xF1, 0xEA);
-    const ImVec4 popupBgColor      = rgb(0xD2, 0xC4, 0xB8);
-    const ImVec4 borderColor       = rgb(0xCA, 0xB7, 0xA4);
-    const ImVec4 typeTextColor     = rgb(0x87, 0x9F, 0x4B);
-    const ImVec4 itemGroupColor    = rgb(0xC7, 0x61, 0x62);
-    const ImVec4 progressColor     = rgb(0xAF, 0x5F, 0x39);
-    const ImVec4 fullProgressColor = rgb(0xF7, 0x86, 0x80);
-    const ImVec4 hairColor         = rgb(0xB9, 0xC0, 0xAE);
-    const ImVec4 deepHairColor     = rgb(0x8B, 0x98, 0x87);
-    const ImVec4 shadowWarmColor   = rgb(0xB9, 0xAA, 0x9C);
-    const ImVec4 panelHoverColor   = rgb(0xE1, 0xD7, 0xCD);
-    const ImVec4 cloakColor        = rgb(0x13, 0x1B, 0x29);
+    const ImVec4 titleTextColor     = rgb(0x36, 0x26, 0x28);
+    const ImVec4 detailTextColor    = rgb(0x5B, 0x48, 0x43);
+    const ImVec4 baseBgColor        = rgb(0xE8, 0xDF, 0xD6);
+    const ImVec4 viewBgColor        = rgb(0xEE, 0xE7, 0xDF);
+    const ImVec4 progressBgColor    = rgb(0xF7, 0xF1, 0xEA);
+    const ImVec4 popupBgColor       = rgb(0xD2, 0xC4, 0xB8);
+    const ImVec4 borderColor        = rgb(0xCA, 0xB7, 0xA4);
+    const ImVec4 typeTextColor      = rgb(0x87, 0x9F, 0x4B);
+    const ImVec4 itemGroupColor     = rgb(0xC7, 0x61, 0x62);
+    const ImVec4 progressColor      = rgb(0xAF, 0x5F, 0x39);
+    const ImVec4 fullProgressColor  = rgb(0xF7, 0x86, 0x80);
+    const ImVec4 hairColor          = rgb(0xB9, 0xC0, 0xAE);
+    const ImVec4 deepHairColor      = rgb(0x8B, 0x98, 0x87);
+    const ImVec4 titleBgColor       = rgb(0xA4, 0xAD, 0x9F);
+    const ImVec4 titleBgActiveColor = rgb(0x95, 0xA2, 0x91);
+    const ImVec4 windowBorderColor  = rgb(0xAC, 0x9B, 0x8C);
+    const ImVec4 shadowWarmColor    = rgb(0xB9, 0xAA, 0x9C);
+    const ImVec4 panelHoverColor    = rgb(0xE1, 0xD7, 0xCD);
+    const ImVec4 cloakColor         = rgb(0x13, 0x1B, 0x29);
 
     style.Colors[ImGuiCol_Text]         = detailTextColor;
     style.Colors[ImGuiCol_TextDisabled] = ImVec4(
         detailTextColor.x, detailTextColor.y, detailTextColor.z, 0.6200f);
-    style.Colors[ImGuiCol_WindowBg]             = baseBgColor;
-    style.Colors[ImGuiCol_ChildBg]              = viewBgColor;
-    style.Colors[ImGuiCol_PopupBg]              = popupBgColor;
-    style.Colors[ImGuiCol_Border]               = borderColor;
-    style.Colors[ImGuiCol_BorderShadow]         = shadowWarmColor;
+    style.Colors[ImGuiCol_WindowBg] = baseBgColor;
+    style.Colors[ImGuiCol_ChildBg]  = viewBgColor;
+    style.Colors[ImGuiCol_PopupBg]  = popupBgColor;
+    style.Colors[ImGuiCol_Border]   = windowBorderColor;
+    style.Colors[ImGuiCol_BorderShadow] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.1600f);
     style.Colors[ImGuiCol_FrameBg]              = progressBgColor;
     style.Colors[ImGuiCol_FrameBgHovered]       = panelHoverColor;
     style.Colors[ImGuiCol_FrameBgActive]        = borderColor;
-    style.Colors[ImGuiCol_TitleBg]              = hairColor;
-    style.Colors[ImGuiCol_TitleBgActive]        = viewBgColor;
+    style.Colors[ImGuiCol_TitleBg]              = titleBgColor;
+    style.Colors[ImGuiCol_TitleBgActive]        = titleBgActiveColor;
     style.Colors[ImGuiCol_TitleBgCollapsed]     = hairColor;
     style.Colors[ImGuiCol_MenuBarBg]            = deepHairColor;
     style.Colors[ImGuiCol_ScrollbarBg]          = viewBgColor;
@@ -3309,6 +3313,8 @@ void VKContext::setCeciliaStyle()
         ImVec4(typeTextColor.x, typeTextColor.y, typeTextColor.z, 0.3200f);
     style.Colors[ImGuiCol_DockingEmptyBg] = baseBgColor;
     style.Colors[ImGuiCol_TextLink]       = titleTextColor;
+
+    style.WindowBorderSize = 1.0f;
 }
 
 void VKContext::setComfortableLightStyle()

@@ -156,18 +156,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     ImGuiStyle& style         = ImGui::GetStyle();
 
     // --- 同步全局样式与 DPI 感知的圆角 (Premium Look) ---
-    float windowRound      = std::floor(aesthetics.windowRounding * dpiScale);
-    float frameRound       = std::floor(aesthetics.frameRounding * dpiScale);
-    style.WindowRounding   = windowRound;
-    style.ChildRounding    = windowRound;
-    style.FrameRounding    = frameRound;
-    style.PopupRounding    = frameRound;
-    style.TabRounding      = frameRound;
-    style.ItemSpacing      = { std::floor(aesthetics.itemSpacing * dpiScale),
-                               std::floor(aesthetics.itemSpacing * dpiScale) };
-    style.WindowPadding    = { windowPaddingVal, windowPaddingVal };
-    style.WindowBorderSize = 0.0f;
-    style.FrameBorderSize  = 0.0f;
+    float windowRound     = std::floor(aesthetics.windowRounding * dpiScale);
+    float frameRound      = std::floor(aesthetics.frameRounding * dpiScale);
+    style.WindowRounding  = windowRound;
+    style.ChildRounding   = windowRound;
+    style.FrameRounding   = frameRound;
+    style.PopupRounding   = frameRound;
+    style.TabRounding     = frameRound;
+    style.ItemSpacing     = { std::floor(aesthetics.itemSpacing * dpiScale),
+                              std::floor(aesthetics.itemSpacing * dpiScale) };
+    style.WindowPadding   = { windowPaddingVal, windowPaddingVal };
+    style.FrameBorderSize = 0.0f;
 
     float menuBarHeight =
         ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
