@@ -516,6 +516,7 @@ enum class UITheme {
     FutureDark,
     CleanDark,
     Moonlight,
+    MmmDefault,  ///< 基于 mmm-default 塞西莉娅配色的 Moonlight 派生主题。
     ComfortableLight,
     HazyDark,
     Everforest,
@@ -548,6 +549,7 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
                  { UITheme::FutureDark, "FutureDark" },
                  { UITheme::CleanDark, "CleanDark" },
                  { UITheme::Moonlight, "Moonlight" },
+                 { UITheme::MmmDefault, "MmmDefault" },
                  { UITheme::ComfortableLight, "ComfortableLight" },
                  { UITheme::HazyDark, "HazyDark" },
                  { UITheme::Everforest, "Everforest" },

@@ -18,6 +18,18 @@
 namespace MMM::Graphic
 {
 
+/// @brief Wayland 下独立图标字体的视觉缩放，避免 DPI 下方形按钮裁切字形。
+static constexpr float WAYLAND_PURE_ICON_VISUAL_SCALE = 0.86f;
+
+/// @brief 获取独立图标字体的运行时视觉缩放。
+/// @return Wayland 平台返回修正倍率，其他平台保持 1.0。
+static float getPureIconVisualScale()
+{
+    return glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
+               ? WAYLAND_PURE_ICON_VISUAL_SCALE
+               : 1.0f;
+}
+
 static void check_vk_result(VkResult err)
 {
     if ( err == VK_SUCCESS ) return;
@@ -141,6 +153,10 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     XDEBUG("ImGui Vulkan backend initialized.");
 }
 
+/**
+ * @brief 加载 ImGui 运行时字体，并按当前 DPI 建立字体缩放基准。
+ * @warning 仅在初始化或低频字体重建时执行，不应进入每帧 UI 热路径。
+ */
 void VKContext::setupFonts()
 {
     ImGuiIO& io        = ImGui::GetIO();
@@ -296,7 +312,7 @@ void VKContext::setupFonts()
         iconConfig.OversampleH          = 1;
         iconConfig.OversampleV          = 1;
 
-        // 这里的 size 使用 side_bar 的默认大小，确保视觉一致
+        // 独立图标字体保持较小的基础尺寸，避免方形按钮内裁切。
         float size               = 16.0f;
         float atlasSize          = std::max(1.0f, size * native_scale);
         iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
@@ -308,6 +324,9 @@ void VKContext::setupFonts()
                                            atlasSize * 0.9f,
                                            &iconConfig,
                                            nerd_ranges);
+        if ( iconFont ) {
+            iconFont->Scale = m_fontAtlasBaseScale * getPureIconVisualScale();
+        }
         skinMgr.setFont("pure_icons", iconFont);
     }
 }
@@ -334,6 +353,10 @@ void VKContext::rebuildFonts()
     XINFO("Fonts rebuilt.");
 }
 
+/**
+ * @brief 刷新已经加载的 ImGui 运行时字体缩放。
+ * @warning 仅响应 DPI 或字体设置变化时调用，不应进入每帧 UI 热路径。
+ */
 void VKContext::updateFontScales()
 {
     ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
@@ -341,7 +364,9 @@ void VKContext::updateFontScales()
     auto& skinMgr = Config::SkinManager::instance();
     for ( auto& [key, font] : skinMgr.getData().runtimeFonts ) {
         if ( font ) {
-            font->Scale = m_fontAtlasBaseScale;
+            font->Scale = key == "pure_icons"
+                              ? m_fontAtlasBaseScale * getPureIconVisualScale()
+                              : m_fontAtlasBaseScale;
         }
     }
 }
@@ -408,6 +433,8 @@ void VKContext::applyTheme()
             appliedTheme = Config::UITheme::CleanDark;
         else if ( skinTheme == "Moonlight" )
             appliedTheme = Config::UITheme::Moonlight;
+        else if ( skinTheme == "MmmDefault" )
+            appliedTheme = Config::UITheme::MmmDefault;
         else if ( skinTheme == "ComfortableLight" )
             appliedTheme = Config::UITheme::ComfortableLight;
         else if ( skinTheme == "HazyDark" )
@@ -447,6 +474,7 @@ void VKContext::applyTheme()
     case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
     case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
     case Config::UITheme::Moonlight: setMoonlightStyle(); break;
+    case Config::UITheme::MmmDefault: setMmmDefaultStyle(); break;
     case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
     case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
     case Config::UITheme::Everforest: setEverforestStyle(); break;
@@ -3171,6 +3199,116 @@ void VKContext::setMoonlightStyle()
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
     style.Colors[ImGuiCol_ModalWindowDimBg] =
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
+}
+
+/**
+ * @brief 设置 mmm-default 塞西莉娅配色派生样式。
+ */
+void VKContext::setMmmDefaultStyle()
+{
+    setMoonlightStyle();
+
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    auto skinColor = [](const std::string& key, ImVec4 fallback) {
+        const auto& colors = Config::SkinManager::instance().getData().colors;
+        if ( auto it = colors.find(key); it != colors.end() ) {
+            return ImVec4(it->second.r, it->second.g, it->second.b, fallback.w);
+        }
+        return fallback;
+    };
+
+    const ImVec4 nodeColor =
+        skinColor("note_node", ImVec4(0.9922f, 0.9255f, 0.5608f, 1.0f));
+    auto rgb = [](int r, int g, int b) {
+        return ImVec4(static_cast<float>(r) / 255.0f,
+                      static_cast<float>(g) / 255.0f,
+                      static_cast<float>(b) / 255.0f,
+                      1.0f);
+    };
+
+    const ImVec4 titleTextColor    = rgb(0x36, 0x26, 0x28);
+    const ImVec4 detailTextColor   = rgb(0x5B, 0x48, 0x43);
+    const ImVec4 baseBgColor       = rgb(0xE8, 0xDF, 0xD6);
+    const ImVec4 viewBgColor       = rgb(0xEE, 0xE7, 0xDF);
+    const ImVec4 progressBgColor   = rgb(0xF7, 0xF1, 0xEA);
+    const ImVec4 popupBgColor      = rgb(0xD2, 0xC4, 0xB8);
+    const ImVec4 borderColor       = rgb(0xCA, 0xB7, 0xA4);
+    const ImVec4 typeTextColor     = rgb(0x87, 0x9F, 0x4B);
+    const ImVec4 itemGroupColor    = rgb(0xC7, 0x61, 0x62);
+    const ImVec4 progressColor     = rgb(0xAF, 0x5F, 0x39);
+    const ImVec4 fullProgressColor = rgb(0xF7, 0x86, 0x80);
+    const ImVec4 hairColor         = rgb(0xB9, 0xC0, 0xAE);
+    const ImVec4 deepHairColor     = rgb(0x8B, 0x98, 0x87);
+    const ImVec4 shadowWarmColor   = rgb(0xB9, 0xAA, 0x9C);
+    const ImVec4 panelHoverColor   = rgb(0xE1, 0xD7, 0xCD);
+    const ImVec4 cloakColor        = rgb(0x13, 0x1B, 0x29);
+
+    style.Colors[ImGuiCol_Text]         = detailTextColor;
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(
+        detailTextColor.x, detailTextColor.y, detailTextColor.z, 0.6200f);
+    style.Colors[ImGuiCol_WindowBg]             = baseBgColor;
+    style.Colors[ImGuiCol_ChildBg]              = viewBgColor;
+    style.Colors[ImGuiCol_PopupBg]              = popupBgColor;
+    style.Colors[ImGuiCol_Border]               = borderColor;
+    style.Colors[ImGuiCol_BorderShadow]         = shadowWarmColor;
+    style.Colors[ImGuiCol_FrameBg]              = progressBgColor;
+    style.Colors[ImGuiCol_FrameBgHovered]       = panelHoverColor;
+    style.Colors[ImGuiCol_FrameBgActive]        = borderColor;
+    style.Colors[ImGuiCol_TitleBg]              = hairColor;
+    style.Colors[ImGuiCol_TitleBgActive]        = viewBgColor;
+    style.Colors[ImGuiCol_TitleBgCollapsed]     = hairColor;
+    style.Colors[ImGuiCol_MenuBarBg]            = deepHairColor;
+    style.Colors[ImGuiCol_ScrollbarBg]          = viewBgColor;
+    style.Colors[ImGuiCol_ScrollbarGrab]        = borderColor;
+    style.Colors[ImGuiCol_ScrollbarGrabHovered] = shadowWarmColor;
+    style.Colors[ImGuiCol_ScrollbarGrabActive]  = progressColor;
+    style.Colors[ImGuiCol_CheckMark]            = typeTextColor;
+    style.Colors[ImGuiCol_SliderGrab]           = progressColor;
+    style.Colors[ImGuiCol_SliderGrabActive]     = fullProgressColor;
+    style.Colors[ImGuiCol_Button]               = viewBgColor;
+    style.Colors[ImGuiCol_ButtonHovered]        = panelHoverColor;
+    style.Colors[ImGuiCol_ButtonActive]         = borderColor;
+    style.Colors[ImGuiCol_Header]               = borderColor;
+    style.Colors[ImGuiCol_HeaderHovered]        = hairColor;
+    style.Colors[ImGuiCol_HeaderActive]         = deepHairColor;
+    style.Colors[ImGuiCol_Separator]            = borderColor;
+    style.Colors[ImGuiCol_SeparatorHovered]     = hairColor;
+    style.Colors[ImGuiCol_SeparatorActive]      = deepHairColor;
+    style.Colors[ImGuiCol_ResizeGrip] =
+        ImVec4(borderColor.x, borderColor.y, borderColor.z, 0.5000f);
+    style.Colors[ImGuiCol_ResizeGripHovered]   = hairColor;
+    style.Colors[ImGuiCol_ResizeGripActive]    = deepHairColor;
+    style.Colors[ImGuiCol_Tab]                 = panelHoverColor;
+    style.Colors[ImGuiCol_TabHovered]          = hairColor;
+    style.Colors[ImGuiCol_TabActive]           = progressBgColor;
+    style.Colors[ImGuiCol_TabSelectedOverline] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    style.Colors[ImGuiCol_TabUnfocused]        = baseBgColor;
+    style.Colors[ImGuiCol_TabUnfocusedActive]  = panelHoverColor;
+    style.Colors[ImGuiCol_TabDimmedSelectedOverline] =
+        ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    style.Colors[ImGuiCol_PlotLines]            = borderColor;
+    style.Colors[ImGuiCol_PlotLinesHovered]     = typeTextColor;
+    style.Colors[ImGuiCol_PlotHistogram]        = titleTextColor;
+    style.Colors[ImGuiCol_PlotHistogramHovered] = nodeColor;
+    style.Colors[ImGuiCol_TableHeaderBg]        = panelHoverColor;
+    style.Colors[ImGuiCol_TableBorderStrong]    = borderColor;
+    style.Colors[ImGuiCol_TableBorderLight]     = panelHoverColor;
+    style.Colors[ImGuiCol_TableRowBg]           = viewBgColor;
+    style.Colors[ImGuiCol_TableRowBgAlt]        = panelHoverColor;
+    style.Colors[ImGuiCol_TextSelectedBg] =
+        ImVec4(itemGroupColor.x, itemGroupColor.y, itemGroupColor.z, 0.3000f);
+    style.Colors[ImGuiCol_DragDropTarget]        = fullProgressColor;
+    style.Colors[ImGuiCol_NavHighlight]          = titleTextColor;
+    style.Colors[ImGuiCol_NavWindowingHighlight] = titleTextColor;
+    style.Colors[ImGuiCol_NavWindowingDimBg] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.2500f);
+    style.Colors[ImGuiCol_ModalWindowDimBg] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.3000f);
+    style.Colors[ImGuiCol_DockingPreview] =
+        ImVec4(typeTextColor.x, typeTextColor.y, typeTextColor.z, 0.3200f);
+    style.Colors[ImGuiCol_DockingEmptyBg] = baseBgColor;
+    style.Colors[ImGuiCol_TextLink]       = titleTextColor;
 }
 
 void VKContext::setComfortableLightStyle()

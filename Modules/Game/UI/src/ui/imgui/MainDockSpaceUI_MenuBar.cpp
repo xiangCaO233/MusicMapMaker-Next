@@ -52,6 +52,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
     // 设置 WindowBg 以确保完全覆盖
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyle().Colors[ImGuiCol_TextLink]);
 
     ImGui::Begin(
         "TopMenuBarHost", nullptr, menu_flags & ~ImGuiWindowFlags_NoBackground);
@@ -141,9 +143,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiIO&    io       = ImGui::GetIO();
         float       logicUps = Logic::EditorEngine::instance().getLogicUps();
         std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                    1000.0f / io.Framerate,
-                                    io.Framerate,
-                                    logicUps);
+                                      1000.0f / io.Framerate,
+                                      io.Framerate,
+                                      logicUps);
         float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         float numberOfButtons  = 3;
@@ -271,7 +273,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::EndMenuBar();
     }
     ImGui::End();
-    ImGui::PopStyleColor(2);  // MenuBarBg, WindowBg
+    ImGui::PopStyleColor(3);  // MenuBarBg, WindowBg, Text
     ImGui::PopStyleVar(3);
 }
 

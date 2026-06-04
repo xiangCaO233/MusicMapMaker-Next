@@ -36,11 +36,11 @@ constexpr const char* kImguiIniFileName = "imgui.ini";
 constexpr const char* kAssetsDirectoryName = "assets";
 
 /// @brief 默认资源包中的皮肤脚本相对路径。
-constexpr const char* kDefaultSkinRelativePath = "skins/mmm-nightly/skin.lua";
+constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
 
 /// @brief 默认资源包中的窗口图标相对路径。
 constexpr const char* kWindowIconRelativePath =
-    "skins/mmm-nightly/resources/image/logo.png";
+    "skins/mmm-default/resources/image/logo.png";
 
 #ifdef _WIN32
 /// @brief 读取 Windows 宽字符环境变量并转换为文件系统路径。

@@ -1,4 +1,4 @@
--- assets/skins/mmm-nightly/skin.lua
+-- assets/skins/mmm-default/skin.lua
 local ressPath = __SKINLUA_DIR__
 
 local f_ascii_reg  = "font/ComicShannsMonoNerdFontPropo-Regular.otf"
@@ -22,7 +22,7 @@ local divisor_list = { 1, 2, 3, 4, 6, 8, 12, 16 }
 
 local Skin = {
 	meta = {
-		name = "MMM Nightly",
+		name = "MMM Default",
 		author = "xiang",
 		version = "1.0",
 		effectbasefps = 60,
@@ -83,7 +83,7 @@ local Skin = {
 	},
 
     -- UI 默认主题
-    theme = "Moonlight",
+    theme = "MmmDefault",
 
 	-- 音频配置
 	audios = {

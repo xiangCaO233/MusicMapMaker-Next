@@ -37,6 +37,20 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
     // 背景颜色 (同步为 MenuBarBg)
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+    const ImVec4 statusTextColor = ImGui::GetStyle().Colors[ImGuiCol_TextLink];
+    ImGui::PushStyleColor(ImGuiCol_Text, statusTextColor);
+    ImGui::PushStyleColor(
+        ImGuiCol_TextDisabled,
+        ImVec4(
+            statusTextColor.x, statusTextColor.y, statusTextColor.z, 0.6200f));
+    ImGui::PushStyleColor(
+        ImGuiCol_Separator,
+        ImVec4(
+            statusTextColor.x, statusTextColor.y, statusTextColor.z, 0.3600f));
+    ImGui::PushStyleColor(
+        ImGuiCol_Border,
+        ImVec4(
+            statusTextColor.x, statusTextColor.y, statusTextColor.z, 0.3000f));
 
     if ( ImGui::Begin("StatusBar", nullptr, window_flags) ) {
         // 在状态栏顶部画一根分隔线
@@ -132,7 +146,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGui::End();
     }
 
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(5);
     ImGui::PopStyleVar(3);
 }
 

@@ -263,11 +263,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImGui::SetCursorScreenPos(menuBtnPos);
 
             ImGui::PushStyleColor(ImGuiCol_Button,
-                                  ImVec4(0.15f, 0.18f, 0.22f, 0.85f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                  ImVec4(0.25f, 0.28f, 0.32f, 0.95f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                  ImVec4(0.35f, 0.38f, 0.42f, 1.0f));
+                                  ImGui::GetStyleColorVec4(ImGuiCol_Button));
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonHovered,
+                ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered));
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonActive,
+                ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
             UI::Utils::pushFixedButtonStyleVars();
             if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {

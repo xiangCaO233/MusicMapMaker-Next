@@ -74,6 +74,13 @@ public:
                         vk::Device& logicalDevice, vk::CommandPool& cmdPool,
                         vk::Queue& queue) override;
 
+    /// @brief 渲染顶部菜单栏和无边框窗口控制区域。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param menuBarHeight 顶部菜单栏高度。
+    /// @param sidebarWidth 左侧边栏宽度。
+    /// @param toolbarWidth 右侧工具栏宽度。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：每帧执行；只允许常量规模布局、绘制和事件投递。
     void renderMenuBar(UIManager* sourceManager, float menuBarHeight,
                        float sidebarWidth, float toolbarWidth, float dpiScale);
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
@@ -98,6 +105,7 @@ public:
     /// @param sourceManager 当前 UI 管理器。
     /// @param statusBarHeight 状态栏高度。
     /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：每帧执行；只允许常量规模布局和状态快照读取。
     void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
                          float dpiScale);
 
