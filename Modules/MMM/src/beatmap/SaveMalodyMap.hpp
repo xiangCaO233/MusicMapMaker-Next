@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -336,7 +337,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
 
             if ( t.m_timingEffect == TimingEffect::SCROLL ) {
-                ej["scroll"] = t.m_timingEffectParameter;
+                ej["scroll"] = normalizeScrollMultiplier(
+                    t.m_timingEffectParameter, t.m_beat_length);
             } else if ( t.m_timingEffect == TimingEffect::JUMP ) {
                 ej["jump"] = t.m_timingEffectParameter;
             } else {

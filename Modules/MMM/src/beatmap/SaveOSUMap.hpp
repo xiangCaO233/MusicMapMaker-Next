@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -174,12 +175,6 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "\n";
 
     ofs << "[TimingPoints]\n";
-    /// @brief 判断时间线是否来自 Malody 语义
-    auto hasMalodyTimingMetadata = [](const Timing& timing) {
-        return timing.m_metadata.timing_properties.contains(
-            TimingMetadataType::MALODY);
-    };
-
     for ( auto& timing_const : beatMap.m_timings ) {
         Timing timing =
             timing_const;  // create a mutable copy to call to_osu_description()
@@ -190,15 +185,10 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         }
 
         if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
-            if ( hasMalodyTimingMetadata(timing) ) {
-                if ( timing.m_timingEffectParameter <= 0.0 ) {
-                    continue;
-                }
-                timing.m_beat_length =
-                    -100.0 / std::max(1e-9, timing.m_timingEffectParameter);
-            } else if ( timing.m_beat_length >= 0.0 ) {
-                continue;
-            }
+            double scrollMultiplier = normalizeScrollMultiplier(
+                timing.m_timingEffectParameter, timing.m_beat_length);
+            timing.m_timingEffectParameter = scrollMultiplier;
+            timing.m_beat_length           = scrollMultiplier;
         }
 
         ofs << timing.to_osu_description() << "\n";

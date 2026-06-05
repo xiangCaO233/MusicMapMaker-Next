@@ -414,7 +414,6 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
     const BeatMap& beatMap = *session->getContext().currentBeatmap;
 
     bool hasJumpOrHsTiming        = false;
-    bool hasNegativeScrollTiming  = false;
     bool hasAnyNonBpmTimingForImd = false;
     bool hasFlick                 = !beatMap.m_noteData.flicks.empty();
     bool hasPolyline              = !beatMap.m_noteData.polylines.empty();
@@ -429,9 +428,6 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
             hasAnyNonBpmTimingForImd = true;
         } else if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
             hasAnyNonBpmTimingForImd = true;
-            if ( timing.m_timingEffectParameter < 0.0 ) {
-                hasNegativeScrollTiming = true;
-            }
         }
     }
 
@@ -440,11 +436,6 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
             warnings.push_back(
                 "osu! 文件不支持保存 Jump/HS timing；导出时这些 timing "
                 "会被忽略。");
-        }
-        if ( hasNegativeScrollTiming ) {
-            warnings.push_back(
-                "osu! 文件不支持保存负数倍率的 Scroll timing；导出时该类 "
-                "timing 会被忽略。");
         }
         if ( hasFlick ) {
             warnings.push_back(

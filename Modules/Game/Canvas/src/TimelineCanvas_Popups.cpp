@@ -135,57 +135,29 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
     return elements;
 }
 
-/// @brief 判断当前活动谱面是否以 Malody 语义存储时间线
-bool isActiveBeatmapMalody()
-{
-    if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
-        if ( auto beatmap = session->getContext().currentBeatmap ) {
-            return beatmap->m_metadata.map_properties.contains(
-                ::MMM::MapMetadataType::MALODY);
-        }
-    }
-    return false;
-}
-
-/// @brief 判断指定时间线实体是否以 Malody 语义存储流速值
-bool isMalodyTimelineEntity(entt::entity entity)
-{
-    if ( entity == entt::null ) {
-        return isActiveBeatmapMalody();
-    }
-
-    if ( auto session = Logic::EditorEngine::instance().getActiveSession() ) {
-        auto& registry = session->getContext().timelineRegistry;
-        if ( registry.valid(entity) &&
-             registry.all_of<Logic::TimelineComponent>(entity) ) {
-            const auto& tl = registry.get<Logic::TimelineComponent>(entity);
-            return tl.m_metadata.timing_properties.contains(
-                ::MMM::TimingMetadataType::MALODY);
-        }
-    }
-    return isActiveBeatmapMalody();
-}
-
 /// @brief 将存储值转换成编辑器显示值
+/// @warning UI 热路径：表格绘制时逐行调用，只做常量时间数值归一化。
 double getDisplayValue(::MMM::TimingEffect effect, double rawValue,
-                       entt::entity entity = entt::null)
+                       entt::entity = entt::null)
 {
-    if ( effect == ::MMM::TimingEffect::SCROLL &&
-         !isMalodyTimelineEntity(entity) && rawValue < -1e-6 ) {
+    if ( effect != ::MMM::TimingEffect::SCROLL ) {
+        return rawValue;
+    }
+    if ( rawValue < -1e-6 ) {
         return -100.0 / rawValue;
     }
-    return rawValue;
+    return rawValue > 1e-6 ? rawValue : 1.0;
 }
 
 /// @brief 将编辑器显示值转换成存储值
+/// @warning UI 热路径：用户提交编辑值时调用，不应访问文件系统或执行重型同步。
 double getStoredValue(::MMM::TimingEffect effect, double displayValue,
-                      entt::entity entity = entt::null)
+                      entt::entity = entt::null)
 {
-    if ( effect == ::MMM::TimingEffect::SCROLL &&
-         !isMalodyTimelineEntity(entity) && displayValue > 1e-6 ) {
-        return -100.0 / displayValue;
+    if ( effect != ::MMM::TimingEffect::SCROLL ) {
+        return displayValue;
     }
-    return displayValue;
+    return displayValue > 1e-6 ? displayValue : 1.0;
 }
 
 /// @brief 从创建弹窗索引获取 Timing 类型
@@ -232,10 +204,7 @@ double getKeepSpeedScrollValue(double bpm)
     double refBpm      = getKeepSpeedReferenceBpm();
     double safeBpm     = bpm > 1e-6 ? bpm : refBpm;
     double scrollSpeed = refBpm / safeBpm;
-    if ( isActiveBeatmapMalody() ) {
-        return scrollSpeed;
-    }
-    return scrollSpeed > 1e-6 ? (-100.0 / scrollSpeed) : -100.0;
+    return scrollSpeed > 1e-6 ? scrollSpeed : 1.0;
 }
 
 /// @brief 创建与新 BPM 同时间点的保持速度流速事件。
@@ -682,11 +651,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
         if ( ImGui::Button("添加流速 (SV)") ) {
-            double defaultScroll = isActiveBeatmapMalody() ? 1.0 : -100.0;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::SCROLL,
-                                               defaultScroll }));
+                                               1.0 }));
             m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
             m_lastCreatedTimingHighlightUntil =

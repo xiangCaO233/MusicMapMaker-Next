@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -73,12 +74,19 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     auto& timingArr = root["timing"];
     timingArr       = json::array();
     for ( const auto& timing : beatMap.m_timings ) {
-        json t;
+        json   t;
+        double beatLength = timing.m_beat_length;
+        double parameter  = timing.m_timingEffectParameter;
+        if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
+            parameter  = normalizeScrollMultiplier(parameter, beatLength);
+            beatLength = parameter;
+        }
+
         t["timestamp"]   = timing.m_timestamp;
         t["bpm"]         = timing.m_bpm;
-        t["beat_length"] = timing.m_beat_length;
+        t["beat_length"] = beatLength;
         t["effect"]      = timingEffectToString(timing.m_timingEffect);
-        t["param"]       = timing.m_timingEffectParameter;
+        t["param"]       = parameter;
 
         auto& tExtra = t["extra"];
         tExtra       = json::array();

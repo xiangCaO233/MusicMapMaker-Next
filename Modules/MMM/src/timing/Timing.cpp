@@ -27,6 +27,45 @@ TimingEffect timingEffectFromString(const std::string& effect)
     return TimingEffect::SCROLL;
 }
 
+/// @brief 将 osu! 继承时间点的负 beatLength 转换为内部 SV 倍率。
+double osuInheritedBeatLengthToScrollMultiplier(double beatLength)
+{
+    constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
+    if ( beatLength < -MIN_SCROLL_MULTIPLIER ) {
+        return -100.0 / beatLength;
+    }
+    if ( beatLength > MIN_SCROLL_MULTIPLIER ) {
+        return beatLength;
+    }
+    return 1.0;
+}
+
+/// @brief 将内部 SV 倍率转换为 osu! 继承时间点的负 beatLength。
+double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier)
+{
+    constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
+    return -100.0 / std::max(MIN_SCROLL_MULTIPLIER, scrollMultiplier);
+}
+
+/// @brief 将旧版 mmm/osu 原始值统一归一化为内部 SV 倍率。
+double normalizeScrollMultiplier(double parameter, double beatLength)
+{
+    constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
+    if ( parameter > MIN_SCROLL_MULTIPLIER ) {
+        return parameter;
+    }
+    if ( parameter < -MIN_SCROLL_MULTIPLIER ) {
+        return osuInheritedBeatLengthToScrollMultiplier(parameter);
+    }
+    if ( beatLength > MIN_SCROLL_MULTIPLIER ) {
+        return beatLength;
+    }
+    if ( beatLength < -MIN_SCROLL_MULTIPLIER ) {
+        return osuInheritedBeatLengthToScrollMultiplier(beatLength);
+    }
+    return 1.0;
+}
+
 /// @brief 从osu的字符串读取
 void Timing::from_osu_description(std::vector<std::string>& description)
 {
@@ -66,14 +105,16 @@ void Timing::from_osu_description(std::vector<std::string>& description)
     auto is_inherit_timing = MMM::Internal::safeStod(description.at(6)) == 0;
 
     // beat_length
-    m_beat_length = std::stod(description.at(1));
+    m_beat_length = MMM::Internal::safeStod(description.at(1));
 
     if ( is_inherit_timing ) {
         // bpm只存储倍速--并非bpm
-        auto is_base_timing     = false;
+        double scrollMultiplier =
+            osuInheritedBeatLengthToScrollMultiplier(m_beat_length);
         m_bpm                   = last_base_bpm;
         m_timingEffect          = TimingEffect::SCROLL;
-        m_timingEffectParameter = m_beat_length;
+        m_timingEffectParameter = scrollMultiplier;
+        m_beat_length           = scrollMultiplier;
     } else {
         // 真实bpm
         m_bpm = 1.0 / m_beat_length * 1000.0 * 60.0;
@@ -129,8 +170,12 @@ std::string Timing::to_osu_description()
         break;
     }
     case TimingEffect::SCROLL: {
-        // 继承时间点(绿线): 拍长为负值，表示滑条速度倍数
-        oss << std::fixed << std::setprecision(12) << m_beat_length << ",";
+        // 继承时间点(绿线): osu! 文件中拍长为负值，表示滑条速度倍数
+        double scrollMultiplier =
+            normalizeScrollMultiplier(m_timingEffectParameter, m_beat_length);
+        oss << std::fixed << std::setprecision(12)
+            << scrollMultiplierToOsuInheritedBeatLength(scrollMultiplier)
+            << ",";
         break;
     }
     case TimingEffect::JUMP:

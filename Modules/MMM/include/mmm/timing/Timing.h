@@ -23,6 +23,15 @@ std::string timingEffectToString(TimingEffect effect);
 /// @brief 从持久化字符串解析时间线效果类型
 TimingEffect timingEffectFromString(const std::string& effect);
 
+/// @brief 将 osu! 继承时间点的负 beatLength 转换为内部 SV 倍率。
+double osuInheritedBeatLengthToScrollMultiplier(double beatLength);
+
+/// @brief 将内部 SV 倍率转换为 osu! 继承时间点的负 beatLength。
+double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier);
+
+/// @brief 将旧版 mmm/osu 原始值统一归一化为内部 SV 倍率。
+double normalizeScrollMultiplier(double parameter, double beatLength);
+
 class Timing
 {
 public:
