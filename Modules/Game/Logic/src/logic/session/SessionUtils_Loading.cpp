@@ -9,7 +9,6 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "mmm/timing/Timing.h"
 #include <stb_image.h>
 
 namespace MMM::Logic
@@ -110,17 +109,12 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     // 根据传入的 BeatMap 构建 ECS 实体
     // 1. 加载 Timing 点
     for ( const auto& timing : beatmap->m_timings ) {
-        double timingValue = timing.m_timingEffectParameter;
-        if ( timing.m_timingEffect == ::MMM::TimingEffect::SCROLL ) {
-            timingValue = ::MMM::normalizeScrollMultiplier(
-                timing.m_timingEffectParameter, timing.m_beat_length);
-        }
         auto  entity = ctx.timelineRegistry.create();
         auto& tc     = ctx.timelineRegistry.emplace<TimelineComponent>(
             entity,
             timing.m_timestamp / 1000.0,  // 毫秒转秒
             timing.m_timingEffect,
-            timingValue);
+            timing.m_timingEffectParameter);
         tc.m_metadata = timing.m_metadata;
     }
 
@@ -381,12 +375,6 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                 currentBPM           = tc.m_value;
                 timing.m_bpm         = currentBPM;
                 timing.m_beat_length = 60000.0 / std::max(0.1, timing.m_bpm);
-            } else if ( tc.m_effect == ::MMM::TimingEffect::SCROLL ) {
-                double scrollMultiplier =
-                    ::MMM::normalizeScrollMultiplier(tc.m_value, tc.m_value);
-                timing.m_bpm                   = currentBPM;
-                timing.m_timingEffectParameter = scrollMultiplier;
-                timing.m_beat_length           = scrollMultiplier;
             } else {
                 timing.m_bpm         = currentBPM;
                 timing.m_beat_length = tc.m_value;

@@ -126,12 +126,6 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             t.m_timingEffect =
                 timingEffectFromString(tJson.value("effect", "bpm"));
             t.m_timingEffectParameter = tJson.value("param", 0.0);
-            if ( t.m_timingEffect == TimingEffect::SCROLL ) {
-                double scrollMultiplier = normalizeScrollMultiplier(
-                    t.m_timingEffectParameter, t.m_beat_length);
-                t.m_timingEffectParameter = scrollMultiplier;
-                t.m_beat_length           = scrollMultiplier;
-            }
 
             if ( tJson.contains("extra") ) {
                 for ( const auto& extraItem : tJson["extra"] ) {

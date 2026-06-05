@@ -185,10 +185,9 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
         }
 
         if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
-            double scrollMultiplier = normalizeScrollMultiplier(
-                timing.m_timingEffectParameter, timing.m_beat_length);
-            timing.m_timingEffectParameter = scrollMultiplier;
-            timing.m_beat_length           = scrollMultiplier;
+            if ( timing.m_timingEffectParameter <= 0.0 ) {
+                continue;
+            }
         }
 
         ofs << timing.to_osu_description() << "\n";

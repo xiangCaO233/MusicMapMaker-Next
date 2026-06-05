@@ -29,9 +29,6 @@ double osuInheritedBeatLengthToScrollMultiplier(double beatLength);
 /// @brief 将内部 SV 倍率转换为 osu! 继承时间点的负 beatLength。
 double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier);
 
-/// @brief 将旧版 mmm/osu 原始值统一归一化为内部 SV 倍率。
-double normalizeScrollMultiplier(double parameter, double beatLength);
-
 class Timing
 {
 public:

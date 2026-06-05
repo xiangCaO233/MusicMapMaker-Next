@@ -137,27 +137,18 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
 
 /// @brief 将存储值转换成编辑器显示值
 /// @warning UI 热路径：表格绘制时逐行调用，只做常量时间数值归一化。
-double getDisplayValue(::MMM::TimingEffect effect, double rawValue,
+double getDisplayValue(::MMM::TimingEffect, double rawValue,
                        entt::entity = entt::null)
 {
-    if ( effect != ::MMM::TimingEffect::SCROLL ) {
-        return rawValue;
-    }
-    if ( rawValue < -1e-6 ) {
-        return -100.0 / rawValue;
-    }
-    return rawValue > 1e-6 ? rawValue : 1.0;
+    return rawValue;
 }
 
 /// @brief 将编辑器显示值转换成存储值
 /// @warning UI 热路径：用户提交编辑值时调用，不应访问文件系统或执行重型同步。
-double getStoredValue(::MMM::TimingEffect effect, double displayValue,
+double getStoredValue(::MMM::TimingEffect, double displayValue,
                       entt::entity = entt::null)
 {
-    if ( effect != ::MMM::TimingEffect::SCROLL ) {
-        return displayValue;
-    }
-    return displayValue > 1e-6 ? displayValue : 1.0;
+    return displayValue;
 }
 
 /// @brief 从创建弹窗索引获取 Timing 类型

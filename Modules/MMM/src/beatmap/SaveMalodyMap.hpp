@@ -337,8 +337,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
 
             if ( t.m_timingEffect == TimingEffect::SCROLL ) {
-                ej["scroll"] = normalizeScrollMultiplier(
-                    t.m_timingEffectParameter, t.m_beat_length);
+                ej["scroll"] = t.m_timingEffectParameter;
             } else if ( t.m_timingEffect == TimingEffect::JUMP ) {
                 ej["jump"] = t.m_timingEffectParameter;
             } else {

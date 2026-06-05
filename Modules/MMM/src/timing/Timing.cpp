@@ -47,25 +47,6 @@ double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier)
     return -100.0 / std::max(MIN_SCROLL_MULTIPLIER, scrollMultiplier);
 }
 
-/// @brief 将旧版 mmm/osu 原始值统一归一化为内部 SV 倍率。
-double normalizeScrollMultiplier(double parameter, double beatLength)
-{
-    constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
-    if ( parameter > MIN_SCROLL_MULTIPLIER ) {
-        return parameter;
-    }
-    if ( parameter < -MIN_SCROLL_MULTIPLIER ) {
-        return osuInheritedBeatLengthToScrollMultiplier(parameter);
-    }
-    if ( beatLength > MIN_SCROLL_MULTIPLIER ) {
-        return beatLength;
-    }
-    if ( beatLength < -MIN_SCROLL_MULTIPLIER ) {
-        return osuInheritedBeatLengthToScrollMultiplier(beatLength);
-    }
-    return 1.0;
-}
-
 /// @brief 从osu的字符串读取
 void Timing::from_osu_description(std::vector<std::string>& description)
 {
@@ -171,8 +152,14 @@ std::string Timing::to_osu_description()
     }
     case TimingEffect::SCROLL: {
         // 继承时间点(绿线): osu! 文件中拍长为负值，表示滑条速度倍数
-        double scrollMultiplier =
-            normalizeScrollMultiplier(m_timingEffectParameter, m_beat_length);
+        constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
+        double           scrollMultiplier      = m_timingEffectParameter;
+        if ( scrollMultiplier <= MIN_SCROLL_MULTIPLIER ) {
+            scrollMultiplier = m_beat_length;
+        }
+        if ( scrollMultiplier <= MIN_SCROLL_MULTIPLIER ) {
+            scrollMultiplier = 1.0;
+        }
         oss << std::fixed << std::setprecision(12)
             << scrollMultiplierToOsuInheritedBeatLength(scrollMultiplier)
             << ",";
