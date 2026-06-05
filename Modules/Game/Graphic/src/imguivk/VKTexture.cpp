@@ -5,8 +5,21 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <mutex>
+
 namespace MMM::Graphic
 {
+namespace
+{
+/// @brief 保护共享 VkDescriptorPool 的 allocate/free 调用。
+/// @warning Vulkan 要求同一 descriptor pool
+/// 的描述符分配和释放由调用端外部同步。
+std::mutex& descriptorPoolMutationMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+}  // namespace
 
 // 构造函数 A：从文件
 VKTexture::VKTexture(const std::filesystem::path& filePath,
@@ -77,7 +90,7 @@ VKTexture::VKTexture(VKTexture&& other) noexcept
 VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
 {
     if ( this != &other ) {
-        this->~VKTexture();
+        releaseResources();
         m_device        = other.m_device;
         m_image         = other.m_image;
         m_memory        = other.m_memory;
@@ -102,16 +115,29 @@ VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
 
 VKTexture::~VKTexture()
 {
+    releaseResources();
+}
+
+void VKTexture::releaseResources()
+{
     if ( !m_device ) return;
 
-    // 顺序非常重要：先从 ImGui 注销，再销毁资源
-    if ( m_descriptorSet ) {
-        ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_descriptorSet);
-    }
+    {
+        std::unique_lock descriptorLock(m_descriptorMutex);
+        std::lock_guard  poolLock(descriptorPoolMutationMutex());
 
-    if ( m_nativePool ) {
-        for ( auto& [layout, set] : m_nativeSets ) {
-            (void)m_device.freeDescriptorSets(m_nativePool, set);
+        // 顺序非常重要：先从 ImGui 注销，再销毁资源
+        if ( m_descriptorSet ) {
+            ImGui_ImplVulkan_RemoveTexture((VkDescriptorSet)m_descriptorSet);
+            m_descriptorSet = nullptr;
+        }
+
+        if ( m_nativePool ) {
+            for ( auto& [layout, set] : m_nativeSets ) {
+                (void)m_device.freeDescriptorSets(m_nativePool, set);
+            }
+            m_nativeSets.clear();
+            m_nativePool = nullptr;
         }
     }
 
@@ -119,6 +145,13 @@ VKTexture::~VKTexture()
     m_device.destroyImageView(m_imageView);
     m_device.destroyImage(m_image);
     m_device.freeMemory(m_memory);
+    m_sampler   = nullptr;
+    m_imageView = nullptr;
+    m_image     = nullptr;
+    m_memory    = nullptr;
+    m_device    = nullptr;
+    m_width     = 0;
+    m_height    = 0;
 }
 
 // 【共通核心逻辑实现】
@@ -241,17 +274,59 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
     m_sampler = m_device.createSampler(samplerInfo).value;
 }
 
+ImTextureID VKTexture::getImTextureID()
+{
+    {
+        std::shared_lock descriptorLock(m_descriptorMutex);
+        if ( m_descriptorSet ) {
+            return reinterpret_cast<ImTextureID>(
+                static_cast<VkDescriptorSet>(m_descriptorSet));
+        }
+    }
+
+    std::unique_lock descriptorLock(m_descriptorMutex);
+    if ( !m_descriptorSet ) {
+        std::lock_guard poolLock(descriptorPoolMutationMutex());
+        // ImGui_ImplVulkan_AddTexture 内部会从它持有的全局 DescriptorPool
+        // 中分配一个 Set。
+        m_descriptorSet = (vk::DescriptorSet)ImGui_ImplVulkan_AddTexture(
+            (VkSampler)m_sampler,
+            (VkImageView)m_imageView,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    return reinterpret_cast<ImTextureID>(
+        static_cast<VkDescriptorSet>(m_descriptorSet));
+}
+
+vk::DescriptorSet VKTexture::getDescriptorSet() const
+{
+    std::shared_lock descriptorLock(m_descriptorMutex);
+    return m_descriptorSet;
+}
+
 vk::DescriptorSet VKTexture::getNativeDescriptorSet(
     vk::DescriptorPool pool, vk::DescriptorSetLayout layout)
 {
     VkDescriptorSetLayout lHandle = (VkDescriptorSetLayout)layout;
 
-    if ( m_nativeSets.count(lHandle) ) {
-        return m_nativeSets[lHandle];
+    {
+        std::shared_lock descriptorLock(m_descriptorMutex);
+        auto             it = m_nativeSets.find(lHandle);
+        if ( it != m_nativeSets.end() && m_nativePool == pool ) {
+            return it->second;
+        }
+    }
+
+    std::unique_lock descriptorLock(m_descriptorMutex);
+    auto             it = m_nativeSets.find(lHandle);
+    if ( it != m_nativeSets.end() && m_nativePool == pool ) {
+        return it->second;
     }
 
     // 如果 pool 变更了，逻辑上应该清空所有旧 pool 的 set
     if ( m_nativePool && m_nativePool != pool ) {
+        std::lock_guard poolLock(descriptorPoolMutationMutex());
         for ( auto& [oldLayout, set] : m_nativeSets ) {
             (void)m_device.freeDescriptorSets(m_nativePool, set);
         }
@@ -260,8 +335,11 @@ vk::DescriptorSet VKTexture::getNativeDescriptorSet(
     m_nativePool = pool;
 
     vk::DescriptorSetAllocateInfo allocInfo(pool, 1, &layout);
-    vk::DescriptorSet             newSet =
-        m_device.allocateDescriptorSets(allocInfo).value[0];
+    vk::DescriptorSet             newSet;
+    {
+        std::lock_guard poolLock(descriptorPoolMutationMutex());
+        newSet = m_device.allocateDescriptorSets(allocInfo).value[0];
+    }
 
     vk::DescriptorImageInfo imageInfo(
         m_sampler, m_imageView, vk::ImageLayout::eShaderReadOnlyOptimal);

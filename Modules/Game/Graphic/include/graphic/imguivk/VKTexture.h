@@ -3,6 +3,7 @@
 #include "imgui_impl_vulkan.h"
 #include <filesystem>
 #include <imgui.h>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vulkan/vulkan.hpp>
@@ -17,6 +18,7 @@ enum class VKTexturePixelFormat {
     R8Red   ///< R8 UNORM，每像素 1 字节，采样时只映射到 R 通道。
 };
 
+/// @brief Vulkan 纹理资源，封装图像、采样器以及 ImGui/原生管线描述符。
 class VKTexture
 {
 public:
@@ -45,29 +47,21 @@ public:
     VKTexture& operator=(const VKTexture&) = delete;
     ~VKTexture();
 
-    inline ImTextureID getImTextureID()
-    {
-        if ( !m_descriptorSet ) {
-            // 4. 注册到 ImGui
-            // ImGui_ImplVulkan_AddTexture 内部会从它持有的全局 DescriptorPool
-            // 中分配一个 Set
-            m_descriptorSet = (vk::DescriptorSet)ImGui_ImplVulkan_AddTexture(
-                (VkSampler)m_sampler,
-                (VkImageView)m_imageView,
-                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        }
-        return reinterpret_cast<ImTextureID>(
-            static_cast<VkDescriptorSet>(m_descriptorSet));
-    }
-
+    /// @brief 获取 ImGui 可使用的纹理 ID，首次调用时注册描述符。
+    /// @warning 资源准备路径：首次调用会从 ImGui descriptor pool
+    /// 分配描述符，必须与其他 descriptor pool allocate/free 外部同步。
+    ImTextureID getImTextureID();
 
     // 暴露句柄供 DescriptorSet 更新使用
-    vk::ImageView     getImageView() const { return m_imageView; }
-    vk::Sampler       getSampler() const { return m_sampler; }
-    vk::DescriptorSet getDescriptorSet() const { return m_descriptorSet; }
+    vk::ImageView getImageView() const { return m_imageView; }
+    vk::Sampler   getSampler() const { return m_sampler; }
+    /// @brief 获取已缓存的 ImGui 描述符集。
+    vk::DescriptorSet getDescriptorSet() const;
 
     /**
      * @brief 获取适配本项目原生管线的描述符集 (CombinedImageSampler)
+     * @warning 渲染命令录制热路径：缓存命中仅读取句柄；首次分配会同步
+     * descriptor pool，禁止在每条 draw command 中制造新 layout 或新 pool。
      */
     vk::DescriptorSet getNativeDescriptorSet(vk::DescriptorPool      pool,
                                              vk::DescriptorSetLayout layout);
@@ -92,6 +86,11 @@ private:
     void copyBufferToImage(vk::CommandPool pool, vk::Queue queue,
                            vk::Buffer buffer, uint32_t width, uint32_t height);
 
+    /// @brief 释放纹理持有的 Vulkan 资源与描述符。
+    /// @warning 资源销毁路径：descriptor set 释放需要与同一 descriptor pool
+    /// 的 allocate/free 外部同步。
+    void releaseResources();
+
 private:
     vk::Device        m_device{ nullptr };
     vk::Image         m_image{ nullptr };
@@ -103,6 +102,9 @@ private:
     // 原生管线用的描述符集映射 (Layout -> DescriptorSet)
     std::unordered_map<VkDescriptorSetLayout, vk::DescriptorSet> m_nativeSets;
     vk::DescriptorPool m_nativePool{ nullptr };
+
+    /// @brief 保护 ImGui 与原生 descriptor 缓存，允许缓存命中并发读取。
+    mutable std::shared_mutex m_descriptorMutex;
 
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };

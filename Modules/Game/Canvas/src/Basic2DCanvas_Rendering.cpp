@@ -88,6 +88,11 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         atlasDescriptor =
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
@@ -99,10 +104,7 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
-            if ( m_bgTexture ) {
-                actualTexture =
-                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
-            }
+            actualTexture = backgroundDescriptor;
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
@@ -149,6 +151,11 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         atlasDescriptor =
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
@@ -160,10 +167,7 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
-            if ( m_bgTexture ) {
-                actualTexture =
-                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
-            }
+            actualTexture = backgroundDescriptor;
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
@@ -210,6 +214,11 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
         atlasDescriptor =
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
@@ -221,10 +230,7 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
-            if ( m_bgTexture ) {
-                actualTexture =
-                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
-            }
+            actualTexture = backgroundDescriptor;
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
