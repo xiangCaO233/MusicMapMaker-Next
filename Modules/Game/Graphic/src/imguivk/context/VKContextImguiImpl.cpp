@@ -164,6 +164,10 @@ void VKContext::setupFonts()
     float native_scale = Config::AppConfig::instance().getNativeContentScale();
     float ui_scale     = Config::AppConfig::instance().getUIScale();
     auto& skinMgr      = Config::SkinManager::instance();
+    io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+    io.Fonts->TexMinWidth  = std::max(io.Fonts->TexMinWidth, 2048);
+    io.Fonts->TexMinHeight = std::max(io.Fonts->TexMinHeight, 1024);
+
     if ( !std::isfinite(native_scale) || native_scale <= 0.0f ) {
         native_scale = 1.0f;
     }
@@ -182,13 +186,6 @@ void VKContext::setupFonts()
     }
     m_fontAtlasScaleMain = std::clamp(m_fontAtlasScaleMain, 0.5f, 2.0f);
     ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
-
-    // --- 字体范围定义 ---
-    static const ImWchar ascii_ranges[] = { 0x0020, 0x00FF, 0 };
-    static const ImWchar cjk_ranges[]   = { 0x2000, 0x206F, 0x3000, 0x30FF,
-                                            0x3105, 0x312D, 0x4E00, 0x9FFF,
-                                            0xFF00, 0xFFEF, 0 };
-    static const ImWchar nerd_ranges[]  = { 0xE000, 0xF8FF, 0 };
 
     auto loadFontWithSize = [&](const std::string& key, float size) {
         auto& settings      = Config::AppConfig::instance().getEditorSettings();
@@ -241,15 +238,12 @@ void VKContext::setupFonts()
         // Load at physical pixel size for sharpness
         float atlasSize = std::max(1.0f, size * native_scale);
 
-        // 1. 加载基础 ASCII 字体 (严格限制范围)
+        // 1. 加载基础 ASCII 字体，字形由 ImGui 1.92 动态烘焙。
         ImFont* font = io.Fonts->AddFontFromFileTTF(
-            Config::pathToUtf8(asciiFontPath).c_str(),
-            atlasSize,
-            &config,
-            ascii_ranges);
+            Config::pathToUtf8(asciiFontPath).c_str(), atlasSize, &config);
 
         if ( font ) {
-            // 2. 配置合并参数加载 CJK 字体 (严格限制范围)
+            // 2. 配置合并参数加载 CJK 字体，避免预烘焙整段汉字范围。
             ImFontConfig mergeConfig;
             mergeConfig.MergeMode   = true;
             mergeConfig.PixelSnapH  = true;
@@ -259,8 +253,7 @@ void VKContext::setupFonts()
             io.Fonts->AddFontFromFileTTF(
                 Config::pathToUtf8(cjkFontPath).c_str(),
                 atlasSize,
-                &mergeConfig,
-                cjk_ranges);
+                &mergeConfig);
 
             // 3. 合并嵌入的 NerdFont 图标
             ImFontConfig iconConfig;
@@ -277,8 +270,7 @@ void VKContext::setupFonts()
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
                                            atlasSize * 0.9f,
-                                           &iconConfig,
-                                           nerd_ranges);
+                                           &iconConfig);
 
             // 固定当前 atlas 生命周期的字体缩放，避免运行时切换动态烘焙尺寸。
             font->Scale = m_fontAtlasBaseScale;
@@ -321,8 +313,7 @@ void VKContext::setupFonts()
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
                                            atlasSize * 0.9f,
-                                           &iconConfig,
-                                           nerd_ranges);
+                                           &iconConfig);
         if ( iconFont ) {
             iconFont->Scale = m_fontAtlasBaseScale * getPureIconVisualScale();
         }
