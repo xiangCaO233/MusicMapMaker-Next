@@ -129,7 +129,13 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         if ( isLinearMapping ) {
             return BASE_SPEED * timelineZoom;
         }
-        double ratio = std::clamp(bpm / refBPM, 0.0, 1000000.0);
+        double ratio = bpm / refBPM;
+        if ( !std::isfinite(ratio) ) {
+            ratio = 0.0;
+        }
+        if ( ratio < 0.0 ) {
+            ratio = 0.0;
+        }
         return ratio * sm * sliderMultiplier * BASE_SPEED * timelineZoom;
     };
 
@@ -167,14 +173,10 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().scrollEntity = entry.entity;
             newSegments.back().scrollValue  = tl->m_value;
             if ( enableEffects ) {
-                if ( hasMalodyMetadata(*tl) ) {
+                // mmm/Malody 内部均存储原始 SV 倍率；osu! 的负
+                // inherited beatLength 已在导入边界转换。
+                if ( std::isfinite(tl->m_value) ) {
                     currentScrollMult = tl->m_value;
-                } else if ( tl->m_value < -1e-6 ) {
-                    currentScrollMult = -100.0 / tl->m_value;
-                } else if ( tl->m_value >= 0 ) {
-                    currentScrollMult = tl->m_value;
-                } else {
-                    currentScrollMult = 1.0;
                 }
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::JUMP ) {
@@ -201,6 +203,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     m_segments = std::move(newSegments);
     rebuildAbsYRangeIndex();
+    rebuildMicroImpulseWindows();
     isDirty = false;
 }
 
@@ -243,7 +246,60 @@ void ScrollCache::rebuildAbsYRangeIndex()
                      });
 }
 
-double ScrollCache::getAbsY(double t) const
+void ScrollCache::rebuildMicroImpulseWindows()
+{
+    constexpr double MAX_SLICE_SECONDS        = 0.0035;
+    constexpr double MAX_WINDOW_SECONDS       = 0.0075;
+    constexpr double MIN_PEAK_DISPLACEMENT    = 24.0;
+    constexpr double MAX_ABS_NET_DISPLACEMENT = 12.0;
+    constexpr double MAX_REL_NET_DISPLACEMENT = 0.12;
+
+    m_microImpulseWindows.clear();
+    if ( m_segments.size() < 3 ) {
+        return;
+    }
+
+    m_microImpulseWindows.reserve(m_segments.size() / 8);
+    for ( std::size_t i = 0; i + 2 < m_segments.size(); ++i ) {
+        const auto& first  = m_segments[i];
+        const auto& second = m_segments[i + 1];
+        const auto& after  = m_segments[i + 2];
+
+        const double firstDuration  = second.time - first.time;
+        const double secondDuration = after.time - second.time;
+        const double windowDuration = after.time - first.time;
+        if ( firstDuration <= 0.0 || secondDuration <= 0.0 ||
+             firstDuration > MAX_SLICE_SECONDS ||
+             secondDuration > MAX_SLICE_SECONDS ||
+             windowDuration > MAX_WINDOW_SECONDS ) {
+            continue;
+        }
+
+        if ( !std::isfinite(first.speed) || !std::isfinite(second.speed) ||
+             first.speed * second.speed >= 0.0 ) {
+            continue;
+        }
+
+        const double firstDelta  = first.speed * firstDuration;
+        const double secondDelta = second.speed * secondDuration;
+        const double peakDelta =
+            std::max(std::abs(firstDelta), std::abs(secondDelta));
+        const double netDelta = firstDelta + secondDelta;
+        if ( peakDelta < MIN_PEAK_DISPLACEMENT ) {
+            continue;
+        }
+        if ( std::abs(netDelta) > MAX_ABS_NET_DISPLACEMENT &&
+             std::abs(netDelta) > peakDelta * MAX_REL_NET_DISPLACEMENT ) {
+            continue;
+        }
+
+        m_microImpulseWindows.push_back(
+            { first.time, after.time, first.absY, after.absY });
+        ++i;
+    }
+}
+
+double ScrollCache::getRawAbsY(double t) const
 {
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
@@ -261,6 +317,48 @@ double ScrollCache::getAbsY(double t) const
     }
     --it;
     return it->absY + (t - it->time) * it->speed;
+}
+
+double ScrollCache::applyMicroImpulseWindow(double t, double rawAbsY) const
+{
+    if ( m_microImpulseWindows.empty() ) {
+        return rawAbsY;
+    }
+
+    auto it =
+        std::upper_bound(m_microImpulseWindows.begin(),
+                         m_microImpulseWindows.end(),
+                         t,
+                         [](double value, const MicroImpulseWindow& window) {
+                             return value < window.startTime;
+                         });
+
+    if ( it == m_microImpulseWindows.begin() ) {
+        return rawAbsY;
+    }
+
+    --it;
+    if ( t < it->startTime || t > it->endTime ) {
+        return rawAbsY;
+    }
+
+    const double duration = it->endTime - it->startTime;
+    if ( duration <= 0.0 ) {
+        return rawAbsY;
+    }
+
+    const double alpha = (t - it->startTime) / duration;
+    return it->startAbsY + (it->endAbsY - it->startAbsY) * alpha;
+}
+
+double ScrollCache::getAbsY(double t) const
+{
+    return getRawAbsY(t);
+}
+
+double ScrollCache::getVisualAnchorAbsY(double t) const
+{
+    return applyMicroImpulseWindow(t, getRawAbsY(t));
 }
 
 double ScrollCache::getTime(double absY) const
@@ -331,7 +429,7 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
 {
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) {
-        return (t * DEFAULT_SPEED - currentAbsY);
+        return t * DEFAULT_SPEED - currentAbsY;
     }
 
     auto it = std::upper_bound(
@@ -347,7 +445,7 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
         seg = &(*std::prev(it));
     }
 
-    double absY = seg->absY + (t - seg->time) * seg->speed;
+    double absY = getAbsY(t);
     double hs =
         (std::abs(t - anchorTime) <= 1e-9) ? seg->hs : getHsAt(anchorTime);
     return (absY - currentAbsY) * hs;

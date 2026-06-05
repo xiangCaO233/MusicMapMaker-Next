@@ -67,6 +67,12 @@ public:
     /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
     double getAbsY(double t) const;
 
+    /// @brief 获取播放渲染锚点使用的绝对 Y 坐标。
+    /// @param t 当前播放视觉时间。
+    /// @return 渲染锚点 AbsY。
+    /// @warning 热路径：每次渲染快照生成时调用；只允许做二分查找。
+    double getVisualAnchorAbsY(double t) const;
+
     /// @brief 获取给定绝对 Y 坐标对应的时间戳 (反向映射)
     double getTime(double absY) const;
 
@@ -107,6 +113,21 @@ private:
 
     double m_lastZoom{ 1.0 };  // 记录最后一次 rebuild 使用的缩放
 
+    /// @brief 亚帧正负高速 SV 抵消窗口。
+    struct MicroImpulseWindow {
+        /// @brief 窗口起始时间。
+        double startTime{ 0.0 };
+        /// @brief 窗口结束时间。
+        double endTime{ 0.0 };
+        /// @brief 窗口起点原始 AbsY。
+        double startAbsY{ 0.0 };
+        /// @brief 窗口终点原始 AbsY。
+        double endAbsY{ 0.0 };
+    };
+
+    /// @brief 按起始时间排序的亚帧抵消脉冲窗口。
+    std::vector<MicroImpulseWindow> m_microImpulseWindows;
+
     struct TimingEntry {
         entt::entity             entity;
         const TimelineComponent* component;
@@ -128,6 +149,23 @@ private:
 
     /// @brief 重建 AbsY 区间索引。
     void rebuildAbsYRangeIndex();
+
+    /// @brief 重建亚帧抵消脉冲窗口。
+    /// @warning 逻辑低频路径：仅在 ScrollCache rebuild 时完整扫描分段。
+    void rebuildMicroImpulseWindows();
+
+    /// @brief 获取原始分段积分 AbsY，不应用亚帧脉冲窗口修正。
+    /// @param t 查询时间。
+    /// @return 原始 AbsY。
+    /// @warning 热路径：每次坐标查询可能调用；只能做二分查找。
+    double getRawAbsY(double t) const;
+
+    /// @brief 将原始 AbsY 投影到渲染用亚帧脉冲窗口。
+    /// @param t 查询时间。
+    /// @param rawAbsY 原始分段积分 AbsY。
+    /// @return 渲染用 AbsY。
+    /// @warning 热路径：每次坐标查询可能调用；只能做二分查找。
+    double applyMicroImpulseWindow(double t, double rawAbsY) const;
 
     /// @brief 获取指定滚动段覆盖的 AbsY 区间。
     std::pair<double, double> getSegmentAbsYRange(std::size_t index) const;

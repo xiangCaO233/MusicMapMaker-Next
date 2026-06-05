@@ -284,39 +284,18 @@ struct RenderSnapshot {
      * @brief [UI 线程专用] 亚帧插值：获取从 currentTime 到 currentTime + dt
      * 的累积绝对位移
      *
-     * 核心修复：不再简单使用 dt * instantaneous_speed，而是通过 scrollSegments
-     * 进行分段积分 (Piecewise Linear Integration)。这能完美处理 dt 跨越 SV/BPM
-     * 突变点的情况，消除变速段落的视觉跳变。
+     * 高 SV 微段会在 1ms 内出现极大的正负速度脉冲。UI 线程若拿旧快照顶点做
+     * 亚帧外推，会显示逻辑快照之间本不该稳定呈现的中间态，造成物件闪回。
+     * 因此当前禁用 UI 侧补偿，播放画面完全以逻辑线程生成的新快照为准。
      *
-     * @param dt 滞后时间 (秒，UI绘制时刻 - 快照生成时刻)
+     * @param dt 滞后时间 (秒，UI绘制时刻 - 快照生成时刻)。
      * @return 累积位移 (AbsY 空间)
+     * @warning UI 每帧路径：禁止在这里遍历 ScrollSegment 或做高 SV 分段积分。
      */
     double getInterpolatedOffset(double dt) const
     {
-        if ( scrollSegments.empty() ) {
-            return dt * 500.0 * playbackSpeed;
-        }
-
-        auto getAbsY = [&](double t) {
-            auto it = std::upper_bound(
-                scrollSegments.begin(),
-                scrollSegments.end(),
-                t,
-                [](double val, const System::ScrollSegment& seg) {
-                    return val < seg.time;
-                });
-
-            if ( it == scrollSegments.begin() ) {
-                return scrollSegments[0].absY +
-                       (t - scrollSegments[0].time) * scrollSegments[0].speed;
-            }
-            auto prev = std::prev(it);
-            return prev->absY + (t - prev->time) * prev->speed;
-        };
-
-        double t1 = currentTime;
-        double t2 = currentTime + dt * playbackSpeed;
-        return getAbsY(t2) - getAbsY(t1);
+        (void)dt;
+        return 0.0;
     }
 
     /// @brief 清理当前快照数据（保留内存容量）

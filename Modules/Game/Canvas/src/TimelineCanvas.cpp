@@ -10,7 +10,6 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -228,34 +227,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             m_editingEntity = entity;
                             m_editTime      = el.time;
                             m_editValue     = el.*(gear.value);
-                            if ( std::string_view(gear.editType) == "Scroll" ) {
-                                bool isMalodyScroll = false;
-                                if ( auto session =
-                                         Logic::EditorEngine::instance()
-                                             .getActiveSession() ) {
-                                    auto& registry =
-                                        session->getContext().timelineRegistry;
-                                    if ( registry.valid(entity) &&
-                                         registry
-                                             .all_of<Logic::TimelineComponent>(
-                                                 entity) ) {
-                                        const auto& tl =
-                                            registry
-                                                .get<Logic::TimelineComponent>(
-                                                    entity);
-                                        isMalodyScroll =
-                                            tl.m_metadata.timing_properties
-                                                .contains(
-                                                    ::MMM::TimingMetadataType::
-                                                        MALODY);
-                                    }
-                                }
-                                if ( !isMalodyScroll && m_editValue < -1e-6 ) {
-                                    m_editValue = -100.0 / m_editValue;
-                                }
-                            }
-                            m_editType    = gear.editType;
-                            m_isPopupOpen = true;
+                            m_editType      = gear.editType;
+                            m_isPopupOpen   = true;
                             ImGui::OpenPopup("TimelineEventEditor");
                         }
                         ImGui::PopStyleColor();

@@ -11,15 +11,34 @@
 #include "logic/session/SessionUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace MMM::Logic::System
 {
 
+/// @brief UI 侧亚帧补偿允许的最大滞后秒数，与 CanvasSnapshotPrepare 保持一致。
+constexpr double MAX_UI_INTERPOLATION_SECONDS = 0.1;
+
+/// @brief 获取当前可视窗口附近的音符实体。
+/// @param currentTime 当前快照的视觉时间。
+/// @param currentAbsY 当前快照视觉时间对应的绝对 Y。
+/// @param visualPaddingPixels 当前皮肤与缩放下的候选视觉余量。
+/// @param interpolationSeconds UI 亚帧补偿需要覆盖的播放时间。
+/// @warning 热路径：每次音符快照生成时执行；只能使用已缓存排序实体与
+/// ScrollCache，不得完整遍历除高复杂 SV 索引失效兜底外的全量实体。
 static std::vector<entt::entity> getNotesInRange(
-    entt::registry& registry, const ScrollCache* cache, double currentAbsY,
-    float judgmentLineY, float topY, float bottomY, float renderScaleY);
+    entt::registry& registry, const ScrollCache* cache, double currentTime,
+    double currentAbsY, float judgmentLineY, float topY, float bottomY,
+    float renderScaleY, float visualPaddingPixels, double interpolationSeconds);
+
+/// @brief 估算 UI 亚帧补偿期间 ScrollCache 可能产生的最大 AbsY 位移。
+/// @warning 热路径：每次音符候选反查前执行；只允许访问当前时间附近的
+/// ScrollSegment，禁止完整遍历全部流速段。
+static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
+                                                double             currentTime,
+                                                double interpolationSeconds);
 
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
@@ -34,13 +53,19 @@ void NoteRenderSystem::renderNotes(
             registry, snapshot, currentTime, singleTrackW, config);
     if ( !ctx.cache ) return;
 
-    auto noteEntities = getNotesInRange(registry,
-                                        ctx.cache,
-                                        ctx.currentAbsY,
-                                        judgmentLineY,
-                                        topY,
-                                        bottomY,
-                                        renderScaleY);
+    auto noteEntities = getNotesInRange(
+        registry,
+        ctx.cache,
+        ctx.currentTime,
+        ctx.currentAbsY,
+        judgmentLineY,
+        topY,
+        bottomY,
+        renderScaleY,
+        std::max(ctx.noteH, 1.0f),
+        snapshot->isPlaying
+            ? std::abs(snapshot->playbackSpeed) * MAX_UI_INTERPOLATION_SECONDS
+            : 0.0);
 
     bool shouldGenerateHitboxes = snapshot->acceptsInteraction &&
                                   SessionUtils::isMainCanvasCameraId(cameraId);
@@ -128,7 +153,7 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     const auto** cachePtr = registry.ctx().find<const ScrollCache*>();
     if ( !cachePtr || !(*cachePtr) ) return ctx;
     ctx.cache       = *cachePtr;
-    ctx.currentAbsY = ctx.cache->getAbsY(currentTime);
+    ctx.currentAbsY = ctx.cache->getVisualAnchorAbsY(currentTime);
     ctx.currentTime = currentTime;
 
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
@@ -166,9 +191,58 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     return ctx;
 }
 
+static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
+                                                double             currentTime,
+                                                double interpolationSeconds)
+{
+    if ( !cache || interpolationSeconds <= 0.0 ||
+         !std::isfinite(interpolationSeconds) ) {
+        return 0.0;
+    }
+
+    const auto& segments = cache->getSegments();
+    if ( segments.empty() ) {
+        return std::abs(cache->getSpeedAt(currentTime)) * interpolationSeconds;
+    }
+
+    const double endTime = currentTime + interpolationSeconds;
+    auto it = std::upper_bound(segments.begin(),
+                               segments.end(),
+                               currentTime,
+                               [](double value, const ScrollSegment& seg) {
+                                   return value < seg.time;
+                               });
+
+    if ( it != segments.begin() ) {
+        --it;
+    }
+
+    double cursor      = currentTime;
+    double paddingAbsY = 0.0;
+    while ( cursor < endTime ) {
+        const double speed = std::isfinite(it->speed) ? it->speed : 0.0;
+        auto         next  = std::next(it);
+        const double sliceEnd =
+            next != segments.end() ? std::min(endTime, next->time) : endTime;
+
+        if ( sliceEnd > cursor ) {
+            paddingAbsY += std::abs(speed) * (sliceEnd - cursor);
+            cursor = sliceEnd;
+        }
+
+        if ( next == segments.end() ) {
+            break;
+        }
+        it = next;
+    }
+
+    return paddingAbsY;
+}
+
 static std::vector<entt::entity> getNotesInRange(
-    entt::registry& registry, const ScrollCache* cache, double currentAbsY,
-    float judgmentLineY, float topY, float bottomY, float renderScaleY)
+    entt::registry& registry, const ScrollCache* cache, double currentTime,
+    double currentAbsY, float judgmentLineY, float topY, float bottomY,
+    float renderScaleY, float visualPaddingPixels, double interpolationSeconds)
 {
     std::vector<entt::entity> result;
     const auto**              sortedEntitiesPtr =
@@ -201,7 +275,11 @@ static std::vector<entt::entity> getNotesInRange(
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
         double minDelta =
             (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-        double padDelta = 128.0 / static_cast<double>(std::abs(renderScaleY));
+        double padDelta =
+            std::max(0.0, static_cast<double>(visualPaddingPixels)) /
+                static_cast<double>(std::abs(renderScaleY)) +
+            calculateInterpolationPaddingAbsY(
+                cache, currentTime, interpolationSeconds);
 
         for ( auto entity : entities ) {
             const auto& note = registry.get<const NoteComponent>(entity);
@@ -238,8 +316,13 @@ static std::vector<entt::entity> getNotesInRange(
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
                                           static_cast<double>(renderScaleY);
+    double padAbsY = std::max(0.0, static_cast<double>(visualPaddingPixels)) /
+                         static_cast<double>(std::abs(renderScaleY)) +
+                     calculateInterpolationPaddingAbsY(
+                         cache, currentTime, interpolationSeconds);
     auto   timeRanges = cache->getTimeRangesForAbsYWindow(
-        std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
+        std::min(topAbsY, bottomAbsY) - padAbsY,
+        std::max(topAbsY, bottomAbsY) + padAbsY);
 
     std::vector<std::pair<double, double>> scanRanges;
     scanRanges.reserve(timeRanges.size());

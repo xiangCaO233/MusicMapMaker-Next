@@ -188,7 +188,7 @@ void NoteRenderSystem::drawBeatLines(
 
     if ( bpmEvents.empty() ) return;
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
     if ( std::abs(renderScaleY) < 1e-6f ) return;
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
@@ -339,7 +339,7 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
 {
     if ( !cache ) return;
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
     if ( std::abs(renderScaleY) < 1e-6f ) return;
     batcher.setTexture(TextureID::None);
 
