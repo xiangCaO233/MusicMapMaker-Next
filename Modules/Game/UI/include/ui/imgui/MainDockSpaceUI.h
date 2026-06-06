@@ -130,9 +130,6 @@ public:
     /// @brief 窗口是否最大化 (通过事件同步)
     bool m_isMaximized{ false };
 
-    /// @brief 是否已初始化窗口状态
-    bool m_initializedWindow{ false };
-
     /// @brief 是否显示退出确认弹窗
     bool m_showExitConfirmation{ false };
 

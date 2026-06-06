@@ -65,6 +65,10 @@ public:
     /// @return 已发起 X11 窗口管理器交互时返回 true。
     bool handleClientCursorPos(double cursorX, double cursorY) override;
 
+    /// @brief 处理主窗口焦点变化，避免重新聚焦时误触发最大化窗口拖动还原。
+    /// @param focused 主窗口获得焦点时为 true。
+    void handleClientFocusChange(bool focused) override;
+
 private:
     /// @brief 处理拖拽区域更新事件。
     /// @param event 拖拽区域更新事件。
@@ -103,6 +107,9 @@ private:
 
     /// @brief 左键按下后是否等待触发窗口缩放。
     bool m_pendingResize{ false };
+
+    /// @brief 重新获得焦点后是否跳过下一次最大化标题栏拖拽。
+    bool m_skipNextMaximizedDragPress{ false };
 
     /// @brief 等待触发的窗口缩放方向。
     WindowFrameResizeEdge m_pendingResizeEdge{ WindowFrameResizeEdge::Right };

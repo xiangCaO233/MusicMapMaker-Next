@@ -202,6 +202,13 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetWindowPosCallback(m_windowHandle, &NativeWindow::windowPosCallback);
     glfwSetWindowSizeCallback(m_windowHandle,
                               &NativeWindow::windowSizeCallback);
+    glfwSetWindowFocusCallback(m_windowHandle, [](GLFWwindow* w, int focused) {
+        auto app = reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
+        if ( app && app->m_windowFrameAdapter ) {
+            app->m_windowFrameAdapter->handleClientFocusChange(focused ==
+                                                               GLFW_TRUE);
+        }
+    });
     glfwSetKeyCallback(m_windowHandle, GLFW_KeyCallback);
     glfwSetDropCallback(m_windowHandle, GLFW_DropCallback);
 

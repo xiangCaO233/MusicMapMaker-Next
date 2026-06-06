@@ -310,7 +310,11 @@ bool X11WindowAdapter::handleClientMouseButton(int button, int action,
     m_pressY = cursorY;
     resetPendingFrameRequest();
 
+    const bool isMaximized =
+        glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED) == GLFW_TRUE;
+
     if ( auto edge = resolveResizeEdge(cursorX, cursorY) ) {
+        m_skipNextMaximizedDragPress = false;
         if ( requestResize(*edge) ) {
             return true;
         }
@@ -321,7 +325,14 @@ bool X11WindowAdapter::handleClientMouseButton(int button, int action,
     }
 
     if ( isInsideDragArea(cursorX, cursorY) ) {
-        m_pendingMove = true;
+        if ( m_skipNextMaximizedDragPress && isMaximized ) {
+            m_skipNextMaximizedDragPress = false;
+            return false;
+        }
+        m_skipNextMaximizedDragPress = false;
+        m_pendingMove                = true;
+    } else {
+        m_skipNextMaximizedDragPress = false;
     }
     return false;
 }
@@ -362,6 +373,24 @@ bool X11WindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
     }
 
     return false;
+}
+
+void X11WindowAdapter::handleClientFocusChange(bool focused)
+{
+    resetPendingFrameRequest();
+    if ( !m_window ) {
+        m_skipNextMaximizedDragPress = false;
+        return;
+    }
+
+    const bool isMaximized =
+        glfwGetWindowAttrib(m_window, GLFW_MAXIMIZED) == GLFW_TRUE;
+    if ( !focused ) {
+        m_skipNextMaximizedDragPress = isMaximized;
+        return;
+    }
+
+    m_skipNextMaximizedDragPress = m_skipNextMaximizedDragPress || isMaximized;
 }
 
 void X11WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& event)

@@ -134,10 +134,10 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
 
-    if ( !m_initializedWindow && viewport->PlatformHandle ) {
+    if ( viewport->PlatformHandle ) {
         if ( GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle ) {
-            m_isMaximized = glfwGetWindowAttrib(nativeWin, GLFW_MAXIMIZED);
-            m_initializedWindow = true;
+            m_isMaximized =
+                glfwGetWindowAttrib(nativeWin, GLFW_MAXIMIZED) == GLFW_TRUE;
         }
     }
 

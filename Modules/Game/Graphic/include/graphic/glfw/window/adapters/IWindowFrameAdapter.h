@@ -54,6 +54,11 @@ public:
     /// @warning 输入热路径：GLFW 鼠标移动回调中执行；只能做常量规模命中判断。
     virtual bool handleClientCursorPos(double cursorX, double cursorY) = 0;
 
+    /// @brief 处理 GLFW 主窗口焦点状态变化。
+    /// @param focused 主窗口获得焦点时为 true。
+    /// @warning 输入热路径：GLFW 焦点回调中执行；只能更新常量规模状态。
+    virtual void handleClientFocusChange(bool focused) { (void)focused; }
+
     /// @brief 判断是否需要 UI 层主动发起移动和缩放请求。
     /// @return 需要 UI 层调用 requestMove/requestResize 时返回 true。
     [[nodiscard]] virtual bool supportsClientFrameRequests() const = 0;
