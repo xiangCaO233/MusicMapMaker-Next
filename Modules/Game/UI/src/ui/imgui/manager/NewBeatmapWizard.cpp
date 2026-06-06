@@ -446,9 +446,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
+    constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoResize;
     if ( modalScope.begin(TR("ui.wizard.new_beatmap.title").data(),
                           &m_isOpen,
-                          ImGuiWindowFlags_None,
+                          WINDOW_FLAGS,
                           ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
                           false) ) {
 

@@ -262,7 +262,9 @@ struct RenderSnapshot {
     int                              erasingSubIndex{ -1 };
 
     // 是否已加载谱面
-    bool        hasBeatmap{ false };
+    bool hasBeatmap{ false };
+    /// @brief 当前快照对应谱面的项目内或绝对路径键。
+    std::string beatmapPathKey;
     std::string beatmapName;
     bool        isDirty{ false };
     std::string lastActionMessage;
@@ -346,6 +348,7 @@ struct RenderSnapshot {
         erasingEntities.clear();
         erasingSubIndex = -1;
         hasBeatmap      = false;
+        beatmapPathKey.clear();
         beatmapName.clear();
         isDirty = false;
         lastActionMessage.clear();

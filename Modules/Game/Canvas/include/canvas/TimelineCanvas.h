@@ -56,6 +56,7 @@ public:
     void prepareUiFrameData(const UI::UiFrameSnapshot& snapshot) override;
 
     /// @brief 将准备好的时间线快照切换到主线程可见状态。
+    /// @warning UI 热路径：每帧只切换快照；无活跃谱面时清空旧帧。
     void swapPreparedUiFrameData() override;
 
     // IRenderableView 接口
@@ -129,8 +130,10 @@ private:
     Logic::RenderSnapshot*                    m_currentSnapshot{ nullptr };
 
     // 弹窗状态
-    bool         m_isPopupOpen{ false };
-    bool         m_isTableWindowOpen{ false };
+    bool m_isPopupOpen{ false };
+    bool m_isTableWindowOpen{ false };
+    /// @brief 时间点批量编辑窗口绑定的谱面快照键。
+    std::string  m_tableBeatmapKey;
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

@@ -374,6 +374,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             }
             snapshot->backgroundPath = Config::pathToUtf8(bgPath);
             snapshot->bgSize         = m_ctx->bgSize;
+            snapshot->beatmapPathKey = Config::pathToUtf8(
+                m_ctx->currentBeatmap->m_baseMapMetadata.map_path);
             snapshot->beatmapName =
                 m_ctx->currentBeatmap->m_baseMapMetadata.name;
             snapshot->isDirty = m_ctx->actionStack.isDirty();

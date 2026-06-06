@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <ice/thread/ThreadPool.hpp>
 #include <thread>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -2055,11 +2056,54 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
 
+    /// @brief 当前项目指针，用于把待删除谱面路径规范成 Session 路径键。
+    const auto* currentProject = ProjectController::instance().currentProject();
+    /// @brief 待删除谱面的稳定路径键。
+    const std::string removedBeatmapKey =
+        makeBeatmapPathKey(currentProject, Config::utf8ToPath(cmd.filePath));
+
     /// @brief 项目命令服务的谱面删除结果。
     auto result = ProjectController::instance().removeBeatmap(cmd);
-    if ( result.m_changed ) {
-        saveProject();
+    if ( !result.m_changed ) {
+        return;
     }
+
+    /// @brief 需要同步关闭的已打开谱面 Session 索引。
+    std::vector<int32_t> sessionsToClose;
+    if ( !removedBeatmapKey.empty() ) {
+        /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
+        const auto& sessions = m_sessionRegistry.entriesUnsafe();
+        for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
+            const auto& entry = sessions[static_cast<size_t>(i)];
+            if ( entry.isLogoPlaceholder || !entry.session ) {
+                continue;
+            }
+
+            std::string openedBeatmapKey = entry.beatmapPathKey;
+            if ( openedBeatmapKey.empty() ) {
+                const auto& ctx = entry.session->getContext();
+                if ( ctx.currentBeatmap ) {
+                    openedBeatmapKey = makeBeatmapPathKey(
+                        currentProject,
+                        ctx.currentBeatmap->m_baseMapMetadata.map_path);
+                }
+            }
+
+            if ( openedBeatmapKey == removedBeatmapKey ) {
+                sessionsToClose.push_back(i);
+            }
+        }
+    }
+
+    for ( auto it = sessionsToClose.rbegin(); it != sessionsToClose.rend();
+          ++it ) {
+        closeSession(*it, false);
+    }
+    if ( !sessionsToClose.empty() ) {
+        captureProjectWorkspaceState();
+    }
+
+    saveProject();
 }
 
 /// @brief 更新项目内谱面文件路径关联并在项目发生变化时保存。

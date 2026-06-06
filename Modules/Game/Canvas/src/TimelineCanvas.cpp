@@ -334,6 +334,17 @@ void TimelineCanvas::swapPreparedUiFrameData()
         return;
     }
 
+    auto&         engine      = Logic::EditorEngine::instance();
+    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+    if ( !activeEntry || activeEntry->isLogoPlaceholder ) {
+        m_currentSnapshot     = nullptr;
+        m_lastOffsetSnapshot  = nullptr;
+        m_lastAppliedYOffset  = 0.0f;
+        m_hasPreparedSnapshot = false;
+        return;
+    }
+
     m_currentSnapshot     = m_preparedSnapshot.snapshot;
     m_lastOffsetSnapshot  = m_preparedSnapshot.offsetSnapshot;
     m_lastAppliedYOffset  = m_preparedSnapshot.appliedYOffset;

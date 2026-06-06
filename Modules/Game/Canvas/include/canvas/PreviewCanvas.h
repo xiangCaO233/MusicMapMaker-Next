@@ -62,6 +62,7 @@ public:
     void prepareUiFrameData(const UI::UiFrameSnapshot& snapshot) override;
 
     /// @brief 将准备好的预览快照切换到主线程可见状态。
+    /// @warning UI 热路径：每帧只切换快照；无活跃谱面时清空旧帧。
     void swapPreparedUiFrameData() override;
 
     // --- 改变尺寸后的回调 ---

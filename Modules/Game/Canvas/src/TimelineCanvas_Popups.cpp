@@ -14,6 +14,7 @@
 #include <cmath>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::Canvas
@@ -85,6 +86,16 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::HS: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
     }
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+}
+
+/// @brief 获取用于绑定时间点批量编辑窗口的谱面快照键。
+std::string_view getTimingPointsTableBeatmapKey(
+    const Logic::RenderSnapshot& snapshot)
+{
+    if ( !snapshot.beatmapPathKey.empty() ) {
+        return snapshot.beatmapPathKey;
+    }
+    return snapshot.beatmapName;
 }
 
 /// @brief 从当前 Session 收集完整 Timing 列表，供表格窗口编辑使用。
@@ -571,11 +582,45 @@ void TimelineCanvas::renderEventCreationPopup()
     }
 }
 
-/// @brief 渲染可批量编辑时间点的表格窗口（非模态）
+/// @brief 渲染可批量编辑时间点的表格窗口（非模态）。
+/// @warning UI 热路径：打开时每帧执行；无谱面快照时只关闭窗口并清理绑定。
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
     if ( !m_isTableWindowOpen ) {
+        m_tableBeatmapKey.clear();
         finishKeepSpeedBinding();
+        return;
+    }
+
+    auto closeTableWindow = [this]() {
+        m_isTableWindowOpen = false;
+        m_tableBeatmapKey.clear();
+        finishKeepSpeedBinding();
+    };
+
+    auto&         engine      = Logic::EditorEngine::instance();
+    const int32_t activeIndex = engine.getActiveSessionIndex();
+    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
+    if ( !activeEntry || activeEntry->isLogoPlaceholder || !m_currentSnapshot ||
+         !m_currentSnapshot->hasBeatmap ) {
+        closeTableWindow();
+        return;
+    }
+
+    const std::string_view currentBeatmapKey =
+        getTimingPointsTableBeatmapKey(*m_currentSnapshot);
+    if ( currentBeatmapKey.empty() ) {
+        closeTableWindow();
+        return;
+    }
+    if ( m_tableBeatmapKey.empty() ) {
+        m_tableBeatmapKey.assign(currentBeatmapKey.data(),
+                                 currentBeatmapKey.size());
+    } else if ( m_tableBeatmapKey.size() != currentBeatmapKey.size() ||
+                !std::equal(m_tableBeatmapKey.begin(),
+                            m_tableBeatmapKey.end(),
+                            currentBeatmapKey.begin()) ) {
+        closeTableWindow();
         return;
     }
 
@@ -606,13 +651,6 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         std::string(TR("ui.timeline.timing_points_table.title").data()) +
         "###TimingPointsTableWindow";
     if ( ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen) ) {
-        if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
-            ImGui::TextDisabled("当前未加载任何谱面");
-            ImGui::End();
-            ImGui::PopStyleVar(6);
-            return;
-        }
-
         auto elements = collectTimelineElements();
         refreshKeepSpeedBinding(elements);
 
