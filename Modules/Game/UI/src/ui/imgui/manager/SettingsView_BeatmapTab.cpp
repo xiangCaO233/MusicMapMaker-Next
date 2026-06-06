@@ -365,8 +365,8 @@ void SettingsView::drawBeatmapSettings()
                        TR_CACHE("ui.settings.beatmap.length").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           const auto lengthText =
-                               Canvas::formatCanvasDuration(meta.map_length);
+                           const auto lengthText = Canvas::formatCanvasDuration(
+                               meta.map_length / 1000.0);
                            ImGui::SetCursorScreenPos({ r.x, r.y });
                            ImGui::TextUnformatted(lengthText.c_str());
                        });

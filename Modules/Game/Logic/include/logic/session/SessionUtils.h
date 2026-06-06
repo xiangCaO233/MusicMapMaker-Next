@@ -68,6 +68,13 @@ void ensureHitEvents(SessionContext& ctx);
 /// @param ctx 会话上下文引用
 void rebuildHitEvents(SessionContext& ctx);
 
+/// @brief 获取当前 Session 的有效总时长。
+/// @param ctx 会话上下文引用。
+/// @return 音频总时长和谱面元数据总时长中的较大值，单位秒。
+/// @warning 逻辑/UI 热路径：播放、seek clamp 和快照生成会调用；只允许读取
+/// AudioManager 当前缓存时长和 currentBeatmap 元数据，禁止加入文件系统访问。
+double getEffectiveTotalTimeSeconds(const SessionContext& ctx);
+
 /// @brief 载入新的谱面数据到上下文中
 /// @param ctx 会话上下文引用
 /// @param beatmap 指向要载入的谱面指针

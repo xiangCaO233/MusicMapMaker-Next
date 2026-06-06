@@ -349,7 +349,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->isPlaying =
             m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
         snapshot->currentTime = m_ctx->visualTime;  // 快照使用视觉平滑时间
-        snapshot->totalTime   = Audio::AudioManager::instance().getTotalTime();
+        snapshot->totalTime =
+            SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
         snapshot->snapshotSysTime =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch())

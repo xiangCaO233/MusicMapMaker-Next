@@ -179,7 +179,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // --- 边缘自动滚动处理 ---
     if ( std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001 ) {
         double delta     = m_ctx->previewEdgeScrollVelocity * dt;
-        double totalTime = Audio::AudioManager::instance().getTotalTime();
+        double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
         m_ctx->currentTime =
             std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
 

@@ -1680,7 +1680,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 }
             }
 
-            double totalTime = Audio::AudioManager::instance().getTotalTime();
+            double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
             double minTime = -m_editorConfig.visual.getEffectiveVisualOffset();
             if ( minTime > totalTime ) {
                 minTime = totalTime;

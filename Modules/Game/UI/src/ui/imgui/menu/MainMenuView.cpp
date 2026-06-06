@@ -117,6 +117,8 @@ MainMenuView::MainMenuView()
     , m_showUpdatePopup(false)
     , m_showCheckingPopup(false)
     , m_updatePopupCanceled(false)
+    , m_showBeatmapSpeedExportPopup(false)
+    , m_speedExportRunning(false)
     , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
 {
     ensureSaveResultSubscription();
@@ -259,6 +261,8 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
 /// @param sourceManager 当前 UI 管理器，用于处理快捷键和菜单窗口。
 void MainMenuView::update(UIManager* sourceManager)
 {
+    consumeBeatmapSpeedExportQueues();
+
     SaveTooltipPayload payload;
     while ( getSaveTooltipQueue().try_dequeue(payload) ) {
         m_saveTooltipMessage = buildSaveTooltipMessage(payload);
@@ -572,6 +576,22 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
         }
 
+        {
+            bool  hasBeatmap = false;
+            auto& engine     = Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            auto session = engine.getActiveSession();
+            hasBeatmap =
+                hasProject && session && session->getContext().currentBeatmap;
+            if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
+                                      "谱面倍速制作",
+                                      nullptr,
+                                      hasBeatmap && !m_speedExportRunning) ) {
+                openBeatmapSpeedExportPopup();
+            }
+        }
+
         ImGui::EndMenu();
     }
 
@@ -628,6 +648,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderExportCompatibilityWarningPopup(dpiScale);
     renderPackageFormatPickerPopup(dpiScale);
     renderPackageFileSelectionWindow(dpiScale);
+    renderBeatmapSpeedExportPopup(dpiScale);
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding

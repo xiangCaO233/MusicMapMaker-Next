@@ -2,6 +2,7 @@
 
 #include "common/LogicCommands.h"
 #include "mmm/project/PackageFileTypes.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -210,6 +211,19 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFileSelectionWindow(float dpiScale);
 
+    /// @brief 打开谱面倍速制作弹窗。
+    void openBeatmapSpeedExportPopup();
+
+    /// @brief 渲染谱面倍速制作弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderBeatmapSpeedExportPopup(float dpiScale);
+
+    /// @brief 启动谱面倍速制作后台任务。
+    void startBeatmapSpeedExport();
+
+    /// @brief 消费谱面倍速制作后台任务消息。
+    void consumeBeatmapSpeedExportQueues();
+
     /// @brief 按当前目标打包格式重建候选文件列表。
     void rebuildPackageCandidateFiles();
 
@@ -291,6 +305,26 @@ private:
     bool m_showPackageFormatPicker = false;
     /// @brief 是否显示打包文件复选列表窗口。
     bool m_showPackageFileSelectionWindow = false;
+    /// @brief 是否显示谱面倍速制作弹窗。
+    bool m_showBeatmapSpeedExportPopup = false;
+    /// @brief 谱面倍速制作后台任务是否运行中。
+    bool m_speedExportRunning = false;
+    /// @brief 谱面倍速制作倍率。
+    float m_speedExportFactor = 1.2f;
+    /// @brief 谱面倍速音频是否保留原音高。
+    bool m_speedExportPreservePitch = true;
+    /// @brief 谱面倍速音频输出格式索引；0 表示跟随源音频。
+    int m_speedExportAudioFormatIndex = 0;
+    /// @brief 输出名称是否已被用户手动编辑。
+    bool m_speedExportNameEdited = false;
+    /// @brief 谱面倍速制作输出名称输入缓存。
+    std::array<char, 192> m_speedExportNameBuffer{};
+    /// @brief 当前自动生成的输出名称，用于判断是否跟随倍率刷新。
+    std::string m_speedExportAutoName;
+    /// @brief 谱面倍速制作进度。
+    float m_speedExportProgress = 0.0f;
+    /// @brief 谱面倍速制作状态文本。
+    std::string m_speedExportStatus;
 
     /// @brief 是否已完成启动时的自动更新检查。
     bool m_hasCheckedOnStartup = false;

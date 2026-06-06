@@ -7,6 +7,7 @@ add_library(Audio STATIC
 	src/AudioManager_Mix.cpp
 	src/AudioManager_Playback.cpp
 	src/AudioManager_SFX.cpp
+	src/AudioSpeedExportService.cpp
 	src/SoundEffectPool.cpp
 )
 
@@ -39,3 +40,8 @@ if(WIN32)
 endif()
 
 target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(AudioSpeedExportServiceTest
+	tests/AudioSpeedExportServiceTest.cpp
+)
+target_link_libraries(AudioSpeedExportServiceTest PRIVATE Audio Log Config)

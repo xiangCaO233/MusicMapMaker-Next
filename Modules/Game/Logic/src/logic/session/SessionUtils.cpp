@@ -1,4 +1,5 @@
 #include "logic/session/SessionUtils.h"
+#include "audio/AudioManager.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -6,6 +7,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace MMM::Logic::SessionUtils
@@ -33,6 +35,19 @@ const CameraInfo* findMainCanvasCamera(
     }
 
     return nullptr;
+}
+
+double getEffectiveTotalTimeSeconds(const SessionContext& ctx)
+{
+    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    if ( ctx.currentBeatmap ) {
+        const double mapLengthMs =
+            ctx.currentBeatmap->m_baseMapMetadata.map_length;
+        if ( mapLengthMs > 0.0 && std::isfinite(mapLengthMs) ) {
+            totalTime = std::max(totalTime, mapLengthMs / 1000.0);
+        }
+    }
+    return std::max(0.0, totalTime);
 }
 
 SnapResult getSnapResult(

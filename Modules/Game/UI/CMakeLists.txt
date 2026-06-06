@@ -11,6 +11,7 @@ add_library(UI STATIC
     src/ui/imgui/menu/MainMenuView_FileDialogs.cpp
     src/ui/imgui/menu/MainMenuView_Metadata.cpp
     src/ui/imgui/menu/MainMenuView_Overlap.cpp
+    src/ui/imgui/menu/MainMenuView_SpeedExport.cpp
     src/ui/imgui/menu/MainMenuView_UpdatePopups.cpp
     src/ui/imgui/manager/FileManagerView.cpp
     src/ui/imgui/manager/FileManagerView_Hierarchy.cpp
