@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -74,6 +75,24 @@ public:
         std::unique_ptr<Project> m_project;
     };
 
+    /// @brief 新建项目时需要写入项目描述文件的初始设置。
+    struct ProjectCreationOptions {
+        /// @brief 项目显示标题。
+        std::string m_title;
+
+        /// @brief 项目曲作者或艺术家。
+        std::string m_artist;
+
+        /// @brief 项目谱师。
+        std::string m_mapper;
+
+        /// @brief 项目默认物件调色方案；空字符串表示继承软件默认。
+        std::string m_noteColorPaletteSchemeName;
+
+        /// @brief 新项目首次打开时的侧边栏页签名称。
+        std::string m_sidebarActiveTab;
+    };
+
     /// @brief 逻辑线程本轮应执行的项目切换动作。
     struct PendingProjectAction {
         /// @brief 本轮是否需要关闭当前项目。
@@ -81,6 +100,9 @@ public:
 
         /// @brief 本轮是否需要打开指定项目。
         std::filesystem::path m_projectPathToOpen;
+
+        /// @brief 打开项目时需要应用的新建项目初始设置。
+        std::optional<ProjectCreationOptions> m_projectCreationOptions;
     };
 
     /// @brief 获取当前项目。
@@ -94,6 +116,12 @@ public:
     /// @brief 请求打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
     void requestOpenProject(const std::filesystem::path& projectPath);
+
+    /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
+    /// @param projectPath 要创建的项目根目录。
+    /// @param options 新项目初始设置。
+    void requestCreateProject(const std::filesystem::path&  projectPath,
+                              const ProjectCreationOptions& options);
 
     /// @brief 请求关闭当前项目，必要时等待 UI 完成旧画布关闭。
     void requestCloseProject();
@@ -116,7 +144,9 @@ public:
     /// @brief 打开项目并启动项目目录监听。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
     /// @return 打开项目后的结果信息。
-    OpenProjectResult openProject(const std::filesystem::path& projectPath);
+    OpenProjectResult openProject(const std::filesystem::path& projectPath,
+                                  const std::optional<ProjectCreationOptions>&
+                                      creationOptions = std::nullopt);
 
     /// @brief 关闭当前项目并停止项目目录监听。
     /// @return 被关闭项目的信息。
@@ -197,6 +227,9 @@ private:
     /// @brief 关闭项目请求事件订阅 ID。
     Event::SubscriptionID m_closeProjectSubscription{ 0 };
 
+    /// @brief 新建项目请求事件订阅 ID。
+    Event::SubscriptionID m_createProjectSubscription{ 0 };
+
     /// @brief 项目切换完成事件订阅 ID。
     Event::SubscriptionID m_projectSwitchCompletedSubscription{ 0 };
 
@@ -221,11 +254,20 @@ private:
     /// @brief 已确认可由逻辑线程直接打开的项目路径。
     std::filesystem::path m_pendingProjectPath;
 
+    /// @brief 已确认可由逻辑线程直接创建并打开的项目初始设置。
+    std::optional<ProjectCreationOptions> m_pendingProjectCreationOptions;
+
     /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径。
     std::filesystem::path m_requestedProjectPath;
 
+    /// @brief 等待逻辑线程判定的项目创建初始设置。
+    std::optional<ProjectCreationOptions> m_requestedProjectCreationOptions;
+
     /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径。
     std::filesystem::path m_pendingProjectSwitchPath;
+
+    /// @brief 等待 UI 关闭旧谱面画布后的项目创建初始设置。
+    std::optional<ProjectCreationOptions> m_pendingProjectSwitchCreationOptions;
 
     /// @brief 是否已有项目关闭请求正在等待逻辑线程分发。
     bool m_requestedProjectClose{ false };

@@ -10,9 +10,34 @@
 #include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include <system_error>
 
 namespace MMM::Logic
 {
+
+namespace
+{
+/// @brief 将新建项目初始设置写入项目实例。
+/// @param project 要初始化的项目。
+/// @param options 新项目初始设置。
+/// @param fallbackTitle 标题为空时使用的回退名称。
+void applyProjectCreationOptions(
+    Project& project, const ProjectController::ProjectCreationOptions& options,
+    const std::string& fallbackTitle)
+{
+    project.m_metadata.m_title =
+        options.m_title.empty() ? fallbackTitle : options.m_title;
+    project.m_metadata.m_artist =
+        options.m_artist.empty() ? "Unknown" : options.m_artist;
+    project.m_metadata.m_mapper =
+        options.m_mapper.empty() ? "Unknown" : options.m_mapper;
+    project.m_settings.m_noteColorPaletteSchemeName =
+        options.m_noteColorPaletteSchemeName;
+    project.m_settings.m_workspace.m_sidebarActiveTab =
+        options.m_sidebarActiveTab.empty() ? std::string{ "FileExplorer" }
+                                           : options.m_sidebarActiveTab;
+}
+}  // namespace
 
 /// @brief 获取项目控制器全局实例。
 /// @return 项目控制器全局实例引用。
@@ -35,6 +60,18 @@ ProjectController::ProjectController()
         eventBus.subscribe<Event::ProjectCloseRequestedEvent>(
             [this](const Event::ProjectCloseRequestedEvent&) {
                 requestCloseProject();
+            });
+    m_createProjectSubscription =
+        eventBus.subscribe<Event::ProjectCreateRequestedEvent>(
+            [this](const Event::ProjectCreateRequestedEvent& event) {
+                ProjectCreationOptions options;
+                options.m_title  = event.m_title;
+                options.m_artist = event.m_artist;
+                options.m_mapper = event.m_mapper;
+                options.m_noteColorPaletteSchemeName =
+                    event.m_noteColorPaletteSchemeName;
+                options.m_sidebarActiveTab = event.m_sidebarActiveTab;
+                requestCreateProject(event.m_projectPath, options);
             });
     m_projectSwitchCompletedSubscription =
         eventBus.subscribe<Event::ProjectSwitchCompletedEvent>(
@@ -60,6 +97,10 @@ ProjectController::~ProjectController()
     if ( m_closeProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectCloseRequestedEvent>(
             m_closeProjectSubscription);
+    }
+    if ( m_createProjectSubscription != 0 ) {
+        eventBus.unsubscribe<Event::ProjectCreateRequestedEvent>(
+            m_createProjectSubscription);
     }
     if ( m_projectSwitchCompletedSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectSwitchCompletedEvent>(
@@ -111,14 +152,46 @@ void ProjectController::requestOpenProject(
     /// @brief 保护本次打开请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectCreationOptions.reset();
+    m_requestedProjectCreationOptions.reset();
     m_requestedProjectClose = false;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
         m_pendingProjectSwitchPath = projectPath;
+        m_pendingProjectSwitchCreationOptions.reset();
     } else {
         m_requestedProjectPath = projectPath;
+    }
+}
+
+/// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
+/// @param projectPath 要创建的项目根目录。
+/// @param options 新项目初始设置。
+void ProjectController::requestCreateProject(
+    const std::filesystem::path&  projectPath,
+    const ProjectCreationOptions& options)
+{
+    if ( projectPath.empty() ) {
+        return;
+    }
+
+    /// @brief 保护本次新建项目请求状态写入的锁。
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    m_pendingProjectPath.clear();
+    m_pendingProjectCreationOptions.reset();
+    m_requestedProjectClose = false;
+    m_pendingProjectClose   = false;
+    m_projectCloseReady     = false;
+    if ( !m_pendingProjectSwitchPath.empty() ) {
+        m_requestedProjectPath.clear();
+        m_requestedProjectCreationOptions.reset();
+        m_pendingProjectSwitchPath            = projectPath;
+        m_pendingProjectSwitchCreationOptions = options;
+    } else {
+        m_requestedProjectPath            = projectPath;
+        m_requestedProjectCreationOptions = options;
     }
 }
 
@@ -128,8 +201,11 @@ void ProjectController::requestCloseProject()
     /// @brief 保护本次关闭请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectCreationOptions.reset();
     m_requestedProjectPath.clear();
+    m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchCreationOptions.reset();
     m_requestedProjectClose = true;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
@@ -157,8 +233,10 @@ void ProjectController::completePendingProjectSwitch()
 
     if ( m_pendingProjectSwitchPath.empty() ) return;
 
-    m_pendingProjectPath = m_pendingProjectSwitchPath;
+    m_pendingProjectPath            = m_pendingProjectSwitchPath;
+    m_pendingProjectCreationOptions = m_pendingProjectSwitchCreationOptions;
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchCreationOptions.reset();
 }
 
 /// @brief 取消所有挂起项目切换流程。
@@ -167,8 +245,11 @@ void ProjectController::cancelPendingProjectSwitch()
     /// @brief 保护挂起项目切换状态清理的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectCreationOptions.reset();
     m_requestedProjectPath.clear();
+    m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchCreationOptions.reset();
     m_requestedProjectClose = false;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
@@ -184,6 +265,8 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     PendingProjectAction action;
     /// @brief 本轮消费到的项目打开请求。
     std::filesystem::path requestedPath;
+    /// @brief 本轮消费到的项目创建初始设置。
+    std::optional<ProjectCreationOptions> requestedCreationOptions;
     /// @brief 本轮是否消费到项目关闭请求。
     bool requestedClose = false;
     /// @brief 本轮是否需要通知 UI 先关闭旧画布。
@@ -201,8 +284,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             m_requestedProjectClose = false;
         }
         if ( !m_requestedProjectPath.empty() ) {
-            requestedPath = m_requestedProjectPath;
+            requestedPath            = m_requestedProjectPath;
+            requestedCreationOptions = m_requestedProjectCreationOptions;
             m_requestedProjectPath.clear();
+            m_requestedProjectCreationOptions.reset();
         }
     }
 
@@ -211,7 +296,9 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             /// @brief 保护关闭请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_pendingProjectPath.clear();
+            m_pendingProjectCreationOptions.reset();
             m_pendingProjectSwitchPath.clear();
+            m_pendingProjectSwitchCreationOptions.reset();
             m_pendingProjectClose    = true;
             shouldPublishCanvasClose = true;
             canvasCloseOnly          = true;
@@ -227,17 +314,20 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             /// @brief 保护打开请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_pendingProjectPath.clear();
-            m_pendingProjectClose      = false;
-            m_pendingProjectSwitchPath = requestedPath;
-            shouldPublishCanvasClose   = true;
-            canvasCloseProjectPath     = requestedPath;
-            canvasCloseOnly            = false;
+            m_pendingProjectCreationOptions.reset();
+            m_pendingProjectClose                 = false;
+            m_pendingProjectSwitchPath            = requestedPath;
+            m_pendingProjectSwitchCreationOptions = requestedCreationOptions;
+            shouldPublishCanvasClose              = true;
+            canvasCloseProjectPath                = requestedPath;
+            canvasCloseOnly                       = false;
             XINFO(
                 "Project open deferred until current beatmap canvases close: "
                 "{}",
                 Config::pathToUtf8(requestedPath));
         } else {
-            action.m_projectPathToOpen = requestedPath;
+            action.m_projectPathToOpen      = requestedPath;
+            action.m_projectCreationOptions = requestedCreationOptions;
         }
     }
 
@@ -255,8 +345,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         }
         if ( action.m_projectPathToOpen.empty() &&
              !m_pendingProjectPath.empty() ) {
-            action.m_projectPathToOpen = m_pendingProjectPath;
+            action.m_projectPathToOpen      = m_pendingProjectPath;
+            action.m_projectCreationOptions = m_pendingProjectCreationOptions;
             m_pendingProjectPath.clear();
+            m_pendingProjectCreationOptions.reset();
         }
     }
 
@@ -267,7 +359,8 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 /// @return 打开项目后的结果信息。
 ProjectController::OpenProjectResult ProjectController::openProject(
-    const std::filesystem::path& projectPath)
+    const std::filesystem::path&                 projectPath,
+    const std::optional<ProjectCreationOptions>& creationOptions)
 {
     /// @brief 本次打开项目的返回结果。
     OpenProjectResult result;
@@ -276,8 +369,25 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     /// @brief 若传入谱面文件，则记录需要自动打开的谱面路径。
     std::filesystem::path targetBeatmapPath;
 
-    if ( std::filesystem::exists(projectPath) &&
-         std::filesystem::is_regular_file(projectPath) ) {
+    if ( creationOptions ) {
+        std::error_code filesystemError;
+        if ( !std::filesystem::exists(projectPath, filesystemError) ) {
+            std::filesystem::create_directories(projectPath, filesystemError);
+            if ( filesystemError ) {
+                XERROR("Failed to create project directory: {}",
+                       Config::pathToUtf8(projectPath));
+                return result;
+            }
+        }
+
+        if ( !std::filesystem::is_directory(projectPath, filesystemError) ||
+             filesystemError ) {
+            XERROR("Failed to create project: Target is not a directory: {}",
+                   Config::pathToUtf8(projectPath));
+            return result;
+        }
+    } else if ( std::filesystem::exists(projectPath) &&
+                std::filesystem::is_regular_file(projectPath) ) {
         actualProjectPath = projectPath.parent_path();
         targetBeatmapPath = projectPath;
     }
@@ -315,7 +425,9 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 
     /// @brief 项目描述文件路径。
     std::filesystem::path projectFile = actualProjectPath / "mmm_project.json";
-    if ( std::filesystem::exists(projectFile) ) {
+    /// @brief 项目描述文件是否已存在。
+    const bool projectFileExists = std::filesystem::exists(projectFile);
+    if ( projectFileExists ) {
         try {
             /// @brief 项目描述文件输入流。
             std::ifstream file(projectFile);
@@ -348,6 +460,13 @@ ProjectController::OpenProjectResult ProjectController::openProject(
                 "Failed to load existing mmm_project.json, using scanned "
                 "results.");
         }
+    }
+
+    if ( creationOptions && !projectFileExists ) {
+        applyProjectCreationOptions(
+            *newProject,
+            *creationOptions,
+            Config::pathToUtf8(actualProjectPath.filename()));
     }
 
     m_projectResourceService.applyExcludedResources(*newProject);

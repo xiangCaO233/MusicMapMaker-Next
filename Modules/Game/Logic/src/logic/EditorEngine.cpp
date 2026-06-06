@@ -726,17 +726,21 @@ void EditorEngine::restoreProjectWorkspace(
     m_pendingWorkspaceActiveIndex = restoredActiveIndex;
 }
 
-void EditorEngine::openProject(const std::filesystem::path& projectPath)
+void EditorEngine::openProject(
+    const std::filesystem::path& projectPath,
+    const std::optional<ProjectController::ProjectCreationOptions>&
+        creationOptions)
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
-    if ( std::filesystem::exists(projectPath) &&
+    if ( !creationOptions && std::filesystem::exists(projectPath) &&
          std::filesystem::is_regular_file(projectPath) ) {
         actualProjectPath = projectPath.parent_path();
     }
 
-    if ( !std::filesystem::exists(actualProjectPath) ||
-         !std::filesystem::is_directory(actualProjectPath) ) {
+    if ( !creationOptions &&
+         (!std::filesystem::exists(actualProjectPath) ||
+          !std::filesystem::is_directory(actualProjectPath)) ) {
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
@@ -747,7 +751,8 @@ void EditorEngine::openProject(const std::filesystem::path& projectPath)
     closeProject();
 
     /// @brief 项目控制器打开项目后的结果。
-    auto openResult = ProjectController::instance().openProject(projectPath);
+    auto openResult =
+        ProjectController::instance().openProject(projectPath, creationOptions);
     if ( !openResult.m_opened ) {
         return;
     }
@@ -1883,7 +1888,8 @@ void EditorEngine::loop()
             closeProject();
         }
         if ( !projectAction.m_projectPathToOpen.empty() ) {
-            openProject(projectAction.m_projectPathToOpen);
+            openProject(projectAction.m_projectPathToOpen,
+                        projectAction.m_projectCreationOptions);
         }
 
         // 多 Session 轮询更新

@@ -29,6 +29,7 @@
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/imgui/manager/NewProjectWizard.h"
 #include "ui/imgui/manager/SearchView.h"
 #include <array>
 #include <chrono>
@@ -110,7 +111,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         TR("title.beatmap_manager"),
         std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
 
-    // 注册新建谱面向导
+    // 注册新建向导
+    m_uiManager.registerView("NewProjectWizard",
+                             std::make_unique<UI::NewProjectWizard>());
     m_uiManager.registerView("NewBeatmapWizard",
                              std::make_unique<UI::NewBeatmapWizard>());
 

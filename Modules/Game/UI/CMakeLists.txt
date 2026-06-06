@@ -19,6 +19,7 @@ add_library(UI STATIC
     src/ui/imgui/manager/AudioManagerView.cpp
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/NewBeatmapWizard.cpp
+    src/ui/imgui/manager/NewProjectWizard.cpp
     src/ui/imgui/manager/SettingsView.cpp
     src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
     src/ui/imgui/manager/SettingsView_DebugTab.cpp

@@ -14,6 +14,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -348,7 +349,10 @@ private:
 
     /// @brief 打开项目目录并加载其中的所有资源。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void openProject(const std::filesystem::path& projectPath);
+    void openProject(
+        const std::filesystem::path& projectPath,
+        const std::optional<ProjectController::ProjectCreationOptions>&
+            creationOptions = std::nullopt);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）

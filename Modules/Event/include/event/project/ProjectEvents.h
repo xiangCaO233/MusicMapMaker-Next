@@ -29,6 +29,27 @@ struct ProjectSwitchEvent : public ProjectEvent {
 struct ProjectCloseRequestedEvent : public ProjectRequestEvent {
 };
 
+/// @brief 新建项目请求事件，由项目控制器创建目录并排队打开。
+struct ProjectCreateRequestedEvent : public ProjectRequestEvent {
+    /// @brief 项目根目录路径。
+    std::filesystem::path m_projectPath;
+
+    /// @brief 项目显示标题。
+    std::string m_title;
+
+    /// @brief 项目曲作者或艺术家。
+    std::string m_artist;
+
+    /// @brief 项目谱师。
+    std::string m_mapper;
+
+    /// @brief 项目默认物件调色方案；空字符串表示继承软件默认。
+    std::string m_noteColorPaletteSchemeName;
+
+    /// @brief 新项目首次打开时的侧边栏页签名称。
+    std::string m_sidebarActiveTab;
+};
+
 /// @brief 项目切换需要先关闭旧谱面画布事件。
 struct ProjectSwitchNeedsCanvasCloseEvent : public ProjectSwitchEvent {
     /// @brief 旧画布关闭后需要打开的项目路径；仅关闭当前项目时为空。
@@ -65,6 +86,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectLifecycleEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchEvent,
                        MMM::Event::ProjectEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectCloseRequestedEvent,
+                       MMM::Event::ProjectRequestEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::ProjectCreateRequestedEvent,
                        MMM::Event::ProjectRequestEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchNeedsCanvasCloseEvent,
                        MMM::Event::ProjectSwitchEvent);

@@ -25,6 +25,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/imgui/manager/NewProjectWizard.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include <ImGuiFileDialog.h>
 #include <concurrentqueue.h>
@@ -162,7 +163,9 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     if ( io.KeyCtrl ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
             if ( io.KeyShift ) {
-                // New project logic placeholder
+                auto* wizard = sourceManager->getView<NewProjectWizard>(
+                    "NewProjectWizard");
+                if ( wizard ) wizard->open();
             } else if ( hasProject ) {
                 auto* wizard = sourceManager->getView<NewBeatmapWizard>(
                     "NewBeatmapWizard");
@@ -351,7 +354,11 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         bool  hasProject = (project != nullptr);
 
         if ( MenuItemWithFontIcon(
-                 ICON_MMM_BOOK, TR("ui.file.new_pro"), "Ctrl+Shift+N") ) {}
+                 ICON_MMM_BOOK, TR("ui.file.new_pro"), "Ctrl+Shift+N") ) {
+            auto* wizard =
+                sourceManager->getView<NewProjectWizard>("NewProjectWizard");
+            if ( wizard ) wizard->open();
+        }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_FILE, TR("ui.file.new_map"), "Ctrl+N", hasProject) ) {
             auto* wizard =
