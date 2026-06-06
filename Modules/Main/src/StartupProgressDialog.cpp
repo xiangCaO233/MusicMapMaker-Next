@@ -68,7 +68,8 @@ StartupProgressDialog::~StartupProgressDialog()
 bool StartupProgressDialog::shouldOpenFor(
     const Network::AssetSyncProgress& progress)
 {
-    return progress.stage ==
+    return progress.stage == Network::AssetSyncProgressStage::kCheckingFiles ||
+           progress.stage ==
                Network::AssetSyncProgressStage::kDownloadingPackage ||
            progress.stage ==
                Network::AssetSyncProgressStage::kExtractingPackage ||
@@ -113,6 +114,29 @@ int StartupProgressDialog::progressPercent(
     if ( progress.stage == Network::AssetSyncProgressStage::kFinished ) {
         return 100;
     }
+    if ( progress.stage == Network::AssetSyncProgressStage::kCheckingFiles &&
+         progress.totalFileCount > 0 ) {
+        const auto percent = static_cast<int>((progress.currentFileIndex * 35) /
+                                              progress.totalFileCount);
+        return std::clamp(percent, 0, 35);
+    }
+    if ( progress.stage == Network::AssetSyncProgressStage::kDownloadingFile &&
+         progress.totalFileCount > 0 ) {
+        const auto completedFiles =
+            progress.currentFileIndex > 0 ? progress.currentFileIndex - 1 : 0;
+        int filePercent = 0;
+        if ( progress.totalBytes > 0 ) {
+            filePercent = static_cast<int>(
+                (progress.currentBytes * 100) /
+                std::max<std::int64_t>(progress.totalBytes, 1));
+        }
+        const auto percent =
+            35 + static_cast<int>(
+                     ((completedFiles * 100 + std::clamp(filePercent, 0, 100)) *
+                      60) /
+                     (progress.totalFileCount * 100));
+        return std::clamp(percent, 35, 95);
+    }
     if ( progress.totalBytes > 0 ) {
         const auto percent =
             static_cast<int>((progress.currentBytes * 100) /
@@ -141,6 +165,11 @@ std::string StartupProgressDialog::progressText(
     case Network::AssetSyncProgressStage::kCheckingManifest:
         return "正在检查资源更新...";
     case Network::AssetSyncProgressStage::kCheckingFiles:
+        if ( progress.totalFileCount > 0 ) {
+            return "正在校验本地资源 " +
+                   std::to_string(progress.currentFileIndex) + "/" +
+                   std::to_string(progress.totalFileCount);
+        }
         return "正在校验本地资源...";
     case Network::AssetSyncProgressStage::kFinished:
         return "资源包已准备完成，正在启动...";

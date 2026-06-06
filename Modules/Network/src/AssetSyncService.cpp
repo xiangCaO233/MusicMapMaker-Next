@@ -129,6 +129,14 @@ std::string resolveUrlInternal(const std::string& baseUrl,
     return base + "/" + url;
 }
 
+/// @brief 从 file URL 中提取本地路径。
+std::filesystem::path pathFromFileUrl(const std::string& url)
+{
+    constexpr std::string_view kFilePrefix = "file://";
+    if ( !startsWith(url, kFilePrefix) ) return {};
+    return Config::utf8ToPath(url.substr(kFilePrefix.size()));
+}
+
 /// @brief 读取环境变量字符串。
 std::string readEnvironmentString(const char* name)
 {
@@ -388,6 +396,21 @@ bool downloadString(const std::string& url, std::string& response,
 {
     response.clear();
 
+    if ( startsWith(url, "file://") ) {
+        std::vector<std::uint8_t> bytes;
+        if ( !readFileBytes(pathFromFileUrl(url), bytes) ) {
+            errorMessage = "Failed to read local file URL";
+            return false;
+        }
+        if ( bytes.empty() ) {
+            response.clear();
+        } else {
+            response.assign(reinterpret_cast<const char*>(bytes.data()),
+                            bytes.size());
+        }
+        return true;
+    }
+
     CURL* curl = curl_easy_init();
     if ( !curl ) {
         errorMessage = "Failed to initialize libcurl";
@@ -425,6 +448,26 @@ bool downloadFile(const std::string& url, const std::filesystem::path& path,
                   const std::function<void(std::int64_t, std::int64_t)>&
                       progressCallback = {})
 {
+    if ( startsWith(url, "file://") ) {
+        std::vector<std::uint8_t> bytes;
+        if ( !readFileBytes(pathFromFileUrl(url), bytes) ) {
+            errorMessage = "Failed to read local file URL";
+            return false;
+        }
+        if ( progressCallback ) {
+            progressCallback(0, static_cast<std::int64_t>(bytes.size()));
+        }
+        if ( !writeBytesToFile(path, bytes.data(), bytes.size()) ) {
+            errorMessage = "Failed to create output file";
+            return false;
+        }
+        if ( progressCallback ) {
+            progressCallback(static_cast<std::int64_t>(bytes.size()),
+                             static_cast<std::int64_t>(bytes.size()));
+        }
+        return true;
+    }
+
     const auto parentPath = path.parent_path();
     if ( !parentPath.empty() ) {
         std::error_code createError;
@@ -545,6 +588,71 @@ void writeLocalVersionFile(const std::filesystem::path& assetsRootPath,
     if ( file ) file << version << '\n';
 }
 
+/// @brief 读取本地资源版本文件。
+std::string readLocalVersionFile(const std::filesystem::path& assetsRootPath)
+{
+    const auto    versionPath = assetsRootPath / kLocalVersionFileName;
+    std::ifstream file(versionPath, std::ios::binary);
+    if ( !file ) return {};
+
+    std::string version;
+    std::getline(file, version);
+    while ( !version.empty() &&
+            (version.back() == '\r' || version.back() == '\n') ) {
+        version.pop_back();
+    }
+    return version;
+}
+
+/// @brief 判断本地资源文件是否缺失或内容不匹配。
+bool isAssetFileOutdated(const AssetFileEntry&        file,
+                         const std::filesystem::path& assetsRootPath)
+{
+    if ( !isSafeRelativeAssetPath(file.path) ) return true;
+
+    const auto localPath =
+        (assetsRootPath / Config::utf8ToPath(file.path)).lexically_normal();
+    if ( !isPathInsideRoot(assetsRootPath, localPath) ) return true;
+
+    std::error_code regularFileError;
+    const bool      regularFile =
+        std::filesystem::is_regular_file(localPath, regularFileError);
+    if ( regularFileError || !regularFile ) return true;
+
+    if ( file.size > 0 ) {
+        std::error_code sizeError;
+        const auto localSize = std::filesystem::file_size(localPath, sizeError);
+        if ( sizeError || localSize != file.size ) return true;
+    }
+
+    const auto localSha256 = AssetSyncService::sha256File(localPath);
+    return localSha256 != file.sha256;
+}
+
+/// @brief 收集本地缺失或变更文件，并向启动 UI 汇报校验进度。
+std::vector<AssetFileEntry> collectOutdatedFilesWithProgress(
+    const AssetManifest& manifest, const std::filesystem::path& assetsRootPath,
+    const AssetSyncOptions& options)
+{
+    std::vector<AssetFileEntry> outdatedFiles;
+    for ( std::size_t index = 0; index < manifest.files.size(); ++index ) {
+        const auto& file = manifest.files[index];
+        emitProgress(options,
+                     AssetSyncProgress{
+                         AssetSyncProgressStage::kCheckingFiles,
+                         "Checking local asset: " + file.path,
+                         0,
+                         0,
+                         index + 1,
+                         manifest.files.size(),
+                     });
+        if ( isAssetFileOutdated(file, assetsRootPath) ) {
+            outdatedFiles.push_back(file);
+        }
+    }
+    return outdatedFiles;
+}
+
 /// @brief 下载并解压完整资源包。
 AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
                                     const AssetManifest*    manifest)
@@ -659,11 +767,20 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                      0,
                      manifest.files.size(),
                  });
-    auto outdatedFiles = AssetSyncService::collectOutdatedFiles(
-        manifest, options.assetsRootPath);
+    auto outdatedFiles = collectOutdatedFilesWithProgress(
+        manifest, options.assetsRootPath, options);
 
     if ( outdatedFiles.empty() ) {
         writeLocalVersionFile(options.assetsRootPath, manifest.version);
+        emitProgress(options,
+                     AssetSyncProgress{
+                         AssetSyncProgressStage::kFinished,
+                         "Assets ready",
+                         0,
+                         0,
+                         0,
+                         0,
+                     });
         result.status = AssetSyncStatus::kReady;
         return result;
     }
@@ -839,6 +956,27 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
         return keepExistingAssetsAfterUpdateFailure(manifestParseError);
     }
 
+    const auto localVersion = readLocalVersionFile(options.assetsRootPath);
+    if ( !manifest->version.empty() && localVersion == manifest->version ) {
+        XINFO(
+            "AssetSync: local assets version {} is current; precise file "
+            "verification skipped",
+            localVersion);
+        AssetSyncResult result;
+        result.status        = AssetSyncStatus::kReady;
+        result.remoteVersion = manifest->version;
+        emitProgress(options,
+                     AssetSyncProgress{
+                         AssetSyncProgressStage::kFinished,
+                         "Assets ready",
+                         0,
+                         0,
+                         0,
+                         0,
+                     });
+        return result;
+    }
+
     auto updateResult = updateFromManifest(options, *manifest);
     if ( updateResult.status == AssetSyncStatus::kError ) {
         return keepExistingAssetsAfterUpdateFailure(updateResult.errorMessage);
@@ -908,38 +1046,7 @@ std::vector<AssetFileEntry> AssetSyncService::collectOutdatedFiles(
 {
     std::vector<AssetFileEntry> outdatedFiles;
     for ( const auto& file : manifest.files ) {
-        if ( !isSafeRelativeAssetPath(file.path) ) {
-            outdatedFiles.push_back(file);
-            continue;
-        }
-
-        const auto localPath =
-            (assetsRootPath / Config::utf8ToPath(file.path)).lexically_normal();
-        if ( !isPathInsideRoot(assetsRootPath, localPath) ) {
-            outdatedFiles.push_back(file);
-            continue;
-        }
-
-        std::error_code regularFileError;
-        const bool      regularFile =
-            std::filesystem::is_regular_file(localPath, regularFileError);
-        if ( regularFileError || !regularFile ) {
-            outdatedFiles.push_back(file);
-            continue;
-        }
-
-        if ( file.size > 0 ) {
-            std::error_code sizeError;
-            const auto      localSize =
-                std::filesystem::file_size(localPath, sizeError);
-            if ( sizeError || localSize != file.size ) {
-                outdatedFiles.push_back(file);
-                continue;
-            }
-        }
-
-        const auto localSha256 = sha256File(localPath);
-        if ( localSha256 != file.sha256 ) {
+        if ( isAssetFileOutdated(file, assetsRootPath) ) {
             outdatedFiles.push_back(file);
         }
     }
