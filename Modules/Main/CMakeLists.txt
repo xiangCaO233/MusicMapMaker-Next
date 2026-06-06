@@ -46,3 +46,7 @@ target_link_libraries(MusicMapMaker-Next
 		Game
 		Network
 )
+
+if(WIN32)
+	target_link_libraries(MusicMapMaker-Next PRIVATE comctl32)
+endif()
