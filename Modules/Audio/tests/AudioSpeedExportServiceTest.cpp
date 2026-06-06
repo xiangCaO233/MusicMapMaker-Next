@@ -180,7 +180,7 @@ bool check(bool condition, const std::string& label)
 /// @param actual 实际值。
 /// @param expected 期望值。
 /// @return 足够接近时返回 true。
-bool near(double actual, double expected)
+bool isNearlyEqual(double actual, double expected)
 {
     return std::abs(actual - expected) < 1e-6;
 }
@@ -347,7 +347,7 @@ int main()
     }
     ok &= check(result.success, "speed export succeeds");
     ok &= check(result.outputFrames == 2400, "2x pitch-shifted frame count");
-    ok &= check(near(result.outputDurationSeconds, 0.05),
+    ok &= check(isNearlyEqual(result.outputDurationSeconds, 0.05),
                 "2x pitch-shifted duration");
     ok &= check(lastProgress >= 1.0f, "progress reached done");
 
@@ -515,8 +515,9 @@ int main()
                     keepPitchResult.outputFrames <= 3200,
                 "keep-pitch frame count near 2x duration");
     ok &=
-        check(near(keepPitchResult.outputDurationSeconds,
-                   static_cast<double>(keepPitchResult.outputFrames) / 48000.0),
+        check(isNearlyEqual(
+                  keepPitchResult.outputDurationSeconds,
+                  static_cast<double>(keepPitchResult.outputFrames) / 48000.0),
               "keep-pitch output duration returned");
     ok &= check(keepPitchProgress >= 1.0f, "keep-pitch progress reached done");
 
@@ -553,7 +554,7 @@ int main()
     ok &= check(paddedResult.success, "minimum-duration export succeeds");
     ok &= check(paddedResult.outputFrames == 3600,
                 "minimum-duration export pads silence");
-    ok &= check(near(paddedResult.outputDurationSeconds, 0.075),
+    ok &= check(isNearlyEqual(paddedResult.outputDurationSeconds, 0.075),
                 "minimum-duration output duration returned");
 
     std::vector<unsigned char> paddedBytes;
