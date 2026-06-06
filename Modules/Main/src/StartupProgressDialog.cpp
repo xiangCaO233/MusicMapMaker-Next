@@ -12,8 +12,9 @@
 #    ifndef NOMINMAX
 #        define NOMINMAX
 #    endif
-#    include <commctrl.h>
 #    include <windows.h>
+// MinGW commctrl.h depends on base Win32 types from windows.h.
+#    include <commctrl.h>
 #else
 #    include <csignal>
 #endif
