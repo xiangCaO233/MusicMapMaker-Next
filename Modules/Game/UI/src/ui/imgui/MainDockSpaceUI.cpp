@@ -222,7 +222,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "ProjectFolderPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -254,7 +254,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "SaveAsFilePicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -286,7 +286,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "PackFilePicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -323,7 +323,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AudioImportPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -351,7 +351,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AsciiFontPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -375,7 +375,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "CjkFontPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {

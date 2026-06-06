@@ -163,7 +163,29 @@ static void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f))
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::SetNextWindowPos(
         viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float margin      = std::max(16.0f, 28.0f * dpiScale);
+    const auto  maxAxisSize = [margin](float workSize, float preferredMin) {
+        const float insetSize   = std::max(1.0f, workSize - margin * 2.0f);
+        const float clampedMin  = std::min(preferredMin, workSize);
+        const float clampedSize = std::max(clampedMin, insetSize);
+        return std::max(1.0f, std::min(clampedSize, workSize));
+    };
+    const ImVec2 maxWindowSize{
+        maxAxisSize(viewport->WorkSize.x, 160.0f * dpiScale),
+        maxAxisSize(viewport->WorkSize.y, 160.0f * dpiScale),
+    };
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
+
     if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
+        if ( desiredSize.x > 0.0f ) {
+            desiredSize.x = std::min(desiredSize.x, maxWindowSize.x);
+        }
+        if ( desiredSize.y > 0.0f ) {
+            desiredSize.y = std::min(desiredSize.y, maxWindowSize.y);
+        }
         ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
     }
 }
@@ -233,7 +255,7 @@ public:
     {
         prepareCenteredModalWindow(desiredSize);
 
-        flags |= ImGuiWindowFlags_NoSavedSettings;
+        flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
         if ( autoResize ) {
             flags |= ImGuiWindowFlags_AlwaysAutoResize;
         }
@@ -259,7 +281,7 @@ public:
     {
         prepareCenteredModalWindow(desiredSize);
 
-        flags |= ImGuiWindowFlags_NoSavedSettings;
+        flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
         if ( autoResize ) {
             flags |= ImGuiWindowFlags_AlwaysAutoResize;
         }

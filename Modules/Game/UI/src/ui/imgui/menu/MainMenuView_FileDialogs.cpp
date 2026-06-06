@@ -737,15 +737,24 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const float       footerReserveHeight =
+                ImGui::GetFrameHeightWithSpacing() +
+                style.ItemSpacing.y * 4.0f + 2.0f * dpiScale;
+            const float listHeight = std::max(
+                48.0f * dpiScale,
+                ImGui::GetContentRegionAvail().y - footerReserveHeight);
+
             if ( m_packageCandidateFiles.empty() ) {
                 ImGui::TextUnformatted("没有找到符合当前打包格式规则的文件。");
+                ImGui::Dummy(ImVec2(0.0f, listHeight));
             } else {
                 if ( ImGui::BeginChild("PackageCandidateFilesChild",
-                                       ImVec2(0.0f, 360.0f * dpiScale),
+                                       ImVec2(0.0f, listHeight),
                                        true) ) {
                     constexpr ImGuiTableFlags tableFlags =
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                        ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+                        ImGuiTableFlags_ScrollY;
                     if ( ImGui::BeginTable("PackageCandidateFilesTable",
                                            3,
                                            tableFlags,
@@ -791,7 +800,7 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             const bool   canPack = selectedCount > 0;
             const ImVec2 footerButtonSize(120.0f * dpiScale, 0.0f);
             const float  footerButtonRowWidth =
-                footerButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
+                footerButtonSize.x * 2.0f + style.ItemSpacing.x;
             centerNextItem(footerButtonRowWidth);
             if ( !canPack ) ImGui::BeginDisabled();
             if ( ImGui::Button("打包到...", footerButtonSize) ) {

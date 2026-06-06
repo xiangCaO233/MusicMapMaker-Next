@@ -427,7 +427,8 @@ void NewProjectWizard::renderParentFolderPicker(float dpiScale)
     }
     if ( ImGuiFileDialog::Instance()->Display(
              PARENT_FOLDER_PICKER_ID,
-             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings,
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
              ImVec2(600.0f * dpiScale, 400.0f * dpiScale)) ) {
         if ( ImGuiFileDialog::Instance()->IsOk() ) {
             std::string folderPath =

@@ -248,9 +248,10 @@ void NewBeatmapWizard::submitCreateRequest()
 void NewBeatmapWizard::renderTemplatePickerPopup(
     const std::vector<OpenTemplateOption>& templateOptions)
 {
-    if ( ImGui::BeginPopupModal("NewBeatmapTemplatePicker",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(
+             "NewBeatmapTemplatePicker",
+             nullptr,
+             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize) ) {
         ImGui::TextUnformatted(
             TR("ui.wizard.new_beatmap.template.pick_title").data());
         ImGui::Separator();
@@ -290,9 +291,10 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
 
 void NewBeatmapWizard::renderTemplateOptionsPopup()
 {
-    if ( ImGui::BeginPopupModal("NewBeatmapTemplateOptions",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(
+             "NewBeatmapTemplateOptions",
+             nullptr,
+             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize) ) {
         ImGui::TextUnformatted(
             TR("ui.wizard.new_beatmap.template.options_title").data());
         ImGui::Separator();
@@ -322,9 +324,10 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
 
 void NewBeatmapWizard::renderDuplicateNameWarningPopup()
 {
-    if ( ImGui::BeginPopupModal("NewBeatmapDuplicateNameWarning",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    if ( ImGui::BeginPopupModal(
+             "NewBeatmapDuplicateNameWarning",
+             nullptr,
+             ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoResize) ) {
         ImGui::TextColored(
             Utils::UIThemeUtils::getWarningColor(),
             "%s",

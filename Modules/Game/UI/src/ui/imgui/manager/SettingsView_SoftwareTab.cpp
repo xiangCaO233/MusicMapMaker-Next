@@ -589,7 +589,7 @@ void SettingsView::drawSoftwareSettings()
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AsciiFontPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
@@ -612,7 +612,7 @@ void SettingsView::drawSoftwareSettings()
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "CjkFontPicker",
-                     ImGuiWindowFlags_NoCollapse |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
                      { 600, 400 }) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
