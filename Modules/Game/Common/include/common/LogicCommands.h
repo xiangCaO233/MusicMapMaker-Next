@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 // 前置声明
 namespace MMM
@@ -394,6 +395,17 @@ struct CmdCreateTimelineEvent {
 };
 
 /**
+ * @brief 批量替换当前谱面的 Timing 列表。
+ */
+struct CmdReplaceBeatmapTimings {
+    /// @brief 替换后的 Timing 列表，时间戳单位为毫秒。
+    std::vector<::MMM::Timing> timings;
+
+    /// @brief 是否保留当前谱面中非 BPM 的流速/特效 Timing。
+    bool keepNonBpmTimings{ false };
+};
+
+/**
  * @brief 从模板创建谱面时可复制的数据类别。
  */
 struct BeatmapTemplateCreateOptions {
@@ -472,10 +484,10 @@ using LogicCommand = std::variant<
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
-    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
-    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
-    CmdRemoveBeatmap>;
+    CmdCreateTimelineEvent, CmdReplaceBeatmapTimings, CmdStartMarquee,
+    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
+    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdImportAudio, CmdUpdateAudioResource,
+    CmdRemoveAudioResource, CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

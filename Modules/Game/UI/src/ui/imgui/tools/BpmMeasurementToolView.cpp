@@ -342,30 +342,54 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     consumePendingAnalysis();
     updateMetronomePlayback();
 
-    ImGui::SetNextWindowSize(ImVec2(980.0f, 640.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(1120.0f, 720.0f), ImGuiCond_FirstUseEver);
     std::string windowTitle =
         std::string(TR("ui.tools.bpm_measure.title").data()) +
         "###BpmMeasurementTool";
     LayoutContext layoutContext(
-        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+        m_layoutCtx,
+        windowTitle,
+        true,
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse,
+        &m_isOpen);
 
-    if ( ImGui::BeginTable(
-             "##BpmMeasureLayout",
-             2,
-             ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp) ) {
+    const float contentWidth = ImGui::GetContentRegionAvail().x;
+    const float controlsWidth =
+        std::clamp(contentWidth * 0.30f, 320.0f, 420.0f);
+    if ( ImGui::BeginTable("##BpmMeasureLayout",
+                           2,
+                           ImGuiTableFlags_Resizable |
+                               ImGuiTableFlags_SizingStretchProp |
+                               ImGuiTableFlags_BordersInnerV) ) {
         ImGui::TableSetupColumn(
             "##Analysis", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn(
-            "##Controls", ImGuiTableColumnFlags_WidthFixed, 280.0f);
+            "##Controls", ImGuiTableColumnFlags_WidthFixed, controlsWidth);
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        renderAnalysisPanel();
+        if ( ImGui::BeginChild("##BpmMeasureAnalysisChild",
+                               ImVec2(0.0f, 0.0f),
+                               ImGuiChildFlags_None,
+                               ImGuiWindowFlags_NoScrollbar |
+                                   ImGuiWindowFlags_NoScrollWithMouse) ) {
+            renderAnalysisPanel();
+        }
+        ImGui::EndChild();
         ImGui::TableNextColumn();
-        renderControlPanel();
+        if ( ImGui::BeginChild("##BpmMeasureControlsChild",
+                               ImVec2(0.0f, 0.0f),
+                               ImGuiChildFlags_None,
+                               ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
+            renderControlPanel();
+        }
+        ImGui::EndChild();
 
         ImGui::EndTable();
     }
+
+    renderAutoApplyOffsetPopup();
+    renderApplyTimingPopup();
 }
 
 /// @brief 判断频谱纹理是否需要上传。
@@ -473,7 +497,14 @@ void BpmMeasurementToolView::consumePendingAnalysis()
             m_firstBeatTime = clampFirstBeatTime(autoTiming.offsetMs / 1000.0,
                                                  m_beatLengthSeconds,
                                                  playbackCanvasDuration());
-            m_viewCenter    = std::clamp<double>(
+            if ( m_timingSegments.empty() ) {
+                m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
+            } else {
+                m_timingSegments.front().timestampSeconds = m_firstBeatTime;
+                m_timingSegments.front().bpm              = m_bpm;
+            }
+            normalizeTimingSegments();
+            m_viewCenter = std::clamp<double>(
                 m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
             resetMetronomeScheduler(m_viewCenter);
             const std::string inaccuracyFraction = formatBeatFractionInaccuracy(
@@ -485,6 +516,7 @@ void BpmMeasurementToolView::consumePendingAnalysis()
                                   autoTiming.rawBpm,
                                   autoTiming.signature,
                                   autoTiming.division);
+            m_shouldOpenAutoApplyPopup = true;
         } else {
             m_statusText = TR("ui.tools.bpm_measure.auto_failed").data();
         }
@@ -492,6 +524,184 @@ void BpmMeasurementToolView::consumePendingAnalysis()
         m_statusText = TR("ui.tools.bpm_measure.ready").data();
     }
     m_analysisFinished.store(false, std::memory_order_release);
+}
+
+/// @brief 确保至少存在一个 BPM 段落，并同步旧单段字段。
+void BpmMeasurementToolView::ensureTimingSegments()
+{
+    if ( m_timingSegments.empty() ) {
+        m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
+        normalizeTimingSegments();
+    }
+}
+
+/// @brief 归一化 BPM 段落列表，保持按时间排序且数值有效。
+void BpmMeasurementToolView::normalizeTimingSegments()
+{
+    const double canvasDuration = playbackCanvasDuration();
+    std::erase_if(m_timingSegments, [](const auto& segment) {
+        return !std::isfinite(segment.timestampSeconds) ||
+               !std::isfinite(segment.bpm) || segment.bpm <= 0.0;
+    });
+
+    if ( m_timingSegments.empty() ) {
+        m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
+    }
+
+    for ( auto& segment : m_timingSegments ) {
+        segment.bpm = std::clamp(segment.bpm, 1.0, 999.0);
+        segment.timestampSeconds =
+            std::clamp(segment.timestampSeconds,
+                       firstBeatMinSeconds(60.0 / segment.bpm),
+                       std::max(0.0, canvasDuration));
+    }
+
+    std::stable_sort(m_timingSegments.begin(),
+                     m_timingSegments.end(),
+                     [](const auto& lhs, const auto& rhs) {
+                         return lhs.timestampSeconds < rhs.timestampSeconds;
+                     });
+
+    std::vector<BpmTimingSegment> normalized;
+    normalized.reserve(m_timingSegments.size());
+    for ( const auto& segment : m_timingSegments ) {
+        if ( !normalized.empty() &&
+             std::abs(normalized.back().timestampSeconds -
+                      segment.timestampSeconds) < 1e-6 ) {
+            normalized.back() = segment;
+            continue;
+        }
+        normalized.push_back(segment);
+    }
+    m_timingSegments = std::move(normalized);
+    syncPrimaryTimingFieldsFromSegments();
+}
+
+/// @brief 从第一段同步兼容旧绘制/输入路径的字段。
+void BpmMeasurementToolView::syncPrimaryTimingFieldsFromSegments()
+{
+    if ( m_timingSegments.empty() ) {
+        return;
+    }
+    m_firstBeatTime     = m_timingSegments.front().timestampSeconds;
+    m_bpm               = std::clamp(m_timingSegments.front().bpm, 1.0, 999.0);
+    m_beatLengthSeconds = 60.0 / m_bpm;
+}
+
+/// @brief 将兼容旧输入路径的字段写回第一段。
+void BpmMeasurementToolView::syncPrimaryTimingFieldsToSegments()
+{
+    if ( m_timingSegments.empty() ) {
+        m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
+    } else {
+        m_timingSegments.front().timestampSeconds = m_firstBeatTime;
+        m_timingSegments.front().bpm              = m_bpm;
+    }
+    normalizeTimingSegments();
+}
+
+/// @brief 查找指定时间所在的 BPM 段落索引。
+/// @param timeSeconds 查询时间，单位为秒。
+/// @return 段落索引。
+std::size_t BpmMeasurementToolView::findSegmentIndexForTime(
+    double timeSeconds) const
+{
+    if ( m_timingSegments.empty() ) {
+        return 0;
+    }
+
+    std::size_t result = 0;
+    for ( std::size_t i = 0; i < m_timingSegments.size(); ++i ) {
+        if ( timeSeconds + 1e-9 < m_timingSegments[i].timestampSeconds ) {
+            break;
+        }
+        result = i;
+    }
+    return result;
+}
+
+/// @brief 获取段落拍长。
+/// @param segmentIndex 段落索引。
+/// @return 单拍时长，单位为秒。
+double BpmMeasurementToolView::segmentBeatLengthSeconds(
+    std::size_t segmentIndex) const
+{
+    if ( m_timingSegments.empty() ) {
+        return m_beatLengthSeconds;
+    }
+    const auto& segment =
+        m_timingSegments[std::min(segmentIndex, m_timingSegments.size() - 1)];
+    return 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+}
+
+/// @brief 将当前段落列表转换为可写入谱面的 BPM Timing 列表。
+std::vector<::MMM::Timing> BpmMeasurementToolView::makeMeasuredTimings() const
+{
+    std::vector<::MMM::Timing> timings;
+    timings.reserve(m_timingSegments.size());
+    for ( const auto& segment : m_timingSegments ) {
+        const double  bpm = std::clamp(segment.bpm, 1.0, 999.0);
+        ::MMM::Timing timing;
+        timing.m_timestamp = std::max(0.0, segment.timestampSeconds) * 1000.0;
+        timing.m_timingEffect          = ::MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = bpm;
+        timing.m_bpm                   = bpm;
+        timing.m_beat_length           = 60000.0 / bpm;
+        timings.push_back(timing);
+    }
+    return timings;
+}
+
+/// @brief 收集当前已打开且可写入的谱面列表。
+std::vector<BpmMeasurementToolView::OpenBeatmapApplyOption>
+BpmMeasurementToolView::collectApplyBeatmapOptions() const
+{
+    std::vector<OpenBeatmapApplyOption> options;
+    const auto entries = Logic::EditorEngine::instance().getSessionEntries();
+    for ( std::size_t i = 0; i < entries.size(); ++i ) {
+        const auto& entry = entries[i];
+        if ( entry.isLogoPlaceholder || !entry.session ) {
+            continue;
+        }
+
+        const auto& ctx = entry.session->getContext();
+        if ( !ctx.currentBeatmap ) {
+            continue;
+        }
+
+        std::string label = entry.displayName;
+        if ( label.empty() ) {
+            label = ctx.currentBeatmap->m_baseMapMetadata.name;
+        }
+        if ( !ctx.currentBeatmap->m_baseMapMetadata.version.empty() ) {
+            label += " [" + ctx.currentBeatmap->m_baseMapMetadata.version + "]";
+        }
+
+        options.push_back({ static_cast<int32_t>(i), entry.cameraId, label });
+    }
+    return options;
+}
+
+/// @brief 请求打开应用到谱面的弹窗。
+void BpmMeasurementToolView::requestOpenApplyTimingPopup()
+{
+    ensureTimingSegments();
+    m_shouldOpenApplyTimingPopup = true;
+}
+
+/// @brief 将测量结果应用到当前弹窗选中的谱面。
+void BpmMeasurementToolView::applyMeasuredTimingsToSelectedBeatmap()
+{
+    if ( m_applyTargetSessionIndex < 0 ) {
+        return;
+    }
+
+    auto& engine = Logic::EditorEngine::instance();
+    engine.setActiveSessionIndex(m_applyTargetSessionIndex);
+    engine.requestSessionFocus(m_applyTargetSessionIndex);
+    engine.pushCommand(Logic::CmdReplaceBeatmapTimings{
+        makeMeasuredTimings(), m_keepNonBpmTimingsOnApply });
+    m_statusText = TR("ui.tools.bpm_measure.apply_done").data();
 }
 
 /// @brief 绘制右侧测量参数面板。
@@ -504,6 +714,7 @@ void BpmMeasurementToolView::renderControlPanel()
                            TR("ui.tools.no_active_session").data());
         return;
     }
+    ensureTimingSegments();
 
     if ( m_selectedAudioTrackId.empty() ) {
         m_selectedAudioLabel = TR("ui.tools.bpm_measure.select_track").data();
@@ -579,6 +790,7 @@ void BpmMeasurementToolView::renderControlPanel()
         m_beatLengthSeconds = 60.0 / m_bpm;
         m_firstBeatTime     = clampFirstBeatTime(
             m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
+        syncPrimaryTimingFieldsToSegments();
     }
 
     constexpr double minBeatLength = 60.0 / 999.0;
@@ -594,6 +806,7 @@ void BpmMeasurementToolView::renderControlPanel()
         m_bpm           = 60.0 / m_beatLengthSeconds;
         m_firstBeatTime = clampFirstBeatTime(
             m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
+        syncPrimaryTimingFieldsToSegments();
     }
 
     const double minFirstBeat = firstBeatMinSeconds(m_beatLengthSeconds);
@@ -607,6 +820,7 @@ void BpmMeasurementToolView::renderControlPanel()
              "%.6f") ) {
         m_firstBeatTime = clampFirstBeatTime(
             firstBeat, m_beatLengthSeconds, playbackCanvasDuration());
+        syncPrimaryTimingFieldsToSegments();
     }
 
     float markerWidth = static_cast<float>(m_markerWidthMs);
@@ -658,6 +872,8 @@ void BpmMeasurementToolView::renderControlPanel()
             m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
     }
 
+    renderTimingSegmentsPanel();
+
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.status").data());
     if ( m_analysisRunning.load(std::memory_order_relaxed) ) {
@@ -674,6 +890,208 @@ void BpmMeasurementToolView::renderControlPanel()
     if ( m_duration > 0.0 ) {
         ImGui::TextDisabled(
             "%s %.3fs", TR("ui.tools.bpm_measure.duration").data(), m_duration);
+    }
+}
+
+/// @brief 绘制 BPM 段落列表和应用入口。
+void BpmMeasurementToolView::renderTimingSegmentsPanel()
+{
+    ImGui::Spacing();
+    ImGui::SeparatorText(TR("ui.tools.bpm_measure.segments").data());
+
+    const float rowHeight = ImGui::GetFrameHeightWithSpacing();
+    const float childHeight =
+        std::min(170.0f, std::max(rowHeight * 3.0f, rowHeight * 4.5f));
+    bool changed = false;
+    if ( ImGui::BeginChild("##BpmMeasureSegments",
+                           ImVec2(0.0f, childHeight),
+                           ImGuiChildFlags_Borders) ) {
+        for ( std::size_t i = 0; i < m_timingSegments.size(); ++i ) {
+            auto& segment = m_timingSegments[i];
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::Text("#%zu", i + 1);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(78.0f);
+            float time = static_cast<float>(segment.timestampSeconds);
+            if ( ImGui::DragFloat("##SegmentTime",
+                                  &time,
+                                  0.001f,
+                                  static_cast<float>(firstBeatMinSeconds(
+                                      60.0 / std::max(1.0, segment.bpm))),
+                                  static_cast<float>(std::max(
+                                      0.001, playbackCanvasDuration())),
+                                  "%.3fs") ) {
+                segment.timestampSeconds = time;
+                changed                  = true;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip(
+                    "%s", TR("ui.tools.bpm_measure.segment_time").data());
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(76.0f);
+            float bpm = static_cast<float>(segment.bpm);
+            if ( ImGui::DragFloat(
+                     "##SegmentBpm", &bpm, 0.01f, 1.0f, 999.0f, "%.3f") ) {
+                segment.bpm = bpm;
+                changed     = true;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                ImGui::SetTooltip(
+                    "%s", TR("ui.tools.bpm_measure.segment_bpm").data());
+            }
+            ImGui::SameLine();
+            if ( i == 0 ) {
+                ImGui::BeginDisabled();
+            }
+            if ( ImGui::SmallButton(TR("ui.common.delete").data()) ) {
+                m_timingSegments.erase(m_timingSegments.begin() +
+                                       static_cast<std::ptrdiff_t>(i));
+                changed = true;
+                if ( i == 0 ) {
+                    ImGui::EndDisabled();
+                }
+                ImGui::PopID();
+                break;
+            }
+            if ( i == 0 ) {
+                ImGui::EndDisabled();
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::EndChild();
+
+    if ( changed ) {
+        normalizeTimingSegments();
+        resetMetronomeScheduler(m_viewCenter);
+    }
+
+    if ( ImGui::Button(TR("ui.tools.bpm_measure.add_segment").data(),
+                       ImVec2(-1.0f, 0.0f)) ) {
+        const std::size_t sourceIndex = findSegmentIndexForTime(m_viewCenter);
+        const double      bpm         = m_timingSegments.empty()
+                                            ? m_bpm
+                                            : m_timingSegments[sourceIndex].bpm;
+        m_timingSegments.push_back(
+            { std::clamp<double>(
+                  m_viewCenter, 0.0, std::max(0.0, playbackCanvasDuration())),
+              bpm });
+        normalizeTimingSegments();
+        resetMetronomeScheduler(m_viewCenter);
+    }
+
+    ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
+                    &m_keepNonBpmTimingsOnApply);
+    if ( ImGui::Button(TR("ui.tools.bpm_measure.apply_to_beatmap").data(),
+                       ImVec2(-1.0f, 0.0f)) ) {
+        requestOpenApplyTimingPopup();
+    }
+}
+
+/// @brief 绘制自动测偏移后的应用确认弹窗。
+void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
+{
+    const char* popupTitle = TR("ui.tools.bpm_measure.auto_apply_title").data();
+    if ( m_shouldOpenAutoApplyPopup ) {
+        ImGui::OpenPopup(popupTitle);
+        m_shouldOpenAutoApplyPopup = false;
+    }
+
+    if ( ImGui::BeginPopupModal(
+             popupTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        ImGui::TextWrapped(
+            "%s", TR("ui.tools.bpm_measure.auto_apply_message").data());
+        ImGui::Spacing();
+        const float buttonWidth = 120.0f;
+        if ( ImGui::Button(TR("ui.common.apply").data(),
+                           ImVec2(buttonWidth, 0.0f)) ) {
+            requestOpenApplyTimingPopup();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.common.cancel").data(),
+                           ImVec2(buttonWidth, 0.0f)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+}
+
+/// @brief 绘制将测量结果应用到已打开谱面的弹窗。
+void BpmMeasurementToolView::renderApplyTimingPopup()
+{
+    const char* popupTitle =
+        TR("ui.tools.bpm_measure.apply_popup_title").data();
+    if ( m_shouldOpenApplyTimingPopup ) {
+        ImGui::OpenPopup(popupTitle);
+        m_shouldOpenApplyTimingPopup = false;
+    }
+
+    if ( ImGui::BeginPopupModal(
+             popupTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        const auto options = collectApplyBeatmapOptions();
+        if ( options.empty() ) {
+            ImGui::TextColored(
+                Utils::UIThemeUtils::getWarningColor(),
+                "%s",
+                TR("ui.tools.bpm_measure.no_apply_target").data());
+        } else {
+            const auto activeIt = std::find_if(
+                options.begin(), options.end(), [&](const auto& option) {
+                    return option.sessionIndex == m_applyTargetSessionIndex;
+                });
+            if ( activeIt == options.end() ) {
+                m_applyTargetSessionIndex = options.front().sessionIndex;
+            }
+
+            std::string preview = options.front().displayName;
+            for ( const auto& option : options ) {
+                if ( option.sessionIndex == m_applyTargetSessionIndex ) {
+                    preview = option.displayName;
+                    break;
+                }
+            }
+
+            ImGui::Text("%s", TR("ui.tools.bpm_measure.apply_target").data());
+            ImGui::SetNextItemWidth(360.0f);
+            if ( ImGui::BeginCombo("##BpmApplyTarget", preview.c_str()) ) {
+                for ( const auto& option : options ) {
+                    const bool selected =
+                        option.sessionIndex == m_applyTargetSessionIndex;
+                    if ( ImGui::Selectable(option.displayName.c_str(),
+                                           selected) ) {
+                        m_applyTargetSessionIndex = option.sessionIndex;
+                    }
+                    if ( selected ) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
+                            &m_keepNonBpmTimingsOnApply);
+        }
+
+        ImGui::Spacing();
+        const float buttonWidth = 120.0f;
+        if ( options.empty() ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ImGui::Button(TR("ui.common.apply").data(),
+                           ImVec2(buttonWidth, 0.0f)) ) {
+            applyMeasuredTimingsToSelectedBeatmap();
+            ImGui::CloseCurrentPopup();
+        }
+        if ( options.empty() ) {
+            ImGui::EndDisabled();
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(TR("ui.common.cancel").data(),
+                           ImVec2(buttonWidth, 0.0f)) ) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 }
 
@@ -865,7 +1283,8 @@ void BpmMeasurementToolView::followPlaybackIfNeeded()
 /// 热路径：每帧执行；只读取播放同步快照并播放已预加载音效，不访问文件系统。
 void BpmMeasurementToolView::updateMetronomePlayback()
 {
-    if ( !isSelectedTrackLoadedForPlayback() || m_beatLengthSeconds <= 1e-6 ) {
+    ensureTimingSegments();
+    if ( !isSelectedTrackLoadedForPlayback() || m_timingSegments.empty() ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
@@ -896,10 +1315,17 @@ void BpmMeasurementToolView::updateMetronomePlayback()
 
     const double audioTime =
         std::clamp(playbackState.audioTime, 0.0, totalTime);
+    const std::size_t activeSegmentIndex = findSegmentIndexForTime(audioTime);
+    const double      activeFirstBeatTime =
+        m_timingSegments[activeSegmentIndex].timestampSeconds;
+    const double activeBeatLength =
+        segmentBeatLengthSeconds(activeSegmentIndex);
     const bool gridChanged =
-        std::abs(m_metronomeScheduledFirstBeatTime - m_firstBeatTime) > 1e-9 ||
-        std::abs(m_metronomeScheduledBeatLength - m_beatLengthSeconds) > 1e-9;
-    const double jumpThreshold = std::max(0.25, m_beatLengthSeconds * 2.0);
+        m_metronomeScheduledSegmentIndex != activeSegmentIndex ||
+        std::abs(m_metronomeScheduledFirstBeatTime - activeFirstBeatTime) >
+            1e-9 ||
+        std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
+    const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
     const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
                           audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
@@ -909,14 +1335,23 @@ void BpmMeasurementToolView::updateMetronomePlayback()
     const double scheduleEndAudioTime = std::min(
         totalTime, audioTime + BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS);
 
-    int scheduledCount{ 0 };
+    int          scheduledCount{ 0 };
+    const double scheduledSegmentEnd =
+        m_metronomeScheduledSegmentIndex + 1 < m_timingSegments.size()
+            ? m_timingSegments[m_metronomeScheduledSegmentIndex + 1]
+                  .timestampSeconds
+            : totalTime;
     while ( scheduledCount < BPM_METRONOME_MAX_TRIGGERED_PER_FRAME ) {
         const double beatAudioTime =
-            m_firstBeatTime +
-            static_cast<double>(m_nextMetronomeBeatIndex) * m_beatLengthSeconds;
+            m_metronomeScheduledFirstBeatTime +
+            static_cast<double>(m_nextMetronomeBeatIndex) *
+                m_metronomeScheduledBeatLength;
         if ( beatAudioTime < audioTime - BPM_METRONOME_PAST_TRIGGER_WINDOW ) {
             ++m_nextMetronomeBeatIndex;
             continue;
+        }
+        if ( beatAudioTime >= scheduledSegmentEnd - 1e-9 ) {
+            break;
         }
         if ( beatAudioTime > scheduleEndAudioTime ) {
             break;
@@ -997,16 +1432,27 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 /// @param audioTime 当前音频调度时间，单位为秒。
 void BpmMeasurementToolView::resetMetronomeScheduler(double audioTime)
 {
-    if ( m_beatLengthSeconds <= 1e-6 ) {
+    ensureTimingSegments();
+    if ( m_timingSegments.empty() ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
 
+    const std::size_t segmentIndex = findSegmentIndexForTime(audioTime);
+    const double      beatLength   = segmentBeatLengthSeconds(segmentIndex);
+    if ( beatLength <= 1e-6 ) {
+        m_metronomeScheduleInitialized = false;
+        return;
+    }
+
+    const double firstBeatTime =
+        m_timingSegments[segmentIndex].timestampSeconds;
     m_nextMetronomeBeatIndex = static_cast<int64_t>(
-        std::ceil((audioTime - m_firstBeatTime) / m_beatLengthSeconds - 1e-6));
+        std::ceil((audioTime - firstBeatTime) / beatLength - 1e-6));
     m_lastMetronomeAudioTime          = audioTime;
-    m_metronomeScheduledFirstBeatTime = m_firstBeatTime;
-    m_metronomeScheduledBeatLength    = m_beatLengthSeconds;
+    m_metronomeScheduledFirstBeatTime = firstBeatTime;
+    m_metronomeScheduledBeatLength    = beatLength;
+    m_metronomeScheduledSegmentIndex  = segmentIndex;
     m_metronomeScheduleInitialized    = true;
 }
 
@@ -1112,6 +1558,7 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
                               Canvas::formatCanvasTime(hoverTime).c_str());
             if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
                 m_firstBeatTime = hoverTime;
+                syncPrimaryTimingFieldsToSegments();
             }
         }
 
@@ -1199,6 +1646,7 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
         ImGui::SetTooltip("%s", Canvas::formatCanvasTime(hoverTime).c_str());
         if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
             m_firstBeatTime = hoverTime;
+            syncPrimaryTimingFieldsToSegments();
         }
     }
 }
@@ -1215,20 +1663,16 @@ void BpmMeasurementToolView::drawBeatMarkers(ImDrawList&   drawList,
                                              double        viewStart,
                                              double        viewEnd) const
 {
-    if ( m_beatLengthSeconds <= 0.0 || viewEnd <= viewStart ||
+    if ( m_timingSegments.empty() || viewEnd <= viewStart ||
          rectMax.x <= rectMin.x ) {
         return;
     }
 
+    const auto&  segments = m_timingSegments;
     const double markerSeconds =
         std::clamp<double>(m_markerWidthMs / 1000.0, 0.004, 1.0);
     const double halfMarkerSeconds = markerSeconds * 0.5;
-    const double firstIndex =
-        std::ceil((viewStart - m_firstBeatTime - halfMarkerSeconds) /
-                  m_beatLengthSeconds);
-    const double lastIndex = std::floor(
-        (viewEnd - m_firstBeatTime + halfMarkerSeconds) / m_beatLengthSeconds);
-    const double width = rectMax.x - rectMin.x;
+    const double width             = rectMax.x - rectMin.x;
 
     auto timeToX = [&](double time) {
         return rectMin.x + static_cast<float>((time - viewStart) /
@@ -1243,64 +1687,106 @@ void BpmMeasurementToolView::drawBeatMarkers(ImDrawList&   drawList,
     const ImU32 firstBeatHandle = IM_COL32(255, 90, 90, 255);
 
     drawList.PushClipRect(rectMin, rectMax, true);
-    for ( double index = firstIndex; index <= lastIndex; index += 1.0 ) {
-        const double beatTime = m_firstBeatTime + index * m_beatLengthSeconds;
-        const float  lineX    = timeToX(beatTime);
-        const bool   isFirstBeatMarker = std::abs(index) < 0.5;
-        const float  halfBoxWidth =
-            std::max(3.0f,
-                     static_cast<float>(halfMarkerSeconds /
-                                        (viewEnd - viewStart) * width));
-        if ( lineX < rectMin.x - halfBoxWidth ||
-             lineX > rectMax.x + halfBoxWidth ) {
+    for ( std::size_t segmentIndex = 0; segmentIndex < segments.size();
+          ++segmentIndex ) {
+        const auto&  segment    = segments[segmentIndex];
+        const double beatLength = 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+        if ( beatLength <= 1e-6 ) {
             continue;
         }
 
-        drawList.AddLine(
-            ImVec2(lineX, rectMin.y), ImVec2(lineX, rectMax.y), white, 1.0f);
-
-        const float boxX1 = lineX - halfBoxWidth;
-        const float boxX2 = lineX + halfBoxWidth;
-        if ( boxX2 <= boxX1 ) {
+        const double segmentStart = segment.timestampSeconds;
+        const double segmentEnd =
+            segmentIndex + 1 < segments.size()
+                ? segments[segmentIndex + 1].timestampSeconds
+                : viewEnd + beatLength;
+        if ( segmentIndex + 1 < segments.size() &&
+             segmentEnd <= segmentStart + 1e-9 ) {
             continue;
         }
 
-        drawList.AddRectFilled(
-            ImVec2(boxX1, rectMin.y), ImVec2(boxX2, rectMax.y), fill);
-        drawList.AddRect(ImVec2(boxX1, rectMin.y),
-                         ImVec2(boxX2, rectMax.y),
-                         border,
-                         0.0f,
-                         0,
-                         1.5f);
-        if ( isFirstBeatMarker ) {
-            drawList.AddRectFilled(ImVec2(boxX1, rectMin.y),
-                                   ImVec2(boxX2, rectMax.y),
-                                   firstBeatFill);
-            drawList.AddRect(ImVec2(boxX1, rectMin.y),
-                             ImVec2(boxX2, rectMax.y),
-                             firstBeatBorder,
-                             0.0f,
-                             0,
-                             2.4f);
+        const double visibleStart =
+            segmentIndex == 0 ? viewStart : std::max(viewStart, segmentStart);
+        const double visibleEnd = std::min(viewEnd, segmentEnd);
+        if ( visibleEnd < visibleStart - halfMarkerSeconds ) {
+            continue;
+        }
+
+        const int64_t firstIndex = static_cast<int64_t>(std::ceil(
+            (visibleStart - segmentStart - halfMarkerSeconds) / beatLength));
+        const int64_t lastIndex  = static_cast<int64_t>(std::floor(
+            (visibleEnd - segmentStart + halfMarkerSeconds) / beatLength));
+        for ( int64_t index = firstIndex; index <= lastIndex; ++index ) {
+            const double beatTime =
+                segmentStart + static_cast<double>(index) * beatLength;
+            if ( segmentIndex > 0 && beatTime < segmentStart - 1e-6 ) {
+                continue;
+            }
+            if ( segmentIndex + 1 < segments.size() &&
+                 beatTime >= segmentEnd + 1e-6 ) {
+                continue;
+            }
+
+            const float lineX             = timeToX(beatTime);
+            const bool  isFirstBeatMarker = index == 0;
+            const float halfBoxWidth =
+                std::max(3.0f,
+                         static_cast<float>(halfMarkerSeconds /
+                                            (viewEnd - viewStart) * width));
+            if ( lineX < rectMin.x - halfBoxWidth ||
+                 lineX > rectMax.x + halfBoxWidth ) {
+                continue;
+            }
+
             drawList.AddLine(ImVec2(lineX, rectMin.y),
                              ImVec2(lineX, rectMax.y),
-                             firstBeatBorder,
-                             2.0f);
-        }
+                             white,
+                             1.0f);
 
-        const ImVec2 handleLeft(lineX - BEAT_MARKER_HANDLE_HALF_WIDTH,
-                                rectMin.y);
-        const ImVec2 handleRight(lineX + BEAT_MARKER_HANDLE_HALF_WIDTH,
-                                 rectMin.y);
-        const ImVec2 handleTip(lineX, rectMin.y + BEAT_MARKER_HANDLE_HEIGHT);
-        drawList.AddTriangleFilled(
-            handleLeft, handleRight, handleTip, IM_COL32(80, 65, 0, 230));
-        drawList.AddTriangleFilled(
-            ImVec2(handleLeft.x + 1.0f, handleLeft.y + 1.0f),
-            ImVec2(handleRight.x - 1.0f, handleRight.y + 1.0f),
-            ImVec2(handleTip.x, handleTip.y - 1.0f),
-            isFirstBeatMarker ? firstBeatHandle : border);
+            const float boxX1 = lineX - halfBoxWidth;
+            const float boxX2 = lineX + halfBoxWidth;
+            if ( boxX2 <= boxX1 ) {
+                continue;
+            }
+
+            drawList.AddRectFilled(
+                ImVec2(boxX1, rectMin.y), ImVec2(boxX2, rectMax.y), fill);
+            drawList.AddRect(ImVec2(boxX1, rectMin.y),
+                             ImVec2(boxX2, rectMax.y),
+                             border,
+                             0.0f,
+                             0,
+                             1.5f);
+            if ( isFirstBeatMarker ) {
+                drawList.AddRectFilled(ImVec2(boxX1, rectMin.y),
+                                       ImVec2(boxX2, rectMax.y),
+                                       firstBeatFill);
+                drawList.AddRect(ImVec2(boxX1, rectMin.y),
+                                 ImVec2(boxX2, rectMax.y),
+                                 firstBeatBorder,
+                                 0.0f,
+                                 0,
+                                 2.4f);
+                drawList.AddLine(ImVec2(lineX, rectMin.y),
+                                 ImVec2(lineX, rectMax.y),
+                                 firstBeatBorder,
+                                 2.0f);
+            }
+
+            const ImVec2 handleLeft(lineX - BEAT_MARKER_HANDLE_HALF_WIDTH,
+                                    rectMin.y);
+            const ImVec2 handleRight(lineX + BEAT_MARKER_HANDLE_HALF_WIDTH,
+                                     rectMin.y);
+            const ImVec2 handleTip(lineX,
+                                   rectMin.y + BEAT_MARKER_HANDLE_HEIGHT);
+            drawList.AddTriangleFilled(
+                handleLeft, handleRight, handleTip, IM_COL32(80, 65, 0, 230));
+            drawList.AddTriangleFilled(
+                ImVec2(handleLeft.x + 1.0f, handleLeft.y + 1.0f),
+                ImVec2(handleRight.x - 1.0f, handleRight.y + 1.0f),
+                ImVec2(handleTip.x, handleTip.y - 1.0f),
+                isFirstBeatMarker ? firstBeatHandle : border);
+        }
     }
     drawList.PopClipRect();
 }
@@ -1320,67 +1806,84 @@ void BpmMeasurementToolView::drawBeatSubdivisionLines(ImDrawList&   drawList,
                                                       double viewEnd) const
 {
     const int beatDivisor = std::clamp(m_beatDivisor, 1, 64);
-    if ( m_beatLengthSeconds <= 0.0 || viewEnd <= viewStart ||
+    if ( m_timingSegments.empty() || viewEnd <= viewStart ||
          rectMax.x <= rectMin.x || rectMax.y <= rectMin.y ) {
         return;
     }
 
-    const double stepDuration = m_beatLengthSeconds / beatDivisor;
-    if ( stepDuration <= 1e-6 ) {
-        return;
-    }
-
-    int64_t stepOffset = 0;
-    if ( viewStart > m_firstBeatTime ) {
-        stepOffset = static_cast<int64_t>(
-            std::ceil((viewStart - m_firstBeatTime) / stepDuration - 1e-4));
-    } else if ( viewStart < m_firstBeatTime ) {
-        stepOffset = static_cast<int64_t>(
-            std::floor((viewStart - m_firstBeatTime) / stepDuration + 1e-4));
-    }
-
-    double t = m_firstBeatTime + static_cast<double>(stepOffset) * stepDuration;
-    while ( t < viewStart - 1e-4 ) {
-        ++stepOffset;
-        t = m_firstBeatTime + static_cast<double>(stepOffset) * stepDuration;
-    }
-
+    const auto&  segments    = m_timingSegments;
     const double width       = rectMax.x - rectMin.x;
     const int    columnCount = std::max(1, static_cast<int>(std::ceil(width)));
-    int          lastColumn  = -1;
-    int          drawnCount  = 0;
     drawList.PushClipRect(rectMin, rectMax, true);
-    while ( t <= viewEnd + 1e-4 ) {
-        const float lineX =
-            rectMin.x +
-            static_cast<float>((t - viewStart) / (viewEnd - viewStart) * width);
-        const int column = static_cast<int>(std::floor(lineX - rectMin.x));
-        if ( column >= 0 && column < columnCount && column != lastColumn ) {
-            int beatIndex = static_cast<int>(stepOffset % beatDivisor);
-            if ( beatIndex < 0 ) {
-                beatIndex += beatDivisor;
-            }
-
-            int denominator = 1;
-            if ( beatIndex != 0 ) {
-                const int divisorGcd = std::gcd(beatIndex, beatDivisor);
-                denominator          = beatDivisor / divisorGcd;
-            }
-
-            const BeatLineStyle style = getBeatLineStyle(denominator);
-            drawList.AddLine(ImVec2(lineX, rectMin.y),
-                             ImVec2(lineX, rectMax.y),
-                             style.color,
-                             style.width);
-            lastColumn = column;
-            ++drawnCount;
-            if ( drawnCount >= columnCount ) {
-                break;
-            }
+    for ( std::size_t segmentIndex = 0; segmentIndex < segments.size();
+          ++segmentIndex ) {
+        const auto&  segment      = segments[segmentIndex];
+        const double beatLength   = 60.0 / std::clamp(segment.bpm, 1.0, 999.0);
+        const double stepDuration = beatLength / beatDivisor;
+        if ( stepDuration <= 1e-6 ) {
+            continue;
         }
 
-        ++stepOffset;
-        t = m_firstBeatTime + static_cast<double>(stepOffset) * stepDuration;
+        const double segmentStart = segment.timestampSeconds;
+        const double segmentEnd =
+            segmentIndex + 1 < segments.size()
+                ? segments[segmentIndex + 1].timestampSeconds
+                : viewEnd + stepDuration;
+        if ( segmentIndex + 1 < segments.size() &&
+             segmentEnd <= segmentStart + 1e-9 ) {
+            continue;
+        }
+
+        const double visibleStart =
+            segmentIndex == 0 ? viewStart : std::max(viewStart, segmentStart);
+        const double visibleEnd = std::min(viewEnd, segmentEnd);
+        if ( visibleEnd < visibleStart ) {
+            continue;
+        }
+
+        int64_t stepOffset = static_cast<int64_t>(
+            std::ceil((visibleStart - segmentStart) / stepDuration - 1e-4));
+        if ( segmentIndex == 0 && visibleStart < segmentStart ) {
+            stepOffset = static_cast<int64_t>(std::floor(
+                (visibleStart - segmentStart) / stepDuration + 1e-4));
+        }
+
+        double t =
+            segmentStart + static_cast<double>(stepOffset) * stepDuration;
+        while ( t < visibleStart - 1e-4 ) {
+            ++stepOffset;
+            t = segmentStart + static_cast<double>(stepOffset) * stepDuration;
+        }
+
+        int lastColumn = -1;
+        while ( t <= visibleEnd + 1e-4 ) {
+            const float lineX =
+                rectMin.x + static_cast<float>((t - viewStart) /
+                                               (viewEnd - viewStart) * width);
+            const int column = static_cast<int>(std::floor(lineX - rectMin.x));
+            if ( column >= 0 && column < columnCount && column != lastColumn ) {
+                int beatIndex = static_cast<int>(stepOffset % beatDivisor);
+                if ( beatIndex < 0 ) {
+                    beatIndex += beatDivisor;
+                }
+
+                int denominator = 1;
+                if ( beatIndex != 0 ) {
+                    const int divisorGcd = std::gcd(beatIndex, beatDivisor);
+                    denominator          = beatDivisor / divisorGcd;
+                }
+
+                const BeatLineStyle style = getBeatLineStyle(denominator);
+                drawList.AddLine(ImVec2(lineX, rectMin.y),
+                                 ImVec2(lineX, rectMax.y),
+                                 style.color,
+                                 style.width);
+                lastColumn = column;
+            }
+
+            ++stepOffset;
+            t = segmentStart + static_cast<double>(stepOffset) * stepDuration;
+        }
     }
     drawList.PopClipRect();
 }
@@ -1459,10 +1962,10 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
                                                   double        viewStart,
                                                   double viewEnd, int ownerId)
 {
+    ensureTimingSegments();
     const double canvasDuration = playbackCanvasDuration();
-    if ( m_beatLengthSeconds <= 0.0 || canvasDuration <= 0.0 ||
-         viewEnd <= viewStart || rectMax.x <= rectMin.x ||
-         rectMax.y <= rectMin.y ) {
+    if ( canvasDuration <= 0.0 || viewEnd <= viewStart ||
+         rectMax.x <= rectMin.x || rectMax.y <= rectMin.y ) {
         if ( m_beatMarkerDragOwner == ownerId ) {
             m_isBeatMarkerDragging = false;
             m_beatMarkerDragOwner  = 0;
@@ -1483,34 +1986,71 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
 
     const ImVec2 mousePos = ImGui::GetMousePos();
     int64_t      hoveredIndex{ 0 };
+    std::size_t  hoveredSegmentIndex{ 0 };
     float        hoveredDistance  = std::numeric_limits<float>::max();
     bool         hasHoveredHandle = false;
 
-    const int64_t firstIndex = static_cast<int64_t>(
-        std::ceil((viewStart - m_firstBeatTime) / m_beatLengthSeconds));
-    const int64_t lastIndex = static_cast<int64_t>(
-        std::floor((viewEnd - m_firstBeatTime) / m_beatLengthSeconds));
     constexpr int64_t MAX_SCANNED_BEAT_HANDLES = 4096;
-    const int64_t     clampedLastIndex =
-        std::min(lastIndex, firstIndex + MAX_SCANNED_BEAT_HANDLES);
+    int64_t           scannedHandleCount       = 0;
 
-    for ( int64_t index = firstIndex; index <= clampedLastIndex; ++index ) {
-        const double beatTime =
-            m_firstBeatTime + static_cast<double>(index) * m_beatLengthSeconds;
-        const float  lineX = timeToX(beatTime);
-        const ImVec2 handleMin(lineX - BEAT_MARKER_HANDLE_HALF_WIDTH - 2.0f,
-                               rectMin.y);
-        const ImVec2 handleMax(lineX + BEAT_MARKER_HANDLE_HALF_WIDTH + 2.0f,
-                               rectMin.y + BEAT_MARKER_HANDLE_HEIGHT + 3.0f);
-        if ( !ImGui::IsMouseHoveringRect(handleMin, handleMax, true) ) {
+    for ( std::size_t segmentIndex = 0;
+          segmentIndex < m_timingSegments.size() &&
+          scannedHandleCount < MAX_SCANNED_BEAT_HANDLES;
+          ++segmentIndex ) {
+        const auto&  segment      = m_timingSegments[segmentIndex];
+        const double beatLength   = segmentBeatLengthSeconds(segmentIndex);
+        const double segmentStart = segment.timestampSeconds;
+        const double segmentEnd =
+            segmentIndex + 1 < m_timingSegments.size()
+                ? m_timingSegments[segmentIndex + 1].timestampSeconds
+                : viewEnd + beatLength;
+        if ( beatLength <= 1e-6 ||
+             (segmentIndex + 1 < m_timingSegments.size() &&
+              segmentEnd <= segmentStart + 1e-9) ) {
             continue;
         }
 
-        const float distance = std::abs(mousePos.x - lineX);
-        if ( distance < hoveredDistance ) {
-            hoveredDistance  = distance;
-            hoveredIndex     = index;
-            hasHoveredHandle = true;
+        const double visibleStart =
+            segmentIndex == 0 ? viewStart : std::max(viewStart, segmentStart);
+        const double visibleEnd = std::min(viewEnd, segmentEnd);
+        if ( visibleEnd < visibleStart ) {
+            continue;
+        }
+
+        const int64_t firstIndex =
+            std::max<int64_t>(1,
+                              static_cast<int64_t>(std::ceil(
+                                  (visibleStart - segmentStart) / beatLength)));
+        const int64_t lastIndex = static_cast<int64_t>(
+            std::floor((visibleEnd - segmentStart) / beatLength));
+        for ( int64_t index = firstIndex;
+              index <= lastIndex &&
+              scannedHandleCount < MAX_SCANNED_BEAT_HANDLES;
+              ++index, ++scannedHandleCount ) {
+            const double beatTime =
+                segmentStart + static_cast<double>(index) * beatLength;
+            if ( segmentIndex + 1 < m_timingSegments.size() &&
+                 beatTime >= segmentEnd + 1e-6 ) {
+                continue;
+            }
+
+            const float  lineX = timeToX(beatTime);
+            const ImVec2 handleMin(lineX - BEAT_MARKER_HANDLE_HALF_WIDTH - 2.0f,
+                                   rectMin.y);
+            const ImVec2 handleMax(
+                lineX + BEAT_MARKER_HANDLE_HALF_WIDTH + 2.0f,
+                rectMin.y + BEAT_MARKER_HANDLE_HEIGHT + 3.0f);
+            if ( !ImGui::IsMouseHoveringRect(handleMin, handleMax, true) ) {
+                continue;
+            }
+
+            const float distance = std::abs(mousePos.x - lineX);
+            if ( distance < hoveredDistance ) {
+                hoveredDistance     = distance;
+                hoveredIndex        = index;
+                hoveredSegmentIndex = segmentIndex;
+                hasHoveredHandle    = true;
+            }
         }
     }
 
@@ -1519,10 +2059,11 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
     }
 
     if ( hasHoveredHandle && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
-        m_isBeatMarkerDragging = true;
-        m_isTimelinePanning    = false;
-        m_beatMarkerDragOwner  = ownerId;
-        m_draggedBeatIndex     = hoveredIndex;
+        m_isBeatMarkerDragging    = true;
+        m_isTimelinePanning       = false;
+        m_beatMarkerDragOwner     = ownerId;
+        m_draggedBeatIndex        = hoveredIndex;
+        m_draggedBeatSegmentIndex = hoveredSegmentIndex;
     }
 
     if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
@@ -1537,19 +2078,33 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
         return;
     }
 
+    if ( m_draggedBeatSegmentIndex >= m_timingSegments.size() ||
+         m_draggedBeatIndex <= 0 ) {
+        return;
+    }
+
     const double rectWidth = std::max(1.0f, rectMax.x - rectMin.x);
     const double relX =
         std::clamp<double>((mousePos.x - rectMin.x) / rectWidth, 0.0, 1.0);
-    const double targetBeatTime = viewStart + relX * (viewEnd - viewStart);
-    const double nextFirstBeat =
-        targetBeatTime -
-        static_cast<double>(m_draggedBeatIndex) * m_beatLengthSeconds;
-    m_firstBeatTime =
-        clampFirstBeatTime(nextFirstBeat, m_beatLengthSeconds, canvasDuration);
+    const double targetBeatTime = std::clamp<double>(
+        viewStart + relX * (viewEnd - viewStart), 0.0, canvasDuration);
+    auto&        segment = m_timingSegments[m_draggedBeatSegmentIndex];
+    const double minTargetTime =
+        segment.timestampSeconds +
+        static_cast<double>(m_draggedBeatIndex) * (60.0 / 999.0);
+    const double clampedTargetTime = std::max(minTargetTime, targetBeatTime);
+    const double beatLength = (clampedTargetTime - segment.timestampSeconds) /
+                              static_cast<double>(m_draggedBeatIndex);
+    if ( beatLength > 1e-6 && std::isfinite(beatLength) ) {
+        segment.bpm = std::clamp(60.0 / beatLength, 1.0, 999.0);
+        syncPrimaryTimingFieldsFromSegments();
+        resetMetronomeScheduler(clampedTargetTime);
+    }
 
-    const std::string tooltip = Canvas::formatCanvasTime(m_firstBeatTime) +
-                                " / " +
-                                Canvas::formatCanvasTime(targetBeatTime);
+    const std::string tooltip =
+        fmt::format("{} / {:.3f} BPM",
+                    Canvas::formatCanvasTime(clampedTargetTime),
+                    segment.bpm);
     ImGui::SetTooltip("%s", tooltip.c_str());
 }
 

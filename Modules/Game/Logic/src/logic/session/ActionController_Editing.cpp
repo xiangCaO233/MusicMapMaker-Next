@@ -7,6 +7,7 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
@@ -152,6 +153,164 @@ void appendDeletedPolylineChildren(
         }
     }
 }
+
+/// @brief 收集当前 Timeline Registry 中的全部事件并按时间排序。
+std::vector<TimelineComponent> collectSortedTimelineComponents(
+    SessionContext& ctx)
+{
+    std::vector<TimelineComponent> timelines;
+    auto view = ctx.timelineRegistry.view<TimelineComponent>();
+    for ( auto entity : view ) {
+        timelines.push_back(view.get<TimelineComponent>(entity));
+    }
+
+    std::stable_sort(
+        timelines.begin(),
+        timelines.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            return static_cast<int>(lhs.m_effect) <
+                   static_cast<int>(rhs.m_effect);
+        });
+    return timelines;
+}
+
+/// @brief 将指定 Timeline 列表整体写回当前会话。
+void replaceTimelineComponents(SessionContext&                       ctx,
+                               const std::vector<TimelineComponent>& timelines)
+{
+    std::vector<entt::entity> entities;
+    auto view = ctx.timelineRegistry.view<TimelineComponent>();
+    for ( auto entity : view ) {
+        entities.push_back(entity);
+    }
+    for ( auto entity : entities ) {
+        ctx.timelineRegistry.destroy(entity);
+    }
+
+    for ( const auto& timeline : timelines ) {
+        auto entity = ctx.timelineRegistry.create();
+        ctx.timelineRegistry.emplace<TimelineComponent>(entity, timeline);
+    }
+
+    ctx.m_needsTimingsSync = true;
+    ctx.isBpmEventsDirty   = true;
+    ctx.isTransformDirty   = true;
+    ctx.isNoteStatsDirty   = true;
+    if ( auto* cache =
+             ctx.timelineRegistry.ctx().find<System::ScrollCache>() ) {
+        cache->isDirty = true;
+    }
+}
+
+/// @brief 归一化批量替换后的 Timeline 列表。
+std::vector<TimelineComponent> normalizeReplacementTimelines(
+    std::vector<TimelineComponent> timelines)
+{
+    std::erase_if(timelines, [](const auto& timeline) {
+        return !std::isfinite(timeline.m_timestamp) ||
+               !std::isfinite(timeline.m_value) ||
+               (timeline.m_effect == ::MMM::TimingEffect::BPM &&
+                timeline.m_value <= 0.0);
+    });
+
+    std::stable_sort(
+        timelines.begin(),
+        timelines.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            return static_cast<int>(lhs.m_effect) <
+                   static_cast<int>(rhs.m_effect);
+        });
+
+    std::vector<TimelineComponent> normalized;
+    normalized.reserve(timelines.size());
+    for ( const auto& timeline : timelines ) {
+        if ( timeline.m_effect == ::MMM::TimingEffect::BPM ) {
+            auto duplicateIt = std::find_if(
+                normalized.begin(),
+                normalized.end(),
+                [&](const auto& existing) {
+                    return existing.m_effect == ::MMM::TimingEffect::BPM &&
+                           std::abs(existing.m_timestamp -
+                                    timeline.m_timestamp) < 1e-6;
+                });
+            if ( duplicateIt != normalized.end() ) {
+                *duplicateIt = timeline;
+                continue;
+            }
+        }
+        normalized.push_back(timeline);
+    }
+    return normalized;
+}
+
+/// @brief 批量替换 Timeline 的可撤销动作。
+class ReplaceTimelinesAction : public IEditorAction
+{
+public:
+    /// @brief 构造批量替换 Timeline 动作。
+    /// @param before 替换前的 Timeline 列表。
+    /// @param after 替换后的 Timeline 列表。
+    /// @param beforePreferenceBpm 替换前的首选 BPM。
+    /// @param afterPreferenceBpm 替换后的首选 BPM。
+    ReplaceTimelinesAction(std::vector<TimelineComponent> before,
+                           std::vector<TimelineComponent> after,
+                           double                         beforePreferenceBpm,
+                           double                         afterPreferenceBpm)
+        : m_before(std::move(before))
+        , m_after(std::move(after))
+        , m_beforePreferenceBpm(beforePreferenceBpm)
+        , m_afterPreferenceBpm(afterPreferenceBpm)
+    {
+    }
+
+    /// @brief 执行批量替换。
+    /// @param ctx 会话上下文引用。
+    void execute(SessionContext& ctx) override
+    {
+        replaceTimelineComponents(ctx, m_after);
+        if ( ctx.currentBeatmap ) {
+            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm =
+                m_afterPreferenceBpm;
+        }
+    }
+
+    /// @brief 撤销批量替换。
+    /// @param ctx 会话上下文引用。
+    void undo(SessionContext& ctx) override
+    {
+        replaceTimelineComponents(ctx, m_before);
+        if ( ctx.currentBeatmap ) {
+            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm =
+                m_beforePreferenceBpm;
+        }
+    }
+
+    /// @brief 重做批量替换。
+    /// @param ctx 会话上下文引用。
+    void redo(SessionContext& ctx) override { execute(ctx); }
+
+    /// @brief 获取动作名称。
+    std::string getName() const override { return "Replace Timings"; }
+
+private:
+    /// @brief 替换前的 Timeline 列表。
+    std::vector<TimelineComponent> m_before;
+
+    /// @brief 替换后的 Timeline 列表。
+    std::vector<TimelineComponent> m_after;
+
+    /// @brief 替换前的谱面首选 BPM。
+    double m_beforePreferenceBpm{ 120.0 };
+
+    /// @brief 替换后的谱面首选 BPM。
+    double m_afterPreferenceBpm{ 120.0 };
+};
 
 // --- Editing Handlers ---
 
@@ -560,6 +719,70 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     TimelineComponent newTl{ cmd.time, cmd.type, cmd.value };
     auto              action = std::make_unique<TimelineAction>(
         TimelineAction::Type::Create, entt::null, std::nullopt, newTl);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
+void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
+{
+    if ( !m_ctx.currentBeatmap ) {
+        return;
+    }
+
+    const std::vector<TimelineComponent> before =
+        collectSortedTimelineComponents(m_ctx);
+    std::vector<TimelineComponent> after;
+    if ( cmd.keepNonBpmTimings ) {
+        for ( const auto& timeline : before ) {
+            if ( timeline.m_effect != ::MMM::TimingEffect::BPM ) {
+                after.push_back(timeline);
+            }
+        }
+    }
+
+    double afterPreferenceBpm =
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
+            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0;
+    bool hasBpm = false;
+    for ( const auto& timing : cmd.timings ) {
+        if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) {
+            continue;
+        }
+
+        double bpm = timing.m_timingEffectParameter > 0.0
+                         ? timing.m_timingEffectParameter
+                         : timing.m_bpm;
+        if ( !(bpm > 0.0) || !std::isfinite(bpm) ||
+             !std::isfinite(timing.m_timestamp) ) {
+            continue;
+        }
+
+        bpm = std::clamp(bpm, 1.0, 999.0);
+        TimelineComponent timeline;
+        timeline.m_timestamp = std::max(0.0, timing.m_timestamp / 1000.0);
+        timeline.m_effect    = ::MMM::TimingEffect::BPM;
+        timeline.m_value     = bpm;
+        timeline.m_metadata  = timing.m_metadata;
+        after.push_back(timeline);
+        if ( !hasBpm ) {
+            afterPreferenceBpm = bpm;
+            hasBpm             = true;
+        }
+    }
+
+    if ( !hasBpm ) {
+        return;
+    }
+
+    after = normalizeReplacementTimelines(std::move(after));
+    const double beforePreferenceBpm =
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
+            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : afterPreferenceBpm;
+
+    auto action = std::make_unique<ReplaceTimelinesAction>(
+        before, after, beforePreferenceBpm, afterPreferenceBpm);
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
 }

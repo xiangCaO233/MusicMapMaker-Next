@@ -3,6 +3,7 @@
 #include "config/VisualConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
+#include "mmm/timing/Timing.h"
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/tools/BpmAutoDetector.h"
 #include <array>
@@ -122,11 +123,41 @@ private:
         std::optional<BpmAutoTimingResult> autoTimingResult;
     };
 
+    /// @brief BPM 工具中一个可手动编辑的变速段落。
+    struct BpmTimingSegment {
+        /// @brief 段落首拍时间，单位为秒。
+        double timestampSeconds{ 0.0 };
+
+        /// @brief 段落 BPM。
+        double bpm{ 120.0 };
+    };
+
+    /// @brief 应用测量结果时可选的已打开谱面。
+    struct OpenBeatmapApplyOption {
+        /// @brief Session 注册表索引。
+        int32_t sessionIndex{ -1 };
+
+        /// @brief 画布 Camera ID。
+        std::string cameraId;
+
+        /// @brief UI 显示名称。
+        std::string displayName;
+    };
+
     /// @brief 尝试消费后台分析结果。
     void consumePendingAnalysis();
 
     /// @brief 绘制右侧测量参数面板。
     void renderControlPanel();
+
+    /// @brief 绘制 BPM 段落列表和应用入口。
+    void renderTimingSegmentsPanel();
+
+    /// @brief 绘制自动测偏移后的应用确认弹窗。
+    void renderAutoApplyOffsetPopup();
+
+    /// @brief 绘制将测量结果应用到已打开谱面的弹窗。
+    void renderApplyTimingPopup();
 
     /// @brief 绘制试听播放、暂停、进度和倍速控制。
     /// @warning UI
@@ -241,6 +272,40 @@ private:
 
     /// @brief 请求自动测量当前选择的音频轨道。
     void requestAutoMeasureSelectedTrack();
+
+    /// @brief 确保至少存在一个 BPM 段落，并同步旧单段字段。
+    void ensureTimingSegments();
+
+    /// @brief 归一化 BPM 段落列表，保持按时间排序且数值有效。
+    void normalizeTimingSegments();
+
+    /// @brief 从第一段同步兼容旧绘制/输入路径的字段。
+    void syncPrimaryTimingFieldsFromSegments();
+
+    /// @brief 将兼容旧输入路径的字段写回第一段。
+    void syncPrimaryTimingFieldsToSegments();
+
+    /// @brief 查找指定时间所在的 BPM 段落索引。
+    /// @param timeSeconds 查询时间，单位为秒。
+    /// @return 段落索引。
+    std::size_t findSegmentIndexForTime(double timeSeconds) const;
+
+    /// @brief 获取段落拍长。
+    /// @param segmentIndex 段落索引。
+    /// @return 单拍时长，单位为秒。
+    double segmentBeatLengthSeconds(std::size_t segmentIndex) const;
+
+    /// @brief 将当前段落列表转换为可写入谱面的 BPM Timing 列表。
+    std::vector<::MMM::Timing> makeMeasuredTimings() const;
+
+    /// @brief 收集当前已打开且可写入的谱面列表。
+    std::vector<OpenBeatmapApplyOption> collectApplyBeatmapOptions() const;
+
+    /// @brief 请求打开应用到谱面的弹窗。
+    void requestOpenApplyTimingPopup();
+
+    /// @brief 将测量结果应用到当前弹窗选中的谱面。
+    void applyMeasuredTimingsToSelectedBeatmap();
 
     /// @brief 查找当前项目默认用于 BPM 自动测量的音频资源 ID。
     /// @return 优先返回主音轨 ID，否则返回首个音频资源 ID；不存在时为空。
@@ -435,6 +500,27 @@ private:
 
     /// @brief 当前正在拖动的整拍索引。
     int64_t m_draggedBeatIndex{ 0 };
+
+    /// @brief 当前正在拖动的整拍所在 BPM 段落索引。
+    std::size_t m_draggedBeatSegmentIndex{ 0 };
+
+    /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
+    std::vector<BpmTimingSegment> m_timingSegments;
+
+    /// @brief 是否在下一帧打开自动测偏移应用确认弹窗。
+    bool m_shouldOpenAutoApplyPopup{ false };
+
+    /// @brief 是否在下一帧打开应用到谱面弹窗。
+    bool m_shouldOpenApplyTimingPopup{ false };
+
+    /// @brief 应用到谱面时是否保留原有非 BPM 流速/特效线。
+    bool m_keepNonBpmTimingsOnApply{ false };
+
+    /// @brief 当前应用目标 Session 索引。
+    int32_t m_applyTargetSessionIndex{ -1 };
+
+    /// @brief 当前节拍器调度游标对应的 BPM 段落索引。
+    std::size_t m_metronomeScheduledSegmentIndex{ 0 };
 
     /// @brief 波形缓存时间分辨率，单位为点/秒。
     double m_wavePointsPerSecond{ 200.0 };

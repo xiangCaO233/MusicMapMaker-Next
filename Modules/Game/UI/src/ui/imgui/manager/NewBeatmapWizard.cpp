@@ -520,13 +520,17 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 : Config::pathToUtf8(m_selectedAudioPath);
 
         const char* measureBpmLabel =
-            TR("ui.wizard.new_beatmap.measure_bpm").data();
+            TR("ui.wizard.new_beatmap.measure_bpm_manual").data();
+        const char* autoBpmLabel =
+            TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
         const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
+                                      ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
                                       ImGui::GetStyle().FramePadding.x * 2.0f;
         const float comboWidth =
             std::max(120.0f,
                      ImGui::GetContentRegionAvail().x - measureBpmWidth -
-                         ImGui::GetStyle().ItemSpacing.x);
+                         autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
 
         ImGui::SetNextItemWidth(comboWidth);
         if ( ImGui::BeginCombo("##NewBeatmapAudioSelect",
@@ -550,7 +554,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         if ( m_selectedAudioTrackId.empty() ) {
             ImGui::BeginDisabled();
         }
-        if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+        auto openBpmTool = [&](bool autoMeasure) {
             std::string viewName = "BpmMeasurementTool";
             auto*       tool =
                 sourceManager->getView<BpmMeasurementToolView>(viewName);
@@ -561,10 +565,21 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 sourceManager->registerView(viewName, std::move(toolView));
             }
             if ( tool ) {
-                tool->openWithAudioTrack(m_selectedAudioTrackId);
+                if ( autoMeasure ) {
+                    tool->openWithAutoMeasurement(m_selectedAudioTrackId);
+                } else {
+                    tool->openWithAudioTrack(m_selectedAudioTrackId);
+                }
             }
             m_isOpen = false;
             ImGui::CloseCurrentPopup();
+        };
+        if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+            openBpmTool(false);
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
+            openBpmTool(true);
         }
         if ( m_selectedAudioTrackId.empty() ) {
             ImGui::EndDisabled();
