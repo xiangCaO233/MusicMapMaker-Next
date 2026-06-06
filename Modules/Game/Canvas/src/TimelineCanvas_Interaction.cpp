@@ -6,6 +6,9 @@
 namespace MMM::Canvas
 {
 
+/// @brief 处理 Timeline 画布右键创建 Timing 的弹窗初始化。
+/// @warning UI 热路径：仅在右键点击时间线画布时执行；允许使用当前快照的
+/// Scroll 映射计算点击时间，禁止引入文件系统访问或跨线程阻塞。
 void TimelineCanvas::handleRightClick(const ImVec2& size)
 {
     auto&  visual        = Config::AppConfig::instance().getVisualConfig();
@@ -81,12 +84,8 @@ void TimelineCanvas::handleRightClick(const ImVec2& size)
     }
 
     m_isCreatePopupOpen = true;
-    if ( m_createPosType == 1 ) {
-        m_createTimeManual = m_currentSnapshot->currentTime;
-    } else {
-        m_createTimeManual =
-            m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
-    }
+    m_createPosType     = 1;
+    m_createTimeManual  = m_currentSnapshot->currentTime;
     ImGui::OpenPopup("TimelineCreateEvent");
 }
 
