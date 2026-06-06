@@ -29,6 +29,9 @@ namespace
 constexpr const wchar_t* kStartupProgressWindowClass =
     L"MMMStartupProgressDialogWindow";
 
+/// @brief Win32 等待光标资源 ID。
+constexpr int kWaitCursorResourceId = 32514;
+
 /// @brief 将 UTF-8 文本转换为 Win32 宽字符文本。
 /// @param text UTF-8 文本。
 /// @return 可传给 Win32 W 接口的宽字符文本。
@@ -94,9 +97,10 @@ LRESULT CALLBACK startupProgressWindowProc(HWND window, UINT message,
 bool registerStartupProgressWindowClass()
 {
     WNDCLASSW windowClass{};
-    windowClass.lpfnWndProc   = startupProgressWindowProc;
-    windowClass.hInstance     = GetModuleHandleW(nullptr);
-    windowClass.hCursor       = LoadCursorW(nullptr, IDC_WAIT);
+    windowClass.lpfnWndProc = startupProgressWindowProc;
+    windowClass.hInstance   = GetModuleHandleW(nullptr);
+    windowClass.hCursor =
+        LoadCursorW(nullptr, MAKEINTRESOURCEW(kWaitCursorResourceId));
     windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
     windowClass.lpszClassName = kStartupProgressWindowClass;
 
