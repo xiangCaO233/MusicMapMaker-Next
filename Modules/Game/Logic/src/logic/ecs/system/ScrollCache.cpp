@@ -51,7 +51,9 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     if ( m_rebuildScratch.empty() ) {
         m_segments.clear();
         m_absYRangeIndex.clear();
-        isDirty = false;
+        m_microImpulseWindows.clear();
+        m_hasJumpEffects = false;
+        isDirty          = false;
         return;
     }
 
@@ -144,6 +146,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     double currentHs         = 1.0;
     double lastTime = std::min(0.0, m_rebuildScratch[0].component->m_timestamp);
     double currentAbsY = 0.0;
+    m_hasJumpEffects   = false;
 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
     newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
@@ -183,7 +186,9 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().effects |= SCROLL_EFFECT_JUMP;
             newSegments.back().jumpEntity = entry.entity;
             newSegments.back().jumpValue  = tl->m_value;
+            m_hasJumpEffects              = true;
             if ( enableEffects ) {
+                // Malody Jump 在滚动积分上制造瞬时断层。
                 currentAbsY += (tl->m_value / 1000.0) * currentSpeed;
                 newSegments.back().absY = currentAbsY;
             }
@@ -453,10 +458,7 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
 
 bool ScrollCache::hasJumpEffects() const
 {
-    return std::any_of(
-        m_segments.begin(), m_segments.end(), [](const ScrollSegment& seg) {
-            return (seg.effects & SCROLL_EFFECT_JUMP) != 0;
-        });
+    return m_hasJumpEffects;
 }
 
 double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,

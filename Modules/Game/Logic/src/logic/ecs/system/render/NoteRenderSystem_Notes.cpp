@@ -27,7 +27,7 @@ constexpr double MAX_UI_INTERPOLATION_SECONDS = 0.1;
 /// @param visualPaddingPixels 当前皮肤与缩放下的候选视觉余量。
 /// @param interpolationSeconds UI 亚帧补偿需要覆盖的播放时间。
 /// @warning 热路径：每次音符快照生成时执行；只能使用已缓存排序实体与
-/// ScrollCache，不得完整遍历除高复杂 SV 索引失效兜底外的全量实体。
+/// ScrollCache，不得完整遍历除 Jump 断层或高复杂 SV 索引失效兜底外的全量实体。
 static std::vector<entt::entity> getNotesInRange(
     entt::registry& registry, const ScrollCache* cache, double currentTime,
     double currentAbsY, float judgmentLineY, float topY, float bottomY,
@@ -268,8 +268,10 @@ static std::vector<entt::entity> getNotesInRange(
         return carrierEnd;
     };
 
-    if ( cache->getSegments().size() > 2048 &&
-         cache->getSegments().size() > count ) {
+    const bool needsExactDisplayScan =
+        cache->hasJumpEffects() || (cache->getSegments().size() > 2048 &&
+                                    cache->getSegments().size() > count);
+    if ( needsExactDisplayScan ) {
         result.reserve(count);
         double maxDelta =
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);

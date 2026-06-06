@@ -34,9 +34,9 @@ struct ScrollSegment {
     entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
     double       bpmValue{ 0.0 };
     double       scrollValue{ 0.0 };
-    double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
-    double       hsValue{ 1.0 };    /// @brief HS 原始参数
-    double       hs{ 1.0 };         /// @brief 当前区间生效的 HS 倍率
+    double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒。
+    double       hsValue{ 1.0 };    /// @brief HS 原始参数。
+    double       hs{ 1.0 };         /// @brief 当前区间生效的 HS 倍率。
 };
 
 constexpr uint32_t SCROLL_EFFECT_BPM    = 1 << 0;
@@ -64,7 +64,7 @@ public:
     void rebuild(const entt::registry&       timelineRegistry,
                  const Config::EditorConfig& config, MMM::BeatMap* beatmap);
 
-    /// @brief 获取给定时间戳对应的绝对 Y 坐标 (对数时间复杂度)
+    /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;
 
     /// @brief 获取播放渲染锚点使用的绝对 Y 坐标。
@@ -127,6 +127,9 @@ private:
 
     /// @brief 按起始时间排序的亚帧抵消脉冲窗口。
     std::vector<MicroImpulseWindow> m_microImpulseWindows;
+
+    /// @brief 当前缓存是否包含 Jump 断层。
+    bool m_hasJumpEffects{ false };
 
     struct TimingEntry {
         entt::entity             entity;
