@@ -1,6 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "ui/imgui/menu/MainMenuView.h"
 
+#include "audio/AudioManager.h"
 #include "audio/AudioSpeedExportService.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -535,6 +536,8 @@ void MainMenuView::consumeBeatmapSpeedExportQueues()
 
         if ( result.success && result.beatmap ) {
             auto& engine = Logic::EditorEngine::instance();
+            Audio::AudioManager::instance().invalidateTrackCache(
+                Config::pathToUtf8(result.audioPath));
             engine.handleImportAudio(Logic::CmdImportAudio{
                 Config::pathToUtf8(result.audioPath), AudioTrackType::Main });
             engine.syncProjectWithFile(result.mapPath);

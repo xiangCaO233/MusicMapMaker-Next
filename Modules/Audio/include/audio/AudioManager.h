@@ -362,6 +362,10 @@ public:
     /// @return 当前 BGM 文件路径；未加载时返回空字符串。
     const std::string& getLoadedBGMPath() const;
 
+    /// @brief 使指定音频文件的解码缓存失效。
+    /// @param filePath UTF-8 音频文件绝对路径。
+    void invalidateTrackCache(const std::string& filePath);
+
     /// @brief 加载或复用音频资源池中的轨道，供离线分析工具读取。
     /// @param filePath 音频文件绝对路径。
     /// @return 加载成功时返回音频轨道；失败时返回空指针。

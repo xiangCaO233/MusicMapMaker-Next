@@ -1,4 +1,5 @@
 #include "audio/AudioSpeedExportService.h"
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <fstream>
 #include <ice/config/config.hpp>
 #include <ice/manage/AudioBuffer.hpp>
+#include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
 #include <ice/thread/ThreadPool.hpp>
@@ -183,6 +185,14 @@ bool near(double actual, double expected)
     return std::abs(actual - expected) < 1e-6;
 }
 
+/// @brief 计算带少量编码器延迟容忍的最低读回帧数。
+/// @param expectedFrames 期望输出帧数。
+/// @return 最低可接受读回帧数。
+std::size_t minimumDecodedFrames(std::size_t expectedFrames)
+{
+    return expectedFrames > 100 ? expectedFrames * 95 / 100 : expectedFrames;
+}
+
 /// @brief 创建测试用立体声 WAV。
 /// @param path 输出路径。
 /// @param frames 帧数。
@@ -260,8 +270,10 @@ bool checkEngineCanReadTail(const std::filesystem::path& path,
 {
     ice::ThreadPool threadPool(1);
     auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();
-    auto track          = ice::AudioTrack::create(
-        path.string(), threadPool, decoderFactory, ice::CachingStrategy::CACHY);
+    auto track          = ice::AudioTrack::create(MMM::Config::pathToUtf8(path),
+                                                  threadPool,
+                                                  decoderFactory,
+                                                  ice::CachingStrategy::CACHY);
     if ( !track ) {
         return check(false, label + " engine track created");
     }
@@ -299,16 +311,23 @@ int main()
     std::error_code cleanupError;
     std::filesystem::remove_all(root, cleanupError);
 
-    const auto inputPath       = root / "input.wav";
-    const auto largeInputPath  = root / "large_input.wav";
-    const auto outputPath      = root / "output_2x.wav";
-    const auto keepPitchOutput = root / "output_2x_keep_pitch.wav";
-    const auto paddedOutput    = root / "output_2x_padded.wav";
+    const auto inputPath         = root / "input.wav";
+    const auto largeInputPath    = root / "large_input.wav";
+    const auto longInputPath     = root / "long_input.wav";
+    const auto outputPath        = root / "output_2x.wav";
+    const auto keepPitchOutput   = root / "output_2x_keep_pitch.wav";
+    const auto paddedOutput      = root / "output_2x_padded.wav";
+    const auto longOggOutput     = root / "long_output_1_2x.ogg";
+    const auto cacheReloadOutput = root / "cache_reload.ogg";
+    const auto unicodeOutputPath = root / MMM::Config::utf8ToPath("中文目录") /
+                                   MMM::Config::utf8ToPath("输出_倍速_2x.ogg");
 
     bool ok = true;
     ok &= check(writeFixtureWav(inputPath, 4800, 48000), "fixture wav created");
     ok &= check(writeFixtureWav(largeInputPath, 96000, 48000),
                 "large fixture wav created");
+    ok &= check(writeFixtureWav(longInputPath, 48000 * 20, 48000),
+                "long fixture wav created");
     ok &= checkEngineCanReadTail(largeInputPath, 96000, "large fixture");
 
     MMM::Audio::AudioSpeedExportOptions options;
@@ -371,9 +390,105 @@ int main()
         ok &= check(containerResult.outputFrames == 48000,
                     label + " export receiver frame count");
         if ( containerResult.success ) {
-            ok &= checkEngineCanReadTail(containerOutput, 1, label + " output");
+            ok &= checkEngineCanReadTail(
+                containerOutput,
+                minimumDecodedFrames(containerResult.outputFrames),
+                label + " output");
         }
     }
+
+    MMM::Audio::AudioSpeedExportOptions longOggOptions;
+    longOggOptions.inputPath     = longInputPath;
+    longOggOptions.outputPath    = longOggOutput;
+    longOggOptions.speed         = 1.2;
+    longOggOptions.preservePitch = false;
+    const auto longOggResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(longOggOptions);
+    if ( !longOggResult.success ) {
+        XERROR("[audio-speed-export] long ogg error: {}",
+               longOggResult.errorMessage);
+    }
+    ok &= check(longOggResult.success, "long ogg speed export succeeds");
+    ok &=
+        check(longOggResult.outputFrames > 0, "long ogg export writes frames");
+    if ( longOggResult.success ) {
+        ok &= checkEngineCanReadTail(
+            longOggOutput,
+            minimumDecodedFrames(longOggResult.outputFrames),
+            "long ogg output");
+    }
+
+    std::error_code unicodeDirectoryError;
+    std::filesystem::create_directories(unicodeOutputPath.parent_path(),
+                                        unicodeDirectoryError);
+    ok &= check(!unicodeDirectoryError, "unicode output directory created");
+
+    MMM::Audio::AudioSpeedExportOptions unicodeOptions;
+    unicodeOptions.inputPath     = inputPath;
+    unicodeOptions.outputPath    = unicodeOutputPath;
+    unicodeOptions.speed         = 2.0;
+    unicodeOptions.preservePitch = false;
+    const auto unicodeResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(unicodeOptions);
+    if ( !unicodeResult.success ) {
+        XERROR("[audio-speed-export] unicode path error: {}",
+               unicodeResult.errorMessage);
+    }
+    ok &= check(unicodeResult.success, "unicode path speed export succeeds");
+    ok &= check(unicodeResult.outputFrames == 2400,
+                "unicode path export receiver frame count");
+    if ( unicodeResult.success ) {
+        std::error_code outputExistsError;
+        ok &= check(std::filesystem::is_regular_file(unicodeOutputPath,
+                                                     outputExistsError) &&
+                        !outputExistsError,
+                    "unicode path output file exists");
+        ok &= checkEngineCanReadTail(
+            unicodeOutputPath,
+            minimumDecodedFrames(unicodeResult.outputFrames),
+            "unicode path output");
+    }
+
+    MMM::Audio::AudioSpeedExportOptions cacheFirstOptions;
+    cacheFirstOptions.inputPath     = inputPath;
+    cacheFirstOptions.outputPath    = cacheReloadOutput;
+    cacheFirstOptions.speed         = 2.0;
+    cacheFirstOptions.preservePitch = false;
+    const auto cacheFirstResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(cacheFirstOptions);
+    ok &= check(cacheFirstResult.success, "cache reload first export succeeds");
+
+    ice::ThreadPool cacheThreadPool(1);
+    ice::AudioPool  cachePool;
+    const auto      cachePathUtf8 = MMM::Config::pathToUtf8(cacheReloadOutput);
+    auto            firstCachedTrack =
+        cachePool.get_or_load(cacheThreadPool, cachePathUtf8).lock();
+    ok &= check(firstCachedTrack != nullptr, "cache first track loaded");
+    const std::size_t firstCachedFrames =
+        firstCachedTrack ? firstCachedTrack->num_frames() : 0;
+    ok &= check(firstCachedFrames >=
+                    minimumDecodedFrames(cacheFirstResult.outputFrames),
+                "cache first track frame count");
+
+    MMM::Audio::AudioSpeedExportOptions cacheSecondOptions;
+    cacheSecondOptions.inputPath     = longInputPath;
+    cacheSecondOptions.outputPath    = cacheReloadOutput;
+    cacheSecondOptions.speed         = 1.2;
+    cacheSecondOptions.preservePitch = false;
+    const auto cacheSecondResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(cacheSecondOptions);
+    ok &=
+        check(cacheSecondResult.success, "cache reload second export succeeds");
+    auto secondCachedTrack =
+        cachePool.get_or_load(cacheThreadPool, cachePathUtf8).lock();
+    ok &= check(secondCachedTrack != nullptr, "cache second track loaded");
+    const std::size_t secondCachedFrames =
+        secondCachedTrack ? secondCachedTrack->num_frames() : 0;
+    ok &= check(secondCachedFrames >=
+                    minimumDecodedFrames(cacheSecondResult.outputFrames),
+                "cache second track reloads changed file");
+    ok &= check(secondCachedFrames > firstCachedFrames,
+                "cache second track is not stale");
 
     MMM::Audio::AudioSpeedExportOptions keepPitchOptions;
     keepPitchOptions.inputPath     = inputPath;
