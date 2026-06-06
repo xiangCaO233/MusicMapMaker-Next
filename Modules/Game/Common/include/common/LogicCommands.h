@@ -394,10 +394,31 @@ struct CmdCreateTimelineEvent {
 };
 
 /**
+ * @brief 从模板创建谱面时可复制的数据类别。
+ */
+struct BeatmapTemplateCreateOptions {
+    /// @brief 是否复制模板谱面的额外谱面元数据。
+    bool copyMetadata{ false };
+
+    /// @brief 是否复制模板谱面的全部 Timing/BPM/流速事件。
+    bool copyTimelines{ false };
+
+    /// @brief 是否复制模板谱面的全部物件。
+    bool copyObjects{ false };
+};
+
+/**
  * @brief 新建谱面指令
  */
 struct CmdCreateBeatmap {
+    /// @brief 新谱面的基础元数据。
     ::MMM::BaseMapMeta baseMeta;
+
+    /// @brief 可选模板谱面；为空时创建空白谱面。
+    std::shared_ptr<const MMM::BeatMap> templateBeatmap;
+
+    /// @brief 从模板谱面复制的数据类别。
+    BeatmapTemplateCreateOptions templateOptions;
 };
 
 /**

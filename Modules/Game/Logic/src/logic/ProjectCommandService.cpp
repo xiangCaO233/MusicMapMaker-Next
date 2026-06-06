@@ -7,9 +7,115 @@
 #include <cctype>
 #include <exception>
 #include <system_error>
+#include <utility>
 
 namespace MMM::Logic
 {
+namespace
+{
+/// @brief 清空目标谱面的物件数据并复制非折线物件。
+/// @param target 接收复制结果的新谱面。
+/// @param source 模板谱面。
+void copyStandaloneNotes(BeatMap& target, const BeatMap& source)
+{
+    target.m_noteData.notes.clear();
+    target.m_noteData.holds.clear();
+    target.m_noteData.flicks.clear();
+    target.m_noteData.polylines.clear();
+
+    for ( const auto& note : source.m_noteData.notes ) {
+        if ( note.m_isSubNote ) continue;
+        target.m_noteData.notes.push_back(note);
+    }
+    for ( const auto& hold : source.m_noteData.holds ) {
+        if ( hold.m_isSubNote ) continue;
+        target.m_noteData.holds.push_back(hold);
+    }
+    for ( const auto& flick : source.m_noteData.flicks ) {
+        if ( flick.m_isSubNote ) continue;
+        target.m_noteData.flicks.push_back(flick);
+    }
+}
+
+/// @brief 将一个折线子物件复制到目标谱面并重新绑定到目标折线。
+/// @param target 接收子物件的新谱面。
+/// @param targetPolyline 正在构建的目标折线。
+/// @param sourceSubNote 模板折线中的子物件。
+void copyPolylineSubNote(BeatMap& target, Polyline& targetPolyline,
+                         const Note& sourceSubNote)
+{
+    if ( sourceSubNote.m_type == ::MMM::NoteType::HOLD ) {
+        const auto& sourceHold = static_cast<const Hold&>(sourceSubNote);
+        Hold        copiedHold = sourceHold;
+        copiedHold.m_isSubNote = true;
+        target.m_noteData.holds.push_back(std::move(copiedHold));
+        auto& copiedRef = target.m_noteData.holds.back();
+        targetPolyline.m_subNotes.push_back(copiedRef);
+        targetPolyline.m_subHolds.push_back(copiedRef);
+        return;
+    }
+
+    if ( sourceSubNote.m_type == ::MMM::NoteType::FLICK ) {
+        const auto& sourceFlick = static_cast<const Flick&>(sourceSubNote);
+        Flick       copiedFlick = sourceFlick;
+        copiedFlick.m_isSubNote = true;
+        target.m_noteData.flicks.push_back(std::move(copiedFlick));
+        auto& copiedRef = target.m_noteData.flicks.back();
+        targetPolyline.m_subNotes.push_back(copiedRef);
+        targetPolyline.m_subFlicks.push_back(copiedRef);
+        return;
+    }
+
+    Note copiedNote        = sourceSubNote;
+    copiedNote.m_isSubNote = true;
+    target.m_noteData.notes.push_back(std::move(copiedNote));
+    auto& copiedRef = target.m_noteData.notes.back();
+    targetPolyline.m_subNotes.push_back(copiedRef);
+}
+
+/// @brief 复制模板谱面的全部物件，并修复折线对子物件的引用。
+/// @param target 接收复制结果的新谱面。
+/// @param source 模板谱面。
+void copyTemplateNotes(BeatMap& target, const BeatMap& source)
+{
+    copyStandaloneNotes(target, source);
+
+    for ( const auto& sourcePolyline : source.m_noteData.polylines ) {
+        Polyline copiedPolyline = sourcePolyline;
+        copiedPolyline.m_subNotes.clear();
+        copiedPolyline.m_subHolds.clear();
+        copiedPolyline.m_subFlicks.clear();
+
+        for ( const auto& sourceSubNoteRef : sourcePolyline.m_subNotes ) {
+            copyPolylineSubNote(target, copiedPolyline, sourceSubNoteRef.get());
+        }
+
+        target.m_noteData.polylines.push_back(std::move(copiedPolyline));
+    }
+
+    target.sync();
+}
+
+/// @brief 按用户选项将模板谱面内容应用到新谱面。
+/// @param target 正在创建的新谱面。
+/// @param source 模板谱面。
+/// @param options 模板复制选项。
+void applyTemplateBeatmap(BeatMap& target, const BeatMap& source,
+                          const BeatmapTemplateCreateOptions& options)
+{
+    if ( options.copyMetadata ) {
+        target.m_metadata = source.m_metadata;
+    }
+    if ( options.copyTimelines ) {
+        target.m_timings = source.m_timings;
+    }
+    if ( options.copyObjects ) {
+        copyTemplateNotes(target, source);
+    } else {
+        target.sync();
+    }
+}
+}  // namespace
 
 /// @brief 创建谱面文件并登记到项目资源列表。
 /// @param project 当前打开的项目。
@@ -59,6 +165,10 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
     /// @brief 新建并即将保存到磁盘的谱面实例。
     auto newBeatmap               = std::make_shared<MMM::BeatMap>();
     newBeatmap->m_baseMapMetadata = meta;
+    if ( cmd.templateBeatmap ) {
+        applyTemplateBeatmap(
+            *newBeatmap, *cmd.templateBeatmap, cmd.templateOptions);
+    }
 
     try {
         newBeatmap->saveToFile(mapPath);
