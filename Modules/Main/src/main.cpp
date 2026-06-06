@@ -8,22 +8,37 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
 #include "main/PGOProfiler.h"
+#include "network/AssetSyncService.h"
 #include <filesystem>
 
 int main(int argc, char* argv[])
 {
     using namespace MMM;
 
-    /// @brief 用户 .config/mmm 下的资源包根目录。
-    const auto assetPath = Config::AppPaths::assetsRootPath();
-    /// @brief 检查用户资源包目录是否存在时接收的文件系统错误。
-    std::error_code assetExistsError;
-    if ( !std::filesystem::exists(assetPath, assetExistsError) ) {
+    /// @brief 启动时同步用户 .config/mmm 下的资源包。
+    const auto assetSyncResult = Network::AssetSyncService::sync(
+        Network::AssetSyncService::defaultOptions());
+    if ( assetSyncResult.status == Network::AssetSyncStatus::kError ) {
+        const auto  assetPath = Config::AppPaths::assetsRootPath();
         std::string msg =
-            "Could not find assets directory!\n"
-            "Please download the resource package (assets.zip) from the "
-            "website "
-            "and extract it to:\n" +
+            "Could not download or verify assets automatically.\n"
+            "Please check your network connection, or download assets.zip from "
+            "the website and extract it to:\n" +
+            Config::pathToUtf8(assetPath) +
+            "\n\nError: " + assetSyncResult.errorMessage;
+        XERROR("Fatal: {}", msg);
+        UI::showFatalError("MusicMapMaker - Assets Sync Failed", msg);
+        return -1;
+    }
+
+    /// @brief 检查默认皮肤入口脚本是否已由同步流程准备完成。
+    const auto      defaultSkinPath = Config::AppPaths::defaultSkinFilePath();
+    std::error_code defaultSkinExistsError;
+    if ( !std::filesystem::exists(defaultSkinPath, defaultSkinExistsError) ) {
+        const auto  assetPath = Config::AppPaths::assetsRootPath();
+        std::string msg =
+            "Could not find default skin after assets sync.\n"
+            "Please download assets.zip from the website and extract it to:\n" +
             Config::pathToUtf8(assetPath);
         XERROR("Fatal: {}", msg);
         UI::showFatalError("MusicMapMaker - Assets Missing", msg);
@@ -35,8 +50,7 @@ int main(int argc, char* argv[])
     AppConfig::instance().load();
 
     // 载入皮肤配置
-    SkinManager::instance().loadSkin(
-        Config::pathToUtf8(Config::AppPaths::defaultSkinFilePath()));
+    SkinManager::instance().loadSkin(Config::pathToUtf8(defaultSkinPath));
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
 
     XINFO(TR("tips.welcome"));
@@ -62,7 +76,7 @@ int main(int argc, char* argv[])
 
     const auto ret = gameLoop.start(nativeWindow, argc, argv);
 
-    // PGO — 强制写出 profile 并异步上传
+    // PGO — 强制写出 profile 并按运行时长阈值上传
     Main::shutdownPGOProfiler();
 
     return ret;
