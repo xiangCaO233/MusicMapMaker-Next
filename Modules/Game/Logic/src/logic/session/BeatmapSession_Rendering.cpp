@@ -278,6 +278,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                  .m_timestamp;
                   });
         rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNoteOrderDirty = false;
         m_ctx->isNotePruneDirty = false;
     } else if ( m_ctx->isNotePruneDirty ) {
@@ -291,6 +292,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                            isEntityInvalid),
             m_ctx->sortedNoteEntities.end());
         rebuildNotePrefixAndStats(!m_ctx->m_needsNotesSync);
+        ++m_ctx->noteVisibilityIndexRevision;
         m_ctx->isNotePruneDirty = false;
     } else if ( m_ctx->isNoteStatsDirty && !m_ctx->m_needsNotesSync ) {
         rebuildNotePrefixAndStats(true);
@@ -302,6 +304,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     m_ctx->noteRegistry.ctx().erase<const std::vector<double>*>();
     m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
         &m_ctx->sortedNoteMaxEndPrefix);
+    m_ctx->noteRegistry.ctx().erase<const std::uint64_t*>();
+    m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
+        &m_ctx->noteVisibilityIndexRevision);
 
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
     // 注意：物理位置更新应基于逻辑时间 m_ctx->currentTime

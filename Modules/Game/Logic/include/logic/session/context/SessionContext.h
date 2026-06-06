@@ -9,6 +9,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
@@ -90,10 +91,11 @@ struct SessionContext {
     std::vector<entt::entity>
         sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
     std::vector<double>
-           sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
-    size_t noteCount{ 0 };          ///< 当前谱面的可计数物件数量缓存
-    size_t maxCombo{ 0 };           ///< 当前谱面的最大连击数缓存
-    double lastSnapshotTime{ 0.0 };
+        sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
+    std::uint64_t noteVisibilityIndexRevision{ 0 };  ///< 音符可见性索引版本号
+    size_t        noteCount{ 0 };  ///< 当前谱面的可计数物件数量缓存
+    size_t        maxCombo{ 0 };   ///< 当前谱面的最大连击数缓存
+    double        lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌

@@ -105,6 +105,10 @@ public:
     /// @brief 获取所有分段信息 (只读)
     const std::vector<ScrollSegment>& getSegments() const { return m_segments; }
 
+    /// @brief 获取缓存重建版本号。
+    /// @return 每次 rebuild 后递增的版本号。
+    std::uint64_t getRevision() const { return m_revision; }
+
     /// @brief 脏标记，用于触发延迟重建
     bool isDirty{ true };
 
@@ -172,6 +176,9 @@ private:
 
     /// @brief 获取指定滚动段覆盖的 AbsY 区间。
     std::pair<double, double> getSegmentAbsYRange(std::size_t index) const;
+
+    /// @brief 缓存重建版本号，用于外部低频索引失效。
+    std::uint64_t m_revision{ 0 };
 };
 
 }  // namespace MMM::Logic::System

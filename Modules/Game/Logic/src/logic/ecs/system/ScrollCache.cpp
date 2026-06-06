@@ -54,6 +54,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         m_microImpulseWindows.clear();
         m_hasJumpEffects = false;
         isDirty          = false;
+        ++m_revision;
         return;
     }
 
@@ -210,6 +211,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     rebuildAbsYRangeIndex();
     rebuildMicroImpulseWindows();
     isDirty = false;
+    ++m_revision;
 }
 
 std::pair<double, double> ScrollCache::getSegmentAbsYRange(
