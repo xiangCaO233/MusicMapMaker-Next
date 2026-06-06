@@ -8,16 +8,42 @@
 #include "graphic/glfw/window/NativeWindow.h"
 #include "log/colorful-log.h"
 #include "main/PGOProfiler.h"
+#include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
 #include <filesystem>
+#include <optional>
 
 int main(int argc, char* argv[])
 {
     using namespace MMM;
 
+    /// @brief 启动期资源下载进度弹窗，仅在实际下载或解压时创建。
+    std::optional<Main::StartupProgressDialog> startupProgressDialog;
+
     /// @brief 启动时同步用户 .config/mmm 下的资源包。
-    const auto assetSyncResult = Network::AssetSyncService::sync(
-        Network::AssetSyncService::defaultOptions());
+    auto assetSyncOptions = Network::AssetSyncService::defaultOptions();
+    std::error_code assetsExistsError;
+    const bool      assetsMissingBeforeSync = !std::filesystem::exists(
+        assetSyncOptions.assetsRootPath, assetsExistsError);
+    assetSyncOptions.progressCallback =
+        [&startupProgressDialog,
+         assetsMissingBeforeSync](const Network::AssetSyncProgress& progress) {
+            const bool shouldOpenImmediately =
+                assetsMissingBeforeSync &&
+                progress.stage ==
+                    Network::AssetSyncProgressStage::kCheckingManifest;
+            if ( !startupProgressDialog &&
+                 (shouldOpenImmediately ||
+                  Main::StartupProgressDialog::shouldOpenFor(progress)) ) {
+                startupProgressDialog.emplace();
+            }
+            if ( startupProgressDialog ) {
+                startupProgressDialog->update(progress);
+            }
+        };
+    const auto assetSyncResult =
+        Network::AssetSyncService::sync(assetSyncOptions);
+    if ( startupProgressDialog ) startupProgressDialog->close();
     if ( assetSyncResult.status == Network::AssetSyncStatus::kError ) {
         const auto  assetPath = Config::AppPaths::assetsRootPath();
         std::string msg =

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,12 +27,36 @@ struct AssetManifest {
     std::vector<AssetFileEntry> files;          ///< 可增量更新的文件列表。
 };
 
+/// @brief 资源同步进度阶段。
+enum class AssetSyncProgressStage : std::uint8_t {
+    kCheckingManifest,    ///< 正在检查远程资源清单。
+    kDownloadingPackage,  ///< 正在下载完整资源包。
+    kExtractingPackage,   ///< 正在解压完整资源包。
+    kCheckingFiles,       ///< 正在校验本地资源文件。
+    kDownloadingFile,     ///< 正在下载单个增量文件。
+    kFinished             ///< 资源同步流程结束。
+};
+
+/// @brief 资源同步进度快照。
+struct AssetSyncProgress {
+    AssetSyncProgressStage stage{
+        AssetSyncProgressStage::kCheckingManifest
+    };  ///< 当前进度阶段。
+    std::string  message;                ///< 面向 UI 的进度说明。
+    std::int64_t currentBytes{ 0 };      ///< 当前下载字节数。
+    std::int64_t totalBytes{ 0 };        ///< 当前下载总字节数。
+    std::size_t  currentFileIndex{ 0 };  ///< 当前增量文件序号。
+    std::size_t  totalFileCount{ 0 };    ///< 增量文件总数。
+};
+
 /// @brief 资源同步运行选项。
 struct AssetSyncOptions {
     std::filesystem::path assetsRootPath;  ///< 用户配置目录中的 assets 根路径。
     std::string           baseUrl;         ///< 网站根 URL，用于补全相对 URL。
     std::string           manifestUrl;     ///< 资源清单 URL。
     std::string           packageUrl;      ///< 清单不可用时的完整资源包 URL。
+    std::function<void(const AssetSyncProgress&)>
+        progressCallback;  ///< 低频启动/更新进度回调。
 };
 
 /// @brief 资源同步结果状态。

@@ -34,7 +34,8 @@ if(Python3_EXECUTABLE)
     )
 endif()
 
-target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp)
+target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp
+                                           src/StartupProgressDialog.cpp)
 target_include_directories(MusicMapMaker-Next PRIVATE include)
 
 target_link_libraries(MusicMapMaker-Next

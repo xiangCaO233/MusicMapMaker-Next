@@ -76,6 +76,25 @@ std::size_t writeFileCallback(void* contents, std::size_t size,
     return std::fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
 }
 
+/// @brief libcurl 下载进度状态。
+struct DownloadProgressState {
+    std::function<void(std::int64_t, std::int64_t)>
+        callback;  ///< 下载进度回调。
+};
+
+/// @brief libcurl 下载进度回调。
+int downloadProgressCallback(void* clientp, curl_off_t dltotal,
+                             curl_off_t dlnow, curl_off_t /*ultotal*/,
+                             curl_off_t /*ulnow*/)
+{
+    auto* state = static_cast<DownloadProgressState*>(clientp);
+    if ( state && state->callback ) {
+        state->callback(static_cast<std::int64_t>(dlnow),
+                        static_cast<std::int64_t>(dltotal));
+    }
+    return 0;
+}
+
 /// @brief 判断字符串是否以指定前缀开头。
 bool startsWith(std::string_view value, std::string_view prefix)
 {
@@ -116,6 +135,13 @@ std::string readEnvironmentString(const char* name)
     const char* value = std::getenv(name);
     if ( value && value[0] != '\0' ) return value;
     return {};
+}
+
+/// @brief 发送资源同步进度事件。
+void emitProgress(const AssetSyncOptions&  options,
+                  const AssetSyncProgress& progress)
+{
+    if ( options.progressCallback ) options.progressCallback(progress);
 }
 
 /// @brief 判断字符是否为十六进制数字。
@@ -395,7 +421,9 @@ bool downloadString(const std::string& url, std::string& response,
 
 /// @brief 以二进制形式下载文件。
 bool downloadFile(const std::string& url, const std::filesystem::path& path,
-                  std::string& errorMessage)
+                  std::string& errorMessage,
+                  const std::function<void(std::int64_t, std::int64_t)>&
+                      progressCallback = {})
 {
     const auto parentPath = path.parent_path();
     if ( !parentPath.empty() ) {
@@ -432,6 +460,14 @@ bool downloadFile(const std::string& url, const std::filesystem::path& path,
     curl_easy_setopt(curl, CURLOPT_USERAGENT, kAssetUserAgent);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 600L);
+
+    DownloadProgressState progressState{ progressCallback };
+    if ( progressCallback ) {
+        curl_easy_setopt(
+            curl, CURLOPT_XFERINFOFUNCTION, downloadProgressCallback);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressState);
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    }
 
     const CURLcode result = curl_easy_perform(curl);
 
@@ -534,8 +570,31 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
 
     const auto tempZipPath = temporaryDownloadPath("assets.zip");
     XINFO("AssetSync: downloading full asset package from {}", packageUrl);
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kDownloadingPackage,
+                     "Downloading asset package",
+                     0,
+                     0,
+                     0,
+                     0,
+                 });
 
-    if ( !downloadFile(packageUrl, tempZipPath, result.errorMessage) ) {
+    if ( !downloadFile(packageUrl,
+                       tempZipPath,
+                       result.errorMessage,
+                       [&options](std::int64_t downloaded, std::int64_t total) {
+                           emitProgress(
+                               options,
+                               AssetSyncProgress{
+                                   AssetSyncProgressStage::kDownloadingPackage,
+                                   "Downloading asset package",
+                                   downloaded,
+                                   total,
+                                   0,
+                                   0,
+                               });
+                       }) ) {
         result.status = AssetSyncStatus::kError;
         return result;
     }
@@ -551,6 +610,15 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
     }
 
     const auto destinationRoot = options.assetsRootPath.parent_path();
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kExtractingPackage,
+                     "Extracting asset package",
+                     0,
+                     0,
+                     0,
+                     0,
+                 });
     if ( !AssetSyncService::extractZipArchive(
              tempZipPath, destinationRoot, result.errorMessage) ) {
         result.status = AssetSyncStatus::kError;
@@ -561,6 +629,15 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
     std::filesystem::remove(tempZipPath, removeError);
 
     writeLocalVersionFile(options.assetsRootPath, result.remoteVersion);
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kFinished,
+                     "Assets ready",
+                     0,
+                     0,
+                     0,
+                     0,
+                 });
     result.status           = AssetSyncStatus::kDownloaded;
     result.updatedFileCount = manifest ? manifest->files.size() : 0;
     return result;
@@ -573,7 +650,16 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     AssetSyncResult result;
     result.remoteVersion    = manifest.version;
     result.checkedFileCount = manifest.files.size();
-    auto outdatedFiles      = AssetSyncService::collectOutdatedFiles(
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kCheckingFiles,
+                     "Checking local assets",
+                     0,
+                     0,
+                     0,
+                     manifest.files.size(),
+                 });
+    auto outdatedFiles = AssetSyncService::collectOutdatedFiles(
         manifest, options.assetsRootPath);
 
     if ( outdatedFiles.empty() ) {
@@ -585,10 +671,39 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     XINFO("AssetSync: updating {} changed asset file(s)", outdatedFiles.size());
 
     for ( const auto& file : outdatedFiles ) {
-        const auto tempPath = temporaryDownloadPath("asset-file.tmp");
-        const auto fileUrl =
+        const std::size_t currentFileIndex = result.updatedFileCount + 1;
+        const auto        tempPath = temporaryDownloadPath("asset-file.tmp");
+        const auto        fileUrl =
             AssetSyncService::resolveDownloadUrl(options.baseUrl, file.url);
-        if ( !downloadFile(fileUrl, tempPath, result.errorMessage) ) {
+        emitProgress(options,
+                     AssetSyncProgress{
+                         AssetSyncProgressStage::kDownloadingFile,
+                         "Downloading asset file: " + file.path,
+                         0,
+                         static_cast<std::int64_t>(file.size),
+                         currentFileIndex,
+                         outdatedFiles.size(),
+                     });
+
+        if ( !downloadFile(fileUrl,
+                           tempPath,
+                           result.errorMessage,
+                           [&options,
+                            currentFileIndex,
+                            totalFiles = outdatedFiles.size(),
+                            path       = file.path](std::int64_t downloaded,
+                                              std::int64_t total) {
+                               emitProgress(
+                                   options,
+                                   AssetSyncProgress{
+                                       AssetSyncProgressStage::kDownloadingFile,
+                                       "Downloading asset file: " + path,
+                                       downloaded,
+                                       total,
+                                       currentFileIndex,
+                                       totalFiles,
+                                   });
+                           }) ) {
             result.status = AssetSyncStatus::kError;
             return result;
         }
@@ -613,6 +728,15 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
     }
 
     writeLocalVersionFile(options.assetsRootPath, manifest.version);
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kFinished,
+                     "Assets ready",
+                     0,
+                     0,
+                     0,
+                     0,
+                 });
     result.status = AssetSyncStatus::kUpdated;
     return result;
 }
@@ -679,7 +803,16 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
 
     std::string manifestText;
     std::string manifestDownloadError;
-    const bool  manifestDownloaded = downloadString(
+    emitProgress(options,
+                 AssetSyncProgress{
+                     AssetSyncProgressStage::kCheckingManifest,
+                     "Checking remote asset manifest",
+                     0,
+                     0,
+                     0,
+                     0,
+                 });
+    const bool manifestDownloaded = downloadString(
         options.manifestUrl, manifestText, manifestDownloadError);
 
     std::optional<AssetManifest> manifest;
