@@ -615,27 +615,6 @@ void NoteRenderSystem::generateTimelineSnapshot(
     }
     float noteX = paddingX;
 
-    const float interactionMargin = 24.0f;
-    int         interactionRows   = std::max(
-        1,
-        static_cast<int>(std::ceil(viewportHeight + interactionMargin * 2.0f)) +
-            1);
-    std::vector<uint8_t> occupiedInteractionRows(
-        static_cast<size_t>(interactionRows), 0);
-    auto occupyInteractionRow = [&](float y) {
-        if ( y < -interactionMargin ||
-             y > viewportHeight + interactionMargin ) {
-            return false;
-        }
-        int row = static_cast<int>(std::floor(y + interactionMargin));
-        row     = std::clamp(row, 0, interactionRows - 1);
-        if ( occupiedInteractionRows[static_cast<size_t>(row)] != 0 ) {
-            return false;
-        }
-        occupiedInteractionRows[static_cast<size_t>(row)] = 1;
-        return true;
-    };
-
     int markerRows =
         std::max(1, static_cast<int>(std::ceil(viewportHeight)) + 1);
     std::vector<uint8_t> occupiedMarkerRows(static_cast<size_t>(markerRows), 0);
@@ -656,21 +635,20 @@ void NoteRenderSystem::generateTimelineSnapshot(
         float y = judgmentLineY -
                   static_cast<float>((seg.absY - currentAbsY) * seg.hs);
 
-        if ( occupyInteractionRow(y) ) {
-            TimelineInteractiveElement el;
-            el.time         = seg.time;
-            el.y            = y;
-            el.effects      = seg.effects;
-            el.bpmEntity    = seg.bpmEntity;
-            el.scrollEntity = seg.scrollEntity;
-            el.jumpEntity   = seg.jumpEntity;
-            el.hsEntity     = seg.hsEntity;
-            el.bpmValue     = seg.bpmValue;
-            el.scrollValue  = seg.scrollValue;
-            el.jumpValue    = seg.jumpValue;
-            el.hsValue      = seg.hsValue;
-            snapshot->timelineElements.push_back(el);
-        }
+        TimelineInteractiveElement el;
+        el.time         = seg.time;
+        el.y            = y;
+        el.effects      = seg.effects;
+        el.bpmEntity    = seg.bpmEntity;
+        el.scrollEntity = seg.scrollEntity;
+        el.jumpEntity   = seg.jumpEntity;
+        el.hsEntity     = seg.hsEntity;
+        el.bpmValue     = seg.bpmValue;
+        el.scrollValue  = seg.scrollValue;
+        el.jumpValue    = seg.jumpValue;
+        el.hsValue      = seg.hsValue;
+        snapshot->timelineElements.push_back(el);
+        size_t interactiveElementIdx = snapshot->timelineElements.size() - 1;
 
         if ( !occupyMarkerRow(y) ) continue;
 
@@ -689,6 +667,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
 
         batcher.setTexture(TextureID::Note);
+        const uint32_t markerVertexOffset =
+            static_cast<uint32_t>(snapshot->vertices.size());
+        const uint32_t markerIndexOffset =
+            static_cast<uint32_t>(snapshot->indices.size());
         batcher.pushFilledQuad(noteX,
                                y + noteH * 0.5f,
                                noteW,
@@ -696,6 +678,14 @@ void NoteRenderSystem::generateTimelineSnapshot(
                                { 1.0f, 1.0f },
                                config.visual.noteFillMode,
                                color);
+        auto& element = snapshot->timelineElements[interactiveElementIdx];
+        element.hasMarkerGeometry  = true;
+        element.markerVertexOffset = markerVertexOffset;
+        element.markerVertexCount  = static_cast<uint32_t>(
+            snapshot->vertices.size() - markerVertexOffset);
+        element.markerIndexOffset = markerIndexOffset;
+        element.markerIndexCount =
+            static_cast<uint32_t>(snapshot->indices.size() - markerIndexOffset);
     }
 
     // 6. 绘制当前时间判定框，作为时间线最上层覆盖物。

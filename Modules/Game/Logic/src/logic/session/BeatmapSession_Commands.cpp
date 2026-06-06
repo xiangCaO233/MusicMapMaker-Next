@@ -295,6 +295,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
+                               std::is_same_v<T, CmdCreateTimelineEvents> ||
                                std::is_same_v<T, CmdReplaceBeatmapTimings> ) {
                     m_ctx->isTransformDirty = true;
                 }
@@ -427,6 +428,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||

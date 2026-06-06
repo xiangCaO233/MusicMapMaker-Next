@@ -395,6 +395,26 @@ struct CmdCreateTimelineEvent {
 };
 
 /**
+ * @brief 批量创建时间线事件指令
+ */
+struct CmdCreateTimelineEvents {
+    /// @brief 单个待创建 Timeline 事件。
+    struct Entry {
+        /// @brief Timeline 时间戳，单位秒。
+        double time{ 0.0 };
+
+        /// @brief Timeline 类型。
+        ::MMM::TimingEffect type{ ::MMM::TimingEffect::BPM };
+
+        /// @brief Timeline 参数值。
+        double value{ 0.0 };
+    };
+
+    /// @brief 待创建 Timeline 事件列表。
+    std::vector<Entry> events;
+};
+
+/**
  * @brief 批量替换当前谱面的 Timing 列表。
  */
 struct CmdReplaceBeatmapTimings {
@@ -484,10 +504,10 @@ using LogicCommand = std::variant<
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdReplaceBeatmapTimings, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdImportAudio, CmdUpdateAudioResource,
-    CmdRemoveAudioResource, CmdRemoveBeatmap>;
+    CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

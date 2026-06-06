@@ -137,6 +137,16 @@ struct TimelineInteractiveElement {
     double       scrollValue{ 0.0 };
     double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
     double       hsValue{ 1.0 };    /// @brief HS 原始参数
+    /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
+    bool hasMarkerGeometry{ false };
+    /// @brief 该 Timing 标记在快照顶点数组中的起点。
+    uint32_t markerVertexOffset{ 0 };
+    /// @brief 该 Timing 标记占用的顶点数量。
+    uint32_t markerVertexCount{ 0 };
+    /// @brief 该 Timing 标记在快照索引数组中的起点。
+    uint32_t markerIndexOffset{ 0 };
+    /// @brief 该 Timing 标记占用的索引数量。
+    uint32_t markerIndexCount{ 0 };
 };
 
 /**

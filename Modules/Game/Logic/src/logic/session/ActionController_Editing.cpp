@@ -723,6 +723,27 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
+{
+    if ( cmd.events.empty() ) {
+        return;
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(cmd.events.size());
+    for ( const auto& event : cmd.events ) {
+        entries.push_back(
+            { entt::null,
+              std::nullopt,
+              TimelineComponent{ event.time, event.type, event.value } });
+    }
+
+    auto action =
+        std::make_unique<BatchTimelineAction>(std::move(entries), "Paste");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
 void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
 {
     if ( !m_ctx.currentBeatmap ) {

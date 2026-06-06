@@ -128,6 +128,69 @@ std::string TimelineAction::getName() const
     return typeStr;
 }
 
+// --- BatchTimelineAction Implementation ---
+
+void BatchTimelineAction::execute(SessionContext& ctx)
+{
+    auto& reg = ctx.timelineRegistry;
+    XINFO("[Action] BatchTimelineAction: {} entries", m_entries.size());
+    for ( auto& entry : m_entries ) {
+        if ( entry.after.has_value() ) {
+            if ( !reg.valid(entry.entity) ) {
+                entry.entity = reg.create(entry.entity);
+            }
+            reg.emplace_or_replace<TimelineComponent>(entry.entity,
+                                                      *entry.after);
+        } else if ( entry.before.has_value() ) {
+            if ( reg.valid(entry.entity) ) {
+                reg.destroy(entry.entity);
+            }
+        }
+    }
+    ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
+}
+
+void BatchTimelineAction::undo(SessionContext& ctx)
+{
+    auto& reg = ctx.timelineRegistry;
+    XINFO("[Undo] BatchTimelineAction: {} entries", m_entries.size());
+    for ( auto& entry : m_entries ) {
+        if ( entry.before.has_value() ) {
+            if ( !reg.valid(entry.entity) ) {
+                entry.entity = reg.create(entry.entity);
+            }
+            reg.emplace_or_replace<TimelineComponent>(entry.entity,
+                                                      *entry.before);
+        } else if ( entry.after.has_value() ) {
+            if ( reg.valid(entry.entity) ) {
+                reg.destroy(entry.entity);
+            }
+        }
+    }
+    ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
+}
+
+void BatchTimelineAction::redo(SessionContext& ctx)
+{
+    XINFO("[Redo] BatchTimelineAction");
+    execute(ctx);
+}
+
+std::string BatchTimelineAction::getName() const
+{
+    const char* nameKey = "ui.status.action.batch_note";
+    if ( m_name == "Paste" ) {
+        nameKey = "ui.status.action.paste";
+    }
+
+    return fmt::format("{}: {} {}",
+                       TR(nameKey),
+                       m_entries.size(),
+                       TR("ui.status.info.entries"));
+}
+
 // --- NoteAction Implementation ---
 
 void NoteAction::execute(SessionContext& ctx)

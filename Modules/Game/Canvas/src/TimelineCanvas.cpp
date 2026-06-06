@@ -10,13 +10,17 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string_view>
+#include <unordered_set>
 
 namespace MMM::Canvas
 {
@@ -24,14 +28,58 @@ namespace
 {
 /// @brief Timeline 画布齿轮按钮的类型信息
 struct TimelineGearInfo {
-    uint32_t     mask;
+    /// @brief 对应 TimelineInteractiveElement 的效果掩码。
+    uint32_t mask;
+
+    /// @brief 对应 TimelineInteractiveElement 的实体字段。
     entt::entity Logic::TimelineInteractiveElement::* entity;
+
+    /// @brief 对应 TimelineInteractiveElement 的参数值字段。
     double Logic::TimelineInteractiveElement::* value;
-    const char*                                 label;
-    const char*                                 editType;
-    ImVec4                                      color;
-    float                                       xRatio;
+
+    /// @brief 显示标签。
+    const char* label;
+
+    /// @brief 编辑弹窗类型。
+    const char* editType;
+
+    /// @brief 齿轮文字颜色。
+    ImVec4 color;
+
+    /// @brief 是否显示在 Timeline 右侧。
+    bool rightSide;
 };
+
+/// @brief 将创建弹窗索引转换为 Timeline Timing 类型。
+::MMM::TimingEffect timelineEffectFromCreateType(int createType)
+{
+    switch ( createType ) {
+    case 0: return ::MMM::TimingEffect::BPM;
+    case 2: return ::MMM::TimingEffect::JUMP;
+    case 3: return ::MMM::TimingEffect::HS;
+    case 1:
+    default: return ::MMM::TimingEffect::SCROLL;
+    }
+}
+
+/// @brief 获取 Timeline Timing 类型的渲染颜色。
+glm::vec4 timelineEffectColor(::MMM::TimingEffect effect, float alpha)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return { 1.0f, 0.28f, 0.28f, alpha };
+    case ::MMM::TimingEffect::SCROLL: return { 0.28f, 1.0f, 0.34f, alpha };
+    case ::MMM::TimingEffect::JUMP: return { 0.32f, 0.53f, 1.0f, alpha };
+    case ::MMM::TimingEffect::HS: return { 1.0f, 0.87f, 0.28f, alpha };
+    }
+    return { 1.0f, 1.0f, 1.0f, alpha };
+}
+
+/// @brief 生成用于去重同一个 marker glow 命令的键。
+uint64_t timelineMarkerKey(uint32_t indexOffset, uint32_t indexCount)
+{
+    return (static_cast<uint64_t>(indexOffset) << 32U) |
+           static_cast<uint64_t>(indexCount);
+}
 }  // namespace
 
 TimelineCanvas::TimelineCanvas(
@@ -137,81 +185,215 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         m_name, -wheel, ImGui::GetIO().KeyShift }));
             }
 
-            // 3. 处理右键点击创建事件
-            if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
-                handleRightClick(size);
-            }
-
-            // 4. 绘制交互层元件 (齿轮按钮)
+            // 3. 处理 Timeline Timing 的工具交互和反馈
             ImVec2 canvasPos = ImGui::GetItemRectMin();
             ImVec2 mousePos  = ImGui::GetMousePos();
-            float  iconSize  = 20.0f;
-            float  padding   = 5.0f;
+            bool   isFocused =
+                ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+            float iconSize = 20.0f;
+            float padding  = 5.0f;
 
-            auto& visual    = Config::AppConfig::instance().getVisualConfig();
-            float proximity = visual.snapThreshold;
+            const auto& visual =
+                Config::AppConfig::instance().getVisualConfig();
+            float proximity   = visual.snapThreshold;
+            float localMouseX = mousePos.x - canvasPos.x;
+            float localMouseY = mousePos.y - canvasPos.y;
+            bool  overMenuButton =
+                localMouseX >= size.x - 56.0f && localMouseY <= 56.0f;
+            bool   hoveredSnapped = false;
+            double hoveredTime    = 0.0;
+            if ( isHovered && !overMenuButton ) {
+                double rawHoveredTime = canvasTimeAtLocalY(size, localMouseY);
+                hoveredTime           = snapTimingTime(
+                    size, rawHoveredTime, localMouseY, hoveredSnapped);
+            }
 
+            const TimelineGearInfo gears[] = {
+                { Logic::System::SCROLL_EFFECT_BPM,
+                  &Logic::TimelineInteractiveElement::bpmEntity,
+                  &Logic::TimelineInteractiveElement::bpmValue,
+                  "BPM",
+                  "BPM",
+                  ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+                  false },
+                { Logic::System::SCROLL_EFFECT_SCROLL,
+                  &Logic::TimelineInteractiveElement::scrollEntity,
+                  &Logic::TimelineInteractiveElement::scrollValue,
+                  "Scroll",
+                  "Scroll",
+                  ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
+                  true },
+                { Logic::System::SCROLL_EFFECT_JUMP,
+                  &Logic::TimelineInteractiveElement::jumpEntity,
+                  &Logic::TimelineInteractiveElement::jumpValue,
+                  "Jump",
+                  "Jump",
+                  ImVec4(0.2f, 0.45f, 1.0f, 1.0f),
+                  false },
+                { Logic::System::SCROLL_EFFECT_HS,
+                  &Logic::TimelineInteractiveElement::hsEntity,
+                  &Logic::TimelineInteractiveElement::hsValue,
+                  "HS",
+                  "HS",
+                  ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
+                  true },
+            };
+
+            auto isNearInlineGearTime =
+                [&](const Logic::TimelineInteractiveElement& el) {
+                    bool isNearTime  = hoveredSnapped &&
+                                       std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
+                    return isNearTime || isNearPixel;
+                };
+
+            auto countInlineGears =
+                [&](const Logic::TimelineInteractiveElement& el,
+                    bool                                     rightSide) {
+                    int count = 0;
+                    for ( const auto& gear : gears ) {
+                        if ( gear.rightSide != rightSide ) continue;
+                        if ( (el.effects & gear.mask) == 0 ) continue;
+                        auto entity = el.*(gear.entity);
+                        if ( entity == entt::null ) continue;
+                        ++count;
+                    }
+                    return count;
+                };
+
+            auto inlineGearPos =
+                [&](const Logic::TimelineInteractiveElement& el,
+                    const TimelineGearInfo&                  gear,
+                    int                                      index,
+                    int                                      count) {
+                    float yOffset = 0.0f;
+                    if ( count > 1 ) {
+                        yOffset = (static_cast<float>(index) -
+                                   (static_cast<float>(count) - 1.0f) * 0.5f) *
+                                  (iconSize + 4.0f);
+                    }
+
+                    float x    = gear.rightSide
+                                     ? canvasPos.x + size.x - iconSize - padding
+                                     : canvasPos.x + padding;
+                    float minY = canvasPos.y;
+                    float maxY =
+                        std::max(minY, canvasPos.y + size.y - iconSize);
+                    float y = std::clamp(
+                        canvasPos.y + el.y + yOffset - iconSize * 0.5f,
+                        minY,
+                        maxY);
+                    return ImVec2(x, y);
+                };
+
+            /// @brief 当前鼠标命中的 Timeline 齿轮按钮。
+            struct InlineGearHit {
+                /// @brief Timing 实体。
+                entt::entity entity{ entt::null };
+
+                /// @brief Timing 时间戳，单位秒。
+                double time{ 0.0 };
+
+                /// @brief Timing 参数值。
+                double value{ 0.0 };
+
+                /// @brief 编辑类型。
+                const char* editType{ "" };
+
+                /// @brief 显示标签。
+                const char* label{ "" };
+            };
+
+            auto openInlineGearEditor = [&](const InlineGearHit& hit) {
+                if ( hit.entity == entt::null ) return;
+                XINFO("{} gear clicked at time: {}", hit.label, hit.time);
+                m_editingEntity          = hit.entity;
+                m_editTime               = hit.time;
+                m_editValue              = hit.value;
+                m_editType               = hit.editType;
+                m_isPopupOpen            = true;
+                m_isCreatePopupOpen      = false;
+                m_isTimingDrawPreviewing = false;
+                m_isTimingDragging       = false;
+                m_isTimingErasing        = false;
+                m_timingEraseTargetEntities.clear();
+                ImGui::OpenPopup("TimelineEventEditor");
+            };
+
+            const bool showInlineTimingEditors =
+                isHovered && !overMenuButton && m_currentSnapshot->hasBeatmap &&
+                !m_isTimingDragging && !m_isTimingErasing &&
+                !m_isTimingDrawPreviewing && !m_isPopupOpen &&
+                !m_isCreatePopupOpen;
+            std::optional<InlineGearHit> inlineGearHit;
+            if ( showInlineTimingEditors ) {
+                for ( const auto& el : m_currentSnapshot->timelineElements ) {
+                    if ( !isNearInlineGearTime(el) ) continue;
+
+                    const int leftGearCount  = countInlineGears(el, false);
+                    const int rightGearCount = countInlineGears(el, true);
+                    int       leftGearIndex  = 0;
+                    int       rightGearIndex = 0;
+                    for ( const auto& gear : gears ) {
+                        if ( (el.effects & gear.mask) == 0 ) continue;
+                        auto entity = el.*(gear.entity);
+                        if ( entity == entt::null ) continue;
+
+                        int count =
+                            gear.rightSide ? rightGearCount : leftGearCount;
+                        int index =
+                            gear.rightSide ? rightGearIndex++ : leftGearIndex++;
+                        ImVec2 pos = inlineGearPos(el, gear, index, count);
+                        if ( mousePos.x >= pos.x &&
+                             mousePos.x <= pos.x + iconSize &&
+                             mousePos.y >= pos.y &&
+                             mousePos.y <= pos.y + iconSize ) {
+                            inlineGearHit = InlineGearHit{ entity,
+                                                           el.time,
+                                                           el.*(gear.value),
+                                                           gear.editType,
+                                                           gear.label };
+                            break;
+                        }
+                    }
+                    if ( inlineGearHit ) break;
+                }
+            }
+            if ( inlineGearHit &&
+                 ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+                openInlineGearEditor(*inlineGearHit);
+            }
+
+            handleTimingCanvasInteraction(
+                canvasPos, size, isHovered && !inlineGearHit, isFocused);
+            renderTimingInteractionOverlay(canvasPos, size);
+            refreshTimelineInteractionDecoration(size);
+
+            // 4. 绘制交互层元件 (齿轮按钮)
             UI::Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
-
-            bool isFocused =
-                ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
-
             for ( const auto& el : m_currentSnapshot->timelineElements ) {
-                float localMouseY = mousePos.y - canvasPos.y;
-                float mappedY     = el.y;
-                bool  isNear      = std::abs(localMouseY - mappedY) < proximity;
+                if ( showInlineTimingEditors && isNearInlineGearTime(el) ) {
+                    int leftGearCount  = countInlineGears(el, false);
+                    int rightGearCount = countInlineGears(el, true);
 
-                if ( isNear && isFocused ) {
-                    const TimelineGearInfo gears[] = {
-                        { Logic::System::SCROLL_EFFECT_BPM,
-                          &Logic::TimelineInteractiveElement::bpmEntity,
-                          &Logic::TimelineInteractiveElement::bpmValue,
-                          "BPM",
-                          "BPM",
-                          ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
-                          0.0f },
-                        { Logic::System::SCROLL_EFFECT_SCROLL,
-                          &Logic::TimelineInteractiveElement::scrollEntity,
-                          &Logic::TimelineInteractiveElement::scrollValue,
-                          "Scroll",
-                          "Scroll",
-                          ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                          1.0f },
-                        { Logic::System::SCROLL_EFFECT_JUMP,
-                          &Logic::TimelineInteractiveElement::jumpEntity,
-                          &Logic::TimelineInteractiveElement::jumpValue,
-                          "Jump",
-                          "Jump",
-                          ImVec4(0.2f, 0.45f, 1.0f, 1.0f),
-                          0.33f },
-                        { Logic::System::SCROLL_EFFECT_HS,
-                          &Logic::TimelineInteractiveElement::hsEntity,
-                          &Logic::TimelineInteractiveElement::hsValue,
-                          "HS",
-                          "HS",
-                          ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
-                          0.66f },
-                    };
-
+                    int leftGearIndex  = 0;
+                    int rightGearIndex = 0;
                     for ( const auto& gear : gears ) {
                         if ( (el.effects & gear.mask) == 0 ) continue;
+                        auto entity = el.*(gear.entity);
+                        if ( entity == entt::null ) continue;
 
-                        float x = canvasPos.x + padding;
-                        if ( gear.xRatio >= 0.99f ) {
-                            x = canvasPos.x + size.x - iconSize - padding;
-                        } else if ( gear.xRatio > 0.0f ) {
-                            x = canvasPos.x + padding +
-                                (size.x - iconSize - 2.0f * padding) *
-                                    gear.xRatio;
-                        }
-
-                        ImVec2 pos(x, canvasPos.y + mappedY - iconSize * 0.5f);
+                        int count =
+                            gear.rightSide ? rightGearCount : leftGearCount;
+                        int index =
+                            gear.rightSide ? rightGearIndex++ : leftGearIndex++;
+                        ImVec2 pos = inlineGearPos(el, gear, index, count);
                         ImGui::SetCursorScreenPos(pos);
 
+                        ImGui::SetNextItemAllowOverlap();
                         ImGui::PushStyleColor(ImGuiCol_Text, gear.color);
-                        auto        entity = el.*(gear.entity);
                         std::string id =
                             fmt::format("{}_{}_{}",
                                         gear.label,
@@ -221,15 +403,12 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                  (std::string(UI::ICON_MMM_COG) + "##" + id)
                                      .c_str(),
                                  ImVec2(iconSize, iconSize)) ) {
-                            XINFO("{} gear clicked at time: {}",
-                                  gear.label,
-                                  el.time);
-                            m_editingEntity = entity;
-                            m_editTime      = el.time;
-                            m_editValue     = el.*(gear.value);
-                            m_editType      = gear.editType;
-                            m_isPopupOpen   = true;
-                            ImGui::OpenPopup("TimelineEventEditor");
+                            openInlineGearEditor(
+                                InlineGearHit{ entity,
+                                               el.time,
+                                               el.*(gear.value),
+                                               gear.editType,
+                                               gear.label });
                         }
                         ImGui::PopStyleColor();
 
@@ -322,6 +501,7 @@ bool TimelineCanvas::needsParallelUiPrepare(
 void TimelineCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
 {
     (void)snapshot;
+    resetTimelineInteractionDecoration();
     m_preparedSnapshot = prepareCanvasSnapshot(
         m_syncBuffer.get(), m_lastOffsetSnapshot, m_lastAppliedYOffset, false);
     m_hasPreparedSnapshot = true;
@@ -356,6 +536,195 @@ void TimelineCanvas::swapPreparedUiFrameData()
     }
 }
 
+/// @brief 清除上一帧追加到 Timeline 快照中的交互修饰。
+void TimelineCanvas::resetTimelineInteractionDecoration()
+{
+    if ( !m_decoratedTimelineSnapshot ) {
+        m_timelineColorRestore.clear();
+        return;
+    }
+
+    auto* snapshot = m_decoratedTimelineSnapshot;
+    for ( const auto& restore : m_timelineColorRestore ) {
+        if ( restore.vertexIndex < snapshot->vertices.size() ) {
+            snapshot->vertices[restore.vertexIndex].color = restore.color;
+        }
+    }
+
+    if ( snapshot->vertices.size() >= m_decoratedTimelineVertexCount ) {
+        snapshot->vertices.resize(m_decoratedTimelineVertexCount);
+    }
+    if ( snapshot->indices.size() >= m_decoratedTimelineIndexCount ) {
+        snapshot->indices.resize(m_decoratedTimelineIndexCount);
+    }
+    if ( snapshot->cmds.size() >= m_decoratedTimelineCmdCount ) {
+        snapshot->cmds.resize(m_decoratedTimelineCmdCount);
+    }
+    if ( snapshot->glowCmds.size() >= m_decoratedTimelineGlowCmdCount ) {
+        snapshot->glowCmds.resize(m_decoratedTimelineGlowCmdCount);
+    }
+
+    m_decoratedTimelineSnapshot     = nullptr;
+    m_decoratedTimelineVertexCount  = 0;
+    m_decoratedTimelineIndexCount   = 0;
+    m_decoratedTimelineCmdCount     = 0;
+    m_decoratedTimelineGlowCmdCount = 0;
+    m_timelineColorRestore.clear();
+}
+
+/// @brief 根据当前 Timeline 交互状态刷新快照半透明与发光命令。
+/// @param size 当前 Timeline 画布尺寸。
+void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
+{
+    resetTimelineInteractionDecoration();
+    if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
+        return;
+    }
+
+    m_decoratedTimelineSnapshot     = m_currentSnapshot;
+    m_decoratedTimelineVertexCount  = m_currentSnapshot->vertices.size();
+    m_decoratedTimelineIndexCount   = m_currentSnapshot->indices.size();
+    m_decoratedTimelineCmdCount     = m_currentSnapshot->cmds.size();
+    m_decoratedTimelineGlowCmdCount = m_currentSnapshot->glowCmds.size();
+
+    bool                         hasDecoration = false;
+    std::unordered_set<uint64_t> glowMarkers;
+    std::unordered_set<uint64_t> dimMarkers;
+    float                        paddingX = 30.0f;
+    float noteW = std::max(1.0f, size.x - paddingX * 2.0f);
+    float noteH = noteW * 0.36f;
+    if ( auto uvIt = m_currentSnapshot->uvMap.find(
+             static_cast<uint32_t>(Logic::TextureID::Note));
+         uvIt != m_currentSnapshot->uvMap.end() && uvIt->second.w > 0.0f ) {
+        noteH = noteW * (uvIt->second.w / uvIt->second.z);
+    }
+
+    auto appendGlowRange =
+        [&](uint32_t indexOffset, uint32_t indexCount, uint64_t key) {
+            if ( indexCount == 0U || !glowMarkers.insert(key).second ) {
+                return;
+            }
+
+            UI::BrushDrawCmd cmd;
+            cmd.indexOffset     = indexOffset;
+            cmd.indexCount      = indexCount;
+            cmd.vertexOffset    = 0;
+            cmd.customTextureId = static_cast<uint32_t>(Logic::TextureID::Note);
+            cmd.scissor         = vk::Rect2D{
+                { 0, 0 },
+                { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
+                  static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
+            };
+            m_currentSnapshot->glowCmds.push_back(cmd);
+            hasDecoration = true;
+        };
+
+    auto appendPreviewMarker =
+        [&](float y, ::MMM::TimingEffect effect, float alpha) {
+            const uint32_t previewIndexOffset =
+                static_cast<uint32_t>(m_currentSnapshot->indices.size());
+            Logic::System::Batcher previewBatcher(m_currentSnapshot,
+                                                  &m_currentSnapshot->cmds);
+            previewBatcher.setTexture(Logic::TextureID::Note);
+            previewBatcher.pushFilledQuad(
+                paddingX,
+                y + noteH * 0.5f,
+                noteW,
+                noteH,
+                { 1.0f, 1.0f },
+                Config::AppConfig::instance().getVisualConfig().noteFillMode,
+                timelineEffectColor(effect, alpha));
+            previewBatcher.flush();
+
+            const uint32_t previewIndexCount =
+                static_cast<uint32_t>(m_currentSnapshot->indices.size()) -
+                previewIndexOffset;
+            const uint64_t previewKey =
+                timelineMarkerKey(previewIndexOffset, previewIndexCount);
+            appendGlowRange(previewIndexOffset, previewIndexCount, previewKey);
+        };
+
+    auto transformMarkerColor =
+        [&](uint32_t                                     vertexOffset,
+            uint32_t                                     vertexCount,
+            float                                        multiplier,
+            const std::optional<Graphic::Vertex::Color>& overrideColor) {
+            const uint32_t endVertex = vertexOffset + vertexCount;
+            for ( uint32_t i = vertexOffset;
+                  i < endVertex && i < m_currentSnapshot->vertices.size();
+                  ++i ) {
+                m_timelineColorRestore.push_back(
+                    { i, m_currentSnapshot->vertices[i].color });
+                if ( overrideColor ) {
+                    m_currentSnapshot->vertices[i].color = *overrideColor;
+                }
+                m_currentSnapshot->vertices[i].color.a *= multiplier;
+                hasDecoration = true;
+            }
+        };
+
+    auto appendGlow = [&](const TimelineHitTarget& target) {
+        if ( !target.hasMarkerGeometry || target.markerIndexCount == 0U ) {
+            return;
+        }
+        const uint64_t key = timelineMarkerKey(target.markerIndexOffset,
+                                               target.markerIndexCount);
+        appendGlowRange(target.markerIndexOffset, target.markerIndexCount, key);
+    };
+
+    for ( const auto& target : collectVisibleTimingTargets() ) {
+        const bool selected = m_selectedTimingEntities.find(target.entity) !=
+                              m_selectedTimingEntities.end();
+        const bool hovered  = target.entity == m_hoveredTimingEntity;
+        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
+                              m_timingEraseTargetEntities.end();
+        const bool dragging = m_isTimingDragging && selected;
+        const bool popupEditing =
+            m_isPopupOpen && target.entity == m_editingEntity;
+        const bool editing = dragging || popupEditing || erasing;
+
+        if ( hovered || (selected && !dragging) || popupEditing || erasing ) {
+            appendGlow(target);
+        }
+        if ( editing && target.hasMarkerGeometry ) {
+            const uint64_t key = timelineMarkerKey(target.markerIndexOffset,
+                                                   target.markerIndexCount);
+            if ( dimMarkers.insert(key).second ) {
+                std::optional<Graphic::Vertex::Color> overrideColor;
+                if ( erasing ) {
+                    overrideColor =
+                        Graphic::Vertex::Color{ 1.0f, 0.2f, 0.2f, 1.0f };
+                }
+                transformMarkerColor(target.markerVertexOffset,
+                                     target.markerVertexCount,
+                                     0.5f,
+                                     overrideColor);
+            }
+        }
+        if ( dragging ) {
+            const double previewTime =
+                std::max(0.0, target.time + m_timingDragPreviewDelta);
+            const float previewY =
+                static_cast<float>(canvasYAtTime(size, previewTime));
+            if ( previewY >= -noteH && previewY <= size.y + noteH ) {
+                appendPreviewMarker(previewY, target.effect, 0.42f);
+            }
+        }
+    }
+
+    if ( m_isTimingDrawPreviewing && size.x > 1.0f && size.y > 1.0f ) {
+        const auto  previewEffect = timelineEffectFromCreateType(m_createType);
+        const float previewY =
+            static_cast<float>(canvasYAtTime(size, m_timingDrawPreviewTime));
+        m_timingDrawPreviewY = previewY;
+        appendPreviewMarker(previewY, previewEffect, 0.42f);
+    }
+
+    if ( !hasDecoration ) {
+        m_decoratedTimelineSnapshot = nullptr;
+    }
+}
+
 void TimelineCanvas::resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
                                 uint32_t h) const
 {
@@ -372,19 +741,32 @@ std::vector<std::string> TimelineCanvas::getShaderSources(
     if ( m_shaderSourceCache.count(shader_name) )
         return m_shaderSourceCache[shader_name];
 
-    // Timeline 仅使用主着色器，不支持效果着色器（无模糊/发光后处理）
-    if ( shader_name != "main" ) return {};
-
     auto canvas_config =
         Config::SkinManager::instance().getCanvasConfig("Basic2DCanvas");
-    auto it = canvas_config.canvas_shader_modules.find("main");
+    auto it = canvas_config.canvas_shader_modules.find(shader_name);
     if ( it != canvas_config.canvas_shader_modules.end() ) {
-        auto        path = it->second;
-        std::string vert = Graphic::VKShader::readFile(
+        auto path = it->second;
+        if ( !std::filesystem::exists(path) ) {
+            XWARN("Timeline shader module {} not defined.", shader_name);
+            return {};
+        }
+
+        std::string vertexShaderSource = Graphic::VKShader::readFile(
             Config::pathToUtf8(path / "VertexShader.spv"));
-        std::string frag = Graphic::VKShader::readFile(
+        std::string fragmentShaderSource = Graphic::VKShader::readFile(
             Config::pathToUtf8(path / "FragmentShader.spv"));
-        m_shaderSourceCache[shader_name] = { vert, frag };
+
+        if ( auto geometryShaderPath = path / "GeometryShader.spv";
+             std::filesystem::exists(geometryShaderPath) ) {
+            m_shaderSourceCache[shader_name] = { vertexShaderSource,
+                                                 Graphic::VKShader::readFile(
+                                                     Config::pathToUtf8(
+                                                         geometryShaderPath)),
+                                                 fragmentShaderSource };
+        } else {
+            m_shaderSourceCache[shader_name] = { vertexShaderSource,
+                                                 fragmentShaderSource };
+        }
         return m_shaderSourceCache[shader_name];
     }
     return {};
@@ -483,6 +865,66 @@ void TimelineCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         cmdBuf.drawIndexed(
             cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
+}
+
+/// @brief 录制 Timeline Timing 发光层离屏绘制命令。
+/// @warning 渲染热路径：每帧离屏命令录制时执行；只遍历 glow 命令列表。
+void TimelineCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
+                                      vk::PipelineLayout      pipelineLayout,
+                                      vk::DescriptorSetLayout setLayout,
+                                      vk::DescriptorSet       defaultDescriptor,
+                                      uint32_t                frameIndex)
+{
+    if ( !m_currentSnapshot ) return;
+
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+    }
+
+    vk::DescriptorSet lastBound = VK_NULL_HANDLE;
+    vk::Rect2D        lastScissor;
+
+    for ( const auto& cmd : m_currentSnapshot->glowCmds ) {
+        vk::DescriptorSet tex = m_atlasUVs.count(cmd.customTextureId)
+                                    ? atlasDescriptor
+                                    : defaultDescriptor;
+        if ( tex == VK_NULL_HANDLE ) {
+            tex = defaultDescriptor;
+        }
+
+        if ( tex != lastBound ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &tex,
+                                      0,
+                                      nullptr);
+            lastBound = tex;
+        }
+
+        if ( cmd.scissor != lastScissor ) {
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            cmdBuf.setScissor(0, 1, &physicalScissor);
+            lastScissor = cmd.scissor;
+        }
+
+        cmdBuf.drawIndexed(
+            cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
+    }
+}
+
+/// @brief 判断当前 Timeline 快照是否包含发光绘制命令。
+/// @return 当前快照存在发光命令时返回 true。
+/// @warning 渲染热路径：每帧离屏命令录制前执行，只读取命令数量。
+bool TimelineCanvas::hasGlowDrawCmds() const
+{
+    return m_currentSnapshot && !m_currentSnapshot->glowCmds.empty();
 }
 
 }  // namespace MMM::Canvas

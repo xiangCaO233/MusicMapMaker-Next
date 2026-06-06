@@ -74,6 +74,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdCreateTimelineEvent& cmd);
 
+    /// @brief 处理批量创建时间轴事件的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdCreateTimelineEvents& cmd);
+
     /// @brief 处理批量替换谱面 Timing 列表的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdReplaceBeatmapTimings& cmd);
