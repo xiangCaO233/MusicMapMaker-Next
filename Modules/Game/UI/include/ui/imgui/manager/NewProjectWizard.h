@@ -47,8 +47,7 @@ private:
     void renderPreferencesStep();
 
     /// @brief 绘制项目保存位置步骤。
-    /// @param sourceManager 当前 UI 管理器，用于获取原生父窗口。
-    void renderLocationStep(UIManager* sourceManager);
+    void renderLocationStep();
 
     /// @brief 绘制底部操作按钮。
     void renderFooter();
@@ -62,9 +61,15 @@ private:
     bool renderLabeledInputText(const char* label, const char* id, char* buffer,
                                 std::size_t bufferSize);
 
-    /// @brief 打开项目保存父目录选择器。
-    /// @param sourceManager 当前 UI 管理器，用于获取原生父窗口。
-    void openParentFolderPicker(UIManager* sourceManager);
+    /// @brief 请求在弹窗绘制结束后打开项目保存父目录选择器。
+    void requestParentFolderPicker();
+
+    /// @brief 如果已有挂起请求，则打开项目保存父目录选择器。
+    void processPendingParentFolderPicker();
+
+    /// @brief 打开统一文件选择器中的项目保存父目录选择窗口。
+    /// @param initialPath 初始目录路径。
+    void openUnifiedParentFolderPicker(const std::string& initialPath);
 
     /// @brief 绘制统一文件选择器中的父目录选择窗口。
     /// @param dpiScale 当前窗口内容缩放。
@@ -72,6 +77,10 @@ private:
 
     /// @brief 提交项目创建请求。
     void submitCreateRequest();
+
+    /// @brief 判断本帧是否应禁止底部按钮响应。
+    /// @return 原生目录选择器刚返回后的保护帧内返回 true。
+    bool shouldSuppressFooterActionsThisFrame() const;
 
     /// @brief 当前步骤是否允许继续。
     /// @return 当前步骤输入有效时返回 true。
@@ -134,6 +143,12 @@ private:
 
     /// @brief 最近一次保存位置选择失败时展示给用户的错误文本。
     std::string m_locationErrorText;
+
+    /// @brief 原生文件夹选择器返回后需要丢弃底部按钮点击的剩余帧数。
+    int m_suppressFooterActionFrames{ 0 };
+
+    /// @brief 是否有等待当前 ImGui 弹窗绘制结束后打开的目录选择器请求。
+    bool m_pendingParentFolderPicker{ false };
 };
 
 }  // namespace MMM::UI

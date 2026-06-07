@@ -4,10 +4,6 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
-#ifdef _WIN32
-#    define GLFW_EXPOSE_NATIVE_WIN32
-#endif
-#include "graphic/glfw/window/NativeWindow.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -15,9 +11,6 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
-#ifdef _WIN32
-#    include <GLFW/glfw3native.h>
-#endif
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
@@ -133,33 +126,6 @@ std::string existingDirectoryPathToUtf8(const std::filesystem::path& path)
         return {};
     }
     return Config::pathToUtf8(absolutePath);
-}
-
-/// @brief 从 UI 管理器解析 NFD 原生父窗口。
-/// @param sourceManager 当前 UI 管理器。
-/// @return 原生文件对话框父窗口句柄；不可用时返回空句柄。
-nfdwindowhandle_t resolveNativeDialogParent(UIManager* sourceManager)
-{
-    nfdwindowhandle_t parentWindow{};
-#ifdef _WIN32
-    if ( !sourceManager ) {
-        return parentWindow;
-    }
-
-    auto* nativeWindow = sourceManager->getNativeWindow();
-    if ( !nativeWindow || !nativeWindow->getWindowHandle() ) {
-        return parentWindow;
-    }
-
-    HWND hwnd = glfwGetWin32Window(nativeWindow->getWindowHandle());
-    if ( hwnd ) {
-        parentWindow.type   = NFD_WINDOW_HANDLE_TYPE_WINDOWS;
-        parentWindow.handle = hwnd;
-    }
-#else
-    (void)sourceManager;
-#endif
-    return parentWindow;
 }
 
 }  // namespace
@@ -354,7 +320,7 @@ void NewProjectWizard::renderPreferencesStep()
     }
 }
 
-void NewProjectWizard::renderLocationStep(UIManager* sourceManager)
+void NewProjectWizard::renderLocationStep()
 {
     ImGui::SeparatorText(TR("ui.wizard.new_project.location").data());
 
@@ -369,7 +335,7 @@ void NewProjectWizard::renderLocationStep(UIManager* sourceManager)
         160.0f * Config::AppConfig::instance().getWindowContentScale());
     if ( ImGui::Button(TR("ui.wizard.new_project.select_parent").data(),
                        ImVec2(buttonWidth, 0.0f)) ) {
-        openParentFolderPicker(sourceManager);
+        requestParentFolderPicker();
     }
 
     if ( !m_locationErrorText.empty() ) {
@@ -420,6 +386,7 @@ void NewProjectWizard::renderFooter()
 {
     ImGui::Separator();
 
+    const bool  suppressActions = shouldSuppressFooterActionsThisFrame();
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
@@ -427,7 +394,7 @@ void NewProjectWizard::renderFooter()
     const float buttonWidth = std::floor(
         std::min(150.0f * dpiScale, (available - spacing * 2.0f) / 3.0f));
     const ImVec2 buttonSize{ std::max(96.0f * dpiScale, buttonWidth), 0.0f };
-    ImGui::BeginDisabled(m_currentStep == Step::ProjectInfo);
+    ImGui::BeginDisabled(suppressActions || m_currentStep == Step::ProjectInfo);
     if ( ImGui::Button(TR("ui.wizard.new_project.back").data(), buttonSize) ) {
         if ( m_currentStep == Step::Preferences ) {
             m_currentStep = Step::ProjectInfo;
@@ -438,13 +405,15 @@ void NewProjectWizard::renderFooter()
     ImGui::EndDisabled();
 
     ImGui::SameLine();
+    ImGui::BeginDisabled(suppressActions);
     if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
                        buttonSize) ) {
         close();
     }
+    ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(!canAdvance());
+    ImGui::BeginDisabled(suppressActions || !canAdvance());
     const bool isLastStep = m_currentStep == Step::Location;
     if ( ImGui::Button(isLastStep ? TR("ui.wizard.new_project.create").data()
                                   : TR("ui.wizard.new_project.next").data(),
@@ -458,28 +427,44 @@ void NewProjectWizard::renderFooter()
         }
     }
     ImGui::EndDisabled();
+
+    if ( suppressActions && m_suppressFooterActionFrames > 0 ) {
+        --m_suppressFooterActionFrames;
+    }
 }
 
-void NewProjectWizard::openParentFolderPicker(UIManager* sourceManager)
+void NewProjectWizard::requestParentFolderPicker()
 {
+    m_pendingParentFolderPicker  = true;
+    m_suppressFooterActionFrames = 12;
+}
+
+void NewProjectWizard::processPendingParentFolderPicker()
+{
+    if ( !m_pendingParentFolderPicker ) {
+        return;
+    }
+
+    m_pendingParentFolderPicker = false;
     auto& config = Config::AppConfig::instance().getEditorSettings();
     m_locationErrorText.clear();
+    std::string defaultPath = existingDirectoryPathToUtf8(m_parentDirectory);
+    if ( defaultPath.empty() && !config.lastFilePickerPath.empty() ) {
+        defaultPath = existingDirectoryPathToUtf8(
+            Config::utf8ToPath(config.lastFilePickerPath));
+    }
+
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        nfdu8char_t* outPath = nullptr;
-        std::string  defaultPath =
-            existingDirectoryPathToUtf8(m_parentDirectory);
-        if ( defaultPath.empty() && !config.lastFilePickerPath.empty() ) {
-            defaultPath = existingDirectoryPathToUtf8(
-                Config::utf8ToPath(config.lastFilePickerPath));
-        }
+        nfdu8char_t*       outPath = nullptr;
         const nfdu8char_t* defaultPathPtr =
             defaultPath.empty() ? nullptr : defaultPath.c_str();
-        const nfdwindowhandle_t parentWindow =
-            resolveNativeDialogParent(sourceManager);
-        const nfdpickfolderu8args_t args{ defaultPathPtr, parentWindow };
-        const nfdresult_t result = NFD_PickFolderU8_With(&outPath, &args);
+        const nfdresult_t result = NFD_PickFolderU8(&outPath, defaultPathPtr);
+        m_isOpen                 = true;
+        m_shouldOpen             = true;
+        m_suppressFooterActionFrames = 12;
         if ( result == NFD_OKAY ) {
             m_parentDirectory = Config::utf8ToPath(outPath);
+            m_locationErrorText.clear();
             auto editorConfig =
                 Logic::EditorEngine::instance().getEditorConfig();
             editorConfig.settings.lastFilePickerPath = outPath;
@@ -491,14 +476,20 @@ void NewProjectWizard::openParentFolderPicker(UIManager* sourceManager)
                                       ? fmt::format("NFD Error: {}", errorText)
                                       : "NFD Error";
             XERROR("NFD Error: {}", errorText ? errorText : "");
+            openUnifiedParentFolderPicker(defaultPath);
         }
         return;
     }
 
+    openUnifiedParentFolderPicker(defaultPath);
+}
+
+void NewProjectWizard::openUnifiedParentFolderPicker(
+    const std::string& initialPath)
+{
+    auto& config = Config::AppConfig::instance().getEditorSettings();
     IGFD::FileDialogConfig fdConfig;
-    fdConfig.path              = config.lastFilePickerPath.empty()
-                                     ? std::string(".")
-                                     : config.lastFilePickerPath;
+    fdConfig.path = initialPath.empty() ? std::string(".") : initialPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
                                  ImGuiFileDialogFlags_HideColumnType |
@@ -538,6 +529,11 @@ void NewProjectWizard::renderParentFolderPicker(float dpiScale)
         }
         ImGuiFileDialog::Instance()->Close();
     }
+}
+
+bool NewProjectWizard::shouldSuppressFooterActionsThisFrame() const
+{
+    return m_suppressFooterActionFrames > 0;
 }
 
 void NewProjectWizard::submitCreateRequest()
@@ -595,7 +591,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         switch ( m_currentStep ) {
         case Step::ProjectInfo: renderProjectInfoStep(); break;
         case Step::Preferences: renderPreferencesStep(); break;
-        case Step::Location: renderLocationStep(sourceManager); break;
+        case Step::Location: renderLocationStep(); break;
         }
         ImGui::EndChild();
 
@@ -603,6 +599,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         ImGui::EndPopup();
     }
 
+    processPendingParentFolderPicker();
     renderParentFolderPicker(dpiScale);
 }
 
@@ -633,6 +630,8 @@ void NewProjectWizard::reset()
     copyToBuffer(m_mapperBuf, sizeof(m_mapperBuf), "Unknown");
     refreshFolderNameFromTitle();
     m_locationErrorText.clear();
+    m_suppressFooterActionFrames = 0;
+    m_pendingParentFolderPicker  = false;
 
     m_noteColorPaletteSchemeName.clear();
     m_initialSideBarTab = SideBarTab::FileExplorer;

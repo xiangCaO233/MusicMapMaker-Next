@@ -74,6 +74,29 @@ public:
     bool handleClientCursorPos(double cursorX, double cursorY) override;
 
 private:
+    /// @brief 判断 Win32 窗口当前是否明确处于最大化状态。
+    /// @param hWnd Win32 窗口句柄。
+    /// @return 当前窗口为最大化时返回 true。
+    [[nodiscard]] bool windowPlacementWantsMaximized(HWND hWnd) const;
+
+    /// @brief 在最小化发生前记录后续应恢复到的最大化状态。
+    /// @param hWnd Win32 窗口句柄。
+    void rememberRestoreStateBeforeMinimize(HWND hWnd);
+
+    /// @brief 判断窗口是否仍带有恢复最大化标记。
+    /// @param hWnd Win32 窗口句柄。
+    /// @return 仍需恢复最大化时返回 true。
+    [[nodiscard]] bool hasRestoreMaximizedProperty(HWND hWnd) const;
+
+    /// @brief 任务栏恢复后重新应用最大化，修正无边框窗口被还原成普通窗口。
+    /// @param hWnd Win32 窗口句柄。
+    void restoreMaximizedAfterMinimize(HWND hWnd);
+
+    /// @brief Apply the queued maximized restore after Win32 has finished its
+    /// normal restore message.
+    /// @param hWnd Win32 window handle.
+    void applyQueuedMaximizedRestore(HWND hWnd);
+
     /**
      * @brief Win32 窗口过程消息拦截器
      * @param hWnd 窗口句柄
@@ -98,6 +121,26 @@ private:
     GLFWwindow* m_window{ nullptr };           ///< 关联的 GLFW 窗口指针
     HWND        m_hwnd{ nullptr };             ///< 关联的 Win32 原生窗口句柄
     std::vector<Event::DragArea> m_dragAreas;  ///< 缓存的允许拖拽的矩形区域列表
+
+    /// @brief 最近一次非最小化尺寸消息是否表示窗口处于最大化。
+    bool m_lastKnownMaximized{ false };
+
+    /// @brief 最小化前是否最大化，用于任务栏恢复后重新最大化。
+    bool m_restoreMaximizedAfterMinimize{ false };
+
+    /// @brief 当前是否正在通过 ShowWindow 应用最大化恢复，避免同步消息递归。
+    bool m_applyingMaximizedRestore{ false };
+
+    /// @brief Whether a deferred maximized restore message is already queued.
+    bool m_maximizedRestorePosted{ false };
+
+    /// @brief Whether the next SC_RESTORE should be ignored after Alt+Tab
+    /// restores a minimized maximized window.
+    bool m_ignoreNextRestoreSysCommand{ false };
+
+    /// @brief Whether a message is queued to clear the temporary SC_RESTORE
+    /// ignore flag.
+    bool m_restoreIgnoreClearPosted{ false };
 };
 
 }  // namespace MMM::Graphic

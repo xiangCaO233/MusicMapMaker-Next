@@ -192,6 +192,9 @@ private:
     /// @brief 最小化前窗口是否最大化，用于任务栏恢复时重新应用最大化。
     bool m_restoreMaximizedAfterIconify{ false };
 
+    /// @brief 最近一次由用户或系统请求的主窗口最大化状态。
+    bool m_lastRequestedMaximized{ false };
+
     /// @brief 无原生装饰窗口的平台行为适配器。
     std::unique_ptr<IWindowFrameAdapter> m_windowFrameAdapter;
 };

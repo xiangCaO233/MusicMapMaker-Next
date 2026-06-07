@@ -409,6 +409,10 @@ bool consumeMainWindowActivation(GLFWwindow* window)
 }
 
 #ifdef _WIN32
+/// @brief HWND 属性名，与 Win32WindowAdapter 协同保留最小化前最大化状态。
+constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
+    L"MMMRestoreMaximizedAfterMinimize";
+
 /// @brief 判断 Win32 窗口最小化前是否处于最大化状态。
 /// @param hwnd Win32 窗口句柄。
 /// @return 任务栏恢复时应恢复到最大化状态则返回 true。
@@ -419,13 +423,22 @@ bool shouldRestoreWin32WindowToMaximized(HWND hwnd)
         return false;
     }
 
+    if ( GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr ) {
+        return true;
+    }
+
+    if ( IsZoomed(hwnd) ) {
+        return true;
+    }
+
     constexpr UINT  restoreToMaximizedFlag = 0x0002;
     WINDOWPLACEMENT placement{};
     placement.length = sizeof(WINDOWPLACEMENT);
     if ( !GetWindowPlacement(hwnd, &placement) ) {
         return false;
     }
-    return (placement.flags & restoreToMaximizedFlag) != 0;
+    return placement.showCmd == SW_SHOWMAXIMIZED ||
+           (placement.flags & restoreToMaximizedFlag) != 0;
 }
 #endif
 

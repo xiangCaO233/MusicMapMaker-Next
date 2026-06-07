@@ -20,6 +20,9 @@
 
 #ifdef _WIN32
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
+#    define GLFW_EXPOSE_NATIVE_WIN32
+#    include <GLFW/glfw3native.h>
+#    include <windows.h>
 #endif
 
 #if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
@@ -36,6 +39,170 @@ namespace
 {
 /// @brief 判断历史尺寸是否贴近显示器工作区时允许的像素误差。
 constexpr int MAXIMIZED_PLACEMENT_TOLERANCE = 8;
+
+#ifdef _WIN32
+/// @brief HWND 属性名，与 Win32WindowAdapter/renderer
+/// 协同保留最小化前最大化状态。
+constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
+    L"MMMRestoreMaximizedAfterMinimize";
+
+/// @brief Win32 WINDOWPLACEMENT flag that restores a minimized window to
+/// maximized state on the next activation.
+constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
+
+/// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。
+/// @param placement Win32 窗口布局信息。
+/// @return 当前 show command 是最大化时返回 true。
+bool win32PlacementShowsMaximized(const WINDOWPLACEMENT& placement)
+{
+    return placement.showCmd == SW_SHOWMAXIMIZED;
+}
+
+/// @brief 清除 Win32 最小化后恢复最大化的系统 hint。
+/// @param hwnd Win32 窗口句柄。
+void clearWin32RestoreToMaximizedFlag(HWND hwnd)
+{
+    if ( !hwnd ) {
+        return;
+    }
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hwnd, &placement) ||
+         (placement.flags & RESTORE_TO_MAXIMIZED_FLAG) == 0 ) {
+        return;
+    }
+
+    placement.flags &= ~RESTORE_TO_MAXIMIZED_FLAG;
+    SetWindowPlacement(hwnd, &placement);
+}
+
+/// @brief 判断 Win32 窗口当前是否明确处于最大化状态。
+/// @param hwnd Win32 窗口句柄。
+/// @return 当前窗口为最大化时返回 true。
+bool win32PlacementWantsMaximized(HWND hwnd)
+{
+    if ( !hwnd ) {
+        return false;
+    }
+
+    if ( IsZoomed(hwnd) ) {
+        return true;
+    }
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hwnd, &placement) ) {
+        return false;
+    }
+
+    return win32PlacementShowsMaximized(placement);
+}
+
+/// @brief 写入 Win32 最小化后恢复最大化的跨模块窗口属性。
+/// @param window GLFW 窗口句柄。
+/// @param restoreMaximized 任务栏恢复时是否应最大化。
+void setWin32RestoreMaximizedProperty(GLFWwindow* window, bool restoreMaximized)
+{
+    if ( !window ) {
+        return;
+    }
+
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        return;
+    }
+
+    if ( restoreMaximized ) {
+        SetPropW(hwnd, RESTORE_MAXIMIZED_PROP, reinterpret_cast<HANDLE>(1));
+    } else {
+        RemovePropW(hwnd, RESTORE_MAXIMIZED_PROP);
+    }
+}
+
+/// @brief 判断 GLFW 窗口是否带有恢复最大化的 Win32 属性。
+/// @param window GLFW 窗口句柄。
+/// @return 存在恢复最大化属性时返回 true。
+bool hasWin32RestoreMaximizedProperty(GLFWwindow* window)
+{
+    if ( !window ) {
+        return false;
+    }
+
+    HWND hwnd = glfwGetWin32Window(window);
+    return hwnd && GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr;
+}
+
+/// @brief Determine whether a Win32 minimize/restore transition should keep
+/// the previous maximized state.
+/// @param window GLFW window handle.
+/// @param lastRequestedMaximized Last maximized state requested by the app.
+/// @param cachedRestoreMaximized Previously cached iconify restore state.
+/// @return True if taskbar or Alt+Tab restore should return to maximized.
+bool shouldPreserveWin32MaximizedRestore(GLFWwindow* window,
+                                         bool        lastRequestedMaximized,
+                                         bool        cachedRestoreMaximized)
+{
+    if ( !window ) {
+        return false;
+    }
+
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        return false;
+    }
+
+    return cachedRestoreMaximized || lastRequestedMaximized ||
+           hasWin32RestoreMaximizedProperty(window) ||
+           win32PlacementWantsMaximized(hwnd);
+}
+
+/// @brief Minimize a Win32 window while preserving the system restore target.
+/// @param hwnd Win32 window handle.
+/// @param restoreMaximized Whether the next taskbar restore should maximize.
+void minimizeWin32Window(HWND hwnd, bool restoreMaximized)
+{
+    if ( !hwnd ) {
+        return;
+    }
+
+    if ( restoreMaximized ) {
+        WINDOWPLACEMENT placement{};
+        placement.length = sizeof(WINDOWPLACEMENT);
+        if ( GetWindowPlacement(hwnd, &placement) ) {
+            placement.flags |= RESTORE_TO_MAXIMIZED_FLAG;
+            placement.showCmd = SW_SHOWMINIMIZED;
+            SetWindowPlacement(hwnd, &placement);
+            return;
+        }
+    }
+
+    clearWin32RestoreToMaximizedFlag(hwnd);
+    ShowWindow(hwnd, SW_MINIMIZE);
+}
+
+/// @brief 在 Win32 上最小化窗口，并在最小化前持久化最大化还原意图。
+/// @param window GLFW 窗口句柄。
+/// @param lastRequestedMaximized 最近一次请求的最大化状态。
+void iconifyWin32WindowPreservingMaximize(GLFWwindow* window,
+                                          bool        lastRequestedMaximized)
+{
+    if ( !window ) {
+        return;
+    }
+
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        glfwIconifyWindow(window);
+        return;
+    }
+
+    const bool restoreMaximized = shouldPreserveWin32MaximizedRestore(
+        window, lastRequestedMaximized, false);
+    setWin32RestoreMaximizedProperty(window, restoreMaximized);
+    minimizeWin32Window(hwnd, restoreMaximized);
+}
+#endif
 }  // namespace
 
 NativeWindow::NativeWindow(int w, int h, const char* wtitle)
@@ -170,6 +337,10 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     }
 
     rememberCurrentWindowPlacement();
+    if ( m_windowHandle ) {
+        m_lastRequestedMaximized =
+            glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+    }
 
     // 在 glfwCreateWindow 之后调用
 #ifdef _WIN32
@@ -247,8 +418,30 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             auto app =
                 reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
             if ( app ) {
-                if ( maximized == GLFW_FALSE ) {
-                    app->rememberCurrentWindowPlacement();
+                const bool isMaximized = maximized == GLFW_TRUE;
+                if ( isMaximized ) {
+                    app->m_lastRequestedMaximized = true;
+#ifdef _WIN32
+                    setWin32RestoreMaximizedProperty(w, false);
+#endif
+                } else {
+#ifdef _WIN32
+                    const bool keepMaximizedRestore =
+                        shouldPreserveWin32MaximizedRestore(
+                            w, false, app->m_restoreMaximizedAfterIconify);
+#else
+                    constexpr bool keepMaximizedRestore = false;
+#endif
+                    if ( !keepMaximizedRestore ) {
+                        app->m_lastRequestedMaximized = false;
+                        app->rememberCurrentWindowPlacement();
+#ifdef _WIN32
+                        setWin32RestoreMaximizedProperty(w, false);
+                        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(w));
+#endif
+                    } else {
+                        app->m_lastRequestedMaximized = true;
+                    }
                 }
                 app->refreshWindowFrameShape();
             }
@@ -348,8 +541,12 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
                 break;
             }
             case Event::NativeEventType::GLFW_ICONFY_WINDOW: {
-                // 最小化窗口
+#ifdef _WIN32
+                iconifyWin32WindowPreservingMaximize(m_windowHandle,
+                                                     m_lastRequestedMaximized);
+#else
                 glfwIconifyWindow(m_windowHandle);
+#endif
                 XINFO("Window iconified.");
                 break;
             }
@@ -420,6 +617,15 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
 
     rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
 
+    m_lastRequestedMaximized = maximized;
+#ifdef _WIN32
+    if ( !maximized ) {
+        m_restoreMaximizedAfterIconify = false;
+        setWin32RestoreMaximizedProperty(m_windowHandle, false);
+        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+    }
+#endif
+
     if ( glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ) {
         glfwRestoreWindow(m_windowHandle);
     }
@@ -443,17 +649,26 @@ void NativeWindow::toggleMaximized()
 
     const int maximized = glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
     if ( maximized ) {
+        m_lastRequestedMaximized       = false;
+        m_restoreMaximizedAfterIconify = false;
+#ifdef _WIN32
+        setWin32RestoreMaximizedProperty(m_windowHandle, false);
+#endif
         glfwRestoreWindow(m_windowHandle);
+#ifdef _WIN32
+        clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+#endif
         XINFO("Window restored.");
         refreshWindowFrameShape();
         return;
     }
 
     rememberCurrentWindowPlacement();
-    const int restoreX      = m_normalWindowPos[0];
-    const int restoreY      = m_normalWindowPos[1];
-    const int restoreWidth  = m_normalWindowSize[0];
-    const int restoreHeight = m_normalWindowSize[1];
+    const int restoreX       = m_normalWindowPos[0];
+    const int restoreY       = m_normalWindowPos[1];
+    const int restoreWidth   = m_normalWindowSize[0];
+    const int restoreHeight  = m_normalWindowSize[1];
+    m_lastRequestedMaximized = true;
     glfwMaximizeWindow(m_windowHandle);
     rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
     XINFO("Window maximized.");
@@ -603,13 +818,32 @@ void NativeWindow::handleWindowIconify(int iconified)
     }
 
     if ( iconified == GLFW_TRUE ) {
+#ifdef _WIN32
         m_restoreMaximizedAfterIconify =
+            shouldPreserveWin32MaximizedRestore(m_windowHandle,
+                                                m_lastRequestedMaximized,
+                                                m_restoreMaximizedAfterIconify);
+        m_lastRequestedMaximized =
+            m_lastRequestedMaximized || m_restoreMaximizedAfterIconify;
+        setWin32RestoreMaximizedProperty(m_windowHandle,
+                                         m_restoreMaximizedAfterIconify);
+#else
+        m_restoreMaximizedAfterIconify =
+            m_lastRequestedMaximized ||
             glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+#endif
         return;
     }
 
+#ifdef _WIN32
+    m_restoreMaximizedAfterIconify =
+        shouldPreserveWin32MaximizedRestore(m_windowHandle,
+                                            m_lastRequestedMaximized,
+                                            m_restoreMaximizedAfterIconify);
+#endif
     if ( m_restoreMaximizedAfterIconify &&
          glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) != GLFW_TRUE ) {
+        m_lastRequestedMaximized = true;
         glfwMaximizeWindow(m_windowHandle);
     }
     m_restoreMaximizedAfterIconify = false;
