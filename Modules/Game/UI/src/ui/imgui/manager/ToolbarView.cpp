@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
@@ -418,7 +419,8 @@ void ToolbarView::update(UIManager* sourceManager)
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.move").data(),
-                       showToolLabels);
+                       showToolLabels,
+                       sourceManager);
         advanceItem();
         drawToolButton(ICON_MMM_SQUARE_SELECT,
                        Logic::EditTool::Marquee,
@@ -426,7 +428,8 @@ void ToolbarView::update(UIManager* sourceManager)
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.marquee").data(),
-                       showToolLabels);
+                       showToolLabels,
+                       sourceManager);
         advanceItem();
         drawToolButton(ICON_MMM_PEN,
                        Logic::EditTool::Draw,
@@ -434,7 +437,8 @@ void ToolbarView::update(UIManager* sourceManager)
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.draw").data(),
-                       showToolLabels);
+                       showToolLabels,
+                       sourceManager);
         advanceItem();
         drawToolButton(ICON_MMM_PAINT_BRUSH,
                        Logic::EditTool::ColorBrush,
@@ -442,7 +446,8 @@ void ToolbarView::update(UIManager* sourceManager)
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_brush").data(),
-                       showToolLabels);
+                       showToolLabels,
+                       sourceManager);
         advanceItem();
         drawToolButton(ICON_MMM_ERASER,
                        Logic::EditTool::ColorEraser,
@@ -450,7 +455,8 @@ void ToolbarView::update(UIManager* sourceManager)
                        btnSize,
                        btnHeight,
                        TR("ui.toolbar.short.color_eraser").data(),
-                       showToolLabels);
+                       showToolLabels,
+                       sourceManager);
         advanceItem();
 
         ImVec2 sepPos = ImGui::GetCursorScreenPos();
@@ -1619,7 +1625,8 @@ bool ToolbarView::drawIconButton(const char* icon, const char* id,
 
 void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
                                  const char* tooltip, float width, float height,
-                                 const char* shortLabel, bool showLabel)
+                                 const char* shortLabel, bool showLabel,
+                                 UIManager* sourceManager)
 {
     bool isActive = (m_currentTool == tool);
 
@@ -1646,6 +1653,13 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             }
             Logic::EditorEngine::instance().pushCommand(
                 Logic::CmdChangeTool{ tool });
+            if ( sourceManager ) {
+                auto* timeline = sourceManager->getView<Canvas::TimelineCanvas>(
+                    "TimelineWindow");
+                if ( timeline && timeline->wasFocusedLastFrame() ) {
+                    timeline->requestFocus();
+                }
+            }
         }
     }
     ImGui::PopID();

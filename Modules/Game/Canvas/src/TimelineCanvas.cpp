@@ -7,6 +7,7 @@
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
@@ -17,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string_view>
@@ -26,6 +28,26 @@ namespace MMM::Canvas
 {
 namespace
 {
+/// @brief 判断 ImGui 窗口是否为左侧工具栏窗口。
+/// @param window 待判断的 ImGui 窗口。
+/// @return 指向工具栏窗口时返回 true。
+bool isToolbarWindow(const ImGuiWindow* window)
+{
+    return window && std::strcmp(window->Name, " ###Toolbar") == 0;
+}
+
+/// @brief 判断当前 ImGui 焦点或悬浮窗口是否为工具栏。
+/// @return 工具栏正处理鼠标或键盘焦点时返回 true。
+bool isToolbarFocusedOrHovered()
+{
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if ( !context ) {
+        return false;
+    }
+    return isToolbarWindow(context->NavWindow) ||
+           isToolbarWindow(context->HoveredWindow);
+}
+
 /// @brief Timeline 画布齿轮按钮的类型信息
 struct TimelineGearInfo {
     /// @brief 对应 TimelineInteractiveElement 的效果掩码。
@@ -109,12 +131,22 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
     bool windowOpen = editorSettings.showTimelineWindow;
 
+    if ( m_shouldFocusNextFrame ) {
+        ImGui::SetNextWindowFocus();
+        m_shouldFocusNextFrame = false;
+    }
     UI::LayoutContext lctx(m_layoutCtx,
                            windowName,
                            true,
                            ImGuiWindowFlags_NoScrollbar,
                            &windowOpen);
+    if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
+        m_hasTimingInteractionFocus = true;
+    }
+    m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
     if ( !windowOpen ) {
+        m_wasFocusedLastFrame             = false;
+        m_hasTimingInteractionFocus       = false;
         editorSettings.showTimelineWindow = false;
         appConfig.save();
         return;
@@ -188,8 +220,25 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             // 3. 处理 Timeline Timing 的工具交互和反馈
             ImVec2 canvasPos = ImGui::GetItemRectMin();
             ImVec2 mousePos  = ImGui::GetMousePos();
-            bool   isFocused =
+            bool   windowFocused =
                 ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+            const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
+            const bool timelineMouseClicked =
+                isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                              ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                              ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
+            const bool outsideMouseClicked =
+                !isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                               ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                               ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
+            if ( windowFocused || timelineMouseClicked ) {
+                m_hasTimingInteractionFocus = true;
+            } else if ( outsideMouseClicked && !toolbarFocusedOrHovered ) {
+                m_hasTimingInteractionFocus = false;
+            }
+            m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
+            const bool hasTimingInteractionFocus =
+                windowFocused || m_hasTimingInteractionFocus;
             ImVec2 gearGlyphSize = ImGui::CalcTextSize(UI::ICON_MMM_COG);
             float  iconSize      = std::ceil(
                 std::max({ 20.0f, gearGlyphSize.x, gearGlyphSize.y }) + 4.0f);
@@ -366,8 +415,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 openInlineGearEditor(*inlineGearHit);
             }
 
-            handleTimingCanvasInteraction(
-                canvasPos, size, isHovered && !inlineGearHit, isFocused);
+            handleTimingCanvasInteraction(canvasPos,
+                                          size,
+                                          isHovered && !inlineGearHit,
+                                          hasTimingInteractionFocus);
             renderTimingInteractionOverlay(canvasPos, size);
             refreshTimelineInteractionDecoration(size);
 
@@ -461,6 +512,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             renderTimingPointsTableWindow();
         }
     }
+}
+
+/// @brief 请求下一帧将时间线窗口聚焦到前台。
+void TimelineCanvas::requestFocus()
+{
+    m_shouldFocusNextFrame      = true;
+    m_hasTimingInteractionFocus = true;
+    m_wasFocusedLastFrame       = true;
 }
 
 const std::vector<Graphic::Vertex::VKBasicVertex>&

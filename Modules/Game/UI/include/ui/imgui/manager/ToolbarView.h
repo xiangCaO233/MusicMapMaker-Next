@@ -81,10 +81,12 @@ private:
      * @param height 按钮高度
      * @param shortLabel 图标下方显示的短标签
      * @param showLabel 是否显示短标签
+     * @param sourceManager 当前 UI 管理器，用于恢复工具切换前的画布焦点
      */
     void drawToolButton(const char* icon, Logic::EditTool tool,
                         const char* tooltip, float width, float height,
-                        const char* shortLabel, bool showLabel);
+                        const char* shortLabel, bool showLabel,
+                        UIManager* sourceManager);
 
     /// @brief 绘制带可选短标签的图标按钮。
     /// @param icon 图标字符串。

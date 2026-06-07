@@ -745,13 +745,13 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 48.0f * dpiScale,
                 ImGui::GetContentRegionAvail().y - footerReserveHeight);
 
-            if ( m_packageCandidateFiles.empty() ) {
-                ImGui::TextUnformatted("没有找到符合当前打包格式规则的文件。");
-                ImGui::Dummy(ImVec2(0.0f, listHeight));
-            } else {
-                if ( ImGui::BeginChild("PackageCandidateFilesChild",
-                                       ImVec2(0.0f, listHeight),
-                                       true) ) {
+            if ( ImGui::BeginChild("PackageCandidateFilesChild",
+                                   ImVec2(0.0f, listHeight),
+                                   true) ) {
+                if ( m_packageCandidateFiles.empty() ) {
+                    ImGui::TextUnformatted(
+                        "没有找到符合当前打包格式规则的文件。");
+                } else {
                     constexpr ImGuiTableFlags tableFlags =
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                         ImGuiTableFlags_ScrollY;
@@ -790,8 +790,8 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                         ImGui::EndTable();
                     }
                 }
-                ImGui::EndChild();
             }
+            ImGui::EndChild();
 
             ImGui::Spacing();
             ImGui::Separator();

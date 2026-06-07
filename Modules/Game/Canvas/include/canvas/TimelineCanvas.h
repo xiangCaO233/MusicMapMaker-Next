@@ -82,6 +82,13 @@ public:
     /// @param open 是否打开表格窗口。
     void setTimingPointsTableOpen(bool open) { m_isTableWindowOpen = open; }
 
+    /// @brief 请求下一帧将时间线窗口聚焦到前台。
+    void requestFocus();
+
+    /// @brief 判断时间线上一帧是否拥有 Timing 编辑焦点。
+    /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
+    bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
+
 protected:
     const std::vector<Graphic::Vertex::VKBasicVertex>&
                                  getVertices() const override;
@@ -319,6 +326,12 @@ private:
     // 弹窗状态
     bool m_isPopupOpen{ false };
     bool m_isTableWindowOpen{ false };
+    /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
+    bool m_shouldFocusNextFrame{ false };
+    /// @brief 时间线上一帧是否拥有 Timing 编辑焦点。
+    bool m_wasFocusedLastFrame{ false };
+    /// @brief Timeline Timing 编辑焦点是否仍归属于时间线窗口。
+    bool m_hasTimingInteractionFocus{ false };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
     std::string  m_tableBeatmapKey;
     entt::entity m_editingEntity{ entt::null };
