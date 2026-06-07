@@ -408,6 +408,27 @@ bool consumeMainWindowActivation(GLFWwindow* window)
     return activated;
 }
 
+#ifdef _WIN32
+/// @brief 判断 Win32 窗口最小化前是否处于最大化状态。
+/// @param hwnd Win32 窗口句柄。
+/// @return 任务栏恢复时应恢复到最大化状态则返回 true。
+/// @warning 低频平台查询：只在主窗口被任务栏/系统激活时调用。
+bool shouldRestoreWin32WindowToMaximized(HWND hwnd)
+{
+    if ( !hwnd ) {
+        return false;
+    }
+
+    constexpr UINT  restoreToMaximizedFlag = 0x0002;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hwnd, &placement) ) {
+        return false;
+    }
+    return (placement.flags & restoreToMaximizedFlag) != 0;
+}
+#endif
+
 /// @brief 将 GLFW 窗口恢复并提升到当前窗口组顶层。
 /// @param window GLFW 窗口句柄。
 /// @param activate 是否请求系统前台焦点。
@@ -418,10 +439,6 @@ void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
         return;
     }
 
-    if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
-        glfwRestoreWindow(window);
-    }
-
 #ifdef _WIN32
     HWND hwnd = glfwGetWin32Window(window);
     if ( !hwnd ) {
@@ -429,9 +446,17 @@ void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
     }
 
     if ( IsIconic(hwnd) ) {
-        ShowWindow(hwnd, SW_RESTORE);
+        const bool restoreMaximized = shouldRestoreWin32WindowToMaximized(hwnd);
+        ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
+    }
+#else
+    if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
+        glfwRestoreWindow(window);
     }
 
+#endif
+
+#ifdef _WIN32
     UINT flags = SWP_NOMOVE | SWP_NOSIZE;
     if ( !activate ) {
         flags |= SWP_NOACTIVATE;
@@ -456,6 +481,8 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
     }
 
 #ifdef _WIN32
+    // Windows 提窗顺序很关键：主窗口先拿回前台焦点，随后独立
+    // ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
     raiseGlfwWindowToTop(mainWindow, true);
 #endif
 
