@@ -135,6 +135,18 @@ private:
         double bpm{ 120.0 };
     };
 
+    /// @brief BPM 测量线当前拖动语义。
+    enum class BeatMarkerDragMode {
+        /// @brief 未拖动 BPM 测量线。
+        None,
+
+        /// @brief 拖动段落首拍红线，调整段落起始位置。
+        SegmentStart,
+
+        /// @brief 拖动普通整拍白线，调整该段落拍长。
+        BeatLength
+    };
+
     /// @brief 应用测量结果时可选的已打开谱面。
     struct OpenBeatmapApplyOption {
         /// @brief Session 注册表索引。
@@ -236,7 +248,7 @@ private:
                             const ImVec2& rectMax, double viewStart,
                             double viewEnd) const;
 
-    /// @brief 处理整拍线顶部三角手柄的拖拽，反向调整第一拍位置。
+    /// @brief 处理 BPM 段落首拍红线和普通整拍白线的拖拽。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
@@ -500,16 +512,19 @@ private:
     /// @brief 播放指针拖拽预览的目标画布时间，单位为秒。
     double m_pendingPlaybackSeekCanvasTime{ 0.0 };
 
-    /// @brief 当前是否正在拖动整拍线手柄。
+    /// @brief 当前是否正在拖动 BPM 测量线。
     bool m_isBeatMarkerDragging{ false };
 
-    /// @brief 当前整拍线拖拽所属的视图标识，0 表示无拖拽。
+    /// @brief 当前 BPM 测量线拖拽所属的视图标识，0 表示无拖拽。
     int m_beatMarkerDragOwner{ 0 };
 
-    /// @brief 当前正在拖动的整拍索引。
+    /// @brief 当前 BPM 测量线拖动语义。
+    BeatMarkerDragMode m_beatMarkerDragMode{ BeatMarkerDragMode::None };
+
+    /// @brief 当前正在拖动的整拍索引，段落首拍红线固定为 0。
     int64_t m_draggedBeatIndex{ 0 };
 
-    /// @brief 当前正在拖动的整拍所在 BPM 段落索引。
+    /// @brief 当前正在拖动的 BPM 测量线所在段落索引。
     std::size_t m_draggedBeatSegmentIndex{ 0 };
 
     /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
