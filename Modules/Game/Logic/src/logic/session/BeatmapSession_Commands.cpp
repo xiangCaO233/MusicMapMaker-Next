@@ -14,15 +14,18 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include <stb_image.h>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
 #include <miniz.h>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -176,16 +179,117 @@ bool writePackageOutputFile(const std::filesystem::path& path, const void* data,
     return file.good();
 }
 
+/// @brief 取得打包格式要求的主谱面扩展名。
+/// @param packageTypes 输出包格式对应的文件类型规则。
+/// @return 带前导点的目标谱面扩展名。
+std::string getPackageBeatmapOutputExtension(
+    const MMM::PackageSupportedFileTypes& packageTypes)
+{
+    if ( packageTypes.m_beatmapExtensions.empty() ) return ".mmm";
+    return std::string(packageTypes.m_beatmapExtensions.front());
+}
+
+/// @brief 判断 .mmm 来源是否需要转换成当前包格式的谱面文件。
+/// @param sourceExtension 来源文件扩展名。
+/// @param outputExtension 目标谱面扩展名。
+/// @return 是否需要在打包前转换。
+bool shouldConvertPackageBeatmapSource(const std::string& sourceExtension,
+                                       const std::string& outputExtension)
+{
+    return MMM::packageExtensionEquals(sourceExtension, ".mmm") &&
+           !MMM::packageExtensionEquals(outputExtension, ".mmm");
+}
+
+/// @brief 生成临时转换谱面文件路径。
+/// @param sourcePath 来源谱面路径。
+/// @param outputExtension 转换后的谱面扩展名。
+/// @return 临时文件路径，失败时为空路径。
+std::filesystem::path makeTemporaryConvertedBeatmapPath(
+    const std::filesystem::path& sourcePath, const std::string& outputExtension)
+{
+    std::error_code filesystemError;
+    auto tempRoot = std::filesystem::temp_directory_path(filesystemError);
+    if ( filesystemError || tempRoot.empty() ) return {};
+
+    const auto stamp =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    std::filesystem::path fileName = sourcePath.stem();
+    if ( fileName.empty() ) fileName = "mmm_package_map";
+    fileName += "_converted_";
+    fileName += std::to_string(stamp);
+    fileName += outputExtension;
+    return (tempRoot / fileName).lexically_normal();
+}
+
+/// @brief 将 .mmm 谱面转换成指定路径的目标格式文件。
+/// @param sourcePath 来源 .mmm 谱面路径。
+/// @param outputPath 转换后输出路径。
+/// @return 是否转换成功。
+bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
+                               const std::filesystem::path& outputPath)
+{
+    auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
+    if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
+    beatMap.m_baseMapMetadata.map_path = outputPath;
+    return beatMap.saveToFile(outputPath);
+}
+
+/// @brief 读取 .mmm 转换后的目标谱面字节。
+/// @param sourcePath 来源 .mmm 谱面路径。
+/// @param projectOutputPath 保存到项目中时使用的目标路径。
+/// @param outputExtension 目标谱面扩展名。
+/// @param saveToProject 是否将转换产物留在项目目录中。
+/// @param outBytes 输出文件字节。
+/// @return 是否成功读取转换结果。
+bool readConvertedPackageBeatmapBytes(
+    const std::filesystem::path& sourcePath,
+    const std::filesystem::path& projectOutputPath,
+    const std::string& outputExtension, bool saveToProject,
+    std::vector<std::uint8_t>& outBytes)
+{
+    const auto conversionPath =
+        saveToProject
+            ? projectOutputPath
+            : makeTemporaryConvertedBeatmapPath(sourcePath, outputExtension);
+    if ( conversionPath.empty() ) return false;
+
+    if ( saveToProject ) {
+        std::error_code filesystemError;
+        const auto      parentPath = conversionPath.parent_path();
+        if ( !parentPath.empty() ) {
+            std::filesystem::create_directories(parentPath, filesystemError);
+            if ( filesystemError ) return false;
+        }
+    }
+
+    if ( !convertPackageBeatmapFile(sourcePath, conversionPath) ) {
+        if ( !saveToProject ) {
+            std::error_code removeError;
+            std::filesystem::remove(conversionPath, removeError);
+        }
+        return false;
+    }
+
+    const bool readOk = readPackageSourceFile(conversionPath, outBytes);
+    if ( !saveToProject ) {
+        std::error_code removeError;
+        std::filesystem::remove(conversionPath, removeError);
+    }
+    return readOk;
+}
+
 /// @brief 写入 zip 兼容的谱面包。
 /// @param projectRoot 当前项目根目录。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
 /// @param packageTypes 输出包格式对应的文件类型规则。
+/// @param saveConvertedBeatmapsToProject 是否将转换后的谱面文件保存回项目目录。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
                          const std::filesystem::path&    outputPath,
                          const std::vector<std::string>& selectedRelativePaths,
-                         const MMM::PackageSupportedFileTypes& packageTypes)
+                         const MMM::PackageSupportedFileTypes& packageTypes,
+                         bool saveConvertedBeatmapsToProject)
 {
     if ( selectedRelativePaths.empty() ) return false;
 
@@ -197,6 +301,8 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
     bool                            success = true;
     std::vector<std::uint8_t>       fileBytes;
     std::unordered_set<std::string> archivedNames;
+    const std::string               packageBeatmapExtension =
+        getPackageBeatmapOutputExtension(packageTypes);
     for ( const auto& relativeUtf8 : selectedRelativePaths ) {
         const auto relativePath =
             MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
@@ -223,13 +329,35 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
             break;
         }
 
-        std::string archiveName = MMM::Config::pathToUtf8Generic(relativePath);
+        auto       archiveRelativePath = relativePath;
+        const bool shouldConvert       = shouldConvertPackageBeatmapSource(
+            extension, packageBeatmapExtension);
+        if ( shouldConvert ) {
+            archiveRelativePath.replace_extension(packageBeatmapExtension);
+        }
+
+        std::string archiveName =
+            MMM::Config::pathToUtf8Generic(archiveRelativePath);
         if ( archiveName.empty() ||
              !archivedNames.insert(archiveName).second ) {
             continue;
         }
 
-        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+        if ( shouldConvert ) {
+            const auto projectOutputPath =
+                (projectRoot / archiveRelativePath).lexically_normal();
+            if ( !readConvertedPackageBeatmapBytes(
+                     sourcePath,
+                     projectOutputPath,
+                     packageBeatmapExtension,
+                     saveConvertedBeatmapsToProject,
+                     fileBytes) ) {
+                XERROR("PackBeatmap: failed to convert source file: {}",
+                       relativeUtf8);
+                success = false;
+                break;
+            }
+        } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
             XERROR("PackBeatmap: failed to read source file: {}", relativeUtf8);
             success = false;
             break;
@@ -574,10 +702,12 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
         return;
     }
 
-    const bool success = writeBeatmapPackage(project->m_projectRoot,
-                                             outputPath,
-                                             cmd.selectedProjectRelativePaths,
-                                             *packageTypes);
+    const bool success =
+        writeBeatmapPackage(project->m_projectRoot,
+                            outputPath,
+                            cmd.selectedProjectRelativePaths,
+                            *packageTypes,
+                            cmd.saveConvertedBeatmapsToProject);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

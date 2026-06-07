@@ -358,6 +358,9 @@ struct CmdPackBeatmap {
 
     /// @brief 需要写入包内的项目相对文件路径列表，使用 UTF-8 编码。
     std::vector<std::string> selectedProjectRelativePaths;
+
+    /// @brief 是否将 .mmm 转换出的目标谱面文件保存回项目目录。
+    bool saveConvertedBeatmapsToProject{ false };
 };
 
 /**

@@ -290,6 +290,18 @@ findPackageSupportedFileTypes(std::string_view extension)
     return false;
 }
 
+/// @brief 判断扩展名是否可作为指定打包格式的谱面来源文件。
+/// @param types 打包格式文件类型规则。
+/// @param extension 待检查的谱面文件扩展名，可带或不带前导点。
+/// @return 扩展名是否可作为打包谱面来源。
+[[nodiscard]] constexpr bool isPackageBeatmapSourceExtensionSupported(
+    const PackageSupportedFileTypes& types, std::string_view extension)
+{
+    return packageExtensionEquals(extension, ".mmm") ||
+           isPackageResourceExtensionSupported(
+               types, PackageResourceType::Beatmap, extension);
+}
+
 /// @brief 判断文件扩展名是否可作为指定打包格式的候选资源。
 /// @param types 打包格式文件类型规则。
 /// @param extension 待检查资源扩展名，可带或不带前导点。
@@ -299,8 +311,7 @@ findPackageSupportedFileTypes(std::string_view extension)
 {
     if ( extension.empty() ) return false;
 
-    if ( isPackageResourceExtensionSupported(
-             types, PackageResourceType::Beatmap, extension) ) {
+    if ( isPackageBeatmapSourceExtensionSupported(types, extension) ) {
         return true;
     }
     if ( types.m_allowAllAudioFormats

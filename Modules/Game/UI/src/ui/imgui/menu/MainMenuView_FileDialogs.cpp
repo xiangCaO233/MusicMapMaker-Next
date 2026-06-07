@@ -261,8 +261,12 @@ bool isPackageArchiveExtension(const std::string& extension)
 std::string getPackageCandidateTypeLabel(const PackageSupportedFileTypes& types,
                                          const std::string& extension)
 {
-    if ( isPackageResourceExtensionSupported(
-             types, PackageResourceType::Beatmap, extension) ) {
+    if ( isPackageBeatmapSourceExtensionSupported(types, extension) ) {
+        if ( packageExtensionEquals(extension, ".mmm") &&
+             !isPackageResourceExtensionSupported(
+                 types, PackageResourceType::Beatmap, extension) ) {
+            return "谱面源";
+        }
         return "谱面";
     }
     if ( types.m_allowAllAudioFormats
@@ -392,6 +396,9 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
     dispatchCommand(Logic::CmdPackBeatmap{
         .exportPath                   = path,
         .selectedProjectRelativePaths = m_pendingPackageRelativePaths,
+        .saveConvertedBeatmapsToProject =
+            m_selectedPackageFileType == PackageFileType::Mcz &&
+            m_saveConvertedPackageBeatmapsToProject,
     });
     m_pendingPackageRelativePaths.clear();
 }
@@ -731,6 +738,11 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 for ( auto& file : m_packageCandidateFiles ) {
                     file.selected = false;
                 }
+            }
+            if ( m_selectedPackageFileType == PackageFileType::Mcz ) {
+                ImGui::SameLine();
+                ImGui::Checkbox("保存转换出的 .mc 到项目中",
+                                &m_saveConvertedPackageBeatmapsToProject);
             }
 
             ImGui::Spacing();

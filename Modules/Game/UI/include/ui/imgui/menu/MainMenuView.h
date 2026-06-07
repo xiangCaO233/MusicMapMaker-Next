@@ -356,6 +356,8 @@ private:
     std::vector<PackageCandidateFile> m_packageCandidateFiles;
     /// @brief 等待输出路径确认的已选项目相对文件路径。
     std::vector<std::string> m_pendingPackageRelativePaths;
+    /// @brief 是否将 .mmm 打包转换产物保存回项目目录。
+    bool m_saveConvertedPackageBeatmapsToProject{ false };
 
     /// @brief 更新检查器实例。
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;
