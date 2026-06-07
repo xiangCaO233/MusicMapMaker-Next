@@ -47,7 +47,8 @@ private:
     void renderPreferencesStep();
 
     /// @brief 绘制项目保存位置步骤。
-    void renderLocationStep();
+    /// @param sourceManager 当前 UI 管理器，用于获取原生父窗口。
+    void renderLocationStep(UIManager* sourceManager);
 
     /// @brief 绘制底部操作按钮。
     void renderFooter();
@@ -62,7 +63,8 @@ private:
                                 std::size_t bufferSize);
 
     /// @brief 打开项目保存父目录选择器。
-    void openParentFolderPicker();
+    /// @param sourceManager 当前 UI 管理器，用于获取原生父窗口。
+    void openParentFolderPicker(UIManager* sourceManager);
 
     /// @brief 绘制统一文件选择器中的父目录选择窗口。
     /// @param dpiScale 当前窗口内容缩放。

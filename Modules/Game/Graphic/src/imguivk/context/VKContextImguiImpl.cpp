@@ -144,7 +144,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
     // IM_ASSERT(font != nullptr);
 
-    // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
+    // 重新设置关键窗口回调，确保在 ImGui 初始化后仍然有效
+    glfwSetWindowIconifyCallback(window_handle,
+                                 NativeWindow::GLFW_IconifyCallback);
     glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
 
     setupFonts();

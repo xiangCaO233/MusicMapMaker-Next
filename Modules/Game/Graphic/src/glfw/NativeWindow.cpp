@@ -202,6 +202,8 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     glfwSetWindowPosCallback(m_windowHandle, &NativeWindow::windowPosCallback);
     glfwSetWindowSizeCallback(m_windowHandle,
                               &NativeWindow::windowSizeCallback);
+    glfwSetWindowIconifyCallback(m_windowHandle,
+                                 &NativeWindow::GLFW_IconifyCallback);
     glfwSetWindowFocusCallback(m_windowHandle, [](GLFWwindow* w, int focused) {
         auto app = reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
         if ( app && app->m_windowFrameAdapter ) {
@@ -592,6 +594,28 @@ void NativeWindow::rememberWindowPlacement(int x, int y, int width, int height)
     m_normalWindowSize[1] = height;
 }
 
+/// @brief 处理窗口最小化/恢复事件，并在任务栏恢复时保留最大化状态。
+/// @param iconified GLFW 最小化状态。
+void NativeWindow::handleWindowIconify(int iconified)
+{
+    if ( !m_windowHandle ) {
+        return;
+    }
+
+    if ( iconified == GLFW_TRUE ) {
+        m_restoreMaximizedAfterIconify =
+            glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+        return;
+    }
+
+    if ( m_restoreMaximizedAfterIconify &&
+         glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) != GLFW_TRUE ) {
+        glfwMaximizeWindow(m_windowHandle);
+    }
+    m_restoreMaximizedAfterIconify = false;
+    refreshWindowFrameShape();
+}
+
 void NativeWindow::GLFW_KeyCallback(GLFWwindow* w, int key, int scancode,
                                     int action, int mods)
 {
@@ -629,6 +653,18 @@ void NativeWindow::GLFW_DropCallback(GLFWwindow* w, int count,
     e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
 
     MMM::Event::EventBus::instance().publish(e);
+}
+
+/// @brief GLFW 窗口最小化/恢复回调入口。
+/// @param window GLFW 窗口句柄。
+/// @param iconified GLFW 最小化状态。
+void NativeWindow::GLFW_IconifyCallback(GLFWwindow* window, int iconified)
+{
+    auto app =
+        reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(window));
+    if ( app ) {
+        app->handleWindowIconify(iconified);
+    }
 }
 
 bool NativeWindow::shouldClose() const

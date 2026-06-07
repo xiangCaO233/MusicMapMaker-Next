@@ -4,12 +4,20 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
+#ifdef _WIN32
+#    define GLFW_EXPOSE_NATIVE_WIN32
+#endif
+#include "graphic/glfw/window/NativeWindow.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#ifdef _WIN32
+#    include <GLFW/glfw3native.h>
+#endif
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
@@ -113,12 +121,45 @@ std::string existingDirectoryPathToUtf8(const std::filesystem::path& path)
     if ( path.empty() ) return {};
 
     std::error_code filesystemError;
-    if ( !std::filesystem::exists(path, filesystemError) || filesystemError ||
-         !std::filesystem::is_directory(path, filesystemError) ||
+    const auto absolutePath = std::filesystem::absolute(path, filesystemError);
+    if ( filesystemError ) {
+        return {};
+    }
+
+    if ( !std::filesystem::exists(absolutePath, filesystemError) ||
+         filesystemError ||
+         !std::filesystem::is_directory(absolutePath, filesystemError) ||
          filesystemError ) {
         return {};
     }
-    return Config::pathToUtf8(path);
+    return Config::pathToUtf8(absolutePath);
+}
+
+/// @brief 从 UI 管理器解析 NFD 原生父窗口。
+/// @param sourceManager 当前 UI 管理器。
+/// @return 原生文件对话框父窗口句柄；不可用时返回空句柄。
+nfdwindowhandle_t resolveNativeDialogParent(UIManager* sourceManager)
+{
+    nfdwindowhandle_t parentWindow{};
+#ifdef _WIN32
+    if ( !sourceManager ) {
+        return parentWindow;
+    }
+
+    auto* nativeWindow = sourceManager->getNativeWindow();
+    if ( !nativeWindow || !nativeWindow->getWindowHandle() ) {
+        return parentWindow;
+    }
+
+    HWND hwnd = glfwGetWin32Window(nativeWindow->getWindowHandle());
+    if ( hwnd ) {
+        parentWindow.type   = NFD_WINDOW_HANDLE_TYPE_WINDOWS;
+        parentWindow.handle = hwnd;
+    }
+#else
+    (void)sourceManager;
+#endif
+    return parentWindow;
 }
 
 }  // namespace
@@ -313,7 +354,7 @@ void NewProjectWizard::renderPreferencesStep()
     }
 }
 
-void NewProjectWizard::renderLocationStep()
+void NewProjectWizard::renderLocationStep(UIManager* sourceManager)
 {
     ImGui::SeparatorText(TR("ui.wizard.new_project.location").data());
 
@@ -328,7 +369,7 @@ void NewProjectWizard::renderLocationStep()
         160.0f * Config::AppConfig::instance().getWindowContentScale());
     if ( ImGui::Button(TR("ui.wizard.new_project.select_parent").data(),
                        ImVec2(buttonWidth, 0.0f)) ) {
-        openParentFolderPicker();
+        openParentFolderPicker(sourceManager);
     }
 
     if ( !m_locationErrorText.empty() ) {
@@ -419,7 +460,7 @@ void NewProjectWizard::renderFooter()
     ImGui::EndDisabled();
 }
 
-void NewProjectWizard::openParentFolderPicker()
+void NewProjectWizard::openParentFolderPicker(UIManager* sourceManager)
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
     m_locationErrorText.clear();
@@ -433,7 +474,10 @@ void NewProjectWizard::openParentFolderPicker()
         }
         const nfdu8char_t* defaultPathPtr =
             defaultPath.empty() ? nullptr : defaultPath.c_str();
-        const nfdresult_t result = NFD_PickFolderU8(&outPath, defaultPathPtr);
+        const nfdwindowhandle_t parentWindow =
+            resolveNativeDialogParent(sourceManager);
+        const nfdpickfolderu8args_t args{ defaultPathPtr, parentWindow };
+        const nfdresult_t result = NFD_PickFolderU8_With(&outPath, &args);
         if ( result == NFD_OKAY ) {
             m_parentDirectory = Config::utf8ToPath(outPath);
             auto editorConfig =
@@ -551,7 +595,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         switch ( m_currentStep ) {
         case Step::ProjectInfo: renderProjectInfoStep(); break;
         case Step::Preferences: renderPreferencesStep(); break;
-        case Step::Location: renderLocationStep(); break;
+        case Step::Location: renderLocationStep(sourceManager); break;
         }
         ImGui::EndChild();
 

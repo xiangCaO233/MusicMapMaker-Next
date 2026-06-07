@@ -119,6 +119,11 @@ public:
 
     static void GLFW_DropCallback(GLFWwindow* w, int count, const char** paths);
 
+    /// @brief GLFW 窗口最小化/恢复回调入口。
+    /// @param window GLFW 窗口句柄。
+    /// @param iconified GLFW 最小化状态。
+    static void GLFW_IconifyCallback(GLFWwindow* window, int iconified);
+
     static void framebufferResizeCallback(GLFWwindow* window, int w, int h);
 
     /// @brief 记录普通窗口移动后的可还原位置。
@@ -157,6 +162,12 @@ private:
     /// @param height 窗口高度。
     void rememberWindowPlacement(int x, int y, int width, int height);
 
+    /// @brief 处理窗口最小化/恢复事件，并在任务栏恢复时保留最大化状态。
+    /// @param iconified GLFW 最小化状态。
+    /// @warning 低频平台事件：仅由 GLFW iconify 回调触发，恢复时可能调用
+    /// glfwMaximizeWindow 纠正 Windows 对无边框最大化窗口的普通还原。
+    void handleWindowIconify(int iconified);
+
     GLFWwindow*                           m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
     /// @brief 是否有待消抖的窗口尺寸变化。
@@ -177,6 +188,9 @@ private:
 
     /// @brief 全屏切换前的窗口尺寸备份。
     int m_backupSize[2] = { 1400, 900 };
+
+    /// @brief 最小化前窗口是否最大化，用于任务栏恢复时重新应用最大化。
+    bool m_restoreMaximizedAfterIconify{ false };
 
     /// @brief 无原生装饰窗口的平台行为适配器。
     std::unique_ptr<IWindowFrameAdapter> m_windowFrameAdapter;
