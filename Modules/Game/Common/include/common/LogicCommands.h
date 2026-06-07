@@ -1,13 +1,18 @@
 #pragma once
 
+#include "common/NoteColor.h"
 #include "config/EditorConfig.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
+#include <array>
 #include <entt/entt.hpp>
+#include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 // 前置声明
 namespace MMM
@@ -172,6 +177,7 @@ struct CmdEndBrush {
  */
 struct CmdStartErase {
     std::string cameraId;
+    bool        isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
 };
 
 /**
@@ -181,6 +187,7 @@ struct CmdUpdateErase {
     std::string cameraId;
     float       mouseX;
     float       mouseY;
+    bool        isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
 };
 
 /**
@@ -216,9 +223,11 @@ struct CmdSetPlaybackSpeed {
  * @brief 编辑工具类型
  */
 enum class EditTool {
-    Move,     // 移动工具
-    Marquee,  // 矩形选取
-    Draw,     // 绘制工具
+    Move,         ///< 移动工具
+    Marquee,      ///< 矩形选取
+    Draw,         ///< 绘制工具
+    ColorBrush,   ///< 配色笔刷工具
+    ColorEraser,  ///< 配色橡皮工具
 };
 
 /**
@@ -226,6 +235,46 @@ enum class EditTool {
  */
 struct CmdChangeTool {
     EditTool tool;
+};
+
+/// @brief 设置画笔当前使用的自定义音符颜色。
+struct CmdSetBrushNoteColor {
+    /// @brief 要修改的音符颜色槽位。
+    NoteColorSlot slot;
+    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    std::optional<glm::vec4> color;
+};
+
+/// @brief 将自定义音符颜色应用到当前选中物件。
+struct CmdApplyNoteColorToSelection {
+    /// @brief 要修改的音符颜色槽位。
+    NoteColorSlot slot;
+    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    std::optional<glm::vec4> color;
+};
+
+/// @brief 设置画笔当前使用的完整音符调色盘。
+struct CmdSetBrushNotePalette {
+    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
+/// @brief 将完整音符调色盘应用到当前选中物件。
+struct CmdApplyNotePaletteToSelection {
+    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+};
+
+/// @brief 将当前画笔调色盘应用到指定音符物件。
+struct CmdApplyBrushPaletteToEntity {
+    /// @brief 目标音符实体。
+    entt::entity entity{ entt::null };
+};
+
+/// @brief 清除指定音符物件的自定义配色覆写。
+struct CmdClearNoteColorOverrides {
+    /// @brief 目标音符实体。
+    entt::entity entity{ entt::null };
 };
 
 /**
@@ -250,6 +299,11 @@ struct CmdCopy {
  * @brief 粘贴指令
  */
 struct CmdPaste {
+    /// @brief 是否在粘贴出的物件上立即应用轨道镜像。
+    bool m_mirrored{ false };
+
+    /// @brief 是否在粘贴后清空旧选择并选中新粘贴出的物件。
+    bool m_selectPastedObjects{ false };
 };
 
 /**
@@ -299,7 +353,14 @@ struct CmdSaveBeatmapAs {
  * @brief 打包谱面指令
  */
 struct CmdPackBeatmap {
+    /// @brief 打包输出路径，使用 UTF-8 编码。
     std::string exportPath;
+
+    /// @brief 需要写入包内的项目相对文件路径列表，使用 UTF-8 编码。
+    std::vector<std::string> selectedProjectRelativePaths;
+
+    /// @brief 是否将 .mmm 转换出的目标谱面文件保存回项目目录。
+    bool saveConvertedBeatmapsToProject{ false };
 };
 
 /**
@@ -337,10 +398,65 @@ struct CmdCreateTimelineEvent {
 };
 
 /**
+ * @brief 批量创建时间线事件指令
+ */
+struct CmdCreateTimelineEvents {
+    /// @brief 单个待创建 Timeline 事件。
+    struct Entry {
+        /// @brief Timeline 时间戳，单位秒。
+        double time{ 0.0 };
+
+        /// @brief Timeline 类型。
+        ::MMM::TimingEffect type{ ::MMM::TimingEffect::BPM };
+
+        /// @brief Timeline 参数值。
+        double value{ 0.0 };
+    };
+
+    /// @brief 待创建 Timeline 事件列表。
+    std::vector<Entry> events;
+};
+
+/**
+ * @brief 批量替换当前谱面的 Timing 列表。
+ */
+struct CmdReplaceBeatmapTimings {
+    /// @brief 替换后的 Timing 列表，时间戳单位为毫秒。
+    std::vector<::MMM::Timing> timings;
+
+    /// @brief 是否保留当前谱面中非 BPM 的流速/特效 Timing。
+    bool keepNonBpmTimings{ false };
+};
+
+/**
+ * @brief 从模板创建谱面时可复制的数据类别。
+ */
+struct BeatmapTemplateCreateOptions {
+    /// @brief 是否复制模板谱面的额外谱面元数据。
+    bool copyMetadata{ false };
+
+    /// @brief 是否复制模板谱面的全部 Timing/BPM/流速事件。
+    bool copyTimelines{ false };
+
+    /// @brief 是否复制模板谱面的全部物件。
+    bool copyObjects{ false };
+};
+
+/**
  * @brief 新建谱面指令
  */
 struct CmdCreateBeatmap {
+    /// @brief 新谱面的基础元数据。
     ::MMM::BaseMapMeta baseMeta;
+
+    /// @brief 可选模板谱面；为空时创建空白谱面。
+    std::shared_ptr<const MMM::BeatMap> templateBeatmap;
+
+    /// @brief 从模板谱面复制的数据类别。
+    BeatmapTemplateCreateOptions templateOptions;
+
+    /// @brief 新建谱面时预置写入的 Timing 列表，时间戳单位为毫秒。
+    std::vector<::MMM::Timing> initialTimings;
 };
 
 /**
@@ -389,12 +505,15 @@ using LogicCommand = std::variant<
     CmdUpdateDrag, CmdEndDrag, CmdUpdateTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdChangeTool, CmdSetMousePosition, CmdUndo, CmdRedo,
     CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
-    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSaveBeatmap,
-    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent,
-    CmdDeleteTimelineEvent, CmdCreateTimelineEvent, CmdStartMarquee,
-    CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush,
-    CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdImportAudio, CmdUpdateAudioResource,
-    CmdRemoveAudioResource, CmdRemoveBeatmap>;
+    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
+    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
+    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

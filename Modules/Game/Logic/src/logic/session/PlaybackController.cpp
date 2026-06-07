@@ -11,7 +11,8 @@ namespace MMM::Logic
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
-    m_ctx.isPlaying = cmd.isPlaying;
+    m_ctx.isMainAudioSyncFollower = false;
+    m_ctx.isPlaying               = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
         m_ctx.syncTimer             = 0.0;
         m_ctx.lastAudioPos          = 0.0;
@@ -35,13 +36,14 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    m_ctx.isMainAudioSyncFollower = false;
     if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
         m_ctx.isPlaying = false;
         Audio::AudioManager::instance().pause();
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
     }
 
-    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(m_ctx);
     double minTime   = -m_ctx.lastConfig.visual.getEffectiveVisualOffset();
 
     // 核心修复：确保 std::clamp 的上限不小于下限。
@@ -108,7 +110,8 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 {
     float wheel = cmd.wheel;
     if ( m_ctx.lastConfig.settings.reverseScroll &&
-         (cmd.cameraId == "Basic2DCanvas" || cmd.cameraId == "Timeline") ) {
+         (SessionUtils::isMainCanvasCameraId(cmd.cameraId) ||
+          cmd.cameraId == "Timeline") ) {
         wheel = -wheel;
     }
 
@@ -133,22 +136,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         int beatDivisor = m_ctx.lastConfig.settings.beatDivisor;
         if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-        std::vector<const TimelineComponent*> bpmEvents;
-        auto tlView = m_ctx.timelineRegistry.view<const TimelineComponent>();
-        for ( auto entity : tlView ) {
-            const auto& tl = tlView.get<const TimelineComponent>(entity);
-            if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-                bpmEvents.push_back(&tl);
-            }
-        }
-
+        SessionUtils::ensureBpmEvents(m_ctx);
+        const auto& bpmEvents = m_ctx.bpmEvents;
         if ( !bpmEvents.empty() ) {
-            std::sort(bpmEvents.begin(),
-                      bpmEvents.end(),
-                      [](const auto* a, const auto* b) {
-                          return a->m_timestamp < b->m_timestamp;
-                      });
-
             double visualCurrentTime = m_ctx.currentTime + visualOffset;
             size_t currentIdx        = 0;
             for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
@@ -205,7 +195,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         targetTime = m_ctx.currentTime - static_cast<double>(wheel) * step;
     }
 
-    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(m_ctx);
     double minTime   = -m_ctx.lastConfig.visual.getEffectiveVisualOffset();
 
     if ( minTime > totalTime ) {

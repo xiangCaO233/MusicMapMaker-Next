@@ -12,6 +12,9 @@
 namespace MMM::Canvas
 {
 
+/// @brief 当快照背景路径变化时加载或清理背景纹理。
+/// @warning 低频阻塞路径：可能访问文件系统、创建 Vulkan 纹理并等待
+/// GPU；调用方必须保证不在每帧无条件执行。
 void Basic2DCanvas::updateBackgroundTexture()
 {
     if ( m_currentSnapshot &&
@@ -31,12 +34,12 @@ void Basic2DCanvas::updateBackgroundTexture()
              !m_loadedBgPath.empty() &&
              std::filesystem::exists(Config::utf8ToPath(m_loadedBgPath)) ) {
             try {
-                m_bgTexture =
-                    std::make_unique<Graphic::VKTexture>(Config::utf8ToPath(m_loadedBgPath),
-                                                         m_physicalDevice,
-                                                         m_logicalDevice,
-                                                         m_cmdPool,
-                                                         m_queue);
+                m_bgTexture = std::make_unique<Graphic::VKTexture>(
+                    Config::utf8ToPath(m_loadedBgPath),
+                    m_physicalDevice,
+                    m_logicalDevice,
+                    m_cmdPool,
+                    m_queue);
                 XINFO("Loaded background texture: {}", m_loadedBgPath);
             } catch ( const std::exception& e ) {
                 XERROR("Failed to load background texture: {}", e.what());
@@ -67,6 +70,8 @@ const std::vector<uint32_t>& Basic2DCanvas::getIndices() const
     return empty;
 }
 
+/// @brief 录制主画布离屏绘制命令。
+/// @warning 热路径：每帧命令录制时执行；只遍历快照命令列表并复用 descriptor。
 void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
@@ -83,6 +88,11 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         atlasDescriptor =
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
@@ -94,10 +104,7 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
-            if ( m_bgTexture ) {
-                actualTexture =
-                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
-            }
+            actualTexture = backgroundDescriptor;
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
@@ -126,6 +133,8 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
     }
 }
 
+/// @brief 录制主画布发光层离屏绘制命令。
+/// @warning 热路径：启用发光时每帧执行；只遍历 glow 命令列表。
 void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
                                      vk::PipelineLayout      pipelineLayout,
                                      vk::DescriptorSetLayout setLayout,
@@ -142,6 +151,11 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         atlasDescriptor =
             m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
     }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
 
     vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
     vk::Rect2D        lastScissor;
@@ -153,10 +167,7 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
             actualTexture = atlasDescriptor;
         } else if ( cmd.customTextureId ==
                     static_cast<uint32_t>(Logic::TextureID::Background) ) {
-            if ( m_bgTexture ) {
-                actualTexture =
-                    m_bgTexture->getNativeDescriptorSet(pool, setLayout);
-            }
+            actualTexture = backgroundDescriptor;
         }
 
         if ( actualTexture == VK_NULL_HANDLE ) {
@@ -183,6 +194,85 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
         cmdBuf.drawIndexed(
             cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
     }
+}
+
+/// @brief 记录主画布最终覆盖层离屏绘制命令。
+/// @warning 热路径：每帧命令录制末尾执行；仅遍历 overlay 命令并复用已有描述符。
+void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                                        vk::PipelineLayout      pipelineLayout,
+                                        vk::DescriptorSetLayout setLayout,
+                                        vk::DescriptorSet defaultDescriptor,
+                                        uint32_t          frameIndex)
+{
+    if ( !m_currentSnapshot ) return;
+
+    auto& renderer = Graphic::VKContext::get().value().get().getRenderer();
+    auto  pool     = renderer.getDescriptorPool();
+
+    vk::DescriptorSet atlasDescriptor = VK_NULL_HANDLE;
+    if ( m_textureAtlas ) {
+        atlasDescriptor =
+            m_textureAtlas->getNativeDescriptorSet(pool, setLayout);
+    }
+    vk::DescriptorSet backgroundDescriptor = VK_NULL_HANDLE;
+    if ( m_bgTexture ) {
+        backgroundDescriptor =
+            m_bgTexture->getNativeDescriptorSet(pool, setLayout);
+    }
+
+    vk::DescriptorSet lastBoundTexture = VK_NULL_HANDLE;
+    vk::Rect2D        lastScissor;
+
+    for ( const auto& cmd : m_currentSnapshot->overlayCmds ) {
+        vk::DescriptorSet actualTexture = cmd.texture;
+
+        if ( m_atlasUVs.count(cmd.customTextureId) ) {
+            actualTexture = atlasDescriptor;
+        } else if ( cmd.customTextureId ==
+                    static_cast<uint32_t>(Logic::TextureID::Background) ) {
+            actualTexture = backgroundDescriptor;
+        }
+
+        if ( actualTexture == VK_NULL_HANDLE ) {
+            actualTexture = defaultDescriptor;
+        }
+
+        if ( actualTexture != lastBoundTexture ) {
+            cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                      pipelineLayout,
+                                      0,
+                                      1,
+                                      &actualTexture,
+                                      0,
+                                      nullptr);
+            lastBoundTexture = actualTexture;
+        }
+
+        if ( cmd.scissor != lastScissor ) {
+            vk::Rect2D physicalScissor = getPhysicalScissor(cmd.scissor);
+            cmdBuf.setScissor(0, 1, &physicalScissor);
+            lastScissor = cmd.scissor;
+        }
+
+        cmdBuf.drawIndexed(
+            cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
+    }
+}
+
+/// @brief 判断当前快照是否包含发光绘制命令。
+/// @return 当前快照存在发光命令时返回 true。
+/// @warning 渲染热路径：每帧离屏命令录制前执行，只读取快照命令数量。
+bool Basic2DCanvas::hasGlowDrawCmds() const
+{
+    return m_currentSnapshot && !m_currentSnapshot->glowCmds.empty();
+}
+
+/// @brief 判断当前快照是否包含最终覆盖层绘制命令。
+/// @return 当前快照存在覆盖层命令时返回 true。
+/// @warning 渲染热路径：每帧离屏命令录制前执行，只读取快照命令数量。
+bool Basic2DCanvas::hasOverlayDrawCmds() const
+{
+    return m_currentSnapshot && !m_currentSnapshot->overlayCmds.empty();
 }
 
 std::vector<std::string> Basic2DCanvas::getShaderSources(
@@ -227,7 +317,7 @@ std::vector<std::string> Basic2DCanvas::getShaderSources(
         m_shaderSourceCache[shader_name] = result;
         return result;
     } else {
-        XERROR("无法获取画布{}的{}着色器配置", m_canvasName, shader_name);
+        XERROR("无法获取画布{}的{}着色器配置", "Basic2DCanvas", shader_name);
         return {};
     }
 }

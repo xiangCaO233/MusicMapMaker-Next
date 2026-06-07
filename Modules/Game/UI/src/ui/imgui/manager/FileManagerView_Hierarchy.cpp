@@ -1,3 +1,4 @@
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/ui/UISubViewToggleEvent.h"
@@ -11,6 +12,9 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 namespace MMM::UI
 {
@@ -24,8 +28,21 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
 
     m_currentRoot = project->m_projectRoot;
 
+    const float dpiScale =
+        std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
+    const auto& style          = ImGui::GetStyle();
+    auto        toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+    const uint16_t compactGap =
+        toLayoutPixels(std::max(2.0f * dpiScale, style.ItemSpacing.y * 0.25f));
+    const uint16_t rootPadding =
+        toLayoutPixels(std::max(12.0f * dpiScale, style.FramePadding.x * 2.0f));
+    const uint16_t rootGap =
+        toLayoutPixels(std::max(8.0f * dpiScale, style.ItemSpacing.y));
+
     CLayVBox treeVBox;
-    treeVBox.setSpacing(2);
+    treeVBox.setSpacing(compactGap);
 
     // 1. Root 节点作为 CollapsingHeader
     treeVBox.addElement(
@@ -75,8 +92,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     }
 
     CLayVBox rootVBox;
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(8)
+    rootVBox.setPadding(rootPadding, rootPadding, rootPadding, rootPadding)
+        .setSpacing(rootGap)
         .addLayout("treeVBox", treeVBox, Sizing::Grow(), Sizing::Grow());
 
     rootVBox.render(layoutContext);
@@ -86,7 +103,10 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                              UIManager* sourceManager)
 {
     try {
+        const float dpiScale = std::max(
+            1.0f, Config::AppConfig::instance().getWindowContentScale());
         float availW = ImGui::GetContentRegionAvail().x;
+        float itemH  = std::max(24.0f * dpiScale, ImGui::GetFrameHeight());
 
         for ( const auto& entry : std::filesystem::directory_iterator(path) ) {
             const auto& p        = entry.path();
@@ -100,7 +120,7 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                 fullPath,
                 filename,
                 availW,
-                24.0f,
+                itemH,
                 !isDir,
                 [&]() {
                     // 文件点击逻辑 (仅对非目录项有效，目录由 TreeNode
@@ -128,39 +148,45 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                         if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ||
                              ext == ".mmm" ) {
                             publishToggleEvent(SideBarTab::BeatMapExplorer);
+                            bool        foundBeatmap = false;
+                            std::string displayName =
+                                Config::pathToUtf8(p.filename());
                             for ( const auto& bm : project->m_beatmaps ) {
                                 if ( bm.m_filePath == relPath ) {
-                                    auto loadedBeatmap =
-                                        std::make_shared<MMM::BeatMap>(
-                                            MMM::BeatMap::loadFromFile(p));
-                                    engine.pushCommand(
-                                        Logic::CmdLoadBeatmap{ loadedBeatmap });
+                                    foundBeatmap = true;
+                                    displayName  = bm.m_name;
                                     break;
                                 }
                             }
+                            if ( !foundBeatmap ) {
+                                engine.syncProjectWithFile(p);
+                                for ( const auto& bm : project->m_beatmaps ) {
+                                    if ( bm.m_filePath == relPath ) {
+                                        displayName = bm.m_name;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                                MMM::BeatMap::loadFromFile(p));
+                            engine.createSession(loadedBeatmap, displayName);
                         } else if ( ext == ".mp3" || ext == ".wav" ||
-                                    ext == ".ogg" || ext == ".flac" ) {
+                                    ext == ".ogg" || ext == ".flac" ||
+                                    ext == ".opus" || ext == ".aac" ||
+                                    ext == ".m4a" ) {
                             publishToggleEvent(SideBarTab::AudioExplorer);
                             for ( const auto& audio :
                                   project->m_audioResources ) {
                                 if ( audio.m_path == relPath ) {
-                                    std::string viewName =
-                                        "TrackController_" + audio.m_id;
-                                    if ( !sourceManager
-                                              ->getView<AudioTrackControllerUI>(
-                                                  viewName) ) {
-                                        auto controller = std::make_unique<
-                                            AudioTrackControllerUI>(
-                                            audio.m_id,
-                                            audio.m_id,
-                                            audio.m_type == AudioTrackType::Main
-                                                ? AudioTrackControllerUI::
-                                                      TrackType::Main
-                                                : AudioTrackControllerUI::
-                                                      TrackType::Effect);
-                                        sourceManager->registerView(
-                                            viewName, std::move(controller));
-                                    }
+                                    sourceManager->openAudioTrackController(
+                                        audio.m_id,
+                                        audio.m_id,
+                                        audio.m_type == AudioTrackType::Main
+                                            ? AudioTrackControllerUI::
+                                                  TrackType::Main
+                                            : AudioTrackControllerUI::
+                                                  TrackType::Effect);
                                     break;
                                 }
                             }

@@ -5,6 +5,15 @@
 #include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
+#include "runtime/AppThreadPool.h"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include <ice/core/MixBus.hpp>
 #include <ice/core/PlayCallBack.hpp>
@@ -12,58 +21,68 @@
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
+#include <ice/out/IReceiver.hpp>
+#include <ice/out/play/openal/ALPlayer.hpp>
 #include <ice/out/play/sdl/SDLPlayer.hpp>
-#include <ice/thread/ThreadPool.hpp>
 
 namespace MMM::Audio
 {
-
-class AudioPlayCallBack : public ice::PlayCallBack
+namespace
 {
-public:
-    void play_done(bool loop) const override
-    {
-        if ( !loop ) {
-            Event::AudioFinishedEvent e;
-            e.isLooping = loop;
-            Event::EventBus::instance().publish(e);
+/// @brief 获取音频播放后端的日志名称。
+/// @param backend 音频播放后端类型。
+/// @return 用于日志输出的后端名称。
+const char* getPlaybackBackendName(Config::AudioPlaybackBackend backend)
+{
+    switch ( backend ) {
+    case Config::AudioPlaybackBackend::SDL: return "SDL";
+    case Config::AudioPlaybackBackend::OpenAL: return "OpenAL";
+    default: return "Unknown";
+    }
+}
+
+/// @brief Log OpenAL playback devices visible to the backend.
+void logOpenALDeviceDiagnostics()
+{
+    const auto devices = ice::ALPlayer::list_devices();
+    if ( devices.empty() ) {
+        XERROR("OpenAL reported no playback devices.");
+        return;
+    }
+
+    std::string deviceNames;
+    for ( const auto& device : devices ) {
+        if ( !deviceNames.empty() ) {
+            deviceNames += " | ";
         }
+        deviceNames += device.name;
     }
+    XINFO("OpenAL reported playback devices: {}", deviceNames);
+}
+}  // namespace
 
-    void frameplaypos_updated(size_t frame_pos) override {}
-
-    void timeplaypos_updated(std::chrono::nanoseconds time_pos) override
-    {
-        Event::AudioPositionEvent e;
-        e.positionSeconds = std::chrono::duration<double>(time_pos).count();
-        e.systemTimeSeconds =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        Event::EventBus::instance().publish(e);
-    }
-};
-
-static std::shared_ptr<AudioPlayCallBack> g_callback =
-    std::make_shared<AudioPlayCallBack>();
-
+/// @brief 获取音频管理器全局实例。
+/// @return 音频管理器全局实例引用。
 AudioManager& AudioManager::instance()
 {
     static AudioManager inst;
     return inst;
 }
 
+/// @brief 构造音频管理器并从编辑器配置初始化音量状态。
 AudioManager::AudioManager()
 {
     // 从配置初始化音量
-    auto& settings    = Config::AppConfig::instance().getEditorSettings();
-    m_globalVolume    = settings.globalVolume;
-    m_globalMuted     = settings.globalMuted;
-    m_bgmGain         = settings.bgmGain;
-    m_bgmGainMuted    = settings.bgmGainMuted;
-    m_sfxGain         = settings.sfxGain;
-    m_sfxGainMuted    = settings.sfxGainMuted;
-    m_mainTrackVolume = 0.5f;  // 默认主音轨音量
+    auto& settings        = Config::AppConfig::instance().getEditorSettings();
+    m_globalVolume        = settings.globalVolume;
+    m_globalMuted         = settings.globalMuted;
+    m_bgmGain             = settings.bgmGain;
+    m_bgmGainMuted        = settings.bgmGainMuted;
+    m_sfxGain             = settings.sfxGain;
+    m_sfxGainMuted        = settings.sfxGainMuted;
+    m_mainTrackVolume     = 0.5f;  // 默认主音轨音量
+    m_playbackBackend     = settings.audioPlaybackBackend;
+    m_openALSpatialConfig = settings.openALSpatialConfig;
 
     // 初始化常驻音效静音状态
     for ( const auto& [key, muted] : settings.sfxConfig.permanentSfxMutes ) {
@@ -71,836 +90,289 @@ AudioManager::AudioManager()
     }
 }
 
+/// @brief 销毁音频管理器。
 AudioManager::~AudioManager() = default;
 
+/// @brief 初始化音频后端、线程池、音频池、播放器和主混音图。
 void AudioManager::init()
 {
     XINFO("Initializing AudioManager...");
-    ice::SDLPlayer::init_backend();
 
-    m_threadPool = std::make_unique<ice::ThreadPool>(4);
-    m_audioPool  = std::make_unique<ice::AudioPool>();
-    m_player     = std::make_unique<ice::SDLPlayer>();
+    m_threadPool = MMM::Runtime::AppThreadPool::instance().get();
+    if ( !m_threadPool ) {
+        XERROR("AppThreadPool is not initialized before AudioManager::init.");
+    }
+    m_audioPool = std::make_unique<ice::AudioPool>();
 
     m_mainMixer         = std::make_shared<ice::MixBus>();
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
 
-    m_player->set_source(m_mainMixer);
-
-    if ( !m_player->open() ) {
-        XERROR("Failed to open SDL audio device.");
+    if ( createPlaybackBackend(m_playbackBackend) ) {
+        XINFO("Audio playback backend opened with configured backend: {}.",
+              getPlaybackBackendName(m_playbackBackend));
+    } else {
+        XERROR(
+            "Failed to open configured audio backend: {}, falling back to "
+            "SDL.",
+            getPlaybackBackendName(m_playbackBackend));
+        if ( createPlaybackBackend(Config::AudioPlaybackBackend::SDL) ) {
+            XINFO("Audio playback backend opened with fallback backend: SDL.");
+        } else {
+            XERROR("Failed to open fallback audio backend: SDL.");
+            m_playbackBackend = Config::AudioPlaybackBackend::SDL;
+        }
     }
-    m_player->start();
     XINFO("AudioManager initialized.");
 }
 
+/// @brief 关闭播放器并释放所有音频引擎资源。
 void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
-    if ( m_player ) {
-        m_player->stop();
-        m_player->close();
-    }
-    ice::SDLPlayer::quit_backend();
+    destroyPlaybackBackend();
 
     m_bgmTrack.reset();
+    m_bgmPath.clear();
     m_bgmSource.reset();
     m_stretcher.reset();
     m_mainMixer.reset();
     m_preStretcherMixer.reset();
     m_player.reset();
     m_audioPool.reset();
-    m_threadPool.reset();
+    m_threadPool = nullptr;
     XINFO("AudioManager shutdown.");
 }
 
-bool AudioManager::loadBGM(const std::string&      filePath,
-                           const AudioTrackConfig& config)
+/// @brief 切换音频播放后端。
+/// @param backend 目标播放后端。
+/// @return 切换成功时返回 true。
+bool AudioManager::setPlaybackBackend(Config::AudioPlaybackBackend backend)
 {
-    if ( !m_audioPool || !m_threadPool ) return false;
-
-    XINFO("Loading BGM: {}", filePath);
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
-
-    if ( !track ) {
-        XERROR("Failed to load audio track: {}", filePath);
-        return false;
+    if ( backend == m_playbackBackend && m_player ) {
+        return true;
     }
 
-    stop();
-
-    m_bgmTrack.reset();
-    if ( m_stretcher ) {
-        m_mainMixer->remove_source(m_stretcher);
-    } else if ( m_bgmSource ) {
-        m_mainMixer->remove_source(m_bgmSource);
-    }
-    if ( m_mainEQ ) {
-        m_preStretcherMixer->remove_source(m_mainEQ);
-    } else if ( m_bgmSource ) {
-        m_preStretcherMixer->remove_source(m_bgmSource);
-    }
-
-    m_mainTrackVolume = config.volume;
-    m_mainTrackMuted  = config.muted;
-
-    m_bgmTrack     = track;
-    m_bgmSource    = std::make_shared<ice::SourceNode>(track);
-    float finalVol = (m_globalMuted || m_bgmGainMuted)
-                         ? 0.0f
-                         : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-    if ( m_mainTrackMuted ) finalVol = 0.0f;
-    m_bgmSource->setvolume(finalVol);
-    m_bgmSource->add_playcallback(g_callback);
-
-    m_stretcher = std::make_shared<ice::TimeStretcher>();
-    m_stretcher->set_inputnode(m_preStretcherMixer);
-
-    if ( m_mainEQ ) {
-        m_mainEQ->set_inputnode(m_bgmSource);
-        m_preStretcherMixer->add_source(m_mainEQ);
-    } else {
-        m_preStretcherMixer->add_source(m_bgmSource);
-    }
-    m_mainMixer->add_source(m_stretcher);
-
-    // 应用播放速度与音高
-    setPlaybackSpeed(config.playbackSpeed);
-    setPlaybackPitch(config.playbackPitch);
-
-    // 应用图形均衡器设置
-    if ( config.eqEnabled &&
-         config.eqPreset != static_cast<int>(EQPreset::None) ) {
-        createMainTrackEQ(static_cast<EQPreset>(config.eqPreset));
-        const size_t bandCount = getMainTrackEQBandCount();
-        for ( size_t i = 0; i < bandCount; ++i ) {
-            if ( i < config.eqBandGains.size() ) {
-                setMainTrackEQBandGain(i, config.eqBandGains[i]);
-            }
-            if ( i < config.eqBandQs.size() ) {
-                setMainTrackEQBandQ(i, config.eqBandQs[i]);
-            }
-        }
-    } else {
-        destroyMainTrackEQ();
-    }
-
-    XINFO("BGM loaded successfully.");
-    return true;
-}
-
-void AudioManager::play()
-{
-    if ( m_bgmSource ) {
-        m_bgmSource->play();
-        m_status = PlaybackStatus::Playing;
-    }
-}
-
-void AudioManager::pause()
-{
-    if ( m_bgmSource ) {
-        m_bgmSource->pause();
-        m_status = PlaybackStatus::Paused;
-    }
-}
-
-void AudioManager::stop()
-{
-    if ( m_bgmSource ) {
-        m_bgmSource->pause();
-        m_bgmSource->set_playpos(static_cast<size_t>(0));
-        m_status = PlaybackStatus::Stopped;
-        clearAllScheduledSoundEffects();
-    }
-}
-
-void AudioManager::seek(double seconds)
-{
-    if ( m_bgmSource ) {
-        m_bgmSource->set_playpos(std::chrono::duration<double>(seconds));
-        clearAllScheduledSoundEffects();
-    }
-}
-
-PlaybackStatus AudioManager::getStatus() const
-{
-    return m_status;
-}
-
-double AudioManager::getCurrentTime() const
-{
-    if ( !m_bgmSource ) return 0.0;
-
-    auto   pos = m_bgmSource->get_playpos();
-    double samplerate =
-        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    if ( samplerate <= 0 ) return 0.0;
-
-    return static_cast<double>(pos) / samplerate;
-}
-
-double AudioManager::getTotalTime() const
-{
-    if ( !m_bgmSource ) return 0.0;
-    return std::chrono::duration_cast<std::chrono::duration<double>>(
-               m_bgmSource->total_time())
-        .count();
-}
-
-void AudioManager::setMainTrackVolume(float volume)
-{
-    m_mainTrackVolume = std::clamp(volume, 0.0f, 1.0f);
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
-}
-
-float AudioManager::getMainTrackVolume() const
-{
-    return m_mainTrackVolume;
-}
-
-void AudioManager::setMainTrackMute(bool muted)
-{
-    m_mainTrackMuted = muted;
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
-}
-
-bool AudioManager::isMainTrackMuted() const
-{
-    return m_mainTrackMuted;
-}
-
-void AudioManager::setGlobalVolume(float volume)
-{
-    m_globalVolume = std::clamp(volume, 0.0f, 1.0f);
-
-    // 同步到配置并保存
-    auto& settings        = Config::AppConfig::instance().getEditorSettings();
-    settings.globalVolume = m_globalVolume;
-    Config::AppConfig::instance().save();
-
-    // 重新应用全局音量到主音轨
-    if ( m_bgmSource ) {
-        float finalVol = (m_globalMuted || m_bgmGainMuted)
-                             ? 0.0f
-                             : m_mainTrackVolume * m_globalVolume * m_bgmGain;
-        if ( m_mainTrackMuted ) finalVol = 0.0f;
-        m_bgmSource->setvolume(finalVol);
-    }
-
-    // 重新应用全局音量到所有音效池
-    for ( auto& [key, pool] : m_sfxPools ) {
-        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
-                                ? 0.0f
-                                : m_globalVolume * m_sfxGain;
-        pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
-    }
-}
-
-void AudioManager::setGlobalMute(bool muted)
-{
-    m_globalMuted = muted;
-
-    // 同步到配置
-    auto& settings       = Config::AppConfig::instance().getEditorSettings();
-    settings.globalMuted = m_globalMuted;
-    Config::AppConfig::instance().save();
-
-    setGlobalVolume(m_globalVolume);  // 重新应用所有音量
-}
-
-bool AudioManager::isGlobalMuted() const
-{
-    return m_globalMuted;
-}
-
-float AudioManager::getOutputLevelL() const
-{
-    if ( m_mainMixer ) return m_mainMixer->get_left_level();
-    return 0.0f;
-}
-
-float AudioManager::getOutputLevelR() const
-{
-    if ( m_mainMixer ) return m_mainMixer->get_right_level();
-    return 0.0f;
-}
-
-float AudioManager::getMainTrackLevelL() const
-{
-    if ( m_bgmSource ) return m_bgmSource->get_left_level();
-    return 0.0f;
-}
-
-float AudioManager::getMainTrackLevelR() const
-{
-    if ( m_bgmSource ) return m_bgmSource->get_right_level();
-    return 0.0f;
-}
-
-float AudioManager::getSFXPoolLevelL(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        if ( auto mixer = it->second->getMixer() ) {
-            return mixer->get_left_level();
-        }
-    }
-    return 0.0f;
-}
-
-float AudioManager::getSFXPoolLevelR(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        if ( auto mixer = it->second->getMixer() ) {
-            return mixer->get_right_level();
-        }
-    }
-    return 0.0f;
-}
-
-float AudioManager::getGlobalVolume() const
-{
-    return m_globalVolume;
-}
-
-void AudioManager::setMainMixerLeftMute(bool muted)
-{
-    if ( m_mainMixer ) {
-        m_mainMixer->set_mute_left(muted);
-    }
-}
-
-bool AudioManager::isMainMixerLeftMuted() const
-{
-    if ( m_mainMixer ) {
-        return m_mainMixer->is_mute_left();
-    }
-    return false;
-}
-
-void AudioManager::setMainMixerRightMute(bool muted)
-{
-    if ( m_mainMixer ) {
-        m_mainMixer->set_mute_right(muted);
-    }
-}
-
-bool AudioManager::isMainMixerRightMuted() const
-{
-    if ( m_mainMixer ) {
-        return m_mainMixer->is_mute_right();
-    }
-    return false;
-}
-
-void AudioManager::setPlaybackSpeed(double speed)
-{
-    m_speed = std::clamp(speed, 0.1, 4.0);
-    if ( m_stretcher ) {
-        m_stretcher->set_playback_ratio(m_speed);
-    }
-}
-
-double AudioManager::getPlaybackSpeed() const
-{
-    return m_speed;
-}
-
-double AudioManager::getActualPlaybackSpeed() const
-{
-    if ( m_stretcher ) {
-        return m_stretcher->get_actual_playback_ratio();
-    }
-    return m_speed;
-}
-
-void AudioManager::setPlaybackPitch(double semitones)
-{
-    // range check -24.0 to 24.0 is inside TimeStretcher
-    if ( m_stretcher ) {
-        m_stretcher->set_pitch_semitones(semitones);
-    }
-}
-
-double AudioManager::getPlaybackPitch() const
-{
-    if ( m_stretcher ) {
-        return m_stretcher->get_pitch_semitones();
-    }
-    return 0.0;
-}
-
-void AudioManager::setPlaybackQuality(StretchQuality quality)
-{
-    if ( m_stretcher ) {
-        ice::TimeStretchQuality iceQuality;
-        switch ( quality ) {
-        case StretchQuality::Fast:
-            iceQuality = ice::TimeStretchQuality::Fast;
-            break;
-        case StretchQuality::Balanced:
-            iceQuality = ice::TimeStretchQuality::Balanced;
-            break;
-        case StretchQuality::Finer:
-            iceQuality = ice::TimeStretchQuality::Finer;
-            break;
-        case StretchQuality::Best:
-            iceQuality = ice::TimeStretchQuality::Best;
-            break;
-        default: iceQuality = ice::TimeStretchQuality::Finer; break;
-        }
-        m_stretcher->set_quality(iceQuality);
-    }
-}
-
-AudioManager::StretchQuality AudioManager::getPlaybackQuality() const
-{
-    if ( m_stretcher ) {
-        auto iceQuality = m_stretcher->get_quality();
-        switch ( iceQuality ) {
-        case ice::TimeStretchQuality::Fast: return StretchQuality::Fast;
-        case ice::TimeStretchQuality::Balanced: return StretchQuality::Balanced;
-        case ice::TimeStretchQuality::Finer: return StretchQuality::Finer;
-        case ice::TimeStretchQuality::Best: return StretchQuality::Best;
-        }
-    }
-    return StretchQuality::Finer;
-}
-
-void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
-                                    bool isPermanent)
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        it->second->setVolume(volume);
-
-        if ( isPermanent ) {
-            // 保存到编辑器配置
-            auto& sfxCfg =
-                Config::AppConfig::instance().getEditorSettings().sfxConfig;
-            sfxCfg.permanentSfxVolumes[key] = volume;
-            Config::AppConfig::instance().save();
-        }
-
-        // 刷新实际音量 (考虑静音)
-        it->second->updateEffectiveVolume(m_globalVolume, getSFXPoolMute(key));
-    }
-}
-
-void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
-                                  bool isPermanent)
-{
-    m_sfxMutes[key] = muted;
-
-    if ( isPermanent ) {
-        auto& sfxCfg =
-            Config::AppConfig::instance().getEditorSettings().sfxConfig;
-        sfxCfg.permanentSfxMutes[key] = muted;
-        Config::AppConfig::instance().save();
-    }
-
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
-                                ? 0.0f
-                                : m_globalVolume * m_sfxGain;
-        it->second->updateEffectiveVolume(sfxFinalVol, muted);
-    }
-}
-
-void AudioManager::setBGMGain(float gain)
-{
-    m_bgmGain = std::clamp(gain, 0.0f, 1.0f);
-
-    auto& settings   = Config::AppConfig::instance().getEditorSettings();
-    settings.bgmGain = m_bgmGain;
-    Config::AppConfig::instance().save();
-
-    setMainTrackVolume(m_mainTrackVolume);  // 重新应用
-}
-
-float AudioManager::getBGMGain() const
-{
-    return m_bgmGain;
-}
-
-void AudioManager::setBGMGainMute(bool muted)
-{
-    m_bgmGainMuted = muted;
-
-    auto& settings        = Config::AppConfig::instance().getEditorSettings();
-    settings.bgmGainMuted = m_bgmGainMuted;
-    Config::AppConfig::instance().save();
-
-    setMainTrackVolume(m_mainTrackVolume);
-}
-
-bool AudioManager::isBGMGainMuted() const
-{
-    return m_bgmGainMuted;
-}
-
-void AudioManager::setSFXGain(float gain)
-{
-    m_sfxGain = std::clamp(gain, 0.0f, 1.0f);
-
-    auto& settings   = Config::AppConfig::instance().getEditorSettings();
-    settings.sfxGain = m_sfxGain;
-    Config::AppConfig::instance().save();
-
-    setGlobalVolume(m_globalVolume);  // 重新应用 SFX 部分
-}
-
-float AudioManager::getSFXGain() const
-{
-    return m_sfxGain;
-}
-
-void AudioManager::setSFXGainMute(bool muted)
-{
-    m_sfxGainMuted = muted;
-
-    auto& settings        = Config::AppConfig::instance().getEditorSettings();
-    settings.sfxGainMuted = m_sfxGainMuted;
-    Config::AppConfig::instance().save();
-
-    setGlobalVolume(m_globalVolume);
-}
-
-bool AudioManager::isSFXGainMuted() const
-{
-    return m_sfxGainMuted;
-}
-
-void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
-{
-    if ( !m_mainMixer || !m_preStretcherMixer ) return;
-
-    for ( auto& [key, pool] : m_sfxPools ) {
-        auto mixer = pool->getMixer();
-        if ( !mixer ) continue;
-
-        if ( syncSpeed ) {
-            m_mainMixer->remove_source(mixer);
-            m_preStretcherMixer->add_source(mixer);
+    const auto previousBackend = m_playbackBackend;
+    destroyPlaybackBackend();
+
+    if ( !createPlaybackBackend(backend) ) {
+        XERROR(
+            "Failed to switch audio backend from {} to {}, trying to restore "
+            "previous backend.",
+            getPlaybackBackendName(previousBackend),
+            getPlaybackBackendName(backend));
+        if ( !createPlaybackBackend(previousBackend) ) {
+            XERROR("Failed to restore previous audio backend: {}.",
+                   getPlaybackBackendName(previousBackend));
         } else {
-            m_preStretcherMixer->remove_source(mixer);
-            m_mainMixer->add_source(mixer);
+            XINFO("Previous audio backend restored: {}.",
+                  getPlaybackBackendName(previousBackend));
         }
-    }
-}
-
-float AudioManager::getSFXPoolVolume(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        return it->second->getVolume();
-    }
-    return 1.0f;
-}
-
-bool AudioManager::getSFXPoolMute(const std::string& key) const
-{
-    auto it = m_sfxMutes.find(key);
-    if ( it != m_sfxMutes.end() ) {
-        return it->second;
-    }
-    return false;
-}
-
-double AudioManager::getSFXDuration(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        return it->second->getDuration();
-    }
-    return 0.0;
-}
-
-double AudioManager::getSFXPlaybackTime(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        return it->second->getLatestPlaybackTime();
-    }
-    return 0.0;
-}
-
-bool AudioManager::preloadSoundEffect(const std::string& key,
-                                      const std::string& filePath,
-                                      float              defaultVolume)
-{
-    if ( !m_audioPool || !m_threadPool || !m_mainMixer ) return false;
-
-    // 检查是否已经有配置好的音量 (来自 EditorSettings 或之前的加载)
-    float activeVolume = defaultVolume;
-    auto& sfxCfg = Config::AppConfig::instance().getEditorSettings().sfxConfig;
-    if ( sfxCfg.permanentSfxVolumes.count(key) ) {
-        activeVolume = sfxCfg.permanentSfxVolumes.at(key);
-    }
-
-    XINFO(
-        "Preloading SFX: {} from {} (Volume: {})", key, filePath, activeVolume);
-    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
-    auto track     = trackWeak.lock();
-
-    if ( !track ) {
-        XERROR("Failed to load SFX track: {}", filePath);
         return false;
     }
 
-    auto pool = std::make_shared<SoundEffectPool>(track);
-    pool->init(8);  // 预分配 8 个并发节点
-    pool->setVolume(activeVolume);
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
-    pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
-
-    // 根据配置决定连接到哪个 Mixer
-    if ( sfxCfg.hitSfxSyncSpeed ) {
-        m_preStretcherMixer->add_source(pool->getMixer());
-    } else {
-        m_mainMixer->add_source(pool->getMixer());
-    }
-
-    m_sfxPools[key] = std::move(pool);
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.audioPlaybackBackend = backend;
+    Config::AppConfig::instance().save();
+    XINFO("Audio playback backend switched from {} to {}.",
+          getPlaybackBackendName(previousBackend),
+          getPlaybackBackendName(backend));
     return true;
 }
 
-void AudioManager::unloadSoundEffect(const std::string& key)
+/// @brief 获取当前正在使用的音频播放后端。
+/// @return 当前播放后端。
+Config::AudioPlaybackBackend AudioManager::getPlaybackBackend() const
 {
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        auto mixer = it->second->getMixer();
-        if ( mixer ) {
-            m_mainMixer->remove_source(mixer);
-            m_preStretcherMixer->remove_source(mixer);
+    return m_playbackBackend;
+}
+
+/// @brief 设置 OpenAL 后端空间化输出参数。
+/// @param config OpenAL 空间化配置。
+/// @return 当前后端为 OpenAL 并成功应用时返回 true。
+bool AudioManager::setOpenALSpatialConfig(
+    const Config::OpenALSpatialConfig& config)
+{
+    m_openALSpatialConfig = config;
+
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.openALSpatialConfig = config;
+    Config::AppConfig::instance().save();
+
+    return applyOpenALSpatialConfig();
+}
+
+/// @brief 获取当前 OpenAL 空间化输出配置。
+/// @return OpenAL 空间化配置。
+const Config::OpenALSpatialConfig& AudioManager::getOpenALSpatialConfig() const
+{
+    return m_openALSpatialConfig;
+}
+
+/// @brief 创建并启动指定播放后端。
+/// @param backend 目标播放后端。
+/// @return 成功创建并启动时返回 true。
+/// @warning 低频后端切换路径；OpenAL 打开失败时会短暂 sleep 后重试，
+/// 禁止在每帧或音频热路径中调用。
+bool AudioManager::createPlaybackBackend(Config::AudioPlaybackBackend backend)
+{
+    if ( !m_mainMixer ) {
+        return false;
+    }
+
+    std::unique_ptr<ice::IReceiver> nextPlayer;
+    m_openALPlayer = nullptr;
+
+    switch ( backend ) {
+    case Config::AudioPlaybackBackend::SDL:
+        if ( !ice::SDLPlayer::init_backend() ) {
+            XERROR("Failed to initialize audio playback backend: {}.",
+                   getPlaybackBackendName(backend));
+            return false;
         }
-        m_sfxPools.erase(it);
-        m_sfxMutes.erase(key);
-        XINFO("Unloaded SFX: {}", key);
+        nextPlayer = std::make_unique<ice::SDLPlayer>();
+        break;
+    case Config::AudioPlaybackBackend::OpenAL:
+        if ( !ice::ALPlayer::init_backend() ) {
+            XERROR("Failed to initialize audio playback backend: {}.",
+                   getPlaybackBackendName(backend));
+            return false;
+        }
+        {
+            auto alPlayer  = std::make_unique<ice::ALPlayer>();
+            m_openALPlayer = alPlayer.get();
+            nextPlayer     = std::move(alPlayer);
+        }
+        break;
+    default:
+        XERROR("Unsupported audio playback backend: {}.",
+               getPlaybackBackendName(backend));
+        return false;
     }
-}
 
-void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
-{
-    if ( getSFXPoolMute(key) ) return;
+    nextPlayer->set_source(m_mainMixer);
+    const int openAttemptCount =
+        backend == Config::AudioPlaybackBackend::OpenAL ? 3 : 1;
+    bool backendOpened = false;
+    for ( int attempt = 1; attempt <= openAttemptCount; ++attempt ) {
+        if ( nextPlayer->open() ) {
+            backendOpened = true;
+            if ( attempt > 1 ) {
+                XINFO(
+                    "Audio playback backend opened after retry: {} "
+                    "(attempt {}/{}).",
+                    getPlaybackBackendName(backend),
+                    attempt,
+                    openAttemptCount);
+            }
+            break;
+        }
 
-    auto it = m_sfxPools.find(key);
-    if ( it == m_sfxPools.end() ) return;
-
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
-    it->second->play(sfxFinalVol * it->second->getVolume() * volumeFactor);
-}
-
-bool AudioManager::isSFXPlaying(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        return it->second->isPlaying();
-    }
-    return false;
-}
-
-bool AudioManager::isSFXPaused(const std::string& key) const
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        return it->second->isPaused();
-    }
-    return false;
-}
-
-void AudioManager::pauseSoundEffect(const std::string& key)
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        it->second->pause();
-    }
-}
-
-void AudioManager::resumeSoundEffect(const std::string& key)
-{
-    auto it = m_sfxPools.find(key);
-    if ( it != m_sfxPools.end() ) {
-        it->second->resume();
-    }
-}
-
-void AudioManager::playSoundEffectScheduled(const std::string& key,
-                                            double             targetTime,
-                                            float              volumeFactor)
-{
-    if ( getSFXPoolMute(key) ) return;
-
-    auto it = m_sfxPools.find(key);
-    if ( it == m_sfxPools.end() ) return;
-
-    if ( !m_bgmSource ) return;
-
-    double samplerate =
-        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    size_t targetFrame = static_cast<size_t>(targetTime * samplerate);
-
-    // 获取 BGM 播放位置的闭包，用于 SourceNode 内部参考
-    auto bgmRef = [this]() -> size_t {
-        if ( m_bgmSource ) return m_bgmSource->get_playpos();
-        return 0;
-    };
-
-    float sfxFinalVol =
-        (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
-    it->second->playScheduled(
-        sfxFinalVol * it->second->getVolume() * volumeFactor,
-        targetFrame,
-        bgmRef);
-}
-
-/// @brief 清空并停止所有正在播放和预定的音效
-void AudioManager::clearAllScheduledSoundEffects()
-{
-    for ( auto& [key, pool] : m_sfxPools ) {
-        if ( pool ) {
-            pool->stopAll();
+        if ( attempt < openAttemptCount ) {
+            const auto retryDelay = std::chrono::milliseconds(100 * attempt);
+            XERROR(
+                "Audio playback backend open attempt {}/{} failed: {}, "
+                "retrying in {} ms.",
+                attempt,
+                openAttemptCount,
+                getPlaybackBackendName(backend),
+                retryDelay.count());
+            nextPlayer->close();
+            std::this_thread::sleep_for(retryDelay);
         }
     }
-}
 
-void AudioManager::createMainTrackEQ(EQPreset preset)
-{
-    if ( preset == EQPreset::None ) {
-        destroyMainTrackEQ();
-        return;
+    if ( !backendOpened ) {
+        XERROR("Failed to open audio playback backend: {}.",
+               getPlaybackBackendName(backend));
+        if ( backend == Config::AudioPlaybackBackend::OpenAL &&
+             m_openALPlayer ) {
+            const auto& detail = m_openALPlayer->getLastError();
+            if ( !detail.empty() ) {
+                XERROR("OpenAL backend detail: {}", detail);
+            }
+            logOpenALDeviceDiagnostics();
+        }
+        nextPlayer->close();
+        if ( backend == Config::AudioPlaybackBackend::SDL ) {
+            ice::SDLPlayer::quit_backend();
+        } else {
+            ice::ALPlayer::quit_backend();
+            m_openALPlayer = nullptr;
+        }
+        return false;
     }
 
-    std::vector<double> freqs;
-    if ( preset == EQPreset::TenBand ) {
-        freqs = { 31.25,  62.5,   125.0,  250.0,  500.0,
-                  1000.0, 2000.0, 4000.0, 8000.0, 16000.0 };
-    } else if ( preset == EQPreset::FifteenBand ) {
-        freqs = { 25.0,   40.0,   63.0,   100.0,   160.0,
-                  250.0,  400.0,  630.0,  1000.0,  1600.0,
-                  2500.0, 4000.0, 6300.0, 10000.0, 16000.0 };
+    if ( backend == Config::AudioPlaybackBackend::OpenAL ) {
+        if ( m_openALPlayer ) {
+            const auto& openedDevice = m_openALPlayer->getOpenedDeviceName();
+            if ( !openedDevice.empty() ) {
+                XINFO("OpenAL playback device opened: {}", openedDevice);
+            }
+        }
+        applyOpenALSpatialConfig();
     }
 
-    auto newEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
-
-    // 如果当前正在播放 BGM，需要热插拔
-    if ( m_bgmSource && m_preStretcherMixer ) {
-        m_preStretcherMixer->remove_source(
-            m_mainEQ ? std::static_pointer_cast<ice::IAudioNode>(m_mainEQ)
-                     : std::static_pointer_cast<ice::IAudioNode>(m_bgmSource));
-
-        newEQ->set_inputnode(m_bgmSource);
-        m_preStretcherMixer->add_source(newEQ);
+    if ( !nextPlayer->start() ) {
+        XERROR("Failed to start audio playback backend: {}.",
+               getPlaybackBackendName(backend));
+        if ( backend == Config::AudioPlaybackBackend::OpenAL &&
+             m_openALPlayer ) {
+            const auto& detail = m_openALPlayer->getLastError();
+            if ( !detail.empty() ) {
+                XERROR("OpenAL backend detail: {}", detail);
+            }
+        }
+        nextPlayer->close();
+        if ( backend == Config::AudioPlaybackBackend::SDL ) {
+            ice::SDLPlayer::quit_backend();
+        } else {
+            ice::ALPlayer::quit_backend();
+            m_openALPlayer = nullptr;
+        }
+        return false;
     }
 
-    m_mainEQ       = std::move(newEQ);
-    m_mainEQPreset = preset;
-    XINFO("Main track EQ created with {} bands.", freqs.size());
+    m_player          = std::move(nextPlayer);
+    m_playbackBackend = backend;
+    return true;
 }
 
-void AudioManager::destroyMainTrackEQ()
+/// @brief 停止并释放当前播放后端。
+void AudioManager::destroyPlaybackBackend()
 {
-    if ( !m_mainEQ ) return;
-
-    if ( m_bgmSource && m_preStretcherMixer ) {
-        m_preStretcherMixer->remove_source(m_mainEQ);
-        m_preStretcherMixer->add_source(m_bgmSource);
+    if ( m_player ) {
+        m_player->stop();
+        m_player->close();
+        m_player.reset();
     }
 
-    m_mainEQ.reset();
-    m_mainEQPreset = EQPreset::None;
-    XINFO("Main track EQ destroyed.");
-}
-
-void AudioManager::setMainTrackEQBandGain(size_t bandIndex, float gainDb)
-{
-    if ( m_mainEQ ) {
-        m_mainEQ->set_band_gain_db(bandIndex, gainDb);
+    if ( m_playbackBackend == Config::AudioPlaybackBackend::OpenAL ) {
+        ice::ALPlayer::quit_backend();
+    } else {
+        ice::SDLPlayer::quit_backend();
     }
+    m_openALPlayer = nullptr;
 }
 
-float AudioManager::getMainTrackEQBandGain(size_t bandIndex) const
+/// @brief 将缓存的 OpenAL 空间化参数应用到当前后端。
+/// @return 当前后端为 OpenAL 并成功应用时返回 true。
+bool AudioManager::applyOpenALSpatialConfig()
 {
-    if ( m_mainEQ ) {
-        return static_cast<float>(m_mainEQ->get_band_gain_db(bandIndex));
+    if ( !m_openALPlayer ) {
+        return false;
     }
-    return 0.0f;
-}
 
-void AudioManager::setMainTrackEQBandQ(size_t bandIndex, float q)
-{
-    if ( m_mainEQ ) {
-        m_mainEQ->set_band_q_factor(bandIndex, q);
-    }
-}
-
-float AudioManager::getMainTrackEQBandQ(size_t bandIndex) const
-{
-    if ( m_mainEQ ) {
-        return static_cast<float>(m_mainEQ->get_band_q_factor(bandIndex));
-    }
-    return 1.414f;  // 默认 Q 值 (sqrt(2))
-}
-
-size_t AudioManager::getMainTrackEQBandCount() const
-{
-    if ( m_mainEQ ) {
-        return m_mainEQ->get_band_count();
-    }
-    return 0;
-}
-
-float AudioManager::getMainTrackEQBandFrequency(size_t bandIndex) const
-{
-    if ( m_mainEQ ) {
-        return static_cast<float>(m_mainEQ->get_band_frequency(bandIndex));
-    }
-    return 0.0f;
-}
-
-
-bool AudioManager::isMainTrackEQEnabled() const
-{
-    return m_mainEQ != nullptr;
-}
-
-EQPreset AudioManager::getMainTrackEQPreset() const
-{
-    return m_mainEQPreset;
-}
-
-float AudioManager::getMainTrackEQResponse(float frequency) const
-{
-    if ( m_mainEQ ) {
-        double mag = m_mainEQ->get_total_magnitude_response(
-            static_cast<double>(frequency));
-        if ( mag <= 1e-6 ) return -120.0f;  // 避免 log10(0)
-        return static_cast<float>(20.0 * std::log10(mag));
-    }
-    return 0.0f;
-}
-
-std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
-{
-    return m_bgmTrack;
+    m_openALPlayer->set_spatial_output_enabled(m_openALSpatialConfig.enabled);
+    m_openALPlayer->set_spatial_parameters(
+        m_openALSpatialConfig.directionX,
+        m_openALSpatialConfig.directionY,
+        m_openALSpatialConfig.directionZ,
+        m_openALSpatialConfig.distance,
+        m_openALSpatialConfig.referenceDistance,
+        m_openALSpatialConfig.maxDistance,
+        m_openALSpatialConfig.rolloffFactor);
+    return true;
 }
 
 }  // namespace MMM::Audio

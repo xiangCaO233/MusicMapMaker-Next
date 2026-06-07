@@ -4,10 +4,14 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Hold.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 namespace MMM
 {
@@ -171,20 +175,55 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     ofs << "\n";
 
     ofs << "[TimingPoints]\n";
-    // Timings are not const qualified in their to_osu_description? We might
-    // need to copy or cast. Let's check Timing.h
     for ( auto& timing_const : beatMap.m_timings ) {
         Timing timing =
             timing_const;  // create a mutable copy to call to_osu_description()
-        XINFO("写出OSU Timing 时bpm=[{}]", timing_const.m_bpm);
+
+        if ( timing.m_timingEffect == TimingEffect::JUMP ||
+             timing.m_timingEffect == TimingEffect::HS ) {
+            continue;
+        }
+
+        if ( timing.m_timingEffect == TimingEffect::SCROLL ) {
+            if ( timing.m_timingEffectParameter <= 0.0 ) {
+                continue;
+            }
+        }
+
         ofs << timing.to_osu_description() << "\n";
     }
     ofs << "\n";
 
     ofs << "[HitObjects]\n";
-    auto all_notes = beatMap.m_allNotes;
-    std::stable_sort(all_notes.begin(),
-                     all_notes.end(),
+    std::unordered_set<const Note*> polyline_subnotes;
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        for ( const auto& subNoteRef : polyline.m_subNotes ) {
+            polyline_subnotes.insert(&subNoteRef.get());
+        }
+    }
+
+    std::vector<std::reference_wrapper<Note>> export_notes;
+    export_notes.reserve(beatMap.m_allNotes.size());
+    for ( const auto& noteRef : beatMap.m_allNotes ) {
+        Note& note = noteRef.get();
+        if ( polyline_subnotes.contains(&note) ) continue;
+
+        if ( note.m_type == NoteType::POLYLINE ) {
+            Polyline& polyline = static_cast<Polyline&>(note);
+            for ( const auto& subNoteRef : polyline.m_subNotes ) {
+                Note& subNote = subNoteRef.get();
+                if ( subNote.m_type == NoteType::HOLD ) {
+                    export_notes.push_back(subNote);
+                }
+            }
+            continue;
+        }
+
+        export_notes.push_back(note);
+    }
+
+    std::stable_sort(export_notes.begin(),
+                     export_notes.end(),
                      [](const std::reference_wrapper<Note>& a_ref,
                         const std::reference_wrapper<Note>& b_ref) {
                          const Note& a = a_ref.get();
@@ -196,7 +235,7 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
                          return a.m_type < b.m_type;
                      });
 
-    for ( const auto& noteRef : all_notes ) {
+    for ( const auto& noteRef : export_notes ) {
         Note& note = noteRef.get();
         if ( note.m_type == NoteType::HOLD ) {
             Hold& hold = static_cast<Hold&>(note);

@@ -19,6 +19,8 @@
 //   by your own engine/app code.
 // Read comments in imgui_impl_vulkan.h.
 
+#include "config/AppPaths.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -28,6 +30,7 @@
 #include <filesystem>
 #include <stdio.h>   // printf, fprintf
 #include <stdlib.h>  // abort
+#include <string>
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -443,27 +446,20 @@ static void FramePresent(ImGui_ImplVulkanH_Window* wd)
 int main(int, char**)
 {
     using namespace MMM;
-    // 假设 assets 肯定在运行目录上n级
-    // 而 build 目录通常在 root/build/Modules/Main/ 下 (深度为 3 或 4)
-    auto rootDir = std::filesystem::current_path();
-    // 向上查找直到找到 assets 文件夹
-    while ( !std::filesystem::exists(rootDir / "assets") &&
-            rootDir.has_parent_path() ) {
-        rootDir = rootDir.parent_path();
-    }
-
-    if ( !std::filesystem::exists(rootDir / "assets") ) {
-        XERROR("Fatal: Could not find assets directory!");
+    /// @brief 用户 .config/mmm 下的资源包根目录。
+    auto assetPath = Config::AppPaths::assetsRootPath();
+    /// @brief 检查用户资源包目录是否存在时接收的文件系统错误。
+    std::error_code assetExistsError;
+    if ( !std::filesystem::exists(assetPath, assetExistsError) ) {
+        XERROR("Fatal: Could not find assets directory: {}",
+               Config::pathToUtf8(assetPath));
         return -1;
     }
-
-    // 跨平台（自动处理 / 或 \）
-    auto assetPath = rootDir / "assets";
 
     using namespace Config;
     // 载入皮肤配置
     SkinManager::instance().loadSkin(
-        (assetPath / "skins" / "mmm-nightly" / "skin.lua").generic_string());
+        Config::pathToUtf8(Config::AppPaths::defaultSkinFilePath()));
 
     XINFO(TR("tips.welcome"));
 
@@ -509,6 +505,19 @@ int main(int, char**)
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     (void)io;
+    /// @brief 创建 ImGui ini 所在目录时接收的文件系统错误。
+    std::error_code imguiIniDirectoryError;
+    std::filesystem::create_directories(Config::AppPaths::configRootPath(),
+                                        imguiIniDirectoryError);
+    if ( imguiIniDirectoryError ) {
+        XWARN("Failed to create ImGui ini directory: {}",
+              imguiIniDirectoryError.message());
+    }
+    /// @brief ImGui ini 文件路径字符串，必须静态保存以满足 ImGui
+    /// 指针生命周期要求。
+    static const std::string imguiIniPath =
+        Config::pathToUtf8(Config::AppPaths::imguiIniFilePath());
+    io.IniFilename = imguiIniPath.c_str();
     io.ConfigFlags |=
         ImGuiConfigFlags_NavEnableKeyboard;  // Enable Keyboard Controls
     io.ConfigFlags |=

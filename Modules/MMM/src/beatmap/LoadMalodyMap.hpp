@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -63,6 +64,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         basemeta.version = meta.value("version", "");
         basemeta.main_cover_path =
             Config::utf8ToPath(meta.value("background", ""));
+        basemeta.cover_path = Config::utf8ToPath(meta.value("cover", ""));
 
         if ( meta.contains("song") ) {
             const auto& song        = meta["song"];
@@ -114,13 +116,27 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 2. 收集原始时间事件
     struct RawEvent {
+        /// @brief Malody beat position.
         double beat;
-        double bpm    = -1.0;
-        double scroll = -1.0;
-        json   raw;
-        bool   isBpm = false;
+        /// @brief BPM value for timing events.
+        double bpm = -1.0;
+        /// @brief Effect value for non-BPM events.
+        double value = 0.0;
+        /// @brief Original JSON object for round-trip metadata.
+        json raw;
+        /// @brief Internal timing effect type.
+        TimingEffect effect{ TimingEffect::BPM };
+        /// @brief Whether this event comes from the Malody time section.
+        bool isBpm = false;
+    };
+    struct BpmEvent {
+        /// @brief Malody beat position.
+        double beat;
+        /// @brief BPM value active from this beat.
+        double bpm;
     };
     std::vector<RawEvent> rawEvents;
+    std::vector<BpmEvent> bpmEvents;
 
     double time0Delay = 0.0;
     if ( fileData.contains("time") && fileData["time"].is_array() &&
@@ -137,25 +153,37 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             ev.raw   = t;
 
             rawEvents.push_back(ev);
+            bpmEvents.push_back({ ev.beat, ev.bpm });
         }
     }
     if ( fileData.contains("effect") ) {
         for ( const auto& e : fileData["effect"] ) {
-            // 跳过不包含 scroll 字段的效果（如 sign），避免产生虚假 SCROLL
-            // 计时点
-            if ( !e.contains("scroll") ) continue;
-            RawEvent ev;
-            ev.beat   = beatToDouble(e.value("beat", json::array()));
-            ev.scroll = e.value("scroll", 1.0);
-            ev.isBpm  = false;
-            ev.raw    = e;
-            rawEvents.push_back(ev);
+            auto pushEffect = [&](const char* key, TimingEffect effect) {
+                if ( !e.contains(key) ) return;
+                RawEvent ev;
+                ev.beat   = beatToDouble(e.value("beat", json::array()));
+                ev.value  = e.value(key, 0.0);
+                ev.effect = effect;
+                ev.isBpm  = false;
+                ev.raw    = e;
+                rawEvents.push_back(ev);
+            };
+            pushEffect("scroll", TimingEffect::SCROLL);
+            pushEffect("jump", TimingEffect::JUMP);
+            pushEffect("hs", TimingEffect::HS);
         }
     }
+    std::sort(rawEvents.begin(),
+              rawEvents.end(),
+              [](const RawEvent& a, const RawEvent& b) {
+                  if ( std::abs(a.beat - b.beat) > 1e-9 )
+                      return a.beat < b.beat;
+                  return a.isBpm && !b.isBpm;
+              });
     std::sort(
-        rawEvents.begin(),
-        rawEvents.end(),
-        [](const RawEvent& a, const RawEvent& b) { return a.beat < b.beat; });
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const BpmEvent& a, const BpmEvent& b) { return a.beat < b.beat; });
 
     // 2.3 获取模式信息
     int malodyMode = 0;
@@ -163,13 +191,30 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         malodyMode = fileData["meta"].value("mode", 0);
     }
 
+    /// @brief 判断 note 条目是否为音效或 BGM 采样。
+    /// type 字段为字符串 ("SOUND") 或旧版整数 (1) 时不参与 key 数推断。
+    auto isSoundNote = [](const json& n) -> bool {
+        if ( n.contains("type") ) {
+            if ( n["type"].is_string() )
+                return n["type"].get<std::string>() == "SOUND";
+            if ( n["type"].is_number_integer() )
+                return n["type"].get<int>() == 1;
+        }
+        return false;
+    };
+
     // 2.5 预扫描：通过统计学特征自动识别轨道数 (针对 Mode 7 / 坐标模式)
     std::map<int, int> xFreq;
-    int                maxColumnField = -1;
-    bool               hasX           = false;
+    int                maxColumnField    = -1;
+    bool               hasX              = false;
+    int                playableNoteCount = 0;
+    int                metadataTrackCount =
+        basemeta.track_count > 0 ? basemeta.track_count : -1;
 
     if ( fileData.contains("note") ) {
         for ( const auto& n : fileData["note"] ) {
+            if ( isSoundNote(n) ) continue;
+            ++playableNoteCount;
             if ( n.contains("column") ) {
                 maxColumnField = std::max(maxColumnField, n.value("column", 0));
             } else if ( n.contains("x") ) {
@@ -182,14 +227,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 默认轨道数取 column 字段最大值
     int finalK = std::max(0, maxColumnField + 1);
 
+    // Key 模式的 mode_ext.column 是谱面声明的列数；可玩物件只能在此基础上扩展。
+    if ( malodyMode == 0 && metadataTrackCount > 0 ) {
+        finalK = std::max(finalK, metadataTrackCount);
+    }
+
     // 如果没有通过 column 识别出轨道数，则回退到元数据中的配置
     if ( finalK <= 0 ) {
-        if ( fileData.contains("meta") &&
-             fileData["meta"].contains("mode_ext") ) {
-            finalK = fileData["meta"]["mode_ext"].value("column", 4);
-        } else {
-            finalK = 4;
-        }
+        finalK = metadataTrackCount > 0 ? metadataTrackCount : 4;
     }
 
     // 根据轨道数计算默认间距 (Malody 默认画布宽度为 256)
@@ -241,7 +286,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             if ( error < minTotalError ) {
                 minTotalError = error;
                 // 只有当拟合误差显著小时才更新轨道参数
-                if ( error < (double)fileData["note"].size() * 5.0 ) {
+                if ( error < (double)playableNoteCount * 5.0 ) {
                     finalK      = k;
                     bestW       = w;
                     bestS       = s;
@@ -274,44 +319,38 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 3. 辅助函数：计算绝对时间 (ms)
     double audioOffset        = 0.0;
     bool   hasSoundNoteOffset = false;
-    auto   getAbsTime         = [&](double beat) {
-        double curBpm =
+    auto   getInitialBpm      = [&]() {
+        double initialBpm =
             basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
+        if ( !bpmEvents.empty() && bpmEvents.front().beat <= 0.0 ) {
+            initialBpm = bpmEvents.front().bpm;
+        }
+        return initialBpm;
+    };
+    auto getBpmAtBeat = [&](double beat) {
+        double curBpm = getInitialBpm();
+        for ( const auto& ev : bpmEvents ) {
+            if ( ev.beat > beat + 1e-9 ) break;
+            curBpm = ev.bpm;
+        }
+        return curBpm;
+    };
+    auto getAbsTime = [&](double beat) {
+        double curBpm = getInitialBpm();
 
         double lastB = 0.0;
         double lastT = 0.0;  // 默认 0.0 对应 beat 0
 
-        if ( !rawEvents.empty() ) {
-            // Malody 的 delay 实际上是第一个 timing 点的时间戳
-            lastB = rawEvents[0].beat;
-            lastT = 0.0;
-            if ( rawEvents[0].isBpm ) {
-                curBpm = rawEvents[0].bpm;
-            }
-        }
-
-        for ( const auto& ev : rawEvents ) {
+        for ( const auto& ev : bpmEvents ) {
             if ( ev.beat > beat + 1e-9 ) break;
             if ( ev.beat > lastB ) {
                 lastT += (ev.beat - lastB) * (60000.0 / curBpm);
                 lastB = ev.beat;
             }
-            if ( ev.isBpm ) curBpm = ev.bpm;
+            curBpm = ev.bpm;
         }
         lastT += (beat - lastB) * (60000.0 / curBpm);
         return lastT;
-    };
-
-    /// @brief 判断 note 条目是否为音效采样
-    /// type 字段为字符串 ("SOUND") 或旧版整数 (1)
-    auto isSoundNote = [](const json& n) -> bool {
-        if ( n.contains("type") ) {
-            if ( n["type"].is_string() )
-                return n["type"].get<std::string>() == "SOUND";
-            if ( n["type"].is_number_integer() )
-                return n["type"].get<int>() == 1;
-        }
-        return false;
     };
 
     // 4. 处理音频偏移
@@ -350,26 +389,19 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
           Config::pathToUtf8(basemeta.main_audio_path));
 
     // 4. 处理时间线点 (Timing Points)
-    double currentBpm =
-        basemeta.preference_bpm > 0 ? basemeta.preference_bpm : 120.0;
+    double currentBpm = getInitialBpm();
 
-    double lastProcessedBeat = 0.0;
-    double lastProcessedTime = 0.0;
-
-    if ( !rawEvents.empty() ) {
-        lastProcessedBeat = rawEvents[0].beat;
-        lastProcessedTime = 0.0;
-        if ( rawEvents[0].isBpm ) currentBpm = rawEvents[0].bpm;
-    }
+    /// @brief Count Malody effect events moved to beat 0 for runtime use.
+    std::size_t clampedNegativeEffectCount = 0;
 
     for ( auto& ev : rawEvents ) {
-        double duration =
-            (ev.beat - lastProcessedBeat) * (60000.0 / currentBpm);
-        lastProcessedTime += duration;
-        lastProcessedBeat = ev.beat;
-
         Timing timing;
-        timing.m_timestamp = lastProcessedTime - audioOffset;
+        double runtimeBeat = ev.beat;
+        if ( !ev.isBpm && runtimeBeat < 0.0 ) {
+            runtimeBeat = 0.0;
+            ++clampedNegativeEffectCount;
+        }
+        timing.m_timestamp = getAbsTime(runtimeBeat) - audioOffset;
 
         if ( ev.isBpm ) {
             currentBpm                     = ev.bpm;
@@ -378,29 +410,35 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             timing.m_beat_length           = 60000.0 / currentBpm;
             timing.m_timingEffectParameter = currentBpm;
         } else {
-            timing.m_timingEffect = TimingEffect::SCROLL;
-            timing.m_bpm          = currentBpm;
-            // 内部统一使用 Osu 风格存储 SCROLL (负值 = -100 / multiplier)
-            if ( ev.scroll > 0 ) {
-                timing.m_timingEffectParameter = -100.0 / ev.scroll;
-            } else {
-                timing.m_timingEffectParameter = ev.scroll;
-            }
-            timing.m_beat_length = timing.m_timingEffectParameter;
+            currentBpm                     = getBpmAtBeat(runtimeBeat);
+            timing.m_timingEffect          = ev.effect;
+            timing.m_bpm                   = currentBpm;
+            timing.m_timingEffectParameter = ev.value;
+            timing.m_beat_length           = timing.m_timingEffectParameter;
         }
 
         auto& malody_timing_props =
             timing.m_metadata.timing_properties[TimingMetadataType::MALODY];
         for ( auto it = ev.raw.begin(); it != ev.raw.end(); ++it ) {
-            if ( it.key() != "bpm" && it.key() != "scroll" ) {
+            if ( it.key() != "bpm" && it.key() != "scroll" &&
+                 it.key() != "jump" && it.key() != "hs" ) {
                 malody_timing_props[it.key()] = it.value().dump();
             }
+        }
+        if ( !ev.isBpm ) {
+            malody_timing_props["effect"] =
+                "\"" + timingEffectToString(ev.effect) + "\"";
         }
         if ( beatMap.m_baseMapMetadata.preference_bpm <= 0.0 &&
              timing.m_timingEffect == TimingEffect::BPM ) {
             beatMap.m_baseMapMetadata.preference_bpm = timing.m_bpm;
         }
         beatMap.m_timings.push_back(timing);
+    }
+
+    if ( clampedNegativeEffectCount > 0 ) {
+        XINFO("已将 {} 个负 beat Malody effect 运行时位置收束到 beat 0",
+              clampedNegativeEffectCount);
     }
 
     if ( beatMap.m_timings.empty() ) {

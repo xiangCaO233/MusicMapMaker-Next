@@ -18,7 +18,9 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/DebugWindowUI.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -27,8 +29,9 @@
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/imgui/manager/NewProjectWizard.h"
 #include "ui/imgui/manager/SearchView.h"
-#include "ui/imgui/manager/SettingsView.h"
+#include <array>
 #include <chrono>
 #include <nfd.h>
 #include <thread>
@@ -39,6 +42,36 @@
 
 namespace MMM
 {
+
+namespace
+{
+/// @brief 主循环限帧等待使用的时钟类型，要求单调递增避免系统时间跳变影响。
+using FrameLimitClock = std::chrono::steady_clock;
+
+/// @brief 限帧粗睡眠预留量，给操作系统调度精度留出少量余量。
+constexpr auto FRAME_LIMIT_SLEEP_MARGIN = std::chrono::microseconds(250);
+
+/// @brief 等待到目标帧时间点，避免用 yield 反复忙等。
+/// @warning 热路径等待：主渲染循环提前到达目标帧间隔时执行；只能包含
+/// sleep 和时间查询，禁止加入锁、分配或业务逻辑。
+void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
+{
+    while ( true ) {
+        auto now = FrameLimitClock::now();
+        if ( now >= deadline ) {
+            return;
+        }
+
+        auto remaining = deadline - now;
+        if ( remaining > FRAME_LIMIT_SLEEP_MARGIN ) {
+            std::this_thread::sleep_for(remaining - FRAME_LIMIT_SLEEP_MARGIN);
+        } else {
+            std::this_thread::sleep_until(deadline);
+            return;
+        }
+    }
+}
+}  // namespace
 
 /**
  * @brief 获取 GameLoop 单例实例
@@ -77,23 +110,20 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     sidebar_manager->registerSubView(
         TR("title.beatmap_manager"),
         std::make_unique<UI::BeatMapManagerView>(TR("title.beatmap_manager")));
-    sidebar_manager->registerSubView(
-        TR("title.settings_manager"),
-        std::make_unique<UI::SettingsView>(TR("title.settings_manager")));
 
-    // 注册新建谱面向导
+    // 注册新建向导
+    m_uiManager.registerView("NewProjectWizard",
+                             std::make_unique<UI::NewProjectWizard>());
     m_uiManager.registerView("NewBeatmapWizard",
                              std::make_unique<UI::NewBeatmapWizard>());
 
-    // 初始化时默认激活第一个 Tab（文件管理器）
-    sidebar_manager->toggleSubView(TR("title.file_manager"));
-
     auto& engine = Logic::EditorEngine::instance();
 
-    m_uiManager.registerView(
-        "Basic2DCanvas",
-        std::make_unique<Canvas::Basic2DCanvas>(
-            "Basic2DCanvas", 200, 200, engine.getSyncBuffer("Basic2DCanvas")));
+    m_uiManager.registerView("CanvasTabManager",
+                             std::make_unique<UI::CanvasTabManager>());
+
+    // 默认创建一个初始 Logo 占位画布
+    engine.createSession(nullptr, TR("canvas.welcome").pStr, true);
 
     // 注册预览窗口 (Preview Window)
     m_uiManager.registerView(
@@ -119,6 +149,7 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
 
 GameLoop::~GameLoop() {}
 
+// clang-format off
 /**
  * @brief 启动游戏循环
  *
@@ -128,11 +159,18 @@ GameLoop::~GameLoop() {}
  * @param window 窗口上下文
  * @return int 退出代码 (0 表示正常退出)
  */
+/// @warning 热路径：进入 while 后主线程逐帧执行渲染。
+/// 循环体禁止文件系统访问、完整 ECS 遍历、完整排序和每帧堆分配。
+// clang-format on
 int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 {
+    m_uiManager.setNativeWindow(&window);
+
     // 初始化窗口
     // VKContext 表面资源后续初始化
     if ( g_vkContext ) {
+        Runtime::AppThreadPool::instance().init();
+
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
@@ -147,8 +185,12 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // 预加载音效文件
         auto& skinData = Config::SkinManager::instance().getData();
         for ( const auto& [key, path] : skinData.audioPaths ) {
+            const auto   leadInIt = skinData.audioLeadInSeconds.find(key);
+            const double leadInSeconds =
+                leadInIt != skinData.audioLeadInSeconds.end() ? leadInIt->second
+                                                              : 0.0;
             Audio::AudioManager::instance().preloadSoundEffect(
-                key, Config::pathToUtf8(path));
+                key, Config::pathToUtf8(path), 1.0f, leadInSeconds);
         }
 
         // 启动独立逻辑线程 (必须在音频加载后启动，防止字典竞态)
@@ -203,7 +245,8 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         // Logic::EditorEngine::instance().pushCommand(
         //     Logic::CmdLoadBeatmap{ map });
 
-        auto lastRenderTime = std::chrono::high_resolution_clock::now();
+        auto   nextRenderDeadline = FrameLimitClock::now();
+        double lastRenderTargetDt = 0.0;
 
         // 进入主循环
         while ( !window.shouldClose() ) {
@@ -234,28 +277,35 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             default: targetDt = 0.0; break;
             }
 
+            auto currentRenderTime = FrameLimitClock::now();
             if ( targetDt > 0.0 ) {
-                auto currentTime = std::chrono::high_resolution_clock::now();
-                std::chrono::duration<double> passed =
-                    currentTime - lastRenderTime;
-                if ( passed.count() < targetDt ) {
-                    auto remaining =
-                        std::chrono::duration<double>(targetDt) - passed;
-                    if ( remaining.count() > 0.0015 ) {
-                        // 剩余时间较长，粗粒度 Sleep (减去 1ms
-                        // 作为时间片调度补偿)
-                        std::this_thread::sleep_for(std::chrono::duration_cast<
-                                                    std::chrono::microseconds>(
-                            remaining - std::chrono::milliseconds(1)));
-                    } else {
-                        // 剩余时间极短，让出时间片或自旋
-                        std::this_thread::yield();
-                    }
-                    continue;
-                }
-            }
+                /// @brief 主渲染限帧使用累计 deadline，避免 Windows sleep
+                /// 过冲被逐帧累计到 fps 统计中。
+                /// @warning 渲染热路径：每帧只做时间计算和必要 sleep；禁止加入
+                /// 业务逻辑或资源操作。
+                const auto targetDuration =
+                    std::chrono::duration_cast<FrameLimitClock::duration>(
+                        std::chrono::duration<double>(targetDt));
 
-            lastRenderTime = std::chrono::high_resolution_clock::now();
+                if ( targetDt != lastRenderTargetDt ) {
+                    nextRenderDeadline = currentRenderTime + targetDuration;
+                    lastRenderTargetDt = targetDt;
+                }
+
+                if ( currentRenderTime < nextRenderDeadline ) {
+                    sleepUntilFrameDeadline(nextRenderDeadline);
+                    currentRenderTime = FrameLimitClock::now();
+                }
+
+                if ( currentRenderTime - nextRenderDeadline > targetDuration ) {
+                    nextRenderDeadline = currentRenderTime + targetDuration;
+                } else {
+                    nextRenderDeadline += targetDuration;
+                }
+            } else {
+                nextRenderDeadline = currentRenderTime;
+                lastRenderTargetDt = targetDt;
+            }
 
             // 3.1 让操作系统处理窗口事件 (缩放、关闭、鼠标按键等)
             // 已移至渲染循环内以降低 VSync 延迟 window.pollEvents();
@@ -264,42 +314,24 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
             float cursorSmokeLifeOverride = -1.0f;
             if ( settings.cursorStyle == Config::CursorStyle::Software &&
                  settings.softwareCursorConfig.enableBpmSyncSmokeLife ) {
-                auto& engine = Logic::EditorEngine::instance();
-                std::lock_guard<std::recursive_mutex> lock(
-                    engine.getSessionMutex());
-                if ( auto session = engine.getActiveSession() ) {
-                    auto& ctx = session->getContext();
-                    if ( ctx.currentBeatmap ) {
-                        double time = ctx.currentTime;
-                        double bpm  = ctx.currentBeatmap->m_baseMapMetadata
-                                          .preference_bpm;
-
-                        for ( const auto& t : ctx.currentBeatmap->m_timings ) {
-                            if ( t.m_timingEffect == MMM::TimingEffect::BPM ) {
-                                if ( t.m_timestamp <= time ) {
-                                    bpm = t.m_bpm;
-                                } else {
-                                    break;
-                                }
-                            }
-                        }
-
-                        if ( bpm > 0 ) {
-                            cursorSmokeLifeOverride =
-                                static_cast<float>(60.0 / bpm);
-                        }
-                    }
-                }
+                cursorSmokeLifeOverride = Logic::EditorEngine::instance()
+                                              .getCursorSmokeLifeOverride();
             }
             context.getRenderer().setCursorSmokeLifeOverride(
                 cursorSmokeLifeOverride);
 
             // 3.2 执行渲染
             context.checkAndRebuildFonts();
-            context.getRenderer().render(
-                window,
-                std::vector<Graphic::IGraphicUserHook*>{ &m_uiManager });
+            /// @brief 本帧渲染用户钩子列表，使用栈上数组避免热路径内分配。
+            std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{
+                &m_uiManager
+            };
+            context.getRenderer().render(window, graphicUserHooks);
         }
+
+        // 保存当前项目工作区和项目配置
+        m_uiManager.captureProjectWorkspaceState();
+        Logic::EditorEngine::instance().saveProject();
 
         // 停止逻辑线程
         Logic::EditorEngine::instance().stop();
@@ -319,6 +351,7 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
         (void)context.getLogicalDevice().waitIdle();
         m_uiManager.clearAllViews();
         context.release();
+        Runtime::AppThreadPool::instance().shutdown();
         return EXIT_NORMAL;
     } else {
         return EXIT_WINDOW_EXEPTION;

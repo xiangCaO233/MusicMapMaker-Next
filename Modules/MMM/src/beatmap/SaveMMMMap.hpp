@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -40,6 +41,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_audio_path);
     base["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
+    base["cover_img"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path);
     base["track_count"] = beatMap.m_baseMapMetadata.track_count;
     base["bpm"]         = beatMap.m_baseMapMetadata.preference_bpm;
     base["duration"]    = beatMap.m_baseMapMetadata.map_length;
@@ -75,9 +78,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         t["timestamp"]   = timing.m_timestamp;
         t["bpm"]         = timing.m_bpm;
         t["beat_length"] = timing.m_beat_length;
-        t["effect"] =
-            timing.m_timingEffect == TimingEffect::BPM ? "bpm" : "scroll";
-        t["param"] = timing.m_timingEffectParameter;
+        t["effect"]      = timingEffectToString(timing.m_timingEffect);
+        t["param"]       = timing.m_timingEffectParameter;
 
         auto& tExtra = t["extra"];
         tExtra       = json::array();
@@ -244,6 +246,8 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
                 sourceName = "osu";
             else if ( type == NoteMetadataType::MALODY )
                 sourceName = "malody";
+            else if ( type == NoteMetadataType::MMM )
+                sourceName = "mmm";
 
             if ( sourceName.empty() ) continue;
 

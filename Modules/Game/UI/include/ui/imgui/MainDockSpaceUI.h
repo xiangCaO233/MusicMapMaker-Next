@@ -1,19 +1,45 @@
 #pragma once
 
-#include "ui/ITextureLoader.h"
-#include "ui/imgui/manager/ToolbarView.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
-#include <memory>
+#include "ui/ITextureLoader.h"
+#include "ui/imgui/manager/ToolbarView.h"
+#include "ui/imgui/menu/MainMenuView.h"
 #include <functional>
+#include <memory>
 
 
 namespace MMM::UI
 {
 class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
+public:
+    static ImGuiID getCenterDockId() { return s_centerDockId; }
+    static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
+    /// @brief 获取解除固定时工具窗口使用的右侧停靠节点。
+    static ImGuiID getToolDockId() { return s_toolDockId; }
+    /// @brief 设置解除固定时工具窗口使用的右侧停靠节点。
+    /// @param id 右侧工具停靠节点 ID。
+    static void setToolDockId(ImGuiID id) { s_toolDockId = id; }
+    /// @brief 标记本帧已加载项目专属 ImGui 布局，跳过默认 DockBuilder 重置。
+    static void markProjectWorkspaceLayoutLoaded()
+    {
+        s_projectWorkspaceLayoutLoaded = true;
+    }
+    /// @brief 消费项目专属布局加载标记。
+    static bool consumeProjectWorkspaceLayoutLoaded()
+    {
+        bool loaded                    = s_projectWorkspaceLayoutLoaded;
+        s_projectWorkspaceLayoutLoaded = false;
+        return loaded;
+    }
+
+private:
+    static inline ImGuiID s_centerDockId{ 0 };
+    static inline ImGuiID s_toolDockId{ 0 };
+    static inline bool    s_projectWorkspaceLayoutLoaded{ false };
+
 public:
     MainDockSpaceUI(const std::string& name)
         : IUIView(name), ITextureLoader(name)
@@ -22,7 +48,8 @@ public:
         Event::EventBus::instance().subscribe<Event::GLFWNativeEvent>(
             [&](Event::GLFWNativeEvent e) {
                 if ( e.hasStateChange &&
-                     e.type == Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
+                     e.type ==
+                         Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE ) {
                     m_isMaximized = e.isMaximized;
                 }
             });
@@ -53,11 +80,38 @@ public:
                         vk::Device& logicalDevice, vk::CommandPool& cmdPool,
                         vk::Queue& queue) override;
 
+    /// @brief 渲染顶部菜单栏和无边框窗口控制区域。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param menuBarHeight 顶部菜单栏高度。
+    /// @param sidebarWidth 左侧边栏宽度。
+    /// @param toolbarWidth 右侧工具栏宽度。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：每帧执行；只允许常量规模布局、绘制和事件投递。
     void renderMenuBar(UIManager* sourceManager, float menuBarHeight,
                        float sidebarWidth, float toolbarWidth, float dpiScale);
     void renderDockingSpace(UIManager* sourceManager, float menuBarHeight,
                             float statusBarHeight, float sidebarWidth,
                             float toolbarWidth);
+
+    /// @brief 处理无边框主窗口边缘缩放命中。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：主窗口每帧执行；只做常量规模鼠标命中检测。
+    void handleNativeWindowFrameInteraction(UIManager* sourceManager,
+                                            float      dpiScale);
+
+    /// @brief 绘制无边框主窗口的自绘外框、内阴影和圆角轮廓。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：主窗口每帧执行；只提交固定数量 ImGui 绘制命令。
+    void renderNativeWindowFrameOverlay(UIManager* sourceManager,
+                                        float      dpiScale) const;
+
+    /// @brief 渲染底部状态栏。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @param statusBarHeight 状态栏高度。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @warning UI 热路径：每帧执行；只允许常量规模布局和状态快照读取。
     void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
                          float dpiScale);
 
@@ -75,9 +129,6 @@ public:
 
     /// @brief 窗口是否最大化 (通过事件同步)
     bool m_isMaximized{ false };
-
-    /// @brief 是否已初始化窗口状态
-    bool m_initializedWindow{ false };
 
     /// @brief 是否显示退出确认弹窗
     bool m_showExitConfirmation{ false };

@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -28,10 +29,30 @@ void AppConfig::reset()
 
 bool AppConfig::load(const std::filesystem::path& path)
 {
+    /// @brief 是否使用应用默认配置路径。
+    bool useDefaultPath = path.empty();
+    /// @brief 本次实际尝试读取的配置文件路径。
     std::filesystem::path finalPath =
-        path.empty() ? getDefaultConfigPath() : path;
+        useDefaultPath ? getDefaultConfigPath() : path;
 
-    if ( !std::filesystem::exists(finalPath) ) {
+    /// @brief 检查默认配置文件是否存在时接收的文件系统错误。
+    std::error_code configExistsError;
+    if ( !std::filesystem::exists(finalPath, configExistsError) &&
+         useDefaultPath ) {
+        /// @brief 旧版当前工作目录下的配置文件路径，用于迁移旧配置。
+        std::filesystem::path legacyPath = AppPaths::legacyUserConfigFilePath();
+        /// @brief 检查旧版配置文件是否存在时接收的文件系统错误。
+        std::error_code legacyExistsError;
+        if ( std::filesystem::exists(legacyPath, legacyExistsError) ) {
+            finalPath = legacyPath;
+            XINFO("Using legacy config for migration: {}",
+                  pathToUtf8(finalPath));
+        }
+    }
+
+    /// @brief 检查最终配置文件是否存在时接收的文件系统错误。
+    std::error_code finalExistsError;
+    if ( !std::filesystem::exists(finalPath, finalExistsError) ) {
         XINFO("Config file not found: {}. Using default values.",
               pathToUtf8(finalPath));
         return false;
@@ -48,10 +69,15 @@ bool AppConfig::load(const std::filesystem::path& path)
         nlohmann::json j;
         file >> j;
 
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_editorConfig = j.get<EditorConfig>();
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_editorConfig = j.get<EditorConfig>();
+        }
 
         XINFO("Config loaded successfully from: {}", pathToUtf8(finalPath));
+        if ( useDefaultPath && finalPath != getDefaultConfigPath() ) {
+            save();
+        }
         return true;
     } catch ( const std::exception& e ) {
         XERROR("Failed to parse config file: {}. Error: {}",
@@ -69,7 +95,14 @@ bool AppConfig::save(const std::filesystem::path& path) const
     try {
         // 确保目录存在
         if ( auto parent = finalPath.parent_path(); !parent.empty() ) {
-            std::filesystem::create_directories(parent);
+            std::error_code createDirectoryError;
+            std::filesystem::create_directories(parent, createDirectoryError);
+            if ( createDirectoryError ) {
+                XERROR("Failed to create config directory: {}. Error: {}",
+                       pathToUtf8(parent),
+                       createDirectoryError.message());
+                return false;
+            }
         }
 
         std::ofstream file(finalPath);
@@ -122,9 +155,7 @@ void AppConfig::addRecentProject(
 
 std::filesystem::path AppConfig::getDefaultConfigPath() const
 {
-    // 默认存放在当前可执行文件同级或预定义的配置目录下
-    // 这里暂时使用当前目录下的 user_config.json
-    return "user_config.json";
+    return AppPaths::userConfigFilePath();
 }
 
 }  // namespace MMM::Config

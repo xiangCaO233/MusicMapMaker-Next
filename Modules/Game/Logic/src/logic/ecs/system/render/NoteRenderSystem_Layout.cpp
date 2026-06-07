@@ -7,7 +7,10 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <numeric>
+#include <vector>
 
 #include "logic/ecs/system/HitFXSystem.h"
 
@@ -173,38 +176,44 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
 
 void NoteRenderSystem::drawBeatLines(
     Batcher& batcher, float viewportHeight, float judgmentLineY,
-    const Config::EditorConfig& config, const entt::registry& timelineRegistry,
-    double currentTime, const ScrollCache* cache, float leftX, float topY,
-    float bottomY, float trackAreaW, float renderScaleY)
+    const Config::EditorConfig&                  config,
+    const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
+    const ScrollCache* cache, float leftX, float topY, float bottomY,
+    float trackAreaW, float renderScaleY)
 {
     if ( !cache ) return;
 
     int beatDivisor = config.settings.beatDivisor;
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
-            bpmEvents.push_back(&tl);
-        }
-    }
     if ( bpmEvents.empty() ) return;
 
-    std::stable_sort(
-        bpmEvents.begin(),
-        bpmEvents.end(),
-        [](const TimelineComponent* a, const TimelineComponent* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
-
-    double currentAbsY = cache->getAbsY(currentTime);
-    double startTime   = cache->getTime(
-        currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
-    double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
+    if ( std::abs(renderScaleY) < 1e-6f ) return;
+    double topAbsY = currentAbsY +
+                     (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
+                                             static_cast<double>(renderScaleY);
+    auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
+        std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
 
     batcher.setTexture(TextureID::None);
+
+    float visibleTop    = std::min(topY, bottomY);
+    float visibleBottom = std::max(topY, bottomY);
+    int   rowCount      = std::max(
+        1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
+    std::vector<uint8_t> occupiedRows(static_cast<size_t>(rowCount), 0);
+    int                  occupiedRowCount = 0;
+    auto                 occupyRow        = [&](float y) {
+        if ( y < visibleTop || y > visibleBottom ) return false;
+        int row = static_cast<int>(std::floor(y - visibleTop));
+        row     = std::clamp(row, 0, rowCount - 1);
+        if ( occupiedRows[static_cast<size_t>(row)] != 0 ) return false;
+        occupiedRows[static_cast<size_t>(row)] = 1;
+        ++occupiedRowCount;
+        return true;
+    };
 
     auto& skin        = Config::SkinManager::instance();
     float globalAlpha = config.visual.beatLineAlpha;
@@ -245,61 +254,77 @@ void NoteRenderSystem::drawBeatLines(
                                  ? bpmEvents[i + 1]->m_timestamp
                                  : std::numeric_limits<double>::infinity();
 
-        if ( nextBpmTime <= startTime ) continue;
-        if ( bpmTime >= endTime ) break;
-
         double beatDuration = 60.0 / bpmVal;
         double stepDuration = beatDuration / beatDivisor;
 
-        double  startCalcTime = std::max(bpmTime, startTime);
-        int64_t stepOffset    = 0;
-        if ( startCalcTime > bpmTime ) {
-            stepOffset = static_cast<int64_t>(
-                std::ceil((startCalcTime - bpmTime) / stepDuration - 1e-4));
-        }
+        for ( const auto& [startTime, endTime] : visibleRanges ) {
+            if ( nextBpmTime <= startTime ) continue;
+            double segmentStartTime = bpmTime;
+            if ( i == 0 && config.visual.drawBeatLinesBeforeFirstTiming ) {
+                segmentStartTime = startTime;
+            }
+            if ( segmentStartTime >= endTime ) continue;
 
-        double t = bpmTime + stepOffset * stepDuration;
-        while ( t < nextBpmTime && t <= endTime ) {
-            int beatIndex   = stepOffset % beatDivisor;
-            int denominator = 1;
-            if ( beatIndex != 0 ) {
-                int gcd     = std::gcd(beatIndex, beatDivisor);
-                denominator = beatDivisor / gcd;
+            double  startCalcTime = std::max(segmentStartTime, startTime);
+            int64_t stepOffset    = 0;
+            if ( startCalcTime > bpmTime ) {
+                stepOffset = static_cast<int64_t>(
+                    std::ceil((startCalcTime - bpmTime) / stepDuration - 1e-4));
+            } else if ( startCalcTime < bpmTime ) {
+                stepOffset = static_cast<int64_t>(std::floor(
+                    (startCalcTime - bpmTime) / stepDuration + 1e-4));
             }
 
-            auto [color, width] = getBeatLineConfig(denominator);
-            double absY         = cache->getAbsY(t);
-            float  y = judgmentLineY -
-                       static_cast<float>(absY - currentAbsY) * renderScaleY;
-
-            if ( y >= topY && y <= bottomY ) {
-                if ( batcher.snapshot->isSnapped &&
-                     std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
-                    glm::vec4 glowCol = color;
-                    glowCol.a *= 0.6f;
-                    batcher.pushQuad(leftX,
-                                     y + (width + 4.0f) * 0.5f,
-                                     trackAreaW,
-                                     width + 4.0f,
-                                     glowCol);
-                    glowCol.a *= 0.5f;
-                    batcher.pushQuad(leftX,
-                                     y + (width + 10.0f) * 0.5f,
-                                     trackAreaW,
-                                     width + 10.0f,
-                                     glowCol);
-                    glowCol.a *= 0.5f;
-                    batcher.pushQuad(leftX,
-                                     y + (width + 20.0f) * 0.5f,
-                                     trackAreaW,
-                                     width + 20.0f,
-                                     glowCol);
+            double t = bpmTime + stepOffset * stepDuration;
+            while ( t < startCalcTime - 1e-4 ) {
+                stepOffset++;
+                t = bpmTime + stepOffset * stepDuration;
+            }
+            while ( t < nextBpmTime && t <= endTime ) {
+                int beatIndex = static_cast<int>(stepOffset % beatDivisor);
+                if ( beatIndex < 0 ) beatIndex += beatDivisor;
+                int denominator = 1;
+                if ( beatIndex != 0 ) {
+                    int gcd     = std::gcd(beatIndex, beatDivisor);
+                    denominator = beatDivisor / gcd;
                 }
-                batcher.pushQuad(
-                    leftX, y + width * 0.5f, trackAreaW, width, color);
+
+                auto [color, width] = getBeatLineConfig(denominator);
+                float y =
+                    judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                        t, currentAbsY, t)) *
+                                        renderScaleY;
+
+                if ( y >= visibleTop && y <= visibleBottom && occupyRow(y) ) {
+                    if ( batcher.snapshot->isSnapped &&
+                         std::abs(t - batcher.snapshot->snappedTime) < 1e-6 ) {
+                        glm::vec4 glowCol = color;
+                        glowCol.a *= 0.6f;
+                        batcher.pushQuad(leftX,
+                                         y + (width + 4.0f) * 0.5f,
+                                         trackAreaW,
+                                         width + 4.0f,
+                                         glowCol);
+                        glowCol.a *= 0.5f;
+                        batcher.pushQuad(leftX,
+                                         y + (width + 10.0f) * 0.5f,
+                                         trackAreaW,
+                                         width + 10.0f,
+                                         glowCol);
+                        glowCol.a *= 0.5f;
+                        batcher.pushQuad(leftX,
+                                         y + (width + 20.0f) * 0.5f,
+                                         trackAreaW,
+                                         width + 20.0f,
+                                         glowCol);
+                    }
+                    batcher.pushQuad(
+                        leftX, y + width * 0.5f, trackAreaW, width, color);
+                    if ( occupiedRowCount >= rowCount ) return;
+                }
+                stepOffset++;
+                t = bpmTime + stepOffset * stepDuration;
             }
-            stepOffset++;
-            t = bpmTime + stepOffset * stepDuration;
         }
     }
 }
@@ -314,32 +339,50 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
 {
     if ( !cache ) return;
 
-    double currentAbsY = cache->getAbsY(currentTime);
-    double startTime   = cache->getTime(
-        currentAbsY - (viewportHeight - judgmentLineY) / renderScaleY);
-    double endTime = cache->getTime(currentAbsY + judgmentLineY / renderScaleY);
-
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
+    if ( std::abs(renderScaleY) < 1e-6f ) return;
     batcher.setTexture(TextureID::None);
 
+    float visibleTop    = std::min(topY, bottomY);
+    float visibleBottom = std::max(topY, bottomY);
+    int   rowCount      = std::max(
+        1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
+    std::vector<uint8_t> occupiedRows(static_cast<size_t>(rowCount), 0);
+    int                  occupiedRowCount = 0;
+    auto                 occupyRow        = [&](float y) {
+        if ( y < visibleTop || y > visibleBottom ) return false;
+        int row = static_cast<int>(std::floor(y - visibleTop));
+        row     = std::clamp(row, 0, rowCount - 1);
+        if ( occupiedRows[static_cast<size_t>(row)] != 0 ) return false;
+        occupiedRows[static_cast<size_t>(row)] = 1;
+        ++occupiedRowCount;
+        return true;
+    };
+
     for ( const auto& seg : cache->getSegments() ) {
-        if ( seg.time < startTime || seg.time > endTime ) continue;
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
         float y = judgmentLineY -
-                  static_cast<float>(seg.absY - currentAbsY) * renderScaleY;
+                  static_cast<float>((seg.absY - currentAbsY) * seg.hs) *
+                      renderScaleY;
 
-        if ( y >= topY && y <= bottomY ) {
+        if ( occupyRow(y) ) {
             glm::vec4 color = { 1.0f, 1.0f, 1.0f, 0.5f };
             if ( (seg.effects & SCROLL_EFFECT_BPM) &&
                  (seg.effects & SCROLL_EFFECT_SCROLL) ) {
                 color = { 1.0f, 0.5f, 0.0f, 0.8f };
             } else if ( seg.effects & SCROLL_EFFECT_BPM ) {
                 color = { 1.0f, 0.2f, 0.2f, 0.8f };
+            } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
+                color = { 0.2f, 0.45f, 1.0f, 0.8f };
+            } else if ( seg.effects & SCROLL_EFFECT_HS ) {
+                color = { 1.0f, 0.85f, 0.2f, 0.8f };
             } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
                 color = { 0.2f, 1.0f, 0.2f, 0.8f };
             }
 
             batcher.pushQuad(leftX, y + 1.0f, trackAreaW, 2.0f, color);
+            if ( occupiedRowCount >= rowCount ) return;
         }
     }
 }

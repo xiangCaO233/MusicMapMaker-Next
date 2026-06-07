@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/EditorSettings.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/imguivk/VKQueueFamilyDef.h"
 #include "graphic/imguivk/VKRenderPass.h"
@@ -8,6 +9,7 @@
 #include "graphic/imguivk/VKShader.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "imgui_impl_vulkan.h"
+#include <atomic>
 #include <expected>
 #include <memory>
 #include <unordered_map>
@@ -77,10 +79,11 @@ public:
      */
     inline vk::Device& getLogicalDevice() { return m_vkLogicalDevice; }
 
-    /**
-     * @brief 切换垂直同步
-     */
-    void setVSync(bool enabled);
+    /// @brief 根据帧率限制策略切换交换链呈现模式。
+    /// @param frameLimit 帧率限制策略。
+    /// @warning 低频同步点：呈现模式实际变化时会 waitIdle 并标记交换链重建，
+    /// 只能由设置变更路径调用。
+    void setFrameLimitPresentMode(Config::FrameLimitPreference frameLimit);
 
     /**
      * @brief 全屏
@@ -97,6 +100,9 @@ public:
 
     /**
      * @brief 绘制临时中央通知 (每帧渲染)
+     * @warning
+     * 热路径：渲染循环每帧执行；禁止文件系统访问、阻塞等待和异常处理。
+
      */
     void drawCenterNotification();
 
@@ -111,17 +117,27 @@ public:
     void rebuildFonts();
 
     /**
-     * @brief 仅更新现有字体的 Scale，不触发重建 (用于实时倍率调节)
+     * @brief 恢复当前字体 atlas 生命周期内固定的字体缩放。
+     *
+     * @warning 低频设置路径：禁止在这里读取实时字体倍率并触发动态
+     * atlas 重烘焙；字体尺寸变更只能在下一次字体 atlas 重建后生效。
      */
     void updateFontScales();
 
     /**
      * @brief 请求在下一帧开始前进行字体重建 (线程安全)
+     * @warning
+     * 原子：设置跨
+     * UI/渲染边界的字体重建请求；只发布布尔脏位，不同步字体资源本身。
+
      */
     void requestFontRebuild();
 
     /**
      * @brief 检查并执行字体重建 (由主循环在 NewFrame 前调用)
+     *
+     * @warning 热路径/原子：渲染循环每帧调用一次；原子 exchange
+     * 不可避免，用于低频字体重建请求消耗。
      */
     void checkAndRebuildFonts();
 
@@ -149,13 +165,30 @@ private:
 
 private:
     /// @brief 字体重建请求标志
+    /// @warning
+    /// 热路径/原子：每帧检查、设置页写入；只作为脏位，禁止在此承载字体资源生命周期同步。
     std::atomic<bool> m_fontRebuildRequested{ false };
 
+    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的主字体倍率。
+    /// @warning 运行时设置变更不得直接修改该值，否则 ImGui 1.92
+    /// dynamic atlas 可能在渲染中重新打包字体纹理。
+    float m_fontAtlasScaleMain{ 1.0f };
+
+    /// @brief 当前 ImGui 字体 atlas 生命周期内固定的字体 UI 缩放。
+    /// @warning 运行时设置变更不得直接修改该值，避免已有 ImFont
+    /// 在渲染中切换到新的动态烘焙尺寸。
+    float m_fontAtlasBaseScale{ 1.0f };
+
 private:
-    /**
-     * @brief 仅更新全局呈现模式参数，不触发重建
-     */
-    void updateGlobalPresentMode(bool enabled);
+    /// @brief 根据帧率限制策略选择当前设备支持的呈现模式。
+    /// @param frameLimit 帧率限制策略。
+    /// @return 当前设备可用的 Vulkan 呈现模式。
+    vk::PresentModeKHR selectPresentMode(
+        Config::FrameLimitPreference frameLimit) const;
+
+    /// @brief 仅更新全局呈现模式参数，不触发重建。
+    /// @param frameLimit 帧率限制策略。
+    void updateGlobalPresentMode(Config::FrameLimitPreference frameLimit);
 
     /**
      * @brief 初始化 GLFW 上下文
@@ -404,6 +437,11 @@ private:
      * @brief 设置Moonlight样式
      */
     void setMoonlightStyle();
+
+    /**
+     * @brief 设置 Cecilia 塞西莉娅配色派生样式。
+     */
+    void setCeciliaStyle();
 
     /**
      * @brief 设置ComfortableLight样式

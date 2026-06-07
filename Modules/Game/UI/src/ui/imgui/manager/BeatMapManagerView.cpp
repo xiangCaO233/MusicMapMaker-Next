@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/BeatMapManagerView.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
@@ -10,9 +11,40 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 namespace MMM::UI
 {
+
+/// @brief 获取谱面管理器中不可再换行控件所需的最小内容尺寸。
+ImVec2 BeatMapManagerView::getMinContentSize(float dpiScale) const
+{
+    auto&       engine    = Logic::EditorEngine::instance();
+    auto*       project   = engine.getCurrentProject();
+    const float scale     = std::max(1.0f, dpiScale);
+    const float panelPad  = 12.0f * scale;
+    const float rowHeight = 28.0f * scale;
+    const float footerH   = 44.0f * scale;
+    const float headerWidth =
+        ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x +
+        ImGui::CalcTextSize(TR("ui.beatmap_manager.beatmaps").data()).x;
+
+    if ( !project ) {
+        const char* hint = TR("ui.beatmap_manager.initial_hint").data();
+        return ImVec2(
+            std::ceil(ImGui::CalcTextSize(hint).x + panelPad * 2.0f),
+            std::ceil(ImGui::GetTextLineHeightWithSpacing() + panelPad * 2.0f));
+    }
+
+    const float visibleRows =
+        m_showBeatmapList ? std::min<size_t>(project->m_beatmaps.size(), 1) : 0;
+    const float minHeight = panelPad * 2.0f + ImGui::GetFrameHeight() +
+                            visibleRows * rowHeight + footerH;
+    return ImVec2(std::ceil(headerWidth + panelPad * 2.0f),
+                  std::ceil(minHeight));
+}
 
 void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                   UIManager*     sourceManager)
@@ -23,188 +55,135 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
     float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
-    if ( fileManagerFont ) ImGui::PushFont(fileManagerFont);
+    if ( fileManagerFont ) {
+        ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
+    }
 
-    CLayVBox rootVBox;
+    const float panelPadding = 12.0f * dpiScale;
+    const float rowHeight    = 28.0f * dpiScale;
 
     if ( !project ) {
-        CLayHBox labelHBox;
-        auto     fh = ImGui::GetFrameHeight();
-        labelHBox.addSpring()
-            .addElement(
-                "InitialHint",
-                Sizing::Grow(),
-                Sizing::Fixed(fh),
-                [=](Clay_BoundingBox r, bool isHovered) {
-                    float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
-                    ImGui::SetCursorScreenPos({ r.x, r.y + offY });
-                    ImVec2 textSize = ImGui::CalcTextSize(
-                        TR("ui.beatmap_manager.initial_hint").data());
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                         (r.width - textSize.x) * 0.5f);
-                    ImGui::TextDisabled(
-                        "%s", TR("ui.beatmap_manager.initial_hint").data());
-                })
-            .addSpring();
-
-        rootVBox.setPadding(12, 12, 12, 12)
-            .addLayout(
-                "labelHBox", labelHBox, Sizing::Grow(), Sizing::Fixed(40));
-        rootVBox.addSpring();
-        rootVBox.render(layoutContext);
+        const char* hint     = TR("ui.beatmap_manager.initial_hint").data();
+        ImVec2      textSize = ImGui::CalcTextSize(hint);
+        ImVec2      textPos  = {
+            layoutContext.m_startPos.x +
+                std::max(0.0f, layoutContext.m_avail.x - textSize.x) * 0.5f,
+            layoutContext.m_startPos.y +
+                std::max(0.0f, layoutContext.m_avail.y - textSize.y) * 0.5f
+        };
+        ImGui::SetCursorScreenPos(textPos);
+        ImGui::TextDisabled("%s", hint);
 
         if ( fileManagerFont ) ImGui::PopFont();
         return;
     }
 
-    // 已打开项目时的界面
-    CLayVBox listVBox;
-    listVBox.setSpacing(4);
+    float  footerH  = 44.0f * dpiScale;
+    float  listH    = std::max(0.0f, layoutContext.m_avail.y - footerH);
+    ImVec2 listPos  = { layoutContext.m_startPos.x + panelPadding,
+                        layoutContext.m_startPos.y + panelPadding };
+    ImVec2 listSize = { std::max(0.0f,
+                                 layoutContext.m_avail.x - panelPadding * 2.0f),
+                        std::max(0.0f, listH - panelPadding) };
 
-    listVBox.addElement("BeatmapsHeader",
-                        Sizing::Grow(),
-                        Sizing::Fixed(ImGui::GetFrameHeight()),
-                        [this](Clay_BoundingBox r, bool isHovered) {
-                            Utils::renderCollapsingHeader(
-                                TR("ui.beatmap_manager.beatmaps").data(),
-                                &m_showBeatmapList,
-                                r);
-                        });
+    ImGui::SetCursorScreenPos(listPos);
+    ImGui::BeginChild(
+        "BeatmapListChild", listSize, false, ImGuiWindowFlags_None);
+
+    ImVec2           headerPos = ImGui::GetCursorScreenPos();
+    Clay_BoundingBox headerBox{ .x      = headerPos.x,
+                                .y      = headerPos.y,
+                                .width  = ImGui::GetContentRegionAvail().x,
+                                .height = ImGui::GetFrameHeight() };
+    Utils::renderCollapsingHeader(TR("ui.beatmap_manager.beatmaps").data(),
+                                  &m_showBeatmapList,
+                                  headerBox);
 
     if ( m_showBeatmapList ) {
-        for ( const auto& beatmap : project->m_beatmaps ) {
-            listVBox.addElement(
-                "Beatmap_" + beatmap.m_filePath,
-                Sizing::Grow(),
-                Sizing::Fixed(28 * dpiScale),
-                [=, &engine, this](Clay_BoundingBox r, bool isHovered) {
-                    ImGui::Indent();
-                    std::string labelStr =
-                        beatmap.m_name + " - " + beatmap.m_filePath;
-                    float availW = ImGui::GetContentRegionAvail().x;
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(project->m_beatmaps.size()), rowHeight);
+        while ( clipper.Step() ) {
+            for ( int row = clipper.DisplayStart; row < clipper.DisplayEnd;
+                  ++row ) {
+                const auto& beatmap = project->m_beatmaps[row];
+                ImGui::Indent();
+                std::string labelStr =
+                    beatmap.m_name + " - " + beatmap.m_filePath;
+                float availW = ImGui::GetContentRegionAvail().x;
 
-                    Utils::renderScrollingSelectable(
-                        beatmap.m_filePath,
-                        labelStr,
-                        availW,
-                        28 * dpiScale,
-                        [&]() {
-                            XINFO("Request to load beatmap: {}",
-                                  beatmap.m_name);
-                            auto fullPath =
-                                project->m_projectRoot /
-                                std::filesystem::path(
-                                    reinterpret_cast<const char8_t*>(
-                                        beatmap.m_filePath.c_str()));
-                            auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                                MMM::BeatMap::loadFromFile(fullPath));
-                            engine.pushCommand(
-                                Logic::CmdLoadBeatmap{ loadedBeatmap });
-                        });
+                Utils::renderScrollingSelectable(
+                    beatmap.m_filePath, labelStr, availW, rowHeight, [&]() {
+                        XINFO("Request to load beatmap: {}", beatmap.m_name);
+                        auto fullPath = project->m_projectRoot /
+                                        Config::utf8ToPath(beatmap.m_filePath);
+                        auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
+                            MMM::BeatMap::loadFromFile(fullPath));
+                        engine.createSession(loadedBeatmap, beatmap.m_name);
+                    });
 
-                    {
-                        bool hovered = ImGui::IsItemHovered();
-                        bool rclicked =
-                            ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-                        if ( hovered && rclicked ) {
-                            m_manageBeatmapPath = beatmap.m_filePath;
-                            m_openManageModal   = true;
-                        }
-                    }
+                bool hovered  = ImGui::IsItemHovered();
+                bool rclicked = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                if ( hovered && rclicked ) {
+                    m_manageBeatmapPath = beatmap.m_filePath;
+                    m_openManageModal   = true;
+                }
 
-                    if ( ImGui::IsItemHovered() ) {
-                        ImGui::SetTooltip("File: %s\nTrack: %s",
-                                          beatmap.m_filePath.c_str(),
-                                          beatmap.m_audioTrackId.c_str());
-                    }
-                    ImGui::Unindent();
-                });
+                if ( hovered ) {
+                    ImGui::SetTooltip("File: %s\nTrack: %s",
+                                      beatmap.m_filePath.c_str(),
+                                      beatmap.m_audioTrackId.c_str());
+                }
+                ImGui::Unindent();
+            }
         }
     }
 
-    // 1. 顶部列表区域
-    float footerH = 44.0f * dpiScale;
-    rootVBox.setPadding(12 * dpiScale, 12 * dpiScale, 12 * dpiScale, 0)
-        .setSpacing(8 * dpiScale)
-        .addElement(
-            "BeatmapListArea",
-            Sizing::Grow(),
-            Sizing::Grow(),
-            [&listVBox, &layoutContext](Clay_BoundingBox r, bool isHovered) {
-                ImGui::BeginChild("BeatmapListChild",
-                                  { r.width, r.height },
-                                  false,
-                                  ImGuiWindowFlags_None);
+    ImGui::EndChild();
 
-                ImVec2 oldStartPos = layoutContext.m_startPos;
-                ImVec2 oldAvail    = layoutContext.m_avail;
+    float  btnSize    = 32.0f * dpiScale;
+    ImVec2 footerPos  = { layoutContext.m_startPos.x + panelPadding,
+                          layoutContext.m_startPos.y + listH };
+    ImVec2 footerSize = {
+        std::max(0.0f, layoutContext.m_avail.x - panelPadding * 2.0f), footerH
+    };
+    ImVec2 buttonPos = {
+        footerPos.x, footerPos.y + std::max(0.0f, footerSize.y - btnSize) * 0.5f
+    };
 
-                layoutContext.m_startPos = ImGui::GetCursorScreenPos();
-                layoutContext.m_avail    = { r.width, 10000.0f };
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1, 1, 1, 0.2f));
+    Utils::pushFixedButtonStyleVars();
 
-                listVBox.render(layoutContext);
+    ImGui::SetCursorScreenPos(buttonPos);
+    ImDrawList* dl    = ImGui::GetWindowDrawList();
+    ImVec4      bgCol = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
+    bgCol.w *= 0.5f;
+    float rounding = ImGui::GetStyle().FrameRounding;
+    if ( ImGui::IsMouseHoveringRect(
+             buttonPos,
+             { buttonPos.x + footerSize.x, buttonPos.y + btnSize }) ) {
+        bgCol.w *= 1.5f;
+    }
 
-                layoutContext.m_startPos = oldStartPos;
-                layoutContext.m_avail    = oldAvail;
+    dl->AddRectFilled(buttonPos,
+                      { buttonPos.x + footerSize.x, buttonPos.y + btnSize },
+                      ImGui::ColorConvertFloat4ToU32(bgCol),
+                      rounding);
 
-                ImGui::EndChild();
-            });
+    if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(footerSize.x, btnSize)) ) {
+        auto* wizard =
+            sourceManager->getView<NewBeatmapWizard>("NewBeatmapWizard");
+        if ( wizard ) wizard->open();
+    }
 
-    ImVec2 totalSize = rootVBox.renderInCurrent(
-        layoutContext.m_startPos,
-        { layoutContext.m_avail.x, layoutContext.m_avail.y - footerH });
-
-    // 2. 底部按钮区域 (独立渲染，确保不被列表遮挡)
-    CLayHBox bottomBtnHBox;
-    float    btnSize = 32.0f * dpiScale;
-    bottomBtnHBox.setPadding(12 * dpiScale, 12 * dpiScale, 0, 0)
-        .setAlignment(Alignment::Center())  // 垂直居中
-        .addElement(
-            "Beatmap_CreateNew",
-            Sizing::Grow(),  // 宽度拉满
-            Sizing::Fixed(btnSize),
-            [&engine, sourceManager](Clay_BoundingBox r, bool isHovered) {
-                ImGui::PushStyleColor(
-                    ImGuiCol_Text,
-                    ImGui::GetStyle().Colors[ImGuiCol_TextDisabled]);
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-                                      ImVec4(1, 1, 1, 0.1f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-                                      ImVec4(1, 1, 1, 0.2f));
-                ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
-
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                // 使用带有圆角的装饰背景 (与列表项风格统一)
-                ImDrawList* dl    = ImGui::GetWindowDrawList();
-                ImVec4      bgCol = ImGui::GetStyle().Colors[ImGuiCol_FrameBg];
-                bgCol.w *= 0.5f;
-                float rounding = ImGui::GetStyle().FrameRounding;
-
-                if ( isHovered ) bgCol.w *= 1.5f;
-
-                dl->AddRectFilled({ r.x, r.y },
-                                  { r.x + r.width, r.y + r.height },
-                                  ImGui::ColorConvertFloat4ToU32(bgCol),
-                                  rounding);
-
-                if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(r.width, r.height)) ) {
-                    auto* wizard = sourceManager->getView<NewBeatmapWizard>(
-                        "NewBeatmapWizard");
-                    if ( wizard ) wizard->open();
-                }
-
-                ImGui::PopStyleVar();
-                ImGui::PopStyleColor(4);
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s", TR_CACHE("ui.file.new_map").data());
-                }
-            });
-
-    ImVec2 footerPos = { layoutContext.m_startPos.x,
-                         layoutContext.m_startPos.y + totalSize.y };
-    bottomBtnHBox.renderInCurrent(footerPos,
-                                  { layoutContext.m_avail.x, footerH });
+    Utils::popFixedButtonStyleVars();
+    ImGui::PopStyleColor(4);
+    if ( ImGui::IsItemHovered() ) {
+        ImGui::SetTooltip("%s", TR_CACHE("ui.file.new_map").data());
+    }
 
     // --- 3. 谱面管理窗口 ---
     bool showBMModal = !m_manageBeatmapPath.empty();
@@ -213,25 +192,46 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             fmt::format("{} {}",
                         TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                ImGuiCond_Appearing,
-                                ImVec2(0.5f, 0.5f));
         if ( m_openManageModal ) {
-            ImGui::SetNextWindowSize({ 420 * dpiScale, 0 });
             m_openManageModal = false;
         }
-        if ( ImGui::Begin(windowTitle.c_str(),
-                          &showBMModal,
-                          ImGuiWindowFlags_NoCollapse) ) {
+        Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
+        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
+                                           &showBMModal,
+                                           ImGuiWindowFlags_NoCollapse,
+                                           { 420 * dpiScale, 0.0f }) ) {
             if ( !showBMModal ) {
                 m_manageBeatmapPath = "";
             }
 
             // --- 使用 Clay 重构对话框内容 ---
-            CLayVBox modalLayout;
-            float    padding = 16 * dpiScale;
-            modalLayout.setPadding(padding, padding, padding, padding);
-            modalLayout.setSpacing(16 * dpiScale);
+            CLayVBox    modalLayout;
+            const auto& modalStyle     = ImGui::GetStyle();
+            auto        toLayoutPixels = [](float value) {
+                return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+            };
+            float padding =
+                std::max(16.0f * dpiScale, modalStyle.WindowPadding.x);
+            const float modalGap =
+                std::max(16.0f * dpiScale, modalStyle.ItemSpacing.y);
+            const float buttonGap =
+                std::max(12.0f * dpiScale, modalStyle.ItemSpacing.x);
+            const float buttonH =
+                std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
+            const float removeButtonW =
+                std::max(140.0f * dpiScale,
+                         ImGui::CalcTextSize(
+                             TR("ui.beatmap_manager.remove_beatmap").data())
+                                 .x +
+                             modalStyle.FramePadding.x * 2.0f);
+            const float cancelButtonW =
+                std::max(100.0f * dpiScale,
+                         ImGui::CalcTextSize(TR("ui.common.cancel").data()).x +
+                             modalStyle.FramePadding.x * 2.0f);
+            const uint16_t modalPaddingPx = toLayoutPixels(padding);
+            modalLayout.setPadding(
+                modalPaddingPx, modalPaddingPx, modalPaddingPx, modalPaddingPx);
+            modalLayout.setSpacing(toLayoutPixels(modalGap));
 
             // 1. 标题与信息 (移除了冗余 Text)
             modalLayout.addElement(
@@ -248,12 +248,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             // 2. 操作按钮区
             CLayHBox btnRow;
             btnRow.setAlignment(Alignment::Center());
-            btnRow.setSpacing(12 * dpiScale);
+            btnRow.setSpacing(toLayoutPixels(buttonGap));
 
             btnRow.addElement(
                 "RemoveBtn",
-                Sizing::Fixed(140 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(removeButtonW),
+                Sizing::Fixed(buttonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(
@@ -265,8 +265,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
             btnRow.addElement(
                 "CancelBtn",
-                Sizing::Fixed(100 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(cancelButtonW),
+                Sizing::Fixed(buttonH),
                 [=, this](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(TR("ui.common.cancel").data(),
@@ -275,10 +275,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 });
 
-            modalLayout.addLayout("BtnRowLayout",
-                                  btnRow,
-                                  Sizing::Grow(),
-                                  Sizing::Fixed(32 * dpiScale));
+            modalLayout.addLayout(
+                "BtnRowLayout", btnRow, Sizing::Grow(), Sizing::Fixed(buttonH));
 
             // 渲染布局
             ImVec2 modalSize = modalLayout.renderInCurrent(
@@ -288,33 +286,24 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
             // --- 二次确认弹窗 ---
             {
-                static bool wasOpen = false;
-                bool        isOpen = ImGui::IsPopupOpen("RemoveBeatmapConfirm");
-                if ( isOpen && !wasOpen ) {
-                    ImGui::SetNextWindowPos(
-                        ImGui::GetMainViewport()->GetCenter(),
-                        ImGuiCond_Always,
-                        ImVec2(0.5f, 0.5f));
+                Utils::CenteredModalPopupScope removeModalScope(dpiScale);
+                if ( removeModalScope.begin("RemoveBeatmapConfirm") ) {
+                    ImGui::Text("%s",
+                                TR("ui.beatmap_manager.remove_confirm").data());
+                    ImGui::Spacing();
+                    if ( ImGui::Button(TR("ui.common.confirm").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        engine.pushCommand(
+                            Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
+                        m_manageBeatmapPath = "";
+                    }
+                    ImGui::SameLine();
+                    if ( ImGui::Button(TR("ui.common.cancel").data(),
+                                       { 100 * dpiScale, 0 }) ) {
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::EndPopup();
                 }
-                wasOpen = isOpen;
-            }
-            if ( ImGui::BeginPopupModal(
-                     "RemoveBeatmapConfirm", nullptr, ImGuiWindowFlags_None) ) {
-                ImGui::Text("%s",
-                            TR("ui.beatmap_manager.remove_confirm").data());
-                ImGui::Spacing();
-                if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    engine.pushCommand(
-                        Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
-                    m_manageBeatmapPath = "";
-                }
-                ImGui::SameLine();
-                if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                   { 100 * dpiScale, 0 }) ) {
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
             }
 
             ImGui::End();

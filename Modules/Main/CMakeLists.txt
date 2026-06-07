@@ -34,13 +34,9 @@ if(Python3_EXECUTABLE)
     )
 endif()
 
-target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp)
+target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp
+                                           src/StartupProgressDialog.cpp)
 target_include_directories(MusicMapMaker-Next PRIVATE include)
-
-if(MMM_PGO_INSTRUMENT)
-    # PGO 插桩版本需要 curl 上传 profile
-    target_link_libraries(MusicMapMaker-Next PRIVATE Network)
-endif()
 
 target_link_libraries(MusicMapMaker-Next
 	PRIVATE
@@ -48,4 +44,9 @@ target_link_libraries(MusicMapMaker-Next
 		Config
 		Audio
 		Game
+		Network
 )
+
+if(WIN32)
+	target_link_libraries(MusicMapMaker-Next PRIVATE comctl32)
+endif()

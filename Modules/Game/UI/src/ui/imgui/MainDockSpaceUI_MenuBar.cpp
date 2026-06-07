@@ -8,8 +8,10 @@
 #include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
 #include <memory>
 
@@ -50,6 +52,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
     // 设置 WindowBg 以确保完全覆盖
     ImGui::PushStyleColor(ImGuiCol_WindowBg,
                           ImGui::GetStyle().Colors[ImGuiCol_MenuBarBg]);
+    ImGui::PushStyleColor(ImGuiCol_Text,
+                          ImGui::GetStyle().Colors[ImGuiCol_TextLink]);
 
     ImGui::Begin(
         "TopMenuBarHost", nullptr, menu_flags & ~ImGuiWindowFlags_NoBackground);
@@ -65,7 +69,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
                                   std::unique_ptr<Graphic::VKTexture>& tex,
                                   float                                btnSize,
                                   ImVec4 hoverColor) -> bool {
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
@@ -86,13 +90,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
                     imTexId, img_p1, img_p2, { 0, 0 }, { 1, 1 }, tint);
             }
             ImGui::PopStyleColor(2);
-            ImGui::PopStyleVar(1);
+            Utils::popFixedButtonStyleVars();
             return clicked;
         };
 
         auto DrawFontIconButton =
             [&](const char* icon, float btnSize, ImVec4 hoverColor) -> bool {
-            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0, 0));
+            Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
@@ -102,7 +106,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             bool clicked = ImGui::Button(icon, ImVec2(btnSize, btnSize));
 
             ImGui::PopStyleColor(3);
-            ImGui::PopStyleVar(1);
+            Utils::popFixedButtonStyleVars();
             return clicked;
         };
 
@@ -128,7 +132,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         // 3. 标题：MusicMapMaker-Next (严格居中)
         const char* titleText = "MusicMapMaker-Next";
-        if ( menuFont ) ImGui::PushFont(menuFont);
+        if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
         float titleWidth = ImGui::CalcTextSize(titleText).x;
         float titleX     = (barWidth - titleWidth) * 0.5f;
         ImGui::SetCursorPosX(titleX);
@@ -219,18 +223,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::SetCursorPosX(buttonsStartX);
 
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImFont* contentFont = skinCfg.getFont("content");
 
         if ( DrawFontIconButton(ICON_MMM_MINIMIZE, buttonSize, hoverVec4) ) {
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_ICONFY_WINDOW });
         }
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-            if ( contentFont ) ImGui::PushFont(contentFont);
-            ImGui::SetTooltip("%s", TR("ui.window.minimize").data());
-            if ( contentFont ) ImGui::PopFont();
-        }
+        Utils::renderTooltip(TR("ui.window.minimize").data(),
+                             Utils::TooltipDir::Left);
 
         ImGui::SameLine();
 
@@ -243,12 +242,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE });
         }
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-            if ( contentFont ) ImGui::PushFont(contentFont);
-            ImGui::SetTooltip("%s", maxTip);
-            if ( contentFont ) ImGui::PopFont();
-        }
+        Utils::renderTooltip(maxTip, Utils::TooltipDir::Left);
 
         ImGui::SameLine();
 
@@ -257,19 +251,15 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                 .type = Event::NativeEventType::GLFW_CLOSE_WINDOW });
         }
-        if ( ImGui::IsItemHovered() ) {
-            ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-            if ( contentFont ) ImGui::PushFont(contentFont);
-            ImGui::SetTooltip("%s", TR("ui.window.close").data());
-            if ( contentFont ) ImGui::PopFont();
-        }
+        Utils::renderTooltip(TR("ui.window.close").data(),
+                             Utils::TooltipDir::Left);
 
         ImGui::PopStyleVar(1);
         ImGui::PopStyleVar(2);
         ImGui::EndMenuBar();
     }
     ImGui::End();
-    ImGui::PopStyleColor(2);  // MenuBarBg, WindowBg
+    ImGui::PopStyleColor(3);  // MenuBarBg, WindowBg, Text
     ImGui::PopStyleVar(3);
 }
 

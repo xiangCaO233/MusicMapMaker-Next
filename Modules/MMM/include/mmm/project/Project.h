@@ -60,14 +60,42 @@ public:
     /// @brief 项目内包含的所有谱面入口列表
     std::vector<BeatmapEntry> m_beatmaps;
 
+    /// @brief 手动从项目中移除并排除自动同步的谱面相对路径列表。
+    std::vector<std::string> m_excludedBeatmapPaths;
+
+    /// @brief 手动从项目中移除并排除自动同步的音频相对路径列表。
+    std::vector<std::string> m_excludedAudioPaths;
+
     // --- 运行时状态 (不参与序列化) ---
 
     /// @brief 项目实际在文件系统中的根路径
     std::filesystem::path m_projectRoot;
 
-    /// @brief 序列化宏
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(Project, m_metadata, m_settings,
-                                   m_audioResources, m_beatmaps)
+    /// @brief 序列化项目配置。
+    friend void to_json(nlohmann::json& j, const Project& p)
+    {
+        j = nlohmann::json{
+            { "m_metadata", p.m_metadata },
+            { "m_settings", p.m_settings },
+            { "m_audioResources", p.m_audioResources },
+            { "m_beatmaps", p.m_beatmaps },
+            { "m_excludedBeatmapPaths", p.m_excludedBeatmapPaths },
+            { "m_excludedAudioPaths", p.m_excludedAudioPaths }
+        };
+    }
+
+    /// @brief 反序列化项目配置，并兼容旧项目文件中缺失的排除列表。
+    friend void from_json(const nlohmann::json& j, Project& p)
+    {
+        j.at("m_metadata").get_to(p.m_metadata);
+        j.at("m_settings").get_to(p.m_settings);
+        j.at("m_audioResources").get_to(p.m_audioResources);
+        j.at("m_beatmaps").get_to(p.m_beatmaps);
+        p.m_excludedBeatmapPaths =
+            j.value("m_excludedBeatmapPaths", std::vector<std::string>{});
+        p.m_excludedAudioPaths =
+            j.value("m_excludedAudioPaths", std::vector<std::string>{});
+    }
 };
 
 }  // namespace MMM

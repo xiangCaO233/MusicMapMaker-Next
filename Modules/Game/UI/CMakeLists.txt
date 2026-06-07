@@ -8,6 +8,11 @@ add_library(UI STATIC
     src/ui/imgui/FloatingManagerUI.cpp
     src/ui/imgui/SideBarUI.cpp
     src/ui/imgui/menu/MainMenuView.cpp
+    src/ui/imgui/menu/MainMenuView_FileDialogs.cpp
+    src/ui/imgui/menu/MainMenuView_Metadata.cpp
+    src/ui/imgui/menu/MainMenuView_Overlap.cpp
+    src/ui/imgui/menu/MainMenuView_SpeedExport.cpp
+    src/ui/imgui/menu/MainMenuView_UpdatePopups.cpp
     src/ui/imgui/manager/FileManagerView.cpp
     src/ui/imgui/manager/FileManagerView_Hierarchy.cpp
     src/ui/imgui/manager/FileManagerView_Interactions.cpp
@@ -15,15 +20,26 @@ add_library(UI STATIC
     src/ui/imgui/manager/AudioManagerView.cpp
     src/ui/imgui/manager/BeatMapManagerView.cpp
     src/ui/imgui/manager/NewBeatmapWizard.cpp
+    src/ui/imgui/manager/NewProjectWizard.cpp
     src/ui/imgui/manager/SettingsView.cpp
+    src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+    src/ui/imgui/manager/SettingsView_DebugTab.cpp
+    src/ui/imgui/manager/SettingsView_EditorTab.cpp
+    src/ui/imgui/manager/SettingsView_ProjectTab.cpp
+    src/ui/imgui/manager/SettingsView_ShortcutTab.cpp
+    src/ui/imgui/manager/SettingsView_SoftwareTab.cpp
     src/ui/imgui/manager/SettingsView_Tabs.cpp
+    src/ui/imgui/manager/SettingsView_VisualTab.cpp
     src/ui/imgui/manager/ToolbarView.cpp
     src/ui/imgui/audio/AudioTrackControllerUI.cpp
     src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
     src/ui/imgui/audio/AudioTrackControllerUI_EQ.cpp
     src/ui/imgui/audio/AudioWaveformView.cpp
     src/ui/imgui/audio/AudioSpectrumView.cpp
+    src/ui/imgui/tools/BpmAutoDetector.cpp
+    src/ui/imgui/tools/BpmMeasurementToolView.cpp
     src/ui/imgui/DebugWindowUI.cpp
+    src/ui/imgui/CanvasTabManager.cpp
     src/ui/layout/CLayWrapperCore.cpp
     src/ui/layout/box/CLayBox.cpp
 )
@@ -43,6 +59,7 @@ target_link_libraries(UI
     Event
     Config
     MMM
+    Runtime
     Graphic
     3rd_glm
     3rd_imgui

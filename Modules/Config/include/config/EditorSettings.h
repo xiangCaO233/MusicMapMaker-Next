@@ -1,7 +1,10 @@
 #pragma once
+#include <array>
+#include <cstddef>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <string>
+#include <vector>
 
 namespace MMM::Config
 {
@@ -197,6 +200,221 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowPadding  = j.value("windowPadding", 8.0f);
 }
 
+/// @brief 音符调色盘方案中的颜色槽位数量。
+inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
+
+/// @brief 使用当前皮肤默认音符配色的调色盘方案标识。
+inline constexpr const char* NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
+    "__skin_default__";
+
+/// @brief 用户保存的音符调色盘方案。
+struct NoteColorPaletteScheme {
+    /// @brief 方案显示名称。
+    std::string name{ "Palette" };
+
+    /// @brief 方案颜色，顺序与工具栏音符颜色槽位一致。
+    std::vector<std::array<float, 4>> colors;
+};
+
+inline void to_json(nlohmann::json& j, const NoteColorPaletteScheme& c)
+{
+    j = nlohmann::json{ { "name", c.name }, { "colors", c.colors } };
+}
+
+inline void from_json(const nlohmann::json& j, NoteColorPaletteScheme& c)
+{
+    c.name   = j.value("name", std::string("Palette"));
+    c.colors = j.value("colors", std::vector<std::array<float, 4>>());
+    if ( c.colors.size() > NOTE_COLOR_PALETTE_SLOT_COUNT ) {
+        c.colors.resize(NOTE_COLOR_PALETTE_SLOT_COUNT);
+    }
+}
+
+/// @brief 音符调色盘持久化配置。
+struct NoteColorPaletteConfig {
+    /// @brief 当前选中的方案索引。
+    std::size_t activeSchemeIndex{ 0 };
+
+    /// @brief 用户保存的调色盘方案列表。
+    std::vector<NoteColorPaletteScheme> schemes;
+};
+
+inline void to_json(nlohmann::json& j, const NoteColorPaletteConfig& c)
+{
+    j = nlohmann::json{ { "activeSchemeIndex", c.activeSchemeIndex },
+                        { "schemes", c.schemes } };
+}
+
+inline void from_json(const nlohmann::json& j, NoteColorPaletteConfig& c)
+{
+    c.activeSchemeIndex = j.value("activeSchemeIndex", std::size_t{ 0 });
+    c.schemes = j.value("schemes", std::vector<NoteColorPaletteScheme>());
+    if ( c.schemes.empty() ) {
+        c.activeSchemeIndex = 0;
+    } else if ( c.activeSchemeIndex >= c.schemes.size() ) {
+        c.activeSchemeIndex = 0;
+    }
+}
+
+/// @brief 单个自定义快捷键绑定。
+struct ShortcutBinding {
+    /// @brief 是否启用该快捷键；关闭时该动作没有键盘入口。
+    bool enabled{ true };
+
+    /// @brief 稳定按键名称，由 UI 层映射到 ImGuiKey。
+    std::string key;
+
+    /// @brief 是否要求 Ctrl 修饰键。
+    bool ctrl{ false };
+
+    /// @brief 是否要求 Shift 修饰键。
+    bool shift{ false };
+
+    /// @brief 是否要求 Alt 修饰键。
+    bool alt{ false };
+
+    /// @brief 是否要求 Super/Command 修饰键。
+    bool super{ false };
+};
+
+inline void to_json(nlohmann::json& j, const ShortcutBinding& c)
+{
+    j = nlohmann::json{ { "enabled", c.enabled }, { "key", c.key },
+                        { "ctrl", c.ctrl },       { "shift", c.shift },
+                        { "alt", c.alt },         { "super", c.super } };
+}
+
+inline void from_json(const nlohmann::json& j, ShortcutBinding& c)
+{
+    c.enabled = j.value("enabled", true);
+    c.key     = j.value("key", std::string());
+    c.ctrl    = j.value("ctrl", false);
+    c.shift   = j.value("shift", false);
+    c.alt     = j.value("alt", false);
+    c.super   = j.value("super", false);
+    if ( c.key.empty() ) {
+        c.enabled = false;
+    }
+}
+
+/// @brief 编辑器可自定义快捷键配置。
+struct ShortcutConfig {
+    /// @brief 切换到移动工具。
+    ShortcutBinding toolMove{ true, "1", false, false, false, false };
+
+    /// @brief 切换到框选工具。
+    ShortcutBinding toolMarquee{ true, "2", false, false, false, false };
+
+    /// @brief 切换到绘制工具。
+    ShortcutBinding toolDraw{ true, "3", false, false, false, false };
+
+    /// @brief 切换到配色笔刷工具。
+    ShortcutBinding toolColorBrush{ true, "4", false, false, false, false };
+
+    /// @brief 切换到配色橡皮工具。
+    ShortcutBinding toolColorEraser{ true, "5", false, false, false, false };
+
+    /// @brief 镜像当前选中物件。
+    ShortcutBinding mirror{ true, "M", true, false, false, false };
+
+    /// @brief 镜像粘贴剪贴板物件。
+    ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
+
+    /// @brief 删除当前选中物件。
+    ShortcutBinding deleteSelected{
+        true, "Delete", false, false, false, false
+    };
+
+    /// @brief 切换反转滚动方向。
+    ShortcutBinding toggleReverseScroll{
+        false, "", false, false, false, false
+    };
+
+    /// @brief 切换滚动磁吸。
+    ShortcutBinding toggleScrollSnap{ false, "", false, false, false, false };
+
+    /// @brief 切换吸附向下取整。
+    ShortcutBinding toggleSnapFloor{ false, "", false, false, false, false };
+
+    /// @brief 切换 SCROLLTIMING 视觉映射。
+    ShortcutBinding toggleScrollTimingMapping{ false, "",    false,
+                                               false, false, false };
+
+    /// @brief 切换分拍线显示。
+    ShortcutBinding toggleBeatLines{ false, "", false, false, false, false };
+
+    /// @brief 切换播放时滚动停止播放。
+    ShortcutBinding toggleStopPlaybackOnScroll{ false, "",    false,
+                                                false, false, false };
+
+    /// @brief 切换打击音效。
+    ShortcutBinding toggleHitSfx{ false, "", false, false, false, false };
+
+    /// @brief 切换打击特效。
+    ShortcutBinding toggleHitEffects{ false, "", false, false, false, false };
+
+    /// @brief 切换同主音轨画布同步。
+    ShortcutBinding toggleSyncSameMainAudio{ false, "",    false,
+                                             false, false, false };
+};
+
+inline void to_json(nlohmann::json& j, const ShortcutConfig& c)
+{
+    j = nlohmann::json{
+        { "toolMove", c.toolMove },
+        { "toolMarquee", c.toolMarquee },
+        { "toolDraw", c.toolDraw },
+        { "toolColorBrush", c.toolColorBrush },
+        { "toolColorEraser", c.toolColorEraser },
+        { "mirror", c.mirror },
+        { "mirrorPaste", c.mirrorPaste },
+        { "deleteSelected", c.deleteSelected },
+        { "toggleReverseScroll", c.toggleReverseScroll },
+        { "toggleScrollSnap", c.toggleScrollSnap },
+        { "toggleSnapFloor", c.toggleSnapFloor },
+        { "toggleScrollTimingMapping", c.toggleScrollTimingMapping },
+        { "toggleBeatLines", c.toggleBeatLines },
+        { "toggleStopPlaybackOnScroll", c.toggleStopPlaybackOnScroll },
+        { "toggleHitSfx", c.toggleHitSfx },
+        { "toggleHitEffects", c.toggleHitEffects },
+        { "toggleSyncSameMainAudio", c.toggleSyncSameMainAudio }
+    };
+}
+
+inline void from_json(const nlohmann::json& j, ShortcutConfig& c)
+{
+    c.toolMove    = j.value("toolMove", ShortcutConfig().toolMove);
+    c.toolMarquee = j.value("toolMarquee", ShortcutConfig().toolMarquee);
+    c.toolDraw    = j.value("toolDraw", ShortcutConfig().toolDraw);
+    c.toolColorBrush =
+        j.value("toolColorBrush", ShortcutConfig().toolColorBrush);
+    c.toolColorEraser =
+        j.value("toolColorEraser", ShortcutConfig().toolColorEraser);
+    c.mirror      = j.value("mirror", ShortcutConfig().mirror);
+    c.mirrorPaste = j.value("mirrorPaste", ShortcutConfig().mirrorPaste);
+    c.deleteSelected =
+        j.value("deleteSelected", ShortcutConfig().deleteSelected);
+    c.toggleReverseScroll =
+        j.value("toggleReverseScroll", ShortcutConfig().toggleReverseScroll);
+    c.toggleScrollSnap =
+        j.value("toggleScrollSnap", ShortcutConfig().toggleScrollSnap);
+    c.toggleSnapFloor =
+        j.value("toggleSnapFloor", ShortcutConfig().toggleSnapFloor);
+    c.toggleScrollTimingMapping =
+        j.value("toggleScrollTimingMapping",
+                ShortcutConfig().toggleScrollTimingMapping);
+    c.toggleBeatLines =
+        j.value("toggleBeatLines", ShortcutConfig().toggleBeatLines);
+    c.toggleStopPlaybackOnScroll =
+        j.value("toggleStopPlaybackOnScroll",
+                ShortcutConfig().toggleStopPlaybackOnScroll);
+    c.toggleHitSfx = j.value("toggleHitSfx", ShortcutConfig().toggleHitSfx);
+    c.toggleHitEffects =
+        j.value("toggleHitEffects", ShortcutConfig().toggleHitEffects);
+    c.toggleSyncSameMainAudio = j.value(
+        "toggleSyncSameMainAudio", ShortcutConfig().toggleSyncSameMainAudio);
+}
+
 enum class FrameLimitPreference {
     VSync,
     Refresh2x,
@@ -212,6 +430,69 @@ NLOHMANN_JSON_SERIALIZE_ENUM(FrameLimitPreference,
                                { FrameLimitPreference::Refresh8x, "Refresh8x" },
                                { FrameLimitPreference::Unlimited,
                                  "Unlimited" } })
+
+/// @brief 音频播放后端偏好。
+enum class AudioPlaybackBackend {
+    SDL,    ///< SDL 音频后端。
+    OpenAL  ///< OpenAL Soft 音频后端。
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(AudioPlaybackBackend,
+                             {
+                                 { AudioPlaybackBackend::SDL, "SDL" },
+                                 { AudioPlaybackBackend::OpenAL, "OpenAL" },
+                             })
+
+/// @brief OpenAL 空间化输出配置。
+struct OpenALSpatialConfig {
+    /// @brief 是否启用 OpenAL 空间化输出。
+    bool enabled{ false };
+
+    /// @brief 声源方向 X 分量。
+    float directionX{ 0.0f };
+
+    /// @brief 声源方向 Y 分量。
+    float directionY{ 0.0f };
+
+    /// @brief 声源方向 Z 分量。
+    float directionZ{ -1.0f };
+
+    /// @brief 声源距离。
+    float distance{ 1.0f };
+
+    /// @brief OpenAL 参考距离。
+    float referenceDistance{ 1.0f };
+
+    /// @brief OpenAL 最大距离。
+    float maxDistance{ 100.0f };
+
+    /// @brief OpenAL 距离衰减倍率。
+    float rolloffFactor{ 1.0f };
+};
+
+inline void to_json(nlohmann::json& j, const OpenALSpatialConfig& c)
+{
+    j = nlohmann::json{ { "enabled", c.enabled },
+                        { "directionX", c.directionX },
+                        { "directionY", c.directionY },
+                        { "directionZ", c.directionZ },
+                        { "distance", c.distance },
+                        { "referenceDistance", c.referenceDistance },
+                        { "maxDistance", c.maxDistance },
+                        { "rolloffFactor", c.rolloffFactor } };
+}
+
+inline void from_json(const nlohmann::json& j, OpenALSpatialConfig& c)
+{
+    c.enabled           = j.value("enabled", false);
+    c.directionX        = j.value("directionX", 0.0f);
+    c.directionY        = j.value("directionY", 0.0f);
+    c.directionZ        = j.value("directionZ", -1.0f);
+    c.distance          = j.value("distance", 1.0f);
+    c.referenceDistance = j.value("referenceDistance", 1.0f);
+    c.maxDistance       = j.value("maxDistance", 100.0f);
+    c.rolloffFactor     = j.value("rolloffFactor", 1.0f);
+}
 
 enum class UITheme {
     Auto,
@@ -235,6 +516,7 @@ enum class UITheme {
     FutureDark,
     CleanDark,
     Moonlight,
+    Cecilia,  ///< 基于 mmm-default 塞西莉娅配色的 Moonlight 派生主题。
     ComfortableLight,
     HazyDark,
     Everforest,
@@ -267,6 +549,8 @@ NLOHMANN_JSON_SERIALIZE_ENUM(
                  { UITheme::FutureDark, "FutureDark" },
                  { UITheme::CleanDark, "CleanDark" },
                  { UITheme::Moonlight, "Moonlight" },
+                 { UITheme::Cecilia, "Cecilia" },
+                 { UITheme::Cecilia, "MmmDefault" },
                  { UITheme::ComfortableLight, "ComfortableLight" },
                  { UITheme::HazyDark, "HazyDark" },
                  { UITheme::Everforest, "Everforest" },
@@ -299,6 +583,23 @@ NLOHMANN_JSON_SERIALIZE_ENUM(SaveFormatPreference,
                                  { SaveFormatPreference::ForceMMM, "ForceMMM" },
                              })
 
+/// @brief 画布时间戳显示格式偏好
+enum class TimeFormatPreference {
+    Clock,         ///< 时:分:秒.毫秒
+    Seconds,       ///< 秒，保留三位小数
+    Milliseconds,  ///< 纯毫秒
+    Beat           ///< 拍号 + 分拍位
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(TimeFormatPreference,
+                             {
+                                 { TimeFormatPreference::Clock, "Clock" },
+                                 { TimeFormatPreference::Seconds, "Seconds" },
+                                 { TimeFormatPreference::Milliseconds,
+                                   "Milliseconds" },
+                                 { TimeFormatPreference::Beat, "Beat" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -308,7 +609,7 @@ struct EditorSettings {
     SfxConfig sfxConfig;
 
     /// @brief 文件选择器样式
-    FilePickerStyle filePickerStyle{ FilePickerStyle::Unified };
+    FilePickerStyle filePickerStyle{ FilePickerStyle::Native };
 
     /// @brief 光标样式
     CursorStyle cursorStyle{ CursorStyle::Software };
@@ -318,6 +619,9 @@ struct EditorSettings {
 
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
+
+    /// @brief 重叠物件检测的时间窗口，单位毫秒。
+    float overlapTimeWindowMs{ 5.0f };
 
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
@@ -333,6 +637,15 @@ struct EditorSettings {
 
     /// @brief 帧数限制模式偏好
     FrameLimitPreference frameLimit{ FrameLimitPreference::Refresh2x };
+
+    /// @brief 音频播放后端偏好。
+    AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
+
+    /// @brief OpenAL 后端空间化输出配置。
+    OpenALSpatialConfig openALSpatialConfig;
+
+    /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
+    bool renderProfileLogging{ false };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
@@ -373,6 +686,9 @@ struct EditorSettings {
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
+    /// @brief 画布时间戳显示格式偏好
+    TimeFormatPreference timeFormatPreference{ TimeFormatPreference::Seconds };
+
     /// @brief 上次打开文件的路径 (用于文件对话框记忆)
     std::string lastFilePickerPath{ "." };
 
@@ -384,6 +700,12 @@ struct EditorSettings {
 
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
+
+    /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
+    bool selectPastedObjects{ false };
+
+    /// @brief 时间线窗口多选是否允许选中 BPM 红线
+    bool timelineSelectionIncludesBpm{ false };
 
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
@@ -397,59 +719,103 @@ struct EditorSettings {
     /// @brief 吸附向下取整 (总是吸附到早于鼠标位置的分拍线)
     bool snapFloor{ false };
 
+    /// @brief 是否显示时间线窗口。
+    bool showTimelineWindow{ true };
+
+    /// @brief 是否显示预览窗口。
+    bool showPreviewWindow{ true };
+
+    /// @brief 是否在工具栏图标下方显示简短标签。
+    bool showToolLabels{ false };
+
+    /// @brief 是否将工具窗口固定在主窗口右侧。
+    bool fixedToolWindow{ true };
+
+    /// @brief 是否在左侧管理器图标下方显示简短标签。
+    bool showManagerLabels{ true };
+
     /// @brief UI 审美/视觉表现配置
     UIAestheticsConfig aesthetics;
+
+    /// @brief 音符调色盘方案配置。
+    NoteColorPaletteConfig noteColorPalettes;
+
+    /// @brief 打开项目时默认应用的音符调色盘方案名称。
+    std::string defaultNoteColorPaletteSchemeName{
+        NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+    };
+
+    /// @brief 编辑器自定义快捷键配置。
+    ShortcutConfig shortcutConfig;
 };
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
 {
-    j = nlohmann::json{ { "syncConfig", c.syncConfig },
-                        { "sfxConfig", c.sfxConfig },
-                        { "filePickerStyle", c.filePickerStyle },
-                        { "cursorStyle", c.cursorStyle },
-                        { "theme", c.theme },
-                        { "beatDivisor", c.beatDivisor },
-                        { "reverseScroll", c.reverseScroll },
-                        { "scrollSnap", c.scrollSnap },
-                        { "recentProjectsLimit", c.recentProjectsLimit },
-                        { "language", c.language },
-                        { "frameLimit", c.frameLimit },
-                        { "fontSizeMultiplier", c.fontSizeMultiplier },
-                        { "uiScaleMultiplier", c.uiScaleMultiplier },
-                        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
-                        { "globalVolume", c.globalVolume },
-                        { "globalMuted", c.globalMuted },
-                        { "bgmGain", c.bgmGain },
-                        { "bgmGainMuted", c.bgmGainMuted },
-                        { "sfxGain", c.sfxGain },
-                        { "sfxGainMuted", c.sfxGainMuted },
-                        { "selectionMode", c.selectionMode },
-                        { "marqueeThickness", c.marqueeThickness },
-                        { "marqueeRounding", c.marqueeRounding },
-                        { "saveFormatPreference", c.saveFormatPreference },
-                        { "lastFilePickerPath", c.lastFilePickerPath },
-                        { "disableScrollAccelerationWhileDrawing",
-                          c.disableScrollAccelerationWhileDrawing },
-                        { "removeObjectsOnPolylinePath",
-                          c.removeObjectsOnPolylinePath },
-                        { "softwareCursorConfig", c.softwareCursorConfig },
-                        { "preferredAsciiFont", c.preferredAsciiFont },
-                        { "preferredCjkFont", c.preferredCjkFont },
-                        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
-                        { "snapFloor", c.snapFloor },
-                        { "aesthetics", c.aesthetics } };
+    j = nlohmann::json{
+        { "syncConfig", c.syncConfig },
+        { "sfxConfig", c.sfxConfig },
+        { "filePickerStyle", c.filePickerStyle },
+        { "cursorStyle", c.cursorStyle },
+        { "theme", c.theme },
+        { "beatDivisor", c.beatDivisor },
+        { "overlapTimeWindowMs", c.overlapTimeWindowMs },
+        { "reverseScroll", c.reverseScroll },
+        { "scrollSnap", c.scrollSnap },
+        { "recentProjectsLimit", c.recentProjectsLimit },
+        { "language", c.language },
+        { "frameLimit", c.frameLimit },
+        { "audioPlaybackBackend", c.audioPlaybackBackend },
+        { "openALSpatialConfig", c.openALSpatialConfig },
+        { "renderProfileLogging", c.renderProfileLogging },
+        { "fontSizeMultiplier", c.fontSizeMultiplier },
+        { "uiScaleMultiplier", c.uiScaleMultiplier },
+        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
+        { "globalVolume", c.globalVolume },
+        { "globalMuted", c.globalMuted },
+        { "bgmGain", c.bgmGain },
+        { "bgmGainMuted", c.bgmGainMuted },
+        { "sfxGain", c.sfxGain },
+        { "sfxGainMuted", c.sfxGainMuted },
+        { "selectionMode", c.selectionMode },
+        { "marqueeThickness", c.marqueeThickness },
+        { "marqueeRounding", c.marqueeRounding },
+        { "saveFormatPreference", c.saveFormatPreference },
+        { "timeFormatPreference", c.timeFormatPreference },
+        { "lastFilePickerPath", c.lastFilePickerPath },
+        { "disableScrollAccelerationWhileDrawing",
+          c.disableScrollAccelerationWhileDrawing },
+        { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
+        { "selectPastedObjects", c.selectPastedObjects },
+        { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
+        { "softwareCursorConfig", c.softwareCursorConfig },
+        { "preferredAsciiFont", c.preferredAsciiFont },
+        { "preferredCjkFont", c.preferredCjkFont },
+        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
+        { "snapFloor", c.snapFloor },
+        { "showTimelineWindow", c.showTimelineWindow },
+        { "showPreviewWindow", c.showPreviewWindow },
+        { "showToolLabels", c.showToolLabels },
+        { "fixedToolWindow", c.fixedToolWindow },
+        { "showManagerLabels", c.showManagerLabels },
+        { "aesthetics", c.aesthetics },
+        { "noteColorPalettes", c.noteColorPalettes },
+        { "defaultNoteColorPaletteSchemeName",
+          c.defaultNoteColorPaletteSchemeName },
+        { "shortcutConfig", c.shortcutConfig }
+    };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
 {
-    c.syncConfig      = j.value("syncConfig", SyncConfig());
-    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
-    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Unified);
-    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
-    c.theme           = j.value("theme", UITheme::Auto);
-    c.beatDivisor     = j.value("beatDivisor", 4);
-    c.reverseScroll   = j.value("reverseScroll", false);
-    c.scrollSnap      = j.value("scrollSnap", false);
+    c.syncConfig          = j.value("syncConfig", SyncConfig());
+    c.sfxConfig           = j.value("sfxConfig", SfxConfig());
+    c.filePickerStyle     = j.value("filePickerStyle", FilePickerStyle::Native);
+    c.cursorStyle         = j.value("cursorStyle", CursorStyle::Software);
+    c.theme               = j.value("theme", UITheme::Auto);
+    c.beatDivisor         = j.value("beatDivisor", 4);
+    c.overlapTimeWindowMs = j.value("overlapTimeWindowMs", 5.0f);
+    c.reverseScroll       = j.value("reverseScroll", false);
+    c.scrollSnap          = j.value("scrollSnap", false);
     c.recentProjectsLimit = j.value("recentProjectsLimit", 10);
     c.language            = j.value("language", std::string("zh_cn"));
     c.frameLimit =
@@ -458,6 +824,11 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
                                            ? FrameLimitPreference::VSync
                                            : FrameLimitPreference::Unlimited)
                                     : FrameLimitPreference::Refresh2x);
+    c.audioPlaybackBackend =
+        j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
+    c.openALSpatialConfig =
+        j.value("openALSpatialConfig", OpenALSpatialConfig());
+    c.renderProfileLogging  = j.value("renderProfileLogging", false);
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
@@ -471,12 +842,17 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.marqueeThickness = j.value("marqueeThickness", 2.0f);
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
     c.saveFormatPreference =
-        j.value("saveFormatPreference", SaveFormatPreference::Original);
+        j.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+    c.timeFormatPreference =
+        j.value("timeFormatPreference", TimeFormatPreference::Seconds);
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
     c.disableScrollAccelerationWhileDrawing =
         j.value("disableScrollAccelerationWhileDrawing", true);
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
+    c.selectPastedObjects = j.value("selectPastedObjects", false);
+    c.timelineSelectionIncludesBpm =
+        j.value("timelineSelectionIncludesBpm", false);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =
@@ -484,7 +860,18 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
     c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
     c.snapFloor            = j.value("snapFloor", false);
+    c.showTimelineWindow   = j.value("showTimelineWindow", true);
+    c.showPreviewWindow    = j.value("showPreviewWindow", true);
+    c.showToolLabels       = j.value("showToolLabels", false);
+    c.fixedToolWindow      = j.value("fixedToolWindow", true);
+    c.showManagerLabels    = j.value("showManagerLabels", true);
     c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
+    c.noteColorPalettes =
+        j.value("noteColorPalettes", NoteColorPaletteConfig());
+    c.defaultNoteColorPaletteSchemeName =
+        j.value("defaultNoteColorPaletteSchemeName",
+                std::string(NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
+    c.shortcutConfig = j.value("shortcutConfig", ShortcutConfig());
 }
 
 }  // namespace MMM::Config

@@ -88,6 +88,8 @@ struct BaseMapMeta {
     std::filesystem::path main_audio_path;
     // 主背景文件路径
     std::filesystem::path main_cover_path;
+    /// @brief 封面图片文件路径
+    std::filesystem::path cover_path;
     // 主背景类型
     CoverType cover_type{ CoverType::IMAGE };
     // 主背景类型为视频时的开始时间
@@ -114,6 +116,7 @@ enum class NoteMetadataType {
     OSU,
     MALODY,
     RM,
+    MMM,
 };
 
 class NoteMetadata

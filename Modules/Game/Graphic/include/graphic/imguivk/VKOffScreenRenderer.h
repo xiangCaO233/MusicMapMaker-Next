@@ -41,6 +41,9 @@ public:
     }
 
     /// @brief 录制gpu指令
+    /// @warning 热路径：每个可渲染 UI
+    /// 视图在每帧命令录制阶段执行；禁止文件系统访问、完整排序、try/catch
+    /// 和共享指针所有权复制。
     void recordCmds(vk::CommandBuffer& cmdBuf, uint32_t frameIndex);
 
     /// @brief 重建帧缓冲
@@ -51,9 +54,11 @@ public:
                              size_t maxVertexCount = 81920);
 
     /// @brief 外部确认是否需要重建
+    /// @warning 热路径/原子：渲染准备阶段每帧轮询；resize
+    /// 回调可能写入，只读取脏位和消抖时间，不承载资源同步。
     inline bool needReCreateFrameBuffer() const
     {
-        if ( !m_need_reCreate.load() ) return false;
+        if ( !m_need_reCreate.load(std::memory_order_relaxed) ) return false;
 
         // 核心消抖判断：当前时间 - 最后请求时间 > 阈值
         auto now = std::chrono::steady_clock::now();
@@ -69,6 +74,12 @@ protected:
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };
 
+    /// @brief 发光后处理缓冲的物理宽度。
+    uint32_t m_glowWidth{ 0 };
+
+    /// @brief 发光后处理缓冲的物理高度。
+    uint32_t m_glowHeight{ 0 };
+
     // UI 请求的目标尺寸
     uint32_t m_targetWidth{ 0 };
     uint32_t m_targetHeight{ 0 };
@@ -80,6 +91,9 @@ protected:
     const std::chrono::milliseconds m_debounceThreshold{ 150 };
 
     // UI 只设置目标，不改实际尺寸
+    /// @brief UI 只设置目标，不改实际尺寸
+    /// @warning 热路径/原子：ImGui update
+    /// 期间可能每帧调用；只有尺寸变化时才写入重建脏位。
     inline void setTargetSize(uint32_t logicalW, uint32_t logicalH,
                               float dpiScale)
     {
@@ -96,7 +110,7 @@ protected:
             m_logicalHeight   = logicalH;
             m_lastRequestTime = std::chrono::steady_clock::now();
             // 标记为“有变更待处理”
-            m_need_reCreate.store(true);
+            m_need_reCreate.store(true, std::memory_order_relaxed);
         }
     }
 
@@ -124,20 +138,29 @@ protected:
     /// @brief 将逻辑裁剪矩形转换为物理裁剪矩形 (Vulkan Scissor 使用物理坐标)
     inline vk::Rect2D getPhysicalScissor(const vk::Rect2D& logicalScissor) const
     {
-        float      scale = getDpiScale();
+        float scaleX = m_scissorScaleX > 0.0f ? m_scissorScaleX : getDpiScale();
+        float scaleY = m_scissorScaleY > 0.0f ? m_scissorScaleY : getDpiScale();
         vk::Rect2D physical;
         physical.offset.x =
-            static_cast<int32_t>(logicalScissor.offset.x * scale);
+            static_cast<int32_t>(logicalScissor.offset.x * scaleX);
         physical.offset.y =
-            static_cast<int32_t>(logicalScissor.offset.y * scale);
+            static_cast<int32_t>(logicalScissor.offset.y * scaleY);
         physical.extent.width =
-            static_cast<uint32_t>(logicalScissor.extent.width * scale);
+            static_cast<uint32_t>(logicalScissor.extent.width * scaleX);
         physical.extent.height =
-            static_cast<uint32_t>(logicalScissor.extent.height * scale);
+            static_cast<uint32_t>(logicalScissor.extent.height * scaleY);
         return physical;
     }
 
+    /// @brief 当前命令录制阶段临时覆盖的裁剪 X 轴缩放。
+    float m_scissorScaleX{ 0.0f };
+
+    /// @brief 当前命令录制阶段临时覆盖的裁剪 Y 轴缩放。
+    float m_scissorScaleY{ 0.0f };
+
     /// @brief 是否需要重建
+    /// @warning 热路径/原子：渲染准备阶段读取、UI 尺寸变化写入；仅为离屏
+    /// framebuffer 脏位。
     std::atomic<bool> m_need_reCreate{ true };
 
     /**
@@ -173,6 +196,28 @@ protected:
                                   uint32_t                frameIndex)
     {
     }
+
+    /// @brief 记录最终覆盖层绘制命令，覆盖层会在普通层与发光合成之后绘制。
+    /// @warning
+    /// 热路径：每帧离屏命令录制末尾执行；只允许遍历已经生成的覆盖层命令。
+    virtual void onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
+                                     vk::PipelineLayout      pipelineLayout,
+                                     vk::DescriptorSetLayout setLayout,
+                                     vk::DescriptorSet       defaultDescriptor,
+                                     uint32_t                frameIndex)
+    {
+    }
+
+    /// @brief 判断当前帧是否存在需要发光后处理的绘制命令。
+    /// @return 存在发光命令时返回 true。
+    /// @warning
+    /// 渲染热路径：每帧离屏命令录制时执行，只能读取已生成快照中的缓存状态。
+    virtual bool hasGlowDrawCmds() const { return false; }
+
+    /// @brief 判断当前帧是否存在需要最终覆盖绘制的命令。
+    /// @return 存在覆盖层命令时返回 true。
+    /// @warning 渲染热路径：每帧离屏命令录制时执行，只能读取快照中的缓存状态。
+    virtual bool hasOverlayDrawCmds() const { return false; }
 
 private:
     // --- 1. 物理资源 (独占) ---
@@ -214,7 +259,7 @@ private:
     vk::Framebuffer m_glowFramebuffer{ VK_NULL_HANDLE },
         m_pingFramebuffer{ VK_NULL_HANDLE },
         m_pongFramebuffer{ VK_NULL_HANDLE };
-    vk::Sampler       m_glowSampler{ VK_NULL_HANDLE };
+    vk::Sampler                    m_glowSampler{ VK_NULL_HANDLE };
     std::vector<vk::DescriptorSet> m_pingDescriptorSets;
     std::vector<vk::DescriptorSet> m_pongDescriptorSets;
     std::vector<vk::DescriptorSet> m_glowDescriptorSets;

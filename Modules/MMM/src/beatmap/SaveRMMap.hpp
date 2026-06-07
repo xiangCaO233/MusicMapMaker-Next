@@ -3,14 +3,36 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <limits>
+#include <optional>
+#include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <vector>
 
 namespace MMM
 {
+
+/// @brief 解析 RM/IMD 二进制 int32 字段，不使用 C++ 异常。
+inline std::optional<int32_t> parseRMInt32(std::string_view text)
+{
+    if ( text.empty() ) return std::nullopt;
+
+    int32_t     value    = 0;
+    const char* begin    = text.data();
+    const char* end      = begin + text.size();
+    const auto [ptr, ec] = std::from_chars(begin, end, value);
+    if ( ec != std::errc{} || ptr != end ) {
+        return std::nullopt;
+    }
+    return value;
+}
 
 inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
@@ -22,6 +44,22 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 
     auto write_value = [&ofs](auto value) {
         ofs.write(reinterpret_cast<const char*>(&value), sizeof(value));
+    };
+
+    auto get_rm_map_int32 =
+        [&beatMap](const std::string& key) -> std::optional<int32_t> {
+        auto propsIt =
+            beatMap.m_metadata.map_properties.find(MapMetadataType::RM);
+        if ( propsIt == beatMap.m_metadata.map_properties.end() ) {
+            return std::nullopt;
+        }
+
+        auto valueIt = propsIt->second.find(key);
+        if ( valueIt == propsIt->second.end() ) {
+            return std::nullopt;
+        }
+
+        return parseRMInt32(valueIt->second);
     };
 
     // 0~4字节:int32 谱面时长
@@ -52,14 +90,30 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
             calculated_map_length = timing.m_timestamp;
     }
 
-    write_value(static_cast<int32_t>(std::round(calculated_map_length)));
+    int32_t output_map_length =
+        static_cast<int32_t>(std::round(calculated_map_length));
+    if ( auto value = get_rm_map_int32("mapLength") ) {
+        output_map_length = *value;
+    }
+    write_value(output_map_length);
 
-    // 5~8字节:int32 图时间点数
-    int32_t timing_count = static_cast<int32_t>(beatMap.m_timings.size());
+    std::vector<std::reference_wrapper<const Timing>> bpm_timings;
+    bpm_timings.reserve(beatMap.m_timings.size());
+    for ( const auto& timing : beatMap.m_timings ) {
+        if ( timing.m_timingEffect == TimingEffect::BPM ) {
+            bpm_timings.push_back(std::cref(timing));
+        }
+    }
+
+    // 5~8字节:int32 图时间点数，仅保存 IMD 支持的 BPM timing
+    int32_t timing_count = static_cast<int32_t>(std::min<size_t>(
+        bpm_timings.size(),
+        static_cast<size_t>(std::numeric_limits<int32_t>::max())));
     write_value(timing_count);
 
     // 每12字节一组: 4字节int32 时间戳 + 8字节double bpm
-    for ( const auto& timing : beatMap.m_timings ) {
+    for ( int32_t i = 0; i < timing_count; ++i ) {
+        const auto& timing = bpm_timings[static_cast<size_t>(i)].get();
         write_value(static_cast<int32_t>(std::round(timing.m_timestamp)));
         write_value(static_cast<double>(timing.m_bpm));  // BPM
     }
@@ -108,7 +162,7 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
                 const auto& rm_props =
                     note.m_metadata.note_properties.at(NoteMetadataType::RM);
                 if ( rm_props.contains("Parameter") ) {
-                    param = std::stoi(rm_props.at("Parameter"));
+                    param = parseRMInt32(rm_props.at("Parameter")).value_or(0);
                 }
             }
             base_type = 0;
@@ -190,7 +244,12 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
-    table_rows = static_cast<int32_t>(rm_records.size());
+    table_rows = static_cast<int32_t>(std::min<size_t>(
+        rm_records.size(),
+        static_cast<size_t>(std::numeric_limits<int32_t>::max())));
+    if ( auto value = get_rm_map_int32("tabRows") ) {
+        table_rows = *value;
+    }
     write_value(table_rows);
 
     for ( const auto& rec : rm_records ) {

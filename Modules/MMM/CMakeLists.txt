@@ -1,5 +1,6 @@
 add_library(MMM STATIC
     src/beatmap/BeatMap.cpp
+    src/beatmap/BeatmapSpeedTransform.cpp
     src/note/Note.cpp
     src/note/Hold.cpp
     src/timing/Timing.cpp
@@ -80,3 +81,6 @@ add_test(NAME Test_MMM_Consistency_Collision
     "${TEST_DATA_DIR}/[Polyline]Collision.mc"
     "${TEST_OUTPUT_DIR}/Collision_export.mmm"
 )
+
+add_executable(BeatmapSpeedTransformTest tests/BeatmapSpeedTransformTest.cpp)
+target_link_libraries(BeatmapSpeedTransformTest PRIVATE MMM Log)

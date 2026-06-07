@@ -186,7 +186,7 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
         m_vkLogicalDevice.destroySwapchainKHR(oldSwapchain);
     }
 
-    m_needsRecreate = false;
+    m_needsRecreate.store(false, std::memory_order_relaxed);
     XDEBUG("Swapchain creation completed.");
 }
 

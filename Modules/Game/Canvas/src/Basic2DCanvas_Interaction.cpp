@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -15,8 +16,12 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 
 namespace MMM::Canvas
@@ -83,7 +88,7 @@ void Basic2DCanvasInteraction::update(
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20, 10));
         if ( ImGui::Begin("##SpeedTooltip", nullptr, flags) ) {
             ImFont* font = Config::SkinManager::instance().getFont("content");
-            if ( font ) ImGui::PushFont(font);
+            if ( font ) ImGui::PushFont(font, font->LegacySize);
             ImGui::Text("Playback Speed: %.2fx", m_speedTooltipValue);
             if ( font ) ImGui::PopFont();
         }
@@ -103,7 +108,7 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
     if ( isHovered ) {
         for ( const auto& drop : m_pendingDrops ) {
             if ( !drop.paths.empty() ) {
-                std::filesystem::path p(drop.paths[0]);
+                std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
                 std::filesystem::path projectPath =
                     std::filesystem::is_directory(p) ? p : p.parent_path();
                 auto ext = Config::pathToUtf8(p.extension());
@@ -135,8 +140,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                     try {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(p));
-                        Logic::EditorEngine::instance().pushCommand(
-                            Logic::CmdLoadBeatmap{ loadedBeatmap });
+                        Logic::EditorEngine::instance().createSession(
+                            loadedBeatmap, Config::pathToUtf8(p.filename()));
                     } catch ( const std::exception& e ) {
                         XERROR("Failed to load dropped beatmap: {}", e.what());
                     }
@@ -147,41 +152,54 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
     m_pendingDrops.clear();
 }
 
+/// @brief 处理主画布工具切换和编辑快捷键。
+/// @param currentSnapshot 当前渲染快照。
+/// @warning UI 热路径：每帧检查输入状态；禁止加入文件系统访问、ECS
+/// 全量遍历或阻塞操作。
 void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
     auto& io = ImGui::GetIO();
 
-    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1/2/3
+    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1-5
     // 工具切换键)
     if ( io.WantTextInput ) return;
+    if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
 
-    // --- 快捷键：工具切换 (1: Move, 2: Marquee, 3: Draw) ---
-    // 这些是画布特有的，保留在这里
-    if ( ImGui::IsKeyPressed(ImGuiKey_1, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Move }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_2, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
-    } else if ( ImGui::IsKeyPressed(ImGuiKey_3, false) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Draw }));
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const std::array<Logic::EditTool, 5> editableTools{
+        Logic::EditTool::Move,        Logic::EditTool::Marquee,
+        Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
+        Logic::EditTool::ColorEraser,
+    };
+
+    bool handledShortcut = false;
+    for ( Logic::EditTool tool : editableTools ) {
+        if ( UI::ShortcutUtils::isShortcutPressed(
+                 UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
+            handledShortcut = true;
+            break;
+        }
     }
 
-    // --- 快捷键：删除操作 ---
-    // 目前菜单栏没有 Delete，保留在这里
-    if ( !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_Delete, false) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
-        }
+    if ( !handledShortcut && UI::ShortcutUtils::isShortcutPressed(
+                                 settings.shortcutConfig.deleteSelected) ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
     }
 
     // 注意：Ctrl+C/V/X/Z/Y 和 Space (播放/暂停) 已由全局 MainMenuView 处理，
     // 在此处移除以防止重复触发。
 }
 
+/// @brief 处理主画布鼠标悬停、点击、拖拽和滚轮交互。
+/// @param currentSnapshot 当前渲染快照。
+/// @param targetWidth 画布宽度。
+/// @param targetHeight 画布高度。
+/// @warning UI
+/// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
@@ -194,14 +212,34 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = ImGui::IsWindowHovered();
     bool isDragging = ImGui::IsMouseDragging(0);
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
-        Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
-                                    .mouseX         = localMousePos.x,
-                                    .mouseY         = localMousePos.y,
-                                    .viewportWidth  = targetWidth,
-                                    .viewportHeight = targetHeight,
-                                    .isHovering     = isHovered,
-                                    .isDragging     = isDragging }));
+    constexpr float mouseEpsilon = 0.1f;
+    bool            shouldSendMouse =
+        !m_lastMouseCommand.valid ||
+        std::abs(m_lastMouseCommand.pos.x - localMousePos.x) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.pos.y - localMousePos.y) > mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportWidth - targetWidth) >
+            mouseEpsilon ||
+        std::abs(m_lastMouseCommand.viewportHeight - targetHeight) >
+            mouseEpsilon ||
+        m_lastMouseCommand.isHovering != isHovered ||
+        m_lastMouseCommand.isDragging != isDragging;
+
+    if ( shouldSendMouse ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
+                                        .mouseX         = localMousePos.x,
+                                        .mouseY         = localMousePos.y,
+                                        .viewportWidth  = targetWidth,
+                                        .viewportHeight = targetHeight,
+                                        .isHovering     = isHovered,
+                                        .isDragging     = isDragging }));
+        m_lastMouseCommand.valid         = true;
+        m_lastMouseCommand.pos           = { localMousePos.x, localMousePos.y };
+        m_lastMouseCommand.viewportWidth = targetWidth;
+        m_lastMouseCommand.viewportHeight = targetHeight;
+        m_lastMouseCommand.isHovering     = isHovered;
+        m_lastMouseCommand.isDragging     = isDragging;
+    }
 
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&
@@ -221,7 +259,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                  currentSnapshot->currentTool != Logic::EditTool::Marquee);
 
             if ( currentSnapshot->isSnapped || isEditTool ||
-                 currentSnapshot->hoveredNoteNumerator > 0 ) {
+                 currentSnapshot->hoverInspect.show ) {
                 ImGui::SetNextWindowPos(
                     ImVec2(mousePos.x + 15, mousePos.y + 15));
                 ImGui::SetNextWindowBgAlpha(0.7f);
@@ -231,38 +269,116 @@ void Basic2DCanvasInteraction::handleInteractions(
 
                 ImGui::BeginTooltip();
 
-                if ( currentSnapshot->hoveredNoteNumerator > 0 ) {
-                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                       "%s: %d + %d/%d",
-                                       TR("ui.canvas.note_fraction").data(),
-                                       currentSnapshot->hoveredNoteBeatIndex,
-                                       currentSnapshot->hoveredNoteNumerator,
-                                       currentSnapshot->hoveredNoteDenominator);
-                    ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                       "%s: %.3f s",
-                                       TR("ui.canvas.note_time").data(),
-                                       currentSnapshot->hoveredNoteTime);
+                if ( currentSnapshot->hoverInspect.show ) {
+                    const auto& inspect = currentSnapshot->hoverInspect;
+                    auto drawPoint = [currentSnapshot](
+                                         const char*                  labelKey,
+                                         const Logic::HoverBeatPoint& point,
+                                         bool showTrack) {
+                        if ( !point.show ) return;
+                        const auto label = TR(labelKey);
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s %s: %d + %d/%d",
+                                           label.data(),
+                                           TR("ui.canvas.note_fraction").data(),
+                                           point.beatIndex,
+                                           point.numerator,
+                                           point.denominator);
+                        const auto timeText =
+                            formatCanvasTime(point.time, currentSnapshot);
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s %s: %s",
+                                           label.data(),
+                                           TR("ui.canvas.note_time").data(),
+                                           timeText.c_str());
+                        if ( showTrack ) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                               "%s %s: %d",
+                                               label.data(),
+                                               TR("ui.canvas.track").data(),
+                                               point.track + 1);
+                        }
+                    };
 
-                    // 计算鼠标当前所在的非 PolylineNode 唯一物件包围框个数
-                    std::vector<entt::entity> hoveredEntities;
-                    for ( const auto& hb : currentSnapshot->hitboxes ) {
-                        if ( hb.part != Logic::HoverPart::PolylineNode &&
-                             hb.entity != entt::null ) {
-                            if ( localMousePos.x >= hb.x &&
-                                 localMousePos.x <= hb.x + hb.w &&
-                                 localMousePos.y >= hb.y &&
-                                 localMousePos.y <= hb.y + hb.h ) {
-                                if ( std::find(hoveredEntities.begin(),
-                                               hoveredEntities.end(),
-                                               hb.entity) ==
-                                     hoveredEntities.end() ) {
-                                    hoveredEntities.push_back(hb.entity);
-                                }
-                            }
+                    switch ( inspect.kind ) {
+                    case Logic::HoverInspectKind::Note:
+                        drawPoint("ui.canvas.hover.note",
+                                  inspect.head,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::HoldHead:
+                        drawPoint("ui.canvas.hover.head", inspect.head, true);
+                        break;
+                    case Logic::HoverInspectKind::HoldEnd:
+                    case Logic::HoverInspectKind::PolylineHoldEnd:
+                        drawPoint(
+                            "ui.canvas.hover.hold_end", inspect.end, true);
+                        break;
+                    case Logic::HoverInspectKind::FlickHead:
+                        drawPoint(
+                            "ui.canvas.hover.flick_head", inspect.head, true);
+                        break;
+                    case Logic::HoverInspectKind::FlickBody:
+                    case Logic::HoverInspectKind::PolylineFlickBody:
+                        drawPoint(
+                            "ui.canvas.hover.flick_body", inspect.body, false);
+                        break;
+                    case Logic::HoverInspectKind::FlickEnd:
+                    case Logic::HoverInspectKind::PolylineFlickEnd:
+                        drawPoint(
+                            "ui.canvas.hover.flick_end", inspect.end, true);
+                        break;
+                    case Logic::HoverInspectKind::PolylineHead:
+                        drawPoint("ui.canvas.hover.polyline_head",
+                                  inspect.body,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::PolylineNode:
+                        drawPoint("ui.canvas.hover.polyline_node",
+                                  inspect.body,
+                                  inspect.showTrack);
+                        break;
+                    case Logic::HoverInspectKind::HoldBody:
+                    case Logic::HoverInspectKind::PolylineHoldBody:
+                    case Logic::HoverInspectKind::None: break;
+                    }
+
+                    if ( inspect.showDuration ) {
+                        const auto durationText =
+                            formatCanvasDuration(inspect.duration);
+                        ImGui::TextColored(
+                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                            "%s: %s",
+                            TR("ui.canvas.hover.duration").data(),
+                            durationText.c_str());
+                    }
+                    if ( inspect.showDtrack ) {
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s: %d",
+                                           TR("ui.canvas.hover.dtrack").data(),
+                                           inspect.dtrack);
+                    }
+                    if ( inspect.showTrack &&
+                         (inspect.kind == Logic::HoverInspectKind::HoldBody ||
+                          inspect.kind ==
+                              Logic::HoverInspectKind::PolylineHoldBody) ) {
+                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                           "%s: %d",
+                                           TR("ui.canvas.track").data(),
+                                           inspect.track + 1);
+                    }
+
+                    // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
+                    int overlappingCount = std::max(1, inspect.overlapCount);
+                    for ( const auto& mask : currentSnapshot->overlapMasks ) {
+                        if ( localMousePos.x >= mask.x &&
+                             localMousePos.x <= mask.x + mask.w &&
+                             localMousePos.y >= mask.y &&
+                             localMousePos.y <= mask.y + mask.h ) {
+                            overlappingCount =
+                                std::max(overlappingCount, mask.objectCount);
                         }
                     }
-                    int overlappingCount =
-                        static_cast<int>(hoveredEntities.size());
 
                     if ( overlappingCount > 1 ) {
                         ImGui::TextColored(
@@ -285,10 +401,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
 
                 if ( currentSnapshot->isSnapped ) {
+                    const auto timeText = formatCanvasTime(
+                        currentSnapshot->snappedTime, currentSnapshot);
                     ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                                       "%s: %.3f s",
+                                       "%s: %s",
                                        TR("ui.canvas.snap").data(),
-                                       currentSnapshot->snappedTime);
+                                       timeText.c_str());
 
                     if ( currentSnapshot->snappedNumerator == 1 &&
                          currentSnapshot->snappedDenominator == 1 ) {
@@ -304,9 +422,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            currentSnapshot->snappedDenominator);
                     }
                 } else {
-                    ImGui::Text("%s: %.3f s",
+                    const auto timeText = formatCanvasTime(
+                        currentSnapshot->hoveredTime, currentSnapshot);
+                    ImGui::Text("%s: %s",
                                 TR("ui.canvas.time").data(),
-                                currentSnapshot->hoveredTime);
+                                timeText.c_str());
                 }
 
                 if ( currentSnapshot->hoveredBeatIndex > 0 ) {
@@ -327,6 +447,14 @@ void Basic2DCanvasInteraction::handleInteractions(
                                    "%s: %d",
                                    TR("ui.canvas.beat_divisor").data(),
                                    currentSnapshot->currentBeatDivisor);
+                if ( m_hoverLayerCount > 1 ) {
+                    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                                       "%s: %d/%d  %s",
+                                       TR("ui.canvas.hover.layer").data(),
+                                       m_hoverLayerIndex + 1,
+                                       m_hoverLayerCount,
+                                       TR("ui.canvas.hover.layer_hint").data());
+                }
 
                 ImGui::EndTooltip();
                 ImGui::PopStyleVar(2);
@@ -338,23 +466,96 @@ void Basic2DCanvasInteraction::handleInteractions(
     uint8_t      hoveredPart     = 0;
     int          hoveredSubIndex = -1;
 
-    for ( auto it = currentSnapshot->hitboxes.rbegin();
-          it != currentSnapshot->hitboxes.rend();
-          ++it ) {
-        if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
-             localMousePos.y >= it->y && localMousePos.y <= it->y + it->h ) {
-            hoveredEntity   = it->entity;
-            hoveredPart     = static_cast<uint8_t>(it->part);
-            hoveredSubIndex = it->subIndex;
-            break;
+    struct HoverCandidate {
+        entt::entity     entity{ entt::null };
+        Logic::HoverPart part{ Logic::HoverPart::None };
+        int              subIndex{ -1 };
+    };
+
+    std::vector<HoverCandidate> candidates;
+    std::string                 layerSignature;
+    if ( isHovered ) {
+        for ( auto it = currentSnapshot->hitboxes.rbegin();
+              it != currentSnapshot->hitboxes.rend();
+              ++it ) {
+            if ( localMousePos.x >= it->x && localMousePos.x <= it->x + it->w &&
+                 localMousePos.y >= it->y &&
+                 localMousePos.y <= it->y + it->h ) {
+                candidates.push_back({ it->entity, it->part, it->subIndex });
+                layerSignature +=
+                    std::to_string(
+                        static_cast<uint32_t>(entt::to_integral(it->entity))) +
+                    ":" + std::to_string(static_cast<uint32_t>(it->part)) +
+                    ":" + std::to_string(it->subIndex) + ";";
+            }
         }
     }
 
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
-            hoveredEntity, hoveredPart, hoveredSubIndex }));
+    if ( layerSignature != m_hoverLayerSignature ) {
+        m_hoverLayerSignature = layerSignature;
+        m_hoverLayerIndex     = 0;
+    }
+
+    m_hoverLayerCount = static_cast<int>(candidates.size());
+    if ( candidates.empty() ) {
+        m_hoverLayerIndex = 0;
+    } else {
+        if ( m_hoverLayerIndex >= m_hoverLayerCount ) {
+            m_hoverLayerIndex = m_hoverLayerCount - 1;
+        }
+
+        if ( m_hoverLayerCount > 1 && isHovered &&
+             !ImGui::GetIO().WantTextInput ) {
+            if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                 ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+                m_hoverLayerIndex = (m_hoverLayerIndex + 1) % m_hoverLayerCount;
+            } else if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
+                        ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+                m_hoverLayerIndex =
+                    (m_hoverLayerIndex + m_hoverLayerCount - 1) %
+                    m_hoverLayerCount;
+            }
+        }
+
+        const auto& candidate = candidates[m_hoverLayerIndex];
+        hoveredEntity         = candidate.entity;
+        hoveredPart           = static_cast<uint8_t>(candidate.part);
+        hoveredSubIndex       = candidate.subIndex;
+    }
+
+    bool shouldSendHover = !m_hasLastHovered ||
+                           m_lastHoveredEntity != hoveredEntity ||
+                           m_lastHoveredPart != hoveredPart ||
+                           m_lastHoveredSubIndex != hoveredSubIndex;
+    if ( shouldSendHover ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
+                hoveredEntity, hoveredPart, hoveredSubIndex }));
+        m_hasLastHovered      = true;
+        m_lastHoveredEntity   = hoveredEntity;
+        m_lastHoveredPart     = hoveredPart;
+        m_lastHoveredSubIndex = hoveredSubIndex;
+    }
+
+    auto processColorToolTarget = [&](Logic::EditTool tool) {
+        if ( currentSnapshot->isPlaying || hoveredEntity == entt::null ) return;
+        if ( !m_colorStrokeEntities.insert(hoveredEntity).second ) return;
+
+        if ( tool == Logic::EditTool::ColorBrush ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdApplyBrushPaletteToEntity{ hoveredEntity }));
+        } else if ( tool == Logic::EditTool::ColorEraser ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdClearNoteColorOverrides{ hoveredEntity }));
+        }
+    };
 
     if ( ImGui::IsMouseClicked(0) ) {
+        m_leftPressStartedOnCanvas = isHovered;
+        m_leftPressStartedOnEntity = hoveredEntity != entt::null;
+        m_leftPressDragged         = false;
+        m_colorStrokeEntities.clear();
+
         if ( isHovered ) {
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 if ( hoveredEntity != entt::null ) {
@@ -379,8 +580,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
                                                  ImGui::GetIO().KeyCtrl }));
-                } else {
-                    // 抓取工具点击空白处不再清除选中（只有框选工具可以管理选中）
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -393,11 +592,19 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                   ImGui::GetIO().KeyShift,
                                                   ImGui::GetIO().KeyCtrl }));
                 }
+            } else if ( currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorBrush ) {
+                processColorToolTarget(Logic::EditTool::ColorBrush);
+            } else if ( currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorEraser ) {
+                processColorToolTarget(Logic::EditTool::ColorEraser);
             }
         }
     }
 
     if ( ImGui::IsMouseDragging(0) ) {
+        m_leftPressDragged = true;
+
         if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
@@ -409,12 +616,21 @@ void Basic2DCanvasInteraction::handleInteractions(
                                        localMousePos.y,
                                        ImGui::GetIO().KeyShift,
                                        ImGui::GetIO().KeyCtrl }));
-        } else if ( !currentSnapshot->isPlaying ) {
+        } else if ( !currentSnapshot->isPlaying &&
+                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateDrag{ m_cameraId,
                                       localMousePos.x,
                                       localMousePos.y,
                                       ImGui::GetIO().KeyCtrl }));
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorBrush ) {
+            processColorToolTarget(Logic::EditTool::ColorBrush);
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool ==
+                        Logic::EditTool::ColorEraser ) {
+            processColorToolTarget(Logic::EditTool::ColorEraser);
         }
     }
 
@@ -425,23 +641,36 @@ void Basic2DCanvasInteraction::handleInteractions(
         } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-        } else {
+        } else if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+            if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
+                 !m_leftPressDragged ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                        entt::null, !ImGui::GetIO().KeyCtrl }));
+            }
         }
+
+        m_leftPressStartedOnCanvas = false;
+        m_leftPressStartedOnEntity = false;
+        m_leftPressDragged         = false;
+        m_colorStrokeEntities.clear();
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw &&
          !currentSnapshot->isPlaying ) {
         if ( ImGui::IsMouseClicked(1) && isHovered ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdStartErase{ m_cameraId }));
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
         if ( ImGui::IsMouseDragging(1) ) {
-            Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdUpdateErase{
-                    m_cameraId, localMousePos.x, localMousePos.y }));
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateErase{ m_cameraId,
+                                       localMousePos.x,
+                                       localMousePos.y,
+                                       ImGui::GetIO().KeyShift }));
         }
         if ( ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(

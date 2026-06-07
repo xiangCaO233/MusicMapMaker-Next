@@ -13,6 +13,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <chrono>
+#include <cmath>
 
 static void markScrollCacheDirty(entt::registry& reg, entt::entity)
 {
@@ -23,6 +24,12 @@ static void markScrollCacheDirty(entt::registry& reg, entt::entity)
 
 namespace MMM::Logic
 {
+
+namespace
+{
+/// @brief Note 编辑后延迟同步 BeatMap 的空闲等待时间（秒）。
+constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
+}  // namespace
 
 BeatmapSession::BeatmapSession()
 {
@@ -44,7 +51,8 @@ BeatmapSession::BeatmapSession()
             .subscribe<MMM::Event::AudioFinishedEvent>(
                 [this](const MMM::Event::AudioFinishedEvent& e) {
                     if ( !e.isLooping ) {
-                        m_ctx->isPlaying = false;
+                        m_ctx->isPlaying               = false;
+                        m_ctx->isMainAudioSyncFollower = false;
                         Audio::AudioManager::instance().pause();
                     }
                 });
@@ -85,7 +93,60 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
     m_commandQueue.enqueue(std::move(cmd));
 }
 
-void BeatmapSession::update(double dt, const Config::EditorConfig& config)
+/// @brief 判断会话是否存在等待逻辑线程消费的指令。
+bool BeatmapSession::hasPendingCommands() const
+{
+    return m_commandQueue.size_approx() > 0;
+}
+
+/// @brief 判断会话是否需要跳过后台限频并立即更新。
+bool BeatmapSession::needsRealtimeUpdate() const
+{
+    return hasPendingCommands() || m_ctx->isPlaying ||
+           m_ctx->isMainAudioSyncFollower || m_ctx->isDragging ||
+           m_ctx->isSelecting || m_ctx->brushState.isActive ||
+           m_ctx->eraserState.isActive ||
+           std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
+}
+
+/// @brief 在用户停止 note 编辑一段时间后同步 BeatMap 数据。
+/// @warning 逻辑热路径：每个 Session update
+/// 调用；普通路径只做常量级状态判断，只有空闲超时脏分支允许全量同步 BeatMap。
+void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
+                                              bool processed, bool isBusy)
+{
+    if ( !m_ctx->m_needsNotesSync ) {
+        m_hasDeferredBeatmapSyncTimer = false;
+        return;
+    }
+
+    if ( processed || isBusy ) {
+        m_lastDeferredBeatmapSyncTime = currentSysTime;
+        m_hasDeferredBeatmapSyncTimer = true;
+        return;
+    }
+
+    if ( !m_hasDeferredBeatmapSyncTimer ) {
+        m_lastDeferredBeatmapSyncTime = currentSysTime;
+        m_hasDeferredBeatmapSyncTimer = true;
+        return;
+    }
+
+    if ( currentSysTime - m_lastDeferredBeatmapSyncTime <
+         DEFERRED_BEATMAP_SYNC_IDLE_SECONDS ) {
+        return;
+    }
+
+    SessionUtils::syncBeatmap(*m_ctx);
+    m_hasDeferredBeatmapSyncTimer = m_ctx->m_needsNotesSync;
+    m_lastDeferredBeatmapSyncTime = currentSysTime;
+}
+
+/// @brief 会话逻辑每帧更新。
+/// @warning 逻辑热路径：由 EditorEngine::loop 按 UPS
+/// 调用；禁止文件系统访问、完整排序、try/catch 和可避免的 shared_ptr 拷贝。
+void BeatmapSession::update(double dt, const Config::EditorConfig& config,
+                            bool isActiveSession)
 {
     m_ctx->lastConfig = config;
     bool processed    = processCommands();
@@ -102,6 +163,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
     bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                          m_ctx->brushState.isActive ||
                          m_ctx->eraserState.isActive;
+    bool isBusy        = isInteracting || m_ctx->isPlaying ||
+                         m_ctx->isMainAudioSyncFollower || hasPendingCommands();
 
     if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
          !m_ctx->isPlaying && !isInteracting && !processed ) {
@@ -110,12 +173,13 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
             return;
         }
     }
+    flushDeferredBeatmapSync(currentSysTime, processed, isBusy);
     m_ctx->lastSnapshotTime = currentSysTime;
 
     // --- 边缘自动滚动处理 ---
     if ( std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001 ) {
         double delta     = m_ctx->previewEdgeScrollVelocity * dt;
-        double totalTime = Audio::AudioManager::instance().getTotalTime();
+        double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
         m_ctx->currentTime =
             std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
 
@@ -135,22 +199,30 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
     double prevVisualTime = m_ctx->visualTime;
 
     // --- Playback 更新 ---
-    if ( m_ctx->isPlaying ) {
+    const bool isVisualPlaybackActive =
+        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+    if ( isVisualPlaybackActive ) {
+        SessionUtils::ensureHitEvents(*m_ctx);
+
         float  speed = Audio::AudioManager::instance().getPlaybackSpeed();
         double currentSysTime =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch())
                 .count();
 
-        // 核心修复：直接用系统时钟计算 currentTime，而非累加逻辑线程的 dt
-        // 这样无论逻辑线程的帧间隔如何波动，currentTime
-        // 都是系统时钟的严格线性函数 彻底消除因 dt 采样精度差异导致的周期性抖动
+        // 核心修复：直接用系统时钟计算 currentTime，而非累加逻辑线程的 dt。
+        // 后台同主音轨跟随谱面也使用该基准推进视觉特效，但不参与音频校准。
         m_ctx->currentTime = m_ctx->playStartVisualTime +
                              (currentSysTime - m_ctx->playStartSysTime) * speed;
 
         // --- 周期性音频同步校准 ---
-        m_ctx->syncTimer += dt;
-        if ( m_ctx->syncTimer >= config.settings.syncConfig.syncInterval ) {
+        if ( m_ctx->isPlaying ) {
+            m_ctx->syncTimer += dt;
+        } else {
+            m_ctx->syncTimer = 0.0;
+        }
+        if ( m_ctx->isPlaying &&
+             m_ctx->syncTimer >= config.settings.syncConfig.syncInterval ) {
             double audioTime = 0.0;
             if ( m_ctx->hasInitialAudioOffset ) {
                 audioTime =
@@ -191,32 +263,42 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
                       (m_ctx->visualTime < prevVisualTime) || !m_wasPlaying;
 
         if ( isJump ) {
-            Audio::AudioManager::instance().clearAllScheduledSoundEffects();
+            if ( m_ctx->isPlaying ) {
+                Audio::AudioManager::instance().clearAllScheduledSoundEffects();
+            }
             m_ctx->hitFXSystem.clearActiveEffects();
             SessionUtils::syncHitIndex(*m_ctx);
 
-            // 核心修复：Jump/Start 后立即预测播放窗口内的所有音效
-            double predictWindow = 0.2;
-            while ( m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
+            if ( m_ctx->isPlaying ) {
+                // 核心修复：Jump/Start 后立即预测播放窗口内的所有音效
+                double predictWindow = 0.2;
+                while (
+                    m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
                     m_ctx->hitEvents[m_ctx->nextPredictHitIndex].timestamp <=
                         (m_ctx->visualTime + predictWindow) ) {
-                const auto& ev = m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
-                // 只要物件在当前播放点之后，都触发
-                if ( ev.timestamp >= m_ctx->visualTime ) {
-                    m_ctx->hitFXSystem.triggerAudio(ev, config);
+                    const auto& ev =
+                        m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
+                    // 只要物件在当前播放点之后，都触发
+                    if ( ev.timestamp >= m_ctx->visualTime ) {
+                        m_ctx->hitFXSystem.triggerAudio(ev, config);
+                    }
+                    m_ctx->nextPredictHitIndex++;
                 }
-                m_ctx->nextPredictHitIndex++;
             }
         } else {
-            double predictWindow = 0.2;
-            while ( m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
+            if ( m_ctx->isPlaying ) {
+                double predictWindow = 0.2;
+                while (
+                    m_ctx->nextPredictHitIndex < m_ctx->hitEvents.size() &&
                     m_ctx->hitEvents[m_ctx->nextPredictHitIndex].timestamp <=
                         (m_ctx->visualTime + predictWindow) ) {
-                const auto& ev = m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
-                if ( ev.timestamp > (prevVisualTime + predictWindow) ) {
-                    m_ctx->hitFXSystem.triggerAudio(ev, config);
+                    const auto& ev =
+                        m_ctx->hitEvents[m_ctx->nextPredictHitIndex];
+                    if ( ev.timestamp > (prevVisualTime + predictWindow) ) {
+                        m_ctx->hitFXSystem.triggerAudio(ev, config);
+                    }
+                    m_ctx->nextPredictHitIndex++;
                 }
-                m_ctx->nextPredictHitIndex++;
             }
 
             while ( m_ctx->nextHitIndex < m_ctx->hitEvents.size() &&
@@ -240,9 +322,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config)
         }
     }
 
-    m_wasPlaying = m_ctx->isPlaying;
+    m_wasPlaying = isVisualPlaybackActive;
 
-    updateECSAndRender(config);
+    updateECSAndRender(config, isActiveSession);
 }
 
 }  // namespace MMM::Logic

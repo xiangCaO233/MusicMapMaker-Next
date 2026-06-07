@@ -1,6 +1,7 @@
 #include "ui/imgui/DebugWindowUI.h"
 #include "canvas/Basic2DCanvas.h"
 #include "config/skin/SkinConfig.h"
+#include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <imgui.h>
@@ -15,8 +16,10 @@ void DebugWindowUI::update(UIManager* sourceManager)
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     if ( ImGui::Begin("Renderer Debug Window") ) {
         // 获取主画布实例
-        auto canvas =
-            sourceManager->getView<Canvas::Basic2DCanvas>("Basic2DCanvas");
+        std::string activeCameraId =
+            Logic::EditorEngine::instance().getActiveCameraId();
+        auto canvas = sourceManager->getView<Canvas::Basic2DCanvas>(
+            activeCameraId.empty() ? "Basic2DCanvas" : activeCameraId);
         if ( canvas ) {
             // 获取发光层遮罩的 ImGui 纹理 ID
             ImTextureID glowTex =
@@ -46,15 +49,13 @@ void DebugWindowUI::update(UIManager* sourceManager)
                 }
             } else {
                 ImVec4 dangerCol = Utils::UIThemeUtils::getDangerColor();
-                ImGui::TextColored(
-                    dangerCol,
-                    "Glow Mask texture not available.");
+                ImGui::TextColored(dangerCol,
+                                   "Glow Mask texture not available.");
             }
         } else {
             ImVec4 warningCol = Utils::UIThemeUtils::getWarningColor();
-            ImGui::TextColored(
-                warningCol,
-                "Basic2DCanvas ('Basic2DCanvas') not found.");
+            ImGui::TextColored(warningCol,
+                               "Basic2DCanvas ('Basic2DCanvas') not found.");
         }
     }
     ImGui::End();

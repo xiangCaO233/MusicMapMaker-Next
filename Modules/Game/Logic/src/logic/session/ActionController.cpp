@@ -13,6 +13,34 @@
 namespace MMM::Logic
 {
 
+namespace
+{
+/// @brief 确保音符实体拥有更新所需的辅助组件，并保留已有交互状态。
+void ensureNoteAuxiliaryComponents(entt::registry& reg, entt::entity entity)
+{
+    if ( !reg.all_of<TransformComponent>(entity) ) {
+        reg.emplace<TransformComponent>(entity);
+    }
+    if ( !reg.all_of<InteractionComponent>(entity) ) {
+        reg.emplace<InteractionComponent>(entity);
+    }
+}
+
+/// @brief 标记音符创建/更新后需要完整重建排序缓存。
+void markNoteOrderDirty(SessionContext& ctx)
+{
+    ctx.isNoteOrderDirty = true;
+    ctx.isNoteStatsDirty = true;
+}
+
+/// @brief 标记音符删除后只需从排序缓存中剔除失效实体。
+void markNotePruneDirty(SessionContext& ctx)
+{
+    ctx.isNotePruneDirty = true;
+    ctx.isNoteStatsDirty = true;
+}
+}  // namespace
+
 // --- TimelineAction Implementation ---
 
 void TimelineAction::execute(SessionContext& ctx)
@@ -45,6 +73,7 @@ void TimelineAction::execute(SessionContext& ctx)
         }
     }
     ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
 }
 
 void TimelineAction::undo(SessionContext& ctx)
@@ -63,6 +92,7 @@ void TimelineAction::undo(SessionContext& ctx)
         }
     }
     ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
 }
 
 void TimelineAction::redo(SessionContext& ctx)
@@ -96,6 +126,69 @@ std::string TimelineAction::getName() const
                            TR("ui.status.info.time"),
                            m_before->m_timestamp);
     return typeStr;
+}
+
+// --- BatchTimelineAction Implementation ---
+
+void BatchTimelineAction::execute(SessionContext& ctx)
+{
+    auto& reg = ctx.timelineRegistry;
+    XINFO("[Action] BatchTimelineAction: {} entries", m_entries.size());
+    for ( auto& entry : m_entries ) {
+        if ( entry.after.has_value() ) {
+            if ( !reg.valid(entry.entity) ) {
+                entry.entity = reg.create(entry.entity);
+            }
+            reg.emplace_or_replace<TimelineComponent>(entry.entity,
+                                                      *entry.after);
+        } else if ( entry.before.has_value() ) {
+            if ( reg.valid(entry.entity) ) {
+                reg.destroy(entry.entity);
+            }
+        }
+    }
+    ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
+}
+
+void BatchTimelineAction::undo(SessionContext& ctx)
+{
+    auto& reg = ctx.timelineRegistry;
+    XINFO("[Undo] BatchTimelineAction: {} entries", m_entries.size());
+    for ( auto& entry : m_entries ) {
+        if ( entry.before.has_value() ) {
+            if ( !reg.valid(entry.entity) ) {
+                entry.entity = reg.create(entry.entity);
+            }
+            reg.emplace_or_replace<TimelineComponent>(entry.entity,
+                                                      *entry.before);
+        } else if ( entry.after.has_value() ) {
+            if ( reg.valid(entry.entity) ) {
+                reg.destroy(entry.entity);
+            }
+        }
+    }
+    ctx.m_needsTimingsSync = true;
+    ctx.isNoteStatsDirty   = true;
+}
+
+void BatchTimelineAction::redo(SessionContext& ctx)
+{
+    XINFO("[Redo] BatchTimelineAction");
+    execute(ctx);
+}
+
+std::string BatchTimelineAction::getName() const
+{
+    const char* nameKey = "ui.status.action.batch_note";
+    if ( m_name == "Paste" ) {
+        nameKey = "ui.status.action.paste";
+    }
+
+    return fmt::format("{}: {} {}",
+                       TR(nameKey),
+                       m_entries.size(),
+                       TR("ui.status.info.entries"));
 }
 
 // --- NoteAction Implementation ---
@@ -133,7 +226,12 @@ void NoteAction::execute(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    if ( m_type == Type::Delete ) {
+        markNotePruneDirty(ctx);
+    } else {
+        markNoteOrderDirty(ctx);
+    }
 }
 
 void NoteAction::undo(SessionContext& ctx)
@@ -154,7 +252,12 @@ void NoteAction::undo(SessionContext& ctx)
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    if ( m_type == Type::Create ) {
+        markNotePruneDirty(ctx);
+    } else {
+        markNoteOrderDirty(ctx);
+    }
 }
 
 void NoteAction::redo(SessionContext& ctx)
@@ -199,14 +302,27 @@ void BatchNoteAction::execute(SessionContext& ctx)
             if ( !reg.valid(entry.entity) )
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
-            reg.emplace_or_replace<TransformComponent>(entry.entity);
-            reg.emplace_or_replace<InteractionComponent>(entry.entity);
+            ensureNoteAuxiliaryComponents(reg, entry.entity);
         } else if ( entry.before.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    bool needsOrderRebuild = false;
+    bool needsPrune        = false;
+    for ( const auto& entry : m_entries ) {
+        if ( entry.after.has_value() ) {
+            needsOrderRebuild = true;
+        } else if ( entry.before.has_value() ) {
+            needsPrune = true;
+        }
+    }
+    if ( needsOrderRebuild ) {
+        markNoteOrderDirty(ctx);
+    } else if ( needsPrune ) {
+        markNotePruneDirty(ctx);
+    }
 }
 
 void BatchNoteAction::undo(SessionContext& ctx)
@@ -218,14 +334,27 @@ void BatchNoteAction::undo(SessionContext& ctx)
             if ( !reg.valid(entry.entity) )
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.before);
-            reg.emplace_or_replace<TransformComponent>(entry.entity);
-            reg.emplace_or_replace<InteractionComponent>(entry.entity);
+            ensureNoteAuxiliaryComponents(reg, entry.entity);
         } else if ( entry.after.has_value() ) {
             if ( reg.valid(entry.entity) ) reg.destroy(entry.entity);
         }
     }
     ctx.m_needsNotesSync = true;
-    SessionUtils::rebuildHitEvents(ctx);
+    SessionUtils::markHitEventsDirty(ctx);
+    bool needsOrderRebuild = false;
+    bool needsPrune        = false;
+    for ( const auto& entry : m_entries ) {
+        if ( entry.before.has_value() ) {
+            needsOrderRebuild = true;
+        } else if ( entry.after.has_value() ) {
+            needsPrune = true;
+        }
+    }
+    if ( needsOrderRebuild ) {
+        markNoteOrderDirty(ctx);
+    } else if ( needsPrune ) {
+        markNotePruneDirty(ctx);
+    }
 }
 
 void BatchNoteAction::redo(SessionContext& ctx)
@@ -241,6 +370,8 @@ std::string BatchNoteAction::getName() const
         nameKey = "ui.status.action.delete_selected";
     else if ( m_name == "Paste" )
         nameKey = "ui.status.action.paste";
+    else if ( m_name == "Mirror Paste" )
+        nameKey = "ui.edit.mirror_paste";
     else if ( m_name == "Align Selected" )
         nameKey = "ui.tools.align_beats";
 

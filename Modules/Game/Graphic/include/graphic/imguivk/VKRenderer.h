@@ -5,7 +5,9 @@
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"
 #include "vulkan/vulkan.hpp"
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
 
 namespace MMM::Graphic
@@ -13,8 +15,10 @@ namespace MMM::Graphic
 
 class NativeWindow;
 class IGraphicUserHook;
+
 /**
  * @brief Vulkan 渲染器类
+ *
  *
  * 负责管理渲染循环的核心逻辑，包括命令录制、同步控制（Semaphore/Fence）、
  * 队列提交（Submit）以及呈现（Present）。
@@ -47,6 +51,7 @@ public:
 
     ~VKRenderer();
 
+    // clang-format off
     /**
      * @brief 执行单帧渲染
      * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
@@ -54,8 +59,10 @@ public:
      * @param window 原生窗口
      * @param 图形用户接口钩子列表
      */
-    void render(NativeWindow&                  window,
-                std::vector<IGraphicUserHook*> uiManagers);
+    /// @warning 热路径：主线程每帧执行；Fence/Acquire/Present 不可中断。
+    /// 禁止文件系统访问、完整 ECS 遍历、完整排序和每帧堆分配。
+    // clang-format on
+    void render(NativeWindow& window, std::span<IGraphicUserHook*> uiManagers);
 
     void triggerRecreate(NativeWindow& window);
 
@@ -86,6 +93,24 @@ public:
     }
 
 private:
+    /// @brief 单个可并行录制的离屏任务。
+    struct OffscreenRecordTask {
+        /// @brief 拥有该任务的图形用户钩子，生命周期由渲染循环外部保证。
+        IGraphicUserHook* hook{ nullptr };
+
+        /// @brief 钩子内部的任务索引。
+        uint32_t taskIndex{ 0 };
+    };
+
+    /// @brief 离屏录制任务独占的 Vulkan 命令资源槽。
+    struct OffscreenRecordSlot {
+        /// @brief 该任务槽独占的命令池，避免多线程同时访问同一个 command pool。
+        vk::CommandPool commandPool{};
+
+        /// @brief 按并发帧索引分配的主命令缓冲。
+        std::vector<vk::CommandBuffer> commandBuffers;
+    };
+
     /// @brief 清屏颜色
     static std::array<float, 4> s_clear_color;
 
@@ -182,10 +207,29 @@ private:
     std::unique_ptr<CursorManager> m_cursorManager{ nullptr };
     float                          m_cursorSmokeLifeOverride{ -1.0f };
 
+    /// @brief 当前帧收集到的离屏录制任务列表，跨帧复用容量。
+    std::vector<OffscreenRecordTask> m_offscreenRecordTasks;
+
+    /// @brief 离屏录制任务槽，每个槽拥有独立 command pool。
+    std::vector<OffscreenRecordSlot> m_offscreenRecordSlots;
+
+    /// @brief 当前帧提交到图形队列的命令缓冲列表，跨帧复用容量。
+    std::vector<vk::CommandBuffer> m_frameSubmitCommandBuffers;
+
     void initCursorManager(vk::PhysicalDevice& vkPhysicalDevice,
                            vk::Device&         logicalDevice);
 
     void releaseCursorManager();
+
+    /// @brief 确保离屏录制任务槽数量足够。
+    /// @param taskCount 当前帧需要的任务槽数量。
+    /// @warning 渲染热路径低频分支：只有可渲染视图数量增加时才创建 Vulkan
+    /// command pool。
+    void ensureOffscreenRecordSlots(size_t taskCount);
+
+    /// @brief 释放离屏命令录制任务槽资源。
+    /// @warning 不可中断操作：只能在 GPU idle 后的渲染器销毁路径调用。
+    void releaseOffscreenRecordResources();
 
 private:
     /**

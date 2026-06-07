@@ -9,6 +9,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 #include "logic/session/EditorAction.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 #include <memory>
@@ -48,10 +49,12 @@ struct SessionContext {
     entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
 
-    double  currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
-    double  visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
-    bool    isPlaying{ false };  ///< 是否正在播放
-    int32_t trackCount{ 12 };    ///< 当前轨道总数
+    double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
+    double visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
+    bool   isPlaying{ false };  ///< 是否正在播放
+    /// @brief 是否作为同主音轨后台跟随者进行播放态视觉插值。
+    bool    isMainAudioSyncFollower{ false };
+    int32_t trackCount{ 12 };  ///< 当前轨道总数
 
     std::shared_ptr<MMM::BeatMap> currentBeatmap;  ///< 当前载入的谱面对象
     Config::EditorConfig          lastConfig;      ///< 最近一次同步的编辑器配置
@@ -78,12 +81,21 @@ struct SessionContext {
     size_t nextPredictHitIndex{ 0 };  ///< 下一个待触发的预读打击事件(音频)索引
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*>
-         bpmEvents;                 ///< 缓存并排序后的 BPM 事件
-    bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
-    bool isTransformDirty{ true };  ///< 坐标转换缓存脏标记
+         bpmEvents;                  ///< 缓存并排序后的 BPM 事件
+    bool isBpmEventsDirty{ true };   ///< BPM 缓存脏标记
+    bool isHitEventsDirty{ false };  ///< 打击事件序列是否需要按音符变更重建
+    bool isNoteOrderDirty{ true };   ///< 音符排序缓存是否需要完整重建
+    bool isNotePruneDirty{ false };  ///< 音符排序缓存是否只需剔除失效实体
+    bool isNoteStatsDirty{ true };   ///< 状态栏物件统计是否需要重算
+    bool isTransformDirty{ true };   ///< 坐标转换缓存脏标记
     std::vector<entt::entity>
-           sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
-    double lastSnapshotTime{ 0.0 };
+        sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
+    std::vector<double>
+        sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
+    std::uint64_t noteVisibilityIndexRevision{ 0 };  ///< 音符可见性索引版本号
+    size_t        noteCount{ 0 };  ///< 当前谱面的可计数物件数量缓存
+    size_t        maxCombo{ 0 };   ///< 当前谱面的最大连击数缓存
+    double        lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌
@@ -109,9 +121,11 @@ struct SessionContext {
         dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
     std::string dragCameraId;  ///< 发起拖拽的视口 ID
 
-    bool isSelecting{ false };             ///< 是否正在进行框选操作
-    bool hasMarqueeSelection{ false };     ///< 是否当前存在有效的框选结果
-    bool marqueeIsAdditive{ false };       ///< 框选是否为加选模式 (Ctrl)
+    bool isSelecting{ false };          ///< 是否正在进行框选操作
+    bool hasMarqueeSelection{ false };  ///< 是否当前存在有效的框选结果
+    bool marqueeIsAdditive{ false };    ///< 框选是否为加选模式 (Ctrl)
+    /// @brief 框选区域变化后是否需要重算实体选中状态
+    bool                    isMarqueeSelectionDirty{ false };
     std::vector<MarqueeBox> marqueeBoxes;  ///< 当前活跃的框选框列表
 
     // --- 笔刷工具状态 ---
@@ -127,13 +141,17 @@ struct SessionContext {
         float  segmentStartMouseY{ 0.0f };  ///< 当前子段开始时的鼠标 Y 坐标
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
 
+        /// @brief 当前画笔应用到新建物件的自定义颜色。
+        NoteColorOverrides customColors;
+
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;
     } brushState;
 
     // --- 橡皮擦工具状态 ---
     struct EraserState {
-        bool                             isActive{ false };
+        bool isActive{ false };
+        bool isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
         std::unordered_set<entt::entity> targetEntities;
     } eraserState;
 

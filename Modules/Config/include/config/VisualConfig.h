@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <nlohmann/json.hpp>
 
 namespace MMM::Config
@@ -19,6 +20,68 @@ NLOHMANN_JSON_SERIALIZE_ENUM(BackgroundFillMode,
                                    "AspectFill" },
                                  { BackgroundFillMode::Center, "Center" },
                              })
+
+/// @brief 频谱图生成精细度。
+enum class SpectrumDetailLevel {
+    Performance,
+    Balanced,
+    Fine,
+    Ultra,
+    Extreme,
+    Experimental,
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(
+    SpectrumDetailLevel,
+    {
+        { SpectrumDetailLevel::Performance, "Performance" },
+        { SpectrumDetailLevel::Balanced, "Balanced" },
+        { SpectrumDetailLevel::Fine, "Fine" },
+        { SpectrumDetailLevel::Ultra, "Ultra" },
+        { SpectrumDetailLevel::Extreme, "Extreme" },
+        { SpectrumDetailLevel::Experimental, "Experimental" },
+    })
+
+/// @brief 频谱图精细度对应的生成参数。
+struct SpectrumDetailProfile {
+    /// @brief 时间分辨率，单位为段/秒。
+    double segmentsPerSecond{ 100.0 };
+
+    /// @brief 频率方向分箱数。
+    int frequencyBins{ 128 };
+};
+
+/// @brief 获取频谱图精细度对应的生成参数。
+/// @param level 频谱图精细度。
+/// @return 频谱图生成参数。
+inline SpectrumDetailProfile spectrumDetailProfile(SpectrumDetailLevel level)
+{
+    switch ( level ) {
+    case SpectrumDetailLevel::Performance: return { 40.0, 64 };
+    case SpectrumDetailLevel::Balanced: return { 64.0, 96 };
+    case SpectrumDetailLevel::Fine: return { 96.0, 128 };
+    case SpectrumDetailLevel::Ultra: return { 160.0, 192 };
+    case SpectrumDetailLevel::Extreme: return { 240.0, 256 };
+    case SpectrumDetailLevel::Experimental: return { 360.0, 384 };
+    }
+    return { 64.0, 96 };
+}
+
+/// @brief 估算指定频谱图精细度每分钟需要的纹理显存。
+/// @param level 频谱图精细度。
+/// @param channelCount 频谱图纹理通道数量。
+/// @param bytesPerTexel 每个纹理像素占用的字节数。
+/// @return 每分钟纹理显存字节数，不含驱动对齐和描述符开销。
+inline std::uint64_t estimateSpectrumTextureBytesPerMinute(
+    SpectrumDetailLevel level, std::uint32_t channelCount,
+    std::uint32_t bytesPerTexel = 1)
+{
+    const auto profile = spectrumDetailProfile(level);
+    return static_cast<std::uint64_t>(
+        profile.segmentsPerSecond * 60.0 *
+        static_cast<double>(profile.frequencyBins) *
+        static_cast<double>(bytesPerTexel) * static_cast<double>(channelCount));
+}
 
 struct TrackLayout {
     /// @brief 左侧分隔比例位置
@@ -159,30 +222,40 @@ struct VisualConfig {
     float snapThreshold{ 16.0f };
     /// @brief 分拍线不透明度
     float beatLineAlpha{ 1.0f };
+    /// @brief 是否绘制第一个 BPM 红线前的分拍线
+    bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 是否全局绘制分拍线 (主画布与预览区同步)
     bool drawBeatLines{ true };
+    /// @brief 全局频谱图生成精细度。
+    SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画
     bool enableHitEffects{ true };
+    /// @brief 是否绘制音符悬浮拾取包围盒，主要用于调试交互命中区域。
+    bool debugDrawHitboxes{ false };
 };
 
 inline void to_json(nlohmann::json& j, const VisualConfig& c)
 {
-    j = nlohmann::json{ { "trackLayout", c.trackLayout },
-                        { "background", c.background },
-                        { "previewConfig", c.previewConfig },
-                        { "trackBoxLineWidth", c.trackBoxLineWidth },
-                        { "judgeline_pos", c.judgeline_pos },
-                        { "noteScaleX", c.noteScaleX },
-                        { "noteScaleY", c.noteScaleY },
-                        { "noteFillMode", c.noteFillMode },
-                        { "visualOffset", c.visualOffset },
-                        { "timelineZoom", c.timelineZoom },
-                        { "enableLinearScrollMapping",
-                          c.enableLinearScrollMapping },
-                        { "snapThreshold", c.snapThreshold },
-                        { "beatLineAlpha", c.beatLineAlpha },
-                        { "drawBeatLines", c.drawBeatLines },
-                        { "enableHitEffects", c.enableHitEffects } };
+    j = nlohmann::json{
+        { "trackLayout", c.trackLayout },
+        { "background", c.background },
+        { "previewConfig", c.previewConfig },
+        { "trackBoxLineWidth", c.trackBoxLineWidth },
+        { "judgeline_pos", c.judgeline_pos },
+        { "noteScaleX", c.noteScaleX },
+        { "noteScaleY", c.noteScaleY },
+        { "noteFillMode", c.noteFillMode },
+        { "visualOffset", c.visualOffset },
+        { "timelineZoom", c.timelineZoom },
+        { "enableLinearScrollMapping", c.enableLinearScrollMapping },
+        { "snapThreshold", c.snapThreshold },
+        { "beatLineAlpha", c.beatLineAlpha },
+        { "drawBeatLinesBeforeFirstTiming", c.drawBeatLinesBeforeFirstTiming },
+        { "drawBeatLines", c.drawBeatLines },
+        { "spectrumDetailLevel", c.spectrumDetailLevel },
+        { "enableHitEffects", c.enableHitEffects },
+        { "debugDrawHitboxes", c.debugDrawHitboxes }
+    };
 }
 
 inline void from_json(const nlohmann::json& j, VisualConfig& c)
@@ -201,7 +274,12 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
     c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);
     c.drawBeatLines             = j.value("drawBeatLines", true);
-    c.enableHitEffects          = j.value("enableHitEffects", true);
+    c.drawBeatLinesBeforeFirstTiming =
+        j.value("drawBeatLinesBeforeFirstTiming", true);
+    c.spectrumDetailLevel =
+        j.value("spectrumDetailLevel", SpectrumDetailLevel::Balanced);
+    c.enableHitEffects  = j.value("enableHitEffects", true);
+    c.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
 }
 
 }  // namespace MMM::Config

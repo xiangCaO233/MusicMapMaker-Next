@@ -7,6 +7,14 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
+#include "runtime/AppThreadPool.h"
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <ice/thread/ThreadPool.hpp>
+#include <latch>
 
 #ifdef _WIN32
 #    define GLFW_EXPOSE_NATIVE_WIN32
@@ -23,14 +31,523 @@
 
 namespace MMM::Graphic
 {
+namespace
+{
+/// @brief 渲染性能统计使用的单调时钟。
+using RenderProfileClock = std::chrono::steady_clock;
+
+/// @brief 渲染性能统计日志输出间隔。
+constexpr auto RENDER_PROFILE_LOG_INTERVAL = std::chrono::seconds(2);
+
+/// @brief 单个渲染阶段在统计窗口内的累计耗时。
+struct RenderStageStat {
+    /// @brief 阶段累计耗时，单位为毫秒。
+    double totalMs{ 0.0 };
+
+    /// @brief 阶段单帧最大耗时，单位为毫秒。
+    double maxMs{ 0.0 };
+
+    /// @brief 追加一次阶段耗时。
+    /// @param elapsedMs 本帧该阶段耗时，单位为毫秒。
+    /// @warning 渲染热路径：每帧执行，只能做常量时间浮点累加。
+    void add(double elapsedMs)
+    {
+        totalMs += elapsedMs;
+        maxMs = std::max(maxMs, elapsedMs);
+    }
+
+    /// @brief 获取统计窗口内的平均耗时。
+    /// @param frameCount 统计窗口内累计的完整帧数。
+    /// @return 平均耗时，单位为毫秒。
+    double average(uint64_t frameCount) const
+    {
+        return frameCount == 0 ? 0.0
+                               : totalMs / static_cast<double>(frameCount);
+    }
+
+    /// @brief 清空阶段统计数据。
+    void reset()
+    {
+        totalMs = 0.0;
+        maxMs   = 0.0;
+    }
+};
+
+/// @brief 渲染主循环的分阶段累计性能统计。
+struct RenderProfileAccumulator {
+    /// @brief 当前统计窗口的起始时间。
+    RenderProfileClock::time_point windowStart{ RenderProfileClock::now() };
+
+    /// @brief 当前统计窗口内累计的完整帧数。
+    uint64_t frameCount{ 0 };
+
+    /// @brief 单帧总耗时统计。
+    RenderStageStat total;
+
+    /// @brief 等待和重置 Fence 的耗时统计。
+    RenderStageStat fence;
+
+    /// @brief acquireNextImageKHR 的耗时统计。
+    RenderStageStat acquire;
+
+    /// @brief GLFW 事件轮询的耗时统计。
+    RenderStageStat pollEvents;
+
+    /// @brief ImGui 新帧准备和光标模式同步的耗时统计。
+    RenderStageStat newFrame;
+
+    /// @brief 图形钩子资源准备的耗时统计。
+    RenderStageStat prepareResources;
+
+    /// @brief UI 更新和 ImGui 绘制列表生成前逻辑的耗时统计。
+    RenderStageStat updateUi;
+
+    /// @brief ImGui::Render 的耗时统计。
+    RenderStageStat imguiRender;
+
+    /// @brief 命令缓冲开始录制前准备的耗时统计。
+    RenderStageStat commandSetup;
+
+    /// @brief 离屏画布命令录制的耗时统计。
+    RenderStageStat offscreenRecord;
+
+    /// @brief 主 RenderPass 与 ImGui Vulkan 绘制命令录制的耗时统计。
+    RenderStageStat mainRecord;
+
+    /// @brief 图形队列提交的耗时统计。
+    RenderStageStat submit;
+
+    /// @brief presentKHR 的耗时统计。
+    RenderStageStat present;
+
+    /// @brief ImGui 多视口平台窗口更新和渲染的耗时统计。
+    RenderStageStat platformWindows;
+
+    /// @brief 清空统计窗口。
+    /// @param nextStart 下一个统计窗口的起始时间。
+    void reset(RenderProfileClock::time_point nextStart)
+    {
+        windowStart = nextStart;
+        frameCount  = 0;
+        total.reset();
+        fence.reset();
+        acquire.reset();
+        pollEvents.reset();
+        newFrame.reset();
+        prepareResources.reset();
+        updateUi.reset();
+        imguiRender.reset();
+        commandSetup.reset();
+        offscreenRecord.reset();
+        mainRecord.reset();
+        submit.reset();
+        present.reset();
+        platformWindows.reset();
+    }
+
+    /// @brief 到达统计间隔后输出一次累计结果。
+    /// @param now 当前时间。
+    /// @warning 渲染热路径：每帧只做时间间隔判断；到达间隔后才写日志。
+    void logIfReady(RenderProfileClock::time_point now)
+    {
+        const double elapsedSeconds =
+            std::chrono::duration<double>(now - windowStart).count();
+        const double logIntervalSeconds =
+            std::chrono::duration<double>(RENDER_PROFILE_LOG_INTERVAL).count();
+        if ( elapsedSeconds < logIntervalSeconds || frameCount == 0 ) {
+            return;
+        }
+
+        const double averageFps = static_cast<double>(frameCount) /
+                                  std::max(elapsedSeconds, 0.000001);
+        XINFO(
+            "RenderProfile {:.2f}s frames={} fps={:.1f} "
+            "total(avg/max)={:.3f}/{:.3f}ms",
+            elapsedSeconds,
+            frameCount,
+            averageFps,
+            total.average(frameCount),
+            total.maxMs);
+        XINFO(
+            "RenderStages avg/max ms: fence {:.3f}/{:.3f}, acquire "
+            "{:.3f}/{:.3f}, poll {:.3f}/{:.3f}, newFrame {:.3f}/{:.3f}, "
+            "prepare {:.3f}/{:.3f}, updateUI {:.3f}/{:.3f}",
+            fence.average(frameCount),
+            fence.maxMs,
+            acquire.average(frameCount),
+            acquire.maxMs,
+            pollEvents.average(frameCount),
+            pollEvents.maxMs,
+            newFrame.average(frameCount),
+            newFrame.maxMs,
+            prepareResources.average(frameCount),
+            prepareResources.maxMs,
+            updateUi.average(frameCount),
+            updateUi.maxMs);
+        XINFO(
+            "RenderStages avg/max ms: imguiRender {:.3f}/{:.3f}, cmdSetup "
+            "{:.3f}/{:.3f}, offscreen {:.3f}/{:.3f}, mainPass {:.3f}/{:.3f}, "
+            "submit {:.3f}/{:.3f}, present {:.3f}/{:.3f}, platform "
+            "{:.3f}/{:.3f}",
+            imguiRender.average(frameCount),
+            imguiRender.maxMs,
+            commandSetup.average(frameCount),
+            commandSetup.maxMs,
+            offscreenRecord.average(frameCount),
+            offscreenRecord.maxMs,
+            mainRecord.average(frameCount),
+            mainRecord.maxMs,
+            submit.average(frameCount),
+            submit.maxMs,
+            present.average(frameCount),
+            present.maxMs,
+            platformWindows.average(frameCount),
+            platformWindows.maxMs);
+
+        reset(now);
+    }
+};
+
+/// @brief 计算两个时间点之间的毫秒差。
+/// @param begin 起始时间点。
+/// @param end 结束时间点。
+/// @return 时间差，单位为毫秒。
+double elapsedMilliseconds(RenderProfileClock::time_point begin,
+                           RenderProfileClock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+/// @brief 在启用渲染性能日志时读取当前时间点。
+/// @param enabled 是否启用渲染性能日志。
+/// @return 启用时返回当前时间点，关闭时返回空时间点。
+/// @warning 渲染热路径：每个阶段边界调用；关闭日志时不得调用系统时钟。
+RenderProfileClock::time_point profileTimePoint(bool enabled)
+{
+    return enabled ? RenderProfileClock::now()
+                   : RenderProfileClock::time_point{};
+}
+
+/// @brief 判断当前 ImGui 光标是否应使用原生窗口缩放光标。
+/// @param cursor 当前 ImGui 光标类型。
+/// @return 是缩放光标时返回 true。
+bool isNativeResizeCursor(ImGuiMouseCursor cursor)
+{
+    return cursor == ImGuiMouseCursor_ResizeNS ||
+           cursor == ImGuiMouseCursor_ResizeEW ||
+           cursor == ImGuiMouseCursor_ResizeNESW ||
+           cursor == ImGuiMouseCursor_ResizeNWSE;
+}
+
+/// @brief 获取对应 ImGui 光标类型的 GLFW 标准光标。
+/// @param cursor 当前 ImGui 光标类型。
+/// @return GLFW 标准光标句柄，不支持时返回 nullptr。
+/// @warning 渲染热路径低频分支：首次遇到某个光标类型时创建 GLFW cursor。
+GLFWcursor* getGlfwStandardCursor(ImGuiMouseCursor cursor)
+{
+    constexpr size_t IMGUI_MOUSE_CURSOR_COUNT =
+        static_cast<size_t>(ImGuiMouseCursor_COUNT);
+    static std::array<GLFWcursor*, IMGUI_MOUSE_CURSOR_COUNT> cursors{};
+
+    if ( cursor < 0 || cursor >= ImGuiMouseCursor_COUNT ) {
+        return nullptr;
+    }
+    if ( cursors[static_cast<size_t>(cursor)] ) {
+        return cursors[static_cast<size_t>(cursor)];
+    }
+
+    int glfwCursor = GLFW_ARROW_CURSOR;
+    switch ( cursor ) {
+    case ImGuiMouseCursor_TextInput: glfwCursor = GLFW_IBEAM_CURSOR; break;
+    case ImGuiMouseCursor_Hand:
+#if defined(GLFW_POINTING_HAND_CURSOR)
+        glfwCursor = GLFW_POINTING_HAND_CURSOR;
+#elif defined(GLFW_HAND_CURSOR)
+        glfwCursor = GLFW_HAND_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNS:
+#if defined(GLFW_RESIZE_NS_CURSOR)
+        glfwCursor = GLFW_RESIZE_NS_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeEW:
+#if defined(GLFW_RESIZE_EW_CURSOR)
+        glfwCursor = GLFW_RESIZE_EW_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNESW:
+#if defined(GLFW_RESIZE_NESW_CURSOR)
+        glfwCursor = GLFW_RESIZE_NESW_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeNWSE:
+#if defined(GLFW_RESIZE_NWSE_CURSOR)
+        glfwCursor = GLFW_RESIZE_NWSE_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_ResizeAll:
+#if defined(GLFW_RESIZE_ALL_CURSOR)
+        glfwCursor = GLFW_RESIZE_ALL_CURSOR;
+#endif
+        break;
+    case ImGuiMouseCursor_NotAllowed:
+#if defined(GLFW_NOT_ALLOWED_CURSOR)
+        glfwCursor = GLFW_NOT_ALLOWED_CURSOR;
+#endif
+        break;
+    default: break;
+    }
+
+    cursors[static_cast<size_t>(cursor)] = glfwCreateStandardCursor(glfwCursor);
+    return cursors[static_cast<size_t>(cursor)];
+}
+
+/// @brief GLFW 主窗口光标状态缓存。
+struct GlfwCursorState {
+    /// @brief 当前缓存所属窗口。
+    GLFWwindow* window{ nullptr };
+
+    /// @brief 当前 GLFW 光标模式。
+    int mode{ -1 };
+
+    /// @brief 当前 GLFW 标准光标类型。
+    ImGuiMouseCursor cursor{ ImGuiMouseCursor_COUNT };
+};
+
+/// @brief GLFW 主窗口焦点状态缓存。
+struct MainWindowFocusState {
+    /// @brief 当前缓存所属 GLFW 主窗口。
+    GLFWwindow* window{ nullptr };
+
+    /// @brief 上一帧主窗口是否拥有焦点。
+    bool focused{ false };
+};
+
+/// @brief 对 GLFW 主窗口应用光标模式，并跳过重复状态写入。
+/// @param window GLFW 窗口句柄。
+/// @param cursorMode GLFW 光标模式。
+/// @param cursor 当前 ImGui 光标类型。
+/// @warning 渲染热路径：每帧调用；只有状态变化时才触发 GLFW API。
+void applyGlfwCursorMode(GLFWwindow* window, int cursorMode,
+                         ImGuiMouseCursor cursor)
+{
+    static GlfwCursorState state;
+
+    if ( !window ) {
+        return;
+    }
+
+    if ( state.window != window ) {
+        state.window = window;
+        state.mode   = -1;
+        state.cursor = ImGuiMouseCursor_COUNT;
+    }
+
+    if ( state.mode != cursorMode ) {
+        glfwSetInputMode(window, GLFW_CURSOR, cursorMode);
+        state.mode = cursorMode;
+    }
+
+    if ( cursorMode != GLFW_CURSOR_NORMAL ) {
+        state.cursor = ImGuiMouseCursor_COUNT;
+        return;
+    }
+
+    if ( state.cursor != cursor ) {
+        glfwSetCursor(window, getGlfwStandardCursor(cursor));
+        state.cursor = cursor;
+    }
+}
+
+/// @brief 隐藏 GLFW 原生光标。
+/// @param window GLFW 窗口句柄。
+/// @warning 渲染热路径：软件光标模式下每帧调用；内部会过滤重复写入。
+void hideNativeCursor(GLFWwindow* window)
+{
+    applyGlfwCursorMode(window, GLFW_CURSOR_HIDDEN, ImGuiMouseCursor_None);
+}
+
+/// @brief 对 GLFW 主窗口应用当前 ImGui 光标。
+/// @param window GLFW 窗口句柄。
+/// @param cursor 当前 ImGui 光标类型。
+/// @warning 渲染热路径：每帧最多一次；内部会过滤重复 GLFW 状态写入。
+void applyNativeCursor(GLFWwindow* window, ImGuiMouseCursor cursor)
+{
+    if ( cursor < 0 || cursor >= ImGuiMouseCursor_COUNT ) {
+        hideNativeCursor(window);
+        return;
+    }
+
+    applyGlfwCursorMode(window, GLFW_CURSOR_NORMAL, cursor);
+}
+
+/// @brief 消费主窗口从未聚焦到聚焦的激活边沿。
+/// @param window GLFW 主窗口句柄。
+/// @return 本帧主窗口刚获得焦点时返回 true。
+/// @warning 渲染热路径：每帧调用；只读取 GLFW 窗口属性和更新静态缓存。
+bool consumeMainWindowActivation(GLFWwindow* window)
+{
+    static MainWindowFocusState state;
+
+    if ( !window ) {
+        state.window  = nullptr;
+        state.focused = false;
+        return false;
+    }
+
+    const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+    if ( state.window != window ) {
+        state.window  = window;
+        state.focused = focused;
+        return focused;
+    }
+
+    const bool activated = focused && !state.focused;
+    state.focused        = focused;
+    return activated;
+}
+
+#ifdef _WIN32
+/// @brief HWND 属性名，与 Win32WindowAdapter 协同保留最小化前最大化状态。
+constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
+    L"MMMRestoreMaximizedAfterMinimize";
+
+/// @brief 判断 Win32 窗口最小化前是否处于最大化状态。
+/// @param hwnd Win32 窗口句柄。
+/// @return 任务栏恢复时应恢复到最大化状态则返回 true。
+/// @warning 低频平台查询：只在主窗口被任务栏/系统激活时调用。
+bool shouldRestoreWin32WindowToMaximized(HWND hwnd)
+{
+    if ( !hwnd ) {
+        return false;
+    }
+
+    if ( GetPropW(hwnd, RESTORE_MAXIMIZED_PROP) != nullptr ) {
+        return true;
+    }
+
+    if ( IsZoomed(hwnd) ) {
+        return true;
+    }
+
+    constexpr UINT  restoreToMaximizedFlag = 0x0002;
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hwnd, &placement) ) {
+        return false;
+    }
+    return placement.showCmd == SW_SHOWMAXIMIZED ||
+           (placement.flags & restoreToMaximizedFlag) != 0;
+}
+#endif
+
+/// @brief 将 GLFW 窗口恢复并提升到当前窗口组顶层。
+/// @param window GLFW 窗口句柄。
+/// @param activate 是否请求系统前台焦点。
+/// @warning 低频平台操作：只在主窗口被任务栏/系统激活时调用。
+void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
+{
+    if ( !window ) {
+        return;
+    }
+
+#ifdef _WIN32
+    HWND hwnd = glfwGetWin32Window(window);
+    if ( !hwnd ) {
+        return;
+    }
+
+    if ( IsIconic(hwnd) ) {
+        const bool restoreMaximized = shouldRestoreWin32WindowToMaximized(hwnd);
+        ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
+    }
+#else
+    if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
+        glfwRestoreWindow(window);
+    }
+
+#endif
+
+#ifdef _WIN32
+    UINT flags = SWP_NOMOVE | SWP_NOSIZE;
+    if ( !activate ) {
+        flags |= SWP_NOACTIVATE;
+    }
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, flags);
+    if ( activate ) {
+        SetForegroundWindow(hwnd);
+    }
+#else
+    (void)activate;
+    glfwFocusWindow(window);
+#endif
+}
+
+/// @brief 主窗口被系统激活时同步提升所有 ImGui 多视口窗口。
+/// @param mainWindow GLFW 主窗口句柄。
+/// @warning 低频平台操作：只在主窗口焦点激活边沿触发，避免每帧提窗。
+void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
+{
+    if ( !mainWindow ) {
+        return;
+    }
+
+#ifdef _WIN32
+    // Windows 提窗顺序很关键：主窗口先拿回前台焦点，随后独立
+    // ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
+    raiseGlfwWindowToTop(mainWindow, true);
+#endif
+
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    for ( int i = 0; i < platformIo.Viewports.Size; ++i ) {
+        ImGuiViewport* viewport = platformIo.Viewports[i];
+        if ( !viewport || !viewport->PlatformHandle ) {
+            continue;
+        }
+
+        GLFWwindow* viewportWindow =
+            static_cast<GLFWwindow*>(viewport->PlatformHandle);
+        if ( !viewportWindow || viewportWindow == mainWindow ) {
+            continue;
+        }
+
+#ifdef _WIN32
+        raiseGlfwWindowToTop(viewportWindow, false);
+#else
+        raiseGlfwWindowToTop(viewportWindow, true);
+#endif
+    }
+
+#ifndef _WIN32
+    raiseGlfwWindowToTop(mainWindow, true);
+#endif
+}
+}  // namespace
+
+// clang-format off
 /**
  * @brief 执行单帧渲染
  *
  * 包含等待 Fence、获取图像、录制命令、提交队列、呈现图像等步骤。
  */
-void VKRenderer::render(NativeWindow&                  window,
-                        std::vector<IGraphicUserHook*> graphicUserHooks)
+/// @warning 热路径：主线程每帧执行；Fence/Acquire/Present 不可中断。
+/// 禁止在此加入文件系统访问、完整 ECS 遍历或完整排序。
+// clang-format on
+void VKRenderer::render(NativeWindow&                window,
+                        std::span<IGraphicUserHook*> graphicUserHooks)
 {
+    static RenderProfileAccumulator profile;
+    static bool                     lastRenderProfileLoggingEnabled = false;
+    const bool                      renderProfileLoggingEnabled =
+        Config::AppConfig::instance().getEditorSettings().renderProfileLogging;
+    if ( renderProfileLoggingEnabled && !lastRenderProfileLoggingEnabled ) {
+        profile.reset(RenderProfileClock::now());
+    }
+    lastRenderProfileLoggingEnabled = renderProfileLoggingEnabled;
+    const auto frameProfileStart =
+        profileTimePoint(renderProfileLoggingEnabled);
+
     // 检查窗口是否完成了缩放操作（消抖）
     if ( window.shouldRecreate() ) {
         m_vkSwapChain.markDirty();
@@ -49,7 +566,8 @@ void VKRenderer::render(NativeWindow&                  window,
     }
 
     // 等待cmd完成
-    auto waitResult = m_vkLogicalDevice.waitForFences(
+    const auto fenceStart = profileTimePoint(renderProfileLoggingEnabled);
+    auto       waitResult = m_vkLogicalDevice.waitForFences(
         m_cmdAvailableFences[m_currentFrameIndex],
         true,
         std::numeric_limits<uint64_t>::max());
@@ -60,15 +578,18 @@ void VKRenderer::render(NativeWindow&                  window,
     // 恢复fence
     (void)m_vkLogicalDevice.resetFences(
         m_cmdAvailableFences[m_currentFrameIndex]);
+    const auto fenceEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // --- [优化] 在准备新帧之前获取图像 ---
     // 请求下一个可绘制的图像 - 查到的同时发出图像可用信号量
     // 在 FIFO (VSync) 模式下，这里是主要的阻塞点，会等待垂直同步
+    const auto acquireStart = profileTimePoint(renderProfileLoggingEnabled);
     vk::ResultValue<uint32_t> imageResult =
         m_vkLogicalDevice.acquireNextImageKHR(
             m_vkSwapChain.m_swapchain,
             std::numeric_limits<uint64_t>::max(),
             m_imageAvailableSems[m_currentFrameIndex]);
+    const auto acquireEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
         triggerRecreate(window);
@@ -91,25 +612,24 @@ void VKRenderer::render(NativeWindow&                  window,
 
     // --- [关键优化] 在 VSync 阻塞解除后立即处理输入 ---
     // 这样能保证本帧使用的输入数据是最新鲜的
+    const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
     window.pollEvents();
+    const auto pollEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // --- 1. ImGui 准备新帧 ---
+    const auto newFrameStart = profileTimePoint(renderProfileLoggingEnabled);
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // 根据配置决定是否隐藏系统光标
     auto& editorCfg = Config::AppConfig::instance().getEditorConfig();
     if ( editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-        glfwSetInputMode(
-            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
-    } else {
-        glfwSetInputMode(
-            window.getWindowHandle(), GLFW_CURSOR, GLFW_CURSOR_NORMAL);
     }
+    const auto newFrameEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 准备所有资源
+    const auto prepareStart = profileTimePoint(renderProfileLoggingEnabled);
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onPrepareResources(m_vkPhysicalDevice,
                                             m_vkLogicalDevice,
@@ -117,8 +637,10 @@ void VKRenderer::render(NativeWindow&                  window,
                                             m_vkCommandPool,
                                             m_LogicDeviceGraphicsQueue);
     }
+    const auto prepareEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 录制所有ui
+    const auto updateUiStart = profileTimePoint(renderProfileLoggingEnabled);
     for ( auto& graphicUserHook : graphicUserHooks ) {
         graphicUserHook->onUpdateUI();
     }
@@ -126,13 +648,47 @@ void VKRenderer::render(NativeWindow&                  window,
     // 绘制中央临时通知
     VKContext::get().value().get().drawCenterNotification();
 
-    // 更新光标管理器
-    if ( m_cursorManager &&
-         editorCfg.settings.cursorStyle == Config::CursorStyle::Software ) {
-        m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
+    const ImGuiMouseCursor currentMouseCursor = ImGui::GetMouseCursor();
+    const bool             useNativeResizeCursor =
+        editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
+        isNativeResizeCursor(currentMouseCursor);
+
+    if ( useNativeResizeCursor ) {
+        applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
+    } else if ( editorCfg.settings.cursorStyle ==
+                Config::CursorStyle::Software ) {
+        hideNativeCursor(window.getWindowHandle());
+    } else {
+        applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
     }
 
+    // 更新光标管理器
+    if ( m_cursorManager &&
+         editorCfg.settings.cursorStyle == Config::CursorStyle::Software &&
+         !useNativeResizeCursor ) {
+        m_cursorManager->UpdateAndDraw(m_cursorSmokeLifeOverride);
+    }
+    const auto updateUiEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    const auto imguiRenderStart = profileTimePoint(renderProfileLoggingEnabled);
     ImGui::Render();  // 生成imgui绘制顶点数据
+    const auto imguiRenderEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    m_offscreenRecordTasks.clear();
+    for ( auto& graphicUserHook : graphicUserHooks ) {
+        if ( !graphicUserHook ) {
+            continue;
+        }
+
+        const uint32_t taskCount =
+            graphicUserHook->getOffscreenRecordTaskCount();
+        for ( uint32_t taskIndex = 0; taskIndex < taskCount; ++taskIndex ) {
+            m_offscreenRecordTasks.push_back({ graphicUserHook, taskIndex });
+        }
+    }
+
+    const auto commandSetupStart =
+        profileTimePoint(renderProfileLoggingEnabled);
 
     // 重置命令缓冲
     auto& currentCmdBuffer = m_vkCommandBuffers[m_currentFrameIndex];
@@ -157,15 +713,57 @@ void VKRenderer::render(NativeWindow&                  window,
     clearValues[0].setColor(clearColorValue);
     clearValues[1].setDepthStencil({ 1.0f, 0 });
 
-    // 命令录制
-    (void)currentCmdBuffer.begin(commandBufferBeginInfo);
-
-    // 录制所有离屏渲染命令
-    for ( auto& graphicUserHook : graphicUserHooks ) {
-        graphicUserHook->onRecordOffscreen(currentCmdBuffer,
-                                           (uint32_t)m_currentFrameIndex);
+    auto* offscreenRecordThreadPool =
+        MMM::Runtime::AppThreadPool::instance().get();
+    const bool useParallelOffscreenRecord =
+        offscreenRecordThreadPool && m_offscreenRecordTasks.size() > 1;
+    if ( useParallelOffscreenRecord ) {
+        ensureOffscreenRecordSlots(m_offscreenRecordTasks.size());
     }
 
+    // 命令录制
+    (void)currentCmdBuffer.begin(commandBufferBeginInfo);
+    const auto commandSetupEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    // 录制所有离屏渲染命令
+    const auto offscreenStart = profileTimePoint(renderProfileLoggingEnabled);
+    const uint32_t recordFrameIndex =
+        static_cast<uint32_t>(m_currentFrameIndex);
+    if ( useParallelOffscreenRecord ) {
+        std::latch offscreenLatch(
+            static_cast<std::ptrdiff_t>(m_offscreenRecordTasks.size()));
+        for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
+              ++taskSlot ) {
+            const OffscreenRecordTask task = m_offscreenRecordTasks[taskSlot];
+            vk::CommandBuffer taskCmd = m_offscreenRecordSlots[taskSlot]
+                                            .commandBuffers[recordFrameIndex];
+            offscreenRecordThreadPool->enqueue_void(
+                [task, taskCmd, recordFrameIndex, &offscreenLatch]() mutable {
+                    (void)taskCmd.reset();
+                    vk::CommandBufferBeginInfo taskBeginInfo;
+                    taskBeginInfo.setFlags(
+                        vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+                    (void)taskCmd.begin(taskBeginInfo);
+                    if ( task.hook ) {
+                        task.hook->onRecordOffscreenTask(
+                            taskCmd, recordFrameIndex, task.taskIndex);
+                    }
+                    (void)taskCmd.end();
+                    offscreenLatch.count_down();
+                });
+        }
+        offscreenLatch.wait();
+    } else {
+        for ( const auto& task : m_offscreenRecordTasks ) {
+            if ( task.hook ) {
+                task.hook->onRecordOffscreenTask(
+                    currentCmdBuffer, recordFrameIndex, task.taskIndex);
+            }
+        }
+    }
+    const auto offscreenEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    const auto mainRecordStart = profileTimePoint(renderProfileLoggingEnabled);
     {
         vk::Rect2D renderArea;
         renderArea = { { 0,
@@ -197,6 +795,18 @@ void VKRenderer::render(NativeWindow&                  window,
         currentCmdBuffer.endRenderPass();
     }
     (void)currentCmdBuffer.end();  // 结束命令录制
+    const auto mainRecordEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    m_frameSubmitCommandBuffers.clear();
+    if ( useParallelOffscreenRecord ) {
+        for ( size_t taskSlot = 0; taskSlot < m_offscreenRecordTasks.size();
+              ++taskSlot ) {
+            m_frameSubmitCommandBuffers.push_back(
+                m_offscreenRecordSlots[taskSlot]
+                    .commandBuffers[recordFrameIndex]);
+        }
+    }
+    m_frameSubmitCommandBuffers.push_back(currentCmdBuffer);
 
     // 准备等待的阶段掩码
     // 这表示：在流水线的“颜色附件输出”阶段等待信号量
@@ -209,15 +819,17 @@ void VKRenderer::render(NativeWindow&                  window,
     vk::SubmitInfo submitInfo;
     submitInfo
         // 设置命令缓冲区
-        .setCommandBuffers(currentCmdBuffer)
+        .setCommandBuffers(m_frameSubmitCommandBuffers)
         // 等待信号量
         .setWaitSemaphores(m_imageAvailableSems[m_currentFrameIndex])
         // 设置等待的阶段掩码
         .setWaitDstStageMask(waitStages)
         // 发出信号量
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
+    const auto submitStart = profileTimePoint(renderProfileLoggingEnabled);
     (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
+    const auto submitEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 呈现
     vk::PresentInfoKHR presentInfo;
@@ -229,8 +841,10 @@ void VKRenderer::render(NativeWindow&                  window,
         // 等待信号量
         .setWaitSemaphores(m_renderFinishedSems[imageIndex]);
 
+    const auto presentStart = profileTimePoint(renderProfileLoggingEnabled);
     vk::Result presentResult =
         m_LogicDevicePresentQueue.presentKHR(presentInfo);
+    const auto presentEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     if ( presentResult == vk::Result::eErrorOutOfDateKHR ||
          presentResult == vk::Result::eSuboptimalKHR ) {
@@ -243,9 +857,16 @@ void VKRenderer::render(NativeWindow&                  window,
     ++m_currentFrameIndex %= MAX_FRAMES_IN_FLIGHT;
 
     // 更新并渲染所有的多视口 (Viewports)
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO&    io               = ImGui::GetIO();
+    GLFWwindow* mainWindowHandle = window.getWindowHandle();
+    const bool  mainWindowActivated =
+        consumeMainWindowActivation(mainWindowHandle);
+    const auto platformStart = profileTimePoint(renderProfileLoggingEnabled);
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         ImGui::UpdatePlatformWindows();
+        if ( mainWindowActivated ) {
+            raiseImGuiViewportGroup(mainWindowHandle);
+        }
 #ifdef _WIN32
         // 对所有多视口平台窗口应用 Win32 DWM 圆角和阴影，确保视觉一致性
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
@@ -269,6 +890,34 @@ void VKRenderer::render(NativeWindow&                  window,
         }
 #endif
         ImGui::RenderPlatformWindowsDefault();
+    }
+    const auto platformEnd     = profileTimePoint(renderProfileLoggingEnabled);
+    const auto frameProfileEnd = profileTimePoint(renderProfileLoggingEnabled);
+
+    if ( renderProfileLoggingEnabled ) {
+        ++profile.frameCount;
+        profile.total.add(
+            elapsedMilliseconds(frameProfileStart, frameProfileEnd));
+        profile.fence.add(elapsedMilliseconds(fenceStart, fenceEnd));
+        profile.acquire.add(elapsedMilliseconds(acquireStart, acquireEnd));
+        profile.pollEvents.add(elapsedMilliseconds(pollStart, pollEnd));
+        profile.newFrame.add(elapsedMilliseconds(newFrameStart, newFrameEnd));
+        profile.prepareResources.add(
+            elapsedMilliseconds(prepareStart, prepareEnd));
+        profile.updateUi.add(elapsedMilliseconds(updateUiStart, updateUiEnd));
+        profile.imguiRender.add(
+            elapsedMilliseconds(imguiRenderStart, imguiRenderEnd));
+        profile.commandSetup.add(
+            elapsedMilliseconds(commandSetupStart, commandSetupEnd));
+        profile.offscreenRecord.add(
+            elapsedMilliseconds(offscreenStart, offscreenEnd));
+        profile.mainRecord.add(
+            elapsedMilliseconds(mainRecordStart, mainRecordEnd));
+        profile.submit.add(elapsedMilliseconds(submitStart, submitEnd));
+        profile.present.add(elapsedMilliseconds(presentStart, presentEnd));
+        profile.platformWindows.add(
+            elapsedMilliseconds(platformStart, platformEnd));
+        profile.logIfReady(frameProfileEnd);
     }
 }
 

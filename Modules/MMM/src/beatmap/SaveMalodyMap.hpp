@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -18,6 +19,8 @@ namespace MMM
 
 using json = nlohmann::json;
 
+/// @brief 保存谱面为 Malody .mc JSON 文件。
+/// @warning 低频导出路径：允许完整遍历谱面数据；位置换算必须以当前时间戳为准。
 inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     json fileData;
@@ -61,6 +64,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     meta["version"]    = beatMap.m_baseMapMetadata.version;
     meta["background"] = Config::pathToUtf8(
         beatMap.m_baseMapMetadata.main_cover_path.filename());
+    meta["cover"] =
+        Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path.filename());
     meta["id"] = 0;
 
     /// @brief 获取原始模式，优先从元数据恢复
@@ -163,7 +168,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             currentBpm = t.m_bpm;
         }
         lastBeat += (time - lastTime) / (60000.0 / currentBpm);
-        lastBeat = std::max(0.0, lastBeat);
 
         int    integerBeat = static_cast<int>(std::floor(lastBeat + 1e-6));
         double fraction    = lastBeat - integerBeat;
@@ -273,9 +277,11 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                      [](const Timing* a, const Timing* b) {
                          if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-4 )
                              return a->m_timestamp < b->m_timestamp;
-                         // 同一时间：BPM（红线）排在 SCROLL（绿线）之前
-                         return a->m_timingEffect == TimingEffect::BPM &&
-                                b->m_timingEffect == TimingEffect::SCROLL;
+                         // 同一时间：BPM（红线）排在效果之前
+                         if ( a->m_timingEffect != b->m_timingEffect ) {
+                             return a->m_timingEffect == TimingEffect::BPM;
+                         }
+                         return false;
                      });
 
     json effectArr = json::array();
@@ -309,7 +315,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
         }
 
-        if ( t.m_timingEffect == TimingEffect::SCROLL ) {
+        if ( t.m_timingEffect == TimingEffect::SCROLL ||
+             t.m_timingEffect == TimingEffect::JUMP ||
+             t.m_timingEffect == TimingEffect::HS ) {
             json ej;
 
             bool hasBeat = false;
@@ -328,20 +336,25 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 ej["beat"] = timeToBeat(t.m_timestamp);
             }
 
-            if ( t.m_timingEffectParameter < 0 ) {
-                ej["scroll"] = -100.0 / t.m_timingEffectParameter;
-            } else {
+            if ( t.m_timingEffect == TimingEffect::SCROLL ) {
                 ej["scroll"] = t.m_timingEffectParameter;
+            } else if ( t.m_timingEffect == TimingEffect::JUMP ) {
+                ej["jump"] = t.m_timingEffectParameter;
+            } else {
+                ej["hs"] = t.m_timingEffectParameter;
             }
 
-            currentScroll = ej["scroll"];
+            if ( t.m_timingEffect == TimingEffect::SCROLL ) {
+                currentScroll = ej["scroll"];
+            }
 
             // 恢复 Malody 特有字段
             if ( auto it = t.m_metadata.timing_properties.find(
                      TimingMetadataType::MALODY);
                  it != t.m_metadata.timing_properties.end() ) {
                 for ( const auto& [key, val] : it->second ) {
-                    if ( key != "scroll" ) {
+                    if ( key != "scroll" && key != "jump" && key != "hs" &&
+                         key != "effect" ) {
                         try {
                             ej[key] = json::parse(val);
                         } catch ( ... ) {

@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
@@ -9,9 +10,25 @@
 #include "imgui_impl_glfw.h"
 #include "implot.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <string>
 
 namespace MMM::Graphic
 {
+
+/// @brief Wayland 下独立图标字体的视觉缩放，避免 DPI 下方形按钮裁切字形。
+static constexpr float WAYLAND_PURE_ICON_VISUAL_SCALE = 0.86f;
+
+/// @brief 获取独立图标字体的运行时视觉缩放。
+/// @return Wayland 平台返回修正倍率，其他平台保持 1.0。
+static float getPureIconVisualScale()
+{
+    return glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
+               ? WAYLAND_PURE_ICON_VISUAL_SCALE
+               : 1.0f;
+}
 
 static void check_vk_result(VkResult err)
 {
@@ -33,14 +50,25 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     ImGuiStyle& style = ImGui::GetStyle();
     ImGuiIO&    io    = ImGui::GetIO();
     (void)io;
+    /// @brief 创建 ImGui ini 所在目录时接收的文件系统错误。
+    std::error_code imguiIniDirectoryError;
+    std::filesystem::create_directories(Config::AppPaths::configRootPath(),
+                                        imguiIniDirectoryError);
+    if ( imguiIniDirectoryError ) {
+        XWARN("Failed to create ImGui ini directory: {}",
+              imguiIniDirectoryError.message());
+    }
+    /// @brief ImGui ini 文件路径字符串，必须静态保存以满足 ImGui
+    /// 指针生命周期要求。
+    static const std::string imguiIniPath =
+        Config::pathToUtf8(Config::AppPaths::imguiIniFilePath());
+    io.IniFilename = imguiIniPath.c_str();
     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     // Enable Gamepad Controls
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     // Enable Docking
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // No Auto Change Cursor
-    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
     // 禁用保存
     // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 
@@ -116,7 +144,9 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
     // IM_ASSERT(font != nullptr);
 
-    // 重新设置拖拽回调，确保在 ImGui 初始化后仍然有效
+    // 重新设置关键窗口回调，确保在 ImGui 初始化后仍然有效
+    glfwSetWindowIconifyCallback(window_handle,
+                                 NativeWindow::GLFW_IconifyCallback);
     glfwSetDropCallback(window_handle, NativeWindow::GLFW_DropCallback);
 
     setupFonts();
@@ -125,19 +155,39 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     XDEBUG("ImGui Vulkan backend initialized.");
 }
 
+/**
+ * @brief 加载 ImGui 运行时字体，并按当前 DPI 建立字体缩放基准。
+ * @warning 仅在初始化或低频字体重建时执行，不应进入每帧 UI 热路径。
+ */
 void VKContext::setupFonts()
 {
     ImGuiIO& io        = ImGui::GetIO();
+    auto&    settings  = Config::AppConfig::instance().getEditorSettings();
     float native_scale = Config::AppConfig::instance().getNativeContentScale();
     float ui_scale     = Config::AppConfig::instance().getUIScale();
     auto& skinMgr      = Config::SkinManager::instance();
+    io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+    io.Fonts->TexMinWidth  = std::max(io.Fonts->TexMinWidth, 2048);
+    io.Fonts->TexMinHeight = std::max(io.Fonts->TexMinHeight, 1024);
 
-    // --- 字体范围定义 ---
-    static const ImWchar ascii_ranges[] = { 0x0020, 0x00FF, 0 };
-    static const ImWchar cjk_ranges[]   = { 0x2000, 0x206F, 0x3000, 0x30FF,
-                                            0x3105, 0x312D, 0x4E00, 0x9FFF,
-                                            0xFF00, 0xFFEF, 0 };
-    static const ImWchar nerd_ranges[]  = { 0xE000, 0xF8FF, 0 };
+    if ( !std::isfinite(native_scale) || native_scale <= 0.0f ) {
+        native_scale = 1.0f;
+    }
+    if ( !std::isfinite(ui_scale) || ui_scale <= 0.0f ) {
+        ui_scale = 1.0f;
+    }
+    m_fontAtlasBaseScale = ui_scale / native_scale;
+    if ( !std::isfinite(m_fontAtlasBaseScale) ||
+         m_fontAtlasBaseScale <= 0.0f ) {
+        m_fontAtlasBaseScale = 1.0f;
+    }
+    m_fontAtlasScaleMain = settings.fontSizeMultiplier;
+    if ( !std::isfinite(m_fontAtlasScaleMain) ||
+         m_fontAtlasScaleMain <= 0.0f ) {
+        m_fontAtlasScaleMain = 1.0f;
+    }
+    m_fontAtlasScaleMain = std::clamp(m_fontAtlasScaleMain, 0.5f, 2.0f);
+    ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
 
     auto loadFontWithSize = [&](const std::string& key, float size) {
         auto& settings      = Config::AppConfig::instance().getEditorSettings();
@@ -154,7 +204,8 @@ void VKContext::setupFonts()
                 });
             if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
-            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredAsciiFont)) ) {
+            } else if ( std::filesystem::exists(
+                            Config::utf8ToPath(settings.preferredAsciiFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 asciiFontPath = settings.preferredAsciiFont;
             }
@@ -170,38 +221,41 @@ void VKContext::setupFonts()
                 });
             if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
-            } else if ( std::filesystem::exists(Config::utf8ToPath(settings.preferredCjkFont)) ) {
+            } else if ( std::filesystem::exists(
+                            Config::utf8ToPath(settings.preferredCjkFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 cjkFontPath = settings.preferredCjkFont;
             }
         }
 
         ImFontConfig config;
-        config.OversampleH = 2;
-        config.OversampleV = 2;
+        // ImGui 1.92 dynamic atlas may rasterize glyphs lazily while rendering.
+        // STB's oversample prefilter asserts on some CJK/OpenType glyph edges
+        // in debug builds, so keep oversampling disabled for runtime-loaded
+        // fonts.
+        config.OversampleH = 1;
+        config.OversampleV = 1;
         config.PixelSnapH  = true;
 
         // Load at physical pixel size for sharpness
-        float atlasSize = size * native_scale;
+        float atlasSize = std::max(1.0f, size * native_scale);
 
-        // 1. 加载基础 ASCII 字体 (严格限制范围)
+        // 1. 加载基础 ASCII 字体，字形由 ImGui 1.92 动态烘焙。
         ImFont* font = io.Fonts->AddFontFromFileTTF(
-            Config::pathToUtf8(asciiFontPath).c_str(),
-            atlasSize,
-            &config,
-            ascii_ranges);
+            Config::pathToUtf8(asciiFontPath).c_str(), atlasSize, &config);
 
         if ( font ) {
-            // 2. 配置合并参数加载 CJK 字体 (严格限制范围)
+            // 2. 配置合并参数加载 CJK 字体，避免预烘焙整段汉字范围。
             ImFontConfig mergeConfig;
-            mergeConfig.MergeMode  = true;
-            mergeConfig.PixelSnapH = true;
+            mergeConfig.MergeMode   = true;
+            mergeConfig.PixelSnapH  = true;
+            mergeConfig.OversampleH = 1;
+            mergeConfig.OversampleV = 1;
 
             io.Fonts->AddFontFromFileTTF(
                 Config::pathToUtf8(cjkFontPath).c_str(),
                 atlasSize,
-                &mergeConfig,
-                cjk_ranges);
+                &mergeConfig);
 
             // 3. 合并嵌入的 NerdFont 图标
             ImFontConfig iconConfig;
@@ -211,25 +265,17 @@ void VKContext::setupFonts()
             iconConfig.OversampleH          = 1;
             iconConfig.OversampleV          = 1;
 
-            // 补偿 font->Scale 的影响，使图标视觉大小不随文字倍率增大
-            // 确保图标大小仅受 ui_scale 和 native_scale 影响 (即仅随 UI
-            // 全局缩放而缩放)
-            float iconMultiplier = 1.0f / settings.fontSizeMultiplier;
-
             // 向上稍微偏移 (-0.05x)，并设置缩放为 0.9x
             // 缩小尺寸后，图标会靠近基准线（显得偏下），因此需要负向偏移来使其在按钮/行内视觉居中
-            iconConfig.GlyphOffset.y =
-                -(size * 0.05f) * native_scale * iconMultiplier;
+            iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
-                                           atlasSize * 0.9f * iconMultiplier,
-                                           &iconConfig,
-                                           nerd_ranges);
+                                           atlasSize * 0.9f,
+                                           &iconConfig);
 
-            // 设置缩放以匹配 UI 布局
-            font->Scale =
-                (ui_scale / native_scale) * settings.fontSizeMultiplier;
+            // 固定当前 atlas 生命周期的字体缩放，避免运行时切换动态烘焙尺寸。
+            font->Scale = m_fontAtlasBaseScale;
 
             skinMgr.setFont(key, font);
         }
@@ -260,18 +306,19 @@ void VKContext::setupFonts()
         iconConfig.OversampleH          = 1;
         iconConfig.OversampleV          = 1;
 
-        // 这里的 size 使用 side_bar 的默认大小，确保视觉一致
+        // 独立图标字体保持较小的基础尺寸，避免方形按钮内裁切。
         float size               = 16.0f;
-        float atlasSize          = size * native_scale;
+        float atlasSize          = std::max(1.0f, size * native_scale);
         iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
-        const ImWchar nerd_ranges[] = { 0xE000, 0xF8FF, 0 };
-        ImFont*       iconFont =
+        ImFont* iconFont =
             io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
                                            Config::g_nerdfont_data_size,
                                            atlasSize * 0.9f,
-                                           &iconConfig,
-                                           nerd_ranges);
+                                           &iconConfig);
+        if ( iconFont ) {
+            iconFont->Scale = m_fontAtlasBaseScale * getPureIconVisualScale();
+        }
         skinMgr.setFont("pure_icons", iconFont);
     }
 }
@@ -287,50 +334,44 @@ void VKContext::rebuildFonts()
 
     ImGuiIO& io = ImGui::GetIO();
 
+    Config::SkinManager::instance().clearRuntimeFonts();
+
     // 清除旧字体
     io.Fonts->Clear();
 
     // 重新运行字体加载
     setupFonts();
 
-    // 构建新 Atlas
-    // Backend will detect texture update automatically if RendererHasTextures
-    // is enabled
-    io.Fonts->Build();
-
     XINFO("Fonts rebuilt.");
 }
 
+/**
+ * @brief 刷新已经加载的 ImGui 运行时字体缩放。
+ * @warning 仅响应 DPI 或字体设置变化时调用，不应进入每帧 UI 热路径。
+ */
 void VKContext::updateFontScales()
 {
-    auto& settings     = Config::AppConfig::instance().getEditorSettings();
-    float native_scale = Config::AppConfig::instance().getNativeContentScale();
-    float ui_scale     = Config::AppConfig::instance().getUIScale();
-    float baseScale    = (ui_scale / native_scale) * settings.uiScaleMultiplier;
-    float targetScale  = baseScale * settings.fontSizeMultiplier;
+    ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
 
     auto& skinMgr = Config::SkinManager::instance();
     for ( auto& [key, font] : skinMgr.getData().runtimeFonts ) {
         if ( font ) {
-            if ( key == "pure_icons" ) {
-                font->Scale = baseScale;  // 图标不随文字倍率缩放
-            } else {
-                font->Scale = targetScale;
-            }
+            font->Scale = key == "pure_icons"
+                              ? m_fontAtlasBaseScale * getPureIconVisualScale()
+                              : m_fontAtlasBaseScale;
         }
     }
 }
 
 void VKContext::requestFontRebuild()
 {
-    m_fontRebuildRequested.store(true);
+    m_fontRebuildRequested.store(true, std::memory_order_release);
 }
 
 void VKContext::checkAndRebuildFonts()
 {
-    if ( m_fontRebuildRequested.load() ) {
+    if ( m_fontRebuildRequested.exchange(false, std::memory_order_acq_rel) ) {
         rebuildFonts();
-        m_fontRebuildRequested.store(false);
     }
 }
 
@@ -384,6 +425,8 @@ void VKContext::applyTheme()
             appliedTheme = Config::UITheme::CleanDark;
         else if ( skinTheme == "Moonlight" )
             appliedTheme = Config::UITheme::Moonlight;
+        else if ( skinTheme == "Cecilia" || skinTheme == "MmmDefault" )
+            appliedTheme = Config::UITheme::Cecilia;
         else if ( skinTheme == "ComfortableLight" )
             appliedTheme = Config::UITheme::ComfortableLight;
         else if ( skinTheme == "HazyDark" )
@@ -423,6 +466,7 @@ void VKContext::applyTheme()
     case Config::UITheme::FutureDark: setFutureDarkStyle(); break;
     case Config::UITheme::CleanDark: setCleanDarkStyle(); break;
     case Config::UITheme::Moonlight: setMoonlightStyle(); break;
+    case Config::UITheme::Cecilia: setCeciliaStyle(); break;
     case Config::UITheme::ComfortableLight: setComfortableLightStyle(); break;
     case Config::UITheme::HazyDark: setHazyDarkStyle(); break;
     case Config::UITheme::Everforest: setEverforestStyle(); break;
@@ -442,6 +486,7 @@ void VKContext::applyTheme()
     auto& aes         = settings.aesthetics;
 
     style.ScaleAllSizes(settings.uiScaleMultiplier);
+    style.FontScaleMain = m_fontAtlasScaleMain;
 
     // 应用审美设置 (防止 setStyle 重置了这些值)
     style.WindowRounding = std::floor(aes.windowRounding * dpiScale);
@@ -3146,6 +3191,122 @@ void VKContext::setMoonlightStyle()
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
     style.Colors[ImGuiCol_ModalWindowDimBg] =
         ImVec4(0.19607843f, 0.1764706f, 0.54509807f, 0.5019608f);
+}
+
+/**
+ * @brief 设置 Cecilia 塞西莉娅配色派生样式。
+ */
+void VKContext::setCeciliaStyle()
+{
+    setMoonlightStyle();
+
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    auto skinColor = [](const std::string& key, ImVec4 fallback) {
+        const auto& colors = Config::SkinManager::instance().getData().colors;
+        if ( auto it = colors.find(key); it != colors.end() ) {
+            return ImVec4(it->second.r, it->second.g, it->second.b, fallback.w);
+        }
+        return fallback;
+    };
+
+    const ImVec4 nodeColor =
+        skinColor("note_node", ImVec4(0.9922f, 0.9255f, 0.5608f, 1.0f));
+    auto rgb = [](int r, int g, int b) {
+        return ImVec4(static_cast<float>(r) / 255.0f,
+                      static_cast<float>(g) / 255.0f,
+                      static_cast<float>(b) / 255.0f,
+                      1.0f);
+    };
+
+    const ImVec4 titleTextColor     = rgb(0x36, 0x26, 0x28);
+    const ImVec4 detailTextColor    = rgb(0x5B, 0x48, 0x43);
+    const ImVec4 baseBgColor        = rgb(0xE8, 0xDF, 0xD6);
+    const ImVec4 viewBgColor        = rgb(0xEE, 0xE7, 0xDF);
+    const ImVec4 progressBgColor    = rgb(0xF7, 0xF1, 0xEA);
+    const ImVec4 popupBgColor       = rgb(0xD2, 0xC4, 0xB8);
+    const ImVec4 borderColor        = rgb(0xCA, 0xB7, 0xA4);
+    const ImVec4 typeTextColor      = rgb(0x87, 0x9F, 0x4B);
+    const ImVec4 itemGroupColor     = rgb(0xC7, 0x61, 0x62);
+    const ImVec4 progressColor      = rgb(0xAF, 0x5F, 0x39);
+    const ImVec4 fullProgressColor  = rgb(0xF7, 0x86, 0x80);
+    const ImVec4 hairColor          = rgb(0xB9, 0xC0, 0xAE);
+    const ImVec4 deepHairColor      = rgb(0x8B, 0x98, 0x87);
+    const ImVec4 titleBgColor       = rgb(0xA4, 0xAD, 0x9F);
+    const ImVec4 titleBgActiveColor = rgb(0x95, 0xA2, 0x91);
+    const ImVec4 windowBorderColor  = rgb(0xAC, 0x9B, 0x8C);
+    const ImVec4 shadowWarmColor    = rgb(0xB9, 0xAA, 0x9C);
+    const ImVec4 panelHoverColor    = rgb(0xE1, 0xD7, 0xCD);
+    const ImVec4 cloakColor         = rgb(0x13, 0x1B, 0x29);
+
+    style.Colors[ImGuiCol_Text]         = detailTextColor;
+    style.Colors[ImGuiCol_TextDisabled] = ImVec4(
+        detailTextColor.x, detailTextColor.y, detailTextColor.z, 0.6200f);
+    style.Colors[ImGuiCol_WindowBg] = baseBgColor;
+    style.Colors[ImGuiCol_ChildBg]  = viewBgColor;
+    style.Colors[ImGuiCol_PopupBg]  = popupBgColor;
+    style.Colors[ImGuiCol_Border]   = windowBorderColor;
+    style.Colors[ImGuiCol_BorderShadow] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.1600f);
+    style.Colors[ImGuiCol_FrameBg]              = progressBgColor;
+    style.Colors[ImGuiCol_FrameBgHovered]       = panelHoverColor;
+    style.Colors[ImGuiCol_FrameBgActive]        = borderColor;
+    style.Colors[ImGuiCol_TitleBg]              = titleBgColor;
+    style.Colors[ImGuiCol_TitleBgActive]        = titleBgActiveColor;
+    style.Colors[ImGuiCol_TitleBgCollapsed]     = hairColor;
+    style.Colors[ImGuiCol_MenuBarBg]            = deepHairColor;
+    style.Colors[ImGuiCol_ScrollbarBg]          = viewBgColor;
+    style.Colors[ImGuiCol_ScrollbarGrab]        = borderColor;
+    style.Colors[ImGuiCol_ScrollbarGrabHovered] = shadowWarmColor;
+    style.Colors[ImGuiCol_ScrollbarGrabActive]  = progressColor;
+    style.Colors[ImGuiCol_CheckMark]            = typeTextColor;
+    style.Colors[ImGuiCol_SliderGrab]           = progressColor;
+    style.Colors[ImGuiCol_SliderGrabActive]     = fullProgressColor;
+    style.Colors[ImGuiCol_Button]               = viewBgColor;
+    style.Colors[ImGuiCol_ButtonHovered]        = panelHoverColor;
+    style.Colors[ImGuiCol_ButtonActive]         = borderColor;
+    style.Colors[ImGuiCol_Header]               = borderColor;
+    style.Colors[ImGuiCol_HeaderHovered]        = hairColor;
+    style.Colors[ImGuiCol_HeaderActive]         = deepHairColor;
+    style.Colors[ImGuiCol_Separator]            = borderColor;
+    style.Colors[ImGuiCol_SeparatorHovered]     = hairColor;
+    style.Colors[ImGuiCol_SeparatorActive]      = deepHairColor;
+    style.Colors[ImGuiCol_ResizeGrip] =
+        ImVec4(borderColor.x, borderColor.y, borderColor.z, 0.5000f);
+    style.Colors[ImGuiCol_ResizeGripHovered]   = hairColor;
+    style.Colors[ImGuiCol_ResizeGripActive]    = deepHairColor;
+    style.Colors[ImGuiCol_Tab]                 = panelHoverColor;
+    style.Colors[ImGuiCol_TabHovered]          = hairColor;
+    style.Colors[ImGuiCol_TabActive]           = progressBgColor;
+    style.Colors[ImGuiCol_TabSelectedOverline] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    style.Colors[ImGuiCol_TabUnfocused]        = baseBgColor;
+    style.Colors[ImGuiCol_TabUnfocusedActive]  = panelHoverColor;
+    style.Colors[ImGuiCol_TabDimmedSelectedOverline] =
+        ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    style.Colors[ImGuiCol_PlotLines]            = borderColor;
+    style.Colors[ImGuiCol_PlotLinesHovered]     = typeTextColor;
+    style.Colors[ImGuiCol_PlotHistogram]        = titleTextColor;
+    style.Colors[ImGuiCol_PlotHistogramHovered] = nodeColor;
+    style.Colors[ImGuiCol_TableHeaderBg]        = panelHoverColor;
+    style.Colors[ImGuiCol_TableBorderStrong]    = borderColor;
+    style.Colors[ImGuiCol_TableBorderLight]     = panelHoverColor;
+    style.Colors[ImGuiCol_TableRowBg]           = viewBgColor;
+    style.Colors[ImGuiCol_TableRowBgAlt]        = panelHoverColor;
+    style.Colors[ImGuiCol_TextSelectedBg] =
+        ImVec4(itemGroupColor.x, itemGroupColor.y, itemGroupColor.z, 0.3000f);
+    style.Colors[ImGuiCol_DragDropTarget]        = fullProgressColor;
+    style.Colors[ImGuiCol_NavHighlight]          = titleTextColor;
+    style.Colors[ImGuiCol_NavWindowingHighlight] = titleTextColor;
+    style.Colors[ImGuiCol_NavWindowingDimBg] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.2500f);
+    style.Colors[ImGuiCol_ModalWindowDimBg] =
+        ImVec4(cloakColor.x, cloakColor.y, cloakColor.z, 0.3000f);
+    style.Colors[ImGuiCol_DockingPreview] =
+        ImVec4(typeTextColor.x, typeTextColor.y, typeTextColor.z, 0.3200f);
+    style.Colors[ImGuiCol_DockingEmptyBg] = baseBgColor;
+    style.Colors[ImGuiCol_TextLink]       = titleTextColor;
+
+    style.WindowBorderSize = 1.0f;
 }
 
 void VKContext::setComfortableLightStyle()

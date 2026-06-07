@@ -3,6 +3,9 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace MMM::Logic::System
 {
 
@@ -37,9 +40,10 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 void NoteRenderSystem::renderPolyline(
     const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
     const Config::EditorConfig& config, RenderSnapshot* snapshot,
-    double currentAbsY, float judgmentLineY, float leftX, float rightX,
-    float topY, float bottomY, float singleTrackW, float renderScaleY,
-    glm::vec4 colorHold, glm::vec4 colorNode, glm::vec4 colorArrow,
+    double currentAbsY, double currentTime, float judgmentLineY, float leftX,
+    float rightX, float topY, float bottomY, float singleTrackW,
+    float renderScaleY, glm::vec4 colorHead, glm::vec4 colorHoldBody,
+    glm::vec4 colorHoldEnd, glm::vec4 colorNode, glm::vec4 colorArrow,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex)
 {
@@ -59,9 +63,12 @@ void NoteRenderSystem::renderPolyline(
                      singleTrackW,
                      renderScaleY,
                      currentAbsY,
+                     currentTime,
+                     topY,
+                     bottomY,
                      noteW,
                      noteH,
-                     colorHold,
+                     colorHoldBody,
                      entity,
                      generateHitboxes,
                      glowPart,
@@ -77,6 +84,9 @@ void NoteRenderSystem::renderPolyline(
                       singleTrackW,
                       renderScaleY,
                       currentAbsY,
+                      currentTime,
+                      topY,
+                      bottomY,
                       noteW,
                       noteH,
                       colorNode,
@@ -96,9 +106,12 @@ void NoteRenderSystem::renderPolyline(
                      singleTrackW,
                      renderScaleY,
                      currentAbsY,
+                     currentTime,
+                     topY,
+                     bottomY,
                      noteW,
                      noteH,
-                     colorHold,
+                     colorHead,
                      config,
                      entity,
                      generateHitboxes,
@@ -115,9 +128,12 @@ void NoteRenderSystem::renderPolyline(
                            singleTrackW,
                            renderScaleY,
                            currentAbsY,
+                           currentTime,
+                           topY,
+                           bottomY,
                            noteW,
                            noteH,
-                           colorHold,
+                           colorHoldEnd,
                            colorArrow,
                            config,
                            entity,
@@ -129,9 +145,10 @@ void NoteRenderSystem::renderPolyline(
 void NoteRenderSystem::drawPolylineBody(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, float noteW,
-    float noteH, glm::vec4 colorHold, entt::entity entity,
-    bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
+    HoverPart glowPart, int glowSubIndex)
 {
     if ( note.m_subNotes.empty() ) return;
     if ( glowPart != HoverPart::None && glowPart != HoverPart::HoldBody )
@@ -144,11 +161,33 @@ void NoteRenderSystem::drawPolylineBody(
             continue;
         }
 
-        const auto& sub          = note.m_subNotes[i];
-        double      subStartAbsY = cache->getAbsY(sub.timestamp);
-        float       subStartY =
-            judgmentLineY -
-            static_cast<float>(subStartAbsY - currentAbsY) * renderScaleY;
+        const auto& sub = note.m_subNotes[i];
+
+        double displayDeltaStart =
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+        double displayDeltaEnd =
+            cache->getDisplayDelta(sub.timestamp + sub.duration,
+                                   currentAbsY,
+                                   sub.timestamp + sub.duration);
+
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double padDelta = noteH / static_cast<double>(renderScaleY);
+
+        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
+                                                 sub.timestamp + sub.duration,
+                                                 currentTime,
+                                                 displayDeltaStart,
+                                                 displayDeltaEnd,
+                                                 maxDelta + padDelta,
+                                                 minDelta - padDelta) ) {
+            continue;
+        }
+
+        float subStartY = judgmentLineY -
+                          static_cast<float>(displayDeltaStart) * renderScaleY;
 
         float subEndTrack = (float)sub.trackIndex;
         float subEndY     = subStartY;
@@ -170,7 +209,8 @@ void NoteRenderSystem::drawPolylineBody(
                 glm::vec4 finalBodyColor = colorHold;
                 if ( snapshot->erasingEntities.count(entity) &&
                      (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                      snapshot->erasingSubIndex == 0) ) {
+                      snapshot->erasingSubIndex == 0 ||
+                      snapshot->erasingSubIndex == -1) ) {
                     finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
                 }
 
@@ -192,10 +232,11 @@ void NoteRenderSystem::drawPolylineBody(
                 }
             }
         } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 ) {
-            double subEndAbsY = cache->getAbsY(sub.timestamp + sub.duration);
             subEndY =
                 judgmentLineY -
-                static_cast<float>(subEndAbsY - currentAbsY) * renderScaleY;
+                static_cast<float>(cache->getDisplayDelta(
+                    sub.timestamp + sub.duration, currentAbsY, sub.timestamp)) *
+                    renderScaleY;
             glm::vec2 bodySize = getDrawSize(
                 snapshot, TextureID::HoldBodyVertical, noteW, noteH);
             float bodyX = leftX + sub.trackIndex * singleTrackW +
@@ -204,35 +245,49 @@ void NoteRenderSystem::drawPolylineBody(
             glm::vec4 finalBodyColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
             batcher.setTexture(TextureID::HoldBodyVertical);
-            batcher.pushQuad(bodyX,
-                             subStartY,
-                             bodySize.x,
-                             subStartY - subEndY,
-                             finalBodyColor);
+            float sy = judgmentLineY -
+                       static_cast<float>(cache->getDisplayDelta(
+                           sub.timestamp, currentAbsY, sub.timestamp)) *
+                           renderScaleY;
+            float ey =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    sub.timestamp + sub.duration,
+                                    currentAbsY,
+                                    sub.timestamp + sub.duration)) *
+                                    renderScaleY;
+            batcher.pushFreeQuad({ bodyX, sy },
+                                 { bodyX + bodySize.x, sy },
+                                 { bodyX + bodySize.x, ey },
+                                 { bodyX, ey },
+                                 finalBodyColor);
 
             if ( generateHitboxes && entity != entt::null ) {
+                float hitY = std::min(subStartY, subEndY);
+                float hitH = std::abs(subStartY - subEndY);
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                static_cast<int>(i),
                                                bodyX,
-                                               subEndY,
+                                               hitY,
                                                bodySize.x,
-                                               subStartY - subEndY });
+                                               hitH });
             }
         }
 
         // 过渡 Body (连接当前子物件末尾到下一个子物件开头)
         if ( i + 1 < note.m_subNotes.size() ) {
-            const auto& next          = note.m_subNotes[i + 1];
-            double      nextStartAbsY = cache->getAbsY(next.timestamp);
+            const auto& next = note.m_subNotes[i + 1];
             float       nextStartY =
                 judgmentLineY -
-                static_cast<float>(nextStartAbsY - currentAbsY) * renderScaleY;
+                static_cast<float>(cache->getDisplayDelta(
+                    next.timestamp, currentAbsY, next.timestamp)) *
+                    renderScaleY;
             glm::vec2 bodySize = getDrawSize(
                 snapshot, TextureID::HoldBodyVertical, noteW, noteH);
             float curBodyX  = leftX + subEndTrack * singleTrackW +
@@ -243,15 +298,32 @@ void NoteRenderSystem::drawPolylineBody(
             glm::vec4 finalTransColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalTransColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
 
             batcher.setTexture(TextureID::HoldBodyVertical);
-            batcher.pushFreeQuad({ curBodyX, subEndY },
-                                 { curBodyX + bodySize.x, subEndY },
-                                 { nextBodyX + bodySize.x, nextStartY },
-                                 { nextBodyX, nextStartY },
+
+            double tStart = sub.timestamp + sub.duration;
+            double tEnd   = next.timestamp;
+
+            float sy =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    tStart, currentAbsY, tStart)) *
+                                    renderScaleY;
+            float ey =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    tEnd, currentAbsY, tEnd)) *
+                                    renderScaleY;
+
+            float x1 = curBodyX;
+            float x2 = nextBodyX;
+
+            batcher.pushFreeQuad({ x1, sy },
+                                 { x1 + bodySize.x, sy },
+                                 { x2 + bodySize.x, ey },
+                                 { x2, ey },
                                  finalTransColor);
 
             if ( generateHitboxes && entity != entt::null ) {
@@ -274,8 +346,9 @@ void NoteRenderSystem::drawPolylineBody(
 void NoteRenderSystem::drawPolylineNodes(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, float noteW,
-    float noteH, glm::vec4 colorNode, const Config::EditorConfig& config,
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorNode, const Config::EditorConfig& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex)
 {
@@ -290,11 +363,29 @@ void NoteRenderSystem::drawPolylineNodes(
             continue;
         }
 
-        const auto& sub          = note.m_subNotes[i];
-        double      subStartAbsY = cache->getAbsY(sub.timestamp);
-        float       subStartY =
-            judgmentLineY -
-            static_cast<float>(subStartAbsY - currentAbsY) * renderScaleY;
+        const auto& sub = note.m_subNotes[i];
+        double      displayDeltaStart =
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+        double displayDeltaEnd = displayDeltaStart;
+
+        double maxDelta =
+            (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+        double minDelta =
+            (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+        double padDelta = noteH / static_cast<double>(renderScaleY);
+
+        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
+                                                 sub.timestamp,
+                                                 currentTime,
+                                                 displayDeltaStart,
+                                                 displayDeltaEnd,
+                                                 maxDelta + padDelta,
+                                                 minDelta - padDelta) ) {
+            continue;
+        }
+
+        float subStartY = judgmentLineY -
+                          static_cast<float>(displayDeltaStart) * renderScaleY;
         glm::vec2 nodeSize =
             getDrawSize(snapshot, TextureID::Node, noteW, noteH);
         float nodeX = leftX + sub.trackIndex * singleTrackW +
@@ -303,7 +394,8 @@ void NoteRenderSystem::drawPolylineNodes(
         glm::vec4 finalNodeColor = colorNode;
         if ( snapshot->erasingEntities.count(entity) &&
              (snapshot->erasingSubIndex == static_cast<int>(i) ||
-              snapshot->erasingSubIndex == 0) ) {
+              snapshot->erasingSubIndex == 0 ||
+              snapshot->erasingSubIndex == -1) ) {
             finalNodeColor = { 1.0f, 0.2f, 0.2f, colorNode.a * 0.5f };
         }
 
@@ -332,8 +424,9 @@ void NoteRenderSystem::drawPolylineNodes(
 void NoteRenderSystem::drawPolylineHead(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, float noteW,
-    float noteH, glm::vec4 colorHold, const Config::EditorConfig& config,
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHead, const Config::EditorConfig& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex)
 {
@@ -343,23 +436,43 @@ void NoteRenderSystem::drawPolylineHead(
 
     if ( note.m_subNotes.empty() ) return;
 
-    const auto& first      = note.m_subNotes[0];
-    double      fStartAbsY = cache->getAbsY(first.timestamp);
-    float fStartY = judgmentLineY -
-                    static_cast<float>(fStartAbsY - currentAbsY) * renderScaleY;
+    const auto& firstSub = note.m_subNotes.front();
+
+    double displayDeltaStart = cache->getDisplayDelta(
+        firstSub.timestamp, currentAbsY, firstSub.timestamp);
+    double displayDeltaEnd = displayDeltaStart;
+
+    double maxDelta =
+        (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double minDelta =
+        (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+    double padDelta = noteH / static_cast<double>(renderScaleY);
+
+    if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp,
+                                             firstSub.timestamp,
+                                             currentTime,
+                                             displayDeltaStart,
+                                             displayDeltaEnd,
+                                             maxDelta + padDelta,
+                                             minDelta - padDelta) ) {
+        return;
+    }
+
+    float headY =
+        judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, noteW, noteH);
-    float     headX    = leftX + first.trackIndex * singleTrackW +
+    float     headX    = leftX + firstSub.trackIndex * singleTrackW +
                          (singleTrackW - headSize.x) * 0.5f;
 
-    glm::vec4 finalHeadColor = colorHold;
+    glm::vec4 finalHeadColor = colorHead;
     if ( snapshot->erasingEntities.count(entity) &&
-         snapshot->erasingSubIndex == 0 ) {
-        finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+         (snapshot->erasingSubIndex == 0 || snapshot->erasingSubIndex == -1) ) {
+        finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHead.a * 0.5f };
     }
 
     batcher.setTexture(TextureID::Note);
     batcher.pushFilledQuad(headX,
-                           fStartY + headSize.y * 0.5f,
+                           headY + headSize.y * 0.5f,
                            headSize.x,
                            headSize.y,
                            { getTexAspect(snapshot, TextureID::Note), 1.0f },
@@ -371,7 +484,7 @@ void NoteRenderSystem::drawPolylineHead(
                                        HoverPart::PolylineNode,
                                        0,
                                        headX,
-                                       fStartY - headSize.y * 0.5f,
+                                       headY - headSize.y * 0.5f,
                                        headSize.x,
                                        headSize.y });
     }
@@ -380,8 +493,9 @@ void NoteRenderSystem::drawPolylineHead(
 void NoteRenderSystem::drawPolylineDecoration(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
-    float singleTrackW, float renderScaleY, double currentAbsY, float noteW,
-    float noteH, glm::vec4 colorHold, glm::vec4 colorArrow,
+    float singleTrackW, float renderScaleY, double currentAbsY,
+    double currentTime, float topY, float bottomY, float noteW, float noteH,
+    glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
     const Config::EditorConfig& config, entt::entity entity,
     bool generateHitboxes, HoverPart glowPart, int glowSubIndex)
 {
@@ -396,9 +510,32 @@ void NoteRenderSystem::drawPolylineDecoration(
 
     if ( !isLastGlow ) return;
 
-    double lStartAbsY = cache->getAbsY(last.timestamp);
-    float lStartY = judgmentLineY -
-                    static_cast<float>(lStartAbsY - currentAbsY) * renderScaleY;
+    double targetTime = last.timestamp;
+    if ( last.type == ::MMM::NoteType::HOLD ) {
+        targetTime = last.timestamp + last.duration;
+    }
+    double displayDelta =
+        cache->getDisplayDelta(targetTime, currentAbsY, targetTime);
+    double maxDelta =
+        (judgmentLineY - topY) / static_cast<double>(renderScaleY);
+    double minDelta =
+        (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
+    double padDelta = noteH / static_cast<double>(renderScaleY);
+
+    if ( !NoteRenderSystem::isCarrierVisible(targetTime,
+                                             targetTime,
+                                             currentTime,
+                                             displayDelta,
+                                             displayDelta,
+                                             maxDelta + padDelta,
+                                             minDelta - padDelta) ) {
+        return;
+    }
+
+    float lStartY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            last.timestamp, currentAbsY, last.timestamp)) *
+                            renderScaleY;
 
     if ( last.type == ::MMM::NoteType::FLICK ) {
         if ( glowPart == HoverPart::None ||
@@ -413,7 +550,8 @@ void NoteRenderSystem::drawPolylineDecoration(
             glm::vec4 finalArrowColor = colorArrow;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0) ) {
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
                 finalArrowColor = { 1.0f, 0.2f, 0.2f, colorArrow.a * 0.5f };
             }
 
@@ -438,20 +576,23 @@ void NoteRenderSystem::drawPolylineDecoration(
         }
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
         if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd ) {
-            double subEndAbsY = cache->getAbsY(last.timestamp + last.duration);
-            float  subEndY =
-                judgmentLineY -
-                static_cast<float>(subEndAbsY - currentAbsY) * renderScaleY;
+            float subEndY =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    last.timestamp + last.duration,
+                                    currentAbsY,
+                                    last.timestamp)) *
+                                    renderScaleY;
             glm::vec2 endSize =
                 getDrawSize(snapshot, TextureID::HoldEnd, noteW, noteH);
             float endX = leftX + last.trackIndex * singleTrackW +
                          (singleTrackW - endSize.x) * 0.5f;
 
-            glm::vec4 finalEndColor = colorHold;
+            glm::vec4 finalEndColor = colorHoldEnd;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0) ) {
-                finalEndColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
+                  snapshot->erasingSubIndex == 0 ||
+                  snapshot->erasingSubIndex == -1) ) {
+                finalEndColor = { 1.0f, 0.2f, 0.2f, colorHoldEnd.a * 0.5f };
             }
 
             batcher.setTexture(TextureID::HoldEnd);

@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -49,6 +50,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         mtype = NoteMetadataType::OSU;
                     else if ( it.key() == "malody" )
                         mtype = NoteMetadataType::MALODY;
+                    else if ( it.key() == "mmm" )
+                        mtype = NoteMetadataType::MMM;
                     else
                         continue;
                     auto& props = note.m_metadata.note_properties[mtype];
@@ -80,6 +83,8 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 Config::utf8ToPath(base.value("audio", ""));
             beatMap.m_baseMapMetadata.main_cover_path =
                 Config::utf8ToPath(base.value("cover", ""));
+            beatMap.m_baseMapMetadata.cover_path =
+                Config::utf8ToPath(base.value("cover_img", ""));
             beatMap.m_baseMapMetadata.track_count =
                 base.value("track_count", 4);
             beatMap.m_baseMapMetadata.preference_bpm = base.value("bpm", 120.0);
@@ -115,12 +120,11 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
     if ( root.contains("timing") ) {
         for ( const auto& tJson : root["timing"] ) {
             Timing t;
-            t.m_timestamp             = tJson.value("timestamp", 0.0);
-            t.m_bpm                   = tJson.value("bpm", 120.0);
-            t.m_beat_length           = tJson.value("beat_length", 500.0);
-            t.m_timingEffect          = tJson.value("effect", "bpm") == "bpm"
-                                            ? TimingEffect::BPM
-                                            : TimingEffect::SCROLL;
+            t.m_timestamp   = tJson.value("timestamp", 0.0);
+            t.m_bpm         = tJson.value("bpm", 120.0);
+            t.m_beat_length = tJson.value("beat_length", 500.0);
+            t.m_timingEffect =
+                timingEffectFromString(tJson.value("effect", "bpm"));
             t.m_timingEffectParameter = tJson.value("param", 0.0);
 
             if ( tJson.contains("extra") ) {

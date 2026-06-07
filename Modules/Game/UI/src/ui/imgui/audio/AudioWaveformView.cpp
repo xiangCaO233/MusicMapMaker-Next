@@ -1,5 +1,6 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
+#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -10,8 +11,10 @@
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <ice/config/config.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
@@ -77,18 +80,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
     if ( m_isCalculating ) {
         ImGui::OpenPopup("ProcessingWaveform");
-        {
-            static bool wasOpen = false;
-            bool        isOpen  = ImGui::IsPopupOpen("ProcessingWaveform");
-            if ( isOpen && !wasOpen ) {
-                ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(),
-                                        ImGuiCond_Always,
-                                        ImVec2(0.5f, 0.5f));
-            }
-            wasOpen = isOpen;
-        }
-        if ( ImGui::BeginPopupModal(
-                 "ProcessingWaveform", nullptr, ImGuiWindowFlags_None) ) {
+        float dpiScale = Config::AppConfig::instance().getWindowContentScale();
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin("ProcessingWaveform") ) {
             ImGui::Text("%s", TR("ui.waveform.processing.text").data());
             ImGui::EndPopup();
         }
@@ -104,8 +98,11 @@ void AudioWaveformView::update(UIManager* sourceManager)
     double speed        = audioManager.getPlaybackSpeed();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
+    std::string activeCameraId =
+        Logic::EditorEngine::instance().getActiveCameraId();
     auto snapshot = Logic::EditorEngine::instance()
-                        .getSyncBuffer("Basic2DCanvas")
+                        .getSyncBuffer(activeCameraId.empty() ? "Basic2DCanvas"
+                                                              : activeCameraId)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
@@ -141,13 +138,23 @@ void AudioWaveformView::update(UIManager* sourceManager)
             ImGui::GetColorU32(ImGuiCol_Separator));
     };
 
-    CLayVBox topContainer;
-    topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
+    CLayVBox    topContainer;
+    const float dpiScale =
+        std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
+    auto toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+    const float rowPadding =
+        std::ceil(std::max(4.0f * dpiScale, style.FramePadding.x));
+    const float spacing =
+        std::ceil(std::max(8.0f * dpiScale, style.ItemSpacing.x));
+    topContainer.setPadding(0, 0, 0, 0)
+        .setSpacing(toLayoutPixels(
+            std::max(4.0f * dpiScale, style.ItemSpacing.y * 0.5f)));
     std::deque<CLayHBox> rows;
     CLayHBox*            currentRow = nullptr;
     float                currentW   = 0.0f;
     float                availW     = ImGui::GetContentRegionAvail().x;
-    float                spacing    = 8.0f;
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
         bool  addSep = false;
@@ -158,13 +165,18 @@ void AudioWaveformView::update(UIManager* sourceManager)
         if ( !currentRow || currentW + totalW > availW ) {
             rows.emplace_back();
             currentRow = &rows.back();
-            currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
+            currentRow
+                ->setPadding(toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding))
+                .setSpacing(toLayoutPixels(spacing));
             topContainer.addLayout(
                 ("Row_" + std::to_string(rows.size())).c_str(),
                 *currentRow,
                 Sizing::Grow(),
                 Sizing::Fit());
-            currentW = 8.0f;  // 4 + 4 padding
+            currentW = rowPadding * 2.0f;
         } else {
             addSep = true;
         }
@@ -268,9 +280,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
             // 1. 绘制主画布可见范围包围框
             auto session = Logic::EditorEngine::instance().getActiveSession();
             if ( session ) {
-                auto snapshot = Logic::EditorEngine::instance()
-                                    .getSyncBuffer("Basic2DCanvas")
-                                    ->getReadingSnapshot();
+                std::string activeCameraId =
+                    Logic::EditorEngine::instance().getActiveCameraId();
+                auto snapshot =
+                    Logic::EditorEngine::instance()
+                        .getSyncBuffer(activeCameraId.empty() ? "Basic2DCanvas"
+                                                              : activeCameraId)
+                        ->getReadingSnapshot();
                 if ( snapshot && snapshot->hasBeatmap ) {
                     double boxX[2] = { snapshot->visibleTimeStart,
                                        snapshot->visibleTimeEnd };
@@ -331,8 +347,12 @@ void AudioWaveformView::update(UIManager* sourceManager)
                     ImPlotSpec(ImPlotProp_LineColor, ImVec4(0, 1, 0, 0.6f)));
 
                 if ( s_lastActive[chanIdx] ) {
+                    std::string activeCameraId =
+                        Logic::EditorEngine::instance().getActiveCameraId();
                     auto snapshot = Logic::EditorEngine::instance()
-                                        .getSyncBuffer("Basic2DCanvas")
+                                        .getSyncBuffer(activeCameraId.empty()
+                                                           ? "Basic2DCanvas"
+                                                           : activeCameraId)
                                         ->getReadingSnapshot();
                     if ( snapshot && snapshot->hasBeatmap ) {
                         double offsetStart =
@@ -366,7 +386,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
-                ImGui::SetTooltip("%.3fs", hoverAudioTime);
+                const auto timeText =
+                    Canvas::formatCanvasTime(hoverVisualTime, snapshot);
+                ImGui::SetTooltip("%s", timeText.c_str());
 
                 if ( ImGui::IsItemActive() ) {
                     ImVec2 mousePos = ImGui::GetMousePos();

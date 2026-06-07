@@ -2,6 +2,12 @@
 
 add_library(Audio STATIC
 	src/AudioManager.cpp
+	src/AudioManager_BGM.cpp
+	src/AudioManager_EQ.cpp
+	src/AudioManager_Mix.cpp
+	src/AudioManager_Playback.cpp
+	src/AudioManager_SFX.cpp
+	src/AudioSpeedExportService.cpp
 	src/SoundEffectPool.cpp
 )
 
@@ -10,6 +16,7 @@ target_link_libraries(Audio
 		ICE::IonCachyEngine
 		Log
 		Event
+		Runtime
 		3rd_rubberband
 		MMM
 		Config
@@ -33,3 +40,8 @@ if(WIN32)
 endif()
 
 target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_executable(AudioSpeedExportServiceTest
+	tests/AudioSpeedExportServiceTest.cpp
+)
+target_link_libraries(AudioSpeedExportServiceTest PRIVATE Audio Log Config)

@@ -137,8 +137,7 @@ VKContext::VKContext()
                      e.command) ) {
                 auto& cmd =
                     std::get<MMM::Logic::CmdUpdateEditorConfig>(e.command);
-                setVSync(cmd.config.settings.frameLimit ==
-                         MMM::Config::FrameLimitPreference::VSync);
+                setFrameLimitPresentMode(cmd.config.settings.frameLimit);
                 applyTheme();
             }
         });
@@ -274,8 +273,7 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 在创建交换链之前，根据配置预设全局呈现模式，避免启动后再次重建
     updateGlobalPresentMode(
-        Config::AppConfig::instance().getEditorSettings().frameLimit ==
-        Config::FrameLimitPreference::VSync);
+        Config::AppConfig::instance().getEditorSettings().frameLimit);
 
     // 初始化逻辑设备
     initLogicDevice();
@@ -348,16 +346,20 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
     XDEBUG("Swapchain recreation finished.");
 }
 
-/**
- * @brief 切换垂直同步
- */
-void VKContext::setVSync(bool enabled)
+/// @brief 根据帧率限制策略切换交换链呈现模式。
+void VKContext::setFrameLimitPresentMode(
+    Config::FrameLimitPreference frameLimit)
 {
+    auto nextPresentMode = selectPresentMode(frameLimit);
+    if ( VKSwapchain::s_globalPresentMode == nextPresentMode ) {
+        return;
+    }
+
     // 1. 等待设备空闲，因为要修改交换链
     (void)m_vkLogicalDevice.waitIdle();
 
     // 2. 修改交换链配置类里的 PresentMode 偏好
-    updateGlobalPresentMode(enabled);
+    VKSwapchain::s_globalPresentMode = nextPresentMode;
 
     // 3. 标记需要重建
     if ( m_swapchain ) {
@@ -365,31 +367,41 @@ void VKContext::setVSync(bool enabled)
     }
 }
 
-/**
- * @brief 仅更新全局呈现模式参数，不触发重建
- */
-void VKContext::updateGlobalPresentMode(bool enabled)
+/// @brief 根据帧率限制策略选择当前设备支持的呈现模式。
+vk::PresentModeKHR VKContext::selectPresentMode(
+    Config::FrameLimitPreference frameLimit) const
 {
-    if ( enabled ) {
-        VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eFifo;
-    } else {
-        // fallback 为立即模式
-        VKSwapchain::s_globalPresentMode = vk::PresentModeKHR::eImmediate;
-        // 查询物理设备支持的呈现模式
-        if ( m_vkPhysicalDevice && m_vkSurface ) {
-            std::vector<vk::PresentModeKHR> supported_presentModes =
-                m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface).value;
-            for ( const auto& presentMode : supported_presentModes ) {
-                // 无限帧数优选mailbox模式
-                // 直接取当前时刻gpu产出的最新的图像用于绘制(刷新率高且不撕裂)
-                if ( presentMode == vk::PresentModeKHR::eMailbox ) {
-                    VKSwapchain::s_globalPresentMode =
-                        vk::PresentModeKHR::eMailbox;
-                    break;
-                }
+    if ( frameLimit == Config::FrameLimitPreference::VSync ) {
+        return vk::PresentModeKHR::eFifo;
+    }
+
+    bool supportsImmediate = false;
+    bool supportsMailbox   = false;
+    if ( m_vkPhysicalDevice && m_vkSurface ) {
+        std::vector<vk::PresentModeKHR> supportedPresentModes =
+            m_vkPhysicalDevice.getSurfacePresentModesKHR(m_vkSurface).value;
+        for ( const auto& presentMode : supportedPresentModes ) {
+            if ( presentMode == vk::PresentModeKHR::eImmediate ) {
+                supportsImmediate = true;
+            } else if ( presentMode == vk::PresentModeKHR::eMailbox ) {
+                supportsMailbox = true;
             }
         }
     }
+
+    if ( supportsImmediate ) {
+        return vk::PresentModeKHR::eImmediate;
+    }
+    if ( supportsMailbox ) {
+        return vk::PresentModeKHR::eMailbox;
+    }
+    return vk::PresentModeKHR::eFifo;
+}
+
+/// @brief 仅更新全局呈现模式参数，不触发重建。
+void VKContext::updateGlobalPresentMode(Config::FrameLimitPreference frameLimit)
+{
+    VKSwapchain::s_globalPresentMode = selectPresentMode(frameLimit);
 }
 
 /**

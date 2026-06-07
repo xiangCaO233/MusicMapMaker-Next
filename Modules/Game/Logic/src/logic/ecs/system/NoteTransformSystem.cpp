@@ -6,16 +6,19 @@
 namespace MMM::Logic::System
 {
 
+/// @brief 更新音符逻辑坐标缓存。
+/// @warning 逻辑热路径：每个 Session update 调用；完整 registry sort/view
+/// 遍历只允许在 cacheDirty 或 forceRebuild 时执行。
 void NoteTransformSystem::update(entt::registry&             registry,
                                  entt::registry&             timelineRegistry,
                                  double                      currentTime,
                                  const Config::EditorConfig& config,
-                                 bool                        forceRebuild)
+                                 MMM::BeatMap* beatmap, bool forceRebuild)
 {
     auto& cache      = timelineRegistry.ctx().get<ScrollCache>();
     bool  cacheDirty = cache.isDirty;
     if ( cache.isDirty ) {
-        cache.rebuild(timelineRegistry, config);
+        cache.rebuild(timelineRegistry, config, beatmap);
     }
 
     if ( !cacheDirty && !forceRebuild ) {
@@ -35,24 +38,28 @@ void NoteTransformSystem::update(entt::registry&             registry,
         const auto& note      = noteView.get<const NoteComponent>(entity);
 
         double noteAbsY = cache.getAbsY(note.m_timestamp);
-        float  relY     = static_cast<float>(noteAbsY - currentAbsY);
+        double noteHs   = cache.getHsAt(note.m_timestamp);
+        float  relY     = static_cast<float>((noteAbsY - currentAbsY) * noteHs);
 
         float minY = relY;
         float maxY = relY + 20.0f;
 
         if ( note.m_type == ::MMM::NoteType::HOLD ) {
             double endAbsY = cache.getAbsY(note.m_timestamp + note.m_duration);
-            maxY           = static_cast<float>(endAbsY - currentAbsY);
+            maxY = static_cast<float>((endAbsY - currentAbsY) * noteHs);
         } else if ( note.m_type == ::MMM::NoteType::POLYLINE &&
                     !note.m_subNotes.empty() ) {
             for ( const auto& sub : note.m_subNotes ) {
                 double subAbsY = cache.getAbsY(sub.timestamp);
-                float  subRelY = static_cast<float>(subAbsY - currentAbsY);
-                minY           = std::min(minY, subRelY);
+                double subHs   = cache.getHsAt(sub.timestamp);
+                float  subRelY =
+                    static_cast<float>((subAbsY - currentAbsY) * subHs);
+                minY = std::min(minY, subRelY);
 
                 double subEndAbsY = cache.getAbsY(sub.timestamp + sub.duration);
-                float subEndRelY = static_cast<float>(subEndAbsY - currentAbsY);
-                maxY             = std::max(maxY, subEndRelY + 20.0f);
+                float  subEndRelY =
+                    static_cast<float>((subEndAbsY - currentAbsY) * subHs);
+                maxY = std::max(maxY, subEndRelY + 20.0f);
             }
         }
 

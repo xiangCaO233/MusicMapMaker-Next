@@ -43,6 +43,14 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdChangeTool& cmd);
 
+    /// @brief 处理设置画笔自定义颜色的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdSetBrushNoteColor& cmd);
+
+    /// @brief 处理设置画笔完整调色盘的命令
+    /// @param cmd 命令数据
+    void handleCommand(const CmdSetBrushNotePalette& cmd);
+
     /// @brief 处理更新鼠标位置的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetMousePosition& cmd);
@@ -87,6 +95,8 @@ public:
     void handleCommand(const CmdUpdateTrackCount& cmd);
 
     /// @brief 更新当前所有实体的框选选中状态
+    /// @warning 逻辑热路径：仅在框选脏标记置位时调用；内部会遍历所有音符，
+    /// 禁止改为每帧无条件执行。
     /// @param forceFullSync 是否强制全量同步（忽略加选模式）
     void updateMarqueeSelection(bool forceFullSync = false);
 

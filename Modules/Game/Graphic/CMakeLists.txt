@@ -9,6 +9,7 @@ add_library(Graphic STATIC
  src/glfw/GLFWCallback.cpp
  src/glfw/NativeWindow.cpp
  src/glfw/adapters/Win32WindowAdapter.cpp
+ src/glfw/adapters/X11WindowAdapter.cpp
  src/imguivk/context/VKContext.cpp
  src/imguivk/context/VKContextGLFW.cpp
  src/imguivk/context/VKContextDevice.cpp
@@ -41,6 +42,7 @@ target_link_libraries(Graphic
   Event
   Config
   Common
+  Runtime
   3rd_glfw
   3rd_glm
   3rd_imgui
@@ -53,4 +55,17 @@ target_link_libraries(Graphic
 
 if(WIN32)
     target_link_libraries(Graphic PRIVATE dwmapi comctl32)
+endif()
+
+if(UNIX AND NOT APPLE)
+    find_package(X11)
+    if(X11_FOUND)
+        target_compile_definitions(Graphic PRIVATE MMM_ENABLE_X11_FRAME_INTERACTION)
+        target_include_directories(Graphic PRIVATE ${X11_INCLUDE_DIR})
+        target_link_libraries(Graphic PRIVATE ${X11_LIBRARIES})
+        if(X11_Xext_FOUND)
+            target_compile_definitions(Graphic PRIVATE MMM_ENABLE_X11_FRAME_SHAPE)
+            target_link_libraries(Graphic PRIVATE ${X11_Xext_LIB})
+        endif()
+    endif()
 endif()

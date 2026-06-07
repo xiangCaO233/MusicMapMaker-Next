@@ -48,7 +48,7 @@ public:
     {
     public:
         RenderContext(IRenderableView* view, const char* window_title,
-                      int width, int height)
+                      int width, int height, bool* p_open = nullptr)
             : m_view(view), m_width(width), m_height(height)
         {
             // 1. 在 Begin 之前设置窗口大小
@@ -64,9 +64,9 @@ public:
             // 应用窗口标题字体
             auto&   skinMgr   = Config::SkinManager::instance();
             ImFont* titleFont = skinMgr.getFont("title");
-            if ( titleFont ) ImGui::PushFont(titleFont);
+            if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
-            ImGui::Begin(window_title);
+            ImGui::Begin(window_title, p_open);
 
             // Begin 后立即弹出，确保后续内容使用默认字体
             if ( titleFont ) ImGui::PopFont();
@@ -124,6 +124,8 @@ protected:
 
     /**
      * @brief 录制具体的绘制指令 (由 UI 层实现)
+     * @warning 热路径：每帧离屏命令录制时执行；只遍历 Brush
+     * 已缓存命令，禁止资源加载和阻塞等待。
      */
     void onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
                           vk::PipelineLayout      pipelineLayout,

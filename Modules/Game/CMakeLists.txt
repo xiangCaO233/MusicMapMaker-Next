@@ -6,6 +6,8 @@ add_subdirectory("Logic")
 add_subdirectory("UI")
 add_subdirectory("Canvas")
 
+target_link_libraries(UI PRIVATE Canvas)
+
 add_library(Game STATIC
 	src/GameLoop.cpp
 )
@@ -13,9 +15,10 @@ add_library(Game STATIC
 target_link_libraries(Game
 	PUBLIC
 		Log
+		Runtime
 		Common
-		Canvas
 		UI
+		Canvas
 		Graphic
 		Logic
 		Audio

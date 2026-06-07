@@ -21,11 +21,24 @@ VKOffScreenRenderer::~VKOffScreenRenderer()
 
 
 /// @brief 录制gpu指令
+/// @warning 热路径：每帧离屏命令录制时执行；扩容分支会 waitIdle 并阻塞
+/// GPU，必须保持为容量不足时的低频路径。
 void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                                      uint32_t           frameIndex)
 {
     if ( frameIndex >= MAX_FRAMES_IN_FLIGHT ) {
         XERROR("VKOffScreenRenderer: frameIndex out of bounds!");
+        return;
+    }
+
+    /// @brief 当前离屏资源是否已经完成创建。
+    const bool resourcesReady =
+        m_device && m_framebuffer && m_offScreenRenderPass &&
+        m_mainBrushRenderPipeline && frameIndex < m_vertexBuffers.size() &&
+        frameIndex < m_indexBuffers.size() &&
+        frameIndex < m_uniformBuffers.size() &&
+        frameIndex < m_offScreenDescriptorSets.size();
+    if ( !resourcesReady ) {
         return;
     }
 
@@ -153,6 +166,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
             m_indexBuffers[frameIndex]->m_vkBuffer, 0, vk::IndexType::eUint32);
 
         // 6. 解析 DrawCmds 进行批次渲染 (回调到 UI 实现层)
+        m_scissorScaleX = 0.0f;
+        m_scissorScaleY = 0.0f;
         onRecordDrawCmds(cmdBuf,
                          m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
                          m_mainBrushRenderPipeline->getDescriptorSetLayout(),
@@ -161,11 +176,22 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     }
     cmdBuf.endRenderPass();
 
-    // 7. 发光特效：如果有 glowShader 且启用了光效，进行多轮渲染
-    if ( m_glowBrushRenderPipeline && m_blurRenderPipeline &&
-         m_compositeRenderPipeline ) {
+    // 7. 发光特效：只有当前帧存在发光命令时才执行全屏模糊和合成。
+    const int glowPasses = MMM::Config::SkinManager::instance().getGlowPasses();
+    const float glowIntensity =
+        MMM::Config::SkinManager::instance().getGlowIntensity();
+    if ( hasGlowDrawCmds() && glowPasses > 0 && glowIntensity > 0.0f &&
+         m_glowBrushRenderPipeline && m_blurRenderPipeline &&
+         m_compositeRenderPipeline && m_glowWidth > 0 && m_glowHeight > 0 &&
+         m_logicalWidth > 0 && m_logicalHeight > 0 ) {
+        const vk::Rect2D glowRenderArea({ 0, 0 },
+                                        { m_glowWidth, m_glowHeight });
+        const vk::Rect2D mainRenderArea({ 0, 0 }, { m_width, m_height });
         // --- 7.1. 渲染发光几何体到 m_glowFramebuffer ---
-        rpBegin.setFramebuffer(m_glowFramebuffer);
+        rpBegin.setRenderPass(m_offScreenRenderPass->getRenderPass())
+            .setFramebuffer(m_glowFramebuffer)
+            .setRenderArea(glowRenderArea)
+            .setClearValues(clearValue);
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             glm::mat4    ortho = glm::ortho(0.0f,
@@ -174,9 +200,13 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                                             (float)m_logicalHeight - m_yOffset,
                                             -1.0f,
                                             1.0f);
-            vk::Viewport viewport(
-                0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
-            vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
+            vk::Viewport viewport(0.0f,
+                                  0.0f,
+                                  (float)m_glowWidth,
+                                  (float)m_glowHeight,
+                                  0.0f,
+                                  1.0f);
+            vk::Rect2D   scissor({ 0, 0 }, { m_glowWidth, m_glowHeight });
             cmdBuf.setViewport(0, 1, &viewport);
             cmdBuf.setScissor(0, 1, &scissor);
 
@@ -207,20 +237,29 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                                    vk::IndexType::eUint32);
 
             // 绘制发光几何体
+            m_scissorScaleX = static_cast<float>(m_glowWidth) /
+                              static_cast<float>(m_logicalWidth);
+            m_scissorScaleY = static_cast<float>(m_glowHeight) /
+                              static_cast<float>(m_logicalHeight);
+
             onRecordGlowCmds(
                 cmdBuf,
                 m_glowBrushRenderPipeline->m_graphicsPipelineLayout,
                 m_glowBrushRenderPipeline->getDescriptorSetLayout(),
                 m_offScreenDescriptorSets[frameIndex],
                 frameIndex);
+            m_scissorScaleX = 0.0f;
+            m_scissorScaleY = 0.0f;
         }
         cmdBuf.endRenderPass();
 
         // --- 7.2. Ping-Pong 模糊渲染 ---
-        int passes = MMM::Config::SkinManager::instance().getGlowPasses();
+        int passes = glowPasses;
         if ( passes > 0 ) {
             // 设置模糊专用的 RenderPass (不 Clear)
-            rpBegin.setRenderPass(m_blurRenderPass->getRenderPass());
+            rpBegin.setRenderPass(m_blurRenderPass->getRenderPass())
+                .setRenderArea(glowRenderArea)
+                .setClearValues(clearValue);
 
             bool ping = true;
             for ( int i = 0; i < passes; ++i ) {
@@ -236,11 +275,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                 {
                     vk::Viewport viewport(0.0f,
                                           0.0f,
-                                          (float)m_width,
-                                          (float)m_height,
+                                          (float)m_glowWidth,
+                                          (float)m_glowHeight,
                                           0.0f,
                                           1.0f);
-                    vk::Rect2D   scissor({ 0, 0 }, { m_width, m_height });
+                    vk::Rect2D scissor({ 0, 0 }, { m_glowWidth, m_glowHeight });
                     cmdBuf.setViewport(0, 1, &viewport);
                     cmdBuf.setScissor(0, 1, &scissor);
 
@@ -260,10 +299,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                         glm::vec4 dirAndPasses;
                         glm::vec4 pad1, pad2, pad3;
                     } pc;
-                    pc.dirAndPasses = glm::vec4(ping ? 1.0f / m_width : 0.0f,
-                                                ping ? 0.0f : 1.0f / m_height,
-                                                0.0f,
-                                                0.0f);
+                    pc.dirAndPasses =
+                        glm::vec4(ping ? 1.0f / m_glowWidth : 0.0f,
+                                  ping ? 0.0f : 1.0f / m_glowHeight,
+                                  0.0f,
+                                  0.0f);
 
                     cmdBuf.pushConstants(
                         m_blurRenderPipeline->m_graphicsPipelineLayout,
@@ -281,8 +321,10 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
             }
 
             // --- 7.3. 叠加最终结果到主画布 (m_image) ---
-            rpBegin.setRenderPass(m_compositeRenderPass->getRenderPass());
-            rpBegin.setFramebuffer(m_framebuffer);  // render to main image
+            rpBegin.setRenderPass(m_compositeRenderPass->getRenderPass())
+                .setFramebuffer(m_framebuffer)
+                .setRenderArea(mainRenderArea)
+                .setClearValues(clearValue);
             cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
             {
                 vk::Viewport viewport(
@@ -311,8 +353,7 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
                     glm::vec4 dirAndPasses;
                     glm::vec4 pad1, pad2, pad3;
                 } pc;
-                float intensity =
-                    MMM::Config::SkinManager::instance().getGlowIntensity();
+                float intensity = glowIntensity;
                 pc.dirAndPasses = glm::vec4(0.0f, 0.0f, 0.0f, intensity);
 
                 cmdBuf.pushConstants(
@@ -327,6 +368,67 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
             }
             cmdBuf.endRenderPass();
         }
+    }
+
+    // 8. 最终覆盖层：用于重叠检测等“滤镜”效果，保证绘制在发光合成之后。
+    if ( hasOverlayDrawCmds() && m_compositeRenderPass &&
+         m_mainBrushRenderPipeline && m_width > 0 && m_height > 0 &&
+         m_logicalWidth > 0 && m_logicalHeight > 0 ) {
+        const vk::Rect2D overlayRenderArea({ 0, 0 }, { m_width, m_height });
+        rpBegin.setRenderPass(m_compositeRenderPass->getRenderPass())
+            .setFramebuffer(m_framebuffer)
+            .setRenderArea(overlayRenderArea)
+            .setClearValues(clearValue);
+        cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+        {
+            glm::mat4    ortho = glm::ortho(0.0f,
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
+            vk::Viewport viewport(
+                0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
+            vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
+            cmdBuf.setViewport(0, 1, &viewport);
+            cmdBuf.setScissor(0, 1, &scissor);
+
+            cmdBuf.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                                m_mainBrushRenderPipeline->m_graphicsPipeline);
+
+            cmdBuf.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                0,
+                1,
+                &m_offScreenDescriptorSets[frameIndex],
+                0,
+                nullptr);
+
+            cmdBuf.pushConstants(
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                vk::ShaderStageFlagBits::eVertex |
+                    vk::ShaderStageFlagBits::eFragment,
+                0,
+                sizeof(glm::mat4),
+                &ortho);
+
+            cmdBuf.bindVertexBuffers(
+                0, m_vertexBuffers[frameIndex]->m_vkBuffer, { 0 });
+            cmdBuf.bindIndexBuffer(m_indexBuffers[frameIndex]->m_vkBuffer,
+                                   0,
+                                   vk::IndexType::eUint32);
+
+            m_scissorScaleX = 0.0f;
+            m_scissorScaleY = 0.0f;
+            onRecordOverlayCmds(
+                cmdBuf,
+                m_mainBrushRenderPipeline->m_graphicsPipelineLayout,
+                m_mainBrushRenderPipeline->getDescriptorSetLayout(),
+                m_offScreenDescriptorSets[frameIndex],
+                frameIndex);
+        }
+        cmdBuf.endRenderPass();
     }
 }
 

@@ -12,6 +12,7 @@
 namespace MMM::UI
 {
 class UIManager;
+class IParallelUiPreparable;
 
 /// @brief 视图类型判别枚举,替代 dynamic_cast (支持 -fno-rtti)
 enum class ViewType : uint8_t {
@@ -47,6 +48,9 @@ public:
     /// @brief 安全转换为 IRenderableView
     virtual class IRenderableView* asRenderableView() { return nullptr; }
 
+    /// @brief 安全转换为可并行准备 UI 数据的接口
+    virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }
+
     /// @brief 获取实际实例指针，用于在禁用 RTTI 且存在虚继承时进行下行转换
     virtual void* getActualInstance() { return this; }
 
@@ -72,18 +76,20 @@ class LayoutContext final
 {
 
 public:
+    /// @brief 创建布局上下文并开始 ImGui 窗口
     LayoutContext(CLayWrapperCore::WindowContext& clayout_ctx,
                   const std::string&              iwindow_name,
                   bool                            custom_window_flags = false,
                   ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
-                  bool*            p_open      = nullptr)
+                  bool* p_open = nullptr, ImGuiID dockId = 0,
+                  ImGuiCond dockCond = ImGuiCond_Always)
     {
         CLayWrapperCore::instance().makeCurrent(clayout_ctx.context);
 
         // 应用窗口标题字体
         auto&   skinMgr   = Config::SkinManager::instance();
         ImFont* titleFont = skinMgr.getFont("title");
-        if ( titleFont ) ImGui::PushFont(titleFont);
+        if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
         // 在 Begin 之前，推入样式变量，将窗口内边距设为 0，并设置圆角
         auto& editorSettings =
@@ -110,6 +116,10 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, frameRound);
         ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
+
+        if ( dockId != 0 ) {
+            ImGui::SetNextWindowDockID(dockId, dockCond);
+        }
 
         if ( custom_window_flags ) {
             ImGui::Begin(iwindow_name.c_str(), p_open, windowFlags);

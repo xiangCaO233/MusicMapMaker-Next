@@ -1,14 +1,54 @@
 #include "logic/session/SessionUtils.h"
+#include "audio/AudioManager.h"
 #include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace MMM::Logic::SessionUtils
 {
+
+bool isMainCanvasCameraId(const std::string& cameraId)
+{
+    return cameraId != "Preview" && cameraId != "PreviewCanvas" &&
+           cameraId != "Timeline" && cameraId != "AudioWaveform" &&
+           cameraId != "AudioSpectrum";
+}
+
+const CameraInfo* findMainCanvasCamera(
+    const std::unordered_map<std::string, CameraInfo>& cameras)
+{
+    auto itLegacy = cameras.find("Basic2DCanvas");
+    if ( itLegacy != cameras.end() ) {
+        return &itLegacy->second;
+    }
+
+    for ( const auto& [cameraId, camera] : cameras ) {
+        if ( isMainCanvasCameraId(cameraId) ) {
+            return &camera;
+        }
+    }
+
+    return nullptr;
+}
+
+double getEffectiveTotalTimeSeconds(const SessionContext& ctx)
+{
+    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    if ( ctx.currentBeatmap ) {
+        const double mapLengthMs =
+            ctx.currentBeatmap->m_baseMapMetadata.map_length;
+        if ( mapLengthMs > 0.0 && std::isfinite(mapLengthMs) ) {
+            totalTime = std::max(totalTime, mapLengthMs / 1000.0);
+        }
+    }
+    return std::max(0.0, totalTime);
+}
 
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
@@ -26,18 +66,20 @@ SnapResult getSnapResult(
 
     if ( bpmEvents.empty() ) return result;
 
-    // 只有在首个 BPM 事件之后才进行磁吸计算
-    if ( rawTime < bpmEvents[0]->m_timestamp ) return result;
+    /// @brief 首个 BPM 前是否沿用首个 BPM 向前反推分拍网格。
+    const bool allowBeforeFirstTiming =
+        config.visual.drawBeatLinesBeforeFirstTiming;
+    if ( rawTime < bpmEvents[0]->m_timestamp && !allowBeforeFirstTiming )
+        return result;
 
     float  judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
     double currentAbsY   = cache->getAbsY(visualTime);
 
     float renderScaleY = 1.0f;
     if ( camera.id == "Preview" || camera.id == "PreviewCanvas" ) {
-        auto  itMain             = cameras.find("Basic2DCanvas");
-        float mainViewportHeight = itMain != cameras.end()
-                                       ? itMain->second.viewportHeight
-                                       : camera.viewportHeight;
+        const auto* mainCamera = findMainCanvasCamera(cameras);
+        float       mainViewportHeight =
+            mainCamera ? mainCamera->viewportHeight : camera.viewportHeight;
 
         float mainEffectiveH =
             (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
@@ -62,7 +104,7 @@ SnapResult getSnapResult(
         if ( rawTime < bpmTime && i > 0 ) continue;
         if ( rawTime > nextBpmTime ) continue;
 
-        double      bVal = bpmVal;
+        double bVal = bpmVal;
         if ( bVal <= 0.0 ) {
             bVal = 120.0;
             // 获取全局活动 Session 里的 Beatmap 预设 BPM
@@ -77,7 +119,7 @@ SnapResult getSnapResult(
         double beatDuration = 60.0 / bVal;
         double stepDuration = beatDuration / beatDivisor;
 
-        double relativeTime    = rawTime - bpmTime;
+        double relativeTime = rawTime - bpmTime;
         double stepCount;
         if ( config.settings.snapFloor ) {
             stepCount = std::floor(relativeTime / stepDuration + 1e-6);
@@ -92,7 +134,8 @@ SnapResult getSnapResult(
         float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
-        if ( config.settings.scrollSnap || std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
+        if ( config.settings.scrollSnap ||
+             std::abs(snapY - mouseY) <= config.visual.snapThreshold ) {
             result.isSnapped   = true;
             result.snappedTime = nearestStepTime;
 
@@ -121,12 +164,46 @@ SnapResult getSnapResult(
 
 void syncHitIndex(SessionContext& ctx)
 {
+    ensureHitEvents(ctx);
     auto it = std::lower_bound(
         ctx.hitEvents.begin(),
         ctx.hitEvents.end(),
         System::HitFXSystem::HitEvent{ ctx.visualTime, ::MMM::NoteType::NOTE });
     ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
     ctx.nextPredictHitIndex = ctx.nextHitIndex;
+}
+
+void ensureBpmEvents(SessionContext& ctx)
+{
+    if ( !ctx.isBpmEventsDirty ) return;
+
+    ctx.bpmEvents.clear();
+    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : tlView ) {
+        const auto& tl = tlView.get<const TimelineComponent>(entity);
+        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) {
+            ctx.bpmEvents.push_back(&tl);
+        }
+    }
+    std::stable_sort(
+        ctx.bpmEvents.begin(),
+        ctx.bpmEvents.end(),
+        [](const TimelineComponent* a, const TimelineComponent* b) {
+            return a->m_timestamp < b->m_timestamp;
+        });
+    ctx.isBpmEventsDirty = false;
+}
+
+void markHitEventsDirty(SessionContext& ctx)
+{
+    ctx.isHitEventsDirty = true;
+}
+
+void ensureHitEvents(SessionContext& ctx)
+{
+    if ( ctx.isHitEventsDirty ) {
+        rebuildHitEvents(ctx);
+    }
 }
 
 void rebuildHitEvents(SessionContext& ctx)
@@ -194,6 +271,7 @@ void rebuildHitEvents(SessionContext& ctx)
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
+    ctx.isHitEventsDirty = false;
     syncHitIndex(ctx);
 
     if ( ctx.currentBeatmap ) {

@@ -1,9 +1,12 @@
+#include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <utility>
 
@@ -192,8 +195,16 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     m_physicalDevice = phyDevice;
 
     // 赋值实际尺寸
-    uint32_t creationW = m_targetWidth;
-    uint32_t creationH = m_targetHeight;
+    uint32_t    creationW           = m_targetWidth;
+    uint32_t    creationH           = m_targetHeight;
+    const float glowResolutionScale = std::clamp(
+        Config::SkinManager::instance().getValue("glow.resolution_scale", 0.5f),
+        0.125f,
+        1.0f);
+    const uint32_t glowCreationW = std::max<uint32_t>(
+        1, static_cast<uint32_t>(std::ceil(creationW * glowResolutionScale)));
+    const uint32_t glowCreationH = std::max<uint32_t>(
+        1, static_cast<uint32_t>(std::ceil(creationH * glowResolutionScale)));
 
     // 创建离屏渲染流程
     m_offScreenRenderPass =
@@ -398,8 +409,8 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
                           swapchain,
                           commandPool,
                           queue,
-                          creationW,
-                          creationH,
+                          glowCreationW,
+                          glowCreationH,
                           m_glowImage,
                           m_glowImageMemory,
                           m_glowImageView,
@@ -411,8 +422,8 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
                           swapchain,
                           commandPool,
                           queue,
-                          creationW,
-                          creationH,
+                          glowCreationW,
+                          glowCreationH,
                           m_pingImage,
                           m_pingImageMemory,
                           m_pingImageView,
@@ -424,8 +435,8 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
                           swapchain,
                           commandPool,
                           queue,
-                          creationW,
-                          creationH,
+                          glowCreationW,
+                          glowCreationH,
                           m_pongImage,
                           m_pongImageMemory,
                           m_pongImageView,
@@ -491,11 +502,13 @@ void VKOffScreenRenderer::reCreateFrameBuffer(
     createDescriptPool();
     createDescriptSets();
 
-    m_width  = creationW;
-    m_height = creationH;
+    m_width      = creationW;
+    m_height     = creationH;
+    m_glowWidth  = glowCreationW;
+    m_glowHeight = glowCreationH;
 
     m_lastAllocatedCount = maxVertexCount;
-    m_need_reCreate.store(false);
+    m_need_reCreate.store(false, std::memory_order_relaxed);
 
     XDEBUG(
         "VKOffScreenRenderer recreate successfully[{}x{}]", m_width, m_height);
@@ -774,6 +787,11 @@ void VKOffScreenRenderer::releaseResources()
         m_device.destroyImageView(m_imageView);
         m_device.destroyImage(m_image);
         m_device.freeMemory(m_imageMemory);
+        m_framebuffer = VK_NULL_HANDLE;
+        m_sampler     = VK_NULL_HANDLE;
+        m_imageView   = VK_NULL_HANDLE;
+        m_image       = VK_NULL_HANDLE;
+        m_imageMemory = VK_NULL_HANDLE;
 
         if ( m_glowFramebuffer ) m_device.destroyFramebuffer(m_glowFramebuffer);
         if ( m_pingFramebuffer ) m_device.destroyFramebuffer(m_pingFramebuffer);
@@ -796,6 +814,8 @@ void VKOffScreenRenderer::releaseResources()
         m_glowImageMemory = m_pingImageMemory = m_pongImageMemory =
             VK_NULL_HANDLE;
         m_glowSampler = VK_NULL_HANDLE;
+        m_glowWidth = m_glowHeight = 0;
+        m_scissorScaleX = m_scissorScaleY = 0.0f;
 
         m_mainBrushRenderPipeline.reset();
         m_glowBrushRenderPipeline.reset();
@@ -808,6 +828,11 @@ void VKOffScreenRenderer::releaseResources()
         m_vertexBuffers.clear();
         m_indexBuffers.clear();
         m_uniformBuffers.clear();
+        m_offScreenDescriptorSets.clear();
+        m_pingDescriptorSets.clear();
+        m_pongDescriptorSets.clear();
+        m_glowDescriptorSets.clear();
+        m_lastAllocatedCount = 0;
     }
 }
 

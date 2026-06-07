@@ -2,6 +2,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
@@ -24,16 +25,24 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.noteRegistry.clear();
     ctx.timelineRegistry.clear();
     ctx.actionStack.clear();
+    ctx.sortedNoteEntities.clear();
+    ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.isNoteOrderDirty = true;
+    ctx.isNotePruneDirty = false;
+    ctx.isNoteStatsDirty = true;
     Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
-    ctx.isPlaying      = false;
-    ctx.currentTime    = 0.0;
-    ctx.currentBeatmap = beatmap;
+    ctx.isPlaying               = false;
+    ctx.isMainAudioSyncFollower = false;
+    ctx.currentTime             = 0.0;
+    ctx.currentBeatmap          = beatmap;
 
     if ( !beatmap ) {
         ctx.hitEvents.clear();
-        ctx.nextHitIndex = 0;
+        ctx.nextHitIndex        = 0;
+        ctx.nextPredictHitIndex = 0;
+        ctx.isHitEventsDirty    = false;
         return;
     }
 
@@ -126,6 +135,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             0.0,
             track);
         nc.m_metadata = note.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -147,6 +157,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             hold.m_duration / 1000.0,   // 毫秒转秒
             track);
         nc.m_metadata = hold.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -169,6 +180,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                                     track,
                                                     flick.m_dtrack);
         nc.m_metadata = flick.m_metadata;
+        loadNoteColorOverridesFromMetadata(nc);
 
         ctx.noteRegistry.emplace<TransformComponent>(
             entity,
@@ -185,6 +197,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         auto& comp = ctx.noteRegistry.emplace<NoteComponent>(
             entity, polyline.m_type, polyline.m_timestamp / 1000.0, 0.0, track);
         comp.m_metadata = polyline.m_metadata;
+        loadNoteColorOverridesFromMetadata(comp);
 
         // 填充子物件并标记它们为 SubNote
         for ( const auto& subNoteRef : polyline.m_subNotes ) {
@@ -214,6 +227,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 sn.dtrack     = f.m_dtrack;
             }
             sn.metadata = subNote.m_metadata;
+            loadNoteColorOverridesFromMetadata(sn);
             comp.m_subNotes.push_back(sn);
         }
 
@@ -306,6 +320,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         }
     }
     std::sort(ctx.hitEvents.begin(), ctx.hitEvents.end());
+    ctx.isHitEventsDirty = false;
 
     XINFO(
         "Loaded new BeatMap with {} notes, {} holds, {} flicks, {} polylines "
@@ -318,6 +333,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
 
     ctx.m_needsTimingsSync = false;
     ctx.m_needsNotesSync   = false;
+    ctx.isNoteOrderDirty   = true;
+    ctx.isNotePruneDirty   = false;
+    ctx.isNoteStatsDirty   = true;
 }
 
 
@@ -374,30 +392,35 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             if ( nc.m_isSubNote ) continue;
             if ( nc.m_type == ::MMM::NoteType::POLYLINE ) continue;
 
+            NoteComponent syncedNote = nc;
+            if ( hasAnyNoteColorOverride(syncedNote.m_customColors) ) {
+                writeNoteColorOverridesToMetadata(syncedNote);
+            }
+
             if ( nc.m_type == ::MMM::NoteType::NOTE ) {
                 Note n;
                 n.m_type      = ::MMM::NoteType::NOTE;
-                n.m_timestamp = nc.m_timestamp * 1000.0;
-                n.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-                n.m_metadata  = nc.m_metadata;
+                n.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                n.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                n.m_metadata  = syncedNote.m_metadata;
                 newNoteData.notes.push_back(std::move(n));
                 newAllNotes.push_back(newNoteData.notes.back());
             } else if ( nc.m_type == ::MMM::NoteType::HOLD ) {
                 Hold h;
                 h.m_type      = ::MMM::NoteType::HOLD;
-                h.m_timestamp = nc.m_timestamp * 1000.0;
-                h.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-                h.m_duration  = nc.m_duration * 1000.0;
-                h.m_metadata  = nc.m_metadata;
+                h.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                h.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                h.m_duration  = syncedNote.m_duration * 1000.0;
+                h.m_metadata  = syncedNote.m_metadata;
                 newNoteData.holds.push_back(std::move(h));
                 newAllNotes.push_back(newNoteData.holds.back());
             } else if ( nc.m_type == ::MMM::NoteType::FLICK ) {
                 Flick f;
                 f.m_type      = ::MMM::NoteType::FLICK;
-                f.m_timestamp = nc.m_timestamp * 1000.0;
-                f.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-                f.m_dtrack    = nc.m_dtrack;
-                f.m_metadata  = nc.m_metadata;
+                f.m_timestamp = syncedNote.m_timestamp * 1000.0;
+                f.m_track     = static_cast<uint32_t>(syncedNote.m_trackIndex);
+                f.m_dtrack    = syncedNote.m_dtrack;
+                f.m_metadata  = syncedNote.m_metadata;
                 newNoteData.flicks.push_back(std::move(f));
                 newAllNotes.push_back(newNoteData.flicks.back());
             }
@@ -407,42 +430,52 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
             const auto& nc = noteView.get<NoteComponent>(entity);
             if ( nc.m_type != ::MMM::NoteType::POLYLINE ) continue;
 
+            NoteComponent syncedPolyline = nc;
+            if ( hasAnyNoteColorOverride(syncedPolyline.m_customColors) ) {
+                writeNoteColorOverridesToMetadata(syncedPolyline);
+            }
+
             Polyline p;
             p.m_type      = ::MMM::NoteType::POLYLINE;
-            p.m_timestamp = nc.m_timestamp * 1000.0;
-            p.m_track     = static_cast<uint32_t>(nc.m_trackIndex);
-            p.m_metadata  = nc.m_metadata;
+            p.m_timestamp = syncedPolyline.m_timestamp * 1000.0;
+            p.m_track     = static_cast<uint32_t>(syncedPolyline.m_trackIndex);
+            p.m_metadata  = syncedPolyline.m_metadata;
 
-            for ( const auto& sub_note : nc.m_subNotes ) {
-                if ( sub_note.type == ::MMM::NoteType::NOTE ) {
+            for ( const auto& sub_note : syncedPolyline.m_subNotes ) {
+                NoteComponent::SubNote syncedSubNote = sub_note;
+                if ( hasAnyNoteColorOverride(syncedSubNote.customColors) ) {
+                    writeNoteColorOverridesToMetadata(syncedSubNote);
+                }
+
+                if ( syncedSubNote.type == ::MMM::NoteType::NOTE ) {
                     Note n;
                     n.m_type      = ::MMM::NoteType::NOTE;
-                    n.m_timestamp = sub_note.timestamp * 1000.0;
-                    n.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                    n.m_metadata  = sub_note.metadata;
+                    n.m_timestamp = syncedSubNote.timestamp * 1000.0;
+                    n.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
+                    n.m_metadata = syncedSubNote.metadata;
                     newNoteData.notes.push_back(std::move(n));
                     auto& ref = newNoteData.notes.back();
                     p.m_subNotes.push_back(ref);
                     newAllNotes.push_back(ref);
-                } else if ( sub_note.type == ::MMM::NoteType::HOLD ) {
+                } else if ( syncedSubNote.type == ::MMM::NoteType::HOLD ) {
                     Hold h;
                     h.m_type      = ::MMM::NoteType::HOLD;
-                    h.m_timestamp = sub_note.timestamp * 1000.0;
-                    h.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                    h.m_duration  = sub_note.duration * 1000.0;
-                    h.m_metadata  = sub_note.metadata;
+                    h.m_timestamp = syncedSubNote.timestamp * 1000.0;
+                    h.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
+                    h.m_duration = syncedSubNote.duration * 1000.0;
+                    h.m_metadata = syncedSubNote.metadata;
                     newNoteData.holds.push_back(std::move(h));
                     auto& ref = newNoteData.holds.back();
                     p.m_subNotes.push_back(ref);
                     p.m_subHolds.push_back(ref);
                     newAllNotes.push_back(ref);
-                } else if ( sub_note.type == ::MMM::NoteType::FLICK ) {
+                } else if ( syncedSubNote.type == ::MMM::NoteType::FLICK ) {
                     Flick f;
                     f.m_type      = ::MMM::NoteType::FLICK;
-                    f.m_timestamp = sub_note.timestamp * 1000.0;
-                    f.m_track     = static_cast<uint32_t>(sub_note.trackIndex);
-                    f.m_dtrack    = sub_note.dtrack;
-                    f.m_metadata  = sub_note.metadata;
+                    f.m_timestamp = syncedSubNote.timestamp * 1000.0;
+                    f.m_track = static_cast<uint32_t>(syncedSubNote.trackIndex);
+                    f.m_dtrack   = syncedSubNote.dtrack;
+                    f.m_metadata = syncedSubNote.metadata;
                     newNoteData.flicks.push_back(std::move(f));
                     auto& ref = newNoteData.flicks.back();
                     p.m_subNotes.push_back(ref);

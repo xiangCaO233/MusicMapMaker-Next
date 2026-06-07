@@ -27,9 +27,9 @@ public:
     {
     }
 
-    void execute(SessionContext& ctx) override;
-    void undo(SessionContext& ctx) override;
-    void redo(SessionContext& ctx) override;
+    void        execute(SessionContext& ctx) override;
+    void        undo(SessionContext& ctx) override;
+    void        redo(SessionContext& ctx) override;
     std::string getName() const override;
 
 private:
@@ -53,14 +53,15 @@ public:
     /// @brief 构造函数
     /// @param entries 批量操作条目列表
     /// @param name 操作描述名称
-    BatchNoteAction(std::vector<Entry> entries, std::string name = "Batch Note Action")
+    BatchNoteAction(std::vector<Entry> entries,
+                    std::string        name = "Batch Note Action")
         : m_entries(std::move(entries)), m_name(std::move(name))
     {
     }
 
-    void execute(SessionContext& ctx) override;
-    void undo(SessionContext& ctx) override;
-    void redo(SessionContext& ctx) override;
+    void        execute(SessionContext& ctx) override;
+    void        undo(SessionContext& ctx) override;
+    void        redo(SessionContext& ctx) override;
     std::string getName() const override;
 
 private:

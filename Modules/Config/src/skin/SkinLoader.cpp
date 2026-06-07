@@ -201,6 +201,8 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     }
 
     sol::table audiosTable = skinTable["audios"];
+    m_data.audioPaths.clear();
+    m_data.audioLeadInSeconds.clear();
     if ( audiosTable.valid() ) {
         parseAudiosRecursive(audiosTable, "");
     }
@@ -290,6 +292,9 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     return true;
 }
 
+/// @brief 递归解析音频配置表。
+/// @param currentTable 当前处理的 Lua 表。
+/// @param prefix 键前缀。
 void SkinManager::parseAudiosRecursive(const sol::table&  currentTable,
                                        const std::string& prefix)
 {
@@ -305,8 +310,27 @@ void SkinManager::parseAudiosRecursive(const sol::table&  currentTable,
                 (m_data.skinPath / Config::utf8ToPath("resources") /
                  Config::utf8ToPath(rpath))
                     .lexically_normal();
+            m_data.audioLeadInSeconds.erase(fullKey);
         } else if ( value.is<sol::table>() ) {
-            parseAudiosRecursive(value.as<sol::table>(), fullKey);
+            sol::table table = value.as<sol::table>();
+            if ( sol::optional<std::string> path = table["path"] ) {
+                m_data.audioPaths[fullKey] =
+                    (m_data.skinPath / Config::utf8ToPath("resources") /
+                     Config::utf8ToPath(path.value()))
+                        .lexically_normal();
+
+                double leadInMs = 0.0;
+                if ( sol::optional<double> valueMs = table["lead_in_ms"] ) {
+                    leadInMs = valueMs.value();
+                } else if ( sol::optional<double> valueMs =
+                                table["leadInMs"] ) {
+                    leadInMs = valueMs.value();
+                }
+                m_data.audioLeadInSeconds[fullKey] =
+                    std::max(0.0, leadInMs) / 1000.0;
+            } else {
+                parseAudiosRecursive(table, fullKey);
+            }
         }
     }
 }
@@ -483,6 +507,18 @@ std::filesystem::path SkinManager::getAudioPath(const std::string& key)
     return "";
 }
 
+/// @brief 获取音效文件开头到有效出声点的延迟。
+/// @param key 音频 ID。
+/// @return 延迟，单位为秒；不存在时返回 0。
+double SkinManager::getAudioLeadInSeconds(const std::string& key) const
+{
+    if ( auto it = m_data.audioLeadInSeconds.find(key);
+         it != m_data.audioLeadInSeconds.end() ) {
+        return it->second;
+    }
+    return 0.0;
+}
+
 std::filesystem::path SkinManager::getAssetPath(const std::string& key)
 {
     if ( auto assetPathit = m_data.assetPaths.find(key);
@@ -510,6 +546,14 @@ const SkinData::CanvasConfig& SkinManager::getCanvasConfig(
     if ( auto canvas_config_it = m_data.canvas_configs.find(canvasName);
          canvas_config_it != m_data.canvas_configs.end() ) {
         return canvas_config_it->second;
+    }
+    // Fallback to "Basic2DCanvas" if not found
+    if ( canvasName != "Basic2DCanvas" ) {
+        if ( auto canvas_config_it =
+                 m_data.canvas_configs.find("Basic2DCanvas");
+             canvas_config_it != m_data.canvas_configs.end() ) {
+            return canvas_config_it->second;
+        }
     }
     XERROR("CanvasConfig key not found: " + canvasName);
     return m_data.null_canvas_config;
@@ -554,6 +598,11 @@ ImFont* SkinManager::getFont(const std::string& key)
 void SkinManager::setFont(const std::string& key, ImFont* font)
 {
     m_data.runtimeFonts[key] = font;
+}
+
+void SkinManager::clearRuntimeFonts()
+{
+    m_data.runtimeFonts.clear();
 }
 
 }  // namespace Config

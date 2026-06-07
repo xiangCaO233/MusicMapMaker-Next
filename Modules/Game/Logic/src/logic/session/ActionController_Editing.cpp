@@ -4,14 +4,17 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <unordered_map>
@@ -20,6 +23,294 @@
 
 namespace MMM::Logic
 {
+
+/// @brief 获取当前会话可用于轨道镜像的轨道数量。
+int getMirrorTrackCount(const SessionContext& ctx)
+{
+    if ( ctx.currentBeatmap &&
+         ctx.currentBeatmap->m_baseMapMetadata.track_count > 0 ) {
+        return ctx.currentBeatmap->m_baseMapMetadata.track_count;
+    }
+    return ctx.trackCount;
+}
+
+/// @brief 对单个 NoteComponent 应用轨道镜像变换。
+void mirrorNoteComponent(NoteComponent& note, int trackCount)
+{
+    if ( trackCount <= 0 ) return;
+
+    note.m_trackIndex = (trackCount - 1) - note.m_trackIndex;
+    if ( note.m_type == ::MMM::NoteType::FLICK ) {
+        note.m_dtrack = -note.m_dtrack;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( auto& sub : note.m_subNotes ) {
+            sub.trackIndex = (trackCount - 1) - sub.trackIndex;
+            if ( sub.type == ::MMM::NoteType::FLICK ) {
+                sub.dtrack = -sub.dtrack;
+            }
+        }
+    }
+}
+
+/// @brief 将调色盘命令颜色转换为 NoteColorOverrides。
+NoteColorOverrides makeNoteColorOverrides(
+    const std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT>& colors)
+{
+    NoteColorOverrides overrides;
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        setNoteColorOverride(overrides, slot, colors[i]);
+    }
+    return overrides;
+}
+
+/// @brief 将折线子物件点击目标解析到父折线实体。
+entt::entity resolveNoteColorTargetEntity(SessionContext& ctx,
+                                          entt::entity    entity)
+{
+    if ( entity == entt::null || !ctx.noteRegistry.valid(entity) ||
+         !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+        return entt::null;
+    }
+
+    const auto& note = ctx.noteRegistry.get<NoteComponent>(entity);
+    if ( note.m_isSubNote && note.m_parentPolyline != entt::null &&
+         ctx.noteRegistry.valid(note.m_parentPolyline) &&
+         ctx.noteRegistry.all_of<NoteComponent>(note.m_parentPolyline) ) {
+        return note.m_parentPolyline;
+    }
+    return entity;
+}
+
+/// @brief 判断两个可选颜色是否完全相同。
+bool isSameOptionalColor(const std::optional<glm::vec4>& lhs,
+                         const std::optional<glm::vec4>& rhs)
+{
+    if ( lhs.has_value() != rhs.has_value() ) return false;
+    if ( !lhs.has_value() ) return true;
+    return lhs->r == rhs->r && lhs->g == rhs->g && lhs->b == rhs->b &&
+           lhs->a == rhs->a;
+}
+
+/// @brief 判断两个音符配色覆写缓存是否完全相同。
+bool isSameNoteColorOverrides(const NoteColorOverrides& lhs,
+                              const NoteColorOverrides& rhs)
+{
+    return isSameOptionalColor(lhs.tap, rhs.tap) &&
+           isSameOptionalColor(lhs.head, rhs.head) &&
+           isSameOptionalColor(lhs.hold, rhs.hold) &&
+           isSameOptionalColor(lhs.end, rhs.end) &&
+           isSameOptionalColor(lhs.flickArrow, rhs.flickArrow) &&
+           isSameOptionalColor(lhs.node, rhs.node);
+}
+
+/// @brief 为待删除折线父实体批量追加其子物件删除条目。
+/// @param ctx 当前会话上下文。
+/// @param deletedEntities 已经加入删除操作的实体集合。
+/// @param entries 待追加的批量 note action 条目。
+/// @warning 逻辑热路径低频分支：删除命令执行时最多完整扫描一次 note ECS，禁止按
+/// 父折线数量重复扫描。
+void appendDeletedPolylineChildren(
+    SessionContext&                         ctx,
+    const std::unordered_set<entt::entity>& deletedEntities,
+    std::vector<BatchNoteAction::Entry>&    entries)
+{
+    if ( deletedEntities.empty() ) return;
+
+    std::unordered_set<entt::entity> polylineParents;
+    for ( auto entity : deletedEntities ) {
+        if ( !ctx.noteRegistry.valid(entity) ||
+             !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+            continue;
+        }
+
+        const auto& note = ctx.noteRegistry.get<NoteComponent>(entity);
+        if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+             !note.m_subNotes.empty() ) {
+            polylineParents.insert(entity);
+        }
+    }
+    if ( polylineParents.empty() ) return;
+
+    std::unordered_set<entt::entity> existingEntries;
+    existingEntries.reserve(entries.size());
+    for ( const auto& entry : entries ) {
+        if ( entry.entity != entt::null ) {
+            existingEntries.insert(entry.entity);
+        }
+    }
+
+    auto noteView = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : noteView ) {
+        const auto& note = noteView.get<NoteComponent>(entity);
+        if ( note.m_isSubNote &&
+             polylineParents.find(note.m_parentPolyline) !=
+                 polylineParents.end() &&
+             existingEntries.insert(entity).second ) {
+            entries.push_back({ entity, note, std::nullopt });
+        }
+    }
+}
+
+/// @brief 收集当前 Timeline Registry 中的全部事件并按时间排序。
+std::vector<TimelineComponent> collectSortedTimelineComponents(
+    SessionContext& ctx)
+{
+    std::vector<TimelineComponent> timelines;
+    auto view = ctx.timelineRegistry.view<TimelineComponent>();
+    for ( auto entity : view ) {
+        timelines.push_back(view.get<TimelineComponent>(entity));
+    }
+
+    std::stable_sort(
+        timelines.begin(),
+        timelines.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            return static_cast<int>(lhs.m_effect) <
+                   static_cast<int>(rhs.m_effect);
+        });
+    return timelines;
+}
+
+/// @brief 将指定 Timeline 列表整体写回当前会话。
+void replaceTimelineComponents(SessionContext&                       ctx,
+                               const std::vector<TimelineComponent>& timelines)
+{
+    std::vector<entt::entity> entities;
+    auto view = ctx.timelineRegistry.view<TimelineComponent>();
+    for ( auto entity : view ) {
+        entities.push_back(entity);
+    }
+    for ( auto entity : entities ) {
+        ctx.timelineRegistry.destroy(entity);
+    }
+
+    for ( const auto& timeline : timelines ) {
+        auto entity = ctx.timelineRegistry.create();
+        ctx.timelineRegistry.emplace<TimelineComponent>(entity, timeline);
+    }
+
+    ctx.m_needsTimingsSync = true;
+    ctx.isBpmEventsDirty   = true;
+    ctx.isTransformDirty   = true;
+    ctx.isNoteStatsDirty   = true;
+    if ( auto* cache =
+             ctx.timelineRegistry.ctx().find<System::ScrollCache>() ) {
+        cache->isDirty = true;
+    }
+}
+
+/// @brief 归一化批量替换后的 Timeline 列表。
+std::vector<TimelineComponent> normalizeReplacementTimelines(
+    std::vector<TimelineComponent> timelines)
+{
+    std::erase_if(timelines, [](const auto& timeline) {
+        return !std::isfinite(timeline.m_timestamp) ||
+               !std::isfinite(timeline.m_value) ||
+               (timeline.m_effect == ::MMM::TimingEffect::BPM &&
+                timeline.m_value <= 0.0);
+    });
+
+    std::stable_sort(
+        timelines.begin(),
+        timelines.end(),
+        [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            return static_cast<int>(lhs.m_effect) <
+                   static_cast<int>(rhs.m_effect);
+        });
+
+    std::vector<TimelineComponent> normalized;
+    normalized.reserve(timelines.size());
+    for ( const auto& timeline : timelines ) {
+        if ( timeline.m_effect == ::MMM::TimingEffect::BPM ) {
+            auto duplicateIt = std::find_if(
+                normalized.begin(),
+                normalized.end(),
+                [&](const auto& existing) {
+                    return existing.m_effect == ::MMM::TimingEffect::BPM &&
+                           std::abs(existing.m_timestamp -
+                                    timeline.m_timestamp) < 1e-6;
+                });
+            if ( duplicateIt != normalized.end() ) {
+                *duplicateIt = timeline;
+                continue;
+            }
+        }
+        normalized.push_back(timeline);
+    }
+    return normalized;
+}
+
+/// @brief 批量替换 Timeline 的可撤销动作。
+class ReplaceTimelinesAction : public IEditorAction
+{
+public:
+    /// @brief 构造批量替换 Timeline 动作。
+    /// @param before 替换前的 Timeline 列表。
+    /// @param after 替换后的 Timeline 列表。
+    /// @param beforePreferenceBpm 替换前的首选 BPM。
+    /// @param afterPreferenceBpm 替换后的首选 BPM。
+    ReplaceTimelinesAction(std::vector<TimelineComponent> before,
+                           std::vector<TimelineComponent> after,
+                           double                         beforePreferenceBpm,
+                           double                         afterPreferenceBpm)
+        : m_before(std::move(before))
+        , m_after(std::move(after))
+        , m_beforePreferenceBpm(beforePreferenceBpm)
+        , m_afterPreferenceBpm(afterPreferenceBpm)
+    {
+    }
+
+    /// @brief 执行批量替换。
+    /// @param ctx 会话上下文引用。
+    void execute(SessionContext& ctx) override
+    {
+        replaceTimelineComponents(ctx, m_after);
+        if ( ctx.currentBeatmap ) {
+            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm =
+                m_afterPreferenceBpm;
+        }
+    }
+
+    /// @brief 撤销批量替换。
+    /// @param ctx 会话上下文引用。
+    void undo(SessionContext& ctx) override
+    {
+        replaceTimelineComponents(ctx, m_before);
+        if ( ctx.currentBeatmap ) {
+            ctx.currentBeatmap->m_baseMapMetadata.preference_bpm =
+                m_beforePreferenceBpm;
+        }
+    }
+
+    /// @brief 重做批量替换。
+    /// @param ctx 会话上下文引用。
+    void redo(SessionContext& ctx) override { execute(ctx); }
+
+    /// @brief 获取动作名称。
+    std::string getName() const override { return "Replace Timings"; }
+
+private:
+    /// @brief 替换前的 Timeline 列表。
+    std::vector<TimelineComponent> m_before;
+
+    /// @brief 替换后的 Timeline 列表。
+    std::vector<TimelineComponent> m_after;
+
+    /// @brief 替换前的谱面首选 BPM。
+    double m_beforePreferenceBpm{ 120.0 };
+
+    /// @brief 替换后的谱面首选 BPM。
+    double m_afterPreferenceBpm{ 120.0 };
+};
 
 // --- Editing Handlers ---
 
@@ -46,6 +337,7 @@ void ActionController::handleCommand(const CmdCopy& cmd)
             m_ctx.clipboard.push_back({ note });
         }
     }
+    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, false);
     XINFO("Copied {} items to clipboard", m_ctx.clipboard.size());
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
@@ -64,6 +356,7 @@ void ActionController::handleCommand(const CmdCut& cmd)
             ic.isCut = true;
         }
     }
+    EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, true);
     m_ctx.lastActionMessage = fmt::format("{} {} {} {}",
                                           TR("ui.status.category.clipboard"),
                                           TR("ui.status.clipboard.cut"),
@@ -102,24 +395,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 
     // 同时删除被删除折线下所有子物件实体，防止孤儿子实体残留
-    for ( entt::entity parentEntity : deletedEntities ) {
-        if ( m_ctx.noteRegistry.valid(parentEntity) &&
-             m_ctx.noteRegistry.all_of<NoteComponent>(parentEntity) ) {
-            const auto& nc =
-                m_ctx.noteRegistry.get<NoteComponent>(parentEntity);
-            if ( nc.m_type == ::MMM::NoteType::POLYLINE &&
-                 !nc.m_subNotes.empty() ) {
-                for ( auto subEnt : m_ctx.noteRegistry.view<NoteComponent>() ) {
-                    const auto& subNC =
-                        m_ctx.noteRegistry.get<NoteComponent>(subEnt);
-                    if ( subNC.m_isSubNote &&
-                         subNC.m_parentPolyline == parentEntity ) {
-                        entries.push_back({ subEnt, subNC, std::nullopt });
-                    }
-                }
-            }
-        }
-    }
+    appendDeletedPolylineChildren(m_ctx, deletedEntities, entries);
 
     if ( !entries.empty() ) {
         size_t count  = entries.size();
@@ -133,7 +409,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
 void ActionController::handleCommand(const CmdMirrorSelected& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
-    int trackCount = m_ctx.currentBeatmap->m_baseMapMetadata.track_count;
+    int trackCount = getMirrorTrackCount(m_ctx);
 
     std::vector<BatchNoteAction::Entry> entries;
     std::unordered_set<entt::entity>    toMirror;
@@ -169,21 +445,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
         const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
         auto        newNote = oldNote;
 
-        // 镜像主轨道索引
-        newNote.m_trackIndex = (trackCount - 1) - oldNote.m_trackIndex;
-        if ( oldNote.m_type == ::MMM::NoteType::FLICK ) {
-            newNote.m_dtrack = -oldNote.m_dtrack;
-        }
-
-        // 如果是 Polyline，还需要镜像其内部缓存的 subNotes 列表
-        if ( oldNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( auto& sub : newNote.m_subNotes ) {
-                sub.trackIndex = (trackCount - 1) - sub.trackIndex;
-                if ( sub.type == ::MMM::NoteType::FLICK ) {
-                    sub.dtrack = -sub.dtrack;
-                }
-            }
-        }
+        mirrorNoteComponent(newNote, trackCount);
 
         entries.push_back({ entity, oldNote, newNote });
     }
@@ -203,24 +465,138 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     }
 }
 
+void ActionController::handleCommand(const CmdApplyNoteColorToSelection& cmd)
+{
+    std::vector<BatchNoteAction::Entry> entries;
+
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( !ic.isSelected ) continue;
+
+        const auto& oldNote = view.get<NoteComponent>(entity);
+        if ( oldNote.m_isSubNote ) continue;
+
+        auto newNote = oldNote;
+        setNoteColorOverride(newNote, cmd.slot, cmd.color);
+        entries.push_back({ entity, oldNote, newNote });
+    }
+
+    if ( entries.empty() ) return;
+
+    auto actionName =
+        cmd.color.has_value() ? "Set Note Color" : "Clear Note Color";
+    auto action =
+        std::make_unique<BatchNoteAction>(std::move(entries), actionName);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage =
+        cmd.color.has_value() ? "Note color applied" : "Note color cleared";
+}
+
+void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
+{
+    std::vector<BatchNoteAction::Entry> entries;
+    auto colors = makeNoteColorOverrides(cmd.colors);
+
+    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& ic = view.get<InteractionComponent>(entity);
+        if ( !ic.isSelected ) continue;
+
+        const auto& oldNote = view.get<NoteComponent>(entity);
+        if ( oldNote.m_isSubNote ) continue;
+
+        auto newNote = oldNote;
+        applyNoteColorOverrides(newNote, colors);
+        entries.push_back({ entity, oldNote, newNote });
+    }
+
+    if ( entries.empty() ) return;
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Set Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette applied";
+}
+
+void ActionController::handleCommand(const CmdApplyBrushPaletteToEntity& cmd)
+{
+    entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
+    if ( target == entt::null ) return;
+
+    const auto& colors = m_ctx.brushState.customColors;
+    if ( !hasAnyNoteColorOverride(colors) ) return;
+
+    const auto& oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    auto        newNote = oldNote;
+    applyNoteColorOverrides(newNote, colors);
+    if ( isSameNoteColorOverrides(oldNote.m_customColors,
+                                  newNote.m_customColors) )
+        return;
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ target, oldNote, newNote });
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Set Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette applied";
+}
+
+void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
+{
+    entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
+    if ( target == entt::null ) return;
+
+    const auto&        oldNote = m_ctx.noteRegistry.get<NoteComponent>(target);
+    auto               newNote = oldNote;
+    NoteColorOverrides emptyColors;
+    applyNoteColorOverrides(newNote, emptyColors);
+    if ( isSameNoteColorOverrides(oldNote.m_customColors,
+                                  newNote.m_customColors) )
+        return;
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ target, oldNote, newNote });
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Clear Note Palette");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "Note palette cleared";
+}
+
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
-    if ( m_ctx.clipboard.empty() ) return;
+    auto clipboard = EditorEngine::instance().getClipboard();
+    if ( clipboard.empty() ) {
+        clipboard = m_ctx.clipboard;
+    }
+    if ( clipboard.empty() ) return;
 
     // 计算基准点 (目前取所有选中音符的最小时间)
-    double minTime = m_ctx.clipboard[0].note.m_timestamp;
-    for ( const auto& item : m_ctx.clipboard ) {
+    double minTime = clipboard[0].note.m_timestamp;
+    for ( const auto& item : clipboard ) {
         minTime = std::min(minTime, item.note.m_timestamp);
     }
 
     std::vector<BatchNoteAction::Entry> entries;
+    /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
+    std::vector<entt::entity> pastedEntities;
+    pastedEntities.reserve(clipboard.size());
+    /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
+    const bool selectPastedObjects = cmd.m_selectPastedObjects;
 
     // 1. 如果之前有 Cut，需要删除那些 Cut 的物件
-    auto view = m_ctx.noteRegistry.view<InteractionComponent>();
-    for ( auto entity : view ) {
-        auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
-        if ( ic.isCut ) {
-            if ( m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+    auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
+    bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
+    if ( isLocalCut ) {
+        for ( auto entity : view ) {
+            auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
+            if ( ic.isCut ) {
+                if ( !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                    continue;
+                }
+
                 auto oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
                 entries.push_back({ entity, oldNote, std::nullopt });
 
@@ -239,6 +615,11 @@ void ActionController::handleCommand(const CmdPaste& cmd)
                 }
             }
         }
+    } else {
+        EditorEngine::instance().consumeCrossSessionCutClipboard(&m_ctx);
+        for ( auto entity : view ) {
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
+        }
     }
 
     // 2. 粘贴到当前视觉时间 (判定线)
@@ -249,7 +630,8 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
     double timeOffset = pasteTime - minTime;
 
-    for ( const auto& item : m_ctx.clipboard ) {
+    int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
+    for ( const auto& item : clipboard ) {
         auto newNote        = item.note;
         newNote.m_timestamp = item.note.m_timestamp + timeOffset;
 
@@ -260,16 +642,47 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
         }
 
-        entries.push_back({ entt::null, std::nullopt, newNote });
+        if ( cmd.m_mirrored ) {
+            mirrorNoteComponent(newNote, mirrorTrackCount);
+        }
+
+        /// @brief 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
+        entt::entity pastedEntity = m_ctx.noteRegistry.create();
+        pastedEntities.push_back(pastedEntity);
+        entries.push_back({ pastedEntity, std::nullopt, newNote });
     }
 
-    auto action =
-        std::make_unique<BatchNoteAction>(std::move(entries), "Paste");
+    auto action = std::make_unique<BatchNoteAction>(
+        std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+
+    if ( selectPastedObjects ) {
+        m_ctx.isSelecting         = false;
+        m_ctx.hasMarqueeSelection = false;
+        m_ctx.marqueeIsAdditive   = false;
+        m_ctx.marqueeBoxes.clear();
+        // 先清空所有旧选择，再只选中本次粘贴创建出的实体。
+        for ( auto entity : m_ctx.noteRegistry.view<InteractionComponent>() ) {
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
+                false;
+        }
+
+        for ( auto entity : pastedEntities ) {
+            if ( !m_ctx.noteRegistry.valid(entity) ||
+                 !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) )
+                continue;
+
+            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
+                true;
+        }
+    }
 
     // 清除剪切状态
     for ( auto entity : view ) {
         m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
+    }
+    if ( isLocalCut ) {
+        EditorEngine::instance().markCutClipboardConsumed();
     }
 }
 
@@ -310,6 +723,91 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
+{
+    if ( cmd.events.empty() ) {
+        return;
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(cmd.events.size());
+    for ( const auto& event : cmd.events ) {
+        entries.push_back(
+            { entt::null,
+              std::nullopt,
+              TimelineComponent{ event.time, event.type, event.value } });
+    }
+
+    auto action =
+        std::make_unique<BatchTimelineAction>(std::move(entries), "Paste");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
+void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
+{
+    if ( !m_ctx.currentBeatmap ) {
+        return;
+    }
+
+    const std::vector<TimelineComponent> before =
+        collectSortedTimelineComponents(m_ctx);
+    std::vector<TimelineComponent> after;
+    if ( cmd.keepNonBpmTimings ) {
+        for ( const auto& timeline : before ) {
+            if ( timeline.m_effect != ::MMM::TimingEffect::BPM ) {
+                after.push_back(timeline);
+            }
+        }
+    }
+
+    double afterPreferenceBpm =
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
+            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0;
+    bool hasBpm = false;
+    for ( const auto& timing : cmd.timings ) {
+        if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) {
+            continue;
+        }
+
+        double bpm = timing.m_timingEffectParameter > 0.0
+                         ? timing.m_timingEffectParameter
+                         : timing.m_bpm;
+        if ( !(bpm > 0.0) || !std::isfinite(bpm) ||
+             !std::isfinite(timing.m_timestamp) ) {
+            continue;
+        }
+
+        bpm = std::clamp(bpm, 1.0, 999.0);
+        TimelineComponent timeline;
+        timeline.m_timestamp = timing.m_timestamp / 1000.0;
+        timeline.m_effect    = ::MMM::TimingEffect::BPM;
+        timeline.m_value     = bpm;
+        timeline.m_metadata  = timing.m_metadata;
+        after.push_back(timeline);
+        if ( !hasBpm ) {
+            afterPreferenceBpm = bpm;
+            hasBpm             = true;
+        }
+    }
+
+    if ( !hasBpm ) {
+        return;
+    }
+
+    after = normalizeReplacementTimelines(std::move(after));
+    const double beforePreferenceBpm =
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
+            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : afterPreferenceBpm;
+
+    auto action = std::make_unique<ReplaceTimelinesAction>(
+        before, after, beforePreferenceBpm, afterPreferenceBpm);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.isBpmEventsDirty = true;
+}
+
 void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
@@ -337,7 +835,12 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     auto getAlignedTime = [&](double rawTime) -> double {
         if ( bpmEvents.empty() ) return rawTime;
-        if ( rawTime < bpmEvents[0]->m_timestamp ) return rawTime;
+
+        /// @brief 首个 BPM 前是否允许按绘制出的前置分拍线对齐。
+        const bool allowBeforeFirstTiming =
+            m_ctx.lastConfig.visual.drawBeatLinesBeforeFirstTiming;
+        if ( rawTime < bpmEvents[0]->m_timestamp && !allowBeforeFirstTiming )
+            return rawTime;
 
         double bestSnappedTime  = rawTime;
         double minWeightedError = std::numeric_limits<double>::max();
@@ -348,17 +851,26 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         double                   bpmVal     = 120.0;
         double nextBpmTime = std::numeric_limits<double>::infinity();
 
-        for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
-            double tBpm  = bpmEvents[i]->m_timestamp;
-            double tNext = (i + 1 < bpmEvents.size())
-                               ? bpmEvents[i + 1]->m_timestamp
-                               : std::numeric_limits<double>::infinity();
-            if ( rawTime >= tBpm && rawTime < tNext ) {
-                currentBPM  = bpmEvents[i];
-                bpmTime     = tBpm;
-                bpmVal      = currentBPM->m_value;
-                nextBpmTime = tNext;
-                break;
+        if ( rawTime < bpmEvents.front()->m_timestamp ) {
+            currentBPM  = bpmEvents.front();
+            bpmTime     = currentBPM->m_timestamp;
+            bpmVal      = currentBPM->m_value;
+            nextBpmTime = bpmEvents.size() > 1
+                              ? bpmEvents[1]->m_timestamp
+                              : std::numeric_limits<double>::infinity();
+        } else {
+            for ( size_t i = 0; i < bpmEvents.size(); ++i ) {
+                double tBpm  = bpmEvents[i]->m_timestamp;
+                double tNext = (i + 1 < bpmEvents.size())
+                                   ? bpmEvents[i + 1]->m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+                if ( rawTime >= tBpm && rawTime < tNext ) {
+                    currentBPM  = bpmEvents[i];
+                    bpmTime     = tBpm;
+                    bpmVal      = currentBPM->m_value;
+                    nextBpmTime = tNext;
+                    break;
+                }
             }
         }
 

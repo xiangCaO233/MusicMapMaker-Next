@@ -84,6 +84,8 @@ VKRenderer::~VKRenderer()
     }
     XDEBUG("Destroyed All image Semaphores.");
 
+    releaseOffscreenRecordResources();
+
     // 分配的命令缓冲区会自动随pool一起释放
     // for ( auto& vkCommandBuffer : m_vkCommandBuffers ) {
     //     m_vkLogicalDevice.freeCommandBuffers(m_vkCommandPool,

@@ -65,3 +65,7 @@
 [submodule "3rdpty/sources/curl"]
 	path = 3rdpty/sources/curl
 	url = https://github.com/curl/curl.git
+[submodule "3rdpty/sources/miniz"]
+	path = 3rdpty/sources/miniz
+	url = https://github.com/richgel999/miniz.git
+	branch = master

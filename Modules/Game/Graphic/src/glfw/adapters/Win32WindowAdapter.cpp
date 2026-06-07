@@ -12,10 +12,72 @@
 
 namespace MMM::Graphic
 {
+namespace
+{
+
+/// @brief HWND 属性名，用于跨 Win32/GLFW 恢复路径保留最小化前最大化状态。
+constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
+    L"MMMRestoreMaximizedAfterMinimize";
+
+/// @brief Private message used to apply maximized restore after Win32 finishes
+/// its own minimized-to-restored transition.
+constexpr UINT APPLY_MAXIMIZED_RESTORE_MESSAGE = WM_APP + 0x0312;
+
+/// @brief Private message used to clear the short-lived Alt+Tab restore guard.
+constexpr UINT CLEAR_RESTORE_IGNORE_MESSAGE = WM_APP + 0x0313;
+
+/// @brief Win32 WINDOWPLACEMENT flag that asks minimized restore to maximize.
+constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
+
+/// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。
+/// @param placement Win32 窗口布局信息。
+/// @return 当前 show command 是最大化时返回 true。
+bool placementShowsMaximized(const WINDOWPLACEMENT& placement)
+{
+    return placement.showCmd == SW_SHOWMAXIMIZED;
+}
+
+/// @brief 清除 Win32 最小化后恢复最大化的系统 hint。
+/// @param hWnd Win32 窗口句柄。
+void clearRestoreToMaximizedFlag(HWND hWnd)
+{
+    if ( !hWnd ) {
+        return;
+    }
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hWnd, &placement) ||
+         (placement.flags & RESTORE_TO_MAXIMIZED_FLAG) == 0 ) {
+        return;
+    }
+
+    placement.flags &= ~RESTORE_TO_MAXIMIZED_FLAG;
+    SetWindowPlacement(hWnd, &placement);
+}
+
+/// @brief 将布尔值写入 HWND 属性。
+/// @param hWnd Win32 窗口句柄。
+/// @param value 待写入状态。
+void setRestoreMaximizedProperty(HWND hWnd, bool value)
+{
+    if ( !hWnd ) {
+        return;
+    }
+
+    if ( value ) {
+        SetPropW(hWnd, RESTORE_MAXIMIZED_PROP, reinterpret_cast<HANDLE>(1));
+    } else {
+        RemovePropW(hWnd, RESTORE_MAXIMIZED_PROP);
+    }
+}
+
+}  // namespace
 
 Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
 {
-    m_hwnd = glfwGetWin32Window(m_window);
+    m_hwnd               = glfwGetWin32Window(m_window);
+    m_lastKnownMaximized = IsZoomed(m_hwnd) != FALSE;
 
     // 订阅拖拽区域更新事件
     Event::EventBus::instance().subscribe<Event::UpdateDragAreaEvent>(
@@ -64,14 +126,159 @@ Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
 Win32WindowAdapter::~Win32WindowAdapter()
 {
     if ( m_hwnd ) {
+        setRestoreMaximizedProperty(m_hwnd, false);
         RemoveWindowSubclass(m_hwnd, WindowProc, 0);
     }
+}
+
+bool Win32WindowAdapter::requestMove()
+{
+    return false;
+}
+
+bool Win32WindowAdapter::requestResize(WindowFrameResizeEdge edge)
+{
+    (void)edge;
+    return false;
+}
+
+bool Win32WindowAdapter::supportsClientFrameRequests() const
+{
+    return false;
+}
+
+bool Win32WindowAdapter::usesClientFrameOverlay() const
+{
+    return false;
+}
+
+void Win32WindowAdapter::refreshFrameShape()
+{
+    if ( !m_hwnd ) {
+        return;
+    }
+
+    DWORD count = DWMWCP_ROUND;
+    DwmSetWindowAttribute(
+        m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &count, sizeof(count));
+}
+
+bool Win32WindowAdapter::handleClientMouseButton(int button, int action,
+                                                 double cursorX, double cursorY)
+{
+    (void)button;
+    (void)action;
+    (void)cursorX;
+    (void)cursorY;
+    return false;
+}
+
+bool Win32WindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
+{
+    (void)cursorX;
+    (void)cursorY;
+    return false;
 }
 
 void Win32WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& e)
 {
     // 更新拖拽区域缓存
     m_dragAreas = e.areas;
+}
+
+bool Win32WindowAdapter::windowPlacementWantsMaximized(HWND hWnd) const
+{
+    if ( !hWnd ) {
+        return false;
+    }
+
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(WINDOWPLACEMENT);
+    if ( !GetWindowPlacement(hWnd, &placement) ) {
+        return IsZoomed(hWnd) != FALSE;
+    }
+
+    return IsZoomed(hWnd) != FALSE || placementShowsMaximized(placement);
+}
+
+void Win32WindowAdapter::rememberRestoreStateBeforeMinimize(HWND hWnd)
+{
+    m_restoreMaximizedAfterMinimize =
+        m_lastKnownMaximized || windowPlacementWantsMaximized(hWnd);
+    if ( !m_restoreMaximizedAfterMinimize ) {
+        clearRestoreToMaximizedFlag(hWnd);
+    }
+    setRestoreMaximizedProperty(hWnd, m_restoreMaximizedAfterMinimize);
+}
+
+bool Win32WindowAdapter::hasRestoreMaximizedProperty(HWND hWnd) const
+{
+    return hWnd && GetPropW(hWnd, RESTORE_MAXIMIZED_PROP) != nullptr;
+}
+
+void Win32WindowAdapter::restoreMaximizedAfterMinimize(HWND hWnd)
+{
+    if ( !hWnd || m_applyingMaximizedRestore ) {
+        return;
+    }
+
+    if ( !hasRestoreMaximizedProperty(hWnd) ) {
+        m_restoreMaximizedAfterMinimize = false;
+        return;
+    }
+
+    m_restoreMaximizedAfterMinimize = true;
+    m_lastKnownMaximized            = true;
+    if ( IsIconic(hWnd) ) {
+        return;
+    }
+
+    if ( IsZoomed(hWnd) ) {
+        m_restoreMaximizedAfterMinimize = false;
+        setRestoreMaximizedProperty(hWnd, false);
+        return;
+    }
+
+    if ( m_maximizedRestorePosted ) {
+        return;
+    }
+
+    m_maximizedRestorePosted = true;
+    PostMessageW(hWnd, APPLY_MAXIMIZED_RESTORE_MESSAGE, 0, 0);
+}
+
+void Win32WindowAdapter::applyQueuedMaximizedRestore(HWND hWnd)
+{
+    m_maximizedRestorePosted = false;
+    if ( !hWnd || m_applyingMaximizedRestore ) {
+        return;
+    }
+
+    if ( !hasRestoreMaximizedProperty(hWnd) ) {
+        m_restoreMaximizedAfterMinimize = false;
+        return;
+    }
+
+    if ( IsIconic(hWnd) ) {
+        return;
+    }
+
+    if ( IsZoomed(hWnd) ) {
+        m_restoreMaximizedAfterMinimize = false;
+        setRestoreMaximizedProperty(hWnd, false);
+        return;
+    }
+
+    m_restoreMaximizedAfterMinimize = true;
+    m_lastKnownMaximized            = true;
+    m_applyingMaximizedRestore      = true;
+    ShowWindow(hWnd, SW_SHOWMAXIMIZED);
+    m_applyingMaximizedRestore = false;
+
+    if ( IsZoomed(hWnd) ) {
+        m_restoreMaximizedAfterMinimize = false;
+        setRestoreMaximizedProperty(hWnd, false);
+    }
 }
 
 LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
@@ -81,6 +288,64 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
 {
     Win32WindowAdapter* adapter =
         reinterpret_cast<Win32WindowAdapter*>(dwRefData);
+
+    if ( adapter ) {
+        switch ( uMsg ) {
+        case APPLY_MAXIMIZED_RESTORE_MESSAGE:
+            adapter->applyQueuedMaximizedRestore(hWnd);
+            return 0;
+        case CLEAR_RESTORE_IGNORE_MESSAGE:
+            adapter->m_ignoreNextRestoreSysCommand = false;
+            adapter->m_restoreIgnoreClearPosted    = false;
+            return 0;
+        case WM_SYSCOMMAND:
+            if ( (wParam & 0xFFF0) == SC_RESTORE &&
+                 adapter->m_ignoreNextRestoreSysCommand && IsZoomed(hWnd) &&
+                 !IsIconic(hWnd) ) {
+                adapter->m_ignoreNextRestoreSysCommand = false;
+                return 0;
+            }
+            if ( (wParam & 0xFFF0) == SC_MINIMIZE ) {
+                adapter->rememberRestoreStateBeforeMinimize(hWnd);
+            } else if ( (wParam & 0xFFF0) == SC_RESTORE ) {
+                adapter->restoreMaximizedAfterMinimize(hWnd);
+            }
+            break;
+        case WM_SIZE:
+            if ( wParam == SIZE_MAXIMIZED ) {
+                const bool restoredMaximizedFromMinimize =
+                    adapter->m_restoreMaximizedAfterMinimize ||
+                    adapter->hasRestoreMaximizedProperty(hWnd);
+                adapter->m_lastKnownMaximized            = true;
+                adapter->m_restoreMaximizedAfterMinimize = false;
+                setRestoreMaximizedProperty(hWnd, false);
+                if ( restoredMaximizedFromMinimize ) {
+                    adapter->m_ignoreNextRestoreSysCommand = true;
+                    if ( !adapter->m_restoreIgnoreClearPosted ) {
+                        adapter->m_restoreIgnoreClearPosted = true;
+                        PostMessageW(hWnd, CLEAR_RESTORE_IGNORE_MESSAGE, 0, 0);
+                    }
+                }
+            } else if ( wParam == SIZE_MINIMIZED ) {
+                adapter->rememberRestoreStateBeforeMinimize(hWnd);
+            } else if ( wParam == SIZE_RESTORED ) {
+                adapter->restoreMaximizedAfterMinimize(hWnd);
+                if ( !adapter->m_restoreMaximizedAfterMinimize &&
+                     !adapter->hasRestoreMaximizedProperty(hWnd) &&
+                     !IsZoomed(hWnd) ) {
+                    adapter->m_lastKnownMaximized = false;
+                    clearRestoreToMaximizedFlag(hWnd);
+                }
+            }
+            break;
+        case WM_ACTIVATE:
+            if ( LOWORD(wParam) != WA_INACTIVE ) {
+                adapter->restoreMaximizedAfterMinimize(hWnd);
+            }
+            break;
+        default: break;
+        }
+    }
 
     if ( uMsg == WM_NCCALCSIZE && wParam == TRUE ) {
         LPNCCALCSIZE_PARAMS params =
