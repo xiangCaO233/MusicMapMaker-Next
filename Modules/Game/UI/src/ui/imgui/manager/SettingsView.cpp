@@ -180,7 +180,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Editor: {
-        const std::array<const char*, 14> labels{
+        const std::array<const char*, 15> labels{
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.scroll_snap").data(),
             TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
@@ -188,6 +188,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.remove_objects_on_polyline_path")
                 .data(),
             TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
+            TR_CACHE("ui.settings.editor.timeline_selection_includes_bpm")
+                .data(),
             TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
             TR_CACHE("ui.settings.editor.beat_divisor").data(),
             TR_CACHE("ui.settings.editor.selection").data(),

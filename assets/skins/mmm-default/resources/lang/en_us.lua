@@ -274,6 +274,7 @@ return {
 	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "Disable Scroll Accel While Drawing",
 	["ui.settings.editor.remove_objects_on_polyline_path"] = "Remove objects on polyline path",
 	["ui.settings.editor.select_pasted_objects"] = "Select pasted objects after paste",
+	["ui.settings.editor.timeline_selection_includes_bpm"] = "Include red BPM lines in timeline multi-select",
 	["ui.settings.editor.selection"] = "Selection (Marquee) Behavior",
 	["ui.settings.editor.selection.strict"] = "Strict (Full Inclusion)",
 	["ui.settings.editor.selection.intersection"] = "Intersection (Touch)",

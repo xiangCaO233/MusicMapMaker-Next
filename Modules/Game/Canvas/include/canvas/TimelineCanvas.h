@@ -282,6 +282,11 @@ private:
     /// @return 当前可见 Timing 目标列表。
     std::vector<TimelineHitTarget> collectVisibleTimingTargets() const;
 
+    /// @brief 判断指定 Timing 目标是否允许被时间线选择操作选中。
+    /// @param target Timing 目标。
+    /// @return 允许选中时返回 true。
+    bool isTimingTargetSelectable(const TimelineHitTarget& target) const;
+
     /// @brief 拾取鼠标附近的 Timing 目标。
     /// @param canvasPos 画布左上角屏幕坐标。
     /// @param size 当前 Timeline 画布尺寸。

@@ -232,6 +232,17 @@ void SettingsView::drawEditorSettings()
         addSettingItem(
             *sec,
             rowIndex,
+            TR_CACHE("ui.settings.editor.timeline_selection_includes_bpm")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                changed |=
+                    ImGui::Checkbox("##TimelineSelectionIncludesBpm",
+                                    &settings.timelineSelectionIncludesBpm);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {

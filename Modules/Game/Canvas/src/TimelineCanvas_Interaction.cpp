@@ -365,6 +365,23 @@ TimelineCanvas::collectVisibleTimingTargets() const
     return targets;
 }
 
+/// @brief 判断指定 Timing 目标是否允许被时间线选择操作选中。
+/// @param target Timing 目标。
+/// @return 允许选中时返回 true。
+bool TimelineCanvas::isTimingTargetSelectable(
+    const TimelineHitTarget& target) const
+{
+    if ( target.entity == entt::null ) {
+        return false;
+    }
+    if ( target.effect != ::MMM::TimingEffect::BPM ) {
+        return true;
+    }
+    return Config::AppConfig::instance()
+        .getEditorSettings()
+        .timelineSelectionIncludesBpm;
+}
+
 /// @brief 将单个 Timing 目标转换为显示用 X 坐标。
 /// @param target Timing 目标。
 /// @param canvasPos 画布左上角屏幕坐标。
@@ -409,6 +426,9 @@ TimelineCanvas::pickTimingTarget(const ImVec2& canvasPos, const ImVec2& size,
     float        bestScore = std::numeric_limits<float>::max();
     std::optional<TimelineHitTarget> bestTarget;
     for ( const auto& target : collectVisibleTimingTargets() ) {
+        if ( !isTimingTargetSelectable(target) ) {
+            continue;
+        }
         float dy = std::abs(localMouseY - target.y);
         if ( dy > TIMING_PICK_RADIUS ) {
             continue;
@@ -446,7 +466,9 @@ void TimelineCanvas::pruneInvalidTimingSelection()
 {
     std::unordered_set<entt::entity> snapshotEntities;
     for ( const auto& target : collectVisibleTimingTargets() ) {
-        snapshotEntities.insert(target.entity);
+        if ( isTimingTargetSelectable(target) ) {
+            snapshotEntities.insert(target.entity);
+        }
     }
 
     std::erase_if(m_selectedTimingEntities, [&](entt::entity entity) {
@@ -476,7 +498,7 @@ void TimelineCanvas::updateTimingEraseTarget(
     const std::optional<TimelineHitTarget>& hoveredTarget)
 {
     m_timingEraseTargetEntities.clear();
-    if ( hoveredTarget ) {
+    if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
         m_timingEraseTargetEntities.insert(hoveredTarget->entity);
     }
 }
@@ -523,8 +545,9 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
 
     std::vector<TimelineHitTarget> selectedTargets;
     for ( const auto& target : collectVisibleTimingTargets() ) {
-        if ( m_selectedTimingEntities.find(target.entity) !=
-             m_selectedTimingEntities.end() ) {
+        if ( isTimingTargetSelectable(target) &&
+             m_selectedTimingEntities.find(target.entity) !=
+                 m_selectedTimingEntities.end() ) {
             selectedTargets.push_back(target);
         }
     }
@@ -627,14 +650,17 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
 
-    const bool ctrl  = io.KeyCtrl;
-    const bool shift = io.KeyShift;
+    const bool ctrl              = io.KeyCtrl;
+    const bool shift             = io.KeyShift;
+    const bool additiveSelection = ctrl || shift;
     if ( ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             m_selectedTimingEntities.clear();
             for ( const auto& target : collectVisibleTimingTargets() ) {
-                m_selectedTimingEntities.insert(target.entity);
+                if ( isTimingTargetSelectable(target) ) {
+                    m_selectedTimingEntities.insert(target.entity);
+                }
             }
         }
     }
@@ -710,12 +736,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     case Logic::EditTool::Move:
         if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget ) {
-                if ( !shift &&
+                if ( !additiveSelection &&
                      m_selectedTimingEntities.find(hoveredTarget->entity) ==
                          m_selectedTimingEntities.end() ) {
                     m_selectedTimingEntities.clear();
                 }
-                if ( shift &&
+                if ( additiveSelection &&
                      m_selectedTimingEntities.find(hoveredTarget->entity) !=
                          m_selectedTimingEntities.end() ) {
                     m_selectedTimingEntities.erase(hoveredTarget->entity);
@@ -728,13 +754,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 m_timingDragPreviewDelta = 0.0;
                 m_timingDragEntries.clear();
                 for ( const auto& target : collectVisibleTimingTargets() ) {
-                    if ( m_selectedTimingEntities.find(target.entity) !=
-                         m_selectedTimingEntities.end() ) {
+                    if ( isTimingTargetSelectable(target) &&
+                         m_selectedTimingEntities.find(target.entity) !=
+                             m_selectedTimingEntities.end() ) {
                         m_timingDragEntries.push_back(
                             { target.entity, target.time, target.value });
                     }
                 }
-            } else if ( !shift ) {
+            } else if ( !additiveSelection ) {
                 m_selectedTimingEntities.clear();
             }
         }
@@ -771,7 +798,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             const float maxY =
                 std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
             for ( const auto& target : collectVisibleTimingTargets() ) {
-                if ( target.y >= minY && target.y <= maxY ) {
+                if ( isTimingTargetSelectable(target) && target.y >= minY &&
+                     target.y <= maxY ) {
                     m_selectedTimingEntities.insert(target.entity);
                 }
             }
@@ -781,7 +809,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             m_isTimingMarqueeSelecting = true;
             m_timingMarqueeStartY      = localMouseY;
             m_timingMarqueeEndY        = localMouseY;
-            if ( !shift ) {
+            if ( !additiveSelection ) {
                 m_selectedTimingEntities.clear();
             }
             addMarqueeTargets();

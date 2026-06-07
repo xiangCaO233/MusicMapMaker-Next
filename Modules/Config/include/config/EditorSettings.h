@@ -704,6 +704,9 @@ struct EditorSettings {
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 
+    /// @brief 时间线窗口多选是否允许选中 BPM 红线
+    bool timelineSelectionIncludesBpm{ false };
+
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
 
@@ -748,56 +751,58 @@ struct EditorSettings {
 
 inline void to_json(nlohmann::json& j, const EditorSettings& c)
 {
-    j = nlohmann::json{ { "syncConfig", c.syncConfig },
-                        { "sfxConfig", c.sfxConfig },
-                        { "filePickerStyle", c.filePickerStyle },
-                        { "cursorStyle", c.cursorStyle },
-                        { "theme", c.theme },
-                        { "beatDivisor", c.beatDivisor },
-                        { "overlapTimeWindowMs", c.overlapTimeWindowMs },
-                        { "reverseScroll", c.reverseScroll },
-                        { "scrollSnap", c.scrollSnap },
-                        { "recentProjectsLimit", c.recentProjectsLimit },
-                        { "language", c.language },
-                        { "frameLimit", c.frameLimit },
-                        { "audioPlaybackBackend", c.audioPlaybackBackend },
-                        { "openALSpatialConfig", c.openALSpatialConfig },
-                        { "renderProfileLogging", c.renderProfileLogging },
-                        { "fontSizeMultiplier", c.fontSizeMultiplier },
-                        { "uiScaleMultiplier", c.uiScaleMultiplier },
-                        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
-                        { "globalVolume", c.globalVolume },
-                        { "globalMuted", c.globalMuted },
-                        { "bgmGain", c.bgmGain },
-                        { "bgmGainMuted", c.bgmGainMuted },
-                        { "sfxGain", c.sfxGain },
-                        { "sfxGainMuted", c.sfxGainMuted },
-                        { "selectionMode", c.selectionMode },
-                        { "marqueeThickness", c.marqueeThickness },
-                        { "marqueeRounding", c.marqueeRounding },
-                        { "saveFormatPreference", c.saveFormatPreference },
-                        { "timeFormatPreference", c.timeFormatPreference },
-                        { "lastFilePickerPath", c.lastFilePickerPath },
-                        { "disableScrollAccelerationWhileDrawing",
-                          c.disableScrollAccelerationWhileDrawing },
-                        { "removeObjectsOnPolylinePath",
-                          c.removeObjectsOnPolylinePath },
-                        { "selectPastedObjects", c.selectPastedObjects },
-                        { "softwareCursorConfig", c.softwareCursorConfig },
-                        { "preferredAsciiFont", c.preferredAsciiFont },
-                        { "preferredCjkFont", c.preferredCjkFont },
-                        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
-                        { "snapFloor", c.snapFloor },
-                        { "showTimelineWindow", c.showTimelineWindow },
-                        { "showPreviewWindow", c.showPreviewWindow },
-                        { "showToolLabels", c.showToolLabels },
-                        { "fixedToolWindow", c.fixedToolWindow },
-                        { "showManagerLabels", c.showManagerLabels },
-                        { "aesthetics", c.aesthetics },
-                        { "noteColorPalettes", c.noteColorPalettes },
-                        { "defaultNoteColorPaletteSchemeName",
-                          c.defaultNoteColorPaletteSchemeName },
-                        { "shortcutConfig", c.shortcutConfig } };
+    j = nlohmann::json{
+        { "syncConfig", c.syncConfig },
+        { "sfxConfig", c.sfxConfig },
+        { "filePickerStyle", c.filePickerStyle },
+        { "cursorStyle", c.cursorStyle },
+        { "theme", c.theme },
+        { "beatDivisor", c.beatDivisor },
+        { "overlapTimeWindowMs", c.overlapTimeWindowMs },
+        { "reverseScroll", c.reverseScroll },
+        { "scrollSnap", c.scrollSnap },
+        { "recentProjectsLimit", c.recentProjectsLimit },
+        { "language", c.language },
+        { "frameLimit", c.frameLimit },
+        { "audioPlaybackBackend", c.audioPlaybackBackend },
+        { "openALSpatialConfig", c.openALSpatialConfig },
+        { "renderProfileLogging", c.renderProfileLogging },
+        { "fontSizeMultiplier", c.fontSizeMultiplier },
+        { "uiScaleMultiplier", c.uiScaleMultiplier },
+        { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
+        { "globalVolume", c.globalVolume },
+        { "globalMuted", c.globalMuted },
+        { "bgmGain", c.bgmGain },
+        { "bgmGainMuted", c.bgmGainMuted },
+        { "sfxGain", c.sfxGain },
+        { "sfxGainMuted", c.sfxGainMuted },
+        { "selectionMode", c.selectionMode },
+        { "marqueeThickness", c.marqueeThickness },
+        { "marqueeRounding", c.marqueeRounding },
+        { "saveFormatPreference", c.saveFormatPreference },
+        { "timeFormatPreference", c.timeFormatPreference },
+        { "lastFilePickerPath", c.lastFilePickerPath },
+        { "disableScrollAccelerationWhileDrawing",
+          c.disableScrollAccelerationWhileDrawing },
+        { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
+        { "selectPastedObjects", c.selectPastedObjects },
+        { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
+        { "softwareCursorConfig", c.softwareCursorConfig },
+        { "preferredAsciiFont", c.preferredAsciiFont },
+        { "preferredCjkFont", c.preferredCjkFont },
+        { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
+        { "snapFloor", c.snapFloor },
+        { "showTimelineWindow", c.showTimelineWindow },
+        { "showPreviewWindow", c.showPreviewWindow },
+        { "showToolLabels", c.showToolLabels },
+        { "fixedToolWindow", c.fixedToolWindow },
+        { "showManagerLabels", c.showManagerLabels },
+        { "aesthetics", c.aesthetics },
+        { "noteColorPalettes", c.noteColorPalettes },
+        { "defaultNoteColorPaletteSchemeName",
+          c.defaultNoteColorPaletteSchemeName },
+        { "shortcutConfig", c.shortcutConfig }
+    };
 }
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
@@ -846,6 +851,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
     c.selectPastedObjects = j.value("selectPastedObjects", false);
+    c.timelineSelectionIncludesBpm =
+        j.value("timelineSelectionIncludesBpm", false);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =
