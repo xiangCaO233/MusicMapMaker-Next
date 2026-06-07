@@ -16,6 +16,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
 #include <fmt/core.h>
@@ -189,9 +190,37 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     cache.windowPadding          = snapshot.windowPadding;
     cache.itemSpacing            = snapshot.itemSpacing;
 
-    const float scale = std::max(1.0f, snapshot.dpiScale);
+    const float scale        = std::max(1.0f, snapshot.dpiScale);
+    const float itemSpacing  = std::floor(snapshot.itemSpacing * scale);
+    const float labelPadding = std::ceil(std::max(8.0f * scale, itemSpacing));
+    const float contentPadding =
+        std::ceil(std::max(4.0f * scale, snapshot.framePadding.x));
+    const float contentSpacing =
+        std::ceil(std::max(4.0f * scale, itemSpacing * 0.5f));
+    const float rowPaddingX =
+        std::ceil(std::max(8.0f * scale, snapshot.framePadding.x * 2.0f));
+    const float rowPaddingY =
+        std::ceil(std::max(4.0f * scale, snapshot.framePadding.y));
+    const float rowSpacing    = std::ceil(std::max(8.0f * scale, itemSpacing));
+    const float presetSpacing = std::ceil(std::max(4.0f * scale, itemSpacing));
+    const float rowHeight =
+        std::ceil(std::max(snapshot.frameHeight + rowPaddingY * 2.0f,
+                           snapshot.fontSize + snapshot.framePadding.y * 2.0f));
+    const float buttonHeight =
+        std::ceil(std::max(snapshot.frameHeight,
+                           snapshot.fontSize + snapshot.framePadding.y * 2.0f));
+    const float muteButtonW = std::ceil(std::max(30.0f * scale, buttonHeight));
     ImFont*     font =
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
+    cache.contentPadding  = contentPadding;
+    cache.contentSpacing  = contentSpacing;
+    cache.rowPaddingX     = rowPaddingX;
+    cache.rowPaddingY     = rowPaddingY;
+    cache.rowSpacing      = rowSpacing;
+    cache.rowHeight       = rowHeight;
+    cache.buttonHeight    = buttonHeight;
+    cache.muteButtonWidth = muteButtonW;
+    cache.presetSpacing   = presetSpacing;
 
     const std::array<const char*, 8> allLabels{
         TR_CACHE("ui.audio_manager.volume").data(),
@@ -205,24 +234,25 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     };
     cache.labelWidth =
         measureTrackControllerTextList(allLabels, font, snapshot.fontSize) +
-        8.0f;
+        labelPadding;
 
-    const float rowHeight = snapshot.frameHeight + 8.0f;
-    const float rowGap    = 4.0f;
     const float sliderMinW =
         measureTrackControllerText("0.0000", font, snapshot.fontSize) +
         snapshot.framePadding.x * 4.0f + std::floor(48.0f * scale);
-    const float muteButtonW = 30.0f;
+    const float lrPaddingX =
+        std::ceil(std::max(3.0f * scale, snapshot.framePadding.x * 0.5f));
     const float lrButtonW =
         std::max({ measureTrackControllerText("L", font, snapshot.fontSize),
                    measureTrackControllerText("R", font, snapshot.fontSize),
                    measureTrackControllerText("LL", font, snapshot.fontSize),
                    measureTrackControllerText("RR", font, snapshot.fontSize),
-                   24.0f });
+                   24.0f * scale }) +
+        lrPaddingX * 2.0f;
+    cache.channelButtonWidth = std::ceil(lrButtonW);
 
-    float widgetWidth = muteButtonW + snapshot.itemSpacing + sliderMinW;
+    float widgetWidth = muteButtonW + rowSpacing + sliderMinW;
     if ( trackType == TrackType::Main ) {
-        widgetWidth += lrButtonW * 4.0f + 2.0f * 4.0f;
+        widgetWidth += cache.channelButtonWidth * 4.0f + presetSpacing * 4.0f;
 
         const std::array<const char*, 4> speedPresets{
             TR_CACHE("ui.audio_manager.speed_025x").data(),
@@ -251,7 +281,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
                 TR("ui.audio_manager.open_spectrum").data(),
                 font,
                 snapshot.fontSize) +
-            snapshot.framePadding.x * 4.0f + 8.0f;
+            snapshot.framePadding.x * 4.0f + rowSpacing;
         widgetWidth = std::max({ widgetWidth,
                                  speedButtonsW,
                                  pitchButtonsW,
@@ -276,16 +306,18 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
             measureTrackControllerText(
                 "000.00s / 000.00s", font, snapshot.fontSize) +
             snapshot.framePadding.x * 2.0f;
-        widgetWidth = std::max(widgetWidth,
-                               playButtonW + pauseButtonW + progressW +
-                                   snapshot.itemSpacing * 2.0f);
+        widgetWidth = std::max(
+            widgetWidth,
+            playButtonW + pauseButtonW + progressW + rowSpacing * 2.0f);
     }
 
-    const float  rowDecorations = 8.0f * 2.0f + 8.0f + 4.0f * 2.0f;
-    const float  contentWidth = cache.labelWidth + widgetWidth + rowDecorations;
-    const size_t rowCount     = trackType == TrackType::Main ? 8U : 2U;
-    float        contentH     = 2.0f * scale + 8.0f + rowCount * rowHeight +
-                                (rowCount > 0 ? (rowCount - 1) * rowGap : 0.0f);
+    const float rowDecorations = rowPaddingX * 2.0f + rowSpacing;
+    const float contentWidth =
+        cache.labelWidth + widgetWidth + rowDecorations + contentPadding * 2.0f;
+    const size_t rowCount = trackType == TrackType::Main ? 8U : 2U;
+    float contentH = 2.0f * scale + contentPadding * 2.0f +
+                     rowCount * rowHeight +
+                     (rowCount > 0 ? (rowCount - 1) * contentSpacing : 0.0f);
 
     if ( trackType == TrackType::Main ) {
         contentH += snapshot.frameHeightWithSpacing * 3.0f;
@@ -303,7 +335,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     if ( trackType == TrackType::Main ) {
         cache.minWindowSizeWithEq =
             ImVec2(minWidth,
-                   std::ceil(minHeight + 150.0f + 220.0f +
+                   std::ceil(minHeight + 150.0f * scale + 220.0f * scale +
                              snapshot.frameHeightWithSpacing * 2.0f));
     } else {
         cache.minWindowSizeWithEq = cache.minWindowSize;
@@ -373,8 +405,19 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                             CLayBox::DrawFunc widget,
                                             float             heightOverride)
 {
+    const auto& layoutMetrics =
+        getLayoutMetrics(Config::AppConfig::instance().getWindowContentScale());
+    auto toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+
     auto& row = getRow(rowIndex++);
-    row.setPadding(8, 8, 0, 0).setSpacing(8).setAlignment(Alignment::Center());
+    row.setPadding(toLayoutPixels(layoutMetrics.rowPaddingX),
+                   toLayoutPixels(layoutMetrics.rowPaddingX),
+                   toLayoutPixels(layoutMetrics.rowPaddingY),
+                   toLayoutPixels(layoutMetrics.rowPaddingY))
+        .setSpacing(toLayoutPixels(layoutMetrics.rowSpacing))
+        .setAlignment(Alignment::Center());
 
     std::string labelId = "AT_R" + std::to_string(rowIndex) + "_L_" + label;
 
@@ -412,8 +455,9 @@ void AudioTrackControllerUI::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                    Sizing::Grow(),
                    [widget](Clay_BoundingBox r, bool h) { widget(r, h); });
 
-    float rowH = heightOverride > 0.0f ? heightOverride
-                                       : (ImGui::GetFrameHeight() + 8.0f);
+    float rowH = heightOverride > 0.0f
+                     ? std::max(heightOverride, layoutMetrics.rowHeight)
+                     : layoutMetrics.rowHeight;
     parent.addLayout(
         (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));
 }
@@ -423,16 +467,34 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                                                 float labelWidth, float& volume,
                                                 bool& muted, bool& changed)
 {
+    const auto& layoutMetrics =
+        getLayoutMetrics(Config::AppConfig::instance().getWindowContentScale());
+    const float btnWidth   = layoutMetrics.muteButtonWidth;
+    const float btnHeight  = layoutMetrics.buttonHeight;
+    const float lrPaddingX = std::ceil(std::max(
+        3.0f * layoutMetrics.dpiScale, layoutMetrics.framePadding.x * 0.5f));
+    const float lrGap      = layoutMetrics.presetSpacing;
+    const float lrButtonW  = layoutMetrics.channelButtonWidth;
+    const float rowSpacing = layoutMetrics.rowSpacing;
+
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.volume").data(),
         labelWidth,
-        [this, &volume, &muted, &changed](Clay_BoundingBox r, bool) {
+        [this,
+         &volume,
+         &muted,
+         &changed,
+         btnWidth,
+         btnHeight,
+         lrPaddingX,
+         lrGap,
+         lrButtonW,
+         rowSpacing](Clay_BoundingBox r, bool) {
             auto& audio = Audio::AudioManager::instance();
 
-            float widgetH = ImGui::GetFrameHeight();
-            float offset  = (r.height - widgetH) * 0.5f;
+            float offset = (r.height - btnHeight) * 0.5f;
             ImGui::SetCursorScreenPos({ r.x, r.y + offset });
 
             const char* icon = ICON_MMM_VOLUME_MUTE;
@@ -452,17 +514,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                 pushedTextColor = true;
             }
 
-            const ImGuiStyle& style      = ImGui::GetStyle();
-            float             btnWidth   = 30.0f;
-            float             btnHeight  = ImGui::GetFrameHeight();
-            float             lrPaddingX = 3.0f;
-            float             lrGap      = 2.0f;
-            float lrButtonW = std::max({ ImGui::CalcTextSize("L").x,
-                                         ImGui::CalcTextSize("R").x,
-                                         ImGui::CalcTextSize("LL").x,
-                                         ImGui::CalcTextSize("RR").x }) +
-                              lrPaddingX * 2.0f;
-            lrButtonW       = std::max(lrButtonW, 24.0f);
+            const ImGuiStyle& style = ImGui::GetStyle();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             Utils::pushFixedButtonStyleVars();
             if ( ImGui::Button(icon, ImVec2(btnWidth, btnHeight)) ) {
@@ -482,14 +534,13 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
                                         : TR("ui.audio_manager.mute").data());
             }
 
-            ImGui::SameLine();
+            ImGui::SameLine(0, rowSpacing);
 
-            float lrWidth = (m_type == TrackType::Main)
-                                ? (lrButtonW * 4.0f + lrGap * 4.0f)
-                                : 0.0f;
-            float sliderWidth =
-                r.width - btnWidth - style.ItemSpacing.x - lrWidth;
-            sliderWidth = std::max(sliderWidth, 40.0f);
+            float lrWidth     = (m_type == TrackType::Main)
+                                    ? (lrButtonW * 4.0f + lrGap * 4.0f)
+                                    : 0.0f;
+            float sliderWidth = r.width - btnWidth - rowSpacing - lrWidth;
+            sliderWidth       = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
             if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
                 changed = true;
@@ -553,7 +604,14 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
     CLayVBox& parent, size_t& rowIndex, float labelWidth, float availWidgetW,
     float& speed, float& pitch, bool& changed)
 {
-    auto& audio = Audio::AudioManager::instance();
+    auto&       audio = Audio::AudioManager::instance();
+    const auto& layoutMetrics =
+        getLayoutMetrics(Config::AppConfig::instance().getWindowContentScale());
+    const float rowPadY     = layoutMetrics.rowPaddingY;
+    const float widgetH     = layoutMetrics.buttonHeight;
+    const float spacing     = layoutMetrics.presetSpacing;
+    const float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
+    availWidgetW            = std::max(availWidgetW, widgetH * 4.0f);
 
     // 动态检测并自动折行说明标签
     auto trim = [](const std::string& str) {
@@ -588,28 +646,26 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
 
     float textW      = ImGui::CalcTextSize(fullStr.c_str()).x;
     bool  labelWraps = (textW > availWidgetW);
-    float labelH     = labelWraps ? (2.0f * ImGui::GetFrameHeight() +
-                                     ImGui::GetStyle().ItemSpacing.y + 8.0f)
-                                  : (ImGui::GetFrameHeight() + 8.0f);
+    float labelH = labelWraps ? (2.0f * widgetH + lineSpacing + rowPadY * 2.0f)
+                              : layoutMetrics.rowHeight;
 
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.speed_control").data(),
         labelWidth,
-        [leftStr, rightStr, fullStr, labelWraps](Clay_BoundingBox r, bool) {
-            float widgetH     = ImGui::GetFrameHeight();
-            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
+        [leftStr, rightStr, fullStr, labelWraps, rowPadY, widgetH, lineSpacing](
+            Clay_BoundingBox r, bool) {
             ImGui::AlignTextToFramePadding();
 
             if ( labelWraps ) {
                 // 第一行期望值
-                ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+                ImGui::SetCursorScreenPos({ r.x, r.y + rowPadY });
                 ImGui::TextUnformatted(leftStr.c_str());
 
                 // 第二行实际值
                 ImGui::SetCursorScreenPos(
-                    { r.x, r.y + 4.0f + widgetH + lineSpacing });
+                    { r.x, r.y + rowPadY + widgetH + lineSpacing });
                 ImGui::TextUnformatted(rightStr.c_str());
             } else {
                 float offset = (r.height - widgetH) * 0.5f;
@@ -630,7 +686,6 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
     };
     std::vector<float> targetSpeeds = { 0.25f, 0.5f, 0.75f, 1.0f };
 
-    float spacing    = ImGui::GetStyle().ItemSpacing.x;
     float currentX   = 0.0f;
     int   speedLines = 1;
     for ( size_t i = 0; i < speedPresets.size(); ++i ) {
@@ -647,22 +702,23 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
             currentX = btnW;
         }
     }
-    float speedPresetsH = speedLines * ImGui::GetFrameHeight() +
-                          (speedLines - 1) * ImGui::GetStyle().ItemSpacing.y +
-                          8.0f;
+    float speedPresetsH =
+        speedLines * widgetH + (speedLines - 1) * lineSpacing + rowPadY * 2.0f;
 
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.speed_presets").data(),
         labelWidth,
-        [speedPresets, targetSpeeds, &speed, &changed](Clay_BoundingBox r,
-                                                       bool) {
-            float widgetH     = ImGui::GetFrameHeight();
-            float spacing     = ImGui::GetStyle().ItemSpacing.x;
-            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
-
-            ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+        [speedPresets,
+         targetSpeeds,
+         &speed,
+         &changed,
+         rowPadY,
+         widgetH,
+         spacing,
+         lineSpacing](Clay_BoundingBox r, bool) {
+            ImGui::SetCursorScreenPos({ r.x, r.y + rowPadY });
 
             float currentX = 0.0f;
             float currentY = 0.0f;
@@ -676,7 +732,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                     } else {
                         currentY += widgetH + lineSpacing;
                         ImGui::SetCursorScreenPos(
-                            { r.x, r.y + 4.0f + currentY });
+                            { r.x, r.y + rowPadY + currentY });
                         currentX = btnW;
                     }
                 } else {
@@ -764,22 +820,23 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
             currentX = btnW;
         }
     }
-    float pitchPresetsH = pitchLines * ImGui::GetFrameHeight() +
-                          (pitchLines - 1) * ImGui::GetStyle().ItemSpacing.y +
-                          8.0f;
+    float pitchPresetsH =
+        pitchLines * widgetH + (pitchLines - 1) * lineSpacing + rowPadY * 2.0f;
 
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.pitch_presets").data(),
         labelWidth,
-        [pitchPresets, targetPitches, &pitch, &changed](Clay_BoundingBox r,
-                                                        bool) {
-            float widgetH     = ImGui::GetFrameHeight();
-            float spacing     = ImGui::GetStyle().ItemSpacing.x;
-            float lineSpacing = ImGui::GetStyle().ItemSpacing.y;
-
-            ImGui::SetCursorScreenPos({ r.x, r.y + 4.0f });
+        [pitchPresets,
+         targetPitches,
+         &pitch,
+         &changed,
+         rowPadY,
+         widgetH,
+         spacing,
+         lineSpacing](Clay_BoundingBox r, bool) {
+            ImGui::SetCursorScreenPos({ r.x, r.y + rowPadY });
 
             float currentX = 0.0f;
             float currentY = 0.0f;
@@ -793,7 +850,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                     } else {
                         currentY += widgetH + lineSpacing;
                         ImGui::SetCursorScreenPos(
-                            { r.x, r.y + 4.0f + currentY });
+                            { r.x, r.y + rowPadY + currentY });
                         currentX = btnW;
                     }
                 } else {
@@ -828,12 +885,18 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
                                                        size_t&   rowIndex,
                                                        float     labelWidth)
 {
+    const auto& layoutMetrics =
+        getLayoutMetrics(Config::AppConfig::instance().getWindowContentScale());
+    const float buttonHeight = layoutMetrics.buttonHeight;
+    const float dpiScale     = layoutMetrics.dpiScale;
+    const float gap          = layoutMetrics.rowSpacing;
+
     addSettingItem(
         parent,
         rowIndex,
         TR_CACHE("ui.audio_manager.play_preview").data(),
         labelWidth,
-        [this](Clay_BoundingBox r, bool) {
+        [this, buttonHeight, dpiScale, gap](Clay_BoundingBox r, bool) {
             auto& audio = Audio::AudioManager::instance();
 
             ImGui::SetCursorScreenPos({ r.x, r.y });
@@ -842,8 +905,17 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
             const char* playText =
                 isPaused ? TR("ui.audio_manager.resume_preview").data()
                          : TR("ui.audio_manager.play_preview").data();
+            const char* pauseText = TR("ui.audio_manager.pause_preview").data();
+            const auto& style     = ImGui::GetStyle();
+            auto        buttonWidth = [&](const char* text) {
+                return std::max(
+                    80.0f * dpiScale,
+                    ImGui::CalcTextSize(text).x + style.FramePadding.x * 2.0f);
+            };
+            const float playButtonW  = buttonWidth(playText);
+            const float pauseButtonW = buttonWidth(pauseText);
 
-            if ( ImGui::Button(playText, ImVec2(80, 0)) ) {
+            if ( ImGui::Button(playText, ImVec2(playButtonW, buttonHeight)) ) {
                 if ( isPaused ) {
                     audio.resumeSoundEffect(m_trackId);
                 } else {
@@ -851,14 +923,14 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
                 }
             }
 
-            ImGui::SameLine();
+            ImGui::SameLine(0, gap);
 
-            if ( ImGui::Button(TR("ui.audio_manager.pause_preview").data(),
-                               ImVec2(80, 0)) ) {
+            if ( ImGui::Button(pauseText,
+                               ImVec2(pauseButtonW, buttonHeight)) ) {
                 audio.pauseSoundEffect(m_trackId);
             }
 
-            ImGui::SameLine();
+            ImGui::SameLine(0, gap);
 
             float duration     = (float)audio.getSFXDuration(m_trackId);
             float playbackTime = (float)audio.getSFXPlaybackTime(m_trackId);
@@ -867,9 +939,11 @@ void AudioTrackControllerUI::buildEffectPreviewSection(CLayVBox& parent,
             std::string progressText =
                 fmt::format("{:.2f}s / {:.2f}s", playbackTime, duration);
 
-            float remaining = r.width - 80.0f - 80.0f - 16.0f;
-            ImGui::ProgressBar(
-                progress, ImVec2(remaining, 0), progressText.c_str());
+            float remaining = r.width - playButtonW - pauseButtonW - gap * 2.0f;
+            remaining       = std::max(0.0f, remaining);
+            ImGui::ProgressBar(progress,
+                               ImVec2(remaining, buttonHeight),
+                               progressText.c_str());
         });
 }
 
@@ -877,19 +951,32 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                                                   size_t&    rowIndex,
                                                   UIManager* sourceManager)
 {
+    const auto& layoutMetrics =
+        getLayoutMetrics(Config::AppConfig::instance().getWindowContentScale());
+    auto toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+    const float gap          = layoutMetrics.rowSpacing;
+    const float buttonHeight = layoutMetrics.buttonHeight;
+
     auto& row = getRow(rowIndex++);
-    row.setPadding(8, 8, 4, 4).setSpacing(8).setAlignment(Alignment::Center());
+    row.setPadding(toLayoutPixels(layoutMetrics.rowPaddingX),
+                   toLayoutPixels(layoutMetrics.rowPaddingX),
+                   toLayoutPixels(layoutMetrics.rowPaddingY),
+                   toLayoutPixels(layoutMetrics.rowPaddingY))
+        .setSpacing(toLayoutPixels(gap))
+        .setAlignment(Alignment::Center());
 
     std::string rowId = "AT_Analysis_R" + std::to_string(rowIndex);
     row.addElement(
         rowId + "_btns",
         Sizing::Grow(),
         Sizing::Grow(),
-        [this, sourceManager](Clay_BoundingBox r, bool) {
+        [this, sourceManager, gap, buttonHeight](Clay_BoundingBox r, bool) {
             ImGui::SetCursorScreenPos({ r.x, r.y });
-            float btnW = (r.width - 8.0f) * 0.5f;
+            float btnW = std::max(0.0f, (r.width - gap) * 0.5f);
             if ( ImGui::Button(TR("ui.audio_manager.open_waveform").data(),
-                               ImVec2(btnW, 0)) ) {
+                               ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioWaveform";
                 if ( !sourceManager->getView<AudioWaveformView>(viewName) ) {
                     sourceManager->registerView(
@@ -898,9 +985,9 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                             TR("ui.audio_manager.waveform_title").data()));
                 }
             }
-            ImGui::SameLine();
+            ImGui::SameLine(0, gap);
             if ( ImGui::Button(TR("ui.audio_manager.open_spectrum").data(),
-                               ImVec2(btnW, 0)) ) {
+                               ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioSpectrum";
                 if ( !sourceManager->getView<AudioSpectrumView>(viewName) ) {
                     sourceManager->registerView(
@@ -911,7 +998,7 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
             }
         });
 
-    float rowH = ImGui::GetFrameHeight() + 8.0f;
+    float rowH = layoutMetrics.rowHeight;
     parent.addLayout(
         (rowId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fixed(rowH));
 }

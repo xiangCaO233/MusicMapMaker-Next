@@ -115,8 +115,65 @@ private:
         /// @brief 缓存对应的 UI 缩放倍率。
         float uiScaleMultiplier{ 1.0f };
 
+        /// @brief 缓存对应的窗口内边距。
+        float windowPadding{ 0.0f };
+
+        /// @brief 缓存对应的控件间距。
+        float itemSpacing{ 0.0f };
+
         /// @brief 页脚控制标签列宽度。
         float footerLabelWidth{ 0.0f };
+
+        /// @brief Clay layout outer padding for the audio manager content.
+        float rootPadding{ 0.0f };
+
+        /// @brief Main vertical gap between audio manager sections.
+        float sectionSpacing{ 0.0f };
+
+        /// @brief Spacing between compact audio list rows.
+        float listRowSpacing{ 0.0f };
+
+        /// @brief Height for normal list rows and audio items.
+        float audioItemHeight{ 0.0f };
+
+        /// @brief Height for the empty-project hint spacer.
+        float hintSpacerHeight{ 0.0f };
+
+        /// @brief Height for the empty-project hint text row.
+        float hintRowHeight{ 0.0f };
+
+        /// @brief Horizontal padding for the global-controls footer.
+        float footerPaddingX{ 0.0f };
+
+        /// @brief Vertical gap inside the global-controls footer.
+        float footerSpacing{ 0.0f };
+
+        /// @brief Height for the global-controls header.
+        float footerHeaderHeight{ 0.0f };
+
+        /// @brief Height for each global audio control row.
+        float controlRowHeight{ 0.0f };
+
+        /// @brief Gap between label, button, and slider in control rows.
+        float controlColumnGap{ 0.0f };
+
+        /// @brief Gap between label text and filler inside label columns.
+        float labelColumnGap{ 0.0f };
+
+        /// @brief Size of the mute icon button in control rows.
+        float muteButtonSize{ 0.0f };
+
+        /// @brief Height of the full-width import-audio button.
+        float importButtonHeight{ 0.0f };
+
+        /// @brief Gap above the import-audio button.
+        float importButtonGap{ 0.0f };
+
+        /// @brief Total footer height, including the import-audio button.
+        float footerHeight{ 0.0f };
+
+        /// @brief Height consumed by global controls before the import button.
+        float globalControlsHeight{ 0.0f };
 
         /// @brief 子视图内容最小尺寸。
         ImVec2 minContentSize{ 0.0f, 0.0f };

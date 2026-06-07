@@ -14,7 +14,9 @@
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace MMM::UI
 {
@@ -70,6 +72,14 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
 /// 避免文件系统扫描或高开销所有权操作。
 void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
 {
+    const auto metrics = getEmptyProjectViewMetrics(layoutContext.m_dpiScale);
+    auto       toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+
+    const uint16_t layoutPadding = toLayoutPixels(metrics.padding);
+    const uint16_t layoutGap     = toLayoutPixels(metrics.gap);
+
     CLayVBox    rootVBox;
     const char* openDirectoryLabel = TR("ui.file_manager.open_directory");
     const float openButtonWidth =
@@ -77,28 +87,32 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                   ImGui::GetStyle().FramePadding.x * 2.0f + 2.0f);
 
     CLayHBox labelHBox;
-    auto     fh = ImGui::GetFrameHeight();
+    labelHBox.setAlignment(Alignment::Center());
     labelHBox.addSpring()
-        .addElement("InitialHint",
-                    Sizing::Grow(),
-                    Sizing::Fixed(fh),
-                    [=](Clay_BoundingBox r, bool isHovered) {
-                        float offY = (r.height - ImGui::GetFontSize()) * 0.5f;
-                        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + offY);
-                        ImVec2 textSize = ImGui::CalcTextSize(
-                            TR("ui.file_manager.initial_hint"));
-                        ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
-                                             (r.width - textSize.x) * 0.5f);
-                        ImGui::TextEx(TR("ui.file_manager.initial_hint"));
-                    })
+        .addElement(
+            "InitialHint",
+            Sizing::Grow(),
+            Sizing::Fixed(metrics.buttonHeight),
+            [=](Clay_BoundingBox r, bool isHovered) {
+                const char*  label     = TR("ui.file_manager.initial_hint");
+                const ImVec2 textSize  = ImGui::CalcTextSize(label);
+                const float  textLineH = ImGui::GetTextLineHeight();
+                const float  offsetX =
+                    std::max(0.0f, (r.width - textSize.x) * 0.5f);
+                const float offsetY =
+                    std::max(0.0f, (r.height - textLineH) * 0.5f);
+                ImGui::SetCursorScreenPos({ r.x + offsetX, r.y + offsetY });
+                ImGui::TextUnformatted(label);
+            })
         .addSpring();
 
     CLayHBox buttonHBox;
+    buttonHBox.setAlignment(Alignment::Center());
     buttonHBox.addSpring()
         .addElement(
             "OpenDirButton",
             Sizing::Fixed(openButtonWidth),
-            Sizing::Fixed(fh),
+            Sizing::Fixed(metrics.buttonHeight),
             [this, openDirectoryLabel](Clay_BoundingBox r, bool isHovered) {
                 if ( ImGui::Button(openDirectoryLabel,
                                    { r.width, r.height }) ) {
@@ -112,21 +126,28 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
         Config::AppConfig::instance().getEditorConfig().recentProjects;
 
     if ( !recent.empty() ) {
-        recentVBox.setPadding(12, 0, 12, 0).setSpacing(8);
-        recentVBox.addElement("RecentTitle",
-                              Sizing::Grow(),
-                              Sizing::Fixed(20),
-                              [](Clay_BoundingBox r, bool isHovered) {
-                                  ImGui::TextDisabled(
-                                      "%s", TR("ui.file.open_recent").data());
-                              });
+        recentVBox
+            .setPadding(
+                layoutPadding, 0, toLayoutPixels(metrics.recentTopPadding), 0)
+            .setSpacing(layoutGap);
+        recentVBox.addElement(
+            "RecentTitle",
+            Sizing::Grow(),
+            Sizing::Fixed(metrics.recentTitleHeight),
+            [](Clay_BoundingBox r, bool isHovered) {
+                const float textLineH = ImGui::GetTextLineHeight();
+                const float offsetY =
+                    std::max(0.0f, (r.height - textLineH) * 0.5f);
+                ImGui::SetCursorScreenPos({ r.x, r.y + offsetY });
+                ImGui::TextDisabled("%s", TR("ui.file.open_recent").data());
+            });
 
         for ( size_t i = 0; i < recent.size(); ++i ) {
             const auto& path = recent[i];
             recentVBox.addElement(
                 fmt::format("RecentItem_{}", i),
                 Sizing::Grow(),
-                Sizing::Fixed(20),
+                Sizing::Fixed(metrics.recentItemHeight),
                 [path, i](Clay_BoundingBox r, bool isHovered) {
                     std::filesystem::path p = Config::utf8ToPath(path);
                     std::string name        = Config::pathToUtf8(p.filename());
@@ -151,10 +172,17 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
         }
     }
 
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(12)
-        .addLayout("labelHBox", labelHBox, Sizing::Grow(), Sizing::Fixed(40))
-        .addLayout("buttonHBox", buttonHBox, Sizing::Grow(), Sizing::Fixed(40))
+    rootVBox
+        .setPadding(layoutPadding, layoutPadding, layoutPadding, layoutPadding)
+        .setSpacing(layoutGap)
+        .addLayout("labelHBox",
+                   labelHBox,
+                   Sizing::Grow(),
+                   Sizing::Fixed(metrics.hintRowHeight))
+        .addLayout("buttonHBox",
+                   buttonHBox,
+                   Sizing::Grow(),
+                   Sizing::Fixed(metrics.buttonRowHeight))
         .addLayout("recentVBox", recentVBox, Sizing::Grow(), Sizing::Grow());
 
     rootVBox.addSpring();

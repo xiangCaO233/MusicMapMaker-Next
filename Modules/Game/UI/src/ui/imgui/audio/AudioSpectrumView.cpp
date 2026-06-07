@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <fftw3.h>
 #include <filesystem>
@@ -194,13 +195,23 @@ void AudioSpectrumView::update(UIManager* sourceManager)
             ImGui::GetColorU32(ImGuiCol_Separator));
     };
 
-    CLayVBox topContainer;
-    topContainer.setPadding(0, 0, 0, 0).setSpacing(4);
+    CLayVBox    topContainer;
+    const float toolbarDpiScale =
+        std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
+    auto toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+    const float rowPadding =
+        std::ceil(std::max(4.0f * toolbarDpiScale, style.FramePadding.x));
+    const float spacing =
+        std::ceil(std::max(8.0f * toolbarDpiScale, style.ItemSpacing.x));
+    topContainer.setPadding(0, 0, 0, 0)
+        .setSpacing(toLayoutPixels(
+            std::max(4.0f * toolbarDpiScale, style.ItemSpacing.y * 0.5f)));
     std::deque<CLayHBox> rows;
     CLayHBox*            currentRow = nullptr;
     float                currentW   = 0.0f;
     float                availW     = ImGui::GetContentRegionAvail().x;
-    float                spacing    = 8.0f;
 
     auto pushGroup = [&](const std::string& id, float w, float h, auto drawCb) {
         bool  addSep = false;
@@ -211,13 +222,18 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         if ( !currentRow || currentW + totalW > availW ) {
             rows.emplace_back();
             currentRow = &rows.back();
-            currentRow->setPadding(4, 4, 4, 4).setSpacing(spacing);
+            currentRow
+                ->setPadding(toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding),
+                             toLayoutPixels(rowPadding))
+                .setSpacing(toLayoutPixels(spacing));
             topContainer.addLayout(
                 ("Row_" + std::to_string(rows.size())).c_str(),
                 *currentRow,
                 Sizing::Grow(),
                 Sizing::Fit());
-            currentW = 8.0f;  // 4 + 4 padding
+            currentW = rowPadding * 2.0f;
         } else {
             addSep = true;
         }

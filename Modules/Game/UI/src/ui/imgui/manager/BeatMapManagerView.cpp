@@ -13,6 +13,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace MMM::UI
 {
@@ -204,10 +205,33 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             }
 
             // --- 使用 Clay 重构对话框内容 ---
-            CLayVBox modalLayout;
-            float    padding = 16 * dpiScale;
-            modalLayout.setPadding(padding, padding, padding, padding);
-            modalLayout.setSpacing(16 * dpiScale);
+            CLayVBox    modalLayout;
+            const auto& modalStyle     = ImGui::GetStyle();
+            auto        toLayoutPixels = [](float value) {
+                return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+            };
+            float padding =
+                std::max(16.0f * dpiScale, modalStyle.WindowPadding.x);
+            const float modalGap =
+                std::max(16.0f * dpiScale, modalStyle.ItemSpacing.y);
+            const float buttonGap =
+                std::max(12.0f * dpiScale, modalStyle.ItemSpacing.x);
+            const float buttonH =
+                std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
+            const float removeButtonW =
+                std::max(140.0f * dpiScale,
+                         ImGui::CalcTextSize(
+                             TR("ui.beatmap_manager.remove_beatmap").data())
+                                 .x +
+                             modalStyle.FramePadding.x * 2.0f);
+            const float cancelButtonW =
+                std::max(100.0f * dpiScale,
+                         ImGui::CalcTextSize(TR("ui.common.cancel").data()).x +
+                             modalStyle.FramePadding.x * 2.0f);
+            const uint16_t modalPaddingPx = toLayoutPixels(padding);
+            modalLayout.setPadding(
+                modalPaddingPx, modalPaddingPx, modalPaddingPx, modalPaddingPx);
+            modalLayout.setSpacing(toLayoutPixels(modalGap));
 
             // 1. 标题与信息 (移除了冗余 Text)
             modalLayout.addElement(
@@ -224,12 +248,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             // 2. 操作按钮区
             CLayHBox btnRow;
             btnRow.setAlignment(Alignment::Center());
-            btnRow.setSpacing(12 * dpiScale);
+            btnRow.setSpacing(toLayoutPixels(buttonGap));
 
             btnRow.addElement(
                 "RemoveBtn",
-                Sizing::Fixed(140 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(removeButtonW),
+                Sizing::Fixed(buttonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(
@@ -241,8 +265,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
             btnRow.addElement(
                 "CancelBtn",
-                Sizing::Fixed(100 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(cancelButtonW),
+                Sizing::Fixed(buttonH),
                 [=, this](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(TR("ui.common.cancel").data(),
@@ -251,10 +275,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 });
 
-            modalLayout.addLayout("BtnRowLayout",
-                                  btnRow,
-                                  Sizing::Grow(),
-                                  Sizing::Fixed(32 * dpiScale));
+            modalLayout.addLayout(
+                "BtnRowLayout", btnRow, Sizing::Grow(), Sizing::Fixed(buttonH));
 
             // 渲染布局
             ImVec2 modalSize = modalLayout.renderInCurrent(

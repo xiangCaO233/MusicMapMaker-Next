@@ -22,6 +22,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <nfd.h>
 #include <utility>
 
@@ -157,7 +158,9 @@ bool AudioManagerView::layoutMetricsMatch(const LayoutMetricsCache&  cache,
            cache.preferredAsciiFont == snapshot.preferredAsciiFont &&
            cache.preferredCjkFont == snapshot.preferredCjkFont &&
            floatEqual(cache.fontSizeMultiplier, snapshot.fontSizeMultiplier) &&
-           floatEqual(cache.uiScaleMultiplier, snapshot.uiScaleMultiplier);
+           floatEqual(cache.uiScaleMultiplier, snapshot.uiScaleMultiplier) &&
+           floatEqual(cache.windowPadding, snapshot.windowPadding) &&
+           floatEqual(cache.itemSpacing, snapshot.itemSpacing);
 }
 
 /// @brief 构造音频管理器布局测量缓存。
@@ -181,21 +184,55 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.preferredCjkFont       = snapshot.preferredCjkFont;
     cache.fontSizeMultiplier     = snapshot.fontSizeMultiplier;
     cache.uiScaleMultiplier      = snapshot.uiScaleMultiplier;
+    cache.windowPadding          = snapshot.windowPadding;
+    cache.itemSpacing            = snapshot.itemSpacing;
 
     const float scale       = std::max(1.0f, snapshot.dpiScale);
     const float frameH      = snapshot.frameHeight;
     const float frameWithSp = snapshot.frameHeightWithSpacing;
-    const float itemSpacing = snapshot.itemSpacing;
-    const float rowSpacingY = 4.0f;
-    const float labelPad    = std::floor(12.0f * scale);
-    const float footerPadX  = std::floor(16.0f * scale) * 2.0f;
-    const float muteButtonW = std::floor(32.0f * scale);
-    const float rootPadX    = std::floor(12.0f * scale) * 2.0f;
-    const float rootPadY    = std::floor(12.0f * scale) * 2.0f;
-    ImFont*     font = snapshot.fileManagerFont
-                           ? snapshot.fileManagerFont
-                           : (snapshot.contentFont ? snapshot.contentFont
-                                                   : snapshot.fallbackFont);
+    const float itemSpacing = std::floor(snapshot.itemSpacing * scale);
+    const float rowSpacingY =
+        std::ceil(std::max(4.0f * scale, itemSpacing * 0.5f));
+    const float labelPad   = std::floor(12.0f * scale);
+    const float footerPadX = std::floor(16.0f * scale);
+    const float rootPad    = std::floor(12.0f * scale);
+    const float sectionSpacing =
+        std::ceil(std::max(12.0f * scale, itemSpacing));
+    const float footerSpacing =
+        std::ceil(std::max(2.0f * scale, itemSpacing * 0.25f));
+    const float controlColGap = std::ceil(std::max(8.0f * scale, itemSpacing));
+    const float labelColGap =
+        std::ceil(std::max(4.0f * scale, itemSpacing * 0.5f));
+    const float rowPaddingY = snapshot.framePadding.y * 2.0f;
+    const float controlRowH = std::ceil(
+        std::max({ frameH, snapshot.fontSize + rowPaddingY, 32.0f * scale }));
+    const float muteButtonSize  = std::ceil(std::max(frameH, 30.0f * scale));
+    const float audioItemHeight = std::ceil(
+        std::max({ frameH, snapshot.fontSize + rowPaddingY, 28.0f * scale }));
+    const float hintSpacerH = std::ceil(std::max(20.0f * scale, frameH * 0.5f));
+    const float hintRowH    = std::ceil(std::max(30.0f * scale, frameH));
+    const float importButtonH = std::ceil(std::max(32.0f * scale, frameH));
+    const float importButtonGap =
+        std::ceil(std::max(8.0f * scale, itemSpacing));
+    cache.rootPadding        = rootPad;
+    cache.sectionSpacing     = sectionSpacing;
+    cache.listRowSpacing     = rowSpacingY;
+    cache.audioItemHeight    = audioItemHeight;
+    cache.hintSpacerHeight   = hintSpacerH;
+    cache.hintRowHeight      = hintRowH;
+    cache.footerPaddingX     = footerPadX;
+    cache.footerSpacing      = footerSpacing;
+    cache.footerHeaderHeight = frameWithSp;
+    cache.controlRowHeight   = controlRowH;
+    cache.controlColumnGap   = controlColGap;
+    cache.labelColumnGap     = labelColGap;
+    cache.muteButtonSize     = muteButtonSize;
+    cache.importButtonHeight = importButtonH;
+    cache.importButtonGap    = importButtonGap;
+    ImFont* font = snapshot.fileManagerFont
+                       ? snapshot.fileManagerFont
+                       : (snapshot.contentFont ? snapshot.contentFont
+                                               : snapshot.fallbackFont);
 
     const std::array<const char*, 3> controlLabels{
         TR("ui.audio_manager.global_volume").data(),
@@ -233,53 +270,57 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
                 measureAudioManagerText(header, font, snapshot.fontSize));
     }
 
-    const float controlRowWidth = footerPadX + labelWidth + itemSpacing +
-                                  muteButtonW + itemSpacing + sliderMinW;
+    const float controlRowWidth = footerPadX * 2.0f + labelWidth +
+                                  controlColGap + muteButtonSize +
+                                  controlColGap + sliderMinW;
     float       minWidth =
-        std::ceil(rootPadX + std::max({ controlRowWidth, headerWidth }));
+        std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
-    float  listHeight = 0.0f;
-    size_t listRows   = 0;
+    float       listHeight = 0.0f;
+    size_t      listRows   = 0;
+    const float headerRowH = cache.footerHeaderHeight;
     if ( input.permanentSfxCount > 0 ) {
-        addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
+        addAudioManagerListRow(listHeight, listRows, headerRowH, rowSpacingY);
         if ( input.showPermanentSFX ) {
             for ( size_t i = 0; i < input.permanentSfxCount; ++i ) {
                 addAudioManagerListRow(
-                    listHeight, listRows, 28.0f * scale, rowSpacingY);
+                    listHeight, listRows, audioItemHeight, rowSpacingY);
             }
         }
     }
 
     if ( input.hasProject ) {
-        addAudioManagerListRow(listHeight, listRows, frameH, rowSpacingY);
+        addAudioManagerListRow(listHeight, listRows, headerRowH, rowSpacingY);
         if ( input.showMainTracks ) {
             for ( size_t i = 0; i < input.mainTrackCount; ++i ) {
                 addAudioManagerListRow(
-                    listHeight, listRows, 28.0f * scale, rowSpacingY);
+                    listHeight, listRows, audioItemHeight, rowSpacingY);
             }
             if ( input.effectTrackCount > 0 ) {
                 addAudioManagerListRow(
-                    listHeight, listRows, frameH, rowSpacingY);
+                    listHeight, listRows, headerRowH, rowSpacingY);
                 if ( input.showProjectSFX ) {
                     for ( size_t i = 0; i < input.effectTrackCount; ++i ) {
                         addAudioManagerListRow(
-                            listHeight, listRows, 28.0f * scale, rowSpacingY);
+                            listHeight, listRows, audioItemHeight, rowSpacingY);
                     }
                 }
             }
         }
     } else {
-        addAudioManagerListRow(listHeight, listRows, 20.0f, rowSpacingY);
-        addAudioManagerListRow(listHeight, listRows, 30.0f, rowSpacingY);
+        addAudioManagerListRow(listHeight, listRows, hintSpacerH, rowSpacingY);
+        addAudioManagerListRow(listHeight, listRows, hintRowH, rowSpacingY);
     }
 
-    float footerH = frameWithSp;
+    float footerH = cache.footerHeaderHeight;
     if ( input.showGlobalSettings ) {
-        footerH += 3.0f * 32.0f + 3.0f * 2.0f + 16.0f;
+        footerH += 3.0f * controlRowH + 3.0f * footerSpacing;
     }
-    footerH += 32.0f + 8.0f;
+    footerH += importButtonH + importButtonGap;
+    cache.globalControlsHeight = footerH - (importButtonH + importButtonGap);
+    cache.footerHeight         = footerH;
 
-    float minHeight      = std::ceil(rootPadY + listHeight + footerH);
+    float minHeight      = std::ceil(rootPad * 2.0f + listHeight + footerH);
     cache.minContentSize = ImVec2(minWidth, minHeight);
     return cache;
 }
@@ -346,17 +387,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto& audioManager = Audio::AudioManager::instance();
 
     float   dpiScale        = layoutContext.m_dpiScale;
-    float   maxLabelW       = getLayoutMetrics(dpiScale).footerLabelWidth;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) {
         ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
     }
 
+    const auto& layoutMetrics  = getLayoutMetrics(dpiScale);
+    const float maxLabelW      = layoutMetrics.footerLabelWidth;
+    auto        toLayoutPixels = [](float value) {
+        return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
+    };
+
     CLayVBox rootVBox;
 
     // 已打开项目时的界面
     CLayVBox listVBox;
-    listVBox.setSpacing(4);
+    listVBox.setSpacing(toLayoutPixels(layoutMetrics.listRowSpacing));
 
     size_t rowIndex     = 0;
     size_t subHBoxIndex = 0;
@@ -380,13 +426,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         CLayHBox& row = this->getRow(rowIndex++);
         row.clear();
         row.setPadding(0, 0, 0, 0)
-            .setSpacing(8)
+            .setSpacing(toLayoutPixels(layoutMetrics.controlColumnGap))
             .setAlignment(Alignment::Center());
 
         // --- A. 左侧容器: (FixW) [ 标签 + 弹簧 ] ---
         CLayHBox& leftBox = this->getSubHBox(subHBoxIndex++);
         leftBox.clear();
-        leftBox.setSpacing(4).setAlignment(Alignment::Center());
+        leftBox.setSpacing(toLayoutPixels(layoutMetrics.labelColumnGap))
+            .setAlignment(Alignment::Center());
 
         // 1. 标签
         leftBox.addElement(std::string(id) + "_lbl",
@@ -411,13 +458,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // --- B. 右侧容器: (GrowW) [ 按钮 + 滑条 ] ---
         CLayHBox& rightBox = this->getSubHBox(subHBoxIndex++);
         rightBox.clear();
-        rightBox.setSpacing(8).setAlignment(Alignment::Center());
+        rightBox.setSpacing(toLayoutPixels(layoutMetrics.controlColumnGap))
+            .setAlignment(Alignment::Center());
 
         // 1. 静音按钮
         rightBox.addElement(
             std::string(id) + "_mute",
-            Sizing::Fixed(32),
-            Sizing::Fixed(30),
+            Sizing::Fixed(layoutMetrics.muteButtonSize),
+            Sizing::Fixed(layoutMetrics.muteButtonSize),
             [&, id, muted, volume, tooltip, onMuteChange](Clay_BoundingBox r,
                                                           bool isHovered) {
                 const char* icon = ICON_MMM_VOLUME_MUTE;
@@ -431,14 +479,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 }
 
                 ImGui::SetCursorScreenPos(
-                    { r.x, r.y + (r.height - 30) * 0.5f });
+                    { r.x,
+                      r.y + (r.height - layoutMetrics.muteButtonSize) * 0.5f });
                 if ( muted ) {
                     ImGui::PushStyleColor(
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
                 Utils::pushFixedButtonStyleVars();
                 if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
-                                   ImVec2(32, 30)) ) {
+                                   ImVec2(layoutMetrics.muteButtonSize,
+                                          layoutMetrics.muteButtonSize)) ) {
                     onMuteChange(!muted);
                 }
                 Utils::popFixedButtonStyleVars();
@@ -458,7 +508,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         rightBox.addElement(
             std::string(id) + "_slider",
             Sizing::Grow(),
-            Sizing::Fixed(30),
+            Sizing::Fixed(layoutMetrics.controlRowHeight),
             [&, id, volume, minVal, maxVal, format, tooltip, onVolumeChange](
                 Clay_BoundingBox r, bool isHovered) {
                 float frameH = ImGui::GetFrameHeight();
@@ -487,7 +537,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         parent.addLayout((std::string(id) + "_row").c_str(),
                          row,
                          Sizing::Grow(),
-                         Sizing::Fixed(32));
+                         Sizing::Fixed(layoutMetrics.controlRowHeight));
     };
 
     // 渲染音轨列表项的辅助函数
@@ -496,14 +546,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         listVBox.addElement(
             "Audio_" + audio.m_id + "_" + audio.m_path,
             Sizing::Grow(),
-            Sizing::Fixed(28 * dpiScale),
+            Sizing::Fixed(layoutMetrics.audioItemHeight),
             [=, &engine, this](Clay_BoundingBox r, bool isHovered) {
                 ImGui::Indent();
                 std::string labelStr = audio.m_id + " - " + audio.m_path;
                 float       availW   = ImGui::GetContentRegionAvail().x;
 
                 Utils::renderScrollingSelectable(
-                    audio.m_id, labelStr, availW, 28 * dpiScale, [&]() {
+                    audio.m_id, labelStr, availW, r.height, [&]() {
                         // 点击弹出控制器
                         AudioTrackControllerUI::TrackType type =
                             (audio.m_type == AudioTrackType::Main)
@@ -560,7 +610,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     if ( !skinData.audioPaths.empty() ) {
         listVBox.addElement("PermanentSFXHeader",
                             Sizing::Grow(),
-                            Sizing::Fixed(ImGui::GetFrameHeight()),
+                            Sizing::Fixed(layoutMetrics.footerHeaderHeight),
                             [&](Clay_BoundingBox r, bool isHovered) {
                                 Utils::renderCollapsingHeader(
                                     TR("ui.audio_manager.permanent_sfx").data(),
@@ -586,7 +636,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 2. 显示主音轨列表
         listVBox.addElement("AudioTracksHeader",
                             Sizing::Grow(),
-                            Sizing::Fixed(ImGui::GetFrameHeight()),
+                            Sizing::Fixed(layoutMetrics.footerHeaderHeight),
                             [&](Clay_BoundingBox r, bool isHovered) {
                                 Utils::renderCollapsingHeader(
                                     TR("ui.audio_manager.audio_tracks").data(),
@@ -614,7 +664,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 listVBox.addElement(
                     "ProjectSFXHeader",
                     Sizing::Grow(),
-                    Sizing::Fixed(ImGui::GetFrameHeight()),
+                    Sizing::Fixed(layoutMetrics.footerHeaderHeight),
                     [&](Clay_BoundingBox r, bool isHovered) {
                         Utils::renderCollapsingHeader(
                             TR("ui.audio_manager.project_sfx").data(),
@@ -633,28 +683,34 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 未打开项目时的提示
         listVBox.addElement("InitialHintSpacer",
                             Sizing::Grow(),
-                            Sizing::Fixed(20),
+                            Sizing::Fixed(layoutMetrics.hintSpacerHeight),
                             [](Clay_BoundingBox, bool) {});
         listVBox.addElement("InitialHint",
                             Sizing::Grow(),
-                            Sizing::Fixed(30),
+                            Sizing::Fixed(layoutMetrics.hintRowHeight),
                             [=](Clay_BoundingBox r, bool isHovered) {
-                                ImGui::Indent();
-                                ImGui::TextDisabled(
-                                    "%s",
-                                    TR("ui.audio_manager.initial_hint").data());
-                                ImGui::Unindent();
+                                const char* text =
+                                    TR("ui.audio_manager.initial_hint").data();
+                                const float textH = ImGui::CalcTextSize(text).y;
+                                ImGui::SetCursorScreenPos(
+                                    { r.x, r.y + (r.height - textH) * 0.5f });
+                                ImGui::TextDisabled("%s", text);
                             });
     }
 
     // 底部全局控制 - 始终显示
     CLayVBox footerVBox;
     // 使用对称的水平内边距，移除手动 Indent，确保左右居中对齐
-    footerVBox.setPadding(16, 16, 0, 0).setSpacing(2);
+    footerVBox
+        .setPadding(toLayoutPixels(layoutMetrics.footerPaddingX),
+                    toLayoutPixels(layoutMetrics.footerPaddingX),
+                    0,
+                    0)
+        .setSpacing(toLayoutPixels(layoutMetrics.footerSpacing));
 
     footerVBox.addElement("FooterHeader",
                           Sizing::Grow(),
-                          Sizing::Fixed(ImGui::GetFrameHeight()),
+                          Sizing::Fixed(layoutMetrics.footerHeaderHeight),
                           [&](Clay_BoundingBox r, bool isHovered) {
                               Utils::renderCollapsingHeader(
                                   TR("ui.audio_manager.global_settings").data(),
@@ -663,8 +719,6 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                           });
 
     if ( m_showGlobalSettings ) {
-        footerVBox.addSpring();  // 顶部弹簧，实现垂直居中
-
         addControlRow(
             footerVBox,
             "Global",
@@ -712,23 +766,19 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             "%.2f",
             [&](float v) { audioManager.setSFXGain(v); },
             [&](bool m) { audioManager.setSFXGainMute(m); });
-
-        footerVBox.addSpring();  // 底部弹簧
     }
 
     // --- 执行分段渲染 ---
     // 1. 动态计算页脚高度
-    float footerH = ImGui::GetFrameHeightWithSpacing();
-    if ( m_showGlobalSettings ) {
-        // 3个32px的项目 + 间距 + 上下预留的缓冲空间
-        footerH += 3 * 32.0f + 3 * 2.0f + 16.0f;
-    }
-    // 3. 底部导入按钮 (32px + 间距)
-    footerH += 32.0f + 8.0f;
+    float footerH = layoutMetrics.footerHeight;
 
     // 2. 渲染顶部列表区域 (自动占据剩余空间)
-    rootVBox.setPadding(12, 12, 12, 12)
-        .setSpacing(12)
+    rootVBox
+        .setPadding(toLayoutPixels(layoutMetrics.rootPadding),
+                    toLayoutPixels(layoutMetrics.rootPadding),
+                    toLayoutPixels(layoutMetrics.rootPadding),
+                    toLayoutPixels(layoutMetrics.rootPadding))
+        .setSpacing(toLayoutPixels(layoutMetrics.sectionSpacing))
         .addElement(
             "listContentArea",
             Sizing::Grow(),
@@ -755,24 +805,29 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     ImVec2 totalSize = rootVBox.renderInCurrent(
         layoutContext.m_startPos,
-        { layoutContext.m_avail.x, layoutContext.m_avail.y - footerH });
+        { layoutContext.m_avail.x,
+          std::max(0.0f, layoutContext.m_avail.y - footerH) });
 
     // 3. 底部全局控制区域 (独立渲染)
     ImVec2 footerPos = { layoutContext.m_startPos.x,
                          layoutContext.m_startPos.y + totalSize.y };
 
-    float controlH = footerH - (32.0f + 8.0f);
+    float controlH = layoutMetrics.globalControlsHeight;
     footerVBox.renderInCurrent(footerPos,
                                { layoutContext.m_avail.x, controlH });
 
     // 4. 底部加号按钮 (全宽)
     CLayHBox bottomBtnHBox;
-    bottomBtnHBox.setPadding(12, 12, 0, 0)
+    bottomBtnHBox
+        .setPadding(toLayoutPixels(layoutMetrics.rootPadding),
+                    toLayoutPixels(layoutMetrics.rootPadding),
+                    0,
+                    0)
         .setAlignment(Alignment::Center())
         .addElement(
             "Audio_ImportNew",
             Sizing::Grow(),
-            Sizing::Fixed(32.0f),
+            Sizing::Fixed(layoutMetrics.importButtonHeight),
             [&engine](Clay_BoundingBox r, bool isHovered) {
                 ImGui::PushStyleColor(
                     ImGuiCol_Text,
@@ -841,8 +896,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 }
             });
 
-    ImVec2 btnPos = { footerPos.x, footerPos.y + controlH + 4.0f };
-    bottomBtnHBox.renderInCurrent(btnPos, { layoutContext.m_avail.x, 32.0f });
+    ImVec2 btnPos = { footerPos.x,
+                      footerPos.y + controlH + layoutMetrics.importButtonGap };
+    bottomBtnHBox.renderInCurrent(
+        btnPos, { layoutContext.m_avail.x, layoutMetrics.importButtonHeight });
 
     // --- 5. 音轨管理窗口 ---
     bool showManageModal = !m_manageTrackId.empty();
@@ -864,10 +921,38 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             }
 
             // --- 使用 Clay 重构对话框内容 ---
-            CLayVBox modalLayout;
-            float    padding = 16 * dpiScale;
-            modalLayout.setPadding(padding, padding, padding, padding);
-            modalLayout.setSpacing(12 * dpiScale);
+            CLayVBox    modalLayout;
+            const auto& modalStyle = ImGui::GetStyle();
+            float       padding =
+                std::max(16.0f * dpiScale, modalStyle.WindowPadding.x);
+            const float modalGap =
+                std::max(12.0f * dpiScale, modalStyle.ItemSpacing.y);
+            const float rowGap =
+                std::max(8.0f * dpiScale, modalStyle.ItemSpacing.x);
+            const float modalButtonH =
+                std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
+            const float modalComboH =
+                std::max(28.0f * dpiScale, ImGui::GetFrameHeight());
+            const float typeLabelW =
+                std::max(100.0f * dpiScale,
+                         measureAudioManagerText(
+                             TR("ui.audio_manager.track_type").data()) +
+                             modalStyle.FramePadding.x * 2.0f);
+            const float removeButtonW =
+                std::max(140.0f * dpiScale,
+                         measureAudioManagerText(
+                             TR("ui.audio_manager.remove_track").data()) +
+                             modalStyle.FramePadding.x * 2.0f);
+            const float cancelButtonW = std::max(
+                100.0f * dpiScale,
+                measureAudioManagerText(TR("ui.common.cancel").data()) +
+                    modalStyle.FramePadding.x * 2.0f);
+            const uint16_t modalPaddingPx = toLayoutPixels(padding);
+            const uint16_t modalGapPx     = toLayoutPixels(modalGap);
+            const uint16_t rowGapPx       = toLayoutPixels(rowGap);
+            modalLayout.setPadding(
+                modalPaddingPx, modalPaddingPx, modalPaddingPx, modalPaddingPx);
+            modalLayout.setSpacing(modalGapPx);
 
             // 1. 标题与分隔线 (移除了冗余的 Text，仅保留分隔线)
             modalLayout.addElement(
@@ -884,10 +969,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             // 2. 配置项 (音轨类型)
             CLayHBox typeRow;
             typeRow.setAlignment(Alignment::Center());
-            typeRow.setSpacing(8 * dpiScale);
+            typeRow.setSpacing(rowGapPx);
             typeRow.addElement(
                 "TypeLabel",
-                Sizing::Fixed(100 * dpiScale),
+                Sizing::Fixed(typeLabelW),
                 Sizing::Grow(),
                 [=, this](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
@@ -898,7 +983,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             typeRow.addElement(
                 "TypeCombo",
                 Sizing::Grow(),
-                Sizing::Fixed(28 * dpiScale),
+                Sizing::Fixed(modalComboH),
                 [=, this, &engine](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     int currentType =
@@ -918,7 +1003,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             modalLayout.addLayout("TypeRow",
                                   typeRow,
                                   Sizing::Grow(),
-                                  Sizing::Fixed(32 * dpiScale));
+                                  Sizing::Fixed(modalButtonH));
 
             modalLayout.addElement(
                 "ModalSep2",
@@ -934,11 +1019,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             // 3. 操作按钮
             CLayHBox btnRow;
             btnRow.setAlignment(Alignment::Center());
-            btnRow.setSpacing(12 * dpiScale);
+            btnRow.setSpacing(modalGapPx);
             btnRow.addElement(
                 "RemoveBtn",
-                Sizing::Fixed(140 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(removeButtonW),
+                Sizing::Fixed(modalButtonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(
@@ -949,8 +1034,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 });
             btnRow.addElement(
                 "CancelBtn",
-                Sizing::Fixed(100 * dpiScale),
-                Sizing::Fixed(32 * dpiScale),
+                Sizing::Fixed(cancelButtonW),
+                Sizing::Fixed(modalButtonH),
                 [=, this](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     if ( ImGui::Button(TR("ui.common.cancel").data(),
@@ -959,7 +1044,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 });
             modalLayout.addLayout(
-                "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(32 * dpiScale));
+                "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(modalButtonH));
 
             // 渲染布局
             // 注意：在模态框中使用 renderInCurrent 来适配 ImGui 的自动大小计算

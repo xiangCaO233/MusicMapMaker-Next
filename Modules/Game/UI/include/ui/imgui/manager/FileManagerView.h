@@ -38,6 +38,39 @@ public:
     ImVec2 getMinContentSize(float dpiScale) const override;
 
 private:
+    /// @brief Runtime metrics for the empty-project placeholder layout.
+    struct EmptyProjectViewMetrics {
+        /// @brief Outer padding around the placeholder content.
+        float padding{ 0.0f };
+
+        /// @brief Vertical gap between placeholder rows.
+        float gap{ 0.0f };
+
+        /// @brief Height reserved for the initial hint row.
+        float hintRowHeight{ 0.0f };
+
+        /// @brief Height reserved for the open-directory button row.
+        float buttonRowHeight{ 0.0f };
+
+        /// @brief Height reserved for the recent-project section title.
+        float recentTitleHeight{ 0.0f };
+
+        /// @brief Height reserved for each recent-project item.
+        float recentItemHeight{ 0.0f };
+
+        /// @brief Top padding before the recent-project list.
+        float recentTopPadding{ 0.0f };
+
+        /// @brief Height used by the actual open-directory button.
+        float buttonHeight{ 0.0f };
+    };
+
+    /// @brief Calculate font-aware placeholder layout metrics.
+    /// @param dpiScale Current window content scale.
+    /// @return Metrics sized for the current ImGui font and DPI scale.
+    [[nodiscard]] EmptyProjectViewMetrics getEmptyProjectViewMetrics(
+        float dpiScale) const;
+
     void handleDragDrop(UIManager* sourceManager);
     /// @brief 渲染未打开项目时的文件浏览器占位内容。
     /// @param layoutContext 当前 Clay/ImGui 布局上下文。

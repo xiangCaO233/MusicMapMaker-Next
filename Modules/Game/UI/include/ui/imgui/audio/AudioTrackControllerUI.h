@@ -136,6 +136,36 @@ private:
         /// @brief 标签列宽度。
         float labelWidth{ 0.0f };
 
+        /// @brief Clay 内容容器内边距。
+        float contentPadding{ 0.0f };
+
+        /// @brief Clay 内容容器纵向间距。
+        float contentSpacing{ 0.0f };
+
+        /// @brief 设置项行水平内边距。
+        float rowPaddingX{ 0.0f };
+
+        /// @brief 设置项行垂直内边距。
+        float rowPaddingY{ 0.0f };
+
+        /// @brief 设置项标签和控件之间的水平间距。
+        float rowSpacing{ 0.0f };
+
+        /// @brief 普通设置项行高。
+        float rowHeight{ 0.0f };
+
+        /// @brief 普通按钮高度。
+        float buttonHeight{ 0.0f };
+
+        /// @brief 静音按钮宽度。
+        float muteButtonWidth{ 0.0f };
+
+        /// @brief 主音轨声道按钮宽度。
+        float channelButtonWidth{ 0.0f };
+
+        /// @brief 预设按钮换行后的行内间距。
+        float presetSpacing{ 0.0f };
+
         /// @brief EQ 关闭时的最小窗口尺寸。
         ImVec2 minWindowSize{ 0.0f, 0.0f };
 

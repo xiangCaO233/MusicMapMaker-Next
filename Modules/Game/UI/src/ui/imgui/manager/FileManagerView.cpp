@@ -30,6 +30,28 @@ FileManagerView::~FileManagerView()
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
+FileManagerView::EmptyProjectViewMetrics
+FileManagerView::getEmptyProjectViewMetrics(float dpiScale) const
+{
+    const float scale      = std::max(1.0f, dpiScale);
+    const auto& style      = ImGui::GetStyle();
+    const float textLineH  = ImGui::GetTextLineHeight();
+    const float frameH     = ImGui::GetFrameHeight();
+    const float rowPadding = style.FramePadding.y * 2.0f;
+
+    EmptyProjectViewMetrics metrics;
+    metrics.padding = std::ceil(12.0f * scale);
+    metrics.gap     = std::ceil(std::max(style.ItemSpacing.y, 8.0f * scale));
+    metrics.hintRowHeight     = std::ceil(std::max(40.0f * scale, frameH));
+    metrics.buttonRowHeight   = std::ceil(std::max(40.0f * scale, frameH));
+    metrics.recentTitleHeight = std::ceil(std::max(20.0f * scale, textLineH));
+    metrics.recentItemHeight =
+        std::ceil(std::max({ 20.0f * scale, frameH, textLineH + rowPadding }));
+    metrics.recentTopPadding = metrics.padding;
+    metrics.buttonHeight     = std::ceil(frameH);
+    return metrics;
+}
+
 /// @brief 获取文件管理器中不可再换行控件所需的最小内容尺寸。
 /// @warning UI 热路径：子视图可见时每帧查询；仅保留配置读取和轻量文本测量。
 ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
@@ -37,7 +59,8 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
     auto&       engine   = Logic::EditorEngine::instance();
     auto*       project  = engine.getCurrentProject();
     const float scale    = std::max(1.0f, dpiScale);
-    const float padding  = 12.0f * scale;
+    const auto  metrics  = getEmptyProjectViewMetrics(dpiScale);
+    const float padding  = metrics.padding;
     const auto& style    = ImGui::GetStyle();
     float       minWidth = 0.0f;
     float       minHeight;
@@ -65,9 +88,13 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
                 minWidth,
                 ImGui::CalcTextSize(TR("ui.file.open_recent").data()).x);
         }
-        minHeight = 40.0f + 12.0f + 40.0f;
+        minHeight =
+            metrics.hintRowHeight + metrics.gap + metrics.buttonRowHeight;
         if ( !recent.empty() ) {
-            minHeight += 12.0f + 20.0f + recent.size() * (20.0f + 8.0f);
+            minHeight += metrics.gap + metrics.recentTopPadding +
+                         metrics.recentTitleHeight +
+                         static_cast<float>(recent.size()) *
+                             (metrics.recentItemHeight + metrics.gap);
         }
     }
 

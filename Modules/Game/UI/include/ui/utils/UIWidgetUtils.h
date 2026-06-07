@@ -102,18 +102,26 @@ static bool renderScrollingTreeNode(const std::string& id,
     ImVec2 cursorPos = ImGui::GetCursorScreenPos();
     ImVec2 textSize  = ImGui::CalcTextSize(text.c_str());
 
-    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
-                               ImGuiTreeNodeFlags_OpenOnDoubleClick |
-                               ImGuiTreeNodeFlags_SpanAvailWidth;
+    const ImGuiStyle& style         = ImGui::GetStyle();
+    const float       targetHeight  = std::max(height, ImGui::GetFrameHeight());
+    const float       framePaddingY = std::max(
+        style.FramePadding.y, (targetHeight - ImGui::GetFontSize()) * 0.5f);
+    ImGuiTreeNodeFlags flags =
+        ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
+        ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if ( isLeaf )
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
     // 强制占满可用宽度
     ImGui::SetNextItemAllowOverlap();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(style.FramePadding.x, framePaddingY));
     bool open      = ImGui::TreeNodeEx(id.c_str(), flags, "");
+    bool isHovered = ImGui::IsItemHovered();
     bool isClicked = ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
+    ImGui::PopStyleVar();
 
-    if ( !tooltip.empty() && ImGui::IsItemHovered() ) {
+    if ( !tooltip.empty() && isHovered ) {
         ImGui::SetTooltip("%s", tooltip.c_str());
     }
 
@@ -135,12 +143,12 @@ static bool renderScrollingTreeNode(const std::string& id,
     }
 
     float textH   = ImGui::GetFontSize();
-    float offsetY = (height - textH) * 0.5f;
+    float offsetY = (targetHeight - textH) * 0.5f;
 
-    ImGui::PushClipRect(
-        textStartPos,
-        ImVec2(textStartPos.x + textAvailableWidth, textStartPos.y + height),
-        true);
+    ImGui::PushClipRect(textStartPos,
+                        ImVec2(textStartPos.x + textAvailableWidth,
+                               textStartPos.y + targetHeight),
+                        true);
     ImGui::GetWindowDrawList()->AddText(
         ImVec2(textStartPos.x - offset, textStartPos.y + offsetY),
         ImGui::GetColorU32(ImGuiCol_Text),

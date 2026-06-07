@@ -8,6 +8,7 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include <cfloat>
+#include <cmath>
 
 namespace MMM::UI
 {
@@ -125,7 +126,14 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         // --- Clay 布局构建 ---
         m_contentVBox.clear();
-        m_contentVBox.setSpacing(4).setPadding(4, 4, 4, 4);
+        m_contentVBox
+            .setSpacing(
+                static_cast<uint16_t>(std::ceil(layoutMetrics.contentSpacing)))
+            .setPadding(
+                static_cast<uint16_t>(std::ceil(layoutMetrics.contentPadding)),
+                static_cast<uint16_t>(std::ceil(layoutMetrics.contentPadding)),
+                static_cast<uint16_t>(std::ceil(layoutMetrics.contentPadding)),
+                static_cast<uint16_t>(std::ceil(layoutMetrics.contentPadding)));
         size_t rowIndex = 0;
 
         float maxLabelW = layoutMetrics.labelWidth;
@@ -134,8 +142,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             m_contentVBox, rowIndex, maxLabelW, volume, muted, changed);
 
         if ( m_type == TrackType::Main ) {
-            float availWidgetW =
-                ImGui::GetContentRegionAvail().x - maxLabelW - 24.0f;
+            float availWidgetW = ImGui::GetContentRegionAvail().x - maxLabelW -
+                                 layoutMetrics.contentPadding * 2.0f -
+                                 layoutMetrics.rowPaddingX * 2.0f -
+                                 layoutMetrics.rowSpacing;
             buildSpeedAndPitchSection(m_contentVBox,
                                       rowIndex,
                                       maxLabelW,
