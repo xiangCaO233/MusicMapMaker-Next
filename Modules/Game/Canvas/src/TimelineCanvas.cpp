@@ -190,8 +190,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImVec2 mousePos  = ImGui::GetMousePos();
             bool   isFocused =
                 ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
-            float iconSize = 20.0f;
-            float padding  = 5.0f;
+            ImVec2 gearGlyphSize = ImGui::CalcTextSize(UI::ICON_MMM_COG);
+            float  iconSize      = std::ceil(
+                std::max({ 20.0f, gearGlyphSize.x, gearGlyphSize.y }) + 4.0f);
+            float padding = 5.0f;
 
             const auto& visual =
                 Config::AppConfig::instance().getVisualConfig();
@@ -370,9 +372,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             refreshTimelineInteractionDecoration(size);
 
             // 4. 绘制交互层元件 (齿轮按钮)
-            UI::Utils::pushFixedButtonStyleVars();
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0, 0, 0, 0));
             for ( const auto& el : m_currentSnapshot->timelineElements ) {
                 if ( showInlineTimingEditors && isNearInlineGearTime(el) ) {
                     int leftGearCount  = countInlineGears(el, false);
@@ -392,16 +391,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         ImVec2 pos = inlineGearPos(el, gear, index, count);
                         ImGui::SetCursorScreenPos(pos);
 
-                        ImGui::SetNextItemAllowOverlap();
-                        ImGui::PushStyleColor(ImGuiCol_Text, gear.color);
                         std::string id =
                             fmt::format("{}_{}_{}",
                                         gear.label,
                                         el.time,
                                         static_cast<uint32_t>(entity));
-                        if ( ImGui::Button(
-                                 (std::string(UI::ICON_MMM_COG) + "##" + id)
-                                     .c_str(),
+                        ImGui::SetNextItemAllowOverlap();
+                        if ( ImGui::InvisibleButton(
+                                 ("##TimelineInlineGear_" + id).c_str(),
                                  ImVec2(iconSize, iconSize)) ) {
                             openInlineGearEditor(
                                 InlineGearHit{ entity,
@@ -410,7 +407,15 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                                gear.editType,
                                                gear.label });
                         }
-                        ImGui::PopStyleColor();
+
+                        const ImVec2 buttonMin = ImGui::GetItemRectMin();
+                        ImGui::GetWindowDrawList()->AddText(
+                            ImVec2(buttonMin.x +
+                                       (iconSize - gearGlyphSize.x) * 0.5f,
+                                   buttonMin.y +
+                                       (iconSize - gearGlyphSize.y) * 0.5f),
+                            ImGui::ColorConvertFloat4ToU32(gear.color),
+                            UI::ICON_MMM_COG);
 
                         if ( ImGui::IsItemHovered() ) {
                             const auto timeText =
@@ -421,9 +426,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     }
                 }
             }
-            ImGui::PopStyleColor(2);
-            UI::Utils::popFixedButtonStyleVars();
-
             // 绘制右上角时间点面板汉堡按钮
             ImVec2 menuBtnPos = ImVec2(canvasPos.x + size.x - 30.0f - 10.0f,
                                        canvasPos.y + 10.0f);
