@@ -299,12 +299,19 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
         return;
     }
 
-    if ( m_selectedAudioTrackId != audioTrackId ) {
+    const bool selectionChanged = m_selectedAudioTrackId != audioTrackId;
+    const bool needsAnalysis =
+        selectionChanged ||
+        (m_waveTimes.empty() &&
+         !m_analysisRunning.load(std::memory_order_relaxed));
+    if ( selectionChanged ) {
         m_selectedAudioTrackId = audioTrackId;
         if ( auto resource = selectedAudioResource() ) {
             m_playbackSpeed =
                 std::clamp<double>(resource->m_config.playbackSpeed, 0.25, 2.0);
         }
+    }
+    if ( needsAnalysis ) {
         requestAnalyzeSelectedTrack();
     }
 }
@@ -488,6 +495,14 @@ void BpmMeasurementToolView::consumePendingAnalysis()
     m_nextSpectrumChunkUploadIndex = 0;
     m_spectrumTextureReloadStarted = false;
     m_texturesNeedReload           = true;
+
+    if ( result->failed ) {
+        m_statusText = result->autoTimingRequested
+                           ? TR("ui.tools.bpm_measure.auto_failed").data()
+                           : TR("ui.tools.bpm_measure.load_failed").data();
+        m_analysisFinished.store(false, std::memory_order_release);
+        return;
+    }
 
     if ( result->autoTimingRequested ) {
         if ( result->autoTimingResult ) {
@@ -2525,6 +2540,24 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
     });
 }
 
+/// @brief 从后台线程发布一次分析失败结果。
+/// @param autoMeasure 本次任务是否属于自动 BPM/offset 测量。
+/// @warning 后台线程路径：只写入受互斥锁保护的待消费结果和原子状态。
+void BpmMeasurementToolView::publishAnalysisFailure(bool autoMeasure)
+{
+    AnalysisResult result;
+    result.autoTimingRequested = autoMeasure;
+    result.failed              = true;
+
+    {
+        std::lock_guard<std::mutex> lock(m_pendingResultMutex);
+        m_pendingResult = std::move(result);
+    }
+    m_analysisProgress.store(1.0f, std::memory_order_relaxed);
+    m_analysisRunning.store(false, std::memory_order_relaxed);
+    m_analysisFinished.store(true, std::memory_order_release);
+}
+
 /// @brief 请求自动测量当前选择的音频轨道。
 void BpmMeasurementToolView::requestAutoMeasureSelectedTrack()
 {
@@ -2604,7 +2637,7 @@ void BpmMeasurementToolView::analyzeTrack(
     Config::SpectrumDetailProfile spectrumProfile)
 {
     if ( !track ) {
-        m_analysisRunning.store(false, std::memory_order_relaxed);
+        publishAnalysisFailure(autoMeasure);
         return;
     }
 
@@ -2612,9 +2645,39 @@ void BpmMeasurementToolView::analyzeTrack(
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     const size_t totalFrames = track->num_frames();
     if ( duration <= 0.0 || sampleRate <= 0.0 || totalFrames == 0 ) {
-        m_analysisRunning.store(false, std::memory_order_relaxed);
+        publishAnalysisFailure(autoMeasure);
         return;
     }
+
+    /// @brief 后台分析失败兜底，避免异常或早退后 UI 长期停在分析状态。
+    struct AnalysisFailureGuard {
+        /// @brief 当前 BPM 工具实例。
+        BpmMeasurementToolView& view;
+
+        /// @brief 是否属于自动 BPM/offset 测量任务。
+        bool autoMeasure{ false };
+
+        /// @brief 仍需要在析构时发布失败。
+        bool active{ true };
+
+        /// @brief 任务成功完成，不再发布失败。
+        void dismiss() { active = false; }
+
+        /// @brief 任务被取消，只清理运行状态。
+        void cancel()
+        {
+            active = false;
+            view.m_analysisRunning.store(false, std::memory_order_relaxed);
+        }
+
+        /// @brief 兜底发布失败结果。
+        ~AnalysisFailureGuard()
+        {
+            if ( active ) {
+                view.publishAnalysisFailure(autoMeasure);
+            }
+        }
+    } failureGuard{ *this, autoMeasure };
 
     const int wavePointCount =
         std::max(2, static_cast<int>(duration * m_wavePointsPerSecond) + 1);
@@ -2654,7 +2717,7 @@ void BpmMeasurementToolView::analyzeTrack(
     ice::AudioBuffer waveBuffer;
     for ( int point = 0; point < wavePointCount; ++point ) {
         if ( stopToken.stop_requested() ) {
-            m_analysisRunning.store(false, std::memory_order_relaxed);
+            failureGuard.cancel();
             return;
         }
 
@@ -2715,7 +2778,6 @@ void BpmMeasurementToolView::analyzeTrack(
         if ( fftOutput ) {
             fftw_free(fftOutput);
         }
-        m_analysisRunning.store(false, std::memory_order_relaxed);
         return;
     }
 
@@ -2729,7 +2791,6 @@ void BpmMeasurementToolView::analyzeTrack(
     if ( !fftPlan ) {
         fftw_free(fftInput);
         fftw_free(fftOutput);
-        m_analysisRunning.store(false, std::memory_order_relaxed);
         return;
     }
 
@@ -2757,7 +2818,7 @@ void BpmMeasurementToolView::analyzeTrack(
             }
             fftw_free(fftInput);
             fftw_free(fftOutput);
-            m_analysisRunning.store(false, std::memory_order_relaxed);
+            failureGuard.cancel();
             return;
         }
 
@@ -2881,6 +2942,7 @@ void BpmMeasurementToolView::analyzeTrack(
         std::lock_guard<std::mutex> lock(m_pendingResultMutex);
         m_pendingResult = std::move(result);
     }
+    failureGuard.dismiss();
     m_analysisRunning.store(false, std::memory_order_relaxed);
     m_analysisFinished.store(true, std::memory_order_release);
 }

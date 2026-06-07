@@ -442,284 +442,285 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( !m_isOpen ) return;
 
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(TR("ui.wizard.new_beatmap.title").data());
         m_shouldOpen = false;
-        XINFO("NewBeatmapWizard: Opening popup modal...");
+        ImGui::SetNextWindowFocus();
+        XINFO("NewBeatmapWizard: Opening wizard window...");
     }
 
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
-    Utils::CenteredModalPopupScope modalScope(dpiScale);
-    constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoResize;
-    if ( modalScope.begin(TR("ui.wizard.new_beatmap.title").data(),
-                          &m_isOpen,
-                          WINDOW_FLAGS,
-                          ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
-                          false) ) {
+    Utils::CenteredModalPopupScope windowScope(dpiScale);
+    constexpr ImGuiWindowFlags     WINDOW_FLAGS =
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
+    const std::string windowTitle =
+        std::string(TR("ui.wizard.new_beatmap.title").data()) +
+        "###NewBeatmapWizardWindow";
+    const bool windowVisible =
+        windowScope.beginWindow(windowTitle.c_str(),
+                                &m_isOpen,
+                                WINDOW_FLAGS,
+                                ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
+                                false);
+    if ( !windowVisible ) {
+        ImGui::End();
+        return;
+    }
 
-        auto DrawInput = [&](const char* label, char* buf, size_t bufSize) {
-            ImGui::InputText(label, buf, bufSize);
-        };
+    auto DrawInput = [&](const char* label, char* buf, size_t bufSize) {
+        ImGui::InputText(label, buf, bufSize);
+    };
 
-        ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
-        DrawInput(TR("ui.settings.beatmap.name").data(),
-                  m_nameBuf,
-                  sizeof(m_nameBuf));
-        DrawInput(TR("ui.settings.beatmap.title").data(),
-                  m_titleBuf,
-                  sizeof(m_titleBuf));
-        DrawInput(TR("ui.settings.beatmap.title_unicode").data(),
-                  m_titleUnicodeBuf,
-                  sizeof(m_titleUnicodeBuf));
-        DrawInput(TR("ui.settings.beatmap.artist").data(),
-                  m_artistBuf,
-                  sizeof(m_artistBuf));
-        DrawInput(TR("ui.settings.beatmap.artist_unicode").data(),
-                  m_artistUnicodeBuf,
-                  sizeof(m_artistUnicodeBuf));
-        DrawInput(TR("ui.settings.beatmap.mapper").data(),
-                  m_authorBuf,
-                  sizeof(m_authorBuf));
-        DrawInput(TR("ui.settings.beatmap.version").data(),
-                  m_versionBuf,
-                  sizeof(m_versionBuf));
+    ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
+    DrawInput(
+        TR("ui.settings.beatmap.name").data(), m_nameBuf, sizeof(m_nameBuf));
+    DrawInput(
+        TR("ui.settings.beatmap.title").data(), m_titleBuf, sizeof(m_titleBuf));
+    DrawInput(TR("ui.settings.beatmap.title_unicode").data(),
+              m_titleUnicodeBuf,
+              sizeof(m_titleUnicodeBuf));
+    DrawInput(TR("ui.settings.beatmap.artist").data(),
+              m_artistBuf,
+              sizeof(m_artistBuf));
+    DrawInput(TR("ui.settings.beatmap.artist_unicode").data(),
+              m_artistUnicodeBuf,
+              sizeof(m_artistUnicodeBuf));
+    DrawInput(TR("ui.settings.beatmap.mapper").data(),
+              m_authorBuf,
+              sizeof(m_authorBuf));
+    DrawInput(TR("ui.settings.beatmap.version").data(),
+              m_versionBuf,
+              sizeof(m_versionBuf));
 
-        ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
-        float bpm = (float)m_bpm;
-        if ( ImGui::DragFloat(TR("ui.settings.beatmap.bpm").data(),
-                              &bpm,
-                              0.1f,
-                              0.0f,
-                              1000.0f,
-                              "%.2f") ) {
-            m_bpm = (double)bpm;
-        }
+    ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
+    float bpm = (float)m_bpm;
+    if ( ImGui::DragFloat(TR("ui.settings.beatmap.bpm").data(),
+                          &bpm,
+                          0.1f,
+                          0.0f,
+                          1000.0f,
+                          "%.2f") ) {
+        m_bpm = (double)bpm;
+    }
 
-        if ( ImGui::InputInt(TR("ui.settings.beatmap.tracks").data(),
-                             &m_trackCount) ) {
-            if ( m_trackCount < 1 ) m_trackCount = 1;
-        }
+    if ( ImGui::InputInt(TR("ui.settings.beatmap.tracks").data(),
+                         &m_trackCount) ) {
+        if ( m_trackCount < 1 ) m_trackCount = 1;
+    }
 
-        auto* project = Logic::EditorEngine::instance().getCurrentProject();
-        if ( !project ) {
-            ImGui::TextColored(Utils::UIThemeUtils::getDangerColor(),
-                               "%s",
-                               TR("ui.wizard.new_beatmap.no_project").data());
-            ImGui::EndPopup();
-            return;
-        }
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        ImGui::TextColored(Utils::UIThemeUtils::getDangerColor(),
+                           "%s",
+                           TR("ui.wizard.new_beatmap.no_project").data());
+        ImGui::End();
+        return;
+    }
 
-        auto templateOptions = collectOpenTemplateOptions();
-        renderTemplateSourceControls(templateOptions);
+    auto templateOptions = collectOpenTemplateOptions();
+    renderTemplateSourceControls(templateOptions);
 
-        ImGui::SeparatorText(TR("ui.settings.beatmap.resource").data());
+    ImGui::SeparatorText(TR("ui.settings.beatmap.resource").data());
 
-        // 音频选择
-        std::string audioPreview =
-            m_selectedAudioPath.empty()
-                ? TR("ui.wizard.new_beatmap.select_audio").data()
-                : Config::pathToUtf8(m_selectedAudioPath);
+    // 音频选择
+    std::string audioPreview =
+        m_selectedAudioPath.empty()
+            ? TR("ui.wizard.new_beatmap.select_audio").data()
+            : Config::pathToUtf8(m_selectedAudioPath);
 
-        const char* measureBpmLabel =
-            TR("ui.wizard.new_beatmap.measure_bpm_manual").data();
-        const char* autoBpmLabel =
-            TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
-        const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
-                                      ImGui::GetStyle().FramePadding.x * 2.0f;
-        const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                      ImGui::GetStyle().FramePadding.x * 2.0f;
-        const float comboWidth =
-            std::max(120.0f,
-                     ImGui::GetContentRegionAvail().x - measureBpmWidth -
-                         autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
+    const char* measureBpmLabel =
+        TR("ui.wizard.new_beatmap.measure_bpm_manual").data();
+    const char* autoBpmLabel =
+        TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
+    const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float comboWidth =
+        std::max(120.0f,
+                 ImGui::GetContentRegionAvail().x - measureBpmWidth -
+                     autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
 
-        ImGui::SetNextItemWidth(comboWidth);
-        if ( ImGui::BeginCombo("##NewBeatmapAudioSelect",
-                               audioPreview.c_str()) ) {
-            for ( const auto& res : project->m_audioResources ) {
-                if ( res.m_type != MMM::AudioTrackType::Main ) continue;
+    ImGui::SetNextItemWidth(comboWidth);
+    if ( ImGui::BeginCombo("##NewBeatmapAudioSelect", audioPreview.c_str()) ) {
+        for ( const auto& res : project->m_audioResources ) {
+            if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
-                bool        isSelected = (m_selectedAudioTrackId == res.m_id);
-                std::string label      = res.m_id + "##" + res.m_path;
-                if ( ImGui::Selectable(label.c_str(), isSelected) ) {
-                    m_selectedAudioTrackId = res.m_id;
-                    onAudioSelected(Config::utf8ToPath(res.m_path));
-                }
-                if ( isSelected ) ImGui::SetItemDefaultFocus();
-                ImGui::SameLine();
-                ImGui::TextDisabled("(%s)", res.m_path.c_str());
+            bool        isSelected = (m_selectedAudioTrackId == res.m_id);
+            std::string label      = res.m_id + "##" + res.m_path;
+            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
+                m_selectedAudioTrackId = res.m_id;
+                onAudioSelected(Config::utf8ToPath(res.m_path));
             }
-            ImGui::EndCombo();
+            if ( isSelected ) ImGui::SetItemDefaultFocus();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", res.m_path.c_str());
         }
-        ImGui::SameLine();
-        if ( m_selectedAudioTrackId.empty() ) {
-            ImGui::BeginDisabled();
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if ( m_selectedAudioTrackId.empty() ) {
+        ImGui::BeginDisabled();
+    }
+    auto openBpmTool = [&](bool autoMeasure) {
+        std::string viewName = "BpmMeasurementTool";
+        auto* tool = sourceManager->getView<BpmMeasurementToolView>(viewName);
+        if ( !tool ) {
+            auto toolView = std::make_unique<BpmMeasurementToolView>(
+                TR("ui.tools.bpm_measure").data());
+            tool = toolView.get();
+            sourceManager->registerView(viewName, std::move(toolView));
         }
-        auto openBpmTool = [&](bool autoMeasure) {
-            std::string viewName = "BpmMeasurementTool";
-            auto*       tool =
-                sourceManager->getView<BpmMeasurementToolView>(viewName);
-            if ( !tool ) {
-                auto toolView = std::make_unique<BpmMeasurementToolView>(
-                    TR("ui.tools.bpm_measure").data());
-                tool = toolView.get();
-                sourceManager->registerView(viewName, std::move(toolView));
+        if ( tool ) {
+            if ( autoMeasure ) {
+                tool->openWithAutoMeasurement(m_selectedAudioTrackId);
+            } else {
+                tool->openWithAudioTrack(m_selectedAudioTrackId);
             }
-            if ( tool ) {
-                if ( autoMeasure ) {
-                    tool->openWithAutoMeasurement(m_selectedAudioTrackId);
-                } else {
-                    tool->openWithAudioTrack(m_selectedAudioTrackId);
-                }
-            }
-            m_isOpen = false;
-            ImGui::CloseCurrentPopup();
-        };
-        if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
-            openBpmTool(false);
         }
-        ImGui::SameLine();
-        if ( ImGui::Button(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
-            openBpmTool(true);
-        }
-        if ( m_selectedAudioTrackId.empty() ) {
-            ImGui::EndDisabled();
-        }
+    };
+    if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+        openBpmTool(false);
+    }
+    ImGui::SameLine();
+    if ( ImGui::Button(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
+        openBpmTool(true);
+    }
+    if ( m_selectedAudioTrackId.empty() ) {
+        ImGui::EndDisabled();
+    }
 
-        // 封面选择 (只可指向图片文件)
-        std::string coverImgPreview =
-            m_selectedCoverImgPath.empty()
-                ? TR("ui.wizard.new_beatmap.select_cover_img").data()
-                : Config::pathToUtf8(m_selectedCoverImgPath);
+    // 封面选择 (只可指向图片文件)
+    std::string coverImgPreview =
+        m_selectedCoverImgPath.empty()
+            ? TR("ui.wizard.new_beatmap.select_cover_img").data()
+            : Config::pathToUtf8(m_selectedCoverImgPath);
 
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if ( ImGui::BeginCombo("##NewBeatmapCoverImageSelect",
-                               coverImgPreview.c_str()) ) {
-            // 扫描项目中的图片文件
-            std::vector<std::string> resources;
-            try {
-                for ( const auto& entry :
-                      std::filesystem::recursive_directory_iterator(
-                          project->m_projectRoot) ) {
-                    if ( entry.is_regular_file() ) {
-                        auto ext = Config::pathToUtf8(entry.path().extension());
-                        std::transform(
-                            ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                             ext == ".bmp" ) {
-                            auto rel = std::filesystem::relative(
-                                entry.path(), project->m_projectRoot);
-                            resources.push_back(Config::pathToUtf8(rel));
-                        }
-                    }
-                }
-            } catch ( ... ) {
-            }
-
-            for ( const auto& resPath : resources ) {
-                bool isSelected = (m_selectedCoverImgPath == resPath);
-                if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
-                    m_selectedCoverImgPath = resPath;
-                }
-                if ( isSelected ) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-
-        // 背景选择
-        std::string coverPreview =
-            m_selectedCoverPath.empty()
-                ? TR("ui.wizard.new_beatmap.select_cover").data()
-                : Config::pathToUtf8(m_selectedCoverPath);
-
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        if ( ImGui::BeginCombo("##NewBeatmapBackgroundSelect",
-                               coverPreview.c_str()) ) {
-            // 扫描项目中的图片/视频文件
-            std::vector<std::string> resources;
-            try {
-                for ( const auto& entry :
-                      std::filesystem::recursive_directory_iterator(
-                          project->m_projectRoot) ) {
-                    if ( entry.is_regular_file() ) {
-                        auto ext = Config::pathToUtf8(entry.path().extension());
-                        std::transform(
-                            ext.begin(), ext.end(), ext.begin(), ::tolower);
-                        if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                             ext == ".bmp" || ext == ".mp4" || ext == ".avi" ) {
-                            auto rel = std::filesystem::relative(
-                                entry.path(), project->m_projectRoot);
-                            resources.push_back(Config::pathToUtf8(rel));
-                        }
-                    }
-                }
-            } catch ( ... ) {
-            }
-
-            for ( const auto& resPath : resources ) {
-                bool isSelected = (m_selectedCoverPath == resPath);
-                if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
-                    m_selectedCoverPath = resPath;
-
-                    // 如果背景是图片且封面为空，则自动沿用同一张图片。
-                    auto ext = Config::pathToUtf8(
-                        Config::utf8ToPath(resPath).extension());
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if ( ImGui::BeginCombo("##NewBeatmapCoverImageSelect",
+                           coverImgPreview.c_str()) ) {
+        // 扫描项目中的图片文件
+        std::vector<std::string> resources;
+        try {
+            for ( const auto& entry :
+                  std::filesystem::recursive_directory_iterator(
+                      project->m_projectRoot) ) {
+                if ( entry.is_regular_file() ) {
+                    auto ext = Config::pathToUtf8(entry.path().extension());
                     std::transform(
                         ext.begin(), ext.end(), ext.begin(), ::tolower);
                     if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
                          ext == ".bmp" ) {
-                        if ( m_selectedCoverImgPath.empty() ) {
-                            m_selectedCoverImgPath = resPath;
-                        }
+                        auto rel = std::filesystem::relative(
+                            entry.path(), project->m_projectRoot);
+                        resources.push_back(Config::pathToUtf8(rel));
                     }
                 }
-                if ( isSelected ) ImGui::SetItemDefaultFocus();
             }
-            ImGui::EndCombo();
+        } catch ( ... ) {
         }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        const bool needsTemplateSelection =
-            m_createMode == CreateMode::OpenTemplate && !m_templateBeatmap;
-        const bool canCreate =
-            !m_selectedAudioPath.empty() && !needsTemplateSelection;
-
-        if ( !canCreate ) {
-            ImGui::BeginDisabled();
-        }
-
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.create").data(),
-                           ImVec2(120, 0)) ) {
-            if ( hasInternalNameConflict() ) {
-                ImGui::OpenPopup("NewBeatmapDuplicateNameWarning");
-            } else {
-                submitCreateRequest();
+        for ( const auto& resPath : resources ) {
+            bool isSelected = (m_selectedCoverImgPath == resPath);
+            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+                m_selectedCoverImgPath = resPath;
             }
+            if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
-
-        if ( !canCreate ) {
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            const char* warningText =
-                m_selectedAudioPath.empty()
-                    ? TR("ui.wizard.new_beatmap.audio_not_selected").data()
-                    : TR("ui.wizard.new_beatmap.template.not_selected").data();
-            ImGui::TextColored(
-                Utils::UIThemeUtils::getWarningColor(), "%s", warningText);
-        }
-
-        ImGui::SameLine(ImGui::GetWindowWidth() - 130);
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120, 0)) ) {
-            close();
-        }
-
-        renderDuplicateNameWarningPopup();
-
-        ImGui::EndPopup();
+        ImGui::EndCombo();
     }
+
+    // 背景选择
+    std::string coverPreview =
+        m_selectedCoverPath.empty()
+            ? TR("ui.wizard.new_beatmap.select_cover").data()
+            : Config::pathToUtf8(m_selectedCoverPath);
+
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if ( ImGui::BeginCombo("##NewBeatmapBackgroundSelect",
+                           coverPreview.c_str()) ) {
+        // 扫描项目中的图片/视频文件
+        std::vector<std::string> resources;
+        try {
+            for ( const auto& entry :
+                  std::filesystem::recursive_directory_iterator(
+                      project->m_projectRoot) ) {
+                if ( entry.is_regular_file() ) {
+                    auto ext = Config::pathToUtf8(entry.path().extension());
+                    std::transform(
+                        ext.begin(), ext.end(), ext.begin(), ::tolower);
+                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                         ext == ".bmp" || ext == ".mp4" || ext == ".avi" ) {
+                        auto rel = std::filesystem::relative(
+                            entry.path(), project->m_projectRoot);
+                        resources.push_back(Config::pathToUtf8(rel));
+                    }
+                }
+            }
+        } catch ( ... ) {
+        }
+
+        for ( const auto& resPath : resources ) {
+            bool isSelected = (m_selectedCoverPath == resPath);
+            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+                m_selectedCoverPath = resPath;
+
+                // 如果背景是图片且封面为空，则自动沿用同一张图片。
+                auto ext =
+                    Config::pathToUtf8(Config::utf8ToPath(resPath).extension());
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
+                     ext == ".bmp" ) {
+                    if ( m_selectedCoverImgPath.empty() ) {
+                        m_selectedCoverImgPath = resPath;
+                    }
+                }
+            }
+            if ( isSelected ) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    const bool needsTemplateSelection =
+        m_createMode == CreateMode::OpenTemplate && !m_templateBeatmap;
+    const bool canCreate =
+        !m_selectedAudioPath.empty() && !needsTemplateSelection;
+
+    if ( !canCreate ) {
+        ImGui::BeginDisabled();
+    }
+
+    if ( ImGui::Button(TR("ui.wizard.new_beatmap.create").data(),
+                       ImVec2(120, 0)) ) {
+        if ( hasInternalNameConflict() ) {
+            ImGui::OpenPopup("NewBeatmapDuplicateNameWarning");
+        } else {
+            submitCreateRequest();
+        }
+    }
+
+    if ( !canCreate ) {
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        const char* warningText =
+            m_selectedAudioPath.empty()
+                ? TR("ui.wizard.new_beatmap.audio_not_selected").data()
+                : TR("ui.wizard.new_beatmap.template.not_selected").data();
+        ImGui::TextColored(
+            Utils::UIThemeUtils::getWarningColor(), "%s", warningText);
+    }
+
+    ImGui::SameLine(ImGui::GetWindowWidth() - 130);
+    if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
+                       ImVec2(120, 0)) ) {
+        close();
+    }
+
+    renderDuplicateNameWarningPopup();
+
+    ImGui::End();
 }
 
 void NewBeatmapWizard::open()

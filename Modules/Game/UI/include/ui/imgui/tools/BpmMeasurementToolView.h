@@ -121,6 +121,9 @@ private:
 
         /// @brief 自动 BPM/offset 测量结果。
         std::optional<BpmAutoTimingResult> autoTimingResult;
+
+        /// @brief 本次分析是否失败。
+        bool failed{ false };
     };
 
     /// @brief BPM 工具中一个可手动编辑的变速段落。
@@ -269,6 +272,11 @@ private:
     /// @brief 请求重新分析当前选择的音频轨道。
     /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
     void requestAnalyzeSelectedTrack(bool autoMeasure = false);
+
+    /// @brief 从后台线程发布一次分析失败结果。
+    /// @param autoMeasure 本次任务是否属于自动 BPM/offset 测量。
+    /// @warning 后台线程路径：只写入受互斥锁保护的待消费结果和原子状态。
+    void publishAnalysisFailure(bool autoMeasure);
 
     /// @brief 请求自动测量当前选择的音频轨道。
     void requestAutoMeasureSelectedTrack();
