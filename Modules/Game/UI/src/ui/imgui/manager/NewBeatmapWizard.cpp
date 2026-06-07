@@ -28,6 +28,9 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief BPM 测量工具窗口在 UIManager 中的稳定视图名。
+constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
+
 /// @brief 将字符串安全写入固定长度输入缓冲区。
 /// @param buffer 目标缓冲区。
 /// @param bufferSize 缓冲区长度。
@@ -269,6 +272,21 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
 
     m_measuredTimings = std::move(bpmTimings);
     m_bpm             = m_measuredTimings.front().m_bpm;
+}
+
+/// @brief 从当前绑定的 BPM 测量工具安全解除导出回调。
+void NewBeatmapWizard::unbindBpmMeasurementTool()
+{
+    if ( m_boundBpmToolManager ) {
+        auto* tool = m_boundBpmToolManager->getView<BpmMeasurementToolView>(
+            BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        if ( tool && tool == m_boundBpmToolView ) {
+            tool->setMeasurementExportCallback({});
+        }
+    }
+
+    m_boundBpmToolView    = nullptr;
+    m_boundBpmToolManager = nullptr;
 }
 
 /// @brief 格式化当前已测量 Timing 的摘要文本。
@@ -649,16 +667,19 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
     auto openBpmTool = [&](bool autoMeasure) {
-        std::string viewName = "BpmMeasurementTool";
-        auto* tool = sourceManager->getView<BpmMeasurementToolView>(viewName);
+        auto* tool = sourceManager->getView<BpmMeasurementToolView>(
+            BPM_MEASUREMENT_TOOL_VIEW_NAME);
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
             tool = toolView.get();
-            sourceManager->registerView(viewName, std::move(toolView));
+            sourceManager->registerView(BPM_MEASUREMENT_TOOL_VIEW_NAME,
+                                        std::move(toolView));
         }
         if ( tool ) {
-            m_boundBpmToolView = tool;
+            unbindBpmMeasurementTool();
+            m_boundBpmToolView    = tool;
+            m_boundBpmToolManager = sourceManager;
             tool->setMeasurementExportCallback(
                 [this](const std::string&                audioTrackId,
                        const std::vector<::MMM::Timing>& timings) {
@@ -826,10 +847,7 @@ void NewBeatmapWizard::open()
 
 void NewBeatmapWizard::close()
 {
-    if ( m_boundBpmToolView ) {
-        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
-        m_boundBpmToolView = nullptr;
-    }
+    unbindBpmMeasurementTool();
     m_isOpen = false;
     ImGui::CloseCurrentPopup();
 }
@@ -863,10 +881,7 @@ void NewBeatmapWizard::reset()
     m_templateOptions           = {};
     m_shouldOpenTemplatePicker  = false;
     m_shouldOpenTemplateOptions = false;
-    if ( m_boundBpmToolView ) {
-        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
-    }
-    m_boundBpmToolView = nullptr;
+    unbindBpmMeasurementTool();
 }
 
 void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
