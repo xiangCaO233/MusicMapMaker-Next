@@ -781,7 +781,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
 
         bpm = std::clamp(bpm, 1.0, 999.0);
         TimelineComponent timeline;
-        timeline.m_timestamp = std::max(0.0, timing.m_timestamp / 1000.0);
+        timeline.m_timestamp = timing.m_timestamp / 1000.0;
         timeline.m_effect    = ::MMM::TimingEffect::BPM;
         timeline.m_value     = bpm;
         timeline.m_metadata  = timing.m_metadata;

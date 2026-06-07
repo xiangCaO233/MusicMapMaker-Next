@@ -248,7 +248,7 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
         }
 
         auto normalized           = timing;
-        normalized.m_timestamp    = std::max(0.0, timing.m_timestamp);
+        normalized.m_timestamp    = timing.m_timestamp;
         normalized.m_timingEffect = ::MMM::TimingEffect::BPM;
         normalized.m_timingEffectParameter =
             std::clamp<double>(bpm, 1.0, 999.0);

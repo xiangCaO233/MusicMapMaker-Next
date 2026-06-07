@@ -672,7 +672,7 @@ std::vector<::MMM::Timing> BpmMeasurementToolView::makeMeasuredTimings() const
     for ( const auto& segment : m_timingSegments ) {
         const double  bpm = std::clamp(segment.bpm, 1.0, 999.0);
         ::MMM::Timing timing;
-        timing.m_timestamp = std::max(0.0, segment.timestampSeconds) * 1000.0;
+        timing.m_timestamp             = segment.timestampSeconds * 1000.0;
         timing.m_timingEffect          = ::MMM::TimingEffect::BPM;
         timing.m_timingEffectParameter = bpm;
         timing.m_bpm                   = bpm;
