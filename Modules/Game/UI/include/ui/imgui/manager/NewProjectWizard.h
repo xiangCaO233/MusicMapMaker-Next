@@ -52,6 +52,15 @@ private:
     /// @brief 绘制底部操作按钮。
     void renderFooter();
 
+    /// @brief 绘制带独立标签的输入框，避免长标签被输入框宽度裁切。
+    /// @param label 显示给用户的字段名。
+    /// @param id ImGui 内部控件 ID。
+    /// @param buffer 输入缓冲区。
+    /// @param bufferSize 输入缓冲区长度。
+    /// @return 输入内容发生变化时返回 true。
+    bool renderLabeledInputText(const char* label, const char* id, char* buffer,
+                                std::size_t bufferSize);
+
     /// @brief 打开项目保存父目录选择器。
     void openParentFolderPicker();
 
@@ -120,6 +129,9 @@ private:
 
     /// @brief 用户选择的项目保存父目录。
     std::filesystem::path m_parentDirectory;
+
+    /// @brief 最近一次保存位置选择失败时展示给用户的错误文本。
+    std::string m_locationErrorText;
 };
 
 }  // namespace MMM::UI

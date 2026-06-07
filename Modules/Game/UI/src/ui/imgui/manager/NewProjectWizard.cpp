@@ -14,6 +14,7 @@
 #include <cctype>
 #include <cfloat>
 #include <cstring>
+#include <fmt/format.h>
 #include <nfd.h>
 #include <string>
 #include <system_error>
@@ -102,6 +103,22 @@ const char* sidebarTabLabel(SideBarTab tab)
     case SideBarTab::Settings:
     default: return TR("ui.wizard.new_project.sidebar.none").data();
     }
+}
+
+/// @brief 如果路径存在且是目录，则返回可传给文件选择器的 UTF-8 路径。
+/// @param path 待检查路径。
+/// @return 有效目录的 UTF-8 文本，无效时返回空字符串。
+std::string existingDirectoryPathToUtf8(const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(path, filesystemError) || filesystemError ||
+         !std::filesystem::is_directory(path, filesystemError) ||
+         filesystemError ) {
+        return {};
+    }
+    return Config::pathToUtf8(path);
 }
 
 }  // namespace
@@ -211,20 +228,20 @@ void NewProjectWizard::renderStepHeader() const
 void NewProjectWizard::renderProjectInfoStep()
 {
     ImGui::SeparatorText(TR("ui.settings.project.info").data());
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::InputText(TR("ui.settings.project.name").data(),
-                          m_titleBuf,
-                          sizeof(m_titleBuf)) ) {
+    if ( renderLabeledInputText(TR("ui.settings.project.name").data(),
+                                "##NewProjectTitle",
+                                m_titleBuf,
+                                sizeof(m_titleBuf)) ) {
         refreshFolderNameFromTitle();
     }
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputText(TR("ui.settings.project.artist").data(),
-                     m_artistBuf,
-                     sizeof(m_artistBuf));
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    ImGui::InputText(TR("ui.settings.project.mapper").data(),
-                     m_mapperBuf,
-                     sizeof(m_mapperBuf));
+    renderLabeledInputText(TR("ui.settings.project.artist").data(),
+                           "##NewProjectArtist",
+                           m_artistBuf,
+                           sizeof(m_artistBuf));
+    renderLabeledInputText(TR("ui.settings.project.mapper").data(),
+                           "##NewProjectMapper",
+                           m_mapperBuf,
+                           sizeof(m_mapperBuf));
 }
 
 void NewProjectWizard::renderPreferencesStep()
@@ -244,9 +261,9 @@ void NewProjectWizard::renderPreferencesStep()
         previewName = m_noteColorPaletteSchemeName;
     }
 
+    ImGui::TextUnformatted(TR("ui.settings.project.note_palette").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo(TR("ui.settings.project.note_palette").data(),
-                           previewName.c_str()) ) {
+    if ( ImGui::BeginCombo("##NewProjectNotePalette", previewName.c_str()) ) {
         const bool inheritSelected = m_noteColorPaletteSchemeName.empty();
         if ( ImGui::Selectable(
                  TR("ui.settings.project.note_palette.inherit").data(),
@@ -276,8 +293,9 @@ void NewProjectWizard::renderPreferencesStep()
         ImGui::EndCombo();
     }
 
+    ImGui::TextUnformatted(TR("ui.wizard.new_project.initial_sidebar").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo(TR("ui.wizard.new_project.initial_sidebar").data(),
+    if ( ImGui::BeginCombo("##NewProjectInitialSidebar",
                            sidebarTabLabel(m_initialSideBarTab)) ) {
         const SideBarTab tabs[] = { SideBarTab::FileExplorer,
                                     SideBarTab::BeatMapExplorer,
@@ -299,10 +317,10 @@ void NewProjectWizard::renderLocationStep()
 {
     ImGui::SeparatorText(TR("ui.wizard.new_project.location").data());
 
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::InputText(TR("ui.wizard.new_project.folder_name").data(),
-                          m_folderNameBuf,
-                          sizeof(m_folderNameBuf)) ) {
+    if ( renderLabeledInputText(TR("ui.wizard.new_project.folder_name").data(),
+                                "##NewProjectFolderName",
+                                m_folderNameBuf,
+                                sizeof(m_folderNameBuf)) ) {
         m_folderNameEdited = true;
     }
 
@@ -311,6 +329,12 @@ void NewProjectWizard::renderLocationStep()
     if ( ImGui::Button(TR("ui.wizard.new_project.select_parent").data(),
                        ImVec2(buttonWidth, 0.0f)) ) {
         openParentFolderPicker();
+    }
+
+    if ( !m_locationErrorText.empty() ) {
+        ImGui::TextColored(Utils::UIThemeUtils::getDangerColor(),
+                           "%s",
+                           m_locationErrorText.c_str());
     }
 
     const std::string parentText =
@@ -342,15 +366,28 @@ void NewProjectWizard::renderLocationStep()
     }
 }
 
+bool NewProjectWizard::renderLabeledInputText(const char* label, const char* id,
+                                              char*       buffer,
+                                              std::size_t bufferSize)
+{
+    ImGui::TextUnformatted(label);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    return ImGui::InputText(id, buffer, bufferSize);
+}
+
 void NewProjectWizard::renderFooter()
 {
     ImGui::Separator();
 
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float spacing     = ImGui::GetStyle().ItemSpacing.x;
+    const float available   = ImGui::GetContentRegionAvail().x;
     const float buttonWidth = std::floor(
-        110.0f * Config::AppConfig::instance().getWindowContentScale());
+        std::min(150.0f * dpiScale, (available - spacing * 2.0f) / 3.0f));
+    const ImVec2 buttonSize{ std::max(96.0f * dpiScale, buttonWidth), 0.0f };
     ImGui::BeginDisabled(m_currentStep == Step::ProjectInfo);
-    if ( ImGui::Button(TR("ui.wizard.new_project.back").data(),
-                       ImVec2(buttonWidth, 0.0f)) ) {
+    if ( ImGui::Button(TR("ui.wizard.new_project.back").data(), buttonSize) ) {
         if ( m_currentStep == Step::Preferences ) {
             m_currentStep = Step::ProjectInfo;
         } else if ( m_currentStep == Step::Location ) {
@@ -361,7 +398,7 @@ void NewProjectWizard::renderFooter()
 
     ImGui::SameLine();
     if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                       ImVec2(buttonWidth, 0.0f)) ) {
+                       buttonSize) ) {
         close();
     }
 
@@ -370,7 +407,7 @@ void NewProjectWizard::renderFooter()
     const bool isLastStep = m_currentStep == Step::Location;
     if ( ImGui::Button(isLastStep ? TR("ui.wizard.new_project.create").data()
                                   : TR("ui.wizard.new_project.next").data(),
-                       ImVec2(buttonWidth, 0.0f)) ) {
+                       buttonSize) ) {
         if ( m_currentStep == Step::ProjectInfo ) {
             m_currentStep = Step::Preferences;
         } else if ( m_currentStep == Step::Preferences ) {
@@ -385,20 +422,31 @@ void NewProjectWizard::renderFooter()
 void NewProjectWizard::openParentFolderPicker()
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
+    m_locationErrorText.clear();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        nfdu8char_t*      outPath     = nullptr;
-        const char*       defaultPath = config.lastFilePickerPath.empty()
-                                            ? nullptr
-                                            : config.lastFilePickerPath.c_str();
-        const nfdresult_t result      = NFD_PickFolder(&outPath, defaultPath);
+        nfdu8char_t* outPath = nullptr;
+        std::string  defaultPath =
+            existingDirectoryPathToUtf8(m_parentDirectory);
+        if ( defaultPath.empty() && !config.lastFilePickerPath.empty() ) {
+            defaultPath = existingDirectoryPathToUtf8(
+                Config::utf8ToPath(config.lastFilePickerPath));
+        }
+        const nfdu8char_t* defaultPathPtr =
+            defaultPath.empty() ? nullptr : defaultPath.c_str();
+        const nfdresult_t result = NFD_PickFolderU8(&outPath, defaultPathPtr);
         if ( result == NFD_OKAY ) {
             m_parentDirectory = Config::utf8ToPath(outPath);
-            auto config = Logic::EditorEngine::instance().getEditorConfig();
-            config.settings.lastFilePickerPath = outPath;
-            Logic::EditorEngine::instance().setEditorConfig(config);
-            NFD_FreePath(outPath);
+            auto editorConfig =
+                Logic::EditorEngine::instance().getEditorConfig();
+            editorConfig.settings.lastFilePickerPath = outPath;
+            Logic::EditorEngine::instance().setEditorConfig(editorConfig);
+            NFD_FreePathU8(outPath);
         } else if ( result == NFD_ERROR ) {
-            XERROR("NFD Error: {}", NFD_GetError());
+            const char* errorText = NFD_GetError();
+            m_locationErrorText = errorText
+                                      ? fmt::format("NFD Error: {}", errorText)
+                                      : "NFD Error";
+            XERROR("NFD Error: {}", errorText ? errorText : "");
         }
         return;
     }
@@ -437,6 +485,7 @@ void NewProjectWizard::renderParentFolderPicker(float dpiScale)
                 folderPath = ImGuiFileDialog::Instance()->GetCurrentPath();
             }
             m_parentDirectory = Config::utf8ToPath(folderPath);
+            m_locationErrorText.clear();
 
             auto config = Logic::EditorEngine::instance().getEditorConfig();
             config.settings.lastFilePickerPath =
@@ -470,27 +519,41 @@ void NewProjectWizard::update(UIManager* sourceManager)
         return;
     }
 
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const std::string windowTitle =
+        std::string(TR("ui.wizard.new_project.title").data()) +
+        "###NewProjectWizardPopup";
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(TR("ui.wizard.new_project.title").data());
+        ImGui::OpenPopup(windowTitle.c_str());
         m_shouldOpen = false;
     }
 
-    const float dpiScale =
-        Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoResize;
-    if ( modalScope.begin(TR("ui.wizard.new_project.title").data(),
+    constexpr ImGuiWindowFlags     WINDOW_FLAGS =
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
+    if ( modalScope.begin(windowTitle.c_str(),
                           &m_isOpen,
                           WINDOW_FLAGS,
-                          ImVec2(560.0f * dpiScale, 420.0f * dpiScale),
+                          ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
                           false) ) {
         renderStepHeader();
 
+        const float footerReserve = ImGui::GetFrameHeightWithSpacing() +
+                                    ImGui::GetStyle().ItemSpacing.y * 3.0f;
+        const float contentHeight =
+            std::max(120.0f * dpiScale,
+                     ImGui::GetContentRegionAvail().y - footerReserve);
+        ImGui::BeginChild("##NewProjectWizardContent",
+                          ImVec2(0.0f, contentHeight),
+                          false,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
         switch ( m_currentStep ) {
         case Step::ProjectInfo: renderProjectInfoStep(); break;
         case Step::Preferences: renderPreferencesStep(); break;
         case Step::Location: renderLocationStep(); break;
         }
+        ImGui::EndChild();
 
         renderFooter();
         ImGui::EndPopup();
@@ -525,6 +588,7 @@ void NewProjectWizard::reset()
     copyToBuffer(m_artistBuf, sizeof(m_artistBuf), "Unknown");
     copyToBuffer(m_mapperBuf, sizeof(m_mapperBuf), "Unknown");
     refreshFolderNameFromTitle();
+    m_locationErrorText.clear();
 
     m_noteColorPaletteSchemeName.clear();
     m_initialSideBarTab = SideBarTab::FileExplorer;
