@@ -15,7 +15,6 @@
 #include <cctype>
 #include <cfloat>
 #include <cstring>
-#include <fmt/format.h>
 #include <nfd.h>
 #include <string>
 #include <system_error>
@@ -125,7 +124,39 @@ std::string existingDirectoryPathToUtf8(const std::filesystem::path& path)
          filesystemError ) {
         return {};
     }
-    return Config::pathToUtf8(absolutePath);
+    auto pickerPath =
+        std::filesystem::weakly_canonical(absolutePath, filesystemError);
+    if ( filesystemError ) {
+        pickerPath = absolutePath;
+        filesystemError.clear();
+    }
+    pickerPath.make_preferred();
+    return Config::pathToUtf8(pickerPath);
+}
+
+/// @brief 打开原生父目录选择器，默认路径不被系统接受时自动无默认路径重试。
+/// @param outPath 原生文件选择器输出路径。
+/// @param defaultPath 原生文件选择器初始目录。
+/// @return 原生文件选择器结果。
+nfdresult_t pickNativeParentFolder(nfdu8char_t**      outPath,
+                                   const std::string& defaultPath)
+{
+    const nfdu8char_t* defaultPathPtr =
+        defaultPath.empty() ? nullptr : defaultPath.c_str();
+    nfdresult_t result = NFD_PickFolderU8(outPath, defaultPathPtr);
+    if ( result != NFD_ERROR || defaultPathPtr == nullptr ) {
+        return result;
+    }
+
+    const char* errorText = NFD_GetError();
+    XWARN("Native folder picker rejected default path [{}]: {}",
+          defaultPath,
+          errorText ? errorText : "");
+    if ( outPath && *outPath ) {
+        NFD_FreePathU8(*outPath);
+        *outPath = nullptr;
+    }
+    return NFD_PickFolderU8(outPath, nullptr);
 }
 
 }  // namespace
@@ -455,12 +486,11 @@ void NewProjectWizard::processPendingParentFolderPicker()
     }
 
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        nfdu8char_t*       outPath = nullptr;
-        const nfdu8char_t* defaultPathPtr =
-            defaultPath.empty() ? nullptr : defaultPath.c_str();
-        const nfdresult_t result = NFD_PickFolderU8(&outPath, defaultPathPtr);
-        m_isOpen                 = true;
-        m_shouldOpen             = true;
+        nfdu8char_t*      outPath = nullptr;
+        const nfdresult_t result =
+            pickNativeParentFolder(&outPath, defaultPath);
+        m_isOpen                     = true;
+        m_shouldOpen                 = true;
         m_suppressFooterActionFrames = 12;
         if ( result == NFD_OKAY ) {
             m_parentDirectory = Config::utf8ToPath(outPath);
@@ -472,10 +502,11 @@ void NewProjectWizard::processPendingParentFolderPicker()
             NFD_FreePathU8(outPath);
         } else if ( result == NFD_ERROR ) {
             const char* errorText = NFD_GetError();
-            m_locationErrorText = errorText
-                                      ? fmt::format("NFD Error: {}", errorText)
-                                      : "NFD Error";
-            XERROR("NFD Error: {}", errorText ? errorText : "");
+            XWARN(
+                "Native folder picker failed, falling back to unified "
+                "picker: {}",
+                errorText ? errorText : "");
+            m_locationErrorText.clear();
             openUnifiedParentFolderPicker(defaultPath);
         }
         return;
