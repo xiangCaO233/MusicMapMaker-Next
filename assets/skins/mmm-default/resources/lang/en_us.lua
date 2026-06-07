@@ -581,6 +581,8 @@ return {
 	["ui.tools.bpm_measure.apply_target"] = "Target Beatmap",
 	["ui.tools.bpm_measure.no_apply_target"] = "No open beatmap can be updated.",
 	["ui.tools.bpm_measure.apply_done"] = "Applied BPM measurement to the target beatmap.",
+	["ui.tools.bpm_measure.export_to_wizard"] = "Export to New Wizard",
+	["ui.tools.bpm_measure.export_done"] = "Exported BPM measurement to the new beatmap wizard.",
 
 	["ui.wizard.new_project.title"] = "New Project Wizard",
 	["ui.wizard.new_project.default_title"] = "New Project",
@@ -613,6 +615,7 @@ return {
 	["ui.wizard.new_beatmap.measure_bpm"] = "Measure BPM",
 	["ui.wizard.new_beatmap.measure_bpm_manual"] = "Manual BPM",
 	["ui.wizard.new_beatmap.measure_bpm_auto"] = "Auto Offset",
+	["ui.wizard.new_beatmap.timing_summary"] = "Measured BPM: {:.3f} / First beat: {:.3f}s / Timings: {}",
 	["ui.wizard.new_beatmap.select_cover"] = "Select Background Image",
 	["ui.wizard.new_beatmap.select_cover_img"] = "Select Cover Image",
 	["ui.wizard.new_beatmap.audio_not_selected"] = "Please select an audio file first",

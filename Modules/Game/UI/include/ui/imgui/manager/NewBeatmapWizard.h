@@ -2,6 +2,7 @@
 
 #include "common/LogicCommands.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/Timing.h"
 #include "ui/IUIView.h"
 #include <filesystem>
 #include <memory>
@@ -10,6 +11,8 @@
 
 namespace MMM::UI
 {
+
+class BpmMeasurementToolView;
 
 class NewBeatmapWizard : public IUIView
 {
@@ -111,6 +114,17 @@ private:
     /// @brief 将输入框状态同步到待创建谱面的基础元数据。
     void syncMetaFromInputs();
 
+    /// @brief 接收 BPM 测量工具导出的 Timing，并写回新建谱面向导。
+    /// @param audioTrackId 测量结果所属的音频轨道 ID。
+    /// @param timings 测量得到的 BPM Timing 列表。
+    void applyMeasuredTimingsFromTool(
+        const std::string&                audioTrackId,
+        const std::vector<::MMM::Timing>& timings);
+
+    /// @brief 格式化当前已测量 Timing 的摘要文本。
+    /// @return 可展示在新建谱面向导中的 Timing 摘要。
+    std::string formatMeasuredTimingSummary() const;
+
     /// @brief 判断当前内部名称是否已存在于项目谱面列表。
     /// @return 已存在相同内部名称时返回 true。
     bool hasInternalNameConflict() const;
@@ -164,6 +178,8 @@ private:
 
     /// @brief 谱面默认 BPM。
     double m_bpm = 120.0;
+    /// @brief BPM 测量工具回填的新建谱面初始 Timing 列表。
+    std::vector<::MMM::Timing> m_measuredTimings;
     /// @brief 谱面轨道数。
     int m_trackCount = 4;
     /// @brief 选中的主音频相对路径。
@@ -176,6 +192,9 @@ private:
     std::filesystem::path m_selectedCoverImgPath;
     /// @brief 当前选中音频时长，单位为秒。
     double m_audioDuration = 0.0;
+
+    /// @brief 当前由新建向导绑定导出回调的 BPM 测量工具视图，非拥有指针。
+    BpmMeasurementToolView* m_boundBpmToolView{ nullptr };
 };
 
 }  // namespace MMM::UI

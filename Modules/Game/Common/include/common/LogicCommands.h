@@ -451,6 +451,9 @@ struct CmdCreateBeatmap {
 
     /// @brief 从模板谱面复制的数据类别。
     BeatmapTemplateCreateOptions templateOptions;
+
+    /// @brief 新建谱面时预置写入的 Timing 列表，时间戳单位为毫秒。
+    std::vector<::MMM::Timing> initialTimings;
 };
 
 /**

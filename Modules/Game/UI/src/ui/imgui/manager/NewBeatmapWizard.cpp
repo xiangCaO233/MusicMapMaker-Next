@@ -17,6 +17,7 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstring>
 #include <fmt/format.h>
 #include <mutex>
@@ -126,6 +127,9 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
     const auto& meta = beatmap.m_baseMapMetadata;
 
     if ( !meta.main_audio_path.empty() ) {
+        if ( m_selectedAudioPath != meta.main_audio_path ) {
+            m_measuredTimings.clear();
+        }
         m_selectedAudioPath    = meta.main_audio_path;
         m_selectedAudioTrackId = findAudioTrackIdForPath(meta.main_audio_path);
     }
@@ -216,6 +220,75 @@ void NewBeatmapWizard::syncMetaFromInputs()
     m_meta.cover_path      = m_selectedCoverImgPath;
 }
 
+/// @brief 接收 BPM 测量工具导出的 Timing，并写回新建谱面向导。
+/// @param audioTrackId 测量结果所属的音频轨道 ID。
+/// @param timings 测量得到的 BPM Timing 列表。
+void NewBeatmapWizard::applyMeasuredTimingsFromTool(
+    const std::string& audioTrackId, const std::vector<::MMM::Timing>& timings)
+{
+    if ( !m_isOpen || timings.empty() ) {
+        return;
+    }
+    if ( !audioTrackId.empty() && !m_selectedAudioTrackId.empty() &&
+         audioTrackId != m_selectedAudioTrackId ) {
+        return;
+    }
+
+    std::vector<::MMM::Timing> bpmTimings;
+    bpmTimings.reserve(timings.size());
+    for ( const auto& timing : timings ) {
+        if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) {
+            continue;
+        }
+
+        const double bpm =
+            timing.m_bpm > 0.0 ? timing.m_bpm : timing.m_timingEffectParameter;
+        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
+            continue;
+        }
+
+        auto normalized           = timing;
+        normalized.m_timestamp    = std::max(0.0, timing.m_timestamp);
+        normalized.m_timingEffect = ::MMM::TimingEffect::BPM;
+        normalized.m_timingEffectParameter =
+            std::clamp<double>(bpm, 1.0, 999.0);
+        normalized.m_bpm         = normalized.m_timingEffectParameter;
+        normalized.m_beat_length = 60000.0 / normalized.m_bpm;
+        bpmTimings.push_back(normalized);
+    }
+
+    if ( bpmTimings.empty() ) {
+        return;
+    }
+
+    std::stable_sort(bpmTimings.begin(),
+                     bpmTimings.end(),
+                     [](const auto& lhs, const auto& rhs) {
+                         return lhs.m_timestamp < rhs.m_timestamp;
+                     });
+
+    m_measuredTimings = std::move(bpmTimings);
+    m_bpm             = m_measuredTimings.front().m_bpm;
+}
+
+/// @brief 格式化当前已测量 Timing 的摘要文本。
+/// @return 可展示在新建谱面向导中的 Timing 摘要。
+std::string NewBeatmapWizard::formatMeasuredTimingSummary() const
+{
+    if ( m_measuredTimings.empty() ) {
+        return {};
+    }
+
+    const auto&  firstTiming = m_measuredTimings.front();
+    const double bpm         = firstTiming.m_bpm > 0.0
+                                   ? firstTiming.m_bpm
+                                   : firstTiming.m_timingEffectParameter;
+    return TR_FMT("ui.wizard.new_beatmap.timing_summary",
+                  bpm,
+                  firstTiming.m_timestamp / 1000.0,
+                  m_measuredTimings.size());
+}
+
 bool NewBeatmapWizard::hasInternalNameConflict() const
 {
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
@@ -234,7 +307,8 @@ void NewBeatmapWizard::submitCreateRequest()
     syncMetaFromInputs();
 
     Logic::CmdCreateBeatmap cmd;
-    cmd.baseMeta = m_meta;
+    cmd.baseMeta       = m_meta;
+    cmd.initialTimings = m_measuredTimings;
     if ( m_createMode == CreateMode::OpenTemplate && m_templateBeatmap ) {
         syncSelectedTemplateBeatmap();
         cmd.templateBeatmap = m_templateBeatmap;
@@ -498,7 +572,21 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                           0.0f,
                           1000.0f,
                           "%.2f") ) {
-        m_bpm = (double)bpm;
+        m_bpm = std::clamp<double>(bpm, 1.0, 999.0);
+        if ( m_measuredTimings.size() == 1 ) {
+            auto& timing          = m_measuredTimings.front();
+            timing.m_timingEffect = ::MMM::TimingEffect::BPM;
+            timing.m_timingEffectParameter =
+                std::clamp<double>(m_bpm, 1.0, 999.0);
+            timing.m_bpm         = timing.m_timingEffectParameter;
+            timing.m_beat_length = 60000.0 / timing.m_bpm;
+        } else if ( !m_measuredTimings.empty() ) {
+            m_measuredTimings.clear();
+        }
+    }
+    if ( !m_measuredTimings.empty() ) {
+        const auto timingSummary = formatMeasuredTimingSummary();
+        ImGui::TextDisabled("%s", timingSummary.c_str());
     }
 
     if ( ImGui::InputInt(TR("ui.settings.beatmap.tracks").data(),
@@ -570,6 +658,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             sourceManager->registerView(viewName, std::move(toolView));
         }
         if ( tool ) {
+            m_boundBpmToolView = tool;
+            tool->setMeasurementExportCallback(
+                [this](const std::string&                audioTrackId,
+                       const std::vector<::MMM::Timing>& timings) {
+                    applyMeasuredTimingsFromTool(audioTrackId, timings);
+                });
             if ( autoMeasure ) {
                 tool->openWithAutoMeasurement(m_selectedAudioTrackId);
             } else {
@@ -732,6 +826,10 @@ void NewBeatmapWizard::open()
 
 void NewBeatmapWizard::close()
 {
+    if ( m_boundBpmToolView ) {
+        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
+        m_boundBpmToolView = nullptr;
+    }
     m_isOpen = false;
     ImGui::CloseCurrentPopup();
 }
@@ -742,6 +840,7 @@ void NewBeatmapWizard::reset()
 
     m_bpm        = 120.0;
     m_trackCount = 4;
+    m_measuredTimings.clear();
 
     copyToBuffer(m_nameBuf, sizeof(m_nameBuf), "New Beatmap");
     copyToBuffer(m_titleBuf, sizeof(m_titleBuf), "");
@@ -764,11 +863,16 @@ void NewBeatmapWizard::reset()
     m_templateOptions           = {};
     m_shouldOpenTemplatePicker  = false;
     m_shouldOpenTemplateOptions = false;
+    if ( m_boundBpmToolView ) {
+        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
+    }
+    m_boundBpmToolView = nullptr;
 }
 
 void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
 {
     m_selectedAudioPath = path;
+    m_measuredTimings.clear();
 
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) return;

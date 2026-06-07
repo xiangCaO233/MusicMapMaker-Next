@@ -115,6 +115,45 @@ void applyTemplateBeatmap(BeatMap& target, const BeatMap& source,
         target.sync();
     }
 }
+
+/// @brief 按时间和类型稳定排序谱面 Timing。
+/// @param timings 待排序的 Timing 列表。
+void sortBeatmapTimings(std::vector<::MMM::Timing>& timings)
+{
+    std::stable_sort(
+        timings.begin(), timings.end(), [](const auto& lhs, const auto& rhs) {
+            if ( lhs.m_timestamp != rhs.m_timestamp ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            return static_cast<int>(lhs.m_timingEffect) <
+                   static_cast<int>(rhs.m_timingEffect);
+        });
+}
+
+/// @brief 将新建命令携带的初始 Timing 写入新谱面。
+/// @param target 接收初始 Timing 的新谱面。
+/// @param initialTimings 新建向导或其他创建流程提供的 Timing 列表。
+/// @param keepNonBpmTimings 是否保留模板中的非 BPM 流速/特效 Timing。
+void applyInitialBeatmapTimings(
+    BeatMap& target, const std::vector<::MMM::Timing>& initialTimings,
+    bool keepNonBpmTimings)
+{
+    if ( initialTimings.empty() ) {
+        return;
+    }
+
+    if ( keepNonBpmTimings ) {
+        std::erase_if(target.m_timings, [](const auto& timing) {
+            return timing.m_timingEffect == ::MMM::TimingEffect::BPM;
+        });
+    } else {
+        target.m_timings.clear();
+    }
+
+    target.m_timings.insert(
+        target.m_timings.end(), initialTimings.begin(), initialTimings.end());
+    sortBeatmapTimings(target.m_timings);
+}
 }  // namespace
 
 /// @brief 创建谱面文件并登记到项目资源列表。
@@ -169,6 +208,10 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
         applyTemplateBeatmap(
             *newBeatmap, *cmd.templateBeatmap, cmd.templateOptions);
     }
+    applyInitialBeatmapTimings(
+        *newBeatmap,
+        cmd.initialTimings,
+        cmd.templateBeatmap && cmd.templateOptions.copyTimelines);
 
     try {
         newBeatmap->saveToFile(mapPath);

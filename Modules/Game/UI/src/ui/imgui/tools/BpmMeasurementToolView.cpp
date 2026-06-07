@@ -28,6 +28,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <numeric>
+#include <utility>
 
 #ifndef M_PI
 #    define M_PI 3.14159265358979323846
@@ -294,6 +295,14 @@ BpmMeasurementToolView::~BpmMeasurementToolView()
     m_spectrumTextures.clear();
 }
 
+/// @brief 设置测量结果导出回调，用于新建谱面向导等未打开谱面的流程。
+/// @param callback 接收当前音频轨道 ID 和 BPM Timing 列表的回调。
+void BpmMeasurementToolView::setMeasurementExportCallback(
+    MeasurementExportCallback callback)
+{
+    m_measurementExportCallback = std::move(callback);
+}
+
 /// @brief 打开窗口并选中指定项目音频轨道。
 /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
 void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
@@ -518,12 +527,8 @@ void BpmMeasurementToolView::consumePendingAnalysis()
             m_firstBeatTime = clampFirstBeatTime(autoTiming.offsetMs / 1000.0,
                                                  m_beatLengthSeconds,
                                                  playbackCanvasDuration());
-            if ( m_timingSegments.empty() ) {
-                m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
-            } else {
-                m_timingSegments.front().timestampSeconds = m_firstBeatTime;
-                m_timingSegments.front().bpm              = m_bpm;
-            }
+            m_timingSegments.clear();
+            m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
             normalizeTimingSegments();
             m_viewCenter = std::clamp<double>(
                 m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
@@ -537,7 +542,11 @@ void BpmMeasurementToolView::consumePendingAnalysis()
                                   autoTiming.rawBpm,
                                   autoTiming.signature,
                                   autoTiming.division);
-            m_shouldOpenAutoApplyPopup = true;
+            if ( m_measurementExportCallback ) {
+                exportMeasuredTimingsToCallback(false);
+            } else {
+                m_shouldOpenAutoApplyPopup = true;
+            }
         } else {
             m_statusText = TR("ui.tools.bpm_measure.auto_failed").data();
         }
@@ -671,6 +680,26 @@ std::vector<::MMM::Timing> BpmMeasurementToolView::makeMeasuredTimings() const
         timings.push_back(timing);
     }
     return timings;
+}
+
+/// @brief 将当前测量 Timing 通过外部回调导出。
+/// @param updateStatus 是否覆盖当前工具状态文本。
+void BpmMeasurementToolView::exportMeasuredTimingsToCallback(bool updateStatus)
+{
+    if ( !m_measurementExportCallback ) {
+        return;
+    }
+
+    ensureTimingSegments();
+    auto timings = makeMeasuredTimings();
+    if ( timings.empty() ) {
+        return;
+    }
+
+    m_measurementExportCallback(m_selectedAudioTrackId, timings);
+    if ( updateStatus ) {
+        m_statusText = TR("ui.tools.bpm_measure.export_done").data();
+    }
 }
 
 /// @brief 收集当前已打开且可写入的谱面列表。
@@ -1007,6 +1036,12 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
     if ( ImGui::Button(TR("ui.tools.bpm_measure.apply_to_beatmap").data(),
                        ImVec2(-1.0f, 0.0f)) ) {
         requestOpenApplyTimingPopup();
+    }
+    if ( m_measurementExportCallback ) {
+        if ( ImGui::Button(TR("ui.tools.bpm_measure.export_to_wizard").data(),
+                           ImVec2(-1.0f, 0.0f)) ) {
+            exportMeasuredTimingsToCallback(true);
+        }
     }
 }
 

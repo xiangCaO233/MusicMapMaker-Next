@@ -585,6 +585,8 @@ return {
 	["ui.tools.bpm_measure.apply_target"] = "目标谱面",
 	["ui.tools.bpm_measure.no_apply_target"] = "当前没有可应用的已打开谱面。",
 	["ui.tools.bpm_measure.apply_done"] = "已应用 BPM 测量结果到目标谱面。",
+	["ui.tools.bpm_measure.export_to_wizard"] = "导出到新建向导",
+	["ui.tools.bpm_measure.export_done"] = "已将 BPM 测量结果回填到新建谱面向导。",
 
 	["ui.wizard.new_project.title"] = "新建项目向导",
 	["ui.wizard.new_project.default_title"] = "新项目",
@@ -617,6 +619,7 @@ return {
 	["ui.wizard.new_beatmap.measure_bpm"] = "测量BPM",
 	["ui.wizard.new_beatmap.measure_bpm_manual"] = "手测BPM",
 	["ui.wizard.new_beatmap.measure_bpm_auto"] = "自动测偏",
+	["ui.wizard.new_beatmap.timing_summary"] = "已测 BPM: {:.3f} / 首拍: {:.3f}s / Timing: {}",
 	["ui.wizard.new_beatmap.select_cover"] = "选择背景图片",
 	["ui.wizard.new_beatmap.select_cover_img"] = "选择封面图片",
 	["ui.wizard.new_beatmap.audio_not_selected"] = "请先选择音频文件",

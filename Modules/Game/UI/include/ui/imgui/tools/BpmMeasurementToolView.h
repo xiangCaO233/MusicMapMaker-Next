@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <limits>
 #include <memory>
@@ -36,6 +37,15 @@ public:
 
     /// @brief 销毁窗口并等待后台分析任务和 GPU 资源释放。
     ~BpmMeasurementToolView() override;
+
+    /// @brief 将当前测量到的 BPM Timing 导出给外部流程的回调类型。
+    using MeasurementExportCallback =
+        std::function<void(const std::string&                audioTrackId,
+                           const std::vector<::MMM::Timing>& timings)>;
+
+    /// @brief 设置测量结果导出回调，用于新建谱面向导等未打开谱面的流程。
+    /// @param callback 接收当前音频轨道 ID 和 BPM Timing 列表的回调。
+    void setMeasurementExportCallback(MeasurementExportCallback callback);
 
     /// @brief 打开窗口并选中指定项目音频轨道。
     /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
@@ -318,6 +328,10 @@ private:
     /// @brief 将当前段落列表转换为可写入谱面的 BPM Timing 列表。
     std::vector<::MMM::Timing> makeMeasuredTimings() const;
 
+    /// @brief 将当前测量 Timing 通过外部回调导出。
+    /// @param updateStatus 是否覆盖当前工具状态文本。
+    void exportMeasuredTimingsToCallback(bool updateStatus);
+
     /// @brief 收集当前已打开且可写入的谱面列表。
     std::vector<OpenBeatmapApplyOption> collectApplyBeatmapOptions() const;
 
@@ -529,6 +543,9 @@ private:
 
     /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
     std::vector<BpmTimingSegment> m_timingSegments;
+
+    /// @brief 外部流程接收 BPM Timing 测量结果的回调。
+    MeasurementExportCallback m_measurementExportCallback;
 
     /// @brief 是否在下一帧打开自动测偏移应用确认弹窗。
     bool m_shouldOpenAutoApplyPopup{ false };
