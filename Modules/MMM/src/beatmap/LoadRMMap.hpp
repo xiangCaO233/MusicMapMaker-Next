@@ -1,9 +1,12 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Polyline.h"
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +34,36 @@ public:
     }
 };
 
+/// @brief 查找 RM/imd 谱面同名前缀的主音频文件。
+/// @param parent 谱面所在目录。
+/// @param filePrefix 音频文件名前缀。
+/// @return 找到时返回相对音频文件名，否则返回空路径。
+inline std::filesystem::path resolveRMAudioPath(
+    const std::filesystem::path& parent, const std::string& filePrefix)
+{
+    if ( filePrefix.empty() ) {
+        return {};
+    }
+
+    static constexpr std::array<std::string_view, 7> AUDIO_EXTENSIONS{
+        ".mp3", ".wav", ".ogg", ".flac", ".opus", ".aac", ".m4a"
+    };
+
+    std::error_code ec;
+    for ( const auto extension : AUDIO_EXTENSIONS ) {
+        auto candidate =
+            Config::utf8ToPath(filePrefix + std::string(extension));
+        if ( std::filesystem::exists(parent / candidate, ec) && !ec ) {
+            return candidate;
+        }
+        ec.clear();
+    }
+    return {};
+}
+
+/// @brief 加载 RM/imd 谱面文件。
+/// @param path 谱面文件路径。
+/// @return 解析出的谱面数据。
 inline BeatMap loadRMMap(std::filesystem::path path)
 {
     // 创建谱面
@@ -98,23 +131,9 @@ inline BeatMap loadRMMap(std::filesystem::path path)
 
     // 同文件夹内查询可能存在的音频文件
     if ( !file_presuffix.empty() ) {
-        auto parent = basemeta.map_path.parent_path();
-        bool has_audio{ true };
-        basemeta.main_audio_path = Config::utf8ToPath(file_presuffix + ".mp3");
-        if ( !std::filesystem::exists(parent / basemeta.main_audio_path, ec) ) {
-            basemeta.main_audio_path =
-                Config::utf8ToPath(file_presuffix + ".wav");
-            if ( !std::filesystem::exists(parent / basemeta.main_audio_path,
-                                          ec) ) {
-                basemeta.main_audio_path =
-                    Config::utf8ToPath(file_presuffix + ".ogg");
-                if ( !std::filesystem::exists(parent / basemeta.main_audio_path,
-                                              ec) ) {
-                    has_audio = false;
-                }
-            }
-        }
-        if ( !has_audio ) {
+        auto parent              = basemeta.map_path.parent_path();
+        basemeta.main_audio_path = resolveRMAudioPath(parent, file_presuffix);
+        if ( basemeta.main_audio_path.empty() ) {
             basemeta.main_audio_path.clear();
             XWARN("未找到imd对应音频文件");
         }
