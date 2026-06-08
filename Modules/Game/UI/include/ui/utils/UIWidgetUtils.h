@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "ui/layout/CLayDefs.h"
 #include <algorithm>
 #include <cmath>
 #include <string>

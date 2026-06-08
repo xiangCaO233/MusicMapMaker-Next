@@ -9,7 +9,6 @@
 #include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "runtime/AppThreadPool.h"
-#include "ui/layout/CLayDefs.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>

@@ -12,7 +12,6 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/render/Batcher.h"
-#include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -292,8 +291,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Logic::TimelineInteractiveElement& el) {
-                    bool isNearTime  = hoveredSnapped &&
-                                       std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime = hoveredSnapped &&
+                                      std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     return isNearTime || isNearPixel;
                 };
@@ -672,9 +671,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             cmd.vertexOffset    = 0;
             cmd.customTextureId = static_cast<uint32_t>(Logic::TextureID::Note);
             cmd.scissor         = vk::Rect2D{
-                { 0, 0 },
-                { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
-                  static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
+                        { 0, 0 },
+                        { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
+                          static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
             };
             m_currentSnapshot->glowCmds.push_back(cmd);
             hasDecoration = true;
@@ -736,9 +735,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     for ( const auto& target : collectVisibleTimingTargets() ) {
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered  = target.entity == m_hoveredTimingEntity;
-        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
-                              m_timingEraseTargetEntities.end();
+        const bool hovered = target.entity == m_hoveredTimingEntity;
+        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
+                             m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;

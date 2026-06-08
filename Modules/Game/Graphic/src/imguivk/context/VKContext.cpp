@@ -460,7 +460,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                                      minPos.y + ImGui::GetWindowHeight());
+                               minPos.y + ImGui::GetWindowHeight());
 
         // 绘制毛玻璃/半透明背板 (深色磨砂)
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(

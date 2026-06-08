@@ -1,11 +1,8 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
-#include "audio/AudioManager.h"
 #include "common/AudioInfoUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -14,7 +11,6 @@
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -356,9 +352,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                   option.displayName,
-                                                   option.internalName,
-                                                   option.cameraId);
+                                                option.displayName,
+                                                option.internalName,
+                                                option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ImGui::Selectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -638,8 +634,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -

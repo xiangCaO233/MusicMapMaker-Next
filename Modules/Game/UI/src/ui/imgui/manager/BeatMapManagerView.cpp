@@ -3,7 +3,6 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"

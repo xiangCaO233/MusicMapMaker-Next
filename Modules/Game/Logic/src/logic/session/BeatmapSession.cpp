@@ -1,8 +1,5 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
-#include "log/colorful-log.h"
-#include "logic/BeatmapSyncBuffer.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
@@ -11,7 +8,6 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include <chrono>
 #include <cmath>
 
@@ -163,8 +159,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     bool isInteracting = m_ctx->isDragging || m_ctx->isSelecting ||
                          m_ctx->brushState.isActive ||
                          m_ctx->eraserState.isActive;
-    bool isBusy        = isInteracting || m_ctx->isPlaying ||
-                         m_ctx->isMainAudioSyncFollower || hasPendingCommands();
+    bool isBusy = isInteracting || m_ctx->isPlaying ||
+                  m_ctx->isMainAudioSyncFollower || hasPendingCommands();
 
     if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
          !m_ctx->isPlaying && !isInteracting && !processed ) {

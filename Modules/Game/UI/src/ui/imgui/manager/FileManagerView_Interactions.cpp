@@ -4,7 +4,6 @@
 #include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"

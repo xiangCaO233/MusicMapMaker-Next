@@ -1,25 +1,14 @@
-#include "audio/AudioManager.h"
-#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
-#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
-#include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
-#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <array>
 #include <cstdint>
-#include <filesystem>
-#include <nfd.h>
 #include <string>
 
 namespace MMM::UI

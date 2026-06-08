@@ -1,7 +1,6 @@
 #include "logic/session/tool/GrabTool.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
-#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -112,9 +111,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -312,12 +311,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW  = (it->second.viewportWidth *
-                              (ctx.lastConfig.visual.trackLayout.right -
-                               ctx.lastConfig.visual.trackLayout.left)) /
-                             static_cast<float>(ctx.trackCount);
-            float lx       = it->second.viewportWidth *
-                             ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW = (it->second.viewportWidth *
+                             (ctx.lastConfig.visual.trackLayout.right -
+                              ctx.lastConfig.visual.trackLayout.left)) /
+                            static_cast<float>(ctx.trackCount);
+            float lx = it->second.viewportWidth *
+                       ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {
@@ -499,7 +498,7 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
     const auto& initDragged  = initSubNotes[subIdx];
 
     bool mergeSubHold  = (initDragged.type == ::MMM::NoteType::HOLD &&
-                          subNotes[subIdx - 1].dtrack == 0);
+                         subNotes[subIdx - 1].dtrack == 0);
     bool mergeSubFlick = (initDragged.type == ::MMM::NoteType::FLICK &&
                           std::abs(subNotes[subIdx - 1].duration) < 0.001);
 

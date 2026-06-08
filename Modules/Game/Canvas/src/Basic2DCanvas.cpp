@@ -7,10 +7,8 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
-#include "logic/ecs/system/ScrollCache.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
 #include <utility>

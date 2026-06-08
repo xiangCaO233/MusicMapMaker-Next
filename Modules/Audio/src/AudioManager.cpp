@@ -1,25 +1,16 @@
 #include "audio/AudioManager.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
-#include "event/audio/AudioPlaybackEvent.h"
-#include "event/core/EventBus.h"
 #include "log/colorful-log.h"
-#include "mmm/project/AudioResource.h"
 #include "runtime/AppThreadPool.h"
 
-#include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include <ice/core/MixBus.hpp>
-#include <ice/core/PlayCallBack.hpp>
-#include <ice/core/SourceNode.hpp>
-#include <ice/core/effect/GraphicEqualizer.hpp>
-#include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/out/IReceiver.hpp>
 #include <ice/out/play/openal/ALPlayer.hpp>

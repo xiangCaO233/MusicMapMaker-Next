@@ -1,7 +1,5 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -800,13 +798,13 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
     bool  shouldShowSubView = false;
     float mouseAxis         = 0.0f;
     float dragDistance      = 0.0f;
-    float separatorAxis = axis == ImGuiAxis_Y
-                              ? (m_collapsedDockIsFirstChild
-                                     ? hostWindow->Pos.y
-                                     : hostWindow->Pos.y + hostWindow->Size.y)
-                              : (m_collapsedDockIsFirstChild
-                                     ? hostWindow->Pos.x
-                                     : hostWindow->Pos.x + hostWindow->Size.x);
+    float separatorAxis     = axis == ImGuiAxis_Y
+                                  ? (m_collapsedDockIsFirstChild
+                                         ? hostWindow->Pos.y
+                                         : hostWindow->Pos.y + hostWindow->Size.y)
+                                  : (m_collapsedDockIsFirstChild
+                                         ? hostWindow->Pos.x
+                                         : hostWindow->Pos.x + hostWindow->Size.x);
 
     if ( !overlayActive ) {
         m_collapsedResizeDragActive        = false;
@@ -917,9 +915,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     std::string    windowName   = m_currentSubViewId + "###" + m_name;
     const ImGuiID  resumeDockId = resumeCollapsedResize ? m_collapsedDockId : 0;
     LayoutContext  lctx{ m_layoutCtx,     windowName,
-                         false,           ImGuiWindowFlags_NoTitleBar,
-                         nullptr,         resumeDockId,
-                         ImGuiCond_Always };
+                        false,           ImGuiWindowFlags_NoTitleBar,
+                        nullptr,         resumeDockId,
+                        ImGuiCond_Always };
     ImVec2         currentWindowSize = ImGui::GetWindowSize();
     const bool     isDocked          = ImGui::IsWindowDocked();
     ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();

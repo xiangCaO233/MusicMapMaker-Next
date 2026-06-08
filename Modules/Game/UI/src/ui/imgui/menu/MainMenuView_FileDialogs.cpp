@@ -1,38 +1,24 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "event/project/ProjectEvents.h"
-#include "event/ui/UISettingsTabEvent.h"
-#include "event/ui/UISubViewToggleEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "mmm/note/Hold.h"
-#include "mmm/note/Polyline.h"
 #include "mmm/project/PackageFileTypes.h"
-#include "mmmversion.h"
-#include "network/UpdateChecker.h"
-#include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <filesystem>
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <nfd.h>
 #include <string_view>
 #include <system_error>
@@ -317,11 +303,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title    = !meta.title_unicode.empty()
-                           ? meta.title_unicode
-                           : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount = meta.track_count;
-            version  = meta.version.empty() ? "default" : meta.version;
+            title            = !meta.title_unicode.empty()
+                                   ? meta.title_unicode
+                                   : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount         = meta.track_count;
+            version          = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -1038,8 +1024,8 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                     ImGuiFileDialogFlags_HideColumnType |
-                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                         ImGuiFileDialogFlags_HideColumnType |
+                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),

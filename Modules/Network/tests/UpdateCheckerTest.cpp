@@ -5,7 +5,6 @@
 
 #include "network/UpdateChecker.h"
 #include "log/colorful-log.h"
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -156,9 +155,9 @@ static int testIsFinished()
         bool isTransient = (tc.status == UpdateStatus::kChecking ||
                             tc.status == UpdateStatus::kDownloading);
         bool isDone      = (tc.status == UpdateStatus::kUpToDate ||
-                            tc.status == UpdateStatus::kUpdateFound ||
-                            tc.status == UpdateStatus::kDownloaded ||
-                            tc.status == UpdateStatus::kError);
+                       tc.status == UpdateStatus::kUpdateFound ||
+                       tc.status == UpdateStatus::kDownloaded ||
+                       tc.status == UpdateStatus::kError);
 
         // 检查枚举值分类一致性
         if ( isTransient != isDone && tc.expectFinished == isDone ) {

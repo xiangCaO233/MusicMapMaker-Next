@@ -3,7 +3,6 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/NoteAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -129,8 +128,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -336,8 +335,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -350,13 +349,13 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
     double rawTime = cache->getTime(currentAbsY + deltaY);
     auto   snap    = SessionUtils::getSnapResult(rawTime,
-                                                 cmd.mouseY,
-                                                 itCamera->second,
-                                                 ctx.lastConfig,
-                                                 bpmEvents,
-                                                 ctx.timelineRegistry,
-                                                 ctx.visualTime,
-                                                 ctx.cameras);
+                                            cmd.mouseY,
+                                            itCamera->second,
+                                            ctx.lastConfig,
+                                            bpmEvents,
+                                            ctx.timelineRegistry,
+                                            ctx.visualTime,
+                                            ctx.cameras);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;

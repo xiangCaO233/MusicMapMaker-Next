@@ -1,5 +1,4 @@
 #include "audio/AudioManager.h"
-#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -9,15 +8,10 @@
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
-#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
-#include <filesystem>
 #include <nfd.h>
 
 namespace MMM::UI
@@ -41,7 +35,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -167,10 +161,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()

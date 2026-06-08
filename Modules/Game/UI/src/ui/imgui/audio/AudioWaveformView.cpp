@@ -7,7 +7,6 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "implot.h"
-#include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/layout/box/CLayBox.h"
@@ -89,13 +88,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
         return;
     }
 
-    float  visualOffset = Config::AppConfig::instance()
-                              .getVisualConfig()
-                              .getEffectiveVisualOffset();
-    double audioTime    = audioManager.getCurrentTime();
-    double visualTime   = audioTime + visualOffset;
-    double totalTime    = audioManager.getTotalTime();
-    double speed        = audioManager.getPlaybackSpeed();
+    float visualOffset = Config::AppConfig::instance()
+                             .getVisualConfig()
+                             .getEffectiveVisualOffset();
+    double audioTime  = audioManager.getCurrentTime();
+    double visualTime = audioTime + visualOffset;
+    double totalTime  = audioManager.getTotalTime();
+    double speed      = audioManager.getPlaybackSpeed();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     std::string activeCameraId =
@@ -331,9 +330,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
 
             // 2. 绘制悬停绿色竖线和预览框
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
-                ImVec2 plotMin = ImPlot::GetPlotPos();
-                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
-                                   plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin         = ImPlot::GetPlotPos();
+                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
+                                           plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -540,8 +539,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
     double viewEnd   = visualTime + m_zoom;
 
     for ( int i = 0; i < m_samplePoints; ++i ) {
-        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                     (viewEnd - viewStart);
+        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                   (viewEnd - viewStart);
         m_times[i] = t;
 
         double audioT = t - visualOffset;

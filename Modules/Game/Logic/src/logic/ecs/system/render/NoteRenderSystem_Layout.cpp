@@ -5,7 +5,6 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -192,9 +191,9 @@ void NoteRenderSystem::drawBeatLines(
     if ( std::abs(renderScaleY) < 1e-6f ) return;
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
-                                             static_cast<double>(renderScaleY);
-    auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
+    double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
+                                          static_cast<double>(renderScaleY);
+    auto visibleRanges = cache->getTimeRangesForAbsYWindow(
         std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
 
     batcher.setTexture(TextureID::None);

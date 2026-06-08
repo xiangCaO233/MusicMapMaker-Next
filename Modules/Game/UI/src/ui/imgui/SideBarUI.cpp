@@ -5,7 +5,6 @@
 #include "event/ui/UISettingsTabEvent.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
-#include "log/colorful-log.h"
 #include "logic/ProjectController.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -14,7 +13,6 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <limits>
-#include <lunasvg.h>
 
 namespace MMM::UI
 {
