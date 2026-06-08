@@ -5,6 +5,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 #include <memory>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -61,6 +62,11 @@ public:
     /// @param cameraId 目标画布 cameraId。
     /// @param size 视口尺寸。
     void cacheViewportSize(const std::string& cameraId, glm::vec2 size);
+
+    /// @brief 获取指定画布的最后已知视口尺寸。
+    /// @param cameraId 目标画布 cameraId。
+    /// @return 已缓存的视口尺寸；未缓存时返回空值。
+    std::optional<glm::vec2> getViewportSize(const std::string& cameraId) const;
 
     /// @brief 获取 Preview 和 Timeline 等共享视口尺寸快照。
     /// @return 共享视口 cameraId 与尺寸列表。

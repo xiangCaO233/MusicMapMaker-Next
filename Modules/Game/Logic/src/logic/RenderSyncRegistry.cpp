@@ -75,6 +75,21 @@ void RenderSyncRegistry::cacheViewportSize(const std::string& cameraId,
     m_lastViewportSizes[cameraId] = size;
 }
 
+/// @brief 获取指定画布的最后已知视口尺寸。
+std::optional<glm::vec2> RenderSyncRegistry::getViewportSize(
+    const std::string& cameraId) const
+{
+    /// @brief 保护本次视口尺寸缓存读取的临界区。
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+
+    /// @brief 指定画布视口尺寸缓存的迭代器。
+    auto it = m_lastViewportSizes.find(cameraId);
+    if ( it == m_lastViewportSizes.end() ) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 /// @brief 获取 Preview 和 Timeline 等共享视口尺寸快照。
 std::vector<std::pair<std::string, glm::vec2>>
 RenderSyncRegistry::getSharedViewportSizes() const
