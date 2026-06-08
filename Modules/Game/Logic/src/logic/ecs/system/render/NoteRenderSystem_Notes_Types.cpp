@@ -3,6 +3,9 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/render/Batcher.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace MMM::Logic::System
 {
 
@@ -52,35 +55,38 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                                   glm::vec4 headColor, glm::vec4 bodyColor,
                                   glm::vec4 endColor, const ScrollCache* cache,
                                   double currentAbsY, float judgmentLineY,
-                                  float renderScaleY,
-                                  HoverPart glowPart)
+                                  float renderScaleY, HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
     glm::vec2 endSize  = getDrawSize(snapshot, TextureID::HoldEnd, w, h);
     glm::vec2 bodySize =
         getDrawSize(snapshot, TextureID::HoldBodyVertical, w, h);
 
-    float headX = x;
-    float endX  = x + (w - endSize.x) * 0.5f;
-    float bodyX = x + (w - bodySize.x) * 0.5f;
+    float  headX       = x;
+    float  endX        = x + (w - endSize.x) * 0.5f;
+    float  bodyX       = x + (w - bodySize.x) * 0.5f;
+    double holdEndTime = note.m_timestamp + note.m_duration;
 
-    float headY = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                      note.m_timestamp, currentAbsY, note.m_timestamp)) *
-                                      renderScaleY;
-    float endY = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                     note.m_timestamp + note.m_duration,
-                                     currentAbsY, note.m_timestamp)) *
-                                     renderScaleY;
+    float headY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            note.m_timestamp, currentAbsY, note.m_timestamp)) *
+                            renderScaleY;
+    float endY =
+        judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                            holdEndTime, currentAbsY, note.m_timestamp)) *
+                            renderScaleY;
 
     // 1. Body
     if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldBody ) {
         batcher.setTexture(TextureID::HoldBodyVertical);
-        float sy = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                       note.m_timestamp, currentAbsY, note.m_timestamp)) *
-                                       renderScaleY;
-        float ey = judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                       note.m_timestamp + note.m_duration, currentAbsY, note.m_timestamp + note.m_duration)) *
-                                       renderScaleY;
+        float sy = judgmentLineY -
+                   static_cast<float>(cache->getDisplayDelta(
+                       note.m_timestamp, currentAbsY, note.m_timestamp)) *
+                       renderScaleY;
+        float ey =
+            judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                holdEndTime, currentAbsY, note.m_timestamp)) *
+                                renderScaleY;
         batcher.pushFreeQuad({ bodyX, sy },
                              { bodyX + bodySize.x, sy },
                              { bodyX + bodySize.x, ey },
@@ -121,8 +127,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    RenderSnapshot* snapshot, float x, float y,
                                    float w, float h, float singleTrackW,
                                    glm::vec4 headColor, glm::vec4 bodyColor,
-                                   glm::vec4 arrowColor,
-                                   HoverPart glowPart)
+                                   glm::vec4 arrowColor, HoverPart glowPart)
 {
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
     float     headX    = x;
@@ -141,8 +146,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                startTrack * singleTrackW + singleTrackW * 0.5f;
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
-            batcher.pushQuad(
-                bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
+            batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
         }
     }
 

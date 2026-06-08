@@ -91,6 +91,18 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     entt::registry& registry, const ScrollCache* cache,
     const std::vector<entt::entity>& entities, std::uint64_t noteRevision);
 
+/// @brief 获取普通物件主体末端的 HS 锚点时间。
+/// @warning 热路径：音符可见性和命中盒计算中调用；保持纯计算，不得分配。
+static double getCarrierEndAnchorTime(const NoteComponent& note,
+                                      const ScrollCache*   cache)
+{
+    (void)cache;
+    if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        return note.m_timestamp;
+    }
+    return note.m_timestamp + note.m_duration;
+}
+
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
     const std::string& cameraId, double currentTime, float judgmentLineY,
@@ -257,7 +269,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto         it      = std::upper_bound(segments.begin(),
+    auto it = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -696,10 +708,9 @@ void NoteRenderSystem::generateNoteHitboxes(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd =
-            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
-                                       ctx.currentAbsY,
-                                       note.m_timestamp + note.m_duration);
+        const double endAnchorTime   = getCarrierEndAnchorTime(note, ctx.cache);
+        double       displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, endAnchorTime);
 
         double maxDelta =
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
@@ -790,7 +801,7 @@ void NoteRenderSystem::generateNoteHitboxes(
             judgmentLineY - static_cast<float>(ctx.cache->getDisplayDelta(
                                 note.m_timestamp + note.m_duration,
                                 ctx.currentAbsY,
-                                note.m_timestamp)) *
+                                getCarrierEndAnchorTime(note, ctx.cache))) *
                                 renderScaleY;
 
         float minY = std::min(screenY, endY) - ctx.noteH;
@@ -883,10 +894,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd =
-            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
-                                       ctx.currentAbsY,
-                                       note.m_timestamp + note.m_duration);
+        const double endAnchorTime   = getCarrierEndAnchorTime(note, ctx.cache);
+        double       displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, endAnchorTime);
 
         double maxDelta =
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
@@ -938,7 +948,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX = leftX + note.m_trackIndex * singleTrackW;
+        float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -1078,11 +1088,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
+                                 note.m_timestamp + note.m_duration,
+                                 ctx.cache->getAbsY(note.m_timestamp),
+                                 note.m_timestamp)) *
+                             renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1428,9 +1438,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                              (singleTrackW - ctx.noteW) * 0.5f;
-                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h = std::abs(y0 - y1) + ctx.noteH;
+                               (singleTrackW - ctx.noteW) * 0.5f;
+                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h  = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1469,9 +1479,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                              (singleTrackW - w) * 0.5f;
-                    float y = std::min(y0, y1) - h0 * 0.5f;
-                    float h = std::abs(y0 - y1) + h0;
+                               (singleTrackW - w) * 0.5f;
+                    float y  = std::min(y0, y1) - h0 * 0.5f;
+                    float h  = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1510,7 +1520,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                      (singleTrackW - verticalBodySize.x) * 0.5f;
+                       (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1579,7 +1589,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                      singleTrackW * 0.5f;
+                       singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;

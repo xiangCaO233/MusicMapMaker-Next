@@ -210,7 +210,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -285,7 +285,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.visualTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                   std::abs(screen.renderScaleY) > 1e-6f;
+                         std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -300,6 +300,29 @@ float timeToScreenY(const SelectionScreenContext& screen, double time,
                screen.renderScaleY;
 }
 
+/// @brief 获取可交互主体末端时间。
+/// @warning 逻辑热路径：框选重算时按候选物件调用；保持纯计算，不得分配。
+double carrierEndTime(::MMM::NoteType type, double timestamp, double duration)
+{
+    if ( type == ::MMM::NoteType::HOLD ) {
+        return timestamp + duration;
+    }
+    return timestamp;
+}
+
+/// @brief 获取可交互主体末端 HS 锚点时间。
+/// @warning 逻辑热路径：框选重算时按候选物件调用；保持纯计算，不得访问 ECS。
+double carrierEndAnchorTime(const SelectionScreenContext& screen,
+                            ::MMM::NoteType type, double timestamp,
+                            double duration)
+{
+    (void)screen;
+    if ( type == ::MMM::NoteType::HOLD ) {
+        return timestamp;
+    }
+    return carrierEndTime(type, timestamp, duration);
+}
+
 /// @brief 计算框选区域的屏幕矩形。
 /// @warning 逻辑热路径：框选重算时只做两次时间投影和边界归一化。
 SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
@@ -311,10 +334,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1        = screen.judgmentLineY -
-                     static_cast<float>(startAbsY - screen.currentAbsY) *
-                         screen.renderScaleY;
-    const float y2 =
+    const float  y1 = screen.judgmentLineY -
+                      static_cast<float>(startAbsY - screen.currentAbsY) *
+                          screen.renderScaleY;
+    const float  y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -351,12 +374,14 @@ void includeCarrierRect(SelectionRect&                target,
                                TextureID::HoldBodyVertical,
                                screen.noteW,
                                screen.noteH);
-        const float x = screen.leftX +
-                        static_cast<float>(trackIndex) * screen.singleTrackW +
-                        (screen.singleTrackW - bodySize.x) * 0.5f;
+        const float x  = screen.leftX +
+                         static_cast<float>(trackIndex) * screen.singleTrackW +
+                         (screen.singleTrackW - bodySize.x) * 0.5f;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
-        const float ey =
-            timeToScreenY(screen, timestamp + duration, timestamp + duration);
+        const float ey = timeToScreenY(
+            screen,
+            carrierEndTime(type, timestamp, duration),
+            carrierEndAnchorTime(screen, type, timestamp, duration));
         includeRect(target, makeRect(x, sy, x + bodySize.x, ey));
     } else if ( type == ::MMM::NoteType::FLICK && dtrack != 0 ) {
         const glm::vec2 bodySize =
@@ -393,16 +418,20 @@ void includePolylineTransitionRect(SelectionRect&                target,
                                   (current.type == ::MMM::NoteType::FLICK
                                        ? static_cast<float>(current.dtrack)
                                        : 0.0f);
-    const float currentX = screen.leftX +
-                           currentEndTrack * screen.singleTrackW +
-                           (screen.singleTrackW - bodySize.x) * 0.5f;
+    const float currentX        = screen.leftX +
+                                  currentEndTrack * screen.singleTrackW +
+                                  (screen.singleTrackW - bodySize.x) * 0.5f;
     const float nextX =
         screen.leftX +
         static_cast<float>(next.trackIndex) * screen.singleTrackW +
         (screen.singleTrackW - bodySize.x) * 0.5f;
-    const double currentEndTime = current.timestamp + current.duration;
-    const float  sy = timeToScreenY(screen, currentEndTime, currentEndTime);
-    const float  ey = timeToScreenY(screen, next.timestamp, next.timestamp);
+    const double currentEndTime =
+        carrierEndTime(current.type, current.timestamp, current.duration);
+    const double currentEndAnchorTime = carrierEndAnchorTime(
+        screen, current.type, current.timestamp, current.duration);
+    const float sy =
+        timeToScreenY(screen, currentEndTime, currentEndAnchorTime);
+    const float ey = timeToScreenY(screen, next.timestamp, next.timestamp);
     includeRect(target,
                 makeRect(std::min(currentX, nextX),
                          std::min(sy, ey),
@@ -442,12 +471,15 @@ SelectionRect makeNoteScreenRect(const NoteComponent&          note,
                            note.m_duration,
                            note.m_trackIndex,
                            note.m_dtrack);
-        includeRect(rect,
-                    makeTextureRect(screen,
-                                    TextureID::HoldEnd,
-                                    static_cast<float>(note.m_trackIndex),
-                                    note.m_timestamp + note.m_duration,
-                                    note.m_timestamp));
+        includeRect(
+            rect,
+            makeTextureRect(
+                screen,
+                TextureID::HoldEnd,
+                static_cast<float>(note.m_trackIndex),
+                note.m_timestamp + note.m_duration,
+                carrierEndAnchorTime(
+                    screen, note.m_type, note.m_timestamp, note.m_duration)));
         return rect;
     }
 
@@ -540,11 +572,13 @@ bool polylineMatchesSelection(const NoteComponent&          note,
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
         return selectionMatchesRect(
             selection,
-            makeTextureRect(screen,
-                            TextureID::HoldEnd,
-                            static_cast<float>(last.trackIndex),
-                            last.timestamp + last.duration,
-                            last.timestamp),
+            makeTextureRect(
+                screen,
+                TextureID::HoldEnd,
+                static_cast<float>(last.trackIndex),
+                last.timestamp + last.duration,
+                carrierEndAnchorTime(
+                    screen, last.type, last.timestamp, last.duration)),
             mode);
     }
 
