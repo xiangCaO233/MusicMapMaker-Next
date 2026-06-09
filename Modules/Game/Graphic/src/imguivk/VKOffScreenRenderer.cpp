@@ -48,10 +48,20 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         vk::ClearColorValue(std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f }));
 
     // 获取渲染数据
-    const auto& vertices = getVertices();
-    const auto& indices  = getIndices();
+    const auto& vertices            = getVertices();
+    const auto& indices             = getIndices();
+    const bool  hasDrawableGeometry = !vertices.empty() && !indices.empty();
 
-    if ( vertices.empty() || indices.empty() ) return;
+    if ( !hasDrawableGeometry ) {
+        vk::RenderPassBeginInfo rpBegin;
+        rpBegin.setRenderPass(m_offScreenRenderPass->getRenderPass())
+            .setFramebuffer(m_framebuffer)
+            .setRenderArea(vk::Rect2D({ 0, 0 }, { m_width, m_height }))
+            .setClearValues(clearValue);
+        cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
+        cmdBuf.endRenderPass();
+        return;
+    }
 
     // --- 动态扩容检查 ---
     size_t neededCount = std::max(vertices.size(), indices.size());
@@ -110,10 +120,8 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     // 每一帧将 CPU 的顶点数据上传到当前帧的 GPU 缓冲区
     m_vertexBuffers[frameIndex]->uploadData(
         vertices.data(), vertices.size() * sizeof(Vertex::VKBasicVertex));
-    if ( !indices.empty() ) {
-        m_indexBuffers[frameIndex]->uploadData(
-            indices.data(), indices.size() * sizeof(uint32_t));
-    }
+    m_indexBuffers[frameIndex]->uploadData(indices.data(),
+                                           indices.size() * sizeof(uint32_t));
 
     // 2. 开始渲染流程 (针对离屏 Framebuffer)
     vk::RenderPassBeginInfo rpBegin;
@@ -126,11 +134,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     {
         // 3. 因为开启了动态状态，必须手动设置 Viewport 和 Scissor
         glm::mat4    ortho = glm::ortho(0.0f,
-                                     (float)m_logicalWidth,
-                                     0.0f - m_yOffset,
-                                     (float)m_logicalHeight - m_yOffset,
-                                     -1.0f,
-                                     1.0f);
+                                        (float)m_logicalWidth,
+                                        0.0f - m_yOffset,
+                                        (float)m_logicalHeight - m_yOffset,
+                                        -1.0f,
+                                        1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -195,11 +203,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             glm::mat4    ortho = glm::ortho(0.0f,
-                                         (float)m_logicalWidth,
-                                         0.0f - m_yOffset,
-                                         (float)m_logicalHeight - m_yOffset,
-                                         -1.0f,
-                                         1.0f);
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(0.0f,
                                   0.0f,
                                   (float)m_glowWidth,
@@ -382,11 +390,11 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             glm::mat4    ortho = glm::ortho(0.0f,
-                                         (float)m_logicalWidth,
-                                         0.0f - m_yOffset,
-                                         (float)m_logicalHeight - m_yOffset,
-                                         -1.0f,
-                                         1.0f);
+                                            (float)m_logicalWidth,
+                                            0.0f - m_yOffset,
+                                            (float)m_logicalHeight - m_yOffset,
+                                            -1.0f,
+                                            1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
