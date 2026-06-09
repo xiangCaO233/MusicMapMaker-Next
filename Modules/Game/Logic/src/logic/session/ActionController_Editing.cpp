@@ -6,11 +6,14 @@
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/TimelineAction.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -62,6 +65,28 @@ NoteColorOverrides makeNoteColorOverrides(
         setNoteColorOverride(overrides, slot, colors[i]);
     }
     return overrides;
+}
+
+/// @brief 确保整体替换创建出的音符实体拥有基础辅助组件。
+/// @param registry 目标 ECS 注册表。
+/// @param entity 目标音符实体。
+void ensureReplacementNoteAuxiliaryComponents(entt::registry& registry,
+                                              entt::entity    entity)
+{
+    if ( !registry.all_of<TransformComponent>(entity) ) {
+        registry.emplace<TransformComponent>(entity);
+    }
+    if ( !registry.all_of<InteractionComponent>(entity) ) {
+        registry.emplace<InteractionComponent>(entity);
+    }
+}
+
+/// @brief 标记整体替换后需要重建音符排序和统计缓存。
+/// @param ctx 当前会话上下文。
+void markReplacementNoteOrderDirty(SessionContext& ctx)
+{
+    ctx.isNoteOrderDirty = true;
+    ctx.isNoteStatsDirty = true;
 }
 
 /// @brief 将折线子物件点击目标解析到父折线实体。
@@ -247,6 +272,374 @@ std::vector<TimelineComponent> normalizeReplacementTimelines(
     return normalized;
 }
 
+/// @brief 收集当前会话中可作为整体替换快照的物件组件。
+/// @param ctx 当前会话上下文。
+/// @return 非子物件的物件组件列表。
+std::vector<NoteComponent> collectEditableNoteComponents(SessionContext& ctx)
+{
+    std::vector<NoteComponent> notes;
+    auto                       view = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( note.m_isSubNote ) continue;
+        notes.push_back(note);
+    }
+
+    std::stable_sort(
+        notes.begin(), notes.end(), [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            if ( lhs.m_trackIndex != rhs.m_trackIndex ) {
+                return lhs.m_trackIndex < rhs.m_trackIndex;
+            }
+            return static_cast<int>(lhs.m_type) < static_cast<int>(rhs.m_type);
+        });
+    return notes;
+}
+
+/// @brief 从谱面 Note 构建 ECS 音符组件。
+/// @param note 来源谱面物件。
+/// @return 对应的 ECS 组件。
+NoteComponent makeNoteComponentFromBeatmapNote(const ::MMM::Note& note)
+{
+    NoteComponent component;
+    component.m_type       = note.m_type;
+    component.m_timestamp  = note.m_timestamp / 1000.0;
+    component.m_trackIndex = static_cast<int>(note.m_track);
+    component.m_metadata   = note.m_metadata;
+
+    if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        component.m_duration =
+            static_cast<const ::MMM::Hold&>(note).m_duration / 1000.0;
+    } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+        component.m_dtrack = static_cast<const ::MMM::Flick&>(note).m_dtrack;
+    }
+
+    loadNoteColorOverridesFromMetadata(component);
+    return component;
+}
+
+/// @brief 从谱面折线子物件构建 ECS 子物件组件。
+/// @param note 来源谱面子物件。
+/// @return 对应的 ECS 折线子物件。
+NoteComponent::SubNote makeSubNoteComponentFromBeatmapNote(
+    const ::MMM::Note& note)
+{
+    NoteComponent::SubNote subNote;
+    subNote.type       = note.m_type;
+    subNote.timestamp  = note.m_timestamp / 1000.0;
+    subNote.duration   = 0.0;
+    subNote.trackIndex = static_cast<int>(note.m_track);
+    subNote.dtrack     = 0;
+    subNote.metadata   = note.m_metadata;
+
+    if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        subNote.duration =
+            static_cast<const ::MMM::Hold&>(note).m_duration / 1000.0;
+    } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+        subNote.dtrack = static_cast<const ::MMM::Flick&>(note).m_dtrack;
+    }
+
+    loadNoteColorOverridesFromMetadata(subNote);
+    return subNote;
+}
+
+/// @brief 收集谱面中已经被 Polyline 引用的子物件地址。
+/// @param beatMap 来源谱面。
+/// @return Polyline 子物件地址集合。
+std::unordered_set<const ::MMM::Note*> collectBeatmapPolylineSubNotePointers(
+    const ::MMM::BeatMap& beatMap)
+{
+    std::unordered_set<const ::MMM::Note*> subNotePointers;
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        for ( const auto& subNoteRef : polyline.m_subNotes ) {
+            subNotePointers.insert(&subNoteRef.get());
+        }
+    }
+    return subNotePointers;
+}
+
+/// @brief 从谱面数据构建可整体替换到当前会话的物件组件列表。
+/// @param beatMap 来源谱面。
+/// @return 非子物件的物件组件列表。
+std::vector<NoteComponent> makeNoteComponentsFromBeatMap(
+    const ::MMM::BeatMap& beatMap)
+{
+    std::vector<NoteComponent> notes;
+    notes.reserve(
+        beatMap.m_noteData.notes.size() + beatMap.m_noteData.holds.size() +
+        beatMap.m_noteData.flicks.size() + beatMap.m_noteData.polylines.size());
+
+    const auto subNotePointers = collectBeatmapPolylineSubNotePointers(beatMap);
+    for ( const auto& note : beatMap.m_noteData.notes ) {
+        if ( note.m_isSubNote || subNotePointers.contains(&note) ) continue;
+        notes.push_back(makeNoteComponentFromBeatmapNote(note));
+    }
+    for ( const auto& hold : beatMap.m_noteData.holds ) {
+        if ( hold.m_isSubNote || subNotePointers.contains(&hold) ) continue;
+        notes.push_back(makeNoteComponentFromBeatmapNote(hold));
+    }
+    for ( const auto& flick : beatMap.m_noteData.flicks ) {
+        if ( flick.m_isSubNote || subNotePointers.contains(&flick) ) continue;
+        notes.push_back(makeNoteComponentFromBeatmapNote(flick));
+    }
+    for ( const auto& polyline : beatMap.m_noteData.polylines ) {
+        auto component   = makeNoteComponentFromBeatmapNote(polyline);
+        component.m_type = ::MMM::NoteType::POLYLINE;
+        component.m_subNotes.clear();
+        component.m_subNotes.reserve(polyline.m_subNotes.size());
+        for ( const auto& subNoteRef : polyline.m_subNotes ) {
+            component.m_subNotes.push_back(
+                makeSubNoteComponentFromBeatmapNote(subNoteRef.get()));
+        }
+        if ( !component.m_subNotes.empty() ) {
+            component.m_timestamp  = component.m_subNotes.front().timestamp;
+            component.m_trackIndex = component.m_subNotes.front().trackIndex;
+        }
+        notes.push_back(std::move(component));
+    }
+
+    std::stable_sort(
+        notes.begin(), notes.end(), [](const auto& lhs, const auto& rhs) {
+            if ( std::abs(lhs.m_timestamp - rhs.m_timestamp) > 1e-9 ) {
+                return lhs.m_timestamp < rhs.m_timestamp;
+            }
+            if ( lhs.m_trackIndex != rhs.m_trackIndex ) {
+                return lhs.m_trackIndex < rhs.m_trackIndex;
+            }
+            return static_cast<int>(lhs.m_type) < static_cast<int>(rhs.m_type);
+        });
+    return notes;
+}
+
+/// @brief 从谱面 Timing 构建可替换到当前会话的 Timeline 组件。
+/// @param beatMap 来源谱面。
+/// @return Timeline 组件列表。
+std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
+    const ::MMM::BeatMap& beatMap)
+{
+    std::vector<TimelineComponent> timelines;
+    timelines.reserve(beatMap.m_timings.size());
+    for ( const auto& timing : beatMap.m_timings ) {
+        TimelineComponent timeline;
+        timeline.m_timestamp = timing.m_timestamp / 1000.0;
+        timeline.m_effect    = timing.m_timingEffect;
+        timeline.m_value     = timing.m_timingEffectParameter;
+        if ( timeline.m_effect == ::MMM::TimingEffect::BPM &&
+             !(timeline.m_value > 0.0) ) {
+            timeline.m_value = timing.m_bpm;
+        }
+        timeline.m_metadata = timing.m_metadata;
+        timelines.push_back(std::move(timeline));
+    }
+    return normalizeReplacementTimelines(std::move(timelines));
+}
+
+/// @brief 整体重建当前会话的物件 ECS。
+/// @param ctx 当前会话上下文。
+/// @param notes 替换后的非子物件组件列表。
+void replaceNoteComponents(SessionContext&                   ctx,
+                           const std::vector<NoteComponent>& notes)
+{
+    ctx.noteRegistry.clear();
+    for ( const auto& note : notes ) {
+        auto entity = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<NoteComponent>(entity, note);
+        ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry, entity);
+
+        if ( note.m_type != ::MMM::NoteType::POLYLINE ) continue;
+
+        for ( std::size_t index = 0; index < note.m_subNotes.size(); ++index ) {
+            const auto&   sub = note.m_subNotes[index];
+            NoteComponent subComponent;
+            subComponent.m_type           = sub.type;
+            subComponent.m_timestamp      = sub.timestamp;
+            subComponent.m_duration       = sub.duration;
+            subComponent.m_trackIndex     = sub.trackIndex;
+            subComponent.m_dtrack         = sub.dtrack;
+            subComponent.m_isSubNote      = true;
+            subComponent.m_parentPolyline = entity;
+            subComponent.m_subIndex       = static_cast<int>(index);
+            subComponent.m_metadata       = sub.metadata;
+            subComponent.m_customColors   = sub.customColors;
+
+            auto subEntity = ctx.noteRegistry.create();
+            ctx.noteRegistry.emplace<NoteComponent>(subEntity, subComponent);
+            ensureReplacementNoteAuxiliaryComponents(ctx.noteRegistry,
+                                                     subEntity);
+        }
+    }
+
+    ctx.hoveredEntity       = entt::null;
+    ctx.draggedEntity       = entt::null;
+    ctx.draggedPart         = HoverPart::None;
+    ctx.draggedSubIndex     = -1;
+    ctx.isDragging          = false;
+    ctx.isSelecting         = false;
+    ctx.hasMarqueeSelection = false;
+    ctx.marqueeBoxes.clear();
+    ctx.m_needsNotesSync = true;
+    SessionUtils::markHitEventsDirty(ctx);
+    markReplacementNoteOrderDirty(ctx);
+}
+
+/// @brief 谱面元数据替换快照。
+struct BeatmapMetadataSnapshot {
+    /// @brief 基础谱面元数据。
+    ::MMM::BaseMapMeta baseMeta;
+
+    /// @brief 扩展谱面元数据。
+    ::MMM::MapMetadata mapMetadata;
+};
+
+/// @brief 从当前谱面构建元数据快照。
+/// @param beatMap 来源谱面。
+/// @return 当前元数据快照。
+BeatmapMetadataSnapshot makeMetadataSnapshot(const ::MMM::BeatMap& beatMap)
+{
+    return BeatmapMetadataSnapshot{
+        .baseMeta    = beatMap.m_baseMapMetadata,
+        .mapMetadata = beatMap.m_metadata,
+    };
+}
+
+/// @brief 构建元数据替换后的快照，保留当前谱面的文件和资源路径。
+/// @param current 当前谱面。
+/// @param source 来源谱面。
+/// @return 替换后的元数据快照。
+BeatmapMetadataSnapshot makeReplacementMetadataSnapshot(
+    const ::MMM::BeatMap& current, const ::MMM::BeatMap& source)
+{
+    auto base            = source.m_baseMapMetadata;
+    base.map_path        = current.m_baseMapMetadata.map_path;
+    base.main_audio_path = current.m_baseMapMetadata.main_audio_path;
+    base.main_cover_path = current.m_baseMapMetadata.main_cover_path;
+    base.cover_path      = current.m_baseMapMetadata.cover_path;
+    return BeatmapMetadataSnapshot{
+        .baseMeta    = std::move(base),
+        .mapMetadata = source.m_metadata,
+    };
+}
+
+/// @brief 将元数据快照应用到当前谱面。
+/// @param ctx 当前会话上下文。
+/// @param snapshot 元数据快照。
+void applyMetadataSnapshot(SessionContext&                ctx,
+                           const BeatmapMetadataSnapshot& snapshot)
+{
+    if ( !ctx.currentBeatmap ) return;
+
+    ctx.currentBeatmap->m_baseMapMetadata = snapshot.baseMeta;
+    ctx.currentBeatmap->m_metadata        = snapshot.mapMetadata;
+    if ( snapshot.baseMeta.track_count > 0 ) {
+        ctx.trackCount = snapshot.baseMeta.track_count;
+    }
+    ctx.isTransformDirty = true;
+    ctx.isNoteStatsDirty = true;
+}
+
+/// @brief 从其他谱面替换当前谱面部分数据的可撤销动作。
+class ReplaceBeatmapDataAction : public IEditorAction
+{
+public:
+    /// @brief 构造数据替换动作。
+    ReplaceBeatmapDataAction(bool replaceObjects, bool replaceTimelines,
+                             bool                           replaceMetadata,
+                             std::vector<NoteComponent>     beforeNotes,
+                             std::vector<NoteComponent>     afterNotes,
+                             std::vector<TimelineComponent> beforeTimelines,
+                             std::vector<TimelineComponent> afterTimelines,
+                             BeatmapMetadataSnapshot        beforeMetadata,
+                             BeatmapMetadataSnapshot        afterMetadata,
+                             double                         beforePreferenceBpm,
+                             double                         afterPreferenceBpm)
+        : m_replaceObjects(replaceObjects)
+        , m_replaceTimelines(replaceTimelines)
+        , m_replaceMetadata(replaceMetadata)
+        , m_beforeNotes(std::move(beforeNotes))
+        , m_afterNotes(std::move(afterNotes))
+        , m_beforeTimelines(std::move(beforeTimelines))
+        , m_afterTimelines(std::move(afterTimelines))
+        , m_beforeMetadata(std::move(beforeMetadata))
+        , m_afterMetadata(std::move(afterMetadata))
+        , m_beforePreferenceBpm(beforePreferenceBpm)
+        , m_afterPreferenceBpm(afterPreferenceBpm)
+    {
+    }
+
+    /// @brief 执行替换。
+    /// @param ctx 当前会话上下文。
+    void execute(SessionContext& ctx) override { apply(ctx, true); }
+
+    /// @brief 撤销替换。
+    /// @param ctx 当前会话上下文。
+    void undo(SessionContext& ctx) override { apply(ctx, false); }
+
+    /// @brief 重做替换。
+    /// @param ctx 当前会话上下文。
+    void redo(SessionContext& ctx) override { execute(ctx); }
+
+    /// @brief 获取动作名称。
+    std::string getName() const override { return "Replace Beatmap Data"; }
+
+private:
+    /// @brief 应用指定方向的替换快照。
+    /// @param ctx 当前会话上下文。
+    /// @param forward 是否应用替换后的快照。
+    void apply(SessionContext& ctx, bool forward)
+    {
+        if ( m_replaceObjects ) {
+            replaceNoteComponents(ctx, forward ? m_afterNotes : m_beforeNotes);
+        }
+        if ( m_replaceTimelines ) {
+            replaceTimelineComponents(
+                ctx, forward ? m_afterTimelines : m_beforeTimelines);
+            if ( ctx.currentBeatmap && !m_replaceMetadata ) {
+                ctx.currentBeatmap->m_baseMapMetadata.preference_bpm =
+                    forward ? m_afterPreferenceBpm : m_beforePreferenceBpm;
+            }
+        }
+        if ( m_replaceMetadata ) {
+            applyMetadataSnapshot(ctx,
+                                  forward ? m_afterMetadata : m_beforeMetadata);
+        }
+    }
+
+    /// @brief 是否替换物件数据。
+    bool m_replaceObjects{ false };
+
+    /// @brief 是否替换时间线数据。
+    bool m_replaceTimelines{ false };
+
+    /// @brief 是否替换谱面元数据。
+    bool m_replaceMetadata{ false };
+
+    /// @brief 替换前物件组件。
+    std::vector<NoteComponent> m_beforeNotes;
+
+    /// @brief 替换后物件组件。
+    std::vector<NoteComponent> m_afterNotes;
+
+    /// @brief 替换前 Timeline 组件。
+    std::vector<TimelineComponent> m_beforeTimelines;
+
+    /// @brief 替换后 Timeline 组件。
+    std::vector<TimelineComponent> m_afterTimelines;
+
+    /// @brief 替换前元数据。
+    BeatmapMetadataSnapshot m_beforeMetadata;
+
+    /// @brief 替换后元数据。
+    BeatmapMetadataSnapshot m_afterMetadata;
+
+    /// @brief 替换前首选 BPM。
+    double m_beforePreferenceBpm{ 120.0 };
+
+    /// @brief 替换后首选 BPM。
+    double m_afterPreferenceBpm{ 120.0 };
+};
+
 /// @brief 批量替换 Timeline 的可撤销动作。
 class ReplaceTimelinesAction : public IEditorAction
 {
@@ -398,7 +791,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -451,7 +844,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -806,6 +1199,62 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
+{
+    if ( !m_ctx.currentBeatmap || !cmd.sourceBeatmap ) {
+        return;
+    }
+    if ( !cmd.replaceObjects && !cmd.replaceTimelines &&
+         !cmd.replaceMetadata ) {
+        return;
+    }
+
+    const auto normalizeBpm = [](double bpm) {
+        return bpm > 0.0 && std::isfinite(bpm) ? bpm : 120.0;
+    };
+
+    std::vector<NoteComponent> beforeNotes;
+    std::vector<NoteComponent> afterNotes;
+    if ( cmd.replaceObjects ) {
+        beforeNotes = collectEditableNoteComponents(m_ctx);
+        afterNotes  = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
+    }
+
+    std::vector<TimelineComponent> beforeTimelines;
+    std::vector<TimelineComponent> afterTimelines;
+    if ( cmd.replaceTimelines ) {
+        beforeTimelines = collectSortedTimelineComponents(m_ctx);
+        afterTimelines  = makeTimelineComponentsFromBeatMap(*cmd.sourceBeatmap);
+    }
+
+    BeatmapMetadataSnapshot beforeMetadata =
+        makeMetadataSnapshot(*m_ctx.currentBeatmap);
+    BeatmapMetadataSnapshot afterMetadata = makeReplacementMetadataSnapshot(
+        *m_ctx.currentBeatmap, *cmd.sourceBeatmap);
+
+    const double beforePreferenceBpm =
+        normalizeBpm(m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+    const double afterPreferenceBpm =
+        normalizeBpm(cmd.sourceBeatmap->m_baseMapMetadata.preference_bpm);
+
+    auto action =
+        std::make_unique<ReplaceBeatmapDataAction>(cmd.replaceObjects,
+                                                   cmd.replaceTimelines,
+                                                   cmd.replaceMetadata,
+                                                   std::move(beforeNotes),
+                                                   std::move(afterNotes),
+                                                   std::move(beforeTimelines),
+                                                   std::move(afterTimelines),
+                                                   std::move(beforeMetadata),
+                                                   std::move(afterMetadata),
+                                                   beforePreferenceBpm,
+                                                   afterPreferenceBpm);
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+
+    m_ctx.lastActionMessage =
+        fmt::format("{} {}", TR("ui.status.category.action"), "数据来源替换");
+}
+
 void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
@@ -1061,7 +1510,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

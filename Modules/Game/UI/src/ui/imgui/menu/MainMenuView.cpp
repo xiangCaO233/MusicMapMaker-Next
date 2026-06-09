@@ -14,6 +14,8 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -22,9 +24,12 @@
 #include "ui/imgui/manager/NewProjectWizard.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
 #include <concurrentqueue.h>
+#include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <system_error>
 
 namespace MMM::UI
 {
@@ -115,6 +120,26 @@ void ensureSaveConflictSubscription()
             });
         });
     subscribed = true;
+}
+
+/// @brief 将项目谱面路径规范化为候选比较键。
+/// @param projectRoot 当前项目根目录。
+/// @param path 谱面路径，可为项目相对路径或绝对路径。
+/// @return 规范化后的 UTF-8 路径键。
+std::string makeDataSourceBeatmapPathKey(
+    const std::filesystem::path& projectRoot, const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+
+    std::filesystem::path fullPath =
+        path.is_absolute() ? path : (projectRoot / path);
+    std::error_code filesystemError;
+    auto            canonicalPath = std::filesystem::weakly_canonical(
+        fullPath.lexically_normal(), filesystemError);
+    if ( !filesystemError ) {
+        fullPath = canonicalPath;
+    }
+    return Config::pathToUtf8Generic(fullPath.lexically_normal());
 }
 }  // namespace
 
@@ -377,6 +402,206 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
                 ImGui::CloseCurrentPopup();
             }
 
+            ImGui::EndPopup();
+        }
+    }
+}
+
+/// @brief 收集可用于替换当前焦点谱面的项目谱面候选。
+/// @return 数据来源候选列表。
+std::vector<MainMenuView::DataSourceReplaceCandidate>
+MainMenuView::collectDataSourceReplaceCandidates() const
+{
+    std::vector<DataSourceReplaceCandidate> candidates;
+
+    auto& engine  = Logic::EditorEngine::instance();
+    auto* project = engine.getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ) return candidates;
+
+    std::string activePathKey;
+    {
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
+        if ( session && session->getContext().currentBeatmap ) {
+            activePathKey = makeDataSourceBeatmapPathKey(
+                project->m_projectRoot,
+                session->getContext()
+                    .currentBeatmap->m_baseMapMetadata.map_path);
+        }
+    }
+
+    candidates.reserve(project->m_beatmaps.size());
+    for ( const auto& entry : project->m_beatmaps ) {
+        if ( entry.m_filePath.empty() ) continue;
+
+        auto relativePath =
+            Config::utf8ToPath(entry.m_filePath).lexically_normal();
+        auto candidatePathKey =
+            makeDataSourceBeatmapPathKey(project->m_projectRoot, relativePath);
+        if ( candidatePathKey.empty() || candidatePathKey == activePathKey ) {
+            continue;
+        }
+
+        std::error_code filesystemError;
+        const auto      fullPath =
+            (project->m_projectRoot / relativePath).lexically_normal();
+        if ( !std::filesystem::is_regular_file(fullPath, filesystemError) ||
+             filesystemError ) {
+            continue;
+        }
+
+        std::string displayName =
+            entry.m_name.empty() ? entry.m_filePath : entry.m_name;
+        candidates.push_back(DataSourceReplaceCandidate{
+            .relativePath = Config::pathToUtf8Generic(relativePath),
+            .displayName  = displayName,
+        });
+    }
+
+    std::sort(candidates.begin(),
+              candidates.end(),
+              [](const auto& lhs, const auto& rhs) {
+                  if ( lhs.displayName != rhs.displayName ) {
+                      return lhs.displayName < rhs.displayName;
+                  }
+                  return lhs.relativePath < rhs.relativePath;
+              });
+    return candidates;
+}
+
+/// @brief 提交数据来源替换请求。
+void MainMenuView::submitDataSourceReplaceRequest()
+{
+    auto& engine  = Logic::EditorEngine::instance();
+    auto* project = engine.getCurrentProject();
+    if ( !project || project->m_projectRoot.empty() ||
+         m_dataSourceReplacePath.empty() ) {
+        m_statusMessage      = "没有可用的数据来源谱面";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    if ( !m_replaceObjectsFromDataSource && !m_replaceTimelinesFromDataSource &&
+         !m_replaceMetadataFromDataSource ) {
+        m_statusMessage      = "至少选择一种要替换的数据";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    const auto sourcePath =
+        (project->m_projectRoot / Config::utf8ToPath(m_dataSourceReplacePath))
+            .lexically_normal();
+    auto sourceBeatmap =
+        std::make_shared<MMM::BeatMap>(MMM::BeatMap::loadFromFile(sourcePath));
+    if ( sourceBeatmap->m_baseMapMetadata.map_path.empty() ) {
+        m_statusMessage      = "读取数据来源谱面失败";
+        m_statusMessageTimer = 3.0f;
+        return;
+    }
+
+    dispatchCommand(Logic::CmdReplaceBeatmapData{
+        .sourceBeatmap    = sourceBeatmap,
+        .replaceObjects   = m_replaceObjectsFromDataSource,
+        .replaceTimelines = m_replaceTimelinesFromDataSource,
+        .replaceMetadata  = m_replaceMetadataFromDataSource,
+    });
+
+    m_statusMessage      = "已替换当前谱面数据";
+    m_statusMessageTimer = 3.0f;
+}
+
+/// @brief 渲染数据来源替换工具窗口。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
+{
+    constexpr const char* popupId = "数据来源替换工具###DataSourceReplaceModal";
+    if ( m_showDataSourceReplaceWindow ) {
+        ImGui::OpenPopup(popupId);
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    bool closePopup = false;
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_NoCollapse,
+                              ImVec2(640.0f * dpiScale, 480.0f * dpiScale),
+                              false) ) {
+            auto candidates = collectDataSourceReplaceCandidates();
+            if ( m_dataSourceReplacePath.empty() && !candidates.empty() ) {
+                m_dataSourceReplacePath = candidates.front().relativePath;
+            }
+            if ( !m_dataSourceReplacePath.empty() &&
+                 std::none_of(candidates.begin(),
+                              candidates.end(),
+                              [&](const auto& candidate) {
+                                  return candidate.relativePath ==
+                                         m_dataSourceReplacePath;
+                              }) ) {
+                m_dataSourceReplacePath = candidates.empty()
+                                              ? std::string{}
+                                              : candidates.front().relativePath;
+            }
+
+            ImGui::TextUnformatted("数据来源谱面");
+            ImGui::Spacing();
+            const float listHeight =
+                std::max(120.0f * dpiScale,
+                         ImGui::GetContentRegionAvail().y - 126.0f * dpiScale);
+            if ( ImGui::BeginChild("DataSourceReplaceBeatmapList",
+                                   ImVec2(0.0f, listHeight),
+                                   true) ) {
+                if ( candidates.empty() ) {
+                    ImGui::TextDisabled("没有找到其他项目谱面。");
+                } else {
+                    for ( const auto& candidate : candidates ) {
+                        const bool selected =
+                            candidate.relativePath == m_dataSourceReplacePath;
+                        std::string label = candidate.displayName + " - " +
+                                            candidate.relativePath;
+                        if ( ImGui::Selectable(label.c_str(), selected) ) {
+                            m_dataSourceReplacePath = candidate.relativePath;
+                        }
+                    }
+                }
+            }
+            ImGui::EndChild();
+
+            ImGui::Spacing();
+            ImGui::Checkbox("物件数据源", &m_replaceObjectsFromDataSource);
+            ImGui::SameLine();
+            ImGui::Checkbox("时间线源", &m_replaceTimelinesFromDataSource);
+            ImGui::SameLine();
+            ImGui::Checkbox("元数据源", &m_replaceMetadataFromDataSource);
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const bool   canApply = !candidates.empty() &&
+                                    !m_dataSourceReplacePath.empty() &&
+                                    (m_replaceObjectsFromDataSource ||
+                                     m_replaceTimelinesFromDataSource ||
+                                     m_replaceMetadataFromDataSource);
+            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            if ( !canApply ) ImGui::BeginDisabled();
+            if ( ImGui::Button("替换", buttonSize) ) {
+                submitDataSourceReplaceRequest();
+                closePopup = true;
+            }
+            if ( !canApply ) ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
+                closePopup = true;
+            }
+
+            if ( closePopup ) {
+                m_showDataSourceReplaceWindow = false;
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::EndPopup();
         }
     }
@@ -649,6 +874,22 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             m_showMetadataEditorWindow = !m_showMetadataEditorWindow;
         }
 
+        {
+            bool  hasActiveBeatmap = false;
+            auto& engine           = Logic::EditorEngine::instance();
+            std::lock_guard<std::recursive_mutex> sessionLock(
+                engine.getSessionMutex());
+            auto session = engine.getActiveSession();
+            hasActiveBeatmap =
+                hasProject && session && session->getContext().currentBeatmap;
+            if ( MenuItemWithFontIcon(ICON_MMM_BARS,
+                                      "数据来源替换工具",
+                                      nullptr,
+                                      hasActiveBeatmap) ) {
+                m_showDataSourceReplaceWindow = true;
+            }
+        }
+
         if ( MenuItemWithFontIcon(
                  ICON_MMM_BARS, TR("ui.tools.format"), "Ctrl+F") ) {
             dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
@@ -722,6 +963,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderOverlapCheckWindow();
     renderMetadataEditorWindow();
     renderNoteMetadataEditorWindow();
+    renderDataSourceReplaceWindow(dpiScale);
     renderSaveConflictWarningPopup(dpiScale);
     renderExportFormatPickerPopup(dpiScale);
     renderExportCompatibilityWarningPopup(dpiScale);

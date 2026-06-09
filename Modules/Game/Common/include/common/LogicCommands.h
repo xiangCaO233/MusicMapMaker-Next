@@ -445,6 +445,21 @@ struct CmdReplaceBeatmapTimings {
     bool keepNonBpmTimings{ false };
 };
 
+/// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
+struct CmdReplaceBeatmapData {
+    /// @brief 数据来源谱面。
+    std::shared_ptr<const MMM::BeatMap> sourceBeatmap;
+
+    /// @brief 是否替换物件数据。
+    bool replaceObjects{ false };
+
+    /// @brief 是否替换时间线数据。
+    bool replaceTimelines{ false };
+
+    /// @brief 是否替换谱面元数据。
+    bool replaceMetadata{ false };
+};
+
 /**
  * @brief 从模板创建谱面时可复制的数据类别。
  */
@@ -528,9 +543,10 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
     CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap>;
+    CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
+    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
+    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
+    CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic
