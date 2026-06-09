@@ -407,6 +407,8 @@ private:
     std::vector<PackageBeatmapMetadataEdit> m_packageMalodyMetadataEdits;
     /// @brief 是否将打包转换产物保存回项目目录。
     bool m_saveConvertedPackageBeatmapsToProject{ false };
+    /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
+    bool m_includeLegacyImdPackageBeatmaps{ false };
 
     /// @brief 更新检查器实例。
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;

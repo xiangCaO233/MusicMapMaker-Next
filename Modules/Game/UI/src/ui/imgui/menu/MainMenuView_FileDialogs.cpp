@@ -226,6 +226,14 @@ bool shouldShowConvertedBeatmapSaveOption(PackageFileType type)
     return type == PackageFileType::Mcz || type == PackageFileType::Osz;
 }
 
+/// @brief 判断打包格式是否需要显示旧 IMD 兼容谱面选项。
+/// @param type 打包格式。
+/// @return 需要显示时返回 true。
+bool shouldShowLegacyImdPackageOption(PackageFileType type)
+{
+    return type == PackageFileType::Mcz;
+}
+
 /// @brief 取得原生文件选择器使用的扩展名过滤器。
 /// @param type 打包格式。
 /// @return 不带前导点的扩展名。
@@ -426,6 +434,9 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
         .saveConvertedBeatmapsToProject =
             shouldShowConvertedBeatmapSaveOption(m_selectedPackageFileType) &&
             m_saveConvertedPackageBeatmapsToProject,
+        .includeLegacyImdBeatmapsInPackage =
+            shouldShowLegacyImdPackageOption(m_selectedPackageFileType) &&
+            m_includeLegacyImdPackageBeatmaps,
         .metadataOverrides = m_pendingPackageMetadataOverrides,
     });
     m_pendingPackageRelativePaths.clear();
@@ -721,6 +732,9 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
         if ( !shouldShowConvertedBeatmapSaveOption(selectedType) ) {
             m_saveConvertedPackageBeatmapsToProject = false;
         }
+        if ( !shouldShowLegacyImdPackageOption(selectedType) ) {
+            m_includeLegacyImdPackageBeatmaps = false;
+        }
         rebuildPackageCandidateFiles();
         m_showPackageFileSelectionWindow = true;
     }
@@ -780,6 +794,11 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                     " 到项目中";
                 ImGui::Checkbox(saveConvertedLabel.c_str(),
                                 &m_saveConvertedPackageBeatmapsToProject);
+            }
+            if ( shouldShowLegacyImdPackageOption(m_selectedPackageFileType) ) {
+                ImGui::SameLine();
+                ImGui::Checkbox("同时打包兼容旧皮肤的 .imd",
+                                &m_includeLegacyImdPackageBeatmaps);
             }
 
             ImGui::Spacing();
@@ -1247,6 +1266,9 @@ void MainMenuView::openPackFilePicker()
     m_showPackageFileSelectionWindow  = false;
     m_showPackageMalodyMetadataWindow = false;
     m_showPackageFormatPicker         = true;
+    if ( !shouldShowLegacyImdPackageOption(m_selectedPackageFileType) ) {
+        m_includeLegacyImdPackageBeatmaps = false;
+    }
 }
 
 /// @brief 打开打包输出路径选择器。

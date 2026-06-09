@@ -288,6 +288,55 @@ bool readConvertedPackageBeatmapBytes(
     return readOk;
 }
 
+/// @brief 将文件字节写入 zip 包，重复包内路径会自动跳过。
+/// @param zipArchive 正在写入的 zip 归档。
+/// @param archivedNames 已写入的包内路径集合。
+/// @param archiveRelativePath 包内相对路径。
+/// @param fileBytes 待写入的文件字节。
+/// @param sourceRelativeUtf8 日志中使用的来源项目相对路径。
+/// @return 写入成功或因重复路径跳过时返回 true。
+bool addPackageArchiveBytes(mz_zip_archive&                  zipArchive,
+                            std::unordered_set<std::string>& archivedNames,
+                            const std::filesystem::path& archiveRelativePath,
+                            const std::vector<std::uint8_t>& fileBytes,
+                            const std::string&               sourceRelativeUtf8)
+{
+    std::string archiveName =
+        MMM::Config::pathToUtf8Generic(archiveRelativePath);
+    if ( archiveName.empty() ) {
+        XERROR("PackBeatmap: empty archive path: {}", sourceRelativeUtf8);
+        return false;
+    }
+    if ( !archivedNames.insert(archiveName).second ) {
+        return true;
+    }
+
+    const void* fileData = fileBytes.empty() ? nullptr : fileBytes.data();
+    if ( !mz_zip_writer_add_mem(&zipArchive,
+                                archiveName.c_str(),
+                                fileData,
+                                fileBytes.size(),
+                                MZ_DEFAULT_COMPRESSION) ) {
+        XERROR("PackBeatmap: failed to add file to archive: {}",
+               sourceRelativeUtf8);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 判断包内路径是否已在指定集合中。
+/// @param archivedNames 包内路径集合。
+/// @param archiveRelativePath 待检查的包内相对路径。
+/// @return 已存在时返回 true。
+bool hasPackageArchivePath(const std::unordered_set<std::string>& archivedNames,
+                           const std::filesystem::path& archiveRelativePath)
+{
+    const std::string archiveName =
+        MMM::Config::pathToUtf8Generic(archiveRelativePath);
+    return !archiveName.empty() &&
+           archivedNames.find(archiveName) != archivedNames.end();
+}
+
 /// @brief 将项目相对路径规范化为用于匹配打包元数据覆盖项的 UTF-8 路径。
 /// @param relativePath 项目相对路径。
 /// @return 规范化后的通用分隔符路径。
@@ -316,6 +365,25 @@ makePackageMetadataOverrideMap(
     return result;
 }
 
+/// @brief 构建已选原始 IMD 谱面在包内的路径集合。
+/// @param selectedRelativePaths 需要打包的项目相对路径列表。
+/// @return 已选 IMD 源文件对应的包内路径集合。
+std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
+    const std::vector<std::string>& selectedRelativePaths)
+{
+    std::unordered_set<std::string> result;
+    for ( const auto& relativeUtf8 : selectedRelativePaths ) {
+        const auto relativePath =
+            MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+        const auto extension =
+            MMM::Config::pathToUtf8(relativePath.extension());
+        if ( MMM::packageExtensionEquals(extension, ".imd") ) {
+            result.insert(MMM::Config::pathToUtf8Generic(relativePath));
+        }
+    }
+    return result;
+}
+
 /// @brief 写入 zip 兼容的谱面包。
 /// @param projectRoot 当前项目根目录。
 /// @param outputPath 输出包路径。
@@ -323,6 +391,7 @@ makePackageMetadataOverrideMap(
 /// @param packageTypes 输出包格式对应的文件类型规则。
 /// @param metadataOverrides 转换指定谱面时临时覆盖的基础元数据列表。
 /// @param saveConvertedBeatmapsToProject 是否将转换后的谱面文件保存回项目目录。
+/// @param includeLegacyImdBeatmapsInPackage 是否额外写入旧皮肤兼容的 IMD 谱面。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(
     const std::filesystem::path&          projectRoot,
@@ -331,7 +400,7 @@ bool writeBeatmapPackage(
     const MMM::PackageSupportedFileTypes& packageTypes,
     const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
          metadataOverrides,
-    bool saveConvertedBeatmapsToProject)
+    bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage)
 {
     if ( selectedRelativePaths.empty() ) return false;
 
@@ -345,6 +414,13 @@ bool writeBeatmapPackage(
     std::unordered_set<std::string> archivedNames;
     const std::string               packageBeatmapExtension =
         getPackageBeatmapOutputExtension(packageTypes);
+    const bool includeLegacyImdBeatmaps =
+        includeLegacyImdBeatmapsInPackage &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    const auto selectedImdArchiveNames =
+        includeLegacyImdBeatmaps
+            ? makeSelectedImdArchiveNameSet(selectedRelativePaths)
+            : std::unordered_set<std::string>{};
     const auto metadataOverrideMap =
         makePackageMetadataOverrideMap(metadataOverrides);
     for ( const auto& relativeUtf8 : selectedRelativePaths ) {
@@ -375,53 +451,119 @@ bool writeBeatmapPackage(
             break;
         }
 
-        auto       archiveRelativePath = relativePath;
-        const bool shouldConvert       = shouldConvertPackageBeatmapSource(
-            extension, packageBeatmapExtension);
-        if ( shouldConvert ) {
-            archiveRelativePath.replace_extension(packageBeatmapExtension);
-        }
+        const bool isBeatmapSource = MMM::isKnownPackageResourceExtension(
+            MMM::PackageResourceType::Beatmap, extension);
+        if ( isBeatmapSource ) {
+            auto       targetArchivePath = relativePath;
+            const bool shouldConvert     = shouldConvertPackageBeatmapSource(
+                extension, packageBeatmapExtension);
+            if ( shouldConvert ) {
+                targetArchivePath.replace_extension(packageBeatmapExtension);
+            }
 
-        std::string archiveName =
-            MMM::Config::pathToUtf8Generic(archiveRelativePath);
-        if ( archiveName.empty() ||
-             !archivedNames.insert(archiveName).second ) {
-            continue;
-        }
-
-        if ( shouldConvert ) {
-            const auto projectOutputPath =
-                (projectRoot / archiveRelativePath).lexically_normal();
             const auto metadataIt = metadataOverrideMap.find(relativePathKey);
             const MMM::BaseMapMeta* metadataOverride =
                 metadataIt == metadataOverrideMap.end() ? nullptr
                                                         : &metadataIt->second;
-            if ( !readConvertedPackageBeatmapBytes(
-                     sourcePath,
-                     projectOutputPath,
-                     packageBeatmapExtension,
-                     saveConvertedBeatmapsToProject,
-                     metadataOverride,
-                     fileBytes) ) {
-                XERROR("PackBeatmap: failed to convert source file: {}",
-                       relativeUtf8);
-                success = false;
-                break;
+
+            if ( !hasPackageArchivePath(archivedNames, targetArchivePath) ) {
+                if ( shouldConvert ) {
+                    const auto projectOutputPath =
+                        (projectRoot / targetArchivePath).lexically_normal();
+                    if ( !readConvertedPackageBeatmapBytes(
+                             sourcePath,
+                             projectOutputPath,
+                             packageBeatmapExtension,
+                             saveConvertedBeatmapsToProject,
+                             metadataOverride,
+                             fileBytes) ) {
+                        XERROR("PackBeatmap: failed to convert source file: {}",
+                               relativeUtf8);
+                        success = false;
+                        break;
+                    }
+                } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+                    XERROR("PackBeatmap: failed to read source file: {}",
+                           relativeUtf8);
+                    success = false;
+                    break;
+                }
+
+                if ( !addPackageArchiveBytes(zipArchive,
+                                             archivedNames,
+                                             targetArchivePath,
+                                             fileBytes,
+                                             relativeUtf8) ) {
+                    success = false;
+                    break;
+                }
             }
-        } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+
+            if ( includeLegacyImdBeatmaps ) {
+                auto imdArchivePath = relativePath;
+                imdArchivePath.replace_extension(".imd");
+                const bool sourceIsImd =
+                    MMM::packageExtensionEquals(extension, ".imd");
+                const bool rawImdSelected =
+                    !sourceIsImd &&
+                    hasPackageArchivePath(selectedImdArchiveNames,
+                                          imdArchivePath);
+                if ( !rawImdSelected &&
+                     !hasPackageArchivePath(archivedNames, imdArchivePath) ) {
+                    if ( sourceIsImd ) {
+                        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+                            XERROR(
+                                "PackBeatmap: failed to read source file: {}",
+                                relativeUtf8);
+                            success = false;
+                            break;
+                        }
+                    } else {
+                        const auto projectOutputPath =
+                            (projectRoot / imdArchivePath).lexically_normal();
+                        if ( !readConvertedPackageBeatmapBytes(
+                                 sourcePath,
+                                 projectOutputPath,
+                                 ".imd",
+                                 false,
+                                 nullptr,
+                                 fileBytes) ) {
+                            XERROR(
+                                "PackBeatmap: failed to convert legacy IMD "
+                                "file: {}",
+                                relativeUtf8);
+                            success = false;
+                            break;
+                        }
+                    }
+
+                    if ( !addPackageArchiveBytes(zipArchive,
+                                                 archivedNames,
+                                                 imdArchivePath,
+                                                 fileBytes,
+                                                 relativeUtf8) ) {
+                        success = false;
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if ( hasPackageArchivePath(archivedNames, relativePath) ) {
+            continue;
+        }
+        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
             XERROR("PackBeatmap: failed to read source file: {}", relativeUtf8);
             success = false;
             break;
         }
 
-        const void* fileData = fileBytes.empty() ? nullptr : fileBytes.data();
-        if ( !mz_zip_writer_add_mem(&zipArchive,
-                                    archiveName.c_str(),
-                                    fileData,
-                                    fileBytes.size(),
-                                    MZ_DEFAULT_COMPRESSION) ) {
-            XERROR("PackBeatmap: failed to add file to archive: {}",
-                   relativeUtf8);
+        if ( !addPackageArchiveBytes(zipArchive,
+                                     archivedNames,
+                                     relativePath,
+                                     fileBytes,
+                                     relativeUtf8) ) {
             success = false;
             break;
         }
@@ -759,7 +901,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.selectedProjectRelativePaths,
                             *packageTypes,
                             cmd.metadataOverrides,
-                            cmd.saveConvertedBeatmapsToProject);
+                            cmd.saveConvertedBeatmapsToProject,
+                            cmd.includeLegacyImdBeatmapsInPackage);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

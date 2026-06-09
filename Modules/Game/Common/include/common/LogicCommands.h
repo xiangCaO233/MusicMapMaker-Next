@@ -371,6 +371,9 @@ struct CmdPackBeatmap {
     /// @brief 是否将转换出的目标谱面文件保存回项目目录。
     bool saveConvertedBeatmapsToProject{ false };
 
+    /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
+    bool includeLegacyImdBeatmapsInPackage{ false };
+
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
