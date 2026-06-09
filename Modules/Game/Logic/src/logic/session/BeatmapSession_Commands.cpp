@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
@@ -18,6 +19,7 @@
 #include "mmm/project/PackageFileTypes.h"
 #include <stb_image.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -25,7 +27,9 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <miniz.h>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -83,6 +87,101 @@ void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
         resolveCurrentProjectPath(meta.main_cover_path));
     meta.cover_path = makeCurrentProjectRelativePath(
         resolveCurrentProjectPath(meta.cover_path));
+}
+
+/// @brief 计算谱面文件的 FNV-1a 64 位哈希。
+/// @param path 待读取文件路径。
+/// @return 成功时返回哈希值，文件不可读时返回空。
+std::optional<std::uint64_t> calculateBeatmapFileHash(
+    const std::filesystem::path& path)
+{
+    std::error_code filesystemError;
+    if ( !std::filesystem::is_regular_file(path, filesystemError) ||
+         filesystemError ) {
+        return std::nullopt;
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if ( !file ) return std::nullopt;
+
+    constexpr std::uint64_t fnvOffset = 14695981039346656037ull;
+    constexpr std::uint64_t fnvPrime  = 1099511628211ull;
+
+    std::uint64_t               hash = fnvOffset;
+    std::array<char, 64 * 1024> buffer{};
+    while ( file ) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto bytesRead = file.gcount();
+        for ( std::streamsize index = 0; index < bytesRead; ++index ) {
+            hash ^= static_cast<std::uint8_t>(static_cast<unsigned char>(
+                buffer[static_cast<std::size_t>(index)]));
+            hash *= fnvPrime;
+        }
+    }
+
+    if ( file.bad() ) return std::nullopt;
+    return hash;
+}
+
+/// @brief 生成保存哈希缓存使用的路径键。
+/// @param path 目标文件路径。
+/// @return 规范化后的 UTF-8 路径键。
+std::string makeBeatmapFileHashPathKey(const std::filesystem::path& path)
+{
+    return MMM::Config::pathToUtf8Generic(path.lexically_normal());
+}
+
+/// @brief 刷新会话中记录的单个谱面文件哈希。
+/// @param savedBeatmapFileHashes 当前会话的谱面文件哈希缓存。
+/// @param path 已加载或已成功保存的谱面路径。
+void rememberBeatmapFileHash(
+    std::unordered_map<std::string, std::uint64_t>& savedBeatmapFileHashes,
+    const std::filesystem::path&                    path)
+{
+    if ( path.empty() ) return;
+
+    const std::string key = makeBeatmapFileHashPathKey(path);
+    if ( key.empty() ) return;
+
+    if ( auto hash = calculateBeatmapFileHash(path) ) {
+        savedBeatmapFileHashes[key] = *hash;
+    } else {
+        savedBeatmapFileHashes.erase(key);
+    }
+}
+
+/// @brief 判断强制 MMM 保存是否需要用户确认覆盖。
+/// @param settings 当前编辑器设置。
+/// @param savedBeatmapFileHashes 当前会话的谱面文件哈希缓存。
+/// @param cmd 保存命令。
+/// @param savePath 本次实际写出的目标路径。
+/// @return 需要确认时返回 true。
+bool shouldConfirmForcedMmmOverwrite(
+    const MMM::Config::EditorSettings& settings,
+    const std::unordered_map<std::string, std::uint64_t>&
+                                      savedBeatmapFileHashes,
+    const MMM::Logic::CmdSaveBeatmap& cmd,
+    const std::filesystem::path&      savePath)
+{
+    if ( cmd.allowExternallyModifiedOverwrite ) return false;
+    if ( settings.saveFormatPreference !=
+         MMM::Config::SaveFormatPreference::ForceMMM ) {
+        return false;
+    }
+
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(savePath, filesystemError) ||
+         filesystemError ) {
+        return false;
+    }
+
+    auto currentHash = calculateBeatmapFileHash(savePath);
+    if ( !currentHash ) return true;
+
+    const auto hashIt =
+        savedBeatmapFileHashes.find(makeBeatmapFileHashPathKey(savePath));
+    return hashIt == savedBeatmapFileHashes.end() ||
+           hashIt->second != *currentHash;
 }
 
 /// @brief 格式化无快照上下文的状态栏时间文本。
@@ -189,15 +288,16 @@ std::string getPackageBeatmapOutputExtension(
     return std::string(packageTypes.m_beatmapExtensions.front());
 }
 
-/// @brief 判断 .mmm 来源是否需要转换成当前包格式的谱面文件。
+/// @brief 判断谱面来源是否需要转换成当前包格式的谱面文件。
 /// @param sourceExtension 来源文件扩展名。
 /// @param outputExtension 目标谱面扩展名。
 /// @return 是否需要在打包前转换。
 bool shouldConvertPackageBeatmapSource(const std::string& sourceExtension,
                                        const std::string& outputExtension)
 {
-    return MMM::packageExtensionEquals(sourceExtension, ".mmm") &&
-           !MMM::packageExtensionEquals(outputExtension, ".mmm");
+    return MMM::isKnownPackageResourceExtension(
+               MMM::PackageResourceType::Beatmap, sourceExtension) &&
+           !MMM::packageExtensionEquals(sourceExtension, outputExtension);
 }
 
 /// @brief 生成临时转换谱面文件路径。
@@ -221,30 +321,37 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
     return (tempRoot / fileName).lexically_normal();
 }
 
-/// @brief 将 .mmm 谱面转换成指定路径的目标格式文件。
-/// @param sourcePath 来源 .mmm 谱面路径。
+/// @brief 将谱面源文件转换成指定路径的目标格式文件。
+/// @param sourcePath 来源谱面路径。
 /// @param outputPath 转换后输出路径。
+/// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @return 是否转换成功。
 bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
-                               const std::filesystem::path& outputPath)
+                               const std::filesystem::path& outputPath,
+                               const MMM::BaseMapMeta*      metadataOverride)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
+    if ( metadataOverride ) {
+        beatMap.m_baseMapMetadata = *metadataOverride;
+    }
     beatMap.m_baseMapMetadata.map_path = outputPath;
     return beatMap.saveToFile(outputPath);
 }
 
-/// @brief 读取 .mmm 转换后的目标谱面字节。
-/// @param sourcePath 来源 .mmm 谱面路径。
+/// @brief 读取转换后的目标谱面字节。
+/// @param sourcePath 来源谱面路径。
 /// @param projectOutputPath 保存到项目中时使用的目标路径。
 /// @param outputExtension 目标谱面扩展名。
 /// @param saveToProject 是否将转换产物留在项目目录中。
+/// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
     const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
+    const MMM::BaseMapMeta*    metadataOverride,
     std::vector<std::uint8_t>& outBytes)
 {
     const auto conversionPath =
@@ -262,7 +369,8 @@ bool readConvertedPackageBeatmapBytes(
         }
     }
 
-    if ( !convertPackageBeatmapFile(sourcePath, conversionPath) ) {
+    if ( !convertPackageBeatmapFile(
+             sourcePath, conversionPath, metadataOverride) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -278,18 +386,119 @@ bool readConvertedPackageBeatmapBytes(
     return readOk;
 }
 
+/// @brief 将文件字节写入 zip 包，重复包内路径会自动跳过。
+/// @param zipArchive 正在写入的 zip 归档。
+/// @param archivedNames 已写入的包内路径集合。
+/// @param archiveRelativePath 包内相对路径。
+/// @param fileBytes 待写入的文件字节。
+/// @param sourceRelativeUtf8 日志中使用的来源项目相对路径。
+/// @return 写入成功或因重复路径跳过时返回 true。
+bool addPackageArchiveBytes(mz_zip_archive&                  zipArchive,
+                            std::unordered_set<std::string>& archivedNames,
+                            const std::filesystem::path& archiveRelativePath,
+                            const std::vector<std::uint8_t>& fileBytes,
+                            const std::string&               sourceRelativeUtf8)
+{
+    std::string archiveName =
+        MMM::Config::pathToUtf8Generic(archiveRelativePath);
+    if ( archiveName.empty() ) {
+        XERROR("PackBeatmap: empty archive path: {}", sourceRelativeUtf8);
+        return false;
+    }
+    if ( !archivedNames.insert(archiveName).second ) {
+        return true;
+    }
+
+    const void* fileData = fileBytes.empty() ? nullptr : fileBytes.data();
+    if ( !mz_zip_writer_add_mem(&zipArchive,
+                                archiveName.c_str(),
+                                fileData,
+                                fileBytes.size(),
+                                MZ_DEFAULT_COMPRESSION) ) {
+        XERROR("PackBeatmap: failed to add file to archive: {}",
+               sourceRelativeUtf8);
+        return false;
+    }
+    return true;
+}
+
+/// @brief 判断包内路径是否已在指定集合中。
+/// @param archivedNames 包内路径集合。
+/// @param archiveRelativePath 待检查的包内相对路径。
+/// @return 已存在时返回 true。
+bool hasPackageArchivePath(const std::unordered_set<std::string>& archivedNames,
+                           const std::filesystem::path& archiveRelativePath)
+{
+    const std::string archiveName =
+        MMM::Config::pathToUtf8Generic(archiveRelativePath);
+    return !archiveName.empty() &&
+           archivedNames.find(archiveName) != archivedNames.end();
+}
+
+/// @brief 将项目相对路径规范化为用于匹配打包元数据覆盖项的 UTF-8 路径。
+/// @param relativePath 项目相对路径。
+/// @return 规范化后的通用分隔符路径。
+std::string normalizePackageRelativePathKey(
+    const std::filesystem::path& relativePath)
+{
+    return MMM::Config::pathToUtf8Generic(relativePath.lexically_normal());
+}
+
+/// @brief 构建打包元数据覆盖项查询表。
+/// @param metadataOverrides 命令中携带的元数据覆盖项。
+/// @return 项目相对路径到基础元数据的映射。
+std::unordered_map<std::string, MMM::BaseMapMeta>
+makePackageMetadataOverrideMap(
+    const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
+        metadataOverrides)
+{
+    std::unordered_map<std::string, MMM::BaseMapMeta> result;
+    result.reserve(metadataOverrides.size());
+    for ( const auto& metadataOverride : metadataOverrides ) {
+        auto relativePath =
+            MMM::Config::utf8ToPath(metadataOverride.relativePath);
+        result[normalizePackageRelativePathKey(relativePath)] =
+            metadataOverride.baseMeta;
+    }
+    return result;
+}
+
+/// @brief 构建已选原始 IMD 谱面在包内的路径集合。
+/// @param selectedRelativePaths 需要打包的项目相对路径列表。
+/// @return 已选 IMD 源文件对应的包内路径集合。
+std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
+    const std::vector<std::string>& selectedRelativePaths)
+{
+    std::unordered_set<std::string> result;
+    for ( const auto& relativeUtf8 : selectedRelativePaths ) {
+        const auto relativePath =
+            MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+        const auto extension =
+            MMM::Config::pathToUtf8(relativePath.extension());
+        if ( MMM::packageExtensionEquals(extension, ".imd") ) {
+            result.insert(MMM::Config::pathToUtf8Generic(relativePath));
+        }
+    }
+    return result;
+}
+
 /// @brief 写入 zip 兼容的谱面包。
 /// @param projectRoot 当前项目根目录。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
 /// @param packageTypes 输出包格式对应的文件类型规则。
+/// @param metadataOverrides 转换指定谱面时临时覆盖的基础元数据列表。
 /// @param saveConvertedBeatmapsToProject 是否将转换后的谱面文件保存回项目目录。
+/// @param includeLegacyImdBeatmapsInPackage 是否额外写入旧皮肤兼容的 IMD 谱面。
 /// @return 是否打包成功。
-bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
-                         const std::filesystem::path&    outputPath,
-                         const std::vector<std::string>& selectedRelativePaths,
-                         const MMM::PackageSupportedFileTypes& packageTypes,
-                         bool saveConvertedBeatmapsToProject)
+bool writeBeatmapPackage(
+    const std::filesystem::path&          projectRoot,
+    const std::filesystem::path&          outputPath,
+    const std::vector<std::string>&       selectedRelativePaths,
+    const MMM::PackageSupportedFileTypes& packageTypes,
+    const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
+         metadataOverrides,
+    bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage)
 {
     if ( selectedRelativePaths.empty() ) return false;
 
@@ -303,9 +512,20 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
     std::unordered_set<std::string> archivedNames;
     const std::string               packageBeatmapExtension =
         getPackageBeatmapOutputExtension(packageTypes);
+    const bool includeLegacyImdBeatmaps =
+        includeLegacyImdBeatmapsInPackage &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    const auto selectedImdArchiveNames =
+        includeLegacyImdBeatmaps
+            ? makeSelectedImdArchiveNameSet(selectedRelativePaths)
+            : std::unordered_set<std::string>{};
+    const auto metadataOverrideMap =
+        makePackageMetadataOverrideMap(metadataOverrides);
     for ( const auto& relativeUtf8 : selectedRelativePaths ) {
         const auto relativePath =
             MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+        const auto relativePathKey =
+            normalizePackageRelativePathKey(relativePath);
         if ( packageRelativePathEscapesRoot(relativePath) ) {
             XERROR("PackBeatmap: path escapes project root: {}", relativeUtf8);
             success = false;
@@ -329,48 +549,119 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
             break;
         }
 
-        auto       archiveRelativePath = relativePath;
-        const bool shouldConvert       = shouldConvertPackageBeatmapSource(
-            extension, packageBeatmapExtension);
-        if ( shouldConvert ) {
-            archiveRelativePath.replace_extension(packageBeatmapExtension);
-        }
+        const bool isBeatmapSource = MMM::isKnownPackageResourceExtension(
+            MMM::PackageResourceType::Beatmap, extension);
+        if ( isBeatmapSource ) {
+            auto       targetArchivePath = relativePath;
+            const bool shouldConvert     = shouldConvertPackageBeatmapSource(
+                extension, packageBeatmapExtension);
+            if ( shouldConvert ) {
+                targetArchivePath.replace_extension(packageBeatmapExtension);
+            }
 
-        std::string archiveName =
-            MMM::Config::pathToUtf8Generic(archiveRelativePath);
-        if ( archiveName.empty() ||
-             !archivedNames.insert(archiveName).second ) {
+            const auto metadataIt = metadataOverrideMap.find(relativePathKey);
+            const MMM::BaseMapMeta* metadataOverride =
+                metadataIt == metadataOverrideMap.end() ? nullptr
+                                                        : &metadataIt->second;
+
+            if ( !hasPackageArchivePath(archivedNames, targetArchivePath) ) {
+                if ( shouldConvert ) {
+                    const auto projectOutputPath =
+                        (projectRoot / targetArchivePath).lexically_normal();
+                    if ( !readConvertedPackageBeatmapBytes(
+                             sourcePath,
+                             projectOutputPath,
+                             packageBeatmapExtension,
+                             saveConvertedBeatmapsToProject,
+                             metadataOverride,
+                             fileBytes) ) {
+                        XERROR("PackBeatmap: failed to convert source file: {}",
+                               relativeUtf8);
+                        success = false;
+                        break;
+                    }
+                } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+                    XERROR("PackBeatmap: failed to read source file: {}",
+                           relativeUtf8);
+                    success = false;
+                    break;
+                }
+
+                if ( !addPackageArchiveBytes(zipArchive,
+                                             archivedNames,
+                                             targetArchivePath,
+                                             fileBytes,
+                                             relativeUtf8) ) {
+                    success = false;
+                    break;
+                }
+            }
+
+            if ( includeLegacyImdBeatmaps ) {
+                auto imdArchivePath = relativePath;
+                imdArchivePath.replace_extension(".imd");
+                const bool sourceIsImd =
+                    MMM::packageExtensionEquals(extension, ".imd");
+                const bool rawImdSelected =
+                    !sourceIsImd &&
+                    hasPackageArchivePath(selectedImdArchiveNames,
+                                          imdArchivePath);
+                if ( !rawImdSelected &&
+                     !hasPackageArchivePath(archivedNames, imdArchivePath) ) {
+                    if ( sourceIsImd ) {
+                        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+                            XERROR(
+                                "PackBeatmap: failed to read source file: {}",
+                                relativeUtf8);
+                            success = false;
+                            break;
+                        }
+                    } else {
+                        const auto projectOutputPath =
+                            (projectRoot / imdArchivePath).lexically_normal();
+                        if ( !readConvertedPackageBeatmapBytes(
+                                 sourcePath,
+                                 projectOutputPath,
+                                 ".imd",
+                                 false,
+                                 nullptr,
+                                 fileBytes) ) {
+                            XERROR(
+                                "PackBeatmap: failed to convert legacy IMD "
+                                "file: {}",
+                                relativeUtf8);
+                            success = false;
+                            break;
+                        }
+                    }
+
+                    if ( !addPackageArchiveBytes(zipArchive,
+                                                 archivedNames,
+                                                 imdArchivePath,
+                                                 fileBytes,
+                                                 relativeUtf8) ) {
+                        success = false;
+                        break;
+                    }
+                }
+            }
             continue;
         }
 
-        if ( shouldConvert ) {
-            const auto projectOutputPath =
-                (projectRoot / archiveRelativePath).lexically_normal();
-            if ( !readConvertedPackageBeatmapBytes(
-                     sourcePath,
-                     projectOutputPath,
-                     packageBeatmapExtension,
-                     saveConvertedBeatmapsToProject,
-                     fileBytes) ) {
-                XERROR("PackBeatmap: failed to convert source file: {}",
-                       relativeUtf8);
-                success = false;
-                break;
-            }
-        } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+        if ( hasPackageArchivePath(archivedNames, relativePath) ) {
+            continue;
+        }
+        if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
             XERROR("PackBeatmap: failed to read source file: {}", relativeUtf8);
             success = false;
             break;
         }
 
-        const void* fileData = fileBytes.empty() ? nullptr : fileBytes.data();
-        if ( !mz_zip_writer_add_mem(&zipArchive,
-                                    archiveName.c_str(),
-                                    fileData,
-                                    fileBytes.size(),
-                                    MZ_DEFAULT_COMPRESSION) ) {
-            XERROR("PackBeatmap: failed to add file to archive: {}",
-                   relativeUtf8);
+        if ( !addPackageArchiveBytes(zipArchive,
+                                     archivedNames,
+                                     relativePath,
+                                     fileBytes,
+                                     relativeUtf8) ) {
             success = false;
             break;
         }
@@ -424,7 +715,8 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
-                               std::is_same_v<T, CmdReplaceBeatmapTimings> ) {
+                               std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                               std::is_same_v<T, CmdReplaceBeatmapData> ) {
                     m_ctx->isTransformDirty = true;
                 }
 
@@ -558,6 +850,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
+                    std::is_same_v<T, CmdReplaceBeatmapData> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
                     std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
@@ -599,23 +892,39 @@ void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
 void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 {
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
+    m_savedBeatmapFileHashes.clear();
+    if ( m_ctx->currentBeatmap ) {
+        rememberBeatmapFileHash(
+            m_savedBeatmapFileHashes,
+            resolveCurrentProjectPath(
+                m_ctx->currentBeatmap->m_baseMapMetadata.map_path));
+    }
     m_ctx->isBpmEventsDirty = true;
 }
 
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
-        m_ctx->m_needsTimingsSync = true;
-        m_ctx->m_needsNotesSync   = true;
-        SessionUtils::syncBeatmap(*m_ctx);
-        SessionUtils::ensureHitEvents(*m_ctx);
-
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto savePath = resolveCurrentProjectPath(oldPath);
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
              Config::SaveFormatPreference::ForceMMM ) {
             savePath.replace_extension(".mmm");
         }
+        if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+                                             m_savedBeatmapFileHashes,
+                                             cmd,
+                                             savePath) ) {
+            Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
+                .path = Config::pathToUtf8(savePath),
+            });
+            return;
+        }
+
+        m_ctx->m_needsTimingsSync = true;
+        m_ctx->m_needsNotesSync   = true;
+        SessionUtils::syncBeatmap(*m_ctx);
+        SessionUtils::ensureHitEvents(*m_ctx);
 
         bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {
@@ -635,6 +944,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         });
         auto storedSavePath = makeCurrentProjectRelativePath(savePath);
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
+        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
         m_ctx->actionStack.markSaved();
         if ( oldPath != storedSavePath ) {
             EditorEngine::instance().updateBeatmapFilePathInProject(
@@ -670,6 +980,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         });
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
             makeCurrentProjectRelativePath(savePath);
+        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
         m_ctx->actionStack.markSaved();
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
@@ -707,7 +1018,9 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             outputPath,
                             cmd.selectedProjectRelativePaths,
                             *packageTypes,
-                            cmd.saveConvertedBeatmapsToProject);
+                            cmd.metadataOverrides,
+                            cmd.saveConvertedBeatmapsToProject,
+                            cmd.includeLegacyImdBeatmapsInPackage);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

@@ -1,12 +1,9 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "audio/AudioManager.h"
 #include "config/skin/SkinConfig.h"
-#include "config/skin/translation/Translation.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/audio/AudioSpectrumView.h"
-#include "ui/imgui/audio/AudioWaveformView.h"
 #include <cfloat>
 #include <cmath>
 

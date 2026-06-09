@@ -1,6 +1,5 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>

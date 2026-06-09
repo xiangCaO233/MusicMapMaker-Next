@@ -5,14 +5,12 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <GLFW/glfw3.h>
 #include <memory>
 
 namespace MMM::UI
@@ -143,9 +141,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiIO&    io       = ImGui::GetIO();
         float       logicUps = Logic::EditorEngine::instance().getLogicUps();
         std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                      1000.0f / io.Framerate,
-                                      io.Framerate,
-                                      logicUps);
+                                    1000.0f / io.Framerate,
+                                    io.Framerate,
+                                    logicUps);
         float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         float numberOfButtons  = 3;

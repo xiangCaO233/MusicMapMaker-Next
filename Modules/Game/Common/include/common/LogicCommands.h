@@ -340,6 +340,8 @@ struct CmdSelectAll {
  * @brief 保存谱面指令
  */
 struct CmdSaveBeatmap {
+    /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
+    bool allowExternallyModifiedOverwrite{ false };
 };
 
 /**
@@ -347,6 +349,15 @@ struct CmdSaveBeatmap {
  */
 struct CmdSaveBeatmapAs {
     std::string path;
+};
+
+/// @brief 打包转换时临时覆盖单个谱面的基础元数据。
+struct PackageBeatmapMetadataOverride {
+    /// @brief 项目相对谱面路径，使用 UTF-8 编码。
+    std::string relativePath;
+
+    /// @brief 转换导出时使用的基础谱面元数据。
+    MMM::BaseMapMeta baseMeta;
 };
 
 /**
@@ -359,8 +370,14 @@ struct CmdPackBeatmap {
     /// @brief 需要写入包内的项目相对文件路径列表，使用 UTF-8 编码。
     std::vector<std::string> selectedProjectRelativePaths;
 
-    /// @brief 是否将 .mmm 转换出的目标谱面文件保存回项目目录。
+    /// @brief 是否将转换出的目标谱面文件保存回项目目录。
     bool saveConvertedBeatmapsToProject{ false };
+
+    /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
+    bool includeLegacyImdBeatmapsInPackage{ false };
+
+    /// @brief 转换指定谱面时临时覆盖的元数据列表。
+    std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
 
 /**
@@ -426,6 +443,21 @@ struct CmdReplaceBeatmapTimings {
 
     /// @brief 是否保留当前谱面中非 BPM 的流速/特效 Timing。
     bool keepNonBpmTimings{ false };
+};
+
+/// @brief 使用另一个谱面作为来源，直接替换当前会话指定类别的数据。
+struct CmdReplaceBeatmapData {
+    /// @brief 数据来源谱面。
+    std::shared_ptr<const MMM::BeatMap> sourceBeatmap;
+
+    /// @brief 是否替换物件数据。
+    bool replaceObjects{ false };
+
+    /// @brief 是否替换时间线数据。
+    bool replaceTimelines{ false };
+
+    /// @brief 是否替换谱面元数据。
+    bool replaceMetadata{ false };
 };
 
 /**
@@ -511,9 +543,10 @@ using LogicCommand = std::variant<
     CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdUpdateTimelineEvent, CmdDeleteTimelineEvent,
     CmdCreateTimelineEvent, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRemoveAudioResource, CmdRemoveBeatmap>;
+    CmdReplaceBeatmapData, CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee,
+    CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
+    CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
+    CmdRemoveBeatmap>;
 
 }  // namespace MMM::Logic

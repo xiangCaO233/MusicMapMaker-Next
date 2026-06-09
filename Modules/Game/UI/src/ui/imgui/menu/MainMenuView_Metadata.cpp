@@ -4,32 +4,14 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "event/project/ProjectEvents.h"
-#include "event/ui/UISettingsTabEvent.h"
-#include "event/ui/UISubViewToggleEvent.h"
-#include "event/ui/menu/AudioImportTriggerEvent.h"
-#include "event/ui/menu/OpenProjectEvent.h"
-#include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "mmm/note/Hold.h"
-#include "mmm/note/Polyline.h"
-#include "mmmversion.h"
-#include "network/UpdateChecker.h"
-#include "ui/Icons.h"
-#include "ui/UIManager.h"
-#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <fmt/core.h>
 #include <imgui.h>
-#include <imgui_internal.h>
-#include <nfd.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -410,7 +392,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool known = std::find_if(knownKeys.begin(),
+            const bool       known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -1915,8 +1897,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2090,8 +2072,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2272,8 +2254,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |

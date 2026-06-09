@@ -7,13 +7,11 @@
 #include "event/core/EventBus.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "imgui.h"
-#include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
-#include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -229,10 +227,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font = snapshot.fileManagerFont
-                       ? snapshot.fileManagerFont
-                       : (snapshot.contentFont ? snapshot.contentFont
-                                               : snapshot.fallbackFont);
+    ImFont* font             = snapshot.fileManagerFont
+                                   ? snapshot.fileManagerFont
+                                   : (snapshot.contentFont ? snapshot.contentFont
+                                                           : snapshot.fallbackFont);
 
     const std::array<const char*, 3> controlLabels{
         TR("ui.audio_manager.global_volume").data(),
@@ -273,7 +271,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float       minWidth =
+    float minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float       listHeight = 0.0f;

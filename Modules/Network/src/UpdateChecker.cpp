@@ -2,19 +2,25 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
-#include <fstream>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <thread>
 
 #if defined(_WIN32)
-#    include <shellapi.h>
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+// clang-format off
 #    include <windows.h>
+#    include <shellapi.h>
+// clang-format on
 #elif defined(__APPLE__)
 #    include <mach-o/dyld.h>
 #else

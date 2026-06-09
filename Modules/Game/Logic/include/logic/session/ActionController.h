@@ -82,6 +82,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdReplaceBeatmapTimings& cmd);
 
+    /// @brief 处理从其他谱面替换当前谱面数据的命令。
+    /// @param cmd 命令数据。
+    void handleCommand(const CmdReplaceBeatmapData& cmd);
+
     /// @brief 强制同步当前的谱面数据(通常在批量编辑后调用)
     void syncBeatmap();
 

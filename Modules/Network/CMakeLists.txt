@@ -15,6 +15,10 @@ target_link_libraries(Network
         Event
 )
 
+if(WIN32)
+    target_link_libraries(Network PUBLIC shell32)
+endif()
+
 # Unit test
 add_executable(UpdateCheckerTest tests/UpdateCheckerTest.cpp)
 target_link_libraries(UpdateCheckerTest PRIVATE Network Log)

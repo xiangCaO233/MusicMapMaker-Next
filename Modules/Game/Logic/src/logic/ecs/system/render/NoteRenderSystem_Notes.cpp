@@ -1,5 +1,4 @@
 #include "config/skin/SkinConfig.h"
-#include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -91,6 +90,18 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
 static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     entt::registry& registry, const ScrollCache* cache,
     const std::vector<entt::entity>& entities, std::uint64_t noteRevision);
+
+/// @brief 获取普通物件主体末端的 HS 锚点时间。
+/// @warning 热路径：音符可见性和命中盒计算中调用；保持纯计算，不得分配。
+static double getCarrierEndAnchorTime(const NoteComponent& note,
+                                      const ScrollCache*   cache)
+{
+    (void)cache;
+    if ( note.m_type == ::MMM::NoteType::HOLD ) {
+        return note.m_timestamp;
+    }
+    return note.m_timestamp + note.m_duration;
+}
 
 void NoteRenderSystem::renderNotes(
     entt::registry& registry, RenderSnapshot* snapshot,
@@ -697,10 +708,9 @@ void NoteRenderSystem::generateNoteHitboxes(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd =
-            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
-                                       ctx.currentAbsY,
-                                       note.m_timestamp + note.m_duration);
+        const double endAnchorTime   = getCarrierEndAnchorTime(note, ctx.cache);
+        double       displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, endAnchorTime);
 
         double maxDelta =
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);
@@ -791,7 +801,7 @@ void NoteRenderSystem::generateNoteHitboxes(
             judgmentLineY - static_cast<float>(ctx.cache->getDisplayDelta(
                                 note.m_timestamp + note.m_duration,
                                 ctx.currentAbsY,
-                                note.m_timestamp)) *
+                                getCarrierEndAnchorTime(note, ctx.cache))) *
                                 renderScaleY;
 
         float minY = std::min(screenY, endY) - ctx.noteH;
@@ -884,10 +894,9 @@ void NoteRenderSystem::renderNoteBaseLayer(
 
         double displayDeltaStart = ctx.cache->getDisplayDelta(
             note.m_timestamp, ctx.currentAbsY, note.m_timestamp);
-        double displayDeltaEnd =
-            ctx.cache->getDisplayDelta(note.m_timestamp + note.m_duration,
-                                       ctx.currentAbsY,
-                                       note.m_timestamp + note.m_duration);
+        const double endAnchorTime   = getCarrierEndAnchorTime(note, ctx.cache);
+        double       displayDeltaEnd = ctx.cache->getDisplayDelta(
+            note.m_timestamp + note.m_duration, ctx.currentAbsY, endAnchorTime);
 
         double maxDelta =
             (judgmentLineY - topY) / static_cast<double>(renderScaleY);

@@ -121,6 +121,9 @@ private:
         const std::string&                audioTrackId,
         const std::vector<::MMM::Timing>& timings);
 
+    /// @brief 从当前绑定的 BPM 测量工具安全解除导出回调。
+    void unbindBpmMeasurementTool();
+
     /// @brief 格式化当前已测量 Timing 的摘要文本。
     /// @return 可展示在新建谱面向导中的 Timing 摘要。
     std::string formatMeasuredTimingSummary() const;
@@ -195,6 +198,9 @@ private:
 
     /// @brief 当前由新建向导绑定导出回调的 BPM 测量工具视图，非拥有指针。
     BpmMeasurementToolView* m_boundBpmToolView{ nullptr };
+
+    /// @brief 当前 BPM 测量工具视图所属的 UI 管理器，非拥有指针。
+    UIManager* m_boundBpmToolManager{ nullptr };
 };
 
 }  // namespace MMM::UI

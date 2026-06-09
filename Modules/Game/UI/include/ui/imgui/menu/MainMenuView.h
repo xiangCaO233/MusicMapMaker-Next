@@ -155,6 +155,42 @@ private:
         bool selected{ true };
     };
 
+    /// @brief 打包转换前临时编辑的目标谱面元数据。
+    struct PackageBeatmapMetadataEdit {
+        /// @brief 项目相对谱面路径，使用 UTF-8 编码和通用分隔符。
+        std::string relativePath;
+
+        /// @brief 当前编辑中的基础谱面元数据。
+        BaseMapMeta baseMeta;
+
+        /// @brief 目标谱面标题输入缓存。
+        std::array<char, 192> titleBuffer{};
+
+        /// @brief 目标谱面原标题输入缓存。
+        std::array<char, 192> titleUnicodeBuffer{};
+
+        /// @brief 目标谱面艺术家输入缓存。
+        std::array<char, 192> artistBuffer{};
+
+        /// @brief 目标谱面原艺术家输入缓存。
+        std::array<char, 192> artistUnicodeBuffer{};
+
+        /// @brief 目标谱面谱师输入缓存。
+        std::array<char, 192> creatorBuffer{};
+
+        /// @brief 目标谱面难度名输入缓存。
+        std::array<char, 192> versionBuffer{};
+    };
+
+    /// @brief 数据来源替换工具中的候选谱面。
+    struct DataSourceReplaceCandidate {
+        /// @brief 项目相对谱面路径，使用 UTF-8 编码和通用分隔符。
+        std::string relativePath;
+
+        /// @brief UI 中显示的谱面名称。
+        std::string displayName;
+    };
+
     /// @brief 扫描当前谱面中的重叠音符。
     void performOverlapScan();
 
@@ -199,6 +235,10 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportCompatibilityWarningPopup(float dpiScale);
 
+    /// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderSaveConflictWarningPopup(float dpiScale);
+
     /// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportFormatPickerPopup(float dpiScale);
@@ -210,6 +250,22 @@ private:
     /// @brief 渲染打包文件复选列表窗口。
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageFileSelectionWindow(float dpiScale);
+
+    /// @brief 渲染数据来源替换工具窗口。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderDataSourceReplaceWindow(float dpiScale);
+
+    /// @brief 收集可用于替换当前焦点谱面的项目谱面候选。
+    /// @return 数据来源候选列表。
+    std::vector<DataSourceReplaceCandidate>
+    collectDataSourceReplaceCandidates() const;
+
+    /// @brief 提交数据来源替换请求。
+    void submitDataSourceReplaceRequest();
+
+    /// @brief 渲染打包前补充目标谱面元数据的窗口。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageBeatmapMetadataWindow(float dpiScale);
 
     /// @brief 打开谱面倍速制作弹窗。
     void openBeatmapSpeedExportPopup();
@@ -226,6 +282,17 @@ private:
 
     /// @brief 按当前目标打包格式重建候选文件列表。
     void rebuildPackageCandidateFiles();
+
+    /// @brief 为选中的谱面准备打包转换前的元数据补充项。
+    /// @param selectedRelativePaths 当前已选的项目相对路径列表。
+    /// @return 需要展示补充窗口时返回 true。
+    bool preparePackageBeatmapMetadataEdits(
+        const std::vector<std::string>& selectedRelativePaths);
+
+    /// @brief 从补充窗口缓存收集打包元数据覆盖项。
+    /// @return 元数据覆盖项列表。
+    std::vector<Logic::PackageBeatmapMetadataOverride>
+    collectPackageMetadataOverridesFromEdits();
 
     /// @brief 收集当前已勾选的项目相对文件路径。
     /// @return 已勾选的项目相对文件路径列表。
@@ -284,6 +351,8 @@ private:
     bool m_showMetadataEditorWindow = false;
     /// @brief 是否显示音符元数据编辑窗口。
     bool m_showNoteMetadataEditorWindow = false;
+    /// @brief 是否显示数据来源替换工具窗口。
+    bool m_showDataSourceReplaceWindow = false;
     /// @brief 当前重叠检测结果是否已生成。
     bool m_hasOverlapScan = false;
     /// @brief 当前缓存的重叠检测结果。
@@ -299,12 +368,16 @@ private:
     bool m_showUpdateSuccessPopup = false;
     /// @brief 是否在下一帧打开导出兼容性警告弹窗。
     bool m_showExportCompatibilityWarning = false;
+    /// @brief 是否在下一帧打开保存覆盖风险确认弹窗。
+    bool m_showSaveConflictWarning = false;
     /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
     bool m_showExportFormatPicker = false;
     /// @brief 是否在下一帧打开打包格式选择弹窗。
     bool m_showPackageFormatPicker = false;
     /// @brief 是否显示打包文件复选列表窗口。
     bool m_showPackageFileSelectionWindow = false;
+    /// @brief 是否显示打包前目标谱面元数据补充窗口。
+    bool m_showPackageBeatmapMetadataWindow = false;
     /// @brief 是否显示谱面倍速制作弹窗。
     bool m_showBeatmapSpeedExportPopup = false;
     /// @brief 谱面倍速制作后台任务是否运行中。
@@ -349,6 +422,8 @@ private:
     std::string m_pendingExportFormatName;
     /// @brief 待确认导出的兼容性警告消息。
     std::vector<std::string> m_pendingExportWarnings;
+    /// @brief 待确认覆盖的保存目标路径。
+    std::string m_pendingSaveConflictPath;
 
     /// @brief 当前打包目标格式。
     PackageFileType m_selectedPackageFileType{ PackageFileType::Osz };
@@ -356,8 +431,23 @@ private:
     std::vector<PackageCandidateFile> m_packageCandidateFiles;
     /// @brief 等待输出路径确认的已选项目相对文件路径。
     std::vector<std::string> m_pendingPackageRelativePaths;
-    /// @brief 是否将 .mmm 打包转换产物保存回项目目录。
+    /// @brief 等待打包命令使用的元数据覆盖项。
+    std::vector<Logic::PackageBeatmapMetadataOverride>
+        m_pendingPackageMetadataOverrides;
+    /// @brief 打包前正在编辑的目标谱面元数据项。
+    std::vector<PackageBeatmapMetadataEdit> m_packageBeatmapMetadataEdits;
+    /// @brief 是否将打包转换产物保存回项目目录。
     bool m_saveConvertedPackageBeatmapsToProject{ false };
+    /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
+    bool m_includeLegacyImdPackageBeatmaps{ false };
+    /// @brief 数据来源替换工具当前选中的项目相对谱面路径。
+    std::string m_dataSourceReplacePath;
+    /// @brief 数据来源替换工具是否替换物件数据。
+    bool m_replaceObjectsFromDataSource{ true };
+    /// @brief 数据来源替换工具是否替换时间线数据。
+    bool m_replaceTimelinesFromDataSource{ false };
+    /// @brief 数据来源替换工具是否替换元数据。
+    bool m_replaceMetadataFromDataSource{ false };
 
     /// @brief 更新检查器实例。
     std::unique_ptr<MMM::Network::UpdateChecker> m_updateChecker;

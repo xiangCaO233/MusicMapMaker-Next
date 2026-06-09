@@ -3,7 +3,6 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
-#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -330,7 +329,7 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t s1 = sha256RotateRight(words[i - 2U], 17U) ^
                                      sha256RotateRight(words[i - 2U], 19U) ^
                                      (words[i - 2U] >> 10U);
-            words[i]               = words[i - 16U] + s0 + words[i - 7U] + s1;
+            words[i] = words[i - 16U] + s0 + words[i - 7U] + s1;
         }
 
         std::uint32_t a = state[0];
@@ -349,9 +348,9 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t ch = (e & f) ^ ((~e) & g);
             const std::uint32_t tmp1 =
                 h + s1 + ch + kSha256RoundConstants[i] + words[i];
-            const std::uint32_t s0   = sha256RotateRight(a, 2U) ^
-                                       sha256RotateRight(a, 13U) ^
-                                       sha256RotateRight(a, 22U);
+            const std::uint32_t s0 = sha256RotateRight(a, 2U) ^
+                                     sha256RotateRight(a, 13U) ^
+                                     sha256RotateRight(a, 22U);
             const std::uint32_t maj  = (a & b) ^ (a & c) ^ (b & c);
             const std::uint32_t tmp2 = s0 + maj;
 

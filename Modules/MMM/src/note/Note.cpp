@@ -1,6 +1,5 @@
 #include "mmm/note/Note.h"
 #include "mmm/SafeParse.h"
-#include <algorithm>
 #include <cmath>
 #include <iomanip>
 #include <sstream>

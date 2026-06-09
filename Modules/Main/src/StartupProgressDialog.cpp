@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstdlib>
-#include <string_view>
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -195,17 +194,17 @@ StartupProgressDialog::StartupProgressDialog()
     const int childW    = width - margin * 2;
 
     HWND text     = CreateWindowExW(0,
-                                    L"STATIC",
-                                    L"正在准备资源包...",
-                                    WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                    margin,
-                                    textY,
-                                    childW,
-                                    textH,
-                                    window,
-                                    nullptr,
-                                    GetModuleHandleW(nullptr),
-                                    nullptr);
+                                L"STATIC",
+                                L"正在准备资源包...",
+                                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                margin,
+                                textY,
+                                childW,
+                                textH,
+                                window,
+                                nullptr,
+                                GetModuleHandleW(nullptr),
+                                nullptr);
     HWND progress = CreateWindowExW(0,
                                     PROGRESS_CLASSW,
                                     nullptr,

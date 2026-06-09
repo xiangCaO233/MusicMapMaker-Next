@@ -1,10 +1,7 @@
 #include "graphic/CursorManager.h"
 #include "config/AppConfig.h"
-#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui_internal.h"
-#include "log/colorful-log.h"
-#include <filesystem>
 
 namespace MMM::Graphic
 {

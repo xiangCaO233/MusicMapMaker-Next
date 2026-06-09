@@ -1,11 +1,8 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
-#include "audio/AudioManager.h"
 #include "common/AudioInfoUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
@@ -14,7 +11,6 @@
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -28,6 +24,9 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief BPM 测量工具窗口在 UIManager 中的稳定视图名。
+constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
+
 /// @brief 将字符串安全写入固定长度输入缓冲区。
 /// @param buffer 目标缓冲区。
 /// @param bufferSize 缓冲区长度。
@@ -271,6 +270,21 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
     m_bpm             = m_measuredTimings.front().m_bpm;
 }
 
+/// @brief 从当前绑定的 BPM 测量工具安全解除导出回调。
+void NewBeatmapWizard::unbindBpmMeasurementTool()
+{
+    if ( m_boundBpmToolManager ) {
+        auto* tool = m_boundBpmToolManager->getView<BpmMeasurementToolView>(
+            BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        if ( tool && tool == m_boundBpmToolView ) {
+            tool->setMeasurementExportCallback({});
+        }
+    }
+
+    m_boundBpmToolView    = nullptr;
+    m_boundBpmToolManager = nullptr;
+}
+
 /// @brief 格式化当前已测量 Timing 的摘要文本。
 /// @return 可展示在新建谱面向导中的 Timing 摘要。
 std::string NewBeatmapWizard::formatMeasuredTimingSummary() const
@@ -338,9 +352,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                   option.displayName,
-                                                   option.internalName,
-                                                   option.cameraId);
+                                                option.displayName,
+                                                option.internalName,
+                                                option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ImGui::Selectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -620,8 +634,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
@@ -649,16 +663,19 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
     auto openBpmTool = [&](bool autoMeasure) {
-        std::string viewName = "BpmMeasurementTool";
-        auto* tool = sourceManager->getView<BpmMeasurementToolView>(viewName);
+        auto* tool = sourceManager->getView<BpmMeasurementToolView>(
+            BPM_MEASUREMENT_TOOL_VIEW_NAME);
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
             tool = toolView.get();
-            sourceManager->registerView(viewName, std::move(toolView));
+            sourceManager->registerView(BPM_MEASUREMENT_TOOL_VIEW_NAME,
+                                        std::move(toolView));
         }
         if ( tool ) {
-            m_boundBpmToolView = tool;
+            unbindBpmMeasurementTool();
+            m_boundBpmToolView    = tool;
+            m_boundBpmToolManager = sourceManager;
             tool->setMeasurementExportCallback(
                 [this](const std::string&                audioTrackId,
                        const std::vector<::MMM::Timing>& timings) {
@@ -826,10 +843,7 @@ void NewBeatmapWizard::open()
 
 void NewBeatmapWizard::close()
 {
-    if ( m_boundBpmToolView ) {
-        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
-        m_boundBpmToolView = nullptr;
-    }
+    unbindBpmMeasurementTool();
     m_isOpen = false;
     ImGui::CloseCurrentPopup();
 }
@@ -863,10 +877,7 @@ void NewBeatmapWizard::reset()
     m_templateOptions           = {};
     m_shouldOpenTemplatePicker  = false;
     m_shouldOpenTemplateOptions = false;
-    if ( m_boundBpmToolView ) {
-        m_boundBpmToolView->setMeasurementExportCallback(nullptr);
-    }
-    m_boundBpmToolView = nullptr;
+    unbindBpmMeasurementTool();
 }
 
 void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)

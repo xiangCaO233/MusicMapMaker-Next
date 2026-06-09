@@ -2,7 +2,6 @@
 #include "mmm/SafeParse.h"
 #include <cmath>
 #include <iomanip>
-#include <ranges>
 #include <sstream>
 
 namespace MMM
@@ -104,11 +103,10 @@ std::string Hold::to_osu_description(int32_t orbit_count)
     if ( auto it = osunote_prop.find("samplegroup");
          it != osunote_prop.end() ) {
         std::string notegroup = it->second;
-        if ( auto it_pos = std::ranges::find(notegroup, ':');
-             it_pos != notegroup.end() ) {
+        if ( auto colonPos = notegroup.find(':');
+             colonPos != std::string::npos ) {
             // 只取第一个冒号之后的部分作为 hitSample
-            std::string samplepart =
-                notegroup.substr(std::distance(notegroup.begin(), it_pos) + 1);
+            std::string samplepart = notegroup.substr(colonPos + 1);
             oss << samplepart;
         } else {
             // 如果没有冒号，则可能是旧格式或异常，尝试直接补齐

@@ -11,9 +11,219 @@
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <optional>
+#include <utility>
+#include <vector>
 
 namespace MMM::Logic
 {
+
+namespace
+{
+/// @brief 折线子段拖拽结束时用于判断零长度 Hold 的容差。
+constexpr double POLYLINE_SUB_DRAG_ZERO_DURATION = 1e-5;
+
+/// @brief 带原始子实体索引的折线子段，用于清理后回写子实体。
+struct CleanPolylineSubSegment {
+    /// @brief 折线子段数据。
+    NoteComponent::SubNote sub;
+    /// @brief 该清理后子段优先复用的原始子实体索引。
+    int sourceIndex{ -1 };
+};
+
+/// @brief 判断折线子段是否已经退化为应删除的零值段。
+/// @param sub 待检测子段。
+/// @return 需要清理时返回 true。
+bool isDegeneratePolylineSubSegment(const NoteComponent::SubNote& sub)
+{
+    if ( sub.type == ::MMM::NoteType::HOLD ) {
+        return sub.duration < POLYLINE_SUB_DRAG_ZERO_DURATION;
+    }
+    if ( sub.type == ::MMM::NoteType::FLICK ) {
+        return sub.dtrack == 0;
+    }
+    return false;
+}
+
+/// @brief 判断两个相邻折线子段是否可在零值清理后合并。
+/// @param lhs 前一个子段。
+/// @param rhs 后一个子段。
+/// @return 可合并时返回 true。
+bool canMergeAdjacentPolylineSubSegments(const NoteComponent::SubNote& lhs,
+                                         const NoteComponent::SubNote& rhs)
+{
+    if ( lhs.type != rhs.type ) return false;
+    return lhs.type == ::MMM::NoteType::HOLD ||
+           lhs.type == ::MMM::NoteType::FLICK;
+}
+
+/// @brief 将后一个同类折线子段合并进前一个子段。
+/// @param target 保留并扩展的子段。
+/// @param source 被合并的子段。
+void mergeAdjacentPolylineSubSegments(NoteComponent::SubNote&       target,
+                                      const NoteComponent::SubNote& source)
+{
+    if ( target.type == ::MMM::NoteType::HOLD ) {
+        double mergedEnd = source.timestamp + source.duration;
+        target.duration  = std::max(0.0, mergedEnd - target.timestamp);
+    } else if ( target.type == ::MMM::NoteType::FLICK ) {
+        int mergedEndTrack = source.trackIndex + source.dtrack;
+        target.dtrack      = mergedEndTrack - target.trackIndex;
+    }
+}
+
+/// @brief 取颜色覆盖中的单个槽位。
+/// @param colors 颜色覆盖集合。
+/// @param slot 目标颜色槽位。
+/// @return 对应槽位的颜色；未设置时为空。
+std::optional<glm::vec4> getPolylineDragColorOverride(
+    const NoteColorOverrides& colors, NoteColorSlot slot)
+{
+    return getNoteColorOverride(colors, slot);
+}
+
+/// @brief 合并子段和父折线的颜色覆盖，优先保留子段颜色。
+/// @param childColors 保留下来的唯一子段颜色。
+/// @param parentColors 被降级的父折线颜色。
+/// @return 子段缺失槽位由父折线补齐后的颜色覆盖集合。
+NoteColorOverrides mergeStandalonePolylineColors(
+    const NoteColorOverrides& childColors,
+    const NoteColorOverrides& parentColors)
+{
+    NoteColorOverrides merged = childColors;
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        if ( getPolylineDragColorOverride(merged, slot).has_value() ) {
+            continue;
+        }
+        setNoteColorOverride(
+            merged, slot, getPolylineDragColorOverride(parentColors, slot));
+    }
+    return merged;
+}
+
+/// @brief 清理折线子段中的零值段，并合并相邻同类段。
+/// @param subNotes 拖拽结束后的折线子段列表。
+/// @param changed 输出是否发生了清理或合并。
+/// @return 清理后的子段与其复用的原始子实体索引。
+std::vector<CleanPolylineSubSegment> cleanPolylineSubSegments(
+    const std::vector<NoteComponent::SubNote>& subNotes, bool& changed)
+{
+    std::vector<CleanPolylineSubSegment> segments;
+    segments.reserve(subNotes.size());
+    for ( std::size_t i = 0; i < subNotes.size(); ++i ) {
+        segments.push_back({ subNotes[i], static_cast<int>(i) });
+    }
+
+    changed          = false;
+    bool passChanged = true;
+    while ( passChanged ) {
+        passChanged = false;
+
+        for ( std::size_t i = 0; i < segments.size(); ) {
+            if ( isDegeneratePolylineSubSegment(segments[i].sub) ) {
+                segments.erase(segments.begin() +
+                               static_cast<std::ptrdiff_t>(i));
+                passChanged = true;
+                changed     = true;
+                continue;
+            }
+            ++i;
+        }
+
+        for ( std::size_t i = 0; i + 1 < segments.size(); ) {
+            if ( canMergeAdjacentPolylineSubSegments(segments[i].sub,
+                                                     segments[i + 1].sub) ) {
+                mergeAdjacentPolylineSubSegments(segments[i].sub,
+                                                 segments[i + 1].sub);
+                segments.erase(segments.begin() +
+                               static_cast<std::ptrdiff_t>(i + 1));
+                passChanged = true;
+                changed     = true;
+                continue;
+            }
+            ++i;
+        }
+    }
+
+    return segments;
+}
+
+/// @brief 将单个折线子段转为独立音符组件。
+/// @param target 被降级的父音符组件。
+/// @param sub 保留下来的唯一子段。
+void applyStandaloneSubSegment(NoteComponent&                target,
+                               const NoteComponent::SubNote& sub)
+{
+    const NoteColorOverrides parentColors = target.m_customColors;
+
+    target.m_type           = sub.type;
+    target.m_timestamp      = sub.timestamp;
+    target.m_duration       = sub.duration;
+    target.m_trackIndex     = sub.trackIndex;
+    target.m_dtrack         = sub.dtrack;
+    target.m_isSubNote      = false;
+    target.m_parentPolyline = entt::null;
+    target.m_subIndex       = -1;
+    target.m_metadata       = sub.metadata;
+    applyNoteColorOverrides(
+        target, mergeStandalonePolylineColors(sub.customColors, parentColors));
+    target.m_subNotes.clear();
+}
+
+/// @brief 将清理后的子段结果应用到父音符组件。
+/// @param parentAfter 即将写入 Action 的父音符结果。
+/// @param segments 清理后的子段列表。
+void applyCleanedPolylineSubSegments(
+    NoteComponent&                              parentAfter,
+    const std::vector<CleanPolylineSubSegment>& segments)
+{
+    parentAfter.m_isSubNote      = false;
+    parentAfter.m_parentPolyline = entt::null;
+    parentAfter.m_subIndex       = -1;
+
+    if ( segments.empty() ) {
+        parentAfter.m_type     = ::MMM::NoteType::NOTE;
+        parentAfter.m_duration = 0.0;
+        parentAfter.m_dtrack   = 0;
+        parentAfter.m_subNotes.clear();
+        return;
+    }
+
+    if ( segments.size() == 1 ) {
+        applyStandaloneSubSegment(parentAfter, segments.front().sub);
+        return;
+    }
+
+    parentAfter.m_type       = ::MMM::NoteType::POLYLINE;
+    parentAfter.m_timestamp  = segments.front().sub.timestamp;
+    parentAfter.m_trackIndex = segments.front().sub.trackIndex;
+    parentAfter.m_duration   = 0.0;
+    parentAfter.m_dtrack     = 0;
+    parentAfter.m_subNotes.clear();
+    parentAfter.m_subNotes.reserve(segments.size());
+    for ( const auto& segment : segments ) {
+        parentAfter.m_subNotes.push_back(segment.sub);
+    }
+}
+
+/// @brief 清除当前拖拽涉及实体的拖拽态。
+/// @param ctx 会话上下文。
+/// @param entities 拖拽开始时记录的实体集合。
+template<typename InitialStateMap>
+void clearDraggingFlags(SessionContext& ctx, const InitialStateMap& entities)
+{
+    for ( const auto& [entity, state] : entities ) {
+        (void)state;
+        if ( ctx.noteRegistry.valid(entity) &&
+             ctx.noteRegistry.all_of<InteractionComponent>(entity) ) {
+            ctx.noteRegistry.get<InteractionComponent>(entity).isDragging =
+                false;
+        }
+    }
+}
+}  // namespace
 
 void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 {
@@ -489,92 +699,89 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
     auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
     if ( !note || note->m_type != ::MMM::NoteType::POLYLINE ) return false;
 
-    int subIdx  = ctx.draggedSubIndex;
-    int lastIdx = (int)note->m_subNotes.size() - 1;
-    if ( subIdx < 2 || subIdx >= lastIdx ) return false;
-
-    const auto& initState    = m_initialStates[ctx.draggedEntity];
-    const auto& initSubNotes = initState.note.m_subNotes;
-    auto&       subNotes     = note->m_subNotes;
-    const auto& initDragged  = initSubNotes[subIdx];
-
-    bool mergeSubHold  = (initDragged.type == ::MMM::NoteType::HOLD &&
-                          subNotes[subIdx - 1].dtrack == 0);
-    bool mergeSubFlick = (initDragged.type == ::MMM::NoteType::FLICK &&
-                          std::abs(subNotes[subIdx - 1].duration) < 0.001);
-
-    if ( !mergeSubHold && !mergeSubFlick ) return false;
-
-    NoteComponent parentBefore = initState.note;
-    NoteComponent parentAfter  = *note;
-
-    auto& newSubNotes = parentAfter.m_subNotes;
-
-    if ( mergeSubHold ) {
-        NoteComponent::SubNote merged;
-        merged.type      = ::MMM::NoteType::HOLD;
-        merged.timestamp = newSubNotes[subIdx - 2].timestamp;
-        merged.duration =
-            (newSubNotes[subIdx].timestamp + newSubNotes[subIdx].duration) -
-            newSubNotes[subIdx - 2].timestamp;
-        merged.trackIndex       = newSubNotes[subIdx - 2].trackIndex;
-        merged.dtrack           = 0;
-        merged.metadata         = newSubNotes[subIdx - 2].metadata;
-        merged.customColors     = newSubNotes[subIdx - 2].customColors;
-        newSubNotes[subIdx - 2] = merged;
-    } else {
-        NoteComponent::SubNote merged;
-        merged.type       = ::MMM::NoteType::FLICK;
-        merged.timestamp  = newSubNotes[subIdx - 2].timestamp;
-        merged.trackIndex = newSubNotes[subIdx - 2].trackIndex;
-        merged.dtrack =
-            (newSubNotes[subIdx].trackIndex + newSubNotes[subIdx].dtrack) -
-            newSubNotes[subIdx - 2].trackIndex;
-        merged.duration         = 0.0;
-        merged.metadata         = newSubNotes[subIdx - 2].metadata;
-        merged.customColors     = newSubNotes[subIdx - 2].customColors;
-        newSubNotes[subIdx - 2] = merged;
+    int subIdx = ctx.draggedSubIndex;
+    if ( subIdx <= 0 || subIdx >= static_cast<int>(note->m_subNotes.size()) ) {
+        return false;
     }
-    newSubNotes.erase(newSubNotes.begin() + subIdx - 1,
-                      newSubNotes.begin() + subIdx + 1);
+
+    auto initIt = m_initialStates.find(ctx.draggedEntity);
+    if ( initIt == m_initialStates.end() ) return false;
+
+    bool cleanedChanged = false;
+    auto cleanedSegments =
+        cleanPolylineSubSegments(note->m_subNotes, cleanedChanged);
+    if ( !cleanedChanged ) return false;
+
+    NoteComponent parentBefore = initIt->second.note;
+    NoteComponent parentAfter  = *note;
+    applyCleanedPolylineSubSegments(parentAfter, cleanedSegments);
+
+    struct ChildRecord {
+        entt::entity  entity{ entt::null };
+        int           oldSubIndex{ -1 };
+        NoteComponent before;
+        bool          kept{ false };
+    };
 
     std::vector<BatchNoteAction::Entry> entries;
     entries.push_back({ ctx.draggedEntity, parentBefore, parentAfter });
 
-    auto subView = ctx.noteRegistry.view<NoteComponent>();
+    std::vector<ChildRecord> children;
+    auto                     subView = ctx.noteRegistry.view<NoteComponent>();
     for ( auto subEnt : subView ) {
-        auto& subNC = subView.get<NoteComponent>(subEnt);
+        const auto& subNC = subView.get<NoteComponent>(subEnt);
         if ( !subNC.m_isSubNote || subNC.m_parentPolyline != ctx.draggedEntity )
             continue;
 
-        int           oldIdx = subNC.m_subIndex;
-        auto          it     = m_initialStates.find(subEnt);
-        NoteComponent initNC =
-            (it != m_initialStates.end()) ? it->second.note : subNC;
+        auto          initSubIt = m_initialStates.find(subEnt);
+        NoteComponent before    = (initSubIt != m_initialStates.end())
+                                      ? initSubIt->second.note
+                                      : subNC;
+        children.push_back(
+            { subEnt, before.m_subIndex, std::move(before), false });
+    }
 
-        if ( oldIdx == subIdx - 1 || oldIdx == subIdx ) {
-            entries.push_back({ subEnt, initNC, std::nullopt });
-        } else if ( oldIdx == subIdx - 2 ) {
-            const auto&   merged = newSubNotes[subIdx - 2];
-            NoteComponent after  = initNC;
-            after.m_type         = merged.type;
-            after.m_timestamp    = merged.timestamp;
-            after.m_duration     = merged.duration;
-            after.m_trackIndex   = merged.trackIndex;
-            after.m_dtrack       = merged.dtrack;
-            after.m_metadata     = merged.metadata;
-            after.m_customColors = merged.customColors;
-            entries.push_back({ subEnt, initNC, after });
-        } else if ( oldIdx > subIdx ) {
-            NoteComponent after = initNC;
-            after.m_subIndex    = oldIdx - 2;
-            entries.push_back({ subEnt, initNC, after });
-        } else {
-            entries.push_back({ subEnt, initNC, subNC });
+    std::stable_sort(children.begin(),
+                     children.end(),
+                     [](const ChildRecord& lhs, const ChildRecord& rhs) {
+                         return lhs.oldSubIndex < rhs.oldSubIndex;
+                     });
+
+    if ( parentAfter.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( std::size_t newIndex = 0; newIndex < cleanedSegments.size();
+              ++newIndex ) {
+            auto childIt =
+                std::find_if(children.begin(),
+                             children.end(),
+                             [&](const ChildRecord& child) {
+                                 return child.oldSubIndex ==
+                                        cleanedSegments[newIndex].sourceIndex;
+                             });
+
+            NoteComponent after =
+                makeNoteComponentFromSubNote(parentAfter.m_subNotes[newIndex],
+                                             true,
+                                             ctx.draggedEntity,
+                                             static_cast<int>(newIndex));
+
+            if ( childIt != children.end() ) {
+                childIt->kept = true;
+                entries.push_back({ childIt->entity, childIt->before, after });
+            } else {
+                entt::entity newChild = ctx.noteRegistry.create();
+                entries.push_back({ newChild, std::nullopt, after });
+            }
+        }
+    }
+
+    for ( const auto& child : children ) {
+        if ( !child.kept ) {
+            entries.push_back({ child.entity, child.before, std::nullopt });
         }
     }
 
     if ( !entries.empty() ) {
+        clearDraggingFlags(ctx, m_initialStates);
         auto action = std::make_unique<BatchNoteAction>(
             std::move(entries), "Polyline Sub-Drag Merge");
         ctx.actionStack.pushAndExecute(std::move(action), ctx);

@@ -5,7 +5,6 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -131,7 +130,7 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float snapY = judgmentLineY -
+        float  snapY    = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( config.settings.scrollSnap ||

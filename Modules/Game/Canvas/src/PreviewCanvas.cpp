@@ -8,19 +8,16 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/imguivk/VKContext.h"
-#include "graphic/imguivk/VKOffScreenRenderer.h"
 #include "graphic/imguivk/VKShader.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
-#include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
-#include <glm/glm.hpp>
 #include <utility>
 
 namespace MMM::Canvas
@@ -77,9 +74,9 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     ImVec2 clickPos              = ImGui::GetIO().MouseClickedPos[0];
     bool   clickStartedInContent = clickPos.x >= windowPos.x &&
-                                   clickPos.x <= windowPos.x + contentSize.x &&
-                                   clickPos.y >= windowPos.y &&
-                                   clickPos.y <= windowPos.y + contentSize.y;
+                                 clickPos.x <= windowPos.x + contentSize.x &&
+                                 clickPos.y >= windowPos.y &&
+                                 clickPos.y <= windowPos.y + contentSize.y;
 
     // 仅当点击起源于内容区，并且当前窗口拥有焦点时，才视为拖拽
     bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent &&

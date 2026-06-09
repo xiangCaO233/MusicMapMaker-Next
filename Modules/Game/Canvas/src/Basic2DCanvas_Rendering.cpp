@@ -3,10 +3,8 @@
 #include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKShader.h"
-#include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include <cmath>
 #include <filesystem>
 
 namespace MMM::Canvas

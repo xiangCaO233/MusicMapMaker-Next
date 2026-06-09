@@ -1,14 +1,11 @@
 #include "audio/AudioManager.h"
 #include "audio/SoundEffectPool.h"
-#include "config/AppConfig.h"
 #include "event/audio/AudioPlaybackEvent.h"
 #include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
 
-#include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -18,8 +15,6 @@
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioPool.hpp>
-#include <ice/out/play/sdl/SDLPlayer.hpp>
-#include <ice/thread/ThreadPool.hpp>
 
 namespace MMM::Audio
 {

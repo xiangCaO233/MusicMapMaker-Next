@@ -8,7 +8,6 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>

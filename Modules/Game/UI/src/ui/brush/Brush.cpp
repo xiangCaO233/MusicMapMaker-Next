@@ -1,6 +1,5 @@
 #include "ui/brush/Brush.h"
 #include <cmath>
-#include <glm/glm.hpp>
 
 
 namespace MMM::UI

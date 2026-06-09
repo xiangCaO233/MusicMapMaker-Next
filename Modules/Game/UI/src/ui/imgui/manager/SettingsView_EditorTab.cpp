@@ -1,24 +1,14 @@
 #include "audio/AudioManager.h"
-#include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
-#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
-#include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "imgui_internal.h"
-#include "logic/EditorEngine.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include "ui/imgui/manager/SettingsView.h"
-#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <algorithm>
-#include <filesystem>
-#include <nfd.h>
 
 namespace MMM::UI
 {
@@ -41,7 +31,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;

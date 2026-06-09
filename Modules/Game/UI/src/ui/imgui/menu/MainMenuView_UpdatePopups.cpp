@@ -1,36 +1,15 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
-#include "canvas/TimeFormatUtils.h"
-#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
-#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
-#include "event/core/EventBus.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "event/project/ProjectEvents.h"
-#include "event/ui/UISettingsTabEvent.h"
-#include "event/ui/UISubViewToggleEvent.h"
-#include "event/ui/menu/AudioImportTriggerEvent.h"
-#include "event/ui/menu/OpenProjectEvent.h"
-#include "log/colorful-log.h"
-#include "logic/EditorEngine.h"
-#include "logic/ecs/components/InteractionComponent.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
-#include "mmm/note/Hold.h"
-#include "mmm/note/Polyline.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuView.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <ImGuiFileDialog.h>
 #include <algorithm>
-#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
-#include <nfd.h>
 
 namespace MMM::UI
 {

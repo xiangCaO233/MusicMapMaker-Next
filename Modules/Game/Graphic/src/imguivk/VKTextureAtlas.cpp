@@ -6,7 +6,6 @@
 #include <stb_rect_pack.h>
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace MMM::Graphic
 {

@@ -4,7 +4,6 @@
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
-#include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKContext.h"

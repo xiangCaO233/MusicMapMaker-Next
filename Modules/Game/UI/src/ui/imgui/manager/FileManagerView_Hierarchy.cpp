@@ -10,7 +10,6 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/layout/box/CLayBox.h"
-#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -183,9 +182,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                         audio.m_id,
                                         audio.m_id,
                                         audio.m_type == AudioTrackType::Main
-                                            ? AudioTrackControllerUI::
+                                             ? AudioTrackControllerUI::
                                                   TrackType::Main
-                                            : AudioTrackControllerUI::
+                                             : AudioTrackControllerUI::
                                                   TrackType::Effect);
                                     break;
                                 }

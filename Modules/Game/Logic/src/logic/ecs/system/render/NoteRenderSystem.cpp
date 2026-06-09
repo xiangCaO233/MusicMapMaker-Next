@@ -8,7 +8,6 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -86,8 +85,8 @@ void NoteRenderSystem::generateSnapshot(
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-            singleTrackW = 0;
-    float   renderScaleY = 1.0f;
+          singleTrackW = 0;
+    float renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
@@ -256,8 +255,8 @@ void NoteRenderSystem::generateSnapshot(
 
         if ( cameraId == "Preview" ) {
             // 预览区逻辑：若全局开启，则由预览区具体开关决定；若全局关闭，则强制关闭
-            shouldDrawBeatLines   = config.visual.drawBeatLines &&
-                                    config.visual.previewConfig.drawBeatLines;
+            shouldDrawBeatLines = config.visual.drawBeatLines &&
+                                  config.visual.previewConfig.drawBeatLines;
             shouldDrawTimingLines = config.visual.previewConfig.drawTimingLines;
         }
 
@@ -588,7 +587,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y = judgmentLineY -
+                    float y             = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {

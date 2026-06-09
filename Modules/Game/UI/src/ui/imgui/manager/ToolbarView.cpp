@@ -1135,18 +1135,10 @@ void ToolbarView::update(UIManager* sourceManager)
 
 void ToolbarView::initializeColorPalette()
 {
-    loadSkinDefaultPalette();
-
-    auto& paletteConfig =
-        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
-    if ( !paletteConfig.schemes.empty() ) {
-        std::size_t index = std::min(paletteConfig.activeSchemeIndex,
-                                     paletteConfig.schemes.size() - 1);
-        loadPaletteScheme(index);
-    } else {
-        m_activePaletteSchemeIndex = -1;
-        setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
-        pushPaletteToBrush();
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( !loadPaletteSchemeByName(
+             settings.defaultNoteColorPaletteSchemeName) ) {
+        loadSkinDefaultPalette();
     }
     m_colorPaletteInitialized = true;
 }
@@ -1191,11 +1183,13 @@ void ToolbarView::applyProjectPalettePreference()
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
 
     std::string projectKey;
-    std::string schemeName = settings.defaultNoteColorPaletteSchemeName;
+    std::string preferenceSource = "inherit";
+    std::string schemeName       = settings.defaultNoteColorPaletteSchemeName;
     if ( project ) {
         projectKey = Config::pathToUtf8(project->m_projectRoot);
         if ( !project->m_settings.m_noteColorPaletteSchemeName.empty() ) {
-            schemeName = project->m_settings.m_noteColorPaletteSchemeName;
+            preferenceSource = "project";
+            schemeName       = project->m_settings.m_noteColorPaletteSchemeName;
         }
     }
     if ( schemeName.empty() ) {
@@ -1203,6 +1197,8 @@ void ToolbarView::applyProjectPalettePreference()
     }
 
     std::string applyKey = projectKey;
+    applyKey.push_back('\n');
+    applyKey += preferenceSource;
     applyKey.push_back('\n');
     applyKey += schemeName;
     if ( applyKey == m_lastAppliedProjectPaletteKey ) return;
