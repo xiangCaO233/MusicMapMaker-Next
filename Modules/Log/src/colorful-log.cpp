@@ -1,5 +1,7 @@
 #include "log/colorful-log.h"
 
+#include "config/Utf8Path.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -64,7 +66,7 @@ std::filesystem::path userHomePath()
 #else
     const char* home = std::getenv("HOME");
     if ( home && home[0] != '\0' ) {
-        return std::filesystem::path(home);
+        return MMM::Config::utf8ToPath(home);
     }
 #endif
 
@@ -80,9 +82,9 @@ std::filesystem::path userHomePath()
 std::filesystem::path logDirectoryPath()
 {
     std::filesystem::path path = userHomePath();
-    path /= kLocalDataDirectoryName;
-    path /= kLogAppDirectoryName;
-    path /= kLogDirectoryName;
+    path /= MMM::Config::utf8ToPath(kLocalDataDirectoryName);
+    path /= MMM::Config::utf8ToPath(kLogAppDirectoryName);
+    path /= MMM::Config::utf8ToPath(kLogDirectoryName);
     return path;
 }
 
@@ -129,7 +131,7 @@ std::filesystem::path resolveWritableLogDirectory()
     if ( ensureDirectory(preferred) ) {
 #ifdef _WIN32
         std::filesystem::path localDataDirectory = userHomePath();
-        localDataDirectory /= kLocalDataDirectoryName;
+        localDataDirectory /= MMM::Config::utf8ToPath(kLocalDataDirectoryName);
         markDirectoryHidden(localDataDirectory);
 #endif
         return preferred;
@@ -140,14 +142,14 @@ std::filesystem::path resolveWritableLogDirectory()
         std::filesystem::temp_directory_path(tempError);
     if ( !tempError ) {
         std::filesystem::path tempLogDir = tempDir;
-        tempLogDir /= kLogAppDirectoryName;
-        tempLogDir /= kLogDirectoryName;
+        tempLogDir /= MMM::Config::utf8ToPath(kLogAppDirectoryName);
+        tempLogDir /= MMM::Config::utf8ToPath(kLogDirectoryName);
         if ( ensureDirectory(tempLogDir) ) {
             return tempLogDir;
         }
     }
 
-    std::filesystem::path localFallback = "logs";
+    std::filesystem::path localFallback = MMM::Config::utf8ToPath("logs");
     ensureDirectory(localFallback);
     return localFallback;
 }
@@ -309,9 +311,9 @@ void XLogger::init(const char* name)
     // 创建三个sink（终端、全量文件、错误文件）
     auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
     auto file_all_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-        allLogPath.string());
+        MMM::Config::pathToUtf8(allLogPath));
     auto file_error_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-        errorLogPath.string());
+        MMM::Config::pathToUtf8(errorLogPath));
 
     // 设置统一的自定义格式
     auto formatter = std::make_unique<ColorfulFormatter>();
@@ -339,7 +341,8 @@ void XLogger::init(const char* name)
     spdlog::register_logger(logger);
     spdlog::set_default_logger(logger);
 
-    XINFO("日志初始化完成，日志目录: {}", logDirectory.string());
+    XINFO("日志初始化完成，日志目录: {}",
+          MMM::Config::pathToUtf8(logDirectory));
 }
 
 void XLogger::shutdown()
