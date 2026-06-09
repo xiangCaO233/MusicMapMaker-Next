@@ -340,6 +340,8 @@ struct CmdSelectAll {
  * @brief 保存谱面指令
  */
 struct CmdSaveBeatmap {
+    /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
+    bool allowExternallyModifiedOverwrite{ false };
 };
 
 /**

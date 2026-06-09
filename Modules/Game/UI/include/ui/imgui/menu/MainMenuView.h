@@ -226,6 +226,10 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportCompatibilityWarningPopup(float dpiScale);
 
+    /// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderSaveConflictWarningPopup(float dpiScale);
+
     /// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportFormatPickerPopup(float dpiScale);
@@ -341,6 +345,8 @@ private:
     bool m_showUpdateSuccessPopup = false;
     /// @brief 是否在下一帧打开导出兼容性警告弹窗。
     bool m_showExportCompatibilityWarning = false;
+    /// @brief 是否在下一帧打开保存覆盖风险确认弹窗。
+    bool m_showSaveConflictWarning = false;
     /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
     bool m_showExportFormatPicker = false;
     /// @brief 是否在下一帧打开打包格式选择弹窗。
@@ -393,6 +399,8 @@ private:
     std::string m_pendingExportFormatName;
     /// @brief 待确认导出的兼容性警告消息。
     std::vector<std::string> m_pendingExportWarnings;
+    /// @brief 待确认覆盖的保存目标路径。
+    std::string m_pendingSaveConflictPath;
 
     /// @brief 当前打包目标格式。
     PackageFileType m_selectedPackageFileType{ PackageFileType::Osz };

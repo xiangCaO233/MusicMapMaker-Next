@@ -5,6 +5,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
@@ -20,6 +21,7 @@
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/NewProjectWizard.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <concurrentqueue.h>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -38,10 +40,23 @@ struct SaveTooltipPayload {
     bool isExport{ false };
 };
 
+/// @brief 跨线程传递给 UI 帧内消费的保存冲突确认载荷。
+struct SaveConflictPayload {
+    /// @brief 存在覆盖风险的目标路径，使用 UTF-8 字符串。
+    std::string path;
+};
+
 /// @brief 获取保存结果提示队列。
 moodycamel::ConcurrentQueue<SaveTooltipPayload>& getSaveTooltipQueue()
 {
     static moodycamel::ConcurrentQueue<SaveTooltipPayload> queue;
+    return queue;
+}
+
+/// @brief 获取保存冲突确认队列。
+moodycamel::ConcurrentQueue<SaveConflictPayload>& getSaveConflictQueue()
+{
+    static moodycamel::ConcurrentQueue<SaveConflictPayload> queue;
     return queue;
 }
 
@@ -86,6 +101,21 @@ void ensureSaveResultSubscription()
         });
     subscribed = true;
 }
+
+/// @brief 订阅逻辑层保存冲突事件，将事件转交 UI 帧内处理。
+void ensureSaveConflictSubscription()
+{
+    static bool subscribed = false;
+    if ( subscribed ) return;
+
+    Event::EventBus::instance().subscribe<Event::BeatmapSaveConflictEvent>(
+        [](const Event::BeatmapSaveConflictEvent& event) {
+            getSaveConflictQueue().enqueue(SaveConflictPayload{
+                .path = event.path,
+            });
+        });
+    subscribed = true;
+}
 }  // namespace
 
 /// @brief 构造主菜单视图并初始化菜单状态、弹窗状态和更新检查器。
@@ -113,6 +143,7 @@ MainMenuView::MainMenuView()
     , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
 {
     ensureSaveResultSubscription();
+    ensureSaveConflictSubscription();
 }
 
 /// @brief 销毁主菜单视图。
@@ -261,6 +292,12 @@ void MainMenuView::update(UIManager* sourceManager)
         m_saveTooltipTimer   = payload.success ? 2.0f : 3.0f;
     }
 
+    SaveConflictPayload conflictPayload;
+    while ( getSaveConflictQueue().try_dequeue(conflictPayload) ) {
+        m_pendingSaveConflictPath = conflictPayload.path;
+        m_showSaveConflictWarning = true;
+    }
+
     if ( m_statusMessageTimer > 0.0f )
         m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
 
@@ -293,6 +330,56 @@ void MainMenuView::update(UIManager* sourceManager)
     }
 
     renderSaveTooltip();
+}
+
+/// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
+{
+    constexpr const char* popupId =
+        "文件已被另外修改过###SaveConflictWarningModal";
+    if ( m_showSaveConflictWarning ) {
+        ImGui::OpenPopup(popupId);
+        m_showSaveConflictWarning = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(540.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextWrapped(
+                "文件已被另外修改过，强行覆盖可能会导致丢失数据，是否确认？");
+            if ( !m_pendingSaveConflictPath.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextWrapped("目标文件：%s",
+                                   m_pendingSaveConflictPath.c_str());
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            if ( ImGui::Button("确认覆盖", buttonSize) ) {
+                dispatchCommand(Logic::CmdSaveBeatmap{
+                    .allowExternallyModifiedOverwrite = true,
+                });
+                m_pendingSaveConflictPath.clear();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
+                m_pendingSaveConflictPath.clear();
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+    }
 }
 
 /// @brief 渲染文件、编辑、工具和帮助主菜单。
@@ -635,6 +722,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderOverlapCheckWindow();
     renderMetadataEditorWindow();
     renderNoteMetadataEditorWindow();
+    renderSaveConflictWarningPopup(dpiScale);
     renderExportFormatPickerPopup(dpiScale);
     renderExportCompatibilityWarningPopup(dpiScale);
     renderPackageFormatPickerPopup(dpiScale);

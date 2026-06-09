@@ -2,7 +2,10 @@
 
 #include "common/LogicCommands.h"
 #include <concurrentqueue.h>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <unordered_map>
 
 namespace MMM::Config
 {
@@ -105,6 +108,9 @@ private:
     double m_lastDeferredBeatmapSyncTime{
         0.0
     };  ///< 最近一次刷新延迟同步的时间
+
+    /// @brief 当前会话已加载或成功保存过的谱面文件哈希，键为规范化路径。
+    std::unordered_map<std::string, std::uint64_t> m_savedBeatmapFileHashes;
 };
 
 }  // namespace MMM::Logic

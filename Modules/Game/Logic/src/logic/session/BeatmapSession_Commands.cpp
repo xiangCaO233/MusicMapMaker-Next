@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
@@ -18,6 +19,7 @@
 #include "mmm/project/PackageFileTypes.h"
 #include <stb_image.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -25,6 +27,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <miniz.h>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -84,6 +87,101 @@ void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
         resolveCurrentProjectPath(meta.main_cover_path));
     meta.cover_path = makeCurrentProjectRelativePath(
         resolveCurrentProjectPath(meta.cover_path));
+}
+
+/// @brief 计算谱面文件的 FNV-1a 64 位哈希。
+/// @param path 待读取文件路径。
+/// @return 成功时返回哈希值，文件不可读时返回空。
+std::optional<std::uint64_t> calculateBeatmapFileHash(
+    const std::filesystem::path& path)
+{
+    std::error_code filesystemError;
+    if ( !std::filesystem::is_regular_file(path, filesystemError) ||
+         filesystemError ) {
+        return std::nullopt;
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if ( !file ) return std::nullopt;
+
+    constexpr std::uint64_t fnvOffset = 14695981039346656037ull;
+    constexpr std::uint64_t fnvPrime  = 1099511628211ull;
+
+    std::uint64_t               hash = fnvOffset;
+    std::array<char, 64 * 1024> buffer{};
+    while ( file ) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto bytesRead = file.gcount();
+        for ( std::streamsize index = 0; index < bytesRead; ++index ) {
+            hash ^= static_cast<std::uint8_t>(static_cast<unsigned char>(
+                buffer[static_cast<std::size_t>(index)]));
+            hash *= fnvPrime;
+        }
+    }
+
+    if ( file.bad() ) return std::nullopt;
+    return hash;
+}
+
+/// @brief 生成保存哈希缓存使用的路径键。
+/// @param path 目标文件路径。
+/// @return 规范化后的 UTF-8 路径键。
+std::string makeBeatmapFileHashPathKey(const std::filesystem::path& path)
+{
+    return MMM::Config::pathToUtf8Generic(path.lexically_normal());
+}
+
+/// @brief 刷新会话中记录的单个谱面文件哈希。
+/// @param savedBeatmapFileHashes 当前会话的谱面文件哈希缓存。
+/// @param path 已加载或已成功保存的谱面路径。
+void rememberBeatmapFileHash(
+    std::unordered_map<std::string, std::uint64_t>& savedBeatmapFileHashes,
+    const std::filesystem::path&                    path)
+{
+    if ( path.empty() ) return;
+
+    const std::string key = makeBeatmapFileHashPathKey(path);
+    if ( key.empty() ) return;
+
+    if ( auto hash = calculateBeatmapFileHash(path) ) {
+        savedBeatmapFileHashes[key] = *hash;
+    } else {
+        savedBeatmapFileHashes.erase(key);
+    }
+}
+
+/// @brief 判断强制 MMM 保存是否需要用户确认覆盖。
+/// @param settings 当前编辑器设置。
+/// @param savedBeatmapFileHashes 当前会话的谱面文件哈希缓存。
+/// @param cmd 保存命令。
+/// @param savePath 本次实际写出的目标路径。
+/// @return 需要确认时返回 true。
+bool shouldConfirmForcedMmmOverwrite(
+    const MMM::Config::EditorSettings& settings,
+    const std::unordered_map<std::string, std::uint64_t>&
+                                      savedBeatmapFileHashes,
+    const MMM::Logic::CmdSaveBeatmap& cmd,
+    const std::filesystem::path&      savePath)
+{
+    if ( cmd.allowExternallyModifiedOverwrite ) return false;
+    if ( settings.saveFormatPreference !=
+         MMM::Config::SaveFormatPreference::ForceMMM ) {
+        return false;
+    }
+
+    std::error_code filesystemError;
+    if ( !std::filesystem::exists(savePath, filesystemError) ||
+         filesystemError ) {
+        return false;
+    }
+
+    auto currentHash = calculateBeatmapFileHash(savePath);
+    if ( !currentHash ) return true;
+
+    const auto hashIt =
+        savedBeatmapFileHashes.find(makeBeatmapFileHashPathKey(savePath));
+    return hashIt == savedBeatmapFileHashes.end() ||
+           hashIt->second != *currentHash;
 }
 
 /// @brief 格式化无快照上下文的状态栏时间文本。
@@ -792,23 +890,39 @@ void BeatmapSession::handleCommand(const CmdUpdateViewport& cmd)
 void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 {
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
+    m_savedBeatmapFileHashes.clear();
+    if ( m_ctx->currentBeatmap ) {
+        rememberBeatmapFileHash(
+            m_savedBeatmapFileHashes,
+            resolveCurrentProjectPath(
+                m_ctx->currentBeatmap->m_baseMapMetadata.map_path));
+    }
     m_ctx->isBpmEventsDirty = true;
 }
 
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
-        m_ctx->m_needsTimingsSync = true;
-        m_ctx->m_needsNotesSync   = true;
-        SessionUtils::syncBeatmap(*m_ctx);
-        SessionUtils::ensureHitEvents(*m_ctx);
-
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto savePath = resolveCurrentProjectPath(oldPath);
         if ( m_ctx->lastConfig.settings.saveFormatPreference ==
              Config::SaveFormatPreference::ForceMMM ) {
             savePath.replace_extension(".mmm");
         }
+        if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+                                             m_savedBeatmapFileHashes,
+                                             cmd,
+                                             savePath) ) {
+            Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
+                .path = Config::pathToUtf8(savePath),
+            });
+            return;
+        }
+
+        m_ctx->m_needsTimingsSync = true;
+        m_ctx->m_needsNotesSync   = true;
+        SessionUtils::syncBeatmap(*m_ctx);
+        SessionUtils::ensureHitEvents(*m_ctx);
 
         bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
         if ( !ok ) {
@@ -828,6 +942,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         });
         auto storedSavePath = makeCurrentProjectRelativePath(savePath);
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
+        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
         m_ctx->actionStack.markSaved();
         if ( oldPath != storedSavePath ) {
             EditorEngine::instance().updateBeatmapFilePathInProject(
@@ -863,6 +978,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         });
         m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
             makeCurrentProjectRelativePath(savePath);
+        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
         m_ctx->actionStack.markSaved();
         EditorEngine::instance().syncProjectWithFile(savePath);
     }
