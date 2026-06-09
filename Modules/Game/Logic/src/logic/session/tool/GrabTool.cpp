@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -72,6 +73,36 @@ void mergeAdjacentPolylineSubSegments(NoteComponent::SubNote&       target,
     }
 }
 
+/// @brief 取颜色覆盖中的单个槽位。
+/// @param colors 颜色覆盖集合。
+/// @param slot 目标颜色槽位。
+/// @return 对应槽位的颜色；未设置时为空。
+std::optional<glm::vec4> getPolylineDragColorOverride(
+    const NoteColorOverrides& colors, NoteColorSlot slot)
+{
+    return getNoteColorOverride(colors, slot);
+}
+
+/// @brief 合并子段和父折线的颜色覆盖，优先保留子段颜色。
+/// @param childColors 保留下来的唯一子段颜色。
+/// @param parentColors 被降级的父折线颜色。
+/// @return 子段缺失槽位由父折线补齐后的颜色覆盖集合。
+NoteColorOverrides mergeStandalonePolylineColors(
+    const NoteColorOverrides& childColors,
+    const NoteColorOverrides& parentColors)
+{
+    NoteColorOverrides merged = childColors;
+    for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<NoteColorSlot>(i);
+        if ( getPolylineDragColorOverride(merged, slot).has_value() ) {
+            continue;
+        }
+        setNoteColorOverride(
+            merged, slot, getPolylineDragColorOverride(parentColors, slot));
+    }
+    return merged;
+}
+
 /// @brief 清理折线子段中的零值段，并合并相邻同类段。
 /// @param subNotes 拖拽结束后的折线子段列表。
 /// @param changed 输出是否发生了清理或合并。
@@ -125,6 +156,8 @@ std::vector<CleanPolylineSubSegment> cleanPolylineSubSegments(
 void applyStandaloneSubSegment(NoteComponent&                target,
                                const NoteComponent::SubNote& sub)
 {
+    const NoteColorOverrides parentColors = target.m_customColors;
+
     target.m_type           = sub.type;
     target.m_timestamp      = sub.timestamp;
     target.m_duration       = sub.duration;
@@ -134,7 +167,8 @@ void applyStandaloneSubSegment(NoteComponent&                target,
     target.m_parentPolyline = entt::null;
     target.m_subIndex       = -1;
     target.m_metadata       = sub.metadata;
-    target.m_customColors   = sub.customColors;
+    applyNoteColorOverrides(
+        target, mergeStandalonePolylineColors(sub.customColors, parentColors));
     target.m_subNotes.clear();
 }
 
