@@ -23,5 +23,5 @@ add_custom_command(
 )
 
 if(WIN32)
-    target_link_libraries(MusicMapMaker-Updater PRIVATE ws2_32)
+    target_link_libraries(MusicMapMaker-Updater PRIVATE shell32 ws2_32)
 endif()

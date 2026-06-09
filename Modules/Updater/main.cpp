@@ -21,9 +21,16 @@
 #include <thread>
 
 #if defined(_WIN32)
-#    define WIN32_LEAN_AND_MEAN
-#    include <shellapi.h>
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN
+#    endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+// clang-format off
 #    include <windows.h>
+#    include <shellapi.h>
+// clang-format on
 #else
 #    include <signal.h>
 #    include <sys/types.h>
