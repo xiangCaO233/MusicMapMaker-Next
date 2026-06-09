@@ -6,12 +6,135 @@
 #include "config/skin/translation/Translation.h"
 #include "game/GameLoop.h"
 #include "graphic/glfw/window/NativeWindow.h"
+#include "graphic/imguivk/IGraphicUserHook.h"
+#include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 #include "main/PGOProfiler.h"
 #include "main/StartupProgressDialog.h"
 #include "network/AssetSyncService.h"
+#include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <fmt/core.h>
+#include <imgui.h>
 #include <optional>
+#include <string>
+#include <thread>
+
+namespace MMM::Main
+{
+namespace
+{
+/// @brief PGO 退出上传进度窗口的渲染钩子。
+class PgoShutdownUploadProgressHook final : public Graphic::IGraphicUserHook
+{
+public:
+    /// @brief 退出上传进度窗口不需要准备额外图形资源。
+    /// @warning 退出低频渲染路径：关闭软件时短暂执行，不允许加入阻塞操作。
+    void onPrepareResources(vk::PhysicalDevice&, vk::Device&,
+                            Graphic::VKSwapchain&, vk::CommandPool&,
+                            vk::Queue&) override
+    {
+    }
+
+    /// @brief 渲染 PGO 上传进度模态窗口。
+    /// @warning 退出低频渲染路径：关闭软件时短暂执行，只读取进度快照并绘制 UI。
+    void onUpdateUI() override
+    {
+        const std::string popupId =
+            std::string(TR("ui.pgo.upload.title").data()) +
+            "###PgoShutdownUploadProgressModal";
+        ImGui::OpenPopup(popupId.c_str());
+
+        const float dpiScale =
+            Config::AppConfig::instance().getWindowContentScale();
+        UI::Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( !popupStyle.begin(
+                 popupId.c_str(),
+                 nullptr,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove,
+                 ImVec2(460.0f * dpiScale, 0.0f)) ) {
+            return;
+        }
+
+        const auto progress = getPGOProfilerShutdownProgress();
+        ImGui::TextWrapped("%s", TR("ui.pgo.upload.uploading").data());
+        ImGui::Spacing();
+
+        const float fraction = uploadFraction(progress);
+        ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f));
+
+        if ( progress.totalBytes > 0 ) {
+            const double uploadedKiB =
+                static_cast<double>(progress.uploadedBytes) / 1024.0;
+            const double totalKiB =
+                static_cast<double>(progress.totalBytes) / 1024.0;
+            const auto bytesText =
+                fmt::format(fmt::runtime(TR("ui.pgo.upload.bytes_fmt").data()),
+                            uploadedKiB,
+                            totalKiB);
+            ImGui::TextWrapped("%s", bytesText.c_str());
+        }
+
+        const auto runtimeText =
+            fmt::format(fmt::runtime(TR("ui.pgo.upload.runtime_fmt").data()),
+                        progress.runtimeSeconds);
+        ImGui::TextWrapped("%s", runtimeText.c_str());
+        ImGui::EndPopup();
+    }
+
+    /// @brief 进度窗口不录制离屏命令。
+    /// @warning 退出低频渲染路径：该钩子不访问离屏渲染资源。
+    void onRecordOffscreen(vk::CommandBuffer&, uint32_t) override {}
+
+    /// @brief 获取离屏任务数量。
+    /// @return 始终为 0。
+    /// @warning 退出低频渲染路径：仅返回稳定常量。
+    uint32_t getOffscreenRecordTaskCount() const override { return 0; }
+
+private:
+    /// @brief 计算进度条比例；总字节未知时使用活动态动画。
+    /// @param progress PGO 退出上传进度。
+    /// @return 0 到 1 之间的进度比例。
+    static float uploadFraction(const PGOProfilerShutdownProgress& progress)
+    {
+        if ( progress.totalBytes > 0 ) {
+            const auto clampedUploaded =
+                std::min(progress.uploadedBytes, progress.totalBytes);
+            return static_cast<float>(static_cast<double>(clampedUploaded) /
+                                      static_cast<double>(progress.totalBytes));
+        }
+        return static_cast<float>(std::fmod(ImGui::GetTime() * 0.35, 1.0));
+    }
+};
+}  // namespace
+
+/// @brief 在图形上下文释放前展示 PGO 退出上传进度。
+/// @param context Vulkan 图形上下文。
+/// @param window 原生窗口。
+/// @warning 退出低频路径：只在关闭软件且实际需要上传 profraw 时执行。
+void renderPgoShutdownUploadProgress(Graphic::VKContext&    context,
+                                     Graphic::NativeWindow& window)
+{
+    const bool uploadAllowed =
+        Config::AppConfig::instance().getEditorSettings().autoUploadPgoProfiles;
+    if ( !beginShutdownPGOProfilerAsync(uploadAllowed) ) return;
+
+    PgoShutdownUploadProgressHook             progressHook;
+    std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{ &progressHook };
+
+    do {
+        context.checkAndRebuildFonts();
+        context.getRenderer().render(window, graphicUserHooks);
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    } while ( !isShutdownPGOProfilerFinished() );
+
+    waitForShutdownPGOProfiler();
+}
+}  // namespace MMM::Main
 
 int main(int argc, char* argv[])
 {
@@ -100,10 +223,13 @@ int main(int argc, char* argv[])
 
     Graphic::NativeWindow nativeWindow(1400, 900, "MusicMapMaker(Gamma)");
 
-    const auto ret = gameLoop.start(nativeWindow, argc, argv);
+    const auto ret = gameLoop.start(
+        nativeWindow, argc, argv, Main::renderPgoShutdownUploadProgress);
 
     // PGO — 强制写出 profile 并按运行时长阈值上传
-    Main::shutdownPGOProfiler();
+    Main::shutdownPGOProfiler(Config::AppConfig::instance()
+                                  .getEditorSettings()
+                                  .autoUploadPgoProfiles);
 
     return ret;
 }

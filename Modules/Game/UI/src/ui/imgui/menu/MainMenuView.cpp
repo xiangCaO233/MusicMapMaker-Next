@@ -407,6 +407,69 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
     }
 }
 
+/// @brief 渲染首次启动 PGO 性能数据上传授权弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderPgoUploadConsentWindow(float dpiScale)
+{
+#ifndef MMM_PGO_INSTRUMENT
+    (void)dpiScale;
+    return;
+#else
+    auto& appConfig = Config::AppConfig::instance();
+    auto& settings  = appConfig.getEditorSettings();
+    if ( settings.pgoProfileUploadConsentAsked ) return;
+
+    const std::string popupId = std::string(TR("ui.pgo.consent.title").data()) +
+                                "###PgoUploadConsentModal";
+    ImGui::OpenPopup(popupId.c_str());
+
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId.c_str(),
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(620.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextWrapped("%s", TR("ui.pgo.consent.message").data());
+            ImGui::Spacing();
+            ImGui::TextWrapped("%s", TR("ui.pgo.consent.detail").data());
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            auto applyConsent = [&](bool allowUpload) {
+                settings.autoUploadPgoProfiles        = allowUpload;
+                settings.pgoProfileUploadConsentAsked = true;
+                appConfig.save();
+                ImGui::CloseCurrentPopup();
+            };
+
+            const ImGuiStyle& style = ImGui::GetStyle();
+            const ImVec2      buttonSize(128.0f * dpiScale, 0.0f);
+            const float       buttonRowWidth =
+                buttonSize.x * 2.0f + style.ItemSpacing.x;
+            const float availableWidth = ImGui::GetContentRegionAvail().x;
+            if ( availableWidth > buttonRowWidth ) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+                                     (availableWidth - buttonRowWidth) * 0.5f);
+            }
+
+            if ( ImGui::Button(TR("ui.pgo.consent.accept").data(),
+                               buttonSize) ) {
+                applyConsent(true);
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.pgo.consent.decline").data(),
+                               buttonSize) ) {
+                applyConsent(false);
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+#endif
+}
+
 /// @brief 收集可用于替换当前焦点谱面的项目谱面候选。
 /// @return 数据来源候选列表。
 std::vector<MainMenuView::DataSourceReplaceCandidate>
@@ -964,6 +1027,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderMetadataEditorWindow();
     renderNoteMetadataEditorWindow();
     renderDataSourceReplaceWindow(dpiScale);
+    renderPgoUploadConsentWindow(dpiScale);
     renderSaveConflictWarningPopup(dpiScale);
     renderExportFormatPickerPopup(dpiScale);
     renderExportCompatibilityWarningPopup(dpiScale);

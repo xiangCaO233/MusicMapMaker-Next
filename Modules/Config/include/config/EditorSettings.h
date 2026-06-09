@@ -647,6 +647,12 @@ struct EditorSettings {
     /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
     bool renderProfileLogging{ false };
 
+    /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
+    bool autoUploadPgoProfiles{ false };
+
+    /// @brief 是否已经向用户询问过 PGO 性能数据上传授权。
+    bool pgoProfileUploadConsentAsked{ false };
+
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
 
@@ -767,6 +773,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "audioPlaybackBackend", c.audioPlaybackBackend },
         { "openALSpatialConfig", c.openALSpatialConfig },
         { "renderProfileLogging", c.renderProfileLogging },
+        { "autoUploadPgoProfiles", c.autoUploadPgoProfiles },
+        { "pgoProfileUploadConsentAsked", c.pgoProfileUploadConsentAsked },
         { "fontSizeMultiplier", c.fontSizeMultiplier },
         { "uiScaleMultiplier", c.uiScaleMultiplier },
         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
@@ -828,7 +836,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
     c.openALSpatialConfig =
         j.value("openALSpatialConfig", OpenALSpatialConfig());
-    c.renderProfileLogging  = j.value("renderProfileLogging", false);
+    c.renderProfileLogging         = j.value("renderProfileLogging", false);
+    c.autoUploadPgoProfiles        = j.value("autoUploadPgoProfiles", false);
+    c.pgoProfileUploadConsentAsked = j.value(
+        "pgoProfileUploadConsentAsked", j.contains("autoUploadPgoProfiles"));
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);

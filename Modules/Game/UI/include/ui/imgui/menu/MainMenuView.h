@@ -239,6 +239,10 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderSaveConflictWarningPopup(float dpiScale);
 
+    /// @brief 渲染首次启动 PGO 性能数据上传授权弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPgoUploadConsentWindow(float dpiScale);
+
     /// @brief 渲染原生另存为对话框前的导出格式选择弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportFormatPickerPopup(float dpiScale);
