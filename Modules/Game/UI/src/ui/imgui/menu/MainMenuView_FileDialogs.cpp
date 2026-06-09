@@ -234,6 +234,46 @@ bool shouldShowLegacyImdPackageOption(PackageFileType type)
     return type == PackageFileType::Mcz;
 }
 
+/// @brief 判断打包转换前是否需要让用户补充目标谱面元数据。
+/// @param type 目标打包格式。
+/// @param extension 来源文件扩展名。
+/// @return 需要补充元数据时返回 true。
+bool shouldPreparePackageBeatmapMetadataEdit(PackageFileType    type,
+                                             const std::string& extension)
+{
+    switch ( type ) {
+    case PackageFileType::Mcz: return packageExtensionEquals(extension, ".imd");
+    case PackageFileType::Osz:
+        return packageExtensionInList(PACKAGE_BEATMAP_SOURCE_EXTENSIONS,
+                                      extension) &&
+               !packageExtensionEquals(extension, ".osu") &&
+               !packageExtensionEquals(extension, ".mmm");
+    case PackageFileType::Mpk: return false;
+    }
+    return false;
+}
+
+/// @brief 构建打包元数据补充窗口的提示文本。
+/// @param type 目标打包格式。
+/// @return 用户界面提示文本。
+std::string makePackageMetadataEditPrompt(PackageFileType type)
+{
+    const std::string targetExtension = getPackageBeatmapExtension(type);
+    switch ( type ) {
+    case PackageFileType::Mcz:
+        return "这些谱面将转换为 " + targetExtension +
+               "。请补充 Malody 包需要的元数据：";
+    case PackageFileType::Osz:
+        return "这些谱面将转换为 " + targetExtension +
+               "。请补充 osu! 包需要的元数据：";
+    case PackageFileType::Mpk:
+        return "这些谱面将转换为 " + targetExtension +
+               "。请补充目标格式需要的元数据：";
+    }
+    return "这些谱面将转换为 " + targetExtension +
+           "。请补充目标格式需要的元数据：";
+}
+
 /// @brief 取得原生文件选择器使用的扩展名过滤器。
 /// @param type 打包格式。
 /// @return 不带前导点的扩展名。
@@ -874,9 +914,9 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             if ( ImGui::Button("打包到...", footerButtonSize) ) {
                 m_pendingPackageRelativePaths =
                     collectSelectedPackageRelativePaths();
-                if ( preparePackageMalodyMetadataEdits(
+                if ( preparePackageBeatmapMetadataEdits(
                          m_pendingPackageRelativePaths) ) {
-                    m_showPackageMalodyMetadataWindow = true;
+                    m_showPackageBeatmapMetadataWindow = true;
                 } else {
                     requestOutputPicker = true;
                 }
@@ -903,16 +943,14 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
     }
 }
 
-/// @brief 为选中的 IMD 谱面准备打包到 MC 前的元数据补充项。
+/// @brief 为选中的谱面准备打包转换前的元数据补充项。
 /// @param selectedRelativePaths 当前已选的项目相对路径列表。
 /// @return 需要展示补充窗口时返回 true。
-bool MainMenuView::preparePackageMalodyMetadataEdits(
+bool MainMenuView::preparePackageBeatmapMetadataEdits(
     const std::vector<std::string>& selectedRelativePaths)
 {
-    m_packageMalodyMetadataEdits.clear();
+    m_packageBeatmapMetadataEdits.clear();
     m_pendingPackageMetadataOverrides.clear();
-
-    if ( m_selectedPackageFileType != PackageFileType::Mcz ) return false;
 
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project || project->m_projectRoot.empty() ) return false;
@@ -922,7 +960,10 @@ bool MainMenuView::preparePackageMalodyMetadataEdits(
             Config::utf8ToPath(relativePathUtf8).lexically_normal();
         const auto extension =
             toLowerAscii(Config::pathToUtf8(relativePath.extension()));
-        if ( !packageExtensionEquals(extension, ".imd") ) continue;
+        if ( !shouldPreparePackageBeatmapMetadataEdit(m_selectedPackageFileType,
+                                                      extension) ) {
+            continue;
+        }
 
         const auto sourcePath =
             (project->m_projectRoot / relativePath).lexically_normal();
@@ -972,10 +1013,10 @@ bool MainMenuView::preparePackageMalodyMetadataEdits(
                                  edit.baseMeta.artist_unicode);
         copyToPackageInputBuffer(edit.creatorBuffer, edit.baseMeta.author);
         copyToPackageInputBuffer(edit.versionBuffer, edit.baseMeta.version);
-        m_packageMalodyMetadataEdits.push_back(std::move(edit));
+        m_packageBeatmapMetadataEdits.push_back(std::move(edit));
     }
 
-    return !m_packageMalodyMetadataEdits.empty();
+    return !m_packageBeatmapMetadataEdits.empty();
 }
 
 /// @brief 从补充窗口缓存收集打包元数据覆盖项。
@@ -984,8 +1025,8 @@ std::vector<Logic::PackageBeatmapMetadataOverride>
 MainMenuView::collectPackageMetadataOverridesFromEdits()
 {
     std::vector<Logic::PackageBeatmapMetadataOverride> overrides;
-    overrides.reserve(m_packageMalodyMetadataEdits.size());
-    for ( auto& edit : m_packageMalodyMetadataEdits ) {
+    overrides.reserve(m_packageBeatmapMetadataEdits.size());
+    for ( auto& edit : m_packageBeatmapMetadataEdits ) {
         edit.baseMeta.title = packageInputBufferText(edit.titleBuffer);
         edit.baseMeta.title_unicode =
             packageInputBufferText(edit.titleUnicodeBuffer);
@@ -1003,15 +1044,15 @@ MainMenuView::collectPackageMetadataOverridesFromEdits()
     return overrides;
 }
 
-/// @brief 渲染打包前补充 Malody 元数据的窗口。
+/// @brief 渲染打包前补充目标谱面元数据的窗口。
 /// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderPackageMalodyMetadataWindow(float dpiScale)
+void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
 {
     constexpr const char* popupId =
-        "补充 Malody 元数据###PackageMalodyMetadataModal";
-    if ( m_showPackageMalodyMetadataWindow ) {
+        "补充谱面元数据###PackageBeatmapMetadataModal";
+    if ( m_showPackageBeatmapMetadataWindow ) {
         ImGui::OpenPopup(popupId);
-        m_showPackageMalodyMetadataWindow = false;
+        m_showPackageBeatmapMetadataWindow = false;
     }
 
     if ( !ImGui::IsPopupOpen(popupId) ) return;
@@ -1024,8 +1065,9 @@ void MainMenuView::renderPackageMalodyMetadataWindow(float dpiScale)
                               ImGuiWindowFlags_NoCollapse,
                               ImVec2(720.0f * dpiScale, 520.0f * dpiScale),
                               false) ) {
-            ImGui::TextUnformatted(
-                "这些 IMD 谱面将转换为 .mc。请补充 Malody 包需要的元数据：");
+            const std::string prompt =
+                makePackageMetadataEditPrompt(m_selectedPackageFileType);
+            ImGui::TextUnformatted(prompt.c_str());
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -1038,19 +1080,19 @@ void MainMenuView::renderPackageMalodyMetadataWindow(float dpiScale)
                 120.0f * dpiScale,
                 ImGui::GetContentRegionAvail().y - footerReserveHeight);
 
-            if ( ImGui::BeginChild("PackageMalodyMetadataEditChild",
+            if ( ImGui::BeginChild("PackageBeatmapMetadataEditChild",
                                    ImVec2(0.0f, editHeight),
                                    true) ) {
                 for ( std::size_t index = 0;
-                      index < m_packageMalodyMetadataEdits.size();
+                      index < m_packageBeatmapMetadataEdits.size();
                       ++index ) {
-                    auto& edit = m_packageMalodyMetadataEdits[index];
+                    auto& edit = m_packageBeatmapMetadataEdits[index];
                     ImGui::PushID(static_cast<int>(index));
                     if ( ImGui::CollapsingHeader(
                              edit.relativePath.c_str(),
                              ImGuiTreeNodeFlags_DefaultOpen) ) {
                         if ( ImGui::BeginTable(
-                                 "PackageMalodyMetadataFields",
+                                 "PackageBeatmapMetadataFields",
                                  2,
                                  ImGuiTableFlags_SizingStretchProp |
                                      ImGuiTableFlags_NoSavedSettings) ) {
@@ -1106,7 +1148,7 @@ void MainMenuView::renderPackageMalodyMetadataWindow(float dpiScale)
             if ( ImGui::Button("继续打包", buttonSize) ) {
                 m_pendingPackageMetadataOverrides =
                     collectPackageMetadataOverridesFromEdits();
-                m_packageMalodyMetadataEdits.clear();
+                m_packageBeatmapMetadataEdits.clear();
                 requestOutputPicker = true;
                 ImGui::CloseCurrentPopup();
             }
@@ -1114,7 +1156,7 @@ void MainMenuView::renderPackageMalodyMetadataWindow(float dpiScale)
             if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
                 m_pendingPackageRelativePaths.clear();
                 m_pendingPackageMetadataOverrides.clear();
-                m_packageMalodyMetadataEdits.clear();
+                m_packageBeatmapMetadataEdits.clear();
                 ImGui::CloseCurrentPopup();
             }
 
@@ -1262,10 +1304,10 @@ void MainMenuView::openPackFilePicker()
     m_packageCandidateFiles.clear();
     m_pendingPackageRelativePaths.clear();
     m_pendingPackageMetadataOverrides.clear();
-    m_packageMalodyMetadataEdits.clear();
-    m_showPackageFileSelectionWindow  = false;
-    m_showPackageMalodyMetadataWindow = false;
-    m_showPackageFormatPicker         = true;
+    m_packageBeatmapMetadataEdits.clear();
+    m_showPackageFileSelectionWindow   = false;
+    m_showPackageBeatmapMetadataWindow = false;
+    m_showPackageFormatPicker          = true;
     if ( !shouldShowLegacyImdPackageOption(m_selectedPackageFileType) ) {
         m_includeLegacyImdPackageBeatmaps = false;
     }

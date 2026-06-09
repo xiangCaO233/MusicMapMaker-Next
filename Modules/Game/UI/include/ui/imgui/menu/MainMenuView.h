@@ -155,7 +155,7 @@ private:
         bool selected{ true };
     };
 
-    /// @brief 打包转换到 MC 前临时编辑的谱面元数据。
+    /// @brief 打包转换前临时编辑的目标谱面元数据。
     struct PackageBeatmapMetadataEdit {
         /// @brief 项目相对谱面路径，使用 UTF-8 编码和通用分隔符。
         std::string relativePath;
@@ -163,22 +163,22 @@ private:
         /// @brief 当前编辑中的基础谱面元数据。
         BaseMapMeta baseMeta;
 
-        /// @brief MC 标题输入缓存。
+        /// @brief 目标谱面标题输入缓存。
         std::array<char, 192> titleBuffer{};
 
-        /// @brief MC 原标题输入缓存。
+        /// @brief 目标谱面原标题输入缓存。
         std::array<char, 192> titleUnicodeBuffer{};
 
-        /// @brief MC 艺术家输入缓存。
+        /// @brief 目标谱面艺术家输入缓存。
         std::array<char, 192> artistBuffer{};
 
-        /// @brief MC 原艺术家输入缓存。
+        /// @brief 目标谱面原艺术家输入缓存。
         std::array<char, 192> artistUnicodeBuffer{};
 
-        /// @brief MC 谱师输入缓存。
+        /// @brief 目标谱面谱师输入缓存。
         std::array<char, 192> creatorBuffer{};
 
-        /// @brief MC 难度名输入缓存。
+        /// @brief 目标谱面难度名输入缓存。
         std::array<char, 192> versionBuffer{};
     };
 
@@ -263,9 +263,9 @@ private:
     /// @brief 提交数据来源替换请求。
     void submitDataSourceReplaceRequest();
 
-    /// @brief 渲染打包前补充 Malody 元数据的窗口。
+    /// @brief 渲染打包前补充目标谱面元数据的窗口。
     /// @param dpiScale 当前窗口内容缩放。
-    void renderPackageMalodyMetadataWindow(float dpiScale);
+    void renderPackageBeatmapMetadataWindow(float dpiScale);
 
     /// @brief 打开谱面倍速制作弹窗。
     void openBeatmapSpeedExportPopup();
@@ -283,10 +283,10 @@ private:
     /// @brief 按当前目标打包格式重建候选文件列表。
     void rebuildPackageCandidateFiles();
 
-    /// @brief 为选中的 IMD 谱面准备打包到 MC 前的元数据补充项。
+    /// @brief 为选中的谱面准备打包转换前的元数据补充项。
     /// @param selectedRelativePaths 当前已选的项目相对路径列表。
     /// @return 需要展示补充窗口时返回 true。
-    bool preparePackageMalodyMetadataEdits(
+    bool preparePackageBeatmapMetadataEdits(
         const std::vector<std::string>& selectedRelativePaths);
 
     /// @brief 从补充窗口缓存收集打包元数据覆盖项。
@@ -376,8 +376,8 @@ private:
     bool m_showPackageFormatPicker = false;
     /// @brief 是否显示打包文件复选列表窗口。
     bool m_showPackageFileSelectionWindow = false;
-    /// @brief 是否显示打包前 Malody 元数据补充窗口。
-    bool m_showPackageMalodyMetadataWindow = false;
+    /// @brief 是否显示打包前目标谱面元数据补充窗口。
+    bool m_showPackageBeatmapMetadataWindow = false;
     /// @brief 是否显示谱面倍速制作弹窗。
     bool m_showBeatmapSpeedExportPopup = false;
     /// @brief 谱面倍速制作后台任务是否运行中。
@@ -434,8 +434,8 @@ private:
     /// @brief 等待打包命令使用的元数据覆盖项。
     std::vector<Logic::PackageBeatmapMetadataOverride>
         m_pendingPackageMetadataOverrides;
-    /// @brief 打包前正在编辑的 Malody 元数据项。
-    std::vector<PackageBeatmapMetadataEdit> m_packageMalodyMetadataEdits;
+    /// @brief 打包前正在编辑的目标谱面元数据项。
+    std::vector<PackageBeatmapMetadataEdit> m_packageBeatmapMetadataEdits;
     /// @brief 是否将打包转换产物保存回项目目录。
     bool m_saveConvertedPackageBeatmapsToProject{ false };
     /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
