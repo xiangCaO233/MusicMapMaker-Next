@@ -117,7 +117,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -437,6 +437,19 @@ void applyToolbarWorkspaceState(
     editorConfig.visual.timelineZoom =
         std::clamp(toolbarState.m_timelineZoom, 0.1f, 10.0f);
 }
+
+/// @brief 保留由 AppConfig 直接维护的全局 UI 窗口显示状态。
+/// @param target 即将写回引擎和 AppConfig 的配置。
+/// @param source 当前 AppConfig 中的全局配置快照。
+void preserveGlobalUiWindowSettings(Config::EditorConfig&       target,
+                                    const Config::EditorConfig& source)
+{
+    target.settings.showTimelineWindow = source.settings.showTimelineWindow;
+    target.settings.showPreviewWindow  = source.settings.showPreviewWindow;
+    target.settings.showToolLabels     = source.settings.showToolLabels;
+    target.settings.fixedToolWindow    = source.settings.fixedToolWindow;
+    target.settings.showManagerLabels  = source.settings.showManagerLabels;
+}
 }  // namespace
 
 EditorEngine& EditorEngine::instance()
@@ -694,10 +707,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1423,10 +1436,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -1692,7 +1705,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             }
             ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
             ctx.visualTime  = ctx.currentTime +
-                             m_editorConfig.visual.getEffectiveVisualOffset();
+                              m_editorConfig.visual.getEffectiveVisualOffset();
             ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
             ctx.isPlaying   = false;
             ctx.isMainAudioSyncFollower = false;
@@ -1750,6 +1763,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
     m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
         globalDefaultNoteColorPalette;
+    preserveGlobalUiWindowSettings(m_editorConfig, globalConfig);
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
