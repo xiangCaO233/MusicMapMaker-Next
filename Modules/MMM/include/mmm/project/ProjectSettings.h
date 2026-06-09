@@ -294,15 +294,18 @@ struct ProjectSettings {
     /// @brief 序列化项目设置。
     friend void to_json(nlohmann::json& j, const ProjectSettings& settings)
     {
-        auto editorOverride = settings.m_editorOverride;
-        if ( editorOverride ) {
-            editorOverride->noteColorPalettes =
-                Config::NoteColorPaletteConfig();
-            editorOverride->defaultNoteColorPaletteSchemeName =
+        nlohmann::json editorOverrideJson = nullptr;
+        if ( settings.m_editorOverride ) {
+            auto editorOverride              = *settings.m_editorOverride;
+            editorOverride.noteColorPalettes = Config::NoteColorPaletteConfig();
+            editorOverride.defaultNoteColorPaletteSchemeName =
                 Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+            editorOverrideJson = editorOverride;
+            editorOverrideJson.erase("autoUploadPgoProfiles");
+            editorOverrideJson.erase("pgoProfileUploadConsentAsked");
         }
         j = nlohmann::json{ { "m_visualOverride", settings.m_visualOverride },
-                            { "m_editorOverride", editorOverride },
+                            { "m_editorOverride", editorOverrideJson },
                             { "m_lastOpenedBeatmap",
                               settings.m_lastOpenedBeatmap },
                             { "m_noteColorPaletteSchemeName",
@@ -323,6 +326,8 @@ struct ProjectSettings {
         if ( auto it = j.find("m_editorOverride");
              it != j.end() && !it->is_null() ) {
             settings.m_editorOverride = it->get<Config::EditorSettings>();
+            settings.m_editorOverride->autoUploadPgoProfiles        = false;
+            settings.m_editorOverride->pgoProfileUploadConsentAsked = false;
         } else {
             settings.m_editorOverride = std::nullopt;
         }

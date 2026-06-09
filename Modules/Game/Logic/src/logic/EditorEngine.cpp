@@ -438,17 +438,21 @@ void applyToolbarWorkspaceState(
         std::clamp(toolbarState.m_timelineZoom, 0.1f, 10.0f);
 }
 
-/// @brief 保留由 AppConfig 直接维护的全局 UI 窗口显示状态。
+/// @brief 保留由 AppConfig 直接维护的全局软件级状态。
 /// @param target 即将写回引擎和 AppConfig 的配置。
 /// @param source 当前 AppConfig 中的全局配置快照。
-void preserveGlobalUiWindowSettings(Config::EditorConfig&       target,
-                                    const Config::EditorConfig& source)
+void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
+                                      const Config::EditorConfig& source)
 {
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
     target.settings.showPreviewWindow  = source.settings.showPreviewWindow;
     target.settings.showToolLabels     = source.settings.showToolLabels;
     target.settings.fixedToolWindow    = source.settings.fixedToolWindow;
     target.settings.showManagerLabels  = source.settings.showManagerLabels;
+    target.settings.autoUploadPgoProfiles =
+        source.settings.autoUploadPgoProfiles;
+    target.settings.pgoProfileUploadConsentAsked =
+        source.settings.pgoProfileUploadConsentAsked;
 }
 }  // namespace
 
@@ -1763,7 +1767,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
     m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
         globalDefaultNoteColorPalette;
-    preserveGlobalUiWindowSettings(m_editorConfig, globalConfig);
+    preserveGlobalAppManagedSettings(m_editorConfig, globalConfig);
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
