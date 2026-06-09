@@ -639,6 +639,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderExportCompatibilityWarningPopup(dpiScale);
     renderPackageFormatPickerPopup(dpiScale);
     renderPackageFileSelectionWindow(dpiScale);
+    renderPackageMalodyMetadataWindow(dpiScale);
     renderBeatmapSpeedExportPopup(dpiScale);
 
     if ( menuFont ) ImGui::PopFont();

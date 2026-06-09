@@ -349,6 +349,15 @@ struct CmdSaveBeatmapAs {
     std::string path;
 };
 
+/// @brief 打包转换时临时覆盖单个谱面的基础元数据。
+struct PackageBeatmapMetadataOverride {
+    /// @brief 项目相对谱面路径，使用 UTF-8 编码。
+    std::string relativePath;
+
+    /// @brief 转换导出时使用的基础谱面元数据。
+    MMM::BaseMapMeta baseMeta;
+};
+
 /**
  * @brief 打包谱面指令
  */
@@ -359,8 +368,11 @@ struct CmdPackBeatmap {
     /// @brief 需要写入包内的项目相对文件路径列表，使用 UTF-8 编码。
     std::vector<std::string> selectedProjectRelativePaths;
 
-    /// @brief 是否将 .mmm 转换出的目标谱面文件保存回项目目录。
+    /// @brief 是否将转换出的目标谱面文件保存回项目目录。
     bool saveConvertedBeatmapsToProject{ false };
+
+    /// @brief 转换指定谱面时临时覆盖的元数据列表。
+    std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
 
 /**

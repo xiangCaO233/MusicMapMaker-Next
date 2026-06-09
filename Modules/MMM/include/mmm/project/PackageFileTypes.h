@@ -99,6 +99,10 @@ inline constexpr std::array<std::string_view, 1> MPK_PACKAGE_BEATMAP_EXTENSIONS{
     ".mmm"
 };
 
+/// @brief 可被打包流程加载并转换的谱面源扩展名。
+inline constexpr std::array<std::string_view, 4>
+    PACKAGE_BEATMAP_SOURCE_EXTENSIONS{ ".mmm", ".mc", ".osu", ".imd" };
+
 /// @brief 通配音频资源发现时使用的常见音频扩展名。
 inline constexpr std::array<std::string_view, 15>
     PACKAGE_COMMON_AUDIO_EXTENSIONS{ ".ogg", ".mp3",  ".wav", ".flac", ".opus",
@@ -225,11 +229,7 @@ inline constexpr std::array<PackageSupportedFileTypes, 3>
         return packageExtensionInList(PACKAGE_COMMON_IMAGE_EXTENSIONS,
                                       extension);
     case PackageResourceType::Beatmap:
-        return packageExtensionInList(MCZ_PACKAGE_BEATMAP_EXTENSIONS,
-                                      extension) ||
-               packageExtensionInList(OSZ_PACKAGE_BEATMAP_EXTENSIONS,
-                                      extension) ||
-               packageExtensionInList(MPK_PACKAGE_BEATMAP_EXTENSIONS,
+        return packageExtensionInList(PACKAGE_BEATMAP_SOURCE_EXTENSIONS,
                                       extension);
     }
     return false;
@@ -297,9 +297,8 @@ findPackageSupportedFileTypes(std::string_view extension)
 [[nodiscard]] constexpr bool isPackageBeatmapSourceExtensionSupported(
     const PackageSupportedFileTypes& types, std::string_view extension)
 {
-    return packageExtensionEquals(extension, ".mmm") ||
-           isPackageResourceExtensionSupported(
-               types, PackageResourceType::Beatmap, extension);
+    (void)types;
+    return packageExtensionInList(PACKAGE_BEATMAP_SOURCE_EXTENSIONS, extension);
 }
 
 /// @brief 判断文件扩展名是否可作为指定打包格式的候选资源。

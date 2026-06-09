@@ -26,6 +26,7 @@
 #include <fstream>
 #include <miniz.h>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -189,15 +190,16 @@ std::string getPackageBeatmapOutputExtension(
     return std::string(packageTypes.m_beatmapExtensions.front());
 }
 
-/// @brief 判断 .mmm 来源是否需要转换成当前包格式的谱面文件。
+/// @brief 判断谱面来源是否需要转换成当前包格式的谱面文件。
 /// @param sourceExtension 来源文件扩展名。
 /// @param outputExtension 目标谱面扩展名。
 /// @return 是否需要在打包前转换。
 bool shouldConvertPackageBeatmapSource(const std::string& sourceExtension,
                                        const std::string& outputExtension)
 {
-    return MMM::packageExtensionEquals(sourceExtension, ".mmm") &&
-           !MMM::packageExtensionEquals(outputExtension, ".mmm");
+    return MMM::isKnownPackageResourceExtension(
+               MMM::PackageResourceType::Beatmap, sourceExtension) &&
+           !MMM::packageExtensionEquals(sourceExtension, outputExtension);
 }
 
 /// @brief 生成临时转换谱面文件路径。
@@ -221,30 +223,37 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
     return (tempRoot / fileName).lexically_normal();
 }
 
-/// @brief 将 .mmm 谱面转换成指定路径的目标格式文件。
-/// @param sourcePath 来源 .mmm 谱面路径。
+/// @brief 将谱面源文件转换成指定路径的目标格式文件。
+/// @param sourcePath 来源谱面路径。
 /// @param outputPath 转换后输出路径。
+/// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @return 是否转换成功。
 bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
-                               const std::filesystem::path& outputPath)
+                               const std::filesystem::path& outputPath,
+                               const MMM::BaseMapMeta*      metadataOverride)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
+    if ( metadataOverride ) {
+        beatMap.m_baseMapMetadata = *metadataOverride;
+    }
     beatMap.m_baseMapMetadata.map_path = outputPath;
     return beatMap.saveToFile(outputPath);
 }
 
-/// @brief 读取 .mmm 转换后的目标谱面字节。
-/// @param sourcePath 来源 .mmm 谱面路径。
+/// @brief 读取转换后的目标谱面字节。
+/// @param sourcePath 来源谱面路径。
 /// @param projectOutputPath 保存到项目中时使用的目标路径。
 /// @param outputExtension 目标谱面扩展名。
 /// @param saveToProject 是否将转换产物留在项目目录中。
+/// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
     const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
+    const MMM::BaseMapMeta*    metadataOverride,
     std::vector<std::uint8_t>& outBytes)
 {
     const auto conversionPath =
@@ -262,7 +271,8 @@ bool readConvertedPackageBeatmapBytes(
         }
     }
 
-    if ( !convertPackageBeatmapFile(sourcePath, conversionPath) ) {
+    if ( !convertPackageBeatmapFile(
+             sourcePath, conversionPath, metadataOverride) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -278,18 +288,50 @@ bool readConvertedPackageBeatmapBytes(
     return readOk;
 }
 
+/// @brief 将项目相对路径规范化为用于匹配打包元数据覆盖项的 UTF-8 路径。
+/// @param relativePath 项目相对路径。
+/// @return 规范化后的通用分隔符路径。
+std::string normalizePackageRelativePathKey(
+    const std::filesystem::path& relativePath)
+{
+    return MMM::Config::pathToUtf8Generic(relativePath.lexically_normal());
+}
+
+/// @brief 构建打包元数据覆盖项查询表。
+/// @param metadataOverrides 命令中携带的元数据覆盖项。
+/// @return 项目相对路径到基础元数据的映射。
+std::unordered_map<std::string, MMM::BaseMapMeta>
+makePackageMetadataOverrideMap(
+    const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
+        metadataOverrides)
+{
+    std::unordered_map<std::string, MMM::BaseMapMeta> result;
+    result.reserve(metadataOverrides.size());
+    for ( const auto& metadataOverride : metadataOverrides ) {
+        auto relativePath =
+            MMM::Config::utf8ToPath(metadataOverride.relativePath);
+        result[normalizePackageRelativePathKey(relativePath)] =
+            metadataOverride.baseMeta;
+    }
+    return result;
+}
+
 /// @brief 写入 zip 兼容的谱面包。
 /// @param projectRoot 当前项目根目录。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
 /// @param packageTypes 输出包格式对应的文件类型规则。
+/// @param metadataOverrides 转换指定谱面时临时覆盖的基础元数据列表。
 /// @param saveConvertedBeatmapsToProject 是否将转换后的谱面文件保存回项目目录。
 /// @return 是否打包成功。
-bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
-                         const std::filesystem::path&    outputPath,
-                         const std::vector<std::string>& selectedRelativePaths,
-                         const MMM::PackageSupportedFileTypes& packageTypes,
-                         bool saveConvertedBeatmapsToProject)
+bool writeBeatmapPackage(
+    const std::filesystem::path&          projectRoot,
+    const std::filesystem::path&          outputPath,
+    const std::vector<std::string>&       selectedRelativePaths,
+    const MMM::PackageSupportedFileTypes& packageTypes,
+    const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
+         metadataOverrides,
+    bool saveConvertedBeatmapsToProject)
 {
     if ( selectedRelativePaths.empty() ) return false;
 
@@ -303,9 +345,13 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
     std::unordered_set<std::string> archivedNames;
     const std::string               packageBeatmapExtension =
         getPackageBeatmapOutputExtension(packageTypes);
+    const auto metadataOverrideMap =
+        makePackageMetadataOverrideMap(metadataOverrides);
     for ( const auto& relativeUtf8 : selectedRelativePaths ) {
         const auto relativePath =
             MMM::Config::utf8ToPath(relativeUtf8).lexically_normal();
+        const auto relativePathKey =
+            normalizePackageRelativePathKey(relativePath);
         if ( packageRelativePathEscapesRoot(relativePath) ) {
             XERROR("PackBeatmap: path escapes project root: {}", relativeUtf8);
             success = false;
@@ -346,11 +392,16 @@ bool writeBeatmapPackage(const std::filesystem::path&    projectRoot,
         if ( shouldConvert ) {
             const auto projectOutputPath =
                 (projectRoot / archiveRelativePath).lexically_normal();
+            const auto metadataIt = metadataOverrideMap.find(relativePathKey);
+            const MMM::BaseMapMeta* metadataOverride =
+                metadataIt == metadataOverrideMap.end() ? nullptr
+                                                        : &metadataIt->second;
             if ( !readConvertedPackageBeatmapBytes(
                      sourcePath,
                      projectOutputPath,
                      packageBeatmapExtension,
                      saveConvertedBeatmapsToProject,
+                     metadataOverride,
                      fileBytes) ) {
                 XERROR("PackBeatmap: failed to convert source file: {}",
                        relativeUtf8);
@@ -707,6 +758,7 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             outputPath,
                             cmd.selectedProjectRelativePaths,
                             *packageTypes,
+                            cmd.metadataOverrides,
                             cmd.saveConvertedBeatmapsToProject);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
