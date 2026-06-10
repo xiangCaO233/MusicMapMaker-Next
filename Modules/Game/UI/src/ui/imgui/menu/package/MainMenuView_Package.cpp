@@ -130,6 +130,41 @@ bool shouldShowConvertedBeatmapSaveOption(PackageFileType type)
     return type == PackageFileType::Mcz || type == PackageFileType::Osz;
 }
 
+/// @brief 判断谱面源是否需要转换为当前目标包的谱面格式。
+/// @param type 目标打包格式。
+/// @param relativePath 项目相对谱面路径。
+/// @return 谱面源需要转换时返回 true。
+bool shouldConvertPackageCandidateBeatmap(PackageFileType    type,
+                                          const std::string& relativePath)
+{
+    const auto  extension = toLowerAscii(Config::pathToUtf8(
+        Config::utf8ToPath(relativePath).lexically_normal().extension()));
+    const auto& types     = getPackageSupportedFileTypes(type);
+    return isPackageBeatmapSourceExtensionSupported(types, extension) &&
+           !isPackageResourceExtensionSupported(
+               types, PackageResourceType::Beatmap, extension);
+}
+
+/// @brief 判断当前已选候选中是否存在需要转换的谱面源。
+/// @param type 目标打包格式。
+/// @param candidateFiles 当前候选文件缓存。
+/// @return 存在需要转换的已选谱面源时返回 true。
+/// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
+bool hasSelectedPackageBeatmapSourceRequiringConversion(
+    PackageFileType                          type,
+    const std::vector<PackageCandidateFile>& candidateFiles)
+{
+    return std::any_of(candidateFiles.begin(),
+                       candidateFiles.end(),
+                       [&](const PackageCandidateFile& file) {
+                           return file.selected &&
+                                  file.resourceType ==
+                                      PackageResourceType::Beatmap &&
+                                  shouldConvertPackageCandidateBeatmap(
+                                      type, file.relativePath);
+                       });
+}
+
 /// @brief 判断打包格式是否需要显示旧 IMD 兼容谱面选项。
 /// @param type 打包格式。
 /// @return 需要显示时返回 true。
@@ -572,6 +607,8 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
         .selectedProjectRelativePaths = m_package.pendingRelativePaths,
         .saveConvertedBeatmapsToProject =
             shouldShowConvertedBeatmapSaveOption(m_package.selectedFileType) &&
+            hasSelectedPackageBeatmapSourceRequiringConversion(
+                m_package.selectedFileType, m_package.candidateFiles) &&
             m_package.saveConvertedBeatmapsToProject,
         .includeLegacyImdBeatmapsInPackage =
             shouldShowLegacyImdPackageOption(m_package.selectedFileType) &&
@@ -711,8 +748,23 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                     "保存转换出的 " +
                     getPackageBeatmapExtension(m_package.selectedFileType) +
                     " 到项目中";
+                const bool canSaveConvertedBeatmaps =
+                    hasSelectedPackageBeatmapSourceRequiringConversion(
+                        m_package.selectedFileType, m_package.candidateFiles);
+                if ( !canSaveConvertedBeatmaps ) {
+                    m_package.saveConvertedBeatmapsToProject = false;
+                    ImGui::BeginDisabled();
+                }
                 ImGui::Checkbox(saveConvertedLabel.c_str(),
                                 &m_package.saveConvertedBeatmapsToProject);
+                if ( !canSaveConvertedBeatmaps ) {
+                    ImGui::EndDisabled();
+                    if ( ImGui::IsItemHovered(
+                             ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                        ImGui::SetTooltip(
+                            "仅当已选谱面源需要转换为目标包谱面格式时可用。");
+                    }
+                }
             }
             if ( shouldShowLegacyImdPackageOption(
                      m_package.selectedFileType) ) {
@@ -1197,6 +1249,10 @@ void MainMenuView::rebuildPackageCandidateFiles()
     }
 
     syncPackageDependencySelection();
+    if ( !hasSelectedPackageBeatmapSourceRequiringConversion(
+             m_package.selectedFileType, m_package.candidateFiles) ) {
+        m_package.saveConvertedBeatmapsToProject = false;
+    }
 }
 
 /// @brief 设置候选文件选中状态，并同步谱面绑定资源。
@@ -1215,6 +1271,10 @@ void MainMenuView::setPackageCandidateSelected(std::size_t index, bool selected)
 
     file.selected = selected;
     syncPackageDependencySelection();
+    if ( !hasSelectedPackageBeatmapSourceRequiringConversion(
+             m_package.selectedFileType, m_package.candidateFiles) ) {
+        m_package.saveConvertedBeatmapsToProject = false;
+    }
 }
 
 /// @brief 根据当前已选中谱面重新计算依赖资源锁定状态。
