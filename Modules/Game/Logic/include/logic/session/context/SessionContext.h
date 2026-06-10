@@ -50,8 +50,18 @@ struct SessionContext {
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
 
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
-    double visualTime{ 0.0 };   ///< 当前平滑视觉渲染时间 (考虑偏移)
-    bool   isPlaying{ false };  ///< 是否正在播放
+    double animateTime{ 0.0 };  ///< 当前动画渲染时间，已包含视觉偏移。
+    /// @brief 当前暂停态滚动动画的目标渲染时间，单位秒。
+    double animateTimeTarget{ 0.0 };
+    /// @brief 暂停态滚动动画是否仍需继续推进。
+    bool animateTimeAnimationActive{ false };
+    /// @brief 当前动画时间线缩放倍率，用于滚轮缩放过渡渲染。
+    float animatedTimelineZoom{ 1.0f };
+    /// @brief 当前动画时间线缩放的目标倍率。
+    float animatedTimelineZoomTarget{ 1.0f };
+    /// @brief 时间线缩放动画是否仍需继续推进。
+    bool animatedTimelineZoomAnimationActive{ false };
+    bool isPlaying{ false };  ///< 是否正在播放
     /// @brief 是否作为同主音轨后台跟随者进行播放态视觉插值。
     bool    isMainAudioSyncFollower{ false };
     int32_t trackCount{ 12 };  ///< 当前轨道总数

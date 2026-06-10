@@ -36,7 +36,14 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isPlaying               = false;
     ctx.isMainAudioSyncFollower = false;
     ctx.currentTime             = 0.0;
-    ctx.currentBeatmap          = beatmap;
+    ctx.animateTime =
+        ctx.currentTime + ctx.lastConfig.visual.getEffectiveVisualOffset();
+    ctx.animateTimeTarget          = ctx.animateTime;
+    ctx.animateTimeAnimationActive = false;
+    ctx.animatedTimelineZoom       = ctx.lastConfig.visual.timelineZoom;
+    ctx.animatedTimelineZoomTarget = ctx.animatedTimelineZoom;
+    ctx.animatedTimelineZoomAnimationActive = false;
+    ctx.currentBeatmap                      = beatmap;
 
     if ( !beatmap ) {
         ctx.hitEvents.clear();

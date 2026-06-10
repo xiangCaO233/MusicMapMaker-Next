@@ -791,7 +791,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Delete Selected");
+                                                        "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -844,7 +844,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Mirror Selected");
+                                                        "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -1013,11 +1013,11 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         }
     }
 
-    // 2. 粘贴到当前视觉时间 (判定线)
-    double pasteTime = m_ctx.visualTime;
+    // 2. 粘贴到当前动画时间 (判定线)
+    double pasteTime = m_ctx.animateTime;
 
     // 尝试获取鼠标悬停处的时间作为基准 (如果有)
-    // 注意：这里为了简化直接使用视觉时间。如果需要鼠标对齐，需要 UI 传入坐标。
+    // 注意：这里为了简化直接使用动画时间。如果需要鼠标对齐，需要 UI 传入坐标。
 
     double timeOffset = pasteTime - minTime;
 
@@ -1510,7 +1510,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Align Selected");
+                                                        "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

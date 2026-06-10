@@ -53,7 +53,7 @@ SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
-    entt::registry& timelineRegistry, double visualTime,
+    entt::registry& timelineRegistry, double animateTime,
     const std::unordered_map<std::string, CameraInfo>& cameras)
 {
     SnapResult result;
@@ -72,7 +72,7 @@ SnapResult getSnapResult(
         return result;
 
     float  judgmentLineY = camera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY   = cache->getAbsY(visualTime);
+    double currentAbsY   = cache->getAbsY(animateTime);
 
     float renderScaleY = 1.0f;
     if ( camera.id == "Preview" || camera.id == "PreviewCanvas" ) {
@@ -164,10 +164,10 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it = std::lower_bound(
-        ctx.hitEvents.begin(),
-        ctx.hitEvents.end(),
-        System::HitFXSystem::HitEvent{ ctx.visualTime, ::MMM::NoteType::NOTE });
+    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
+                               ctx.hitEvents.end(),
+                               System::HitFXSystem::HitEvent{
+                                   ctx.animateTime, ::MMM::NoteType::NOTE });
     ctx.nextHitIndex        = std::distance(ctx.hitEvents.begin(), it);
     ctx.nextPredictHitIndex = ctx.nextHitIndex;
 }

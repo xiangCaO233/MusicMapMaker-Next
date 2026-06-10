@@ -46,10 +46,10 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
-/// @brief 为同主音轨后台跟随谱面推进视觉打击特效事件。
+/// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
 /// hitEvents，只有音符变更后的脏分支允许重建事件序列。
-void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
+void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
                               const Config::EditorConfig& config,
                               bool                        resetHitIndex)
 {
@@ -62,15 +62,15 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
 
     std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
     while ( ctx.nextHitIndex < ctx.hitEvents.size() &&
-            ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.visualTime ) {
+            ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.animateTime ) {
         const auto& ev = ctx.hitEvents[ctx.nextHitIndex];
-        if ( ev.timestamp > previousVisualTime ) {
+        if ( ev.timestamp > previousAnimateTime ) {
             triggeredEvents.push_back(ev);
         }
         ctx.nextHitIndex++;
     }
 
-    ctx.hitFXSystem.update(ctx.visualTime, triggeredEvents, config);
+    ctx.hitFXSystem.update(ctx.animateTime, triggeredEvents, config);
 }
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
@@ -117,7 +117,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -711,10 +711,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1331,16 +1331,22 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             continue;
         }
 
-        const bool   wasFollowing       = ctx.isMainAudioSyncFollower;
-        const double previousVisualTime = ctx.visualTime;
+        const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
+        const double previousAnimateTime = ctx.animateTime;
         const bool   shouldClearHitEffects =
             wasFollowing != sourceCtx.isPlaying ||
-            sourceCtx.visualTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
-                previousVisualTime ||
-            std::abs(sourceCtx.visualTime - previousVisualTime) > 0.2;
+            sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                previousAnimateTime ||
+            std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
 
-        ctx.currentTime             = sourceCtx.currentTime;
-        ctx.visualTime              = sourceCtx.visualTime;
+        ctx.currentTime                = sourceCtx.currentTime;
+        ctx.animateTime                = sourceCtx.animateTime;
+        ctx.animateTimeTarget          = sourceCtx.animateTimeTarget;
+        ctx.animateTimeAnimationActive = sourceCtx.animateTimeAnimationActive;
+        ctx.animatedTimelineZoom       = sourceCtx.animatedTimelineZoom;
+        ctx.animatedTimelineZoomTarget = sourceCtx.animatedTimelineZoomTarget;
+        ctx.animatedTimelineZoomAnimationActive =
+            sourceCtx.animatedTimelineZoomAnimationActive;
         ctx.isPlaying               = false;
         ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
         ctx.lastAudioPos            = 0.0;
@@ -1356,8 +1362,10 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             ctx.hitFXSystem.clearActiveEffects();
         }
         if ( ctx.isMainAudioSyncFollower ) {
-            updateFollowerHitEffects(
-                ctx, previousVisualTime, m_editorConfig, shouldClearHitEffects);
+            updateFollowerHitEffects(ctx,
+                                     previousAnimateTime,
+                                     m_editorConfig,
+                                     shouldClearHitEffects);
         }
     }
 }
@@ -1440,10 +1448,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey   = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -1632,11 +1640,18 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 if ( oldCtx.isPlaying ) {
                     oldCtx.currentTime =
                         Audio::AudioManager::instance().getCurrentTime();
-                    oldCtx.visualTime =
+                    oldCtx.animateTime =
                         oldCtx.currentTime +
                         m_editorConfig.visual.getEffectiveVisualOffset();
-                    oldCtx.isPlaying               = false;
-                    oldCtx.isMainAudioSyncFollower = false;
+                    oldCtx.animateTimeTarget          = oldCtx.animateTime;
+                    oldCtx.animateTimeAnimationActive = false;
+                    oldCtx.animatedTimelineZoom =
+                        m_editorConfig.visual.timelineZoom;
+                    oldCtx.animatedTimelineZoomTarget =
+                        oldCtx.animatedTimelineZoom;
+                    oldCtx.animatedTimelineZoomAnimationActive = false;
+                    oldCtx.isPlaying                           = false;
+                    oldCtx.isMainAudioSyncFollower             = false;
                 }
                 syncedCurrentTime = oldCtx.currentTime;
             }
@@ -1708,8 +1723,13 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 minTime = totalTime;
             }
             ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
-            ctx.visualTime  = ctx.currentTime +
+            ctx.animateTime = ctx.currentTime +
                               m_editorConfig.visual.getEffectiveVisualOffset();
+            ctx.animateTimeTarget          = ctx.animateTime;
+            ctx.animateTimeAnimationActive = false;
+            ctx.animatedTimelineZoom       = m_editorConfig.visual.timelineZoom;
+            ctx.animatedTimelineZoomTarget = ctx.animatedTimelineZoom;
+            ctx.animatedTimelineZoomAnimationActive = false;
             ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
             ctx.isPlaying   = false;
             ctx.isMainAudioSyncFollower = false;
@@ -1725,7 +1745,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             ctx.hitFXSystem.clearActiveEffects();
 
             // 同步进度到音频管理器。这里必须使用逻辑播放时间，
-            // visualTime 包含视觉偏移，会导致切换画布时跳到错误位置。
+            // 动画时间包含视觉偏移，会导致切换画布时跳到错误位置。
             Audio::AudioManager::instance().seek(ctx.currentTime);
 
             /// @brief 当前共享视口尺寸快照，用于刷新切换后的活跃 Session。

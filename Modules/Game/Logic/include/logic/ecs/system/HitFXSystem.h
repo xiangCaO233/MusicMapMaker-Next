@@ -38,14 +38,14 @@ public:
     // clang-format off
     /**
      * @brief 更新打击特效状态
-     * @param visualTime 当前视觉时间
+     * @param animateTime 当前动画时间
      * @param events 本帧新触发的打击事件
      * @param config 编辑器配置
      */
     /// @warning 逻辑热路径：每个 Session update 执行。
     /// 只处理本帧事件和当前活跃特效，禁止文件系统访问和完整 ECS 遍历。
     // clang-format on
-    void update(double visualTime, const std::vector<HitEvent>& events,
+    void update(double animateTime, const std::vector<HitEvent>& events,
                 const Config::EditorConfig& config);
 
     /**
@@ -62,7 +62,7 @@ public:
     /**
      * @brief 生成打击特效的渲染指令
      * @param snapshot 目标渲染快照
-     * @param visualTime 当前视觉时间
+     * @param animateTime 当前动画时间
      * @param config 编辑器配置
      * @param trackCount 总轨道数
      * @param judgmentLineY 判定线 Y 坐标
@@ -72,7 +72,7 @@ public:
     /// @warning 渲染热路径：快照生成阶段执行。
     /// 只遍历当前活跃特效表并追加几何。
     // clang-format on
-    void generateSnapshot(Batcher& batcher, double visualTime,
+    void generateSnapshot(Batcher& batcher, double animateTime,
                           const Config::EditorConfig& config,
                           int32_t trackCount, float judgmentLineY, float leftX,
                           float singleTrackW);

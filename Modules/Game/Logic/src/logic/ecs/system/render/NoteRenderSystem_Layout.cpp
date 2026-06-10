@@ -361,8 +361,9 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
-        float y = judgmentLineY -
-                  static_cast<float>((seg.absY - currentAbsY) * seg.hs) *
+        const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
+        float        y           = judgmentLineY -
+                  static_cast<float>((segmentAbsY - currentAbsY) * seg.hs) *
                       renderScaleY;
 
         if ( occupyRow(y) ) {

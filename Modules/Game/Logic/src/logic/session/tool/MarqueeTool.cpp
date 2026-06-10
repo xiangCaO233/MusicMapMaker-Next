@@ -60,16 +60,16 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
                 renderScaleY = 1.0f;
             }
 
-            double currentAbsY = cache->getAbsY(ctx.visualTime);
+            double currentAbsY = cache->getAbsY(ctx.animateTime);
             double targetAbsY =
                 currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             newBox.startTime = cache->getTime(targetAbsY);
             newBox.endTime   = newBox.startTime;
 
-            float leftX      = it->second.viewportWidth *
-                               ctx.lastConfig.visual.trackLayout.left;
-            float rightX     = it->second.viewportWidth *
-                               ctx.lastConfig.visual.trackLayout.right;
+            float leftX = it->second.viewportWidth *
+                          ctx.lastConfig.visual.trackLayout.left;
+            float rightX = it->second.viewportWidth *
+                           ctx.lastConfig.visual.trackLayout.right;
             float trackAreaW = rightX - leftX;
             newBox.startTrack =
                 (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
@@ -117,15 +117,15 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
                 renderScaleY = 1.0f;
             }
 
-            double currentAbsY = cache->getAbsY(ctx.visualTime);
+            double currentAbsY = cache->getAbsY(ctx.animateTime);
             double targetAbsY =
                 currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
             currentBox.endTime = cache->getTime(targetAbsY);
 
-            float leftX      = it->second.viewportWidth *
-                               ctx.lastConfig.visual.trackLayout.left;
-            float rightX     = it->second.viewportWidth *
-                               ctx.lastConfig.visual.trackLayout.right;
+            float leftX = it->second.viewportWidth *
+                          ctx.lastConfig.visual.trackLayout.left;
+            float rightX = it->second.viewportWidth *
+                           ctx.lastConfig.visual.trackLayout.right;
             float trackAreaW = rightX - leftX;
             currentBox.endTrack =
                 (cmd.mouseX - leftX) / (trackAreaW / ctx.trackCount);
@@ -178,9 +178,9 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -189,7 +189,7 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         renderScaleY = 1.0f;
     }
 
-    double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
     double targetAbsY =
         currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
     double clickTime = cache->getTime(targetAbsY);

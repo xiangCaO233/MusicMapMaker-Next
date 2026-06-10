@@ -117,7 +117,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     float judgmentLineY =
         itCamera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
     double deltaY      = (judgmentLineY - cmd.mouseY);
 
     // 处理预览区缩放
@@ -148,7 +148,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                             ctx.lastConfig,
                                             bpmEvents,
                                             ctx.timelineRegistry,
-                                            ctx.visualTime,
+                                            ctx.animateTime,
                                             ctx.cameras);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
@@ -325,7 +325,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
     float judgmentLineY =
         itCamera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
     double deltaY      = (judgmentLineY - cmd.mouseY);
 
     float renderScaleY = 1.0f;
@@ -354,7 +354,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                                             ctx.lastConfig,
                                             bpmEvents,
                                             ctx.timelineRegistry,
-                                            ctx.visualTime,
+                                            ctx.animateTime,
                                             ctx.cameras);
 
     double currentPosTime =

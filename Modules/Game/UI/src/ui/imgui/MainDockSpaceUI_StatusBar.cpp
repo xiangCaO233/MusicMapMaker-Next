@@ -4,10 +4,43 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include <chrono>
+#include <cmath>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 计算状态栏当前应显示的动画时间。
+/// @param snapshot 当前活动画布快照。
+/// @return 已按 UI 当前帧补偿后的显示时间，单位秒。
+/// @warning UI 热路径：每帧状态栏绘制调用；只做常量级时间计算。
+double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
+{
+    double animateTime = snapshot.currentTime;
+    if ( !snapshot.isPlaying || snapshot.snapshotSysTime <= 0.0 ||
+         !std::isfinite(snapshot.playbackSpeed) ) {
+        return animateTime;
+    }
 
+    const double now = std::chrono::duration<double>(
+                           std::chrono::steady_clock::now().time_since_epoch())
+                           .count();
+    const double dt = now - snapshot.snapshotSysTime;
+    if ( dt <= 0.0 || dt >= 0.1 ) {
+        return animateTime;
+    }
+
+    animateTime += dt * snapshot.playbackSpeed;
+    if ( !std::isfinite(animateTime) ) {
+        return snapshot.currentTime;
+    }
+    return animateTime;
+}
+}  // namespace
+
+/// @brief 渲染主窗口底部状态栏。
+/// @warning UI 热路径：每帧调用；只读取当前活动画布快照和轻量状态。
 void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                                       float statusBarHeight, float dpiScale)
 {
@@ -85,8 +118,10 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
             auto snapshot = syncBuffer->getReadingSnapshot();
             if ( snapshot ) {
                 // 判定线时间 (常驻)
+                const double displayedTime =
+                    resolveStatusBarAnimateTime(*snapshot);
                 const auto currentTimeText =
-                    Canvas::formatCanvasTime(snapshot->currentTime, snapshot);
+                    Canvas::formatCanvasTime(displayedTime, snapshot);
                 ImGui::SetCursorPosY(offsetY);
                 ImGui::Text("%s: %s",
                             TR("ui.canvas.time").data(),

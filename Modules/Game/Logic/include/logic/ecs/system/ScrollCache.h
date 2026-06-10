@@ -64,17 +64,33 @@ public:
     void rebuild(const entt::registry&       timelineRegistry,
                  const Config::EditorConfig& config, MMM::BeatMap* beatmap);
 
+    /// @brief 设置渲染用动画时间线缩放比例。
+    /// @param scale 当前动画缩放相对缓存目标缩放的比例。
+    /// @warning 逻辑/渲染热路径：每个 Session update 执行；只做常量级赋值。
+    void setAnimatedZoomScale(double scale);
+
+    /// @brief 获取当前渲染用动画时间线缩放比例。
+    /// @return 当前动画缩放相对缓存目标缩放的比例。
+    /// @warning 热路径：渲染剔除和快照生成时读取；只返回缓存值。
+    double getAnimatedZoomScale() const { return m_animatedZoomScale; }
+
     /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;
 
     /// @brief 获取播放渲染锚点使用的绝对 Y 坐标。
-    /// @param t 当前播放视觉时间。
+    /// @param t 当前播放动画时间。
     /// @return 渲染锚点 AbsY。
     /// @warning 热路径：每次渲染快照生成时调用；只允许做二分查找。
     double getVisualAnchorAbsY(double t) const;
 
     /// @brief 获取给定绝对 Y 坐标对应的时间戳 (反向映射)
     double getTime(double absY) const;
+
+    /// @brief 将动画 AbsY 还原为缓存重建时的原始 AbsY。
+    /// @param animatedAbsY 已应用动画缩放的 AbsY。
+    /// @return 原始 AbsY。
+    /// @warning 热路径：可见性索引查询时调用；只做一次除法。
+    double toUnscaledAbsY(double animatedAbsY) const;
 
     /// @brief 获取给定时间戳对应的流速倍率
     double getSpeedAt(double t) const;
@@ -105,6 +121,11 @@ public:
     /// @brief 获取所有分段信息 (只读)
     const std::vector<ScrollSegment>& getSegments() const { return m_segments; }
 
+    /// @brief 拷贝已应用动画缩放的分段信息到输出容器。
+    /// @param out 接收动画分段的输出容器。
+    /// @warning 渲染快照路径：Timeline 或播放插值需要时执行一次全量拷贝。
+    void copyAnimatedSegmentsTo(std::vector<ScrollSegment>& out) const;
+
     /// @brief 获取缓存重建版本号。
     /// @return 每次 rebuild 后递增的版本号。
     std::uint64_t getRevision() const { return m_revision; }
@@ -115,7 +136,11 @@ public:
 private:
     std::vector<ScrollSegment> m_segments;
 
-    double m_lastZoom{ 1.0 };  // 记录最后一次 rebuild 使用的缩放
+    /// @brief 记录最后一次 rebuild 使用的目标缩放。
+    double m_lastZoom{ 1.0 };
+
+    /// @brief 当前动画缩放相对 m_lastZoom 的比例。
+    double m_animatedZoomScale{ 1.0 };
 
     /// @brief 亚帧正负高速 SV 抵消窗口。
     struct MicroImpulseWindow {
@@ -161,11 +186,23 @@ private:
     /// @warning 逻辑低频路径：仅在 ScrollCache rebuild 时完整扫描分段。
     void rebuildMicroImpulseWindows();
 
-    /// @brief 获取原始分段积分 AbsY，不应用亚帧脉冲窗口修正。
+    /// @brief 获取原始分段积分 AbsY，不应用动画缩放或亚帧脉冲窗口修正。
     /// @param t 查询时间。
     /// @return 原始 AbsY。
     /// @warning 热路径：每次坐标查询可能调用；只能做二分查找。
+    double getUnscaledRawAbsY(double t) const;
+
+    /// @brief 获取应用动画缩放后的分段积分 AbsY，不应用亚帧脉冲窗口修正。
+    /// @param t 查询时间。
+    /// @return 动画 AbsY。
+    /// @warning 热路径：每次坐标查询可能调用；只能做二分查找和一次乘法。
     double getRawAbsY(double t) const;
+
+    /// @brief 应用当前动画缩放比例。
+    /// @param absY 原始 AbsY。
+    /// @return 动画 AbsY。
+    /// @warning 热路径：坐标查询和快照拷贝时调用；只做一次乘法。
+    double applyAnimatedZoomScale(double absY) const;
 
     /// @brief 将原始 AbsY 投影到渲染用亚帧脉冲窗口。
     /// @param t 查询时间。
