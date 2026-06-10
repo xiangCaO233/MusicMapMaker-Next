@@ -26,6 +26,13 @@ public:
     void update(UIManager* sourceManager) override;
 
 private:
+    /// @brief 当前物件调色盘选择来源。
+    enum class NotePaletteSelectionKind {
+        InheritSoftwareDefault,  ///< 继承软件默认物件调色方案。
+        SkinDefault,             ///< 使用当前皮肤默认色盘。
+        Custom                   ///< 使用用户保存的自定义色盘。
+    };
+
     Logic::EditTool m_currentTool      = Logic::EditTool::Move;
     bool            m_showDivisorPopup = false;
     float           m_lastBtnY         = 0.0f;
@@ -67,6 +74,14 @@ private:
     bool m_colorHexInputActive{ false };
     /// @brief 当前选中的持久化调色盘方案索引；-1 表示未使用保存方案。
     int m_activePaletteSchemeIndex{ -1 };
+    /// @brief 当前调色盘选择来源，用于区分内置项和可管理的自定义方案。
+    NotePaletteSelectionKind m_activePaletteSelection{
+        NotePaletteSelectionKind::SkinDefault
+    };
+    /// @brief 等待删除确认的自定义调色盘方案索引。
+    std::optional<std::size_t> m_pendingDeletePaletteSchemeIndex;
+    /// @brief 当前方案名称校验错误的翻译键；为空表示无错误。
+    std::string m_paletteSchemeErrorKey;
     /// @brief 当前调色盘方案名称编辑缓冲区。
     std::array<char, 96> m_paletteSchemeNameBuffer{};
     /// @brief 上次已应用项目调色方案的项目与方案组合键。
@@ -106,6 +121,9 @@ private:
     /// @brief 将调色盘重置为当前皮肤默认颜色。
     void loadSkinDefaultPalette();
 
+    /// @brief 载入软件默认物件调色方案。
+    void loadSoftwareDefaultPalette();
+
     /// @brief 按方案名称加载软件级调色盘方案。
     /// @param schemeName 方案名称或皮肤默认方案标识。
     /// @return 成功应用方案时返回 true。
@@ -124,12 +142,34 @@ private:
     /// @param schemeIndex 方案索引。
     void loadPaletteScheme(std::size_t schemeIndex);
 
+    /// @brief 判断当前选中的调色盘方案是否允许保存、重命名或删除。
+    /// @return 当前选择为有效自定义方案时返回 true。
+    bool canManageActivePaletteScheme() const;
+
+    /// @brief 检查指定名称是否与已有自定义调色盘方案冲突。
+    /// @param name 待检查的方案名称。
+    /// @param ignoredIndex 允许同名的当前方案索引；为空时不忽略任何方案。
+    /// @return 存在同名自定义方案时返回 true。
+    bool hasPaletteSchemeNameConflict(
+        const std::string& name, std::optional<std::size_t> ignoredIndex) const;
+
+    /// @brief 校验方案名称是否可用于保存或重命名。
+    /// @param name 待校验的方案名称。
+    /// @param ignoredIndex 允许同名的当前方案索引；为空时不忽略任何方案。
+    /// @return 名称可用时返回 true；失败时写入错误提示键。
+    bool validatePaletteSchemeNameForSave(
+        const std::string& name, std::optional<std::size_t> ignoredIndex);
+
     /// @brief 保存当前调色盘方案。
     /// @param createNew 是否创建新方案。
     void savePaletteScheme(bool createNew);
 
     /// @brief 重命名当前选中的调色盘方案。
     void renamePaletteScheme();
+
+    /// @brief 删除指定自定义调色盘方案。
+    /// @param schemeIndex 要删除的自定义方案索引。
+    void deletePaletteScheme(std::size_t schemeIndex);
 
     /// @brief 将方案名写入编辑缓冲区。
     /// @param name 方案名。
