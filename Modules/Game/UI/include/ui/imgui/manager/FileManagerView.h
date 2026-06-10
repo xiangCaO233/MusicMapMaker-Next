@@ -77,9 +77,19 @@ private:
     /// @warning UI 热路径：未打开项目且子视图可见时每帧执行。
     /// 避免文件系统扫描或高开销所有权操作。
     void renderEmptyProjectView(LayoutContext& layoutContext);
+    /// @brief 渲染已打开项目时的文件树内容。
+    /// @param layoutContext 当前 Clay/ImGui 布局上下文。
+    /// @param sourceManager 触发文件打开后需要切换子视图的 UI 管理器。
+    /// @warning UI 热路径：项目文件浏览器可见时每帧执行；
+    /// 避免额外增加文件系统遍历和所有权复制。
     void renderActiveProjectView(LayoutContext& layoutContext,
                                  UIManager*     sourceManager);
 
+    /// @brief 递归绘制目录树节点。
+    /// @param path 当前要绘制的目录路径。
+    /// @param sourceManager 触发文件打开后需要切换子视图的 UI 管理器。
+    /// @warning UI 热路径：当前实现会随文件树展开状态遍历目录；
+    /// 后续应缓存目录快照。
     void drawDirectoryRecursive(const std::filesystem::path& path,
                                 UIManager*                   sourceManager);
     void openFolderPicker();

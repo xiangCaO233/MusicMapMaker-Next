@@ -20,6 +20,10 @@ public:
     ~AudioManagerView() override                         = default;
 
     /// @brief 内部绘制逻辑 (Clay/ImGui)
+    /// @param layoutContext 当前 Clay/ImGui 布局上下文。
+    /// @param sourceManager 打开音频控制器所需的 UI 管理器。
+    /// @warning UI 热路径：音频管理器可见时每帧执行；
+    /// 避免额外增加项目音频资源遍历和所有权复制。
     void onUpdate(LayoutContext& layoutContext,
                   UIManager*     sourceManager) override;
 
