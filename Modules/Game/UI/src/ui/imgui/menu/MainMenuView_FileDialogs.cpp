@@ -16,9 +16,12 @@
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <filesystem>
 #include <imgui.h>
 #include <nfd.h>
+#include <optional>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -41,6 +44,58 @@ std::string getLowerExtension(const std::string& path)
 {
     return toLowerAscii(
         Config::pathToUtf8(Config::utf8ToPath(path).extension()));
+}
+
+/// @brief 去除 ASCII 空白，用于解析 Malody mode 元数据。
+/// @param text 原始字符串视图。
+/// @return 去除首尾空白后的字符串视图。
+std::string_view trimAsciiWhitespace(std::string_view text)
+{
+    while ( !text.empty() && (text.front() == ' ' || text.front() == '\t' ||
+                              text.front() == '\n' || text.front() == '\r') ) {
+        text.remove_prefix(1);
+    }
+    while ( !text.empty() && (text.back() == ' ' || text.back() == '\t' ||
+                              text.back() == '\n' || text.back() == '\r') ) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+/// @brief 无异常解析整数字符串。
+/// @param text 待解析文本。
+/// @return 成功时返回整数，否则返回空。
+std::optional<int> parseAsciiInteger(std::string_view text)
+{
+    text = trimAsciiWhitespace(text);
+    if ( text.empty() ) return std::nullopt;
+
+    int  value = 0;
+    auto result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 获取谱面当前 Malody mode 元数据，缺省时按导出器默认 slide(7) 处理。
+/// @param beatMap 当前谱面。
+/// @return mode 元数据有效时返回 mode；无法解析时返回空。
+std::optional<int> resolveMalodyModeForCompatibilityWarning(
+    const BeatMap& beatMap)
+{
+    int mode = 7;
+    if ( auto it =
+             beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
+         it != beatMap.m_metadata.map_properties.end() ) {
+        if ( it->second.contains("mode") ) {
+            auto parsedMode = parseAsciiInteger(it->second.at("mode"));
+            if ( !parsedMode ) return std::nullopt;
+            mode = *parsedMode;
+        }
+    }
+    return mode;
 }
 
 /// @brief 将下一项控件放到当前内容区域的水平中心。
@@ -252,6 +307,15 @@ void MainMenuView::dispatchSaveBeatmapAs(const std::string& path)
     dispatchCommand(Logic::CmdSaveBeatmapAs{ path });
 }
 
+/// @brief 直接分发当前谱面保存命令。
+/// @param allowExternallyModifiedOverwrite 是否允许覆盖外部修改过的当前文件。
+void MainMenuView::dispatchSaveBeatmap(bool allowExternallyModifiedOverwrite)
+{
+    dispatchCommand(Logic::CmdSaveBeatmap{
+        .allowExternallyModifiedOverwrite = allowExternallyModifiedOverwrite,
+    });
+}
+
 /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
 /// @param path 目标导出路径。
 /// @return 需要展示的警告消息列表。
@@ -260,7 +324,7 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
 {
     std::vector<std::string> warnings;
     const std::string        ext = getLowerExtension(path);
-    if ( ext != ".osu" && ext != ".imd" ) return warnings;
+    if ( ext != ".osu" && ext != ".imd" && ext != ".mc" ) return warnings;
 
     auto& engine = Logic::EditorEngine::instance();
     std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
@@ -335,9 +399,50 @@ std::vector<std::string> MainMenuView::collectExportCompatibilityWarnings(
                 "谱面格式不支持保存物件额外元数据；导出时只保留物件类型、时间、"
                 "轨道和格式本身支持的参数。");
         }
+    } else if ( ext == ".mc" ) {
+        const auto mode = resolveMalodyModeForCompatibilityWarning(beatMap);
+        if ( mode && *mode == 0 && (hasFlick || hasPolyline) ) {
+            warnings.push_back(
+                "Malody key(0) 模式无法存储 Flick/折线；继续保存会将 "
+                "Flick 作为单 Note 写出，忽略 Polyline 中所有 subFlick，"
+                "并将所有 subHold 作为普通 Hold "
+                "写出，转换结果会覆盖目标谱面。");
+        }
     }
 
     return warnings;
+}
+
+/// @brief 请求保存当前谱面，必要时先展示格式兼容性警告。
+/// @param allowExternallyModifiedOverwrite 是否允许覆盖外部修改过的当前文件。
+void MainMenuView::requestSaveBeatmap(bool allowExternallyModifiedOverwrite)
+{
+    std::string path;
+    {
+        auto& engine = Logic::EditorEngine::instance();
+        std::lock_guard<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex());
+        auto session = engine.getActiveSession();
+        if ( session && session->getContext().currentBeatmap ) {
+            path = Config::pathToUtf8(
+                session->getContext()
+                    .currentBeatmap->m_baseMapMetadata.map_path);
+        }
+    }
+
+    auto warnings = collectExportCompatibilityWarnings(path);
+    if ( warnings.empty() ) {
+        dispatchSaveBeatmap(allowExternallyModifiedOverwrite);
+        return;
+    }
+
+    m_pendingExportPath                        = std::move(path);
+    m_pendingExportWarnings                    = std::move(warnings);
+    m_pendingExportFormatName                  = "Malody Key";
+    m_pendingCompatibilityWarningIsCurrentSave = true;
+    m_pendingCompatibilityWarningAllowOverwrite =
+        allowExternallyModifiedOverwrite;
+    m_showExportCompatibilityWarning = true;
 }
 
 /// @brief 请求导出当前谱面，必要时先展示格式兼容性警告。
@@ -354,15 +459,17 @@ void MainMenuView::requestSaveBeatmapAs(std::string path)
     m_pendingExportPath     = std::move(path);
     m_pendingExportWarnings = std::move(warnings);
     m_pendingExportFormatName =
-        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "RM" : "谱面");
-    m_showExportCompatibilityWarning = true;
+        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "RM" : "Malody Key");
+    m_pendingCompatibilityWarningIsCurrentSave  = false;
+    m_pendingCompatibilityWarningAllowOverwrite = false;
+    m_showExportCompatibilityWarning            = true;
 }
 
 /// @brief 渲染导出兼容性警告弹窗。
 /// @param dpiScale 当前窗口内容缩放。
 void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
 {
-    constexpr const char* popupId = "导出兼容性警告###ExportWarningModal";
+    constexpr const char* popupId = "谱面兼容性警告###ExportWarningModal";
     if ( m_showExportCompatibilityWarning ) {
         ImGui::OpenPopup(popupId);
         m_showExportCompatibilityWarning = false;
@@ -376,7 +483,10 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                               nullptr,
                               ImGuiWindowFlags_None,
                               ImVec2(520.0f * dpiScale, 0.0f)) ) {
-            ImGui::Text("导出 %s 前需要确认以下兼容性变化：",
+            const char* actionText =
+                m_pendingCompatibilityWarningIsCurrentSave ? "保存" : "导出";
+            ImGui::Text("%s %s 前需要确认以下兼容性变化：",
+                        actionText,
                         m_pendingExportFormatName.c_str());
             ImGui::Spacing();
             ImGui::Separator();
@@ -396,11 +506,22 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
             const float  actionButtonRowWidth =
                 actionButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
             centerNextItem(actionButtonRowWidth);
-            if ( ImGui::Button("继续导出", actionButtonSize) ) {
-                dispatchSaveBeatmapAs(m_pendingExportPath);
+            const char* confirmLabel =
+                m_pendingCompatibilityWarningIsCurrentSave ? "继续保存"
+                                                           : "继续导出";
+            if ( ImGui::Button(confirmLabel, actionButtonSize) ) {
+                if ( m_pendingCompatibilityWarningIsCurrentSave ) {
+                    m_currentSaveKeyConversionWarningConfirmed = true;
+                    dispatchSaveBeatmap(
+                        m_pendingCompatibilityWarningAllowOverwrite);
+                } else {
+                    dispatchSaveBeatmapAs(m_pendingExportPath);
+                }
                 m_pendingExportPath.clear();
                 m_pendingExportFormatName.clear();
                 m_pendingExportWarnings.clear();
+                m_pendingCompatibilityWarningIsCurrentSave  = false;
+                m_pendingCompatibilityWarningAllowOverwrite = false;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
@@ -409,6 +530,9 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                 m_pendingExportPath.clear();
                 m_pendingExportFormatName.clear();
                 m_pendingExportWarnings.clear();
+                m_pendingCompatibilityWarningIsCurrentSave  = false;
+                m_pendingCompatibilityWarningAllowOverwrite = false;
+                m_currentSaveKeyConversionWarningConfirmed  = false;
                 ImGui::CloseCurrentPopup();
             }
 

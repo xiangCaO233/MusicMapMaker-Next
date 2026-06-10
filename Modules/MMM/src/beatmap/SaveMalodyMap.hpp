@@ -2,22 +2,67 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <numeric>
+#include <optional>
 #include <set>
+#include <string_view>
+#include <system_error>
+#include <utility>
 #include <vector>
 
 namespace MMM
 {
 
 using json = nlohmann::json;
+
+/// @brief 去除 ASCII 空白，用于解析 Malody mode 元数据。
+/// @param text 原始字符串视图。
+/// @return 去除首尾空白后的视图。
+inline std::string_view trimMalodyAsciiWhitespace(std::string_view text)
+{
+    while ( !text.empty() && (text.front() == ' ' || text.front() == '\t' ||
+                              text.front() == '\n' || text.front() == '\r') ) {
+        text.remove_prefix(1);
+    }
+    while ( !text.empty() && (text.back() == ' ' || text.back() == '\t' ||
+                              text.back() == '\n' || text.back() == '\r') ) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+/// @brief 无异常解析 Malody mode 字符串。
+/// @param text mode 元数据文本。
+/// @return 成功时返回 mode 整数，否则返回空。
+inline std::optional<int> parseMalodyModeValue(std::string_view text)
+{
+    text = trimMalodyAsciiWhitespace(text);
+    if ( text.empty() ) return std::nullopt;
+
+    int  value = 0;
+    auto result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 判断当前导出器是否支持指定 Malody mode。
+/// @param mode Malody mode。
+/// @return 支持 key(0) 或 slide(7) 时返回 true。
+inline bool isSupportedMalodyExportMode(int mode)
+{
+    return mode == 0 || mode == 7;
+}
 
 /// @brief 保存谱面为 Malody .mc JSON 文件。
 /// @warning 低频导出路径：允许完整遍历谱面数据；位置换算必须以当前时间戳为准。
@@ -68,19 +113,31 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path.filename());
     meta["id"] = 0;
 
-    /// @brief 获取原始模式，优先从元数据恢复
+    /// @brief 获取原始模式，优先从元数据恢复。
     int mode = 7;
     if ( auto it =
              beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
          it != beatMap.m_metadata.map_properties.end() ) {
         if ( it->second.contains("mode") ) {
-            try {
-                mode = std::stoi(it->second.at("mode"));
-            } catch ( ... ) {
+            auto parsedMode = parseMalodyModeValue(it->second.at("mode"));
+            if ( !parsedMode ) {
+                XERROR("Failed to save Malody map: invalid mode metadata '{}'",
+                       it->second.at("mode"));
+                return false;
             }
+            mode = *parsedMode;
         }
     }
-    meta["mode"] = mode;
+    if ( !isSupportedMalodyExportMode(mode) ) {
+        XERROR(
+            "Failed to save Malody map: unsupported mode {}. Only key(0) "
+            "and slide(7) are supported.",
+            mode);
+        return false;
+    }
+    const bool saveAsKeyMode   = mode == 0;
+    const bool saveAsSlideMode = mode == 7;
+    meta["mode"]               = mode;
 
     auto& song        = meta["song"];
     song["title"]     = beatMap.m_baseMapMetadata.title;
@@ -91,7 +148,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         beatMap.m_baseMapMetadata.main_audio_path.filename());
     song["bpm"] = beatMap.m_baseMapMetadata.preference_bpm;
 
-    auto& mode_ext = meta["mode_ext"] = json::object();
+    meta["mode_ext"] = json::object();
 
     if ( auto it =
              beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
@@ -122,6 +179,14 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     meta[key] = val;
                 }
             }
+        }
+    }
+    if ( saveAsKeyMode ) {
+        if ( !meta["mode_ext"].is_object() ) {
+            meta["mode_ext"] = json::object();
+        }
+        if ( !meta["mode_ext"].contains("column") ) {
+            meta["mode_ext"]["column"] = trackCount;
         }
     }
 
@@ -382,18 +447,20 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         return subNotePtrs.count(&note) > 0;
     };
 
-    auto serializeToMalody = [&](const Note& note) {
+    auto serializeToMalody = [&](const Note& note, bool allowBeatMetadata) {
         json nj;
 
         bool hasBeat = false;
-        if ( auto it =
-                 note.m_metadata.note_properties.find(NoteMetadataType::MALODY);
-             it != note.m_metadata.note_properties.end() ) {
-            if ( it->second.contains("beat") ) {
-                try {
-                    nj["beat"] = json::parse(it->second.at("beat"));
-                    hasBeat    = true;
-                } catch ( ... ) {
+        if ( allowBeatMetadata ) {
+            if ( auto it = note.m_metadata.note_properties.find(
+                     NoteMetadataType::MALODY);
+                 it != note.m_metadata.note_properties.end() ) {
+                if ( it->second.contains("beat") ) {
+                    try {
+                        nj["beat"] = json::parse(it->second.at("beat"));
+                        hasBeat    = true;
+                    } catch ( ... ) {
+                    }
                 }
             }
         }
@@ -402,7 +469,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             nj["beat"] = timeToBeat(note.m_timestamp);
         }
 
-        if ( mode == 7 || mode == 4 ) {
+        if ( saveAsSlideMode ) {
             nj["x"] = columnToX((int)note.m_track);
             // Polyline 和 Hold 根节点使用网格宽度 (64/51/43)，其他使用视觉宽度
             // (60/50/40)
@@ -460,7 +527,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         if ( note.m_type == NoteType::HOLD ) {
             const auto& h = static_cast<const Hold&>(note);
 
-            if ( mode == 7 || mode == 4 ) {
+            if ( saveAsSlideMode ) {
                 // 普通 Hold 写成单 seg 模式，且 seg 内不包含 w 和 x
                 nj["seg"] = json::array();
                 json sj;
@@ -473,14 +540,14 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         } else if ( note.m_type == NoteType::FLICK ) {
             const auto& f = static_cast<const Flick&>(note);
 
-            if ( mode == 7 ) {
+            if ( saveAsSlideMode ) {
                 // Slide 模式：Flick 导出为 dir + w
                 nj["dir"] = (f.m_dtrack < 0) ? 8 : 2;
                 int wVal  = defaultWW + std::abs(f.m_dtrack);
                 nj["w"]   = wVal;
             }
             // Key 模式下 Flick 不产生额外字段，作为普通 column note 处理
-        } else if ( note.m_type == NoteType::POLYLINE ) {
+        } else if ( note.m_type == NoteType::POLYLINE && saveAsSlideMode ) {
             const auto& p = static_cast<const Polyline&>(note);
 
             // 1. 预处理清洗：过滤 0 长度 Hold，合并同向 Flick
@@ -665,14 +732,15 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  note.m_metadata.note_properties.find(NoteMetadataType::MALODY);
              it != note.m_metadata.note_properties.end() ) {
             for ( const auto& [key, val] : it->second ) {
+                const bool shouldDropWidth = saveAsKeyMode ||
+                                             note.m_type == NoteType::FLICK ||
+                                             note.m_type == NoteType::NOTE;
                 // 排除已由程序逻辑确定的核心字段，防止旧元数据覆盖新计算结果
                 if ( key != "beat" && key != "column" && key != "x" &&
                      key != "endbeat" && key != "seg" && key != "dir" &&
                      key != "original_structure" &&
                      key != "original_structure_flick" &&
-                     ((note.m_type != NoteType::FLICK &&
-                       note.m_type != NoteType::NOTE) ||
-                      key != "w") ) {
+                     (!shouldDropWidth || key != "w") ) {
                     try {
                         nj[key] = json::parse(val);
                     } catch ( ... ) {
@@ -725,26 +793,38 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
 
     noteArr.push_back(audioNode);
 
-    std::vector<const Note*> sortedNotes;
+    std::vector<std::pair<const Note*, bool>> sortedNotes;
     for ( const auto& n : beatMap.m_noteData.notes )
-        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
+        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
     for ( const auto& n : beatMap.m_noteData.holds )
-        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
+        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
     for ( const auto& n : beatMap.m_noteData.flicks )
-        if ( !isSubNote(n) ) sortedNotes.push_back(&n);
-    for ( const auto& poly : beatMap.m_noteData.polylines )
-        if ( !isSubNote(poly) ) sortedNotes.push_back(&poly);
+        if ( !isSubNote(n) ) sortedNotes.emplace_back(&n, true);
+    for ( const auto& poly : beatMap.m_noteData.polylines ) {
+        if ( isSubNote(poly) ) continue;
+        if ( saveAsKeyMode && !poly.m_subNotes.empty() ) {
+            for ( const auto& subNoteRef : poly.m_subNotes ) {
+                const Note& subNote = subNoteRef.get();
+                if ( subNote.m_type == NoteType::HOLD ) {
+                    sortedNotes.emplace_back(&subNote, false);
+                }
+            }
+        } else {
+            sortedNotes.emplace_back(&poly, true);
+        }
+    }
 
-    std::sort(sortedNotes.begin(),
-              sortedNotes.end(),
-              [](const Note* a, const Note* b) {
-                  if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-6 )
-                      return a->m_timestamp < b->m_timestamp;
-                  return a->m_track < b->m_track;
-              });
+    std::sort(
+        sortedNotes.begin(),
+        sortedNotes.end(),
+        [](const auto& a, const auto& b) {
+            if ( std::abs(a.first->m_timestamp - b.first->m_timestamp) > 1e-6 )
+                return a.first->m_timestamp < b.first->m_timestamp;
+            return a.first->m_track < b.first->m_track;
+        });
 
-    for ( const auto* n : sortedNotes ) {
-        noteArr.push_back(serializeToMalody(*n));
+    for ( const auto& [note, allowBeatMetadata] : sortedNotes ) {
+        noteArr.push_back(serializeToMalody(*note, allowBeatMetadata));
     }
 
     std::ofstream ofs(path);

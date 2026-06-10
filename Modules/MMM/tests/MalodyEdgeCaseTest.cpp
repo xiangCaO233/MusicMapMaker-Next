@@ -282,6 +282,135 @@ void test_slide_mode_saves_xw()
     XINFO("PASS: Slide mode note correctly uses x + w");
 }
 
+/// @brief 确认不支持的 Malody mode 会阻止导出。
+void test_unsupported_malody_mode_rejected()
+{
+    XINFO("=== Test: Unsupported Malody mode rejected ===");
+
+    auto bm = makeMinimalBeatMap(4 /*Catch*/, 4);
+
+    fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_unsupported_mode.mc";
+
+    TEST_ASSERT(!bm.saveToFile(outPath),
+                "mode 4 should be rejected by Malody exporter");
+
+    XINFO("PASS: Unsupported Malody mode rejected");
+}
+
+/// @brief 确认 key 模式导出折线时只保留 Hold 子物件。
+void test_key_mode_polyline_exports_key_fields()
+{
+    XINFO("=== Test: Key mode polyline exports key fields ===");
+
+    auto bm = makeMinimalBeatMap(0 /*Key*/, 4);
+
+    MMM::Polyline& poly = bm.m_noteData.polylines.emplace_back();
+    poly.m_type         = MMM::NoteType::POLYLINE;
+    poly.m_timestamp    = 1000.0;
+    poly.m_track        = 0;
+
+    MMM::Hold& h  = bm.m_noteData.holds.emplace_back();
+    h.m_type      = MMM::NoteType::HOLD;
+    h.m_timestamp = 1000.0;
+    h.m_track     = 0;
+    h.m_duration  = 500.0;
+    h.m_isSubNote = true;
+    poly.m_subNotes.push_back(h);
+    poly.m_subHolds.push_back(h);
+
+    MMM::Flick& f = bm.m_noteData.flicks.emplace_back();
+    f.m_type      = MMM::NoteType::FLICK;
+    f.m_timestamp = 1750.0;
+    f.m_track     = 2;
+    f.m_dtrack    = 1;
+    f.m_isSubNote = true;
+    poly.m_subNotes.push_back(f);
+    poly.m_subFlicks.push_back(f);
+
+    bm.sync();
+    fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_key_polyline.mc";
+    TEST_ASSERT(bm.saveToFile(outPath), "key polyline map should save");
+
+    std::ifstream ifs(outPath);
+    json          j;
+    ifs >> j;
+
+    TEST_ASSERT(j.contains("meta") && j["meta"].value("mode", -1) == 0,
+                "mode should be 0 (Key)");
+
+    auto gameNotes = json::array();
+    for ( const auto& n : j["note"] ) {
+        if ( n.contains("type") && n["type"].is_string() &&
+             n["type"].get<std::string>() == "SOUND" )
+            continue;
+        gameNotes.push_back(n);
+    }
+
+    TEST_ASSERT(gameNotes.size() == 1,
+                "key polyline should only export subHold notes");
+
+    bool hasHold = false;
+    for ( const auto& note : gameNotes ) {
+        TEST_ASSERT(note.contains("column"), "key note should have column");
+        TEST_ASSERT(!note.contains("x"), "key note should not have x");
+        TEST_ASSERT(!note.contains("w"), "key note should not have w");
+        TEST_ASSERT(!note.contains("seg"), "key note should not have seg");
+        TEST_ASSERT(!note.contains("dir"), "key note should not have dir");
+        if ( note.contains("endbeat") ) {
+            hasHold = true;
+        }
+    }
+
+    TEST_ASSERT(hasHold, "flattened key polyline should keep hold endbeat");
+
+    XINFO("PASS: Key mode polyline exports only key hold fields");
+}
+
+/// @brief 确认 key 模式导出普通 Flick 时作为单 Note 写出。
+void test_key_mode_flick_exports_single_note()
+{
+    XINFO("=== Test: Key mode Flick exports single Note ===");
+
+    auto bm = makeMinimalBeatMap(0 /*Key*/, 4);
+
+    MMM::Flick& flick = bm.m_noteData.flicks.emplace_back();
+    flick.m_type      = MMM::NoteType::FLICK;
+    flick.m_timestamp = 1000.0;
+    flick.m_track     = 1;
+    flick.m_dtrack    = 2;
+
+    bm.sync();
+    fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_key_flick.mc";
+    TEST_ASSERT(bm.saveToFile(outPath), "key flick map should save");
+
+    std::ifstream ifs(outPath);
+    json          j;
+    ifs >> j;
+
+    auto gameNotes = json::array();
+    for ( const auto& n : j["note"] ) {
+        if ( n.contains("type") && n["type"].is_string() &&
+             n["type"].get<std::string>() == "SOUND" )
+            continue;
+        gameNotes.push_back(n);
+    }
+
+    TEST_ASSERT(gameNotes.size() == 1, "key flick should export one note");
+    TEST_ASSERT(gameNotes[0].contains("column"),
+                "key flick should have column");
+    TEST_ASSERT(!gameNotes[0].contains("dir"), "key flick should not have dir");
+    TEST_ASSERT(!gameNotes[0].contains("x"), "key flick should not have x");
+    TEST_ASSERT(!gameNotes[0].contains("w"), "key flick should not have w");
+    TEST_ASSERT(!gameNotes[0].contains("seg"), "key flick should not have seg");
+    TEST_ASSERT(!gameNotes[0].contains("endbeat"),
+                "key flick should not have endbeat");
+
+    XINFO("PASS: Key mode Flick exports as single Note");
+}
+
 void test_audio_node_type_is_string()
 {
     XINFO("=== Test: Audio node type is 'SOUND' string ===");
@@ -485,6 +614,9 @@ int main()
     test_polyline_all_cleaned_degrade_to_note();
     test_key_mode_hold_uses_endbeat();
     test_slide_mode_saves_xw();
+    test_unsupported_malody_mode_rejected();
+    test_key_mode_polyline_exports_key_fields();
+    test_key_mode_flick_exports_single_note();
     test_audio_node_type_is_string();
     test_sound_column_does_not_expand_key_count();
     test_original_structure_not_leaked();

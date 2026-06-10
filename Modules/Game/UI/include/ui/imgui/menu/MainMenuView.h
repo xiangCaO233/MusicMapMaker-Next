@@ -186,6 +186,16 @@ private:
     /// @param path 目标导出路径。
     void dispatchSaveBeatmapAs(const std::string& path);
 
+    /// @brief 请求保存当前谱面，必要时先展示格式兼容性警告。
+    /// @param allowExternallyModifiedOverwrite
+    /// 是否允许覆盖外部修改过的当前文件。
+    void requestSaveBeatmap(bool allowExternallyModifiedOverwrite = false);
+
+    /// @brief 直接分发当前谱面保存命令。
+    /// @param allowExternallyModifiedOverwrite
+    /// 是否允许覆盖外部修改过的当前文件。
+    void dispatchSaveBeatmap(bool allowExternallyModifiedOverwrite);
+
     /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。
     /// @param path 目标导出路径。
     /// @return 需要展示的警告消息列表。
@@ -393,6 +403,12 @@ private:
     std::string m_pendingExportFormatName;
     /// @brief 待确认导出的兼容性警告消息。
     std::vector<std::string> m_pendingExportWarnings;
+    /// @brief 待确认的兼容性警告是否来自当前谱面保存。
+    bool m_pendingCompatibilityWarningIsCurrentSave = false;
+    /// @brief 待确认当前保存是否允许覆盖外部修改。
+    bool m_pendingCompatibilityWarningAllowOverwrite = false;
+    /// @brief 当前保存的 key 模式降级警告是否已经确认。
+    bool m_currentSaveKeyConversionWarningConfirmed = false;
     /// @brief 待确认覆盖的保存目标路径。
     std::string m_pendingSaveConflictPath;
 

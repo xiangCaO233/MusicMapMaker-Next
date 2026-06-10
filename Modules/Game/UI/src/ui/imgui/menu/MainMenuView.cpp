@@ -231,7 +231,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
             if ( io.KeyShift ) {
                 openExportFilePicker("");
             } else {
-                dispatchCommand(Logic::CmdSaveBeatmap{});
+                requestSaveBeatmap();
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
@@ -315,6 +315,9 @@ void MainMenuView::update(UIManager* sourceManager)
         m_saveTooltipMessage = buildSaveTooltipMessage(payload);
         m_saveTooltipSuccess = payload.success;
         m_saveTooltipTimer   = payload.success ? 2.0f : 3.0f;
+        if ( !payload.isExport ) {
+            m_currentSaveKeyConversionWarningConfirmed = false;
+        }
     }
 
     SaveConflictPayload conflictPayload;
@@ -390,15 +393,19 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
 
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( ImGui::Button("确认覆盖", buttonSize) ) {
-                dispatchCommand(Logic::CmdSaveBeatmap{
-                    .allowExternallyModifiedOverwrite = true,
-                });
+                if ( m_currentSaveKeyConversionWarningConfirmed ) {
+                    dispatchSaveBeatmap(true);
+                    m_currentSaveKeyConversionWarningConfirmed = false;
+                } else {
+                    requestSaveBeatmap(true);
+                }
                 m_pendingSaveConflictPath.clear();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
             if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
                 m_pendingSaveConflictPath.clear();
+                m_currentSaveKeyConversionWarningConfirmed = false;
                 ImGui::CloseCurrentPopup();
             }
 
@@ -644,11 +651,11 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool   canApply = !candidates.empty() &&
-                                    !m_dataSourceReplacePath.empty() &&
-                                    (m_replaceObjectsFromDataSource ||
-                                     m_replaceTimelinesFromDataSource ||
-                                     m_replaceMetadataFromDataSource);
+            const bool canApply = !candidates.empty() &&
+                                  !m_dataSourceReplacePath.empty() &&
+                                  (m_replaceObjectsFromDataSource ||
+                                   m_replaceTimelinesFromDataSource ||
+                                   m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
             if ( ImGui::Button("替换", buttonSize) ) {
@@ -782,7 +789,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
 
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
-            dispatchCommand(Logic::CmdSaveBeatmap{});
+            requestSaveBeatmap();
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
