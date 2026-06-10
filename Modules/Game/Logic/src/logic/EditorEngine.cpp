@@ -918,6 +918,30 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     saveProject();
 }
 
+/// @brief 重新预加载当前项目中的 Effect 音频资源。
+/// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
+/// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
+void EditorEngine::reloadCurrentProjectEffectSoundEffects()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+
+    const auto* currentProject = ProjectController::instance().currentProject();
+    if ( !currentProject ) {
+        return;
+    }
+
+    for ( const auto& res : currentProject->m_audioResources ) {
+        if ( res.m_type != AudioTrackType::Effect ) {
+            continue;
+        }
+
+        const auto absolutePath =
+            currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
+        Audio::AudioManager::instance().preloadSoundEffect(
+            res.m_id, Config::pathToUtf8(absolutePath), res.m_config.volume);
+    }
+}
+
 /// @brief 更新编辑器级剪贴板。
 void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
                                 const SessionContext* sourceContext, bool isCut)

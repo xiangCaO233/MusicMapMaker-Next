@@ -325,6 +325,13 @@ std::string Basic2DCanvas::getShaderName(const std::string& shader_module_name)
     return m_canvasName + ":" + shader_module_name;
 }
 
+/// @brief 清空缓存的 shader 源码。
+/// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+void Basic2DCanvas::invalidateShaderSourceCache()
+{
+    m_shaderSourceCache.clear();
+}
+
 void Basic2DCanvas::reloadTextures(vk::PhysicalDevice& physicalDevice,
                                    vk::Device&         logicalDevice,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)

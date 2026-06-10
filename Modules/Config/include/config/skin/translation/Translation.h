@@ -41,6 +41,9 @@ public:
     // 切换语言
     bool switchLang(const std::string& langID);
 
+    /// @brief 清空已加载语言和指针缓存，用于皮肤热切换。
+    void clear();
+
     // 获取翻译器版本
     uint32_t getVersion() const;
 

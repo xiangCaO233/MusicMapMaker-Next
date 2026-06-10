@@ -30,6 +30,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace MMM::UI
@@ -241,6 +242,14 @@ void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
         settingsView->requestDockToCenter();
         settingsView->requestFocus();
     }
+}
+
+/// @brief 请求下一次资源准备阶段重载皮肤相关图形资源。
+/// @warning 低频资源重载路径：皮肤热切换后调用，只置脏位；实际 Vulkan
+/// 资源释放和重建在 onPrepareResources 中执行。
+void UIManager::requestSkinResourceReload()
+{
+    m_skinResourceReloadRequested = true;
 }
 
 /// @brief 为新打开的音轨控制器选择默认 Dock 节点。
@@ -593,11 +602,41 @@ void UIManager::clearAllViews()
 
 /// @brief 准备资源
 /// @warning 热路径：每帧渲染准备阶段执行；重建和纹理重载只能由低频脏位触发。
+/// 皮肤热切换分支会调用 waitIdle，只能由设置页切换皮肤触发。
 void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
                                    vk::Device&           logicalDevice,
                                    Graphic::VKSwapchain& swapchain,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
+    const bool forceSkinResourceReload =
+        std::exchange(m_skinResourceReloadRequested, false);
+
+    if ( forceSkinResourceReload ) {
+        (void)logicalDevice.waitIdle();
+        if ( auto context = Graphic::VKContext::get() ) {
+            context->get().getRenderer().reloadSkinTextures();
+        }
+
+        for ( const auto& name : m_renderableUiSequence ) {
+            auto renderableView = m_uiviews[name]->asRenderableView();
+            if ( renderableView ) {
+                renderableView->requestSkinResourceReload();
+                renderableView->reCreateFrameBuffer(
+                    physicalDevice, logicalDevice, swapchain, cmdPool, queue);
+            }
+        }
+
+        for ( const auto& name : m_textureLoaderSequence ) {
+            auto textureLoader = m_uiviews[name]->asTextureLoader();
+            if ( textureLoader ) {
+                textureLoader->reloadTextures(
+                    physicalDevice, logicalDevice, cmdPool, queue);
+                (void)textureLoader->needReload();
+            }
+        }
+        return;
+    }
+
     // 检查并重建所有离屏帧缓冲
     for ( const auto& name : m_renderableUiSequence ) {
         auto renderableView = m_uiviews[name]->asRenderableView();

@@ -28,6 +28,58 @@ namespace MMM::Main
 {
 namespace
 {
+/// @brief 默认皮肤目录名。
+constexpr const char* kDefaultSkinDirectoryName = "mmm-default";
+
+/// @brief 判断配置中的皮肤目录名是否只指向 skins 下一级目录。
+/// @param directoryName 配置保存的皮肤目录名。
+/// @return 目录名可用于拼接 skins 根目录时返回 true。
+bool isValidSkinDirectoryName(const std::string& directoryName)
+{
+    if ( directoryName.empty() ) {
+        return false;
+    }
+
+    const auto directoryPath = Config::utf8ToPath(directoryName);
+    return !directoryPath.is_absolute() && !directoryPath.has_parent_path();
+}
+
+/// @brief 判断皮肤入口脚本是否存在。
+/// @param skinLuaPath 皮肤入口脚本路径。
+/// @return 文件存在且是普通文件时返回 true。
+bool skinLuaFileExists(const std::filesystem::path& skinLuaPath)
+{
+    std::error_code ec;
+    return std::filesystem::exists(skinLuaPath, ec) &&
+           std::filesystem::is_regular_file(skinLuaPath, ec);
+}
+
+/// @brief 根据编辑器配置解析启动时应加载的皮肤入口脚本。
+/// @param defaultSkinPath 默认皮肤入口脚本路径。
+/// @return 可加载的皮肤入口脚本路径，配置无效时返回默认皮肤。
+std::filesystem::path resolveStartupSkinPath(
+    const std::filesystem::path& defaultSkinPath)
+{
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const auto  selectedDirectory = settings.selectedSkinDirectory.empty()
+                                        ? std::string(kDefaultSkinDirectoryName)
+                                        : settings.selectedSkinDirectory;
+
+    if ( isValidSkinDirectoryName(selectedDirectory) ) {
+        auto skinPath = Config::AppPaths::skinsRootPath();
+        skinPath /= Config::utf8ToPath(selectedDirectory);
+        skinPath /= "skin.lua";
+        if ( skinLuaFileExists(skinPath) ) {
+            return skinPath;
+        }
+        XWARN("Configured skin not found: {}", Config::pathToUtf8(skinPath));
+    } else {
+        XWARN("Configured skin directory is invalid: {}", selectedDirectory);
+    }
+
+    return defaultSkinPath;
+}
+
 /// @brief PGO 退出上传进度窗口的渲染钩子。
 class PgoShutdownUploadProgressHook final : public Graphic::IGraphicUserHook
 {
@@ -199,7 +251,14 @@ int main(int argc, char* argv[])
     AppConfig::instance().load();
 
     // 载入皮肤配置
-    SkinManager::instance().loadSkin(Config::pathToUtf8(defaultSkinPath));
+    const auto startupSkinPath = Main::resolveStartupSkinPath(defaultSkinPath);
+    if ( !SkinManager::instance().loadSkin(
+             Config::pathToUtf8(startupSkinPath)) &&
+         startupSkinPath != defaultSkinPath ) {
+        XWARN("Fallback to default skin: {}",
+              Config::pathToUtf8(defaultSkinPath));
+        SkinManager::instance().loadSkin(Config::pathToUtf8(defaultSkinPath));
+    }
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
 
     XINFO(TR("tips.welcome"));

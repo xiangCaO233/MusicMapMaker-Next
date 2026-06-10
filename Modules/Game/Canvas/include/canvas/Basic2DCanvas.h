@@ -155,6 +155,10 @@ protected:
     /// @warning 渲染热路径：每帧离屏命令录制时执行，只读取命令数量。
     bool hasOverlayDrawCmds() const override;
 
+    /// @brief 清空缓存的 shader 源码。
+    /// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+    void invalidateShaderSourceCache() override;
+
 private:
     /// @brief 画布名称
     std::string m_canvasName;

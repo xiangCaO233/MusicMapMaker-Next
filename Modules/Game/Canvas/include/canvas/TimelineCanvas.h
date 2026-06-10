@@ -70,9 +70,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void reloadTextures(vk::PhysicalDevice& physicalDevice,
-                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                        vk::Queue& queue) override;
+    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                               vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -112,6 +112,10 @@ protected:
     /// @return 当前快照存在发光命令时返回 true。
     /// @warning 渲染热路径：每帧离屏命令录制前执行，只读取命令数量。
     bool hasGlowDrawCmds() const override;
+
+    /// @brief 清空缓存的 shader 源码。
+    /// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+    void invalidateShaderSourceCache() override;
 
 private:
     /// @brief Timeline 画布中的一个可拾取 Timing 目标。

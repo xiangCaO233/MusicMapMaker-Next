@@ -29,6 +29,10 @@ public:
     /// @return assets 资源包在用户 .config 根目录下的完整路径。
     static std::filesystem::path assetsRootPath();
 
+    /// @brief 获取皮肤资源根目录。
+    /// @return skins 目录在用户资源包根目录下的完整路径。
+    static std::filesystem::path skinsRootPath();
+
     /// @brief 获取默认皮肤入口脚本路径。
     /// @return mmm-default 皮肤的 skin.lua 完整路径。
     static std::filesystem::path defaultSkinFilePath();

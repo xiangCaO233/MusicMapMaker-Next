@@ -74,6 +74,15 @@ bool Translator::switchLang(const std::string& langID)
     return false;
 }
 
+/// @brief 清空已加载语言和指针缓存，用于皮肤热切换。
+void Translator::clear()
+{
+    m_Dictionarys.clear();
+    m_currentDictionary = nullptr;
+    m_pointerCache.clear();
+    ++m_version;
+}
+
 // 获取翻译器版本
 uint32_t Translator::getVersion() const
 {

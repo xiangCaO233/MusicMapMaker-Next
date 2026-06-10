@@ -53,6 +53,17 @@ public:
                              const std::filesystem::path& shaderModulePath = {},
                              size_t maxVertexCount = 81920);
 
+    /// @brief 请求皮肤资源变更后的 shader 和离屏帧缓冲重建。
+    /// @warning 低频资源重载路径：皮肤热切换时由 UIManager 调用，只置脏位并
+    /// 清派生类 shader 缓存，禁止在每帧交互路径中调用。
+    void requestSkinResourceReload()
+    {
+        invalidateShaderSourceCache();
+        m_lastRequestTime =
+            std::chrono::steady_clock::now() - m_debounceThreshold;
+        m_need_reCreate.store(true, std::memory_order_relaxed);
+    }
+
     /// @brief 外部确认是否需要重建
     /// @warning 热路径/原子：渲染准备阶段每帧轮询；resize
     /// 回调可能写入，只读取脏位和消抖时间，不承载资源同步。
@@ -174,6 +185,10 @@ protected:
      */
     virtual std::string getShaderName(
         const std::string& shader_module_name) = 0;
+
+    /// @brief 清空派生视图缓存的 shader 源码。
+    /// @warning 低频资源重载路径：皮肤热切换时执行；不得在命令录制热路径调用。
+    virtual void invalidateShaderSourceCache() {}
 
     // --- 获取数据供 Vulkan 使用 ---
     virtual const std::vector<Vertex::VKBasicVertex>& getVertices() const = 0;

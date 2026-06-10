@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <vector>
 
 #include <ice/core/MixBus.hpp>
 #include <ice/core/SourceNode.hpp>
@@ -193,6 +194,28 @@ void AudioManager::unloadSoundEffect(const std::string& key)
         m_sfxMutes.erase(key);
         XINFO("Unloaded SFX: {}", key);
     }
+}
+
+/// @brief 停止并释放所有已加载音效池。
+/// @warning 低频资源重载路径：皮肤热切换时调用，会清空所有 SFX pool
+/// 和调度状态，禁止放入播放热路径。
+void AudioManager::clearSoundEffects()
+{
+    clearAllScheduledSoundEffects();
+
+    std::vector<std::string> keys;
+    keys.reserve(m_sfxPools.size());
+    for ( const auto& [key, pool] : m_sfxPools ) {
+        (void)pool;
+        keys.push_back(key);
+    }
+
+    for ( const auto& key : keys ) {
+        unloadSoundEffect(key);
+    }
+
+    m_sfxLeadInSeconds.clear();
+    m_sfxMutes.clear();
 }
 
 /// @brief 立即播放指定音效。

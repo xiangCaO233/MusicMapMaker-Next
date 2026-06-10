@@ -85,10 +85,11 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 28> labels{
+        const std::array<const char*, 29> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
             TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
+            "皮肤",
             TR_CACHE("ui.settings.software.theme").data(),
             TR_CACHE("ui.settings.software.font.ascii").data(),
             TR_CACHE("ui.settings.software.font.cjk").data(),
@@ -546,10 +547,11 @@ ImVec2 SettingsView::getMinWindowSize(float dpiScale) const
 /// @param tab 需要激活的设置页。
 void SettingsView::open(Event::SettingsTab tab)
 {
-    m_currentTab            = tab;
-    m_isOpen                = true;
-    m_focusNextFrame        = true;
-    m_dockToCenterNextFrame = true;
+    m_currentTab                    = tab;
+    m_isOpen                        = true;
+    m_focusNextFrame                = true;
+    m_dockToCenterNextFrame         = true;
+    m_availableSkinDirectoriesDirty = true;
     if ( tab != Event::SettingsTab::Shortcut ) {
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -572,7 +574,7 @@ void SettingsView::requestFocus()
 /// @param sourceManager 当前 UI 管理器。
 void SettingsView::update(UIManager* sourceManager)
 {
-    (void)sourceManager;
+    m_sourceManager = sourceManager;
 
     std::string windowName =
         std::string(TR("title.settings_manager").data()) + "###SettingsWindow";

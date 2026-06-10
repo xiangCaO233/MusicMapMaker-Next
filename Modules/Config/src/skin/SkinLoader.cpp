@@ -26,17 +26,17 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
 
     namespace fs = std::filesystem;
     // --- 路径注入 ---
-    fs::path path    = Config::utf8ToPath(luaFilePath);
-    fs::path absPath = fs::absolute(path);
-    m_data.skinPath  = absPath.parent_path();
+    fs::path       path     = Config::utf8ToPath(luaFilePath);
+    fs::path       absPath  = fs::absolute(path);
+    const fs::path skinPath = absPath.parent_path();
 
     /// @brief 拼接 skinPath/resources/rpath，避开 libc++ 的窄字符 locale 转换
     auto makeResPath = [&](const std::string& rpath) {
-        return (m_data.skinPath / Config::utf8ToPath("resources") /
+        return (skinPath / Config::utf8ToPath("resources") /
                 Config::utf8ToPath(rpath))
             .lexically_normal();
     };
-    std::string skinDir = pathToUtf8(m_data.skinPath);
+    std::string skinDir = pathToUtf8(skinPath);
     // 规范路径字符串
     std::replace(skinDir.begin(), skinDir.end(), '\\', '/');
     if ( !skinDir.empty() && skinDir.back() != '/' ) skinDir += '/';
@@ -63,6 +63,10 @@ bool SkinManager::loadSkin(const std::string& luaFilePath)
     // 获取返回的 Table (对应 Lua 中的 return Skin)
     sol::table skinTable = result;
     XINFO("Skin Lua table extracted successfully");
+
+    m_data          = SkinData();
+    m_data.skinPath = skinPath;
+    m_translator.clear();
 
     // 解析 Meta
     m_data.themeName =

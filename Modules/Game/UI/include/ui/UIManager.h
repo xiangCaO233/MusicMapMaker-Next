@@ -76,6 +76,11 @@ public:
     /// @param tab 需要激活的设置标签页。
     void openSettingsWindow(MMM::Event::SettingsTab tab);
 
+    /// @brief 请求下一次资源准备阶段重载皮肤相关图形资源。
+    /// @warning 低频资源重载路径：皮肤热切换后调用，只置脏位；实际 Vulkan
+    /// 资源释放和重建在 onPrepareResources 中执行。
+    void requestSkinResourceReload();
+
     /// @brief 打开音轨控制器并默认停靠到谱面画布标签组。
     /// @param trackId 音轨标识符。
     /// @param trackName 音轨显示名称。
@@ -199,6 +204,9 @@ private:
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };
+
+    /// @brief 是否已请求重载皮肤相关图形资源。
+    bool m_skinResourceReloadRequested{ false };
 
     /// @brief 下一次允许捕获项目工作区的 ImGui 时间。
     double m_nextWorkspaceCaptureTime{ 0.0 };

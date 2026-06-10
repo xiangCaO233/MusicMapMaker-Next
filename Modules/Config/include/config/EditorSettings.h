@@ -617,6 +617,9 @@ struct EditorSettings {
     /// @brief UI 主题样式
     UITheme theme{ UITheme::Auto };
 
+    /// @brief 当前选择的皮肤目录名，位于 AppPaths::skinsRootPath() 下。
+    std::string selectedSkinDirectory{ "mmm-default" };
+
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
 
@@ -763,6 +766,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "filePickerStyle", c.filePickerStyle },
         { "cursorStyle", c.cursorStyle },
         { "theme", c.theme },
+        { "selectedSkinDirectory", c.selectedSkinDirectory },
         { "beatDivisor", c.beatDivisor },
         { "overlapTimeWindowMs", c.overlapTimeWindowMs },
         { "reverseScroll", c.reverseScroll },
@@ -815,11 +819,13 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
 {
-    c.syncConfig          = j.value("syncConfig", SyncConfig());
-    c.sfxConfig           = j.value("sfxConfig", SfxConfig());
-    c.filePickerStyle     = j.value("filePickerStyle", FilePickerStyle::Native);
-    c.cursorStyle         = j.value("cursorStyle", CursorStyle::Software);
-    c.theme               = j.value("theme", UITheme::Auto);
+    c.syncConfig      = j.value("syncConfig", SyncConfig());
+    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
+    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Native);
+    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
+    c.theme           = j.value("theme", UITheme::Auto);
+    c.selectedSkinDirectory =
+        j.value("selectedSkinDirectory", std::string("mmm-default"));
     c.beatDivisor         = j.value("beatDivisor", 4);
     c.overlapTimeWindowMs = j.value("overlapTimeWindowMs", 5.0f);
     c.reverseScroll       = j.value("reverseScroll", false);

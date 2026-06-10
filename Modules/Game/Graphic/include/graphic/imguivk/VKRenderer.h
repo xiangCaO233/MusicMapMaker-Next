@@ -92,6 +92,11 @@ public:
         return m_brushTextureLayout;
     }
 
+    /// @brief 重新加载渲染器内部持有的皮肤纹理。
+    /// @warning 低频资源重载路径：皮肤热切换时调用，会等待设备空闲并替换
+    /// 软件光标等渲染器自持有纹理，禁止放入每帧渲染路径。
+    void reloadSkinTextures();
+
 private:
     /// @brief 单个可并行录制的离屏任务。
     struct OffscreenRecordTask {

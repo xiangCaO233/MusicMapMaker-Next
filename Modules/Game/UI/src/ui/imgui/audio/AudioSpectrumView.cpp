@@ -146,12 +146,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    float  visualOffset = Config::AppConfig::instance()
-                              .getVisualConfig()
-                              .getEffectiveVisualOffset();
-    double audioTime    = audioManager.getCurrentTime();
-    double visualTime   = audioTime + visualOffset;
-    double totalTime    = audioManager.getTotalTime();
+    float visualOffset = Config::AppConfig::instance()
+                             .getVisualConfig()
+                             .getEffectiveVisualOffset();
+    double audioTime  = audioManager.getCurrentTime();
+    double visualTime = audioTime + visualOffset;
+    double totalTime  = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
     std::string activeCameraId =
@@ -453,9 +453,9 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                              pixelWidth * plotW);
+                                           pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
@@ -733,7 +733,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture = appThreadPool->enqueue([this,
+    m_calcFuture                    = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1019,9 +1019,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
-                                        size_t                      offset,
-                                        std::uint8_t                intensity) {
+    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
+                            size_t                      offset,
+                            std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);
@@ -1123,6 +1123,13 @@ std::string AudioSpectrumView::getShaderName(
     const std::string& shaderModuleName)
 {
     return "AudioSpectrumView:" + shaderModuleName;
+}
+
+/// @brief 清空缓存的 shader 源码。
+/// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+void AudioSpectrumView::invalidateShaderSourceCache()
+{
+    m_shaderSourceCache.clear();
 }
 
 const std::vector<Graphic::Vertex::VKBasicVertex>&
