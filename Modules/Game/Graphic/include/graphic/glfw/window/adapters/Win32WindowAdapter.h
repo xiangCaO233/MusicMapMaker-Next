@@ -122,6 +122,9 @@ private:
     HWND        m_hwnd{ nullptr };             ///< 关联的 Win32 原生窗口句柄
     std::vector<Event::DragArea> m_dragAreas;  ///< 缓存的允许拖拽的矩形区域列表
 
+    /// @brief 缓存的标题栏拖拽排除区域列表。
+    std::vector<Event::DragArea> m_blockedDragAreas;
+
     /// @brief 最近一次非最小化尺寸消息是否表示窗口处于最大化。
     bool m_lastKnownMaximized{ false };
 

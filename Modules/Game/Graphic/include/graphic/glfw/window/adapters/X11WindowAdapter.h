@@ -102,6 +102,9 @@ private:
     /// @brief UI 上报的标题栏拖拽区域缓存。
     std::vector<Event::DragArea> m_dragAreas;
 
+    /// @brief UI 上报的标题栏拖拽排除区域缓存。
+    std::vector<Event::DragArea> m_blockedDragAreas;
+
     /// @brief 左键按下后是否等待触发标题栏移动。
     bool m_pendingMove{ false };
 

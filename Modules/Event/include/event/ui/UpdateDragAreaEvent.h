@@ -24,6 +24,9 @@ struct DragArea {
  */
 struct UpdateDragAreaEvent : public UIEvent {
     std::vector<DragArea> areas;  ///< 允许拖拽的矩形区域集合
+
+    /// @brief 已被更高层 UI 窗口遮挡、需要从拖拽命中中排除的矩形区域集合。
+    std::vector<DragArea> blockedAreas;
 };
 
 }  // namespace MMM::Event
