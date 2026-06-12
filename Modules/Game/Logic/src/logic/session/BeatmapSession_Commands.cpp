@@ -979,6 +979,9 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             .success  = true,
             .isExport = true,
         });
+
+        // 导出到项目目录时刷新项目资源列表，但不切换当前会话的谱面文件。
+        EditorEngine::instance().syncProjectWithFile(savePath);
     }
 }
 
