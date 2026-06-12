@@ -91,9 +91,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
-    if ( sideBarManager ) {
-        sideBarManager->restoreDockResizeMouseAfterDockSpace();
-    }
 
     if ( titleFont ) ImGui::PopFont();
 

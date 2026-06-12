@@ -849,6 +849,10 @@ void UIManager::onUpdateUI()
         it->second->update(this);
     }
 
+    if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
+        sideBarManager->restoreDockResizeMouseAfterDockSpace();
+    }
+
     syncNativeWindowDragAreas();
 }
 
