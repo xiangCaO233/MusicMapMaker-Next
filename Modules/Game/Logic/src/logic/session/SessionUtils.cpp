@@ -1,6 +1,5 @@
 #include "logic/session/SessionUtils.h"
 #include "audio/AudioManager.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -54,7 +53,8 @@ SnapResult getSnapResult(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
-    const std::unordered_map<std::string, CameraInfo>& cameras)
+    const std::unordered_map<std::string, CameraInfo>& cameras,
+    double                                             fallbackBpm)
 {
     SnapResult result;
     int        beatDivisor = config.settings.beatDivisor;
@@ -104,17 +104,10 @@ SnapResult getSnapResult(
         if ( rawTime > nextBpmTime ) continue;
 
         double bVal = bpmVal;
-        if ( bVal <= 0.0 ) {
-            bVal = 120.0;
-            // 获取全局活动 Session 里的 Beatmap 预设 BPM
-            if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                if ( auto beatmap = session->getContext().currentBeatmap ) {
-                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                        bVal = beatmap->m_baseMapMetadata.preference_bpm;
-                    }
-                }
-            }
+        if ( !std::isfinite(bVal) || bVal <= 0.0 ) {
+            bVal = fallbackBpm;
         }
+        if ( !std::isfinite(bVal) || bVal <= 0.0 ) bVal = 120.0;
         double beatDuration = 60.0 / bVal;
         double stepDuration = beatDuration / beatDivisor;
 
@@ -130,7 +123,7 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float  snapY    = judgmentLineY -
+        float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( config.settings.scrollSnap ||
@@ -164,7 +157,7 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
+    auto it = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

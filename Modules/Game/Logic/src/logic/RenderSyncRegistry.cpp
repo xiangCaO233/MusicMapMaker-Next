@@ -36,7 +36,15 @@ void RenderSyncRegistry::setAtlasUVMap(
 {
     /// @brief 保护本次图集 UV 映射写入的临界区。
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_cameraUVMaps[cameraId] = uvMap;
+    auto&                               state = m_cameraUVMaps[cameraId];
+    state.uvMap                               = uvMap;
+    state.revision                            = m_nextAtlasUvRevision++;
+    if ( state.revision == 0 ) {
+        state.revision = m_nextAtlasUvRevision++;
+    }
+    if ( m_nextAtlasUvRevision == 0 ) {
+        m_nextAtlasUvRevision = 1;
+    }
 }
 
 /// @brief 获取指定画布的图集 UV 映射，缺失时回退到 Basic2DCanvas。
@@ -46,24 +54,39 @@ RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
     /// @brief 保护本次图集 UV 映射读取的临界区。
     std::shared_lock<std::shared_mutex> lock(m_mutex);
 
-    /// @brief 指定画布图集 UV 映射的迭代器。
-    auto it = m_cameraUVMaps.find(cameraId);
-    if ( it != m_cameraUVMaps.end() ) {
-        return it->second;
-    }
-
-    // 回退到默认图集 (Basic2DCanvas)
-    if ( cameraId != "Basic2DCanvas" ) {
-        /// @brief 默认 Basic2DCanvas 图集 UV 映射的迭代器。
-        auto itMain = m_cameraUVMaps.find("Basic2DCanvas");
-        if ( itMain != m_cameraUVMaps.end() ) {
-            return itMain->second;
-        }
+    if ( auto* state = findAtlasUVMapStateUnsafe(cameraId) ) {
+        return state->uvMap;
     }
 
     /// @brief 空 UV 映射回退值，用于没有任何可用图集时返回稳定引用。
     static const std::unordered_map<uint32_t, glm::vec4> emptyMap;
     return emptyMap;
+}
+
+/// @brief 按修订号将指定画布的图集 UV 映射同步到快照。
+/// @warning 逻辑/渲染热路径：每个快照生成时调用；普通路径不复制 UV 表。
+void RenderSyncRegistry::updateSnapshotAtlasUVMap(
+    const std::string&                       cameraId,
+    std::unordered_map<uint32_t, glm::vec4>& target,
+    std::uint64_t&                           targetRevision) const
+{
+    /// @brief 保护本次图集 UV 映射读取的临界区。
+    std::shared_lock<std::shared_mutex> lock(m_mutex);
+    const auto* state = findAtlasUVMapStateUnsafe(cameraId);
+    if ( !state ) {
+        if ( targetRevision != 0 || !target.empty() ) {
+            target.clear();
+            targetRevision = 0;
+        }
+        return;
+    }
+
+    if ( targetRevision == state->revision ) {
+        return;
+    }
+
+    target         = state->uvMap;
+    targetRevision = state->revision;
 }
 
 /// @brief 缓存指定画布的最后已知视口尺寸。
@@ -116,6 +139,27 @@ void RenderSyncRegistry::eraseCamera(const std::string& cameraId)
     m_syncBuffers.erase(cameraId);
     m_cameraUVMaps.erase(cameraId);
     m_lastViewportSizes.erase(cameraId);
+}
+
+/// @brief 在已持锁状态下查找画布图集，缺失时回退到 Basic2DCanvas。
+const RenderSyncRegistry::AtlasUVMapState*
+RenderSyncRegistry::findAtlasUVMapStateUnsafe(const std::string& cameraId) const
+{
+    /// @brief 指定画布图集 UV 映射的迭代器。
+    auto it = m_cameraUVMaps.find(cameraId);
+    if ( it != m_cameraUVMaps.end() ) {
+        return &it->second;
+    }
+
+    if ( cameraId != "Basic2DCanvas" ) {
+        /// @brief 默认 Basic2DCanvas 图集 UV 映射的迭代器。
+        auto itMain = m_cameraUVMaps.find("Basic2DCanvas");
+        if ( itMain != m_cameraUVMaps.end() ) {
+            return &itMain->second;
+        }
+    }
+
+    return nullptr;
 }
 
 /// @brief 判断画布是否为需要同步给新 Session 的共享视口。

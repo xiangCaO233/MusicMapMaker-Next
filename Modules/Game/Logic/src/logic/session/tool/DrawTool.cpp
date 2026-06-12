@@ -128,8 +128,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -142,14 +142,18 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     double rawTime = cache->getTime(currentAbsY + deltaY);
 
-    auto snap = SessionUtils::getSnapResult(rawTime,
-                                            cmd.mouseY,
-                                            itCamera->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto snap = SessionUtils::getSnapResult(
+        rawTime,
+        cmd.mouseY,
+        itCamera->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
     float trackAreaW    = rightX - leftX;
@@ -335,8 +339,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -348,14 +352,18 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     deltaY /= renderScaleY;
 
     double rawTime = cache->getTime(currentAbsY + deltaY);
-    auto   snap    = SessionUtils::getSnapResult(rawTime,
-                                            cmd.mouseY,
-                                            itCamera->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto   snap    = SessionUtils::getSnapResult(
+        rawTime,
+        cmd.mouseY,
+        itCamera->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;

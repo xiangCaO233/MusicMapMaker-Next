@@ -7,8 +7,8 @@ namespace MMM::Logic::System
 {
 
 /// @brief 更新音符逻辑坐标缓存。
-/// @warning 逻辑热路径：每个 Session update 调用；完整 registry sort/view
-/// 遍历只允许在 cacheDirty 或 forceRebuild 时执行。
+/// @warning 逻辑热路径：每个 Session update 调用；完整 registry view
+/// 遍历只允许在 cacheDirty 或 forceRebuild 时执行，禁止在此处排序。
 void NoteTransformSystem::update(entt::registry&             registry,
                                  entt::registry&             timelineRegistry,
                                  double                      currentTime,
@@ -24,11 +24,6 @@ void NoteTransformSystem::update(entt::registry&             registry,
     if ( !cacheDirty && !forceRebuild ) {
         return;
     }
-
-    registry.sort<NoteComponent>(
-        [](const NoteComponent& lhs, const NoteComponent& rhs) {
-            return lhs.m_timestamp < rhs.m_timestamp;
-        });
 
     double currentAbsY = cache.getAbsY(currentTime);
 

@@ -1,5 +1,4 @@
 #include "config/skin/SkinConfig.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -191,9 +190,9 @@ void NoteRenderSystem::drawBeatLines(
     if ( std::abs(renderScaleY) < 1e-6f ) return;
     double topAbsY = currentAbsY +
                      (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
-                                          static_cast<double>(renderScaleY);
-    auto visibleRanges = cache->getTimeRangesForAbsYWindow(
+    double bottomAbsY    = currentAbsY + (judgmentLineY - bottomY) /
+                                             static_cast<double>(renderScaleY);
+    auto   visibleRanges = cache->getTimeRangesForAbsYWindow(
         std::min(topAbsY, bottomAbsY), std::max(topAbsY, bottomAbsY));
 
     batcher.setTexture(TextureID::None);
@@ -236,18 +235,12 @@ void NoteRenderSystem::drawBeatLines(
         double      bpmTime    = currentBPM->m_timestamp;
         double      bpmVal     = currentBPM->m_value;
         if ( bpmVal <= 0.0 ) {
-            bpmVal = 120.0;
-            if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                if ( auto beatmap = session->getContext().currentBeatmap ) {
-                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                        bpmVal = beatmap->m_baseMapMetadata.preference_bpm;
-                    }
-                }
-            }
+            bpmVal = batcher.snapshot->fallbackBpm;
         }
 
         // 限制极端 BPM 导致的无限循环 (例如 osu! 谱面中的 6E-96 ms_per_beat)
         if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+        if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
         double nextBpmTime = (i + 1 < bpmEvents.size())
                                  ? bpmEvents[i + 1]->m_timestamp
@@ -362,7 +355,7 @@ void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
         if ( seg.effects == 0 ) continue;  // 忽略没有效果的段（通常是第0段）
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float        y           = judgmentLineY -
+        float y = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs) *
                       renderScaleY;
 

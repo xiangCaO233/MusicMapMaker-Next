@@ -27,8 +27,8 @@ public:
      * @param currentTime 当前播放时间
      * @param config 编辑器配置
      * @param beatmap 当前 Session 绑定的谱面；为空时使用保守默认值。
-     * @warning 逻辑热路径：由 BeatmapSession update 调用；完整 registry
-     * sort/view 遍历只能在缓存脏或强制重建时执行。
+     * @warning 逻辑热路径：由 BeatmapSession update 调用；完整 registry view
+     * 遍历只能在缓存脏或强制重建时执行，禁止在此处排序。
      */
     static void update(entt::registry& registry,
                        entt::registry& timelineRegistry, double currentTime,

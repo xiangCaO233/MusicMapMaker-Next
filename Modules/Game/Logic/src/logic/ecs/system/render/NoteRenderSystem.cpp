@@ -1,7 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -75,18 +74,21 @@ void NoteRenderSystem::generateSnapshot(
     if ( !cache ) return;
 
     // 将 ScrollCache 指针存入 context 供 renderPolyline 等后续使用
-    registry.ctx().erase<const ScrollCache*>();
-    registry.ctx().emplace<const ScrollCache*>(cache);
+    if ( auto** cacheSlot = registry.ctx().find<const ScrollCache*>() ) {
+        *cacheSlot = cache;
+    } else {
+        registry.ctx().emplace<const ScrollCache*>(cache);
+    }
 
-    // Timeline 右键创建事件需要完整映射；其他画布只在播放亚帧插值时需要。
-    if ( cameraId == "Timeline" || snapshot->isPlaying ) {
+    // Timeline 右键创建事件需要完整映射；普通播放快照已禁用 UI 侧外推。
+    if ( cameraId == "Timeline" ) {
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-          singleTrackW = 0;
-    float renderScaleY = 1.0f;
+            singleTrackW = 0;
+    float   renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
@@ -195,20 +197,10 @@ void NoteRenderSystem::generateSnapshot(
                     double      bpmTime    = currentBPM->m_timestamp;
                     double      bpmVal     = currentBPM->m_value;
                     if ( bpmVal <= 0.0 ) {
-                        bpmVal = 120.0;
-                        if ( auto session =
-                                 EditorEngine::instance().getActiveSession() ) {
-                            if ( auto beatmap =
-                                     session->getContext().currentBeatmap ) {
-                                if ( beatmap->m_baseMapMetadata.preference_bpm >
-                                     0.0 ) {
-                                    bpmVal = beatmap->m_baseMapMetadata
-                                                 .preference_bpm;
-                                }
-                            }
-                        }
+                        bpmVal = snapshot->fallbackBpm;
                     }
                     if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+                    if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
                     double nextBpmTime =
                         (i + 1 < bpmEvents.size())
@@ -255,8 +247,8 @@ void NoteRenderSystem::generateSnapshot(
 
         if ( cameraId == "Preview" ) {
             // 预览区逻辑：若全局开启，则由预览区具体开关决定；若全局关闭，则强制关闭
-            shouldDrawBeatLines = config.visual.drawBeatLines &&
-                                  config.visual.previewConfig.drawBeatLines;
+            shouldDrawBeatLines   = config.visual.drawBeatLines &&
+                                    config.visual.previewConfig.drawBeatLines;
             shouldDrawTimingLines = config.visual.previewConfig.drawTimingLines;
         }
 
@@ -536,17 +528,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
             double      bpmTime    = currentBPM->m_timestamp;
             double      bpmVal     = currentBPM->m_value;
             if ( bpmVal <= 0.0 ) {
-                bpmVal = 120.0;
-                if ( auto session =
-                         EditorEngine::instance().getActiveSession() ) {
-                    if ( auto beatmap = session->getContext().currentBeatmap ) {
-                        if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                            bpmVal = beatmap->m_baseMapMetadata.preference_bpm;
-                        }
-                    }
-                }
+                bpmVal = snapshot->fallbackBpm;
             }
             if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+            if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
             double nextBpmTime  = (i + 1 < bpmEvents.size())
                                       ? bpmEvents[i + 1]->m_timestamp
@@ -587,7 +572,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y             = judgmentLineY -
+                    float y = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
@@ -632,7 +617,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects == 0 ) continue;
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float        y           = judgmentLineY -
+        float y = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;

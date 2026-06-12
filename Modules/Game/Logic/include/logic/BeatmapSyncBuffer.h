@@ -187,6 +187,15 @@ struct RenderSnapshot {
     // 纹理 UV 映射表 (TextureID -> u,v,w,h)
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
+    /// @brief 当前快照持有的图集 UV 修订号。
+    std::uint64_t atlasUvRevision{ 0 };
+
+    /// @brief 逻辑线程可见音符查询临时列表，UI 线程不读取。
+    std::vector<entt::entity> noteQueryScratch;
+
+    /// @brief 逻辑线程可见音符查询去重临时集合，UI 线程不读取。
+    std::unordered_set<entt::entity> noteQuerySeenScratch;
+
     // 背景纹理绝对路径
     std::string backgroundPath;
 
@@ -202,6 +211,9 @@ struct RenderSnapshot {
     double snapshotSysTime{ 0.0 };
     /// @brief 当前播放速度倍率 (用于 UI 侧亚帧插值)
     double playbackSpeed{ 1.0 };
+
+    /// @brief 无效 BPM 事件的会话级回退 BPM。
+    double fallbackBpm{ 120.0 };
 
     // 框选盒子快照
     struct MarqueeBoxSnapshot {
@@ -322,7 +334,8 @@ struct RenderSnapshot {
         overlapMasks.clear();
         timelineElements.clear();
         scrollSegments.clear();
-        uvMap.clear();
+        noteQueryScratch.clear();
+        noteQuerySeenScratch.clear();
         backgroundPath.clear();
         bgSize             = glm::vec2(0.0f, 0.0f);
         isPlaying          = false;
@@ -330,6 +343,7 @@ struct RenderSnapshot {
         totalTime          = 0.0;
         snapshotSysTime    = 0.0;
         playbackSpeed      = 1.0;
+        fallbackBpm        = 120.0;
         currentTool        = EditTool::Move;
         acceptsInteraction = false;
         isHoveringCanvas   = false;

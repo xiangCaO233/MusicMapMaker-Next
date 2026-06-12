@@ -272,6 +272,17 @@ public:
     const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
         const std::string& cameraId) const;
 
+    /// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
+    /// @param cameraId 目标画布 cameraId。
+    /// @param target 目标快照中的 UV 映射表。
+    /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
+    /// 表，普通路径只做锁内查找和 revision 比较。
+    void updateSnapshotAtlasUVMap(
+        const std::string&                       cameraId,
+        std::unordered_map<uint32_t, glm::vec4>& target,
+        std::uint64_t&                           targetRevision) const;
+
     /**
      * @brief 获取当前编辑器配置
      */

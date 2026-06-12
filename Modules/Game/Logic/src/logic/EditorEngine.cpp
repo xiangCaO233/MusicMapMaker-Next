@@ -1189,6 +1189,17 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
     return m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
 
+/// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
+/// @warning 逻辑/渲染热路径：每个快照生成时调用；普通路径不复制 UV 表。
+void EditorEngine::updateSnapshotAtlasUVMap(
+    const std::string&                       cameraId,
+    std::unordered_map<uint32_t, glm::vec4>& target,
+    std::uint64_t&                           targetRevision) const
+{
+    m_renderSyncRegistry.updateSnapshotAtlasUVMap(
+        cameraId, target, targetRevision);
+}
+
 /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
 /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
 /// SessionRegistry 锁。

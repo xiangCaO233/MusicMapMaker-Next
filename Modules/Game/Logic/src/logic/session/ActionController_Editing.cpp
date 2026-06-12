@@ -791,7 +791,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -844,7 +844,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -1330,15 +1330,13 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
         double bVal = bpmVal;
         if ( bVal <= 0.0 ) {
-            bVal = 120.0;
-            if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                if ( auto beatmap = session->getContext().currentBeatmap ) {
-                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                        bVal = beatmap->m_baseMapMetadata.preference_bpm;
-                    }
-                }
+            if ( m_ctx.currentBeatmap &&
+                 m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm >
+                     0.0 ) {
+                bVal = m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
             }
         }
+        if ( bVal <= 0.0 ) bVal = 120.0;
 
         double beatDuration = 60.0 / bVal;
 
@@ -1510,7 +1508,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

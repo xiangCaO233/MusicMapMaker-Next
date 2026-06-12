@@ -173,7 +173,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio = config.visual.previewConfig.areaRatio;
+    float areaRatio    = config.visual.previewConfig.areaRatio;
 
     if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
          areaRatio <= 0.0001f ) {
@@ -240,9 +240,9 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 
     float judgmentLineY =
         previewCamera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY = cache->getAbsY(ctx.animateTime);
-    double deltaY      = (judgmentLineY - ctx.lastMousePos.y) /
-                    static_cast<double>(renderScaleY);
+    double currentAbsY   = cache->getAbsY(ctx.animateTime);
+    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
+                           static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -323,15 +323,28 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         rebuildNotePrefixAndStats(true);
     }
 
-    m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
-        &m_ctx->sortedNoteEntities);
-    m_ctx->noteRegistry.ctx().erase<const std::vector<double>*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
-        &m_ctx->sortedNoteMaxEndPrefix);
-    m_ctx->noteRegistry.ctx().erase<const std::uint64_t*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
-        &m_ctx->noteVisibilityIndexRevision);
+    if ( auto** sortedEntitiesPtr =
+             m_ctx->noteRegistry.ctx()
+                 .find<const std::vector<entt::entity>*>() ) {
+        *sortedEntitiesPtr = &m_ctx->sortedNoteEntities;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
+            &m_ctx->sortedNoteEntities);
+    }
+    if ( auto** maxEndPrefixPtr =
+             m_ctx->noteRegistry.ctx().find<const std::vector<double>*>() ) {
+        *maxEndPrefixPtr = &m_ctx->sortedNoteMaxEndPrefix;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
+            &m_ctx->sortedNoteMaxEndPrefix);
+    }
+    if ( auto** revisionPtr =
+             m_ctx->noteRegistry.ctx().find<const std::uint64_t*>() ) {
+        *revisionPtr = &m_ctx->noteVisibilityIndexRevision;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
+            &m_ctx->noteVisibilityIndexRevision);
+    }
 
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 
@@ -358,6 +371,44 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
     syncPreviewDragHoverTime(*m_ctx, config);
 
+    auto&      engine = EditorEngine::instance();
+    const bool snapshotIsPlaying =
+        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+    const double snapshotTotalTime =
+        SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
+    const double snapshotSysTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const double snapshotPlaybackSpeed =
+        Audio::AudioManager::instance().getPlaybackSpeed();
+
+    const bool  hasBeatmap = (m_ctx->currentBeatmap != nullptr);
+    std::string snapshotBackgroundPath;
+    std::string snapshotBeatmapPathKey;
+    std::string snapshotBeatmapName;
+    bool        snapshotIsDirty     = false;
+    double      snapshotFallbackBpm = 120.0;
+    if ( m_ctx->currentBeatmap ) {
+        const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+        if ( metadata.preference_bpm > 0.0 &&
+             std::isfinite(metadata.preference_bpm) ) {
+            snapshotFallbackBpm = metadata.preference_bpm;
+        }
+
+        std::filesystem::path bgPath;
+        auto*                 project = engine.getCurrentProject();
+        if ( project ) {
+            bgPath = project->m_projectRoot / metadata.main_cover_path;
+        } else {
+            bgPath = metadata.map_path.parent_path() / metadata.main_cover_path;
+        }
+        snapshotBackgroundPath = Config::pathToUtf8(bgPath);
+        snapshotBeatmapPathKey = Config::pathToUtf8(metadata.map_path);
+        snapshotBeatmapName    = metadata.name;
+        snapshotIsDirty        = m_ctx->actionStack.isDirty();
+    }
+
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
         // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
@@ -368,7 +419,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         }
 
         // 从 EditorEngine 获取该 Camera 专属的缓冲
-        auto syncBuffer = EditorEngine::instance().getSyncBuffer(cameraId);
+        auto syncBuffer = engine.getSyncBuffer(cameraId);
         if ( !syncBuffer ) continue;
 
         RenderSnapshot* snapshot = syncBuffer->getWorkingSnapshot();
@@ -377,41 +428,23 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->clear();
 
         // 注入该 Camera 特有的 UV 映射到快照
-        snapshot->uvMap = EditorEngine::instance().getAtlasUVMap(cameraId);
-        snapshot->isPlaying =
-            m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
-        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
-        snapshot->totalTime =
-            SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
-        snapshot->snapshotSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        snapshot->playbackSpeed =
-            Audio::AudioManager::instance().getPlaybackSpeed();
-        snapshot->hasBeatmap        = (m_ctx->currentBeatmap != nullptr);
+        engine.updateSnapshotAtlasUVMap(
+            cameraId, snapshot->uvMap, snapshot->atlasUvRevision);
+        snapshot->isPlaying         = snapshotIsPlaying;
+        snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->totalTime         = snapshotTotalTime;
+        snapshot->snapshotSysTime   = snapshotSysTime;
+        snapshot->playbackSpeed     = snapshotPlaybackSpeed;
+        snapshot->fallbackBpm       = snapshotFallbackBpm;
+        snapshot->hasBeatmap        = hasBeatmap;
         snapshot->lastActionMessage = m_ctx->lastActionMessage;
 
-        if ( m_ctx->currentBeatmap ) {
-            std::filesystem::path bgPath;
-            auto* project = EditorEngine::instance().getCurrentProject();
-            if ( project ) {
-                bgPath =
-                    project->m_projectRoot /
-                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
-            } else {
-                bgPath =
-                    m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                        .parent_path() /
-                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
-            }
-            snapshot->backgroundPath = Config::pathToUtf8(bgPath);
+        if ( hasBeatmap ) {
+            snapshot->backgroundPath = snapshotBackgroundPath;
             snapshot->bgSize         = m_ctx->bgSize;
-            snapshot->beatmapPathKey = Config::pathToUtf8(
-                m_ctx->currentBeatmap->m_baseMapMetadata.map_path);
-            snapshot->beatmapName =
-                m_ctx->currentBeatmap->m_baseMapMetadata.name;
-            snapshot->isDirty = m_ctx->actionStack.isDirty();
+            snapshot->beatmapPathKey = snapshotBeatmapPathKey;
+            snapshot->beatmapName    = snapshotBeatmapName;
+            snapshot->isDirty        = snapshotIsDirty;
         }
 
         // 计算可见时间范围 (基于动画时间)
@@ -441,8 +474,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->isHoveringCanvas   = isActiveSession &&
-                                     m_ctx->isMouseInCanvas &&
-                                     (m_ctx->mouseCameraId == cameraId);
+                                       m_ctx->isMouseInCanvas &&
+                                       (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
@@ -451,7 +484,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -522,7 +555,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         bpmEvents,
                                                         m_ctx->timelineRegistry,
                                                         m_ctx->animateTime,
-                                                        m_ctx->cameras);
+                                                        m_ctx->cameras,
+                                                        snapshotFallbackBpm);
 
                 // 判断是否在轨道框内
                 bool isInsideTrack = (m_ctx->lastMousePos.x >= leftX &&
@@ -651,11 +685,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex   = isBeforeFirstBpm
-                                            ? static_cast<int>(beatsInActive)
-                                            : static_cast<int>(totalBeatsPrefix +
+                    point.beatIndex = isBeforeFirstBpm
+                                          ? static_cast<int>(beatsInActive)
+                                          : static_cast<int>(totalBeatsPrefix +
                                                              beatsInActive + 1);
-                    point.numerator   = bestNum;
+                    point.numerator = bestNum;
                     point.denominator = bestDen;
                     return point;
                 };
@@ -792,10 +826,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                 }
                                 inspect.showDtrack = true;
                             } else {
-                                inspect.kind  = HoverInspectKind::Note;
-                                inspect.head  = makeBeatPoint(note.m_timestamp,
+                                inspect.kind = HoverInspectKind::Note;
+                                inspect.head = makeBeatPoint(note.m_timestamp,
                                                              note.m_trackIndex);
-                                inspect.track = note.m_trackIndex;
+                                inspect.track     = note.m_trackIndex;
                                 inspect.showTrack = true;
                             }
 

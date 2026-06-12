@@ -2,7 +2,6 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/EditorAction.h"
@@ -322,9 +321,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -340,25 +339,21 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     double targetTime = cache->getTime(targetAbsY);
 
     // 磁吸处理
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) bpmEvents.push_back(&tl);
-    }
-    std::stable_sort(
-        bpmEvents.begin(), bpmEvents.end(), [](const auto* a, const auto* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
+    SessionUtils::ensureBpmEvents(ctx);
+    const auto& bpmEvents = ctx.bpmEvents;
 
-    auto snap = SessionUtils::getSnapResult(targetTime,
-                                            cmd.mouseY,
-                                            it->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto snap = SessionUtils::getSnapResult(
+        targetTime,
+        cmd.mouseY,
+        it->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
         targetTime = snap.snappedTime;
     }
@@ -522,12 +517,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW = (it->second.viewportWidth *
-                             (ctx.lastConfig.visual.trackLayout.right -
-                              ctx.lastConfig.visual.trackLayout.left)) /
-                            static_cast<float>(ctx.trackCount);
-            float lx = it->second.viewportWidth *
-                       ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW  = (it->second.viewportWidth *
+                              (ctx.lastConfig.visual.trackLayout.right -
+                               ctx.lastConfig.visual.trackLayout.left)) /
+                             static_cast<float>(ctx.trackCount);
+            float lx       = it->second.viewportWidth *
+                             ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {

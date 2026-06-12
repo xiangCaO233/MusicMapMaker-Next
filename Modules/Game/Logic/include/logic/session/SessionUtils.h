@@ -31,6 +31,7 @@ struct SnapResult {
 /// @param timelineRegistry 时间轴注册表
 /// @param animateTime 当前动画渲染时间。
 /// @param cameras 所有的相机视口字典
+/// @param fallbackBpm 无效 BPM 事件使用的回退 BPM。
 /// @warning
 /// 逻辑热路径：鼠标悬停、绘制和拖拽物件时会频繁调用；禁止在此函数中加入文件系统访问、完整
 /// ECS 遍历、完整排序或 try/catch。
@@ -40,7 +41,8 @@ SnapResult getSnapResult(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
-    const std::unordered_map<std::string, CameraInfo>& cameras);
+    const std::unordered_map<std::string, CameraInfo>& cameras,
+    double                                             fallbackBpm);
 
 /// @brief 根据当前动画时间同步打击事件的索引。
 /// @param ctx 会话上下文引用

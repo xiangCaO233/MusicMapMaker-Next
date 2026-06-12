@@ -58,6 +58,18 @@ public:
     const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
         const std::string& cameraId) const;
 
+    /// @brief 按修订号将指定画布的图集 UV 映射同步到快照。
+    /// @param cameraId 目标画布 cameraId。
+    /// @param target 目标快照中的 UV 映射表。
+    /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @warning
+    /// 逻辑/渲染热路径：每个快照生成时调用；只有图集修订号变化时才在锁内 复制
+    /// unordered_map，普通路径只做一次锁内查找和整数比较。
+    void updateSnapshotAtlasUVMap(
+        const std::string&                       cameraId,
+        std::unordered_map<uint32_t, glm::vec4>& target,
+        std::uint64_t&                           targetRevision) const;
+
     /// @brief 缓存指定画布的最后已知视口尺寸。
     /// @param cameraId 目标画布 cameraId。
     /// @param size 视口尺寸。
@@ -78,6 +90,18 @@ public:
     void eraseCamera(const std::string& cameraId);
 
 private:
+    /// @brief 单个画布图集 UV 映射及其修订号。
+    struct AtlasUVMapState {
+        std::unordered_map<uint32_t, glm::vec4> uvMap;  ///< 图集 UV 映射。
+        std::uint64_t revision{ 0 };                    ///< 当前图集修订号。
+    };
+
+    /// @brief 在已持锁状态下查找画布图集，缺失时回退到 Basic2DCanvas。
+    /// @param cameraId 目标画布 cameraId。
+    /// @return 找到的图集状态；没有可用图集时返回 nullptr。
+    const AtlasUVMapState* findAtlasUVMapStateUnsafe(
+        const std::string& cameraId) const;
+
     /// @brief 判断画布是否为需要同步给新 Session 的共享视口。
     /// @param cameraId 待检查的画布 cameraId。
     /// @return 是否为共享视口。
@@ -88,8 +112,10 @@ private:
         m_syncBuffers;
 
     /// @brief 各摄像机独立的图集 UV 映射表。
-    std::unordered_map<std::string, std::unordered_map<uint32_t, glm::vec4>>
-        m_cameraUVMaps;
+    std::unordered_map<std::string, AtlasUVMapState> m_cameraUVMaps;
+
+    /// @brief 全局图集 UV 修订号计数器，确保不同 camera 的修订号也不会撞号。
+    std::uint64_t m_nextAtlasUvRevision{ 1 };
 
     /// @brief 缓存各摄像机的最后已知视口尺寸。
     std::unordered_map<std::string, glm::vec2> m_lastViewportSizes;
