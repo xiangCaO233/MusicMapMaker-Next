@@ -386,6 +386,8 @@ private:
     bool m_isSilentCheck = false;
     /// @brief 用户是否取消或关闭了更新弹窗。
     bool m_updatePopupCanceled = false;
+    /// @brief 点击重启更新失败时显示的错误信息。
+    std::string m_updateRestartError;
 
     /// @brief 保存提示气泡剩余显示时间。
     float m_saveTooltipTimer = 0.0f;

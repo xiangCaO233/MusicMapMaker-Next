@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 namespace MMM::Network
@@ -51,16 +52,18 @@ public:
     /// @brief 异步下载更新（非阻塞，下载到临时文件）
     void downloadAsync();
 
-    /// @brief 获取当前状态
-    UpdateInfo getInfo() const { return m_info; }
+    /// @brief 获取当前状态。
+    /// @warning UI 每帧轮询路径：只复制一份小型状态快照，禁止执行阻塞操作。
+    UpdateInfo getInfo() const;
 
     /// @brief 判断是否检查完成
     bool isFinished() const
     {
-        return m_info.status == UpdateStatus::kUpToDate ||
-               m_info.status == UpdateStatus::kUpdateFound ||
-               m_info.status == UpdateStatus::kDownloaded ||
-               m_info.status == UpdateStatus::kError;
+        const auto info = getInfo();
+        return info.status == UpdateStatus::kUpToDate ||
+               info.status == UpdateStatus::kUpdateFound ||
+               info.status == UpdateStatus::kDownloaded ||
+               info.status == UpdateStatus::kError;
     }
 
     /// @brief 在浏览器中打开 URL（平台通用）
@@ -69,11 +72,14 @@ public:
     /// @brief 获取当前可执行文件的绝对路径
     static std::string currentExecutablePath();
 
-    /// @brief 应用更新并重启（启动 Updater 后立即退出当前进程）
+    /// @brief 应用更新并重启（成功启动 Updater 后立即退出当前进程）
     /// @param downloadedFilePath 已下载的更新文件路径（主程序）
     /// @param updaterFilePath 更新器文件路径（负责替换主程序）
-    static void applyUpdateAndRestart(const std::string& downloadedFilePath,
-                                      const std::string& updaterFilePath);
+    /// @param errorMessage 启动失败时写入错误信息，可为空。
+    /// @return 成功启动更新器时返回 true；失败时返回 false。
+    static bool applyUpdateAndRestart(const std::string& downloadedFilePath,
+                                      const std::string& updaterFilePath,
+                                      std::string* errorMessage = nullptr);
 
     /// @brief 检查启动时的更新成功标记（更新后首次启动）
     /// @return 如果存在标记则返回 true，并将标记删除；否则返回 false
@@ -87,6 +93,13 @@ public:
     static bool isNewer(const std::string& remote, const std::string& local);
 
 private:
+    /// @brief 更新状态互斥锁，保护下载线程与 UI 线程之间的状态快照。
+    /// @warning UI 每帧读、下载线程写；仅保护小型状态结构，不得在持锁时执行
+    /// 网络、文件系统或进程启动操作。
+    mutable std::mutex m_infoMutex;
+
+    /// @brief 当前更新状态快照。
+    /// @warning 只能在持有 m_infoMutex 时读写。
     UpdateInfo m_info;
 };
 

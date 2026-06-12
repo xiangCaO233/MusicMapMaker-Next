@@ -2,10 +2,12 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <curl/curl.h>
 #include <filesystem>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <thread>
@@ -50,7 +52,76 @@ size_t fileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
     return fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
 }
 
+/// @brief 写入更新启动失败原因。
+void writeRestartError(std::string* errorMessage, const std::string& message)
+{
+    if ( errorMessage ) {
+        *errorMessage = message;
+    }
+}
+
+/// @brief 检查路径是否指向普通文件。
+bool hasRegularFile(const std::filesystem::path& path,
+                    std::string* errorMessage, const char* label)
+{
+    std::error_code filesystemError;
+    if ( !std::filesystem::is_regular_file(path, filesystemError) ||
+         filesystemError ) {
+        const std::string message =
+            fmt::format("{} not found: {}", label, Config::pathToUtf8(path));
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
+    }
+    return true;
+}
+
+#if !defined(_WIN32)
+/// @brief 确保更新器文件在 POSIX 平台有执行权限。
+bool ensureExecutablePermission(const std::filesystem::path& path,
+                                std::string*                 errorMessage)
+{
+    std::error_code statusError;
+    const auto      status = std::filesystem::status(path, statusError);
+    if ( statusError ) {
+        const std::string message = fmt::format(
+            "Cannot read updater permissions: {}", statusError.message());
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
+    }
+
+    constexpr auto executableBits = std::filesystem::perms::owner_exec |
+                                    std::filesystem::perms::group_exec |
+                                    std::filesystem::perms::others_exec;
+    if ( (status.permissions() & executableBits) !=
+         std::filesystem::perms::none ) {
+        return true;
+    }
+
+    std::error_code permissionError;
+    std::filesystem::permissions(path,
+                                 executableBits,
+                                 std::filesystem::perm_options::add,
+                                 permissionError);
+    if ( permissionError ) {
+        const std::string message = fmt::format(
+            "Failed to mark updater executable: {}", permissionError.message());
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
+    }
+    return true;
+}
+#endif
+
 }  // namespace
+
+UpdateInfo UpdateChecker::getInfo() const
+{
+    std::lock_guard<std::mutex> lock(m_infoMutex);
+    return m_info;
+}
 
 bool UpdateChecker::parseVersion(const std::string& verStr, int& major,
                                  int& minor, int& patch)
@@ -127,13 +198,22 @@ std::string UpdateChecker::currentExecutablePath()
 #endif
 }
 
-void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
-                                          const std::string& updaterFilePath)
+bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
+                                          const std::string& updaterFilePath,
+                                          std::string*       errorMessage)
 {
     std::string exePath = currentExecutablePath();
     if ( exePath.empty() ) {
-        XERROR("UpdateChecker: Cannot determine executable path");
-        return;
+        constexpr const char* message = "Cannot determine executable path";
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
+    }
+
+    const std::filesystem::path downloadedPath =
+        Config::utf8ToPath(downloadedFilePath);
+    if ( !hasRegularFile(downloadedPath, errorMessage, "Downloaded update") ) {
+        return false;
     }
 
     // 优先使用下载的更新器，不存在时回退到同目录查找
@@ -150,11 +230,15 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 #endif
     }
 
-    if ( !std::filesystem::exists(updaterPath) ) {
-        XERROR("UpdateChecker: Updater not found at {}",
-               Config::pathToUtf8(updaterPath));
-        return;
+    if ( !hasRegularFile(updaterPath, errorMessage, "Updater") ) {
+        return false;
     }
+
+#if !defined(_WIN32)
+    if ( !ensureExecutablePermission(updaterPath, errorMessage) ) {
+        return false;
+    }
+#endif
 
     long pid = 0;
 #if defined(_WIN32)
@@ -190,12 +274,20 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
         CloseHandle(pi.hProcess);
         CloseHandle(pi.hThread);
     } else {
-        XERROR("UpdateChecker: Failed to launch updater (error={})",
-               GetLastError());
-        return;
+        const std::string message =
+            fmt::format("Failed to launch updater (error={})", GetLastError());
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
     }
 #else
     pid_t child = fork();
+    if ( child < 0 ) {
+        constexpr const char* message = "Failed to fork updater process";
+        writeRestartError(errorMessage, message);
+        XERROR("UpdateChecker: {}", message);
+        return false;
+    }
     if ( child == 0 ) {
         // 子进程: 执行更新器
         std::string updater = Config::pathToUtf8(updaterPath);
@@ -212,6 +304,7 @@ void UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 
     XINFO("UpdateChecker: Exiting for update...");
     std::exit(0);
+    return true;
 }
 
 bool UpdateChecker::checkStartupUpdateMarker()
@@ -230,8 +323,11 @@ bool UpdateChecker::checkStartupUpdateMarker()
 
 void UpdateChecker::checkAsync()
 {
-    m_info.status         = UpdateStatus::kChecking;
-    m_info.currentVersion = MMM_VERSION_STRING;
+    {
+        std::lock_guard<std::mutex> lock(m_infoMutex);
+        m_info.status         = UpdateStatus::kChecking;
+        m_info.currentVersion = MMM_VERSION_STRING;
+    }
 
     std::thread([this]() {
         int maxRetries = 3;
@@ -246,7 +342,10 @@ void UpdateChecker::checkAsync()
             if ( !curl ) {
                 result.status       = UpdateStatus::kError;
                 result.errorMessage = "Failed to initialize libcurl";
-                m_info              = result;
+                {
+                    std::lock_guard<std::mutex> lock(m_infoMutex);
+                    m_info = result;
+                }
                 XERROR("UpdateChecker: {}", result.errorMessage);
                 return;
             }
@@ -290,7 +389,10 @@ void UpdateChecker::checkAsync()
                         result.errorMessage =
                             fmt::format("HTTP error: {}", httpCode);
                     }
-                    m_info = result;
+                    {
+                        std::lock_guard<std::mutex> lock(m_infoMutex);
+                        m_info = result;
+                    }
                     XERROR("UpdateChecker: {}", result.errorMessage);
                     return;
                 }
@@ -350,7 +452,10 @@ void UpdateChecker::checkAsync()
                 XERROR("UpdateChecker: {}", result.errorMessage);
             }
 
-            m_info = result;
+            {
+                std::lock_guard<std::mutex> lock(m_infoMutex);
+                m_info = result;
+            }
             return;
         }
     }).detach();
@@ -358,20 +463,37 @@ void UpdateChecker::checkAsync()
 
 void UpdateChecker::downloadAsync()
 {
-    if ( m_info.downloadUrl.empty() ) {
-        m_info.status       = UpdateStatus::kError;
-        m_info.errorMessage = "No download URL";
-        return;
+    UpdateInfo initialInfo;
+    {
+        std::lock_guard<std::mutex> lock(m_infoMutex);
+        initialInfo = m_info;
+        if ( initialInfo.downloadUrl.empty() ) {
+            m_info.status       = UpdateStatus::kError;
+            m_info.errorMessage = "No download URL";
+            return;
+        }
+
+        m_info.status = UpdateStatus::kDownloading;
     }
 
-    m_info.status = UpdateStatus::kDownloading;
+    std::thread([this, initialInfo]() {
+        auto fail = [this](const std::string& message) {
+            {
+                std::lock_guard<std::mutex> lock(m_infoMutex);
+                m_info.status       = UpdateStatus::kError;
+                m_info.errorMessage = message;
+            }
+            XERROR("UpdateChecker: {}", message);
+        };
 
-    std::thread([this]() {
-        UpdateInfo result       = m_info;
+        UpdateInfo result       = initialInfo;
         result.status           = UpdateStatus::kDownloading;
         result.downloadedBytes  = 0;
         result.downloadProgress = 0.0;
-        m_info                  = result;  // 立即通知 UI 进入下载状态
+        {
+            std::lock_guard<std::mutex> lock(m_infoMutex);
+            m_info = result;  // 立即通知 UI 进入下载状态
+        }
 
         // Phase 1: 下载更新器（有 updaterUrl 时）
         if ( !result.updaterUrl.empty() ) {
@@ -385,19 +507,14 @@ void UpdateChecker::downloadAsync()
             FILE* uFile = fopen(updaterTempPath.c_str(), "wb");
 #endif
             if ( !uFile ) {
-                m_info.status       = UpdateStatus::kError;
-                m_info.errorMessage = "Failed to create updater temp file";
-                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                fail("Failed to create updater temp file");
                 return;
             }
 
             CURL* uCurl = curl_easy_init();
             if ( !uCurl ) {
                 fclose(uFile);
-                m_info.status = UpdateStatus::kError;
-                m_info.errorMessage =
-                    "Failed to initialize libcurl for updater";
-                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                fail("Failed to initialize libcurl for updater");
                 return;
             }
 
@@ -417,16 +534,25 @@ void UpdateChecker::downloadAsync()
             curl_easy_cleanup(uCurl);
 
             if ( uRes != CURLE_OK ) {
-                m_info.status       = UpdateStatus::kError;
-                m_info.errorMessage = fmt::format("Updater download error: {}",
-                                                  curl_easy_strerror(uRes));
                 std::filesystem::remove(updaterTempPath);
-                XERROR("UpdateChecker: {}", m_info.errorMessage);
+                fail(fmt::format("Updater download error: {}",
+                                 curl_easy_strerror(uRes)));
                 return;
             }
 
+#if !defined(_WIN32)
+            if ( !ensureExecutablePermission(updaterTempPath, nullptr) ) {
+                std::filesystem::remove(updaterTempPath);
+                fail("Failed to mark updater executable");
+                return;
+            }
+#endif
+
             result.updaterFilePath = Config::pathToUtf8(updaterTempPath);
-            m_info.updaterFilePath = result.updaterFilePath;
+            {
+                std::lock_guard<std::mutex> lock(m_infoMutex);
+                m_info.updaterFilePath = result.updaterFilePath;
+            }
             XINFO("UpdateChecker: Updater downloaded -> {}",
                   result.updaterFilePath);
         }
@@ -441,19 +567,14 @@ void UpdateChecker::downloadAsync()
         FILE* mFile = fopen(mainTempPath.c_str(), "wb");
 #endif
         if ( !mFile ) {
-            m_info.status       = UpdateStatus::kError;
-            m_info.errorMessage = "Failed to create main temp file";
-            XERROR("UpdateChecker: {}", m_info.errorMessage);
+            fail("Failed to create main temp file");
             return;
         }
 
         CURL* mCurl = curl_easy_init();
         if ( !mCurl ) {
             fclose(mFile);
-            m_info.status = UpdateStatus::kError;
-            m_info.errorMessage =
-                "Failed to initialize libcurl for main program";
-            XERROR("UpdateChecker: {}", m_info.errorMessage);
+            fail("Failed to initialize libcurl for main program");
             return;
         }
 
@@ -470,6 +591,7 @@ void UpdateChecker::downloadAsync()
                 curl_off_t /*ulnow*/) -> int {
                 auto* p = static_cast<UpdateChecker*>(clientp);
                 if ( dltotal > 0 ) {
+                    std::lock_guard<std::mutex> lock(p->m_infoMutex);
                     p->m_info.downloadedBytes  = dlnow;
                     p->m_info.downloadProgress = static_cast<double>(dlnow) /
                                                  static_cast<double>(dltotal);
@@ -491,17 +613,18 @@ void UpdateChecker::downloadAsync()
         curl_easy_cleanup(mCurl);
 
         if ( mRes != CURLE_OK ) {
-            m_info.status = UpdateStatus::kError;
-            m_info.errorMessage =
-                fmt::format("Download error: {}", curl_easy_strerror(mRes));
             std::filesystem::remove(mainTempPath);
-            XERROR("UpdateChecker: {}", m_info.errorMessage);
+            fail(fmt::format("Download error: {}", curl_easy_strerror(mRes)));
             return;
         }
 
-        m_info.status             = UpdateStatus::kDownloaded;
-        m_info.downloadProgress   = 1.0;
-        m_info.downloadedFilePath = Config::pathToUtf8(mainTempPath);
+        result.downloadProgress   = 1.0;
+        result.downloadedFilePath = Config::pathToUtf8(mainTempPath);
+        result.status             = UpdateStatus::kDownloaded;
+        {
+            std::lock_guard<std::mutex> lock(m_infoMutex);
+            m_info = result;
+        }
         XINFO("UpdateChecker: Download complete -> {}",
               Config::pathToUtf8(mainTempPath));
     }).detach();
