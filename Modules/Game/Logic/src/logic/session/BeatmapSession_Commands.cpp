@@ -955,6 +955,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
     }
 }
 
+/// @brief 将当前谱面导出到指定路径，不接管当前会话的谱面路径或保存状态。
 void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 {
     if ( m_ctx->currentBeatmap ) {
@@ -978,11 +979,6 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
             .success  = true,
             .isExport = true,
         });
-        m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
-            makeCurrentProjectRelativePath(savePath);
-        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
-        m_ctx->actionStack.markSaved();
-        EditorEngine::instance().syncProjectWithFile(savePath);
     }
 }
 
