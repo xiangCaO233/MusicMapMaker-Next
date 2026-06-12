@@ -202,7 +202,7 @@ void SessionRegistry::fillIndexedSessionSnapshot(
           ++index ) {
         const auto& entry = m_entries[static_cast<size_t>(index)];
         if ( entry.session ) {
-            sessions.push_back({ index, entry.session });
+            sessions.push_back({ index, entry.session, entry.isCanvasVisible });
         }
     }
 }

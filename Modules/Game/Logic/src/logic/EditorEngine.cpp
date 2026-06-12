@@ -117,7 +117,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -711,10 +711,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1209,6 +1209,25 @@ bool EditorEngine::canHoverScrollCamera(const std::string& cameraId) const
     return canUseHoverScrollTargetUnsafe(sessions, activeIndex, targetIndex);
 }
 
+/// @brief 更新指定主画布窗口在 UI 中的可见状态。
+/// @warning UI 热路径：Basic2DCanvas 每帧写入；只修改注册表中的布尔状态。
+void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
+                                           bool               isVisible)
+{
+    if ( !SessionUtils::isMainCanvasCameraId(cameraId) ) {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( entry.cameraId == cameraId ) {
+            entry.isCanvasVisible = isVisible;
+            return;
+        }
+    }
+}
+
 /// @brief 获取当前工具类型。
 /// @warning 逻辑/UI 热路径原子：只读取工具枚举状态，使用 relaxed。
 EditTool EditorEngine::getCurrentTool() const
@@ -1385,7 +1404,8 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         if ( shouldClearHitEffects ) {
             ctx.hitFXSystem.clearActiveEffects();
         }
-        if ( ctx.isMainAudioSyncFollower ) {
+        if ( ctx.isMainAudioSyncFollower &&
+             sessions[static_cast<size_t>(i)].isCanvasVisible ) {
             updateFollowerHitEffects(ctx,
                                      previousAnimateTime,
                                      m_editorConfig,
@@ -1472,10 +1492,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);
@@ -1983,12 +2003,21 @@ void EditorEngine::loop()
             /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
             int32_t commandSyncSourceIndex = -1;
             for ( auto& entry : m_sessionUpdateSnapshot ) {
-                bool shouldUpdateSession = entry.index == activeIndex;
+                const bool isActiveSession = entry.index == activeIndex;
+                const bool isVisibleSession =
+                    isActiveSession || entry.isCanvasVisible;
+                const bool hadPendingCommands =
+                    entry.session->hasPendingCommands();
+                bool shouldUpdateSession = isActiveSession;
                 if ( !shouldUpdateSession ) {
                     const bool needsRealtimeUpdate =
                         entry.session->needsRealtimeUpdate();
-                    if ( needsRealtimeUpdate ) {
+                    if ( isVisibleSession && needsRealtimeUpdate ) {
                         shouldUpdateSession = true;
+                    } else if ( hadPendingCommands ) {
+                        shouldUpdateSession = true;
+                    } else if ( !isVisibleSession ) {
+                        shouldUpdateSession = false;
                     } else {
                         auto& lastBackgroundUpdate =
                             m_backgroundSessionUpdateTimes[static_cast<size_t>(
@@ -2005,12 +2034,9 @@ void EditorEngine::loop()
                     continue;
                 }
 
-                const bool hadPendingCommands =
-                    entry.session->hasPendingCommands();
                 const double previousCurrentTime =
                     entry.session->getContext().currentTime;
-                entry.session->update(
-                    dt, m_editorConfig, entry.index == activeIndex);
+                entry.session->update(dt, m_editorConfig, isActiveSession);
                 if ( hadPendingCommands &&
                      std::abs(entry.session->getContext().currentTime -
                               previousCurrentTime) >

@@ -230,6 +230,13 @@ public:
     /// SessionRegistry 锁。
     bool canHoverScrollCamera(const std::string& cameraId) const;
 
+    /// @brief 更新指定主画布窗口在 UI 中的可见状态。
+    /// @param cameraId 目标主画布 cameraId。
+    /// @param isVisible 当前 ImGui 窗口是否真实可见。
+    /// @warning UI 热路径：Basic2DCanvas 每帧写入；只更新 SessionEntry
+    /// 中的可见脏状态，供逻辑线程裁剪隐藏 tab 快照。
+    void setSessionCanvasVisible(const std::string& cameraId, bool isVisible);
+
     /**
      * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态
 

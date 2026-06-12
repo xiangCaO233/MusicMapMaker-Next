@@ -896,7 +896,7 @@ void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
     }
 
     auto renderableView = it->second->asRenderableView();
-    if ( renderableView ) {
+    if ( renderableView && renderableView->shouldRecordOffscreen() ) {
         renderableView->recordCmds(cmd, frameIndex);
     }
 }
