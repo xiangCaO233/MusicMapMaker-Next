@@ -21,6 +21,8 @@
 namespace MMM::Logic
 {
 
+class BeatmapSyncBuffer;
+
 /// @brief 相机/视口信息
 struct CameraInfo {
     std::string id;                        ///< 视口唯一标识符
@@ -71,6 +73,18 @@ struct SessionContext {
     std::unordered_map<std::string, CameraInfo>
               cameras;               ///< 当前所有活跃视口的信息
     glm::vec2 bgSize{ 0.0f, 0.0f };  ///< 背景图原始尺寸
+
+    /// @brief 当前 Session 已解析过的画布同步缓冲区缓存。
+    /// @warning 逻辑热路径共享指针：快照生成每 update 只读取 map
+    /// 中已有 shared_ptr 引用，不复制所有权；首次遇到新 cameraId
+    /// 时才从 RenderSyncRegistry 解析并保存所有权。
+    std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
+        syncBuffers;
+
+    /// @brief 当前 Session 各画布最近一次发布渲染快照的系统时间。
+    /// @warning
+    /// 逻辑热路径状态：播放时用于降低辅助画布快照频率；只在逻辑线程读写。
+    std::unordered_map<std::string, double> lastCameraSnapshotTimes;
 
     // --- 音频与播放状态 ---
     double    lastAudioPos{ 0.0 };         ///< 最近一次音频同步包中的时间戳

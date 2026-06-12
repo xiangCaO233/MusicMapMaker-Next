@@ -135,7 +135,8 @@ void NoteRenderSystem::renderNotes(
         noteEntities,
         noteSeen);
 
-    bool shouldGenerateHitboxes = snapshot->acceptsInteraction &&
+    bool shouldGenerateHitboxes = !snapshot->isPlaying &&
+                                  snapshot->acceptsInteraction &&
                                   SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
@@ -198,18 +199,20 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 6. 顶层重叠遮罩
-    NoteRenderSystem::renderOverlapMasks(registry,
-                                         snapshot,
-                                         ctx,
-                                         config,
-                                         noteEntities,
-                                         judgmentLineY,
-                                         leftX,
-                                         rightX,
-                                         topY,
-                                         bottomY,
-                                         singleTrackW,
-                                         renderScaleY);
+    if ( !snapshot->isPlaying ) {
+        NoteRenderSystem::renderOverlapMasks(registry,
+                                             snapshot,
+                                             ctx,
+                                             config,
+                                             noteEntities,
+                                             judgmentLineY,
+                                             leftX,
+                                             rightX,
+                                             topY,
+                                             bottomY,
+                                             singleTrackW,
+                                             renderScaleY);
+    }
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(

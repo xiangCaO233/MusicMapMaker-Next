@@ -20,6 +20,11 @@ namespace MMM::Logic::System
 namespace
 {
 
+/// @brief UI playback interpolation window in steady-clock seconds.
+/// @warning Snapshot hot path constant; keep in sync with
+/// CanvasSnapshotPrepare.
+constexpr double UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS = 0.1;
+
 /// @brief 绘制时间线/预览用的小型判定框。
 /// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
 void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
@@ -80,7 +85,27 @@ void NoteRenderSystem::generateSnapshot(
         registry.ctx().emplace<const ScrollCache*>(cache);
     }
 
-    // Timeline 右键创建事件需要完整映射；普通播放快照已禁用 UI 侧外推。
+    const double interpolationDuration =
+        std::abs(snapshot->playbackSpeed) *
+        UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS;
+    const bool canUsePlaybackInterpolation =
+        snapshot->isPlaying && !snapshot->isPreviewDragging &&
+        (isMainCanvas || cameraId == "Preview") && std::isfinite(renderTime) &&
+        std::isfinite(interpolationDuration) &&
+        cache->canInterpolateLinearly(renderTime, interpolationDuration);
+    if ( canUsePlaybackInterpolation ) {
+        const double interpolationSpeed =
+            cache->getSpeedAt(renderTime) * snapshot->playbackSpeed;
+        snapshot->allowUiPlaybackInterpolation =
+            std::isfinite(interpolationSpeed);
+        snapshot->uiInterpolationAbsYSpeed =
+            snapshot->allowUiPlaybackInterpolation ? interpolationSpeed : 0.0;
+    } else {
+        snapshot->allowUiPlaybackInterpolation = false;
+        snapshot->uiInterpolationAbsYSpeed     = 0.0;
+    }
+
+    // Timeline 右键创建事件需要完整映射；普通播放快照只携带线性补间速度。
     if ( cameraId == "Timeline" ) {
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }

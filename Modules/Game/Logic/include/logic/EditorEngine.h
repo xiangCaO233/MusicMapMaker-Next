@@ -439,11 +439,6 @@ private:
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
 
-    /// @brief 逻辑线程复用的 Session 更新快照容器。
-    /// @warning 逻辑热路径/共享指针：每 update 复用容量以避免 vector
-    /// 分配；元素持有 shared_ptr 是为了保证锁外 update 生命周期安全。
-    std::vector<SessionSnapshotEntry> m_sessionUpdateSnapshot;
-
     /// @brief 非活跃 Session 最近一次生成渲染快照的时间点，按 Session
     /// 索引存储。
     /// @warning 逻辑热路径：每 update

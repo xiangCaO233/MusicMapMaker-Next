@@ -164,6 +164,7 @@ void ProjectController::requestOpenProject(
     } else {
         m_requestedProjectPath = projectPath;
     }
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
@@ -193,6 +194,7 @@ void ProjectController::requestCreateProject(
         m_requestedProjectPath            = projectPath;
         m_requestedProjectCreationOptions = options;
     }
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 请求关闭当前项目，必要时等待 UI 完成旧画布关闭。
@@ -209,6 +211,7 @@ void ProjectController::requestCloseProject()
     m_requestedProjectClose = true;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
@@ -228,6 +231,7 @@ void ProjectController::completePendingProjectSwitch()
     if ( m_pendingProjectClose ) {
         m_pendingProjectClose = false;
         m_projectCloseReady   = true;
+        m_hasPendingProjectAction.store(true, std::memory_order_release);
         return;
     }
 
@@ -237,6 +241,7 @@ void ProjectController::completePendingProjectSwitch()
     m_pendingProjectCreationOptions = m_pendingProjectSwitchCreationOptions;
     m_pendingProjectSwitchPath.clear();
     m_pendingProjectSwitchCreationOptions.reset();
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 取消所有挂起项目切换流程。
@@ -253,6 +258,7 @@ void ProjectController::cancelPendingProjectSwitch()
     m_requestedProjectClose = false;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
+    m_hasPendingProjectAction.store(false, std::memory_order_release);
 }
 
 /// @brief 消费逻辑线程本轮需要处理的项目切换动作。
@@ -261,6 +267,11 @@ void ProjectController::cancelPendingProjectSwitch()
 ProjectController::PendingProjectAction
 ProjectController::consumePendingProjectAction(bool needsCanvasClose)
 {
+    if ( !m_hasPendingProjectAction.exchange(false,
+                                             std::memory_order_acq_rel) ) {
+        return {};
+    }
+
     /// @brief 本轮要返回给逻辑线程的项目动作。
     PendingProjectAction action;
     /// @brief 本轮消费到的项目打开请求。
@@ -353,6 +364,12 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     }
 
     return action;
+}
+
+/// @brief 判断是否存在待逻辑线程消费的项目切换动作。
+bool ProjectController::hasPendingProjectAction() const
+{
+    return m_hasPendingProjectAction.load(std::memory_order_acquire);
 }
 
 /// @brief 打开项目并启动项目目录监听。

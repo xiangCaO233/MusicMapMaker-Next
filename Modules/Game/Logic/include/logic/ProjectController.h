@@ -8,6 +8,7 @@
 #include "logic/ProjectResourceService.h"
 #include "mmm/project/Project.h"
 
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -140,6 +141,12 @@ public:
     /// @param needsCanvasClose 当前是否需要先关闭旧谱面画布。
     /// @return 本轮需要执行的关闭或打开动作。
     PendingProjectAction consumePendingProjectAction(bool needsCanvasClose);
+
+    /// @brief 判断是否存在待逻辑线程消费的项目切换动作。
+    /// @return 有待处理动作时返回 true。
+    /// @warning 逻辑热路径原子：loop 每 update 读取；只作为是否需要进入
+    /// consumePendingProjectAction 和计算旧画布关闭条件的门闩。
+    bool hasPendingProjectAction() const;
 
     /// @brief 打开项目并启动项目目录监听。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
@@ -280,6 +287,12 @@ private:
 
     /// @brief 保护项目打开和关闭请求状态的轻量级锁。
     mutable std::mutex m_pendingMutex;
+
+    /// @brief 是否存在需要逻辑线程消费的项目切换动作。
+    /// @warning 逻辑热路径原子：loop 每 update 读取；UI/事件线程在请求项目
+    /// 打开、创建、关闭或完成旧画布关闭后写入。仅作为进入 m_pendingMutex
+    /// 的脏位门闩，使用 acquire/release。
+    std::atomic<bool> m_hasPendingProjectAction{ false };
 };
 
 }  // namespace MMM::Logic

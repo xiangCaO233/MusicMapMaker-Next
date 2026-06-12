@@ -27,6 +27,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.actionStack.clear();
     ctx.sortedNoteEntities.clear();
     ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.lastCameraSnapshotTimes.clear();
     ctx.isNoteOrderDirty = true;
     ctx.isNotePruneDirty = false;
     ctx.isNoteStatsDirty = true;

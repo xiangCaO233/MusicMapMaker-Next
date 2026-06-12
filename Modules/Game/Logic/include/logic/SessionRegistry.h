@@ -49,6 +49,18 @@ struct SessionSnapshotEntry {
 
     /// @brief 该 Session 对应主画布本帧是否可见。
     bool isCanvasVisible{ true };
+
+    /// @brief 当前会话主音轨同步键。
+    std::string mainAudioSyncKey;
+
+    /// @brief 该条目是否为 Logo 占位画布。
+    bool isLogoPlaceholder{ false };
+};
+
+/// @brief 发布给逻辑热路径的不可变 Session 列表快照。
+struct PublishedSessionSnapshot {
+    /// @brief 当前所有有效 Session 的稳定快照。
+    std::vector<SessionSnapshotEntry> sessions;
 };
 
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
@@ -56,7 +68,7 @@ class SessionRegistry
 {
 public:
     /// @brief 构造空会话注册表。
-    SessionRegistry() = default;
+    SessionRegistry();
 
     /// @brief 析构会话注册表。
     ~SessionRegistry() = default;
@@ -148,6 +160,12 @@ public:
     void fillIndexedSessionSnapshot(
         std::vector<SessionSnapshotEntry>& sessions) const;
 
+    /// @brief 获取当前发布给逻辑线程的不可变 Session 快照。
+    /// @return 当前已发布快照。
+    /// @warning 逻辑热路径原子：loop 每 update 读取一次；只做 acquire
+    /// 指针读取，不获取 SessionRegistry 互斥锁，也不复制 shared_ptr。
+    const PublishedSessionSnapshot& publishedSnapshot() const;
+
     /// @brief 查找第一个 Logo 占位 Session。
     /// @return Logo 占位 Session 索引；不存在时返回 -1。
     int32_t findLogoPlaceholder() const;
@@ -174,6 +192,11 @@ public:
     /// @return 内部 SessionEntry 列表只读引用。
     const std::vector<SessionEntry>& entriesUnsafe() const;
 
+    /// @brief 将当前 SessionEntry 列表发布为新的逻辑线程只读快照。
+    /// @warning 调用者必须持有 mutex()；低频结构/可见性变更路径使用。
+    /// 旧快照保留到注册表析构，避免热路径读侧原子引用计数。
+    void publishSnapshotUnsafe();
+
 private:
     /// @brief 在调用者已持锁时判断索引是否有效。
     /// @param index 待检查的 Session 索引。
@@ -197,6 +220,14 @@ private:
 
     /// @brief 保护会话列表和活跃索引相关复合操作的递归锁。
     mutable std::recursive_mutex m_mutex;
+
+    /// @brief 逻辑线程当前可读取的不可变 Session 快照。
+    /// @warning 逻辑热路径原子：loop 每 update acquire 读取；写侧在持有
+    /// m_mutex 后 release 发布新快照。原子只承载快照指针。
+    std::atomic<const PublishedSessionSnapshot*> m_publishedSnapshot{ nullptr };
+
+    /// @brief 已发布快照的所有权存储，旧快照延迟到注册表析构释放。
+    std::vector<std::unique_ptr<PublishedSessionSnapshot>> m_snapshotStorage;
 };
 
 }  // namespace MMM::Logic

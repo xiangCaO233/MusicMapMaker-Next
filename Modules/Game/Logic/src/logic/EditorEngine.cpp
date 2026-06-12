@@ -1233,7 +1233,11 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         if ( entry.cameraId == cameraId ) {
+            if ( entry.isCanvasVisible == isVisible ) {
+                return;
+            }
             entry.isCanvasVisible = isVisible;
+            m_sessionRegistry.publishSnapshotUnsafe();
             return;
         }
     }
@@ -1305,6 +1309,7 @@ void EditorEngine::refreshMainAudioSyncKeysUnsafe()
         entry.mainAudioSyncKey = getMainAudioSyncKey(ctx, currentProject);
     }
     refreshMainAudioSyncPeerStateUnsafe();
+    m_sessionRegistry.publishSnapshotUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
 }
 
@@ -1353,75 +1358,75 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
-    if ( sourceIndex < 0 ||
-         sourceIndex >= static_cast<int32_t>(sessions.size()) ||
-         !sessions[static_cast<size_t>(sourceIndex)].session ) {
+    {
+        const auto& sessions = m_sessionRegistry.publishedSnapshot().sessions;
+        const auto  sourceEntry =
+            std::find_if(sessions.begin(),
+                         sessions.end(),
+                         [sourceIndex](const SessionSnapshotEntry& entry) {
+                             return entry.index == sourceIndex;
+                         });
+        if ( sourceEntry == sessions.end() || !sourceEntry->session ) {
+            return;
+        }
+
+        auto&       sourceCtx = sourceEntry->session->getContext();
+        const auto& sourceKey = sourceEntry->mainAudioSyncKey;
+        if ( sourceKey.empty() ) {
+            return;
+        }
+        if ( sourceCtx.isMainAudioSyncFollower && !sourceCtx.isPlaying ) {
+            return;
+        }
+
+        for ( const auto& entry : sessions ) {
+            if ( entry.index == sourceIndex || !entry.session ||
+                 entry.mainAudioSyncKey != sourceKey ) {
+                continue;
+            }
+
+            auto& ctx = entry.session->getContextMutable();
+
+            const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
+            const double previousAnimateTime = ctx.animateTime;
+            const bool   shouldClearHitEffects =
+                wasFollowing != sourceCtx.isPlaying ||
+                sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                    previousAnimateTime ||
+                std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
+
+            ctx.currentTime       = sourceCtx.currentTime;
+            ctx.animateTime       = sourceCtx.animateTime;
+            ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
+            ctx.animateTimeAnimationActive =
+                sourceCtx.animateTimeAnimationActive;
+            ctx.animatedTimelineZoom = sourceCtx.animatedTimelineZoom;
+            ctx.animatedTimelineZoomTarget =
+                sourceCtx.animatedTimelineZoomTarget;
+            ctx.animatedTimelineZoomAnimationActive =
+                sourceCtx.animatedTimelineZoomAnimationActive;
+            ctx.isPlaying               = false;
+            ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
+            ctx.lastAudioPos            = 0.0;
+            ctx.lastAudioSysTime        = 0.0;
+            ctx.hasInitialAudioOffset   = false;
+            ctx.playStartSysTime =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            ctx.playStartVisualTime = ctx.currentTime;
+            ctx.syncClock.reset(ctx.currentTime);
+            if ( shouldClearHitEffects ) {
+                ctx.hitFXSystem.clearActiveEffects();
+            }
+            if ( ctx.isMainAudioSyncFollower && entry.isCanvasVisible ) {
+                updateFollowerHitEffects(ctx,
+                                         previousAnimateTime,
+                                         m_editorConfig,
+                                         shouldClearHitEffects);
+            }
+        }
         return;
-    }
-
-    auto& sourceCtx =
-        sessions[static_cast<size_t>(sourceIndex)].session->getContext();
-    const auto& sourceKey =
-        sessions[static_cast<size_t>(sourceIndex)].mainAudioSyncKey;
-    if ( sourceKey.empty() ) {
-        return;
-    }
-    // 被动 follower 的时间变化来自本地视觉插值，不能反向覆盖真正的播放源。
-    if ( sourceCtx.isMainAudioSyncFollower && !sourceCtx.isPlaying ) {
-        return;
-    }
-
-    for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
-        if ( i == sourceIndex || !sessions[static_cast<size_t>(i)].session ) {
-            continue;
-        }
-
-        auto& ctx =
-            sessions[static_cast<size_t>(i)].session->getContextMutable();
-        if ( sessions[static_cast<size_t>(i)].mainAudioSyncKey != sourceKey ) {
-            continue;
-        }
-
-        const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
-        const double previousAnimateTime = ctx.animateTime;
-        const bool   shouldClearHitEffects =
-            wasFollowing != sourceCtx.isPlaying ||
-            sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
-                previousAnimateTime ||
-            std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
-
-        ctx.currentTime                = sourceCtx.currentTime;
-        ctx.animateTime                = sourceCtx.animateTime;
-        ctx.animateTimeTarget          = sourceCtx.animateTimeTarget;
-        ctx.animateTimeAnimationActive = sourceCtx.animateTimeAnimationActive;
-        ctx.animatedTimelineZoom       = sourceCtx.animatedTimelineZoom;
-        ctx.animatedTimelineZoomTarget = sourceCtx.animatedTimelineZoomTarget;
-        ctx.animatedTimelineZoomAnimationActive =
-            sourceCtx.animatedTimelineZoomAnimationActive;
-        ctx.isPlaying               = false;
-        ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
-        ctx.lastAudioPos            = 0.0;
-        ctx.lastAudioSysTime        = 0.0;
-        ctx.hasInitialAudioOffset   = false;
-        ctx.playStartSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        ctx.playStartVisualTime = ctx.currentTime;
-        ctx.syncClock.reset(ctx.currentTime);
-        if ( shouldClearHitEffects ) {
-            ctx.hitFXSystem.clearActiveEffects();
-        }
-        if ( ctx.isMainAudioSyncFollower &&
-             sessions[static_cast<size_t>(i)].isCanvasVisible ) {
-            updateFollowerHitEffects(ctx,
-                                     previousAnimateTime,
-                                     m_editorConfig,
-                                     shouldClearHitEffects);
-        }
     }
 }
 
@@ -1519,6 +1524,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
                 refreshMainAudioSyncPeerStateUnsafe();
+                m_sessionRegistry.publishSnapshotUnsafe();
                 m_lastMainAudioSyncActiveIndex = -1;
 
                 XINFO("Reused Logo canvas {} for beatmap: {}",
@@ -1667,6 +1673,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
 
     m_sessionRegistry.setActiveIndex(index);
     refreshMainAudioSyncPeerStateUnsafe();
+    m_sessionRegistry.publishSnapshotUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
 
     if ( updateWorkspace ) {
@@ -1969,19 +1976,14 @@ void EditorEngine::loop()
             m_lastUpsTime      = currentTime;
         }
 
-        /// @brief 释放上一轮锁外 update 持有的 Session 引用，并保留 vector
-        /// 容量供本轮复用。
-        m_sessionUpdateSnapshot.clear();
-
-        // 关键修复：使用 shared_ptr 在锁内获取引用。
-        // 这样即使 UI 线程在此时 closeSession 销毁了某个 Session，
-        // 逻辑线程持有的共享引用也能保证 session 在 update
-        // 期间一直有效。
         // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
         // 交叉）
         /// @brief 项目控制器消费出的本轮项目打开或关闭动作。
-        auto projectAction = projectController.consumePendingProjectAction(
-            needsCanvasCloseBeforeProjectOpen());
+        ProjectController::PendingProjectAction projectAction;
+        if ( projectController.hasPendingProjectAction() ) {
+            projectAction = projectController.consumePendingProjectAction(
+                needsCanvasCloseBeforeProjectOpen());
+        }
         if ( projectAction.m_closeProject ) {
             closeProject();
         }
@@ -1991,15 +1993,16 @@ void EditorEngine::loop()
         }
 
         // 多 Session 轮询更新
-        /// @brief 当前所有有效 Session 指针快照，避免更新时持有注册表锁。
-        /// @warning 逻辑热路径/共享指针：这里的 shared_ptr
-        /// 拷贝用于保证会话在锁外 update 期间不被 UI 线程关闭释放。
-        m_sessionRegistry.fillIndexedSessionSnapshot(m_sessionUpdateSnapshot);
+        /// @brief 当前已发布的 Session 快照，避免每 update 获取注册表锁。
+        /// @warning 逻辑热路径/原子：只读取发布快照指针；快照自身保留
+        /// shared_ptr 所有权，不在本轮循环复制引用计数。
+        const auto& sessionUpdateSnapshot =
+            m_sessionRegistry.publishedSnapshot().sessions;
 
-        if ( !m_sessionUpdateSnapshot.empty() ) {
+        if ( !sessionUpdateSnapshot.empty() ) {
             int32_t activeIndex     = m_sessionRegistry.activeIndex();
             int32_t maxSessionIndex = -1;
-            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 maxSessionIndex = std::max(maxSessionIndex, entry.index);
             }
             if ( maxSessionIndex >= 0 &&
@@ -2013,7 +2016,7 @@ void EditorEngine::loop()
                 backgroundSessionUpdateInterval(refreshRate);
             /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
             int32_t commandSyncSourceIndex = -1;
-            for ( auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 const bool isActiveSession = entry.index == activeIndex;
                 const bool isVisibleSession =
                     isActiveSession || entry.isCanvasVisible;
@@ -2071,7 +2074,7 @@ void EditorEngine::loop()
             }
 
             bool shouldSyncMainAudioCanvases = false;
-            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 if ( entry.index != activeIndex || !entry.session ) {
                     continue;
                 }
@@ -2093,7 +2096,7 @@ void EditorEngine::loop()
             }
             m_cursorSmokeLifeOverride.store(
                 resolveActiveCursorSmokeLifeOverride(
-                    m_sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
+                    sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
                 std::memory_order_relaxed);
         } else {
             m_cursorSmokeLifeOverride.store(-1.0f, std::memory_order_relaxed);

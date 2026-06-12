@@ -1,6 +1,7 @@
 #pragma once
 
 #include "logic/BeatmapSyncBuffer.h"
+#include <atomic>
 #include <cstdint>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
@@ -20,7 +21,7 @@ class RenderSyncRegistry
 {
 public:
     /// @brief 构造空渲染同步注册表。
-    RenderSyncRegistry() = default;
+    RenderSyncRegistry();
 
     /// @brief 析构渲染同步注册表。
     ~RenderSyncRegistry() = default;
@@ -63,8 +64,8 @@ public:
     /// @param target 目标快照中的 UV 映射表。
     /// @param targetRevision 目标快照当前持有的 UV 修订号。
     /// @warning
-    /// 逻辑/渲染热路径：每个快照生成时调用；只有图集修订号变化时才在锁内 复制
-    /// unordered_map，普通路径只做一次锁内查找和整数比较。
+    /// 逻辑/渲染热路径：每个快照生成时调用；普通路径只做原子快照读取和
+    /// 修订号比较，只有图集修订号变化时才复制 unordered_map。
     void updateSnapshotAtlasUVMap(
         const std::string&                       cameraId,
         std::unordered_map<uint32_t, glm::vec4>& target,
@@ -96,11 +97,24 @@ private:
         std::uint64_t revision{ 0 };                    ///< 当前图集修订号。
     };
 
-    /// @brief 在已持锁状态下查找画布图集，缺失时回退到 Basic2DCanvas。
+    /// @brief 发布给逻辑热路径的不可变图集 UV 快照。
+    struct PublishedAtlasUVSnapshot {
+        /// @brief 各画布图集 UV 映射及其修订号。
+        std::unordered_map<std::string, AtlasUVMapState> cameraUVMaps;
+    };
+
+    /// @brief 在发布快照中查找画布图集，缺失时回退到 Basic2DCanvas。
+    /// @param snapshot 已发布图集快照。
     /// @param cameraId 目标画布 cameraId。
     /// @return 找到的图集状态；没有可用图集时返回 nullptr。
-    const AtlasUVMapState* findAtlasUVMapStateUnsafe(
-        const std::string& cameraId) const;
+    const AtlasUVMapState* findAtlasUVMapStateInSnapshot(
+        const PublishedAtlasUVSnapshot& snapshot,
+        const std::string&              cameraId) const;
+
+    /// @brief 将当前图集 UV 映射发布为新的逻辑线程只读快照。
+    /// @warning 调用者必须持有
+    /// m_mutex；低频图集变更路径使用。旧快照保留到注册表析构。
+    void publishAtlasUVSnapshotUnsafe();
 
     /// @brief 判断画布是否为需要同步给新 Session 的共享视口。
     /// @param cameraId 待检查的画布 cameraId。
@@ -122,6 +136,17 @@ private:
 
     /// @brief 保护同步缓冲区、图集 UV 映射和视口尺寸缓存的共享锁。
     mutable std::shared_mutex m_mutex;
+
+    /// @brief 逻辑线程当前可读取的不可变图集 UV 快照。
+    /// @warning 逻辑热路径原子：每个快照生成时 acquire 读取；写侧在持有
+    /// m_mutex 后 release 发布新快照。原子只承载快照指针。
+    std::atomic<const PublishedAtlasUVSnapshot*> m_publishedAtlasUVSnapshot{
+        nullptr
+    };
+
+    /// @brief 已发布图集快照的所有权存储，旧快照延迟到注册表析构释放。
+    std::vector<std::unique_ptr<PublishedAtlasUVSnapshot>>
+        m_atlasUVSnapshotStorage;
 };
 
 }  // namespace MMM::Logic

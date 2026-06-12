@@ -5,6 +5,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "ui/brush/BrushDrawCmd.h"
+#include <cmath>
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -212,6 +213,15 @@ struct RenderSnapshot {
     /// @brief 当前播放速度倍率 (用于 UI 侧亚帧插值)
     double playbackSpeed{ 1.0 };
 
+    /// @brief 当前快照是否允许 UI 线程对动态顶点做线性播放补间。
+    /// @warning UI 每帧路径读取；逻辑线程只在生成快照时写入，不得在 UI 侧修改。
+    bool allowUiPlaybackInterpolation{ false };
+
+    /// @brief UI 播放补间使用的 AbsY 每秒速度。
+    /// @warning UI 每帧路径读取；只承载线性滚动段速度，SV/JUMP
+    /// 边界附近必须置零。
+    double uiInterpolationAbsYSpeed{ 0.0 };
+
     /// @brief 无效 BPM 事件的会话级回退 BPM。
     double fallbackBpm{ 120.0 };
 
@@ -308,9 +318,9 @@ struct RenderSnapshot {
      * @brief [UI 线程专用] 亚帧插值：获取从 currentTime 到 currentTime + dt
      * 的累积绝对位移
      *
-     * 高 SV 微段会在 1ms 内出现极大的正负速度脉冲。UI 线程若拿旧快照顶点做
-     * 亚帧外推，会显示逻辑快照之间本不该稳定呈现的中间态，造成物件闪回。
-     * 因此当前禁用 UI 侧补偿，播放画面完全以逻辑线程生成的新快照为准。
+     * 普通线性滚动段可以直接使用快照记录的 AbsY 速度补间；高 SV、JUMP
+     * 或跨段边界 会在快照生成时关闭 allowUiPlaybackInterpolation，避免 UI
+     * 线程显示不稳定中间态。
      *
      * @param dt 滞后时间 (秒，UI绘制时刻 - 快照生成时刻)。
      * @return 累积位移 (AbsY 空间)
@@ -318,8 +328,12 @@ struct RenderSnapshot {
      */
     double getInterpolatedOffset(double dt) const
     {
-        (void)dt;
-        return 0.0;
+        if ( !allowUiPlaybackInterpolation || !isPlaying || dt <= 0.0 ||
+             dt >= 0.1 || !std::isfinite(dt) ||
+             !std::isfinite(uiInterpolationAbsYSpeed) ) {
+            return 0.0;
+        }
+        return uiInterpolationAbsYSpeed * dt;
     }
 
     /// @brief 清理当前快照数据（保留内存容量）
@@ -337,17 +351,19 @@ struct RenderSnapshot {
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();
         backgroundPath.clear();
-        bgSize             = glm::vec2(0.0f, 0.0f);
-        isPlaying          = false;
-        currentTime        = 0.0;
-        totalTime          = 0.0;
-        snapshotSysTime    = 0.0;
-        playbackSpeed      = 1.0;
-        fallbackBpm        = 120.0;
-        currentTool        = EditTool::Move;
-        acceptsInteraction = false;
-        isHoveringCanvas   = false;
-        isSelecting        = false;
+        bgSize                       = glm::vec2(0.0f, 0.0f);
+        isPlaying                    = false;
+        currentTime                  = 0.0;
+        totalTime                    = 0.0;
+        snapshotSysTime              = 0.0;
+        playbackSpeed                = 1.0;
+        allowUiPlaybackInterpolation = false;
+        uiInterpolationAbsYSpeed     = 0.0;
+        fallbackBpm                  = 120.0;
+        currentTool                  = EditTool::Move;
+        acceptsInteraction           = false;
+        isHoveringCanvas             = false;
+        isSelecting                  = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
         hoveredTime            = 0.0;
