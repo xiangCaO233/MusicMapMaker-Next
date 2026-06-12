@@ -86,6 +86,21 @@ private:
     void updateECSAndRender(const Config::EditorConfig& config,
                             bool                        isActiveSession);
 
+    /// @brief 根据逻辑时间刷新动画渲染时间。
+    /// @param dt 帧间隔时间，单位秒。
+    /// @param config 全局编辑器配置。
+    /// @param forceImmediate 是否强制跳过暂停态滚动动画。
+    /// @warning 逻辑热路径：每个 Session update 执行；只允许常量级数学运算。
+    void updateAnimateTime(double dt, const Config::EditorConfig& config,
+                           bool forceImmediate);
+
+    /// @brief 刷新渲染使用的动画时间线缩放倍率。
+    /// @param dt 帧间隔时间，单位秒。
+    /// @param config 全局编辑器配置。
+    /// @warning 逻辑热路径：每个 Session update 执行；只允许常量级数学运算。
+    void updateAnimatedTimelineZoom(double                      dt,
+                                    const Config::EditorConfig& config);
+
     // --- 内部指令处理器 (由 Session 自身处理的元命令) ---
     void handleCommand(const CmdUpdateEditorConfig& cmd);
     void handleCommand(const CmdUpdateViewport& cmd);

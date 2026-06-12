@@ -373,6 +373,7 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
             TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
             TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+            TR_CACHE("ui.settings.visual.scroll_animation_duration").data(),
             TR_CACHE("ui.settings.visual.linear_scroll").data(),
             TR_CACHE("ui.settings.visual.snap_threshold").data(),
         };
@@ -486,6 +487,25 @@ void SettingsView::drawVisualSettings()
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
                         TR("ui.settings.visual.timeline_zoom_tooltip").data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.scroll_animation_duration").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ImGui::SliderFloat("##ScrollAnimationDuration",
+                                              &visual.scrollAnimationDuration,
+                                              0.0f,
+                                              0.5f,
+                                              "%.3f s");
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.visual.scroll_animation_tooltip")
+                            .data(),
                         Utils::TooltipDir::Right);
                 }
             });

@@ -322,9 +322,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -334,7 +334,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     if ( !cache ) return;
 
-    double currentAbsY = cache->getAbsY(ctx.visualTime);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
     double targetAbsY =
         currentAbsY + (judgmentLineY - cmd.mouseY) / renderScaleY;
     double targetTime = cache->getTime(targetAbsY);
@@ -357,7 +357,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
                                             ctx.lastConfig,
                                             bpmEvents,
                                             ctx.timelineRegistry,
-                                            ctx.visualTime,
+                                            ctx.animateTime,
                                             ctx.cameras);
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
         targetTime = snap.snappedTime;
@@ -522,12 +522,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW  = (it->second.viewportWidth *
-                              (ctx.lastConfig.visual.trackLayout.right -
-                               ctx.lastConfig.visual.trackLayout.left)) /
-                             static_cast<float>(ctx.trackCount);
-            float lx       = it->second.viewportWidth *
-                             ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW = (it->second.viewportWidth *
+                             (ctx.lastConfig.visual.trackLayout.right -
+                              ctx.lastConfig.visual.trackLayout.left)) /
+                            static_cast<float>(ctx.trackCount);
+            float lx = it->second.viewportWidth *
+                       ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {

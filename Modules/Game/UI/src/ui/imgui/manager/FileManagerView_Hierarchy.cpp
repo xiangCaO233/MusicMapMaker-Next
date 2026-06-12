@@ -35,10 +35,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     };
     const uint16_t compactGap =
         toLayoutPixels(std::max(2.0f * dpiScale, style.ItemSpacing.y * 0.25f));
-    const uint16_t rootPadding =
-        toLayoutPixels(std::max(12.0f * dpiScale, style.FramePadding.x * 2.0f));
-    const uint16_t rootGap =
-        toLayoutPixels(std::max(8.0f * dpiScale, style.ItemSpacing.y));
+    const uint16_t rootPadding = toLayoutPixels(std::min(
+        4.0f * dpiScale, std::max(0.0f, layoutContext.m_avail.x) * 0.02f));
 
     CLayVBox treeVBox;
     treeVBox.setSpacing(compactGap);
@@ -67,6 +65,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
             Sizing::Grow(),
             [this, sourceManager, &layoutContext](Clay_BoundingBox r,
                                                   bool             isHovered) {
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(0.0f, 0.0f));
                 ImGui::BeginChild("FileTreeChild",
                                   { r.width, r.height },
                                   false,
@@ -87,12 +87,13 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                 layoutContext.m_avail    = oldAvail;
 
                 ImGui::EndChild();
+                ImGui::PopStyleVar();
             });
     }
 
     CLayVBox rootVBox;
     rootVBox.setPadding(rootPadding, rootPadding, rootPadding, rootPadding)
-        .setSpacing(rootGap)
+        .setSpacing(compactGap)
         .addLayout("treeVBox", treeVBox, Sizing::Grow(), Sizing::Grow());
 
     rootVBox.render(layoutContext);

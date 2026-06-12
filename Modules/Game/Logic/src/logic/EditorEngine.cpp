@@ -46,10 +46,10 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
-/// @brief 为同主音轨后台跟随谱面推进视觉打击特效事件。
+/// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
 /// hitEvents，只有音符变更后的脏分支允许重建事件序列。
-void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
+void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
                               const Config::EditorConfig& config,
                               bool                        resetHitIndex)
 {
@@ -62,15 +62,15 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousVisualTime,
 
     std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
     while ( ctx.nextHitIndex < ctx.hitEvents.size() &&
-            ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.visualTime ) {
+            ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.animateTime ) {
         const auto& ev = ctx.hitEvents[ctx.nextHitIndex];
-        if ( ev.timestamp > previousVisualTime ) {
+        if ( ev.timestamp > previousAnimateTime ) {
             triggeredEvents.push_back(ev);
         }
         ctx.nextHitIndex++;
     }
 
-    ctx.hitFXSystem.update(ctx.visualTime, triggeredEvents, config);
+    ctx.hitFXSystem.update(ctx.animateTime, triggeredEvents, config);
 }
 
 /// @brief 等待到目标逻辑更新时间点，避免用 yield 反复忙等。
@@ -438,17 +438,21 @@ void applyToolbarWorkspaceState(
         std::clamp(toolbarState.m_timelineZoom, 0.1f, 10.0f);
 }
 
-/// @brief 保留由 AppConfig 直接维护的全局 UI 窗口显示状态。
+/// @brief 保留由 AppConfig 直接维护的全局软件级状态。
 /// @param target 即将写回引擎和 AppConfig 的配置。
 /// @param source 当前 AppConfig 中的全局配置快照。
-void preserveGlobalUiWindowSettings(Config::EditorConfig&       target,
-                                    const Config::EditorConfig& source)
+void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
+                                      const Config::EditorConfig& source)
 {
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
     target.settings.showPreviewWindow  = source.settings.showPreviewWindow;
     target.settings.showToolLabels     = source.settings.showToolLabels;
     target.settings.fixedToolWindow    = source.settings.fixedToolWindow;
     target.settings.showManagerLabels  = source.settings.showManagerLabels;
+    target.settings.autoUploadPgoProfiles =
+        source.settings.autoUploadPgoProfiles;
+    target.settings.pgoProfileUploadConsentAsked =
+        source.settings.pgoProfileUploadConsentAsked;
 }
 }  // namespace
 
@@ -914,6 +918,30 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
     saveProject();
 }
 
+/// @brief 重新预加载当前项目中的 Effect 音频资源。
+/// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
+/// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
+void EditorEngine::reloadCurrentProjectEffectSoundEffects()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+
+    const auto* currentProject = ProjectController::instance().currentProject();
+    if ( !currentProject ) {
+        return;
+    }
+
+    for ( const auto& res : currentProject->m_audioResources ) {
+        if ( res.m_type != AudioTrackType::Effect ) {
+            continue;
+        }
+
+        const auto absolutePath =
+            currentProject->m_projectRoot / Config::utf8ToPath(res.m_path);
+        Audio::AudioManager::instance().preloadSoundEffect(
+            res.m_id, Config::pathToUtf8(absolutePath), res.m_config.volume);
+    }
+}
+
 /// @brief 更新编辑器级剪贴板。
 void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
                                 const SessionContext* sourceContext, bool isCut)
@@ -1181,6 +1209,25 @@ bool EditorEngine::canHoverScrollCamera(const std::string& cameraId) const
     return canUseHoverScrollTargetUnsafe(sessions, activeIndex, targetIndex);
 }
 
+/// @brief 更新指定主画布窗口在 UI 中的可见状态。
+/// @warning UI 热路径：Basic2DCanvas 每帧写入；只修改注册表中的布尔状态。
+void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
+                                           bool               isVisible)
+{
+    if ( !SessionUtils::isMainCanvasCameraId(cameraId) ) {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    for ( auto& entry : sessions ) {
+        if ( entry.cameraId == cameraId ) {
+            entry.isCanvasVisible = isVisible;
+            return;
+        }
+    }
+}
+
 /// @brief 获取当前工具类型。
 /// @warning 逻辑/UI 热路径原子：只读取工具枚举状态，使用 relaxed。
 EditTool EditorEngine::getCurrentTool() const
@@ -1327,16 +1374,22 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
             continue;
         }
 
-        const bool   wasFollowing       = ctx.isMainAudioSyncFollower;
-        const double previousVisualTime = ctx.visualTime;
+        const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
+        const double previousAnimateTime = ctx.animateTime;
         const bool   shouldClearHitEffects =
             wasFollowing != sourceCtx.isPlaying ||
-            sourceCtx.visualTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
-                previousVisualTime ||
-            std::abs(sourceCtx.visualTime - previousVisualTime) > 0.2;
+            sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                previousAnimateTime ||
+            std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
 
-        ctx.currentTime             = sourceCtx.currentTime;
-        ctx.visualTime              = sourceCtx.visualTime;
+        ctx.currentTime                = sourceCtx.currentTime;
+        ctx.animateTime                = sourceCtx.animateTime;
+        ctx.animateTimeTarget          = sourceCtx.animateTimeTarget;
+        ctx.animateTimeAnimationActive = sourceCtx.animateTimeAnimationActive;
+        ctx.animatedTimelineZoom       = sourceCtx.animatedTimelineZoom;
+        ctx.animatedTimelineZoomTarget = sourceCtx.animatedTimelineZoomTarget;
+        ctx.animatedTimelineZoomAnimationActive =
+            sourceCtx.animatedTimelineZoomAnimationActive;
         ctx.isPlaying               = false;
         ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
         ctx.lastAudioPos            = 0.0;
@@ -1351,9 +1404,12 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         if ( shouldClearHitEffects ) {
             ctx.hitFXSystem.clearActiveEffects();
         }
-        if ( ctx.isMainAudioSyncFollower ) {
-            updateFollowerHitEffects(
-                ctx, previousVisualTime, m_editorConfig, shouldClearHitEffects);
+        if ( ctx.isMainAudioSyncFollower &&
+             sessions[static_cast<size_t>(i)].isCanvasVisible ) {
+            updateFollowerHitEffects(ctx,
+                                     previousAnimateTime,
+                                     m_editorConfig,
+                                     shouldClearHitEffects);
         }
     }
 }
@@ -1628,11 +1684,18 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 if ( oldCtx.isPlaying ) {
                     oldCtx.currentTime =
                         Audio::AudioManager::instance().getCurrentTime();
-                    oldCtx.visualTime =
+                    oldCtx.animateTime =
                         oldCtx.currentTime +
                         m_editorConfig.visual.getEffectiveVisualOffset();
-                    oldCtx.isPlaying               = false;
-                    oldCtx.isMainAudioSyncFollower = false;
+                    oldCtx.animateTimeTarget          = oldCtx.animateTime;
+                    oldCtx.animateTimeAnimationActive = false;
+                    oldCtx.animatedTimelineZoom =
+                        m_editorConfig.visual.timelineZoom;
+                    oldCtx.animatedTimelineZoomTarget =
+                        oldCtx.animatedTimelineZoom;
+                    oldCtx.animatedTimelineZoomAnimationActive = false;
+                    oldCtx.isPlaying                           = false;
+                    oldCtx.isMainAudioSyncFollower             = false;
                 }
                 syncedCurrentTime = oldCtx.currentTime;
             }
@@ -1704,8 +1767,13 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 minTime = totalTime;
             }
             ctx.currentTime = std::clamp(ctx.currentTime, minTime, totalTime);
-            ctx.visualTime  = ctx.currentTime +
+            ctx.animateTime = ctx.currentTime +
                               m_editorConfig.visual.getEffectiveVisualOffset();
+            ctx.animateTimeTarget          = ctx.animateTime;
+            ctx.animateTimeAnimationActive = false;
+            ctx.animatedTimelineZoom       = m_editorConfig.visual.timelineZoom;
+            ctx.animatedTimelineZoomTarget = ctx.animatedTimelineZoom;
+            ctx.animatedTimelineZoomAnimationActive = false;
             ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
             ctx.isPlaying   = false;
             ctx.isMainAudioSyncFollower = false;
@@ -1721,7 +1789,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             ctx.hitFXSystem.clearActiveEffects();
 
             // 同步进度到音频管理器。这里必须使用逻辑播放时间，
-            // visualTime 包含视觉偏移，会导致切换画布时跳到错误位置。
+            // 动画时间包含视觉偏移，会导致切换画布时跳到错误位置。
             Audio::AudioManager::instance().seek(ctx.currentTime);
 
             /// @brief 当前共享视口尺寸快照，用于刷新切换后的活跃 Session。
@@ -1763,7 +1831,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     m_editorConfig.settings.noteColorPalettes = globalNoteColorPalettes;
     m_editorConfig.settings.defaultNoteColorPaletteSchemeName =
         globalDefaultNoteColorPalette;
-    preserveGlobalUiWindowSettings(m_editorConfig, globalConfig);
+    preserveGlobalAppManagedSettings(m_editorConfig, globalConfig);
     m_frameLimitPreference.store(m_editorConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
@@ -1935,12 +2003,21 @@ void EditorEngine::loop()
             /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
             int32_t commandSyncSourceIndex = -1;
             for ( auto& entry : m_sessionUpdateSnapshot ) {
-                bool shouldUpdateSession = entry.index == activeIndex;
+                const bool isActiveSession = entry.index == activeIndex;
+                const bool isVisibleSession =
+                    isActiveSession || entry.isCanvasVisible;
+                const bool hadPendingCommands =
+                    entry.session->hasPendingCommands();
+                bool shouldUpdateSession = isActiveSession;
                 if ( !shouldUpdateSession ) {
                     const bool needsRealtimeUpdate =
                         entry.session->needsRealtimeUpdate();
-                    if ( needsRealtimeUpdate ) {
+                    if ( isVisibleSession && needsRealtimeUpdate ) {
                         shouldUpdateSession = true;
+                    } else if ( hadPendingCommands ) {
+                        shouldUpdateSession = true;
+                    } else if ( !isVisibleSession ) {
+                        shouldUpdateSession = false;
                     } else {
                         auto& lastBackgroundUpdate =
                             m_backgroundSessionUpdateTimes[static_cast<size_t>(
@@ -1957,12 +2034,9 @@ void EditorEngine::loop()
                     continue;
                 }
 
-                const bool hadPendingCommands =
-                    entry.session->hasPendingCommands();
                 const double previousCurrentTime =
                     entry.session->getContext().currentTime;
-                entry.session->update(
-                    dt, m_editorConfig, entry.index == activeIndex);
+                entry.session->update(dt, m_editorConfig, isActiveSession);
                 if ( hadPendingCommands &&
                      std::abs(entry.session->getContext().currentTime -
                               previousCurrentTime) >

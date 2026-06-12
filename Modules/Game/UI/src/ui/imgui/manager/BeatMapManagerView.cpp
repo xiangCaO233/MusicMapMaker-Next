@@ -18,12 +18,13 @@ namespace MMM::UI
 {
 
 /// @brief 获取谱面管理器中不可再换行控件所需的最小内容尺寸。
+/// @warning UI 热路径：子视图可见时每帧查询；仅保留轻量文本测量。
 ImVec2 BeatMapManagerView::getMinContentSize(float dpiScale) const
 {
     auto&       engine    = Logic::EditorEngine::instance();
     auto*       project   = engine.getCurrentProject();
     const float scale     = std::max(1.0f, dpiScale);
-    const float panelPad  = 12.0f * scale;
+    const float panelPad  = 4.0f * scale;
     const float rowHeight = 28.0f * scale;
     const float footerH   = 44.0f * scale;
     const float headerWidth =
@@ -58,8 +59,9 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
         ImGui::PushFont(fileManagerFont, fileManagerFont->LegacySize);
     }
 
-    const float panelPadding = 12.0f * dpiScale;
-    const float rowHeight    = 28.0f * dpiScale;
+    const float panelPadding = std::min(
+        4.0f * dpiScale, std::max(0.0f, layoutContext.m_avail.x) * 0.02f);
+    const float rowHeight = 28.0f * dpiScale;
 
     if ( !project ) {
         const char* hint     = TR("ui.beatmap_manager.initial_hint").data();
@@ -86,6 +88,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         std::max(0.0f, listH - panelPadding) };
 
     ImGui::SetCursorScreenPos(listPos);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::BeginChild(
         "BeatmapListChild", listSize, false, ImGuiWindowFlags_None);
 
@@ -138,6 +141,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     }
 
     ImGui::EndChild();
+    ImGui::PopStyleVar();
 
     float  btnSize    = 32.0f * dpiScale;
     ImVec2 footerPos  = { layoutContext.m_startPos.x + panelPadding,

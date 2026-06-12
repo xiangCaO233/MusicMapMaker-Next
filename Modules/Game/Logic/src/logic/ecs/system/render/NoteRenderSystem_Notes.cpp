@@ -66,8 +66,8 @@ struct NoteAbsYBucketIndex {
 };
 
 /// @brief 获取当前可视窗口附近的音符实体。
-/// @param currentTime 当前快照的视觉时间。
-/// @param currentAbsY 当前快照视觉时间对应的绝对 Y。
+/// @param currentTime 当前快照的动画时间。
+/// @param currentAbsY 当前快照动画时间对应的绝对 Y。
 /// @param visualPaddingPixels 当前皮肤与缩放下的候选视觉余量。
 /// @param interpolationSeconds UI 亚帧补偿需要覆盖的播放时间。
 /// @warning 热路径：每次音符快照生成时执行；只能使用已缓存排序实体与
@@ -269,7 +269,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto it = std::upper_bound(segments.begin(),
+    auto         it      = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -283,7 +283,9 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     double cursor      = currentTime;
     double paddingAbsY = 0.0;
     while ( cursor < endTime ) {
-        const double speed = std::isfinite(it->speed) ? it->speed : 0.0;
+        const double speed = std::isfinite(it->speed)
+                                 ? it->speed * cache->getAnimatedZoomScale()
+                                 : 0.0;
         auto         next  = std::next(it);
         const double sliceEnd =
             next != segments.end() ? std::min(endTime, next->time) : endTime;
@@ -357,7 +359,7 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
         auto includeEndpoint = [&](double time) {
             if ( !std::isfinite(time) ) return;
 
-            const double absY = cache->getAbsY(time);
+            const double absY = cache->toUnscaledAbsY(cache->getAbsY(time));
             if ( !std::isfinite(absY) ) return;
 
             const double hs = cache->getHsAt(time);
@@ -546,6 +548,11 @@ static std::vector<entt::entity> getNotesInRange(
         if ( !std::isfinite(queryMinAbsY) || !std::isfinite(queryMaxAbsY) ) {
             runFullExactScan();
             return result;
+        }
+        queryMinAbsY = cache->toUnscaledAbsY(queryMinAbsY);
+        queryMaxAbsY = cache->toUnscaledAbsY(queryMaxAbsY);
+        if ( queryMinAbsY > queryMaxAbsY ) {
+            std::swap(queryMinAbsY, queryMaxAbsY);
         }
 
         auto bucketForAbsY = [&](double absY) {
@@ -948,7 +955,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX  = leftX + note.m_trackIndex * singleTrackW;
+        float trackX = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -1088,11 +1095,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
-                                 note.m_timestamp + note.m_duration,
-                                 ctx.cache->getAbsY(note.m_timestamp),
-                                 note.m_timestamp)) *
-                             renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1438,9 +1445,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                               (singleTrackW - ctx.noteW) * 0.5f;
-                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h  = std::abs(y0 - y1) + ctx.noteH;
+                              (singleTrackW - ctx.noteW) * 0.5f;
+                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1479,9 +1486,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                               (singleTrackW - w) * 0.5f;
-                    float y  = std::min(y0, y1) - h0 * 0.5f;
-                    float h  = std::abs(y0 - y1) + h0;
+                              (singleTrackW - w) * 0.5f;
+                    float y = std::min(y0, y1) - h0 * 0.5f;
+                    float h = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1520,7 +1527,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                       (singleTrackW - verticalBodySize.x) * 0.5f;
+                      (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1589,7 +1596,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                       singleTrackW * 0.5f;
+                      singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;

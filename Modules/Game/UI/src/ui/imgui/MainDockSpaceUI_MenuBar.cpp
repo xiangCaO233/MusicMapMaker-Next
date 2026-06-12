@@ -3,7 +3,6 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
-#include "event/ui/UpdateDragAreaEvent.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
@@ -162,8 +161,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         // Area 2: TitleX -> TitleEnd (标题文字本身)
         // Area 3: TitleEnd -> ButtonsStartX (包含 FPS 信息)
 
-        static std::vector<Event::DragArea> lastAreas;
-        std::vector<Event::DragArea>        currentAreas;
+        std::vector<Event::DragArea> currentAreas;
         currentAreas.push_back(
             { menusEndX, 0.0f, titleX - menusEndX, menuBarHeight });
         currentAreas.push_back(
@@ -171,24 +169,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         currentAreas.push_back(
             { titleEndX, 0.0f, buttonsStartX - titleEndX, menuBarHeight });
 
-        bool areasChanged = (currentAreas.size() != lastAreas.size());
-        if ( !areasChanged ) {
-            for ( size_t i = 0; i < currentAreas.size(); ++i ) {
-                if ( currentAreas[i].x != lastAreas[i].x ||
-                     currentAreas[i].w != lastAreas[i].w ) {
-                    areasChanged = true;
-                    break;
-                }
-            }
-        }
-
-        if ( areasChanged ) {
-            lastAreas = currentAreas;
-            Event::UpdateDragAreaEvent e;
-            e.uiManager    = sourceManager;
-            e.sourceUiName = "TopMenuBarHost";
-            e.areas        = currentAreas;
-            Event::EventBus::instance().publish(e);
+        if ( sourceManager ) {
+            sourceManager->setNativeWindowDragAreas(currentAreas);
         }
 
         // 绘制透明按钮以捕获双击全屏事件

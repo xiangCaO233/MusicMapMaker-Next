@@ -1,10 +1,13 @@
 #include "ui/imgui/FloatingManagerUI.h"
+#include "canvas/Basic2DCanvas.h"
 #include "config/AppConfig.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "ui/ISubView.h"
+#include "ui/UIManager.h"
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -19,6 +22,24 @@ struct DockResizeOverrun {
     ImGuiAxis axis{ ImGuiAxis_None };
     float     boundary{ 0.0f };
     float     overrun{ 0.0f };
+};
+
+/// @brief 一次 dock resize 手势实际命中的 split 节点和当前子树。
+struct DockResizeTarget {
+    /// @brief 是否成功解析到 split 和子节点。
+    bool valid{ false };
+
+    /// @brief 当前浮动窗口所在的 split 子树节点。
+    ImGuiDockNode* node{ nullptr };
+
+    /// @brief 被拖拽的父 split 节点。
+    ImGuiDockNode* parent{ nullptr };
+
+    /// @brief 被拖拽 split 的轴向。
+    ImGuiAxis axis{ ImGuiAxis_None };
+
+    /// @brief 当前子树是否为父 split 的第一个子节点。
+    bool isFirstChild{ true };
 };
 
 /// @brief 判断窗口尺寸是否已经被压到当前内容最小尺寸以下。
@@ -64,6 +85,35 @@ void setAxisValue(ImVec2& value, ImGuiAxis axis, float axisValue)
     } else {
         value.y = axisValue;
     }
+}
+
+/// @brief 根据 split 父子节点构造 resize 目标。
+/// @warning UI 热路径：只校验 DockNode 关系和 split 轴向。
+DockResizeTarget makeDockResizeTarget(ImGuiDockNode* node,
+                                      ImGuiDockNode* parent)
+{
+    DockResizeTarget target;
+    if ( !node || !parent ) {
+        return target;
+    }
+
+    const bool isFirstChild  = parent->ChildNodes[0] == node;
+    const bool isSecondChild = parent->ChildNodes[1] == node;
+    if ( !isFirstChild && !isSecondChild ) {
+        return target;
+    }
+
+    const ImGuiAxis axis = parent->SplitAxis;
+    if ( axis != ImGuiAxis_X && axis != ImGuiAxis_Y ) {
+        return target;
+    }
+
+    target.valid        = true;
+    target.node         = node;
+    target.parent       = parent;
+    target.axis         = axis;
+    target.isFirstChild = isFirstChild;
+    return target;
 }
 
 /// @brief 设置指定 dock 节点轴向尺寸，并同步补偿同一父 split 的兄弟节点。
@@ -117,6 +167,21 @@ float resizeDockNodeAxis(ImGuiDockNode* node, ImGuiAxis axis, float targetSize,
     }
 
     return clampedSize;
+}
+
+/// @brief 将 resize 手势命中的 split 子树锁定到当前内容最小尺寸。
+/// @warning UI 热路径：仅在 dock 分割线越过最小尺寸时写回命中的 DockNode
+/// 几何，阻止压缩继续向兄弟子树传播。
+float lockDockResizeTargetToMinSize(const DockResizeTarget& target,
+                                    ImVec2                  minWindowSize)
+{
+    if ( !target.valid || !target.node ) {
+        return 0.0f;
+    }
+
+    const float minAxisSize = getAxisValue(minWindowSize, target.axis);
+    return resizeDockNodeAxis(
+        target.node, target.axis, minAxisSize, minAxisSize);
 }
 
 /// @brief 将正在续接的自动收回拖拽距离换算为当前侧边栏宽度。
@@ -199,8 +264,6 @@ void clampDockNodeAxis(ImGuiDockNode* node, ImGuiAxis axis, float minValue)
         return;
     }
 
-    const float shortage = minValue - currentSize;
-
     ImGuiDockNode* parent = node->ParentNode;
     if ( !parent || parent->SplitAxis != axis ) {
         setAxisValue(node->Size, axis, minValue);
@@ -228,10 +291,7 @@ void clampDockNodeAxis(ImGuiDockNode* node, ImGuiAxis axis, float minValue)
                  axis,
                  std::max(getAxisValue(node->SizeRef, axis), minValue));
     setAxisValue(sibling->Size, axis, siblingSize);
-    setAxisValue(
-        sibling->SizeRef,
-        axis,
-        std::max(siblingMin, getAxisValue(sibling->SizeRef, axis) - shortage));
+    setAxisValue(sibling->SizeRef, axis, siblingSize);
 
     if ( isFirstChild ) {
         setAxisValue(node->Pos, axis, parentPos);
@@ -292,16 +352,16 @@ ImVec2 clampDockNodeToMinSize(ImGuiWindow* window, ImVec2 currentSize,
 
 /// @brief 计算鼠标越过当前 dock split 最小尺寸手柄的距离。
 /// @warning UI 热路径：每帧只读取 DockNode 几何和鼠标位置。
-DockResizeOverrun getDockResizeOverrun(ImGuiDockNode* node,
+DockResizeOverrun getDockResizeOverrun(const DockResizeTarget& target,
                                        ImVec2 minWindowSize, ImVec2 mousePos)
 {
     DockResizeOverrun result;
-    if ( !node || !node->ParentNode ) {
+    if ( !target.valid || !target.parent || !target.node ) {
         return result;
     }
 
-    ImGuiDockNode*  parent = node->ParentNode;
-    const ImGuiAxis axis   = parent->SplitAxis;
+    ImGuiDockNode*  parent = target.parent;
+    const ImGuiAxis axis   = target.axis;
     if ( axis != ImGuiAxis_X && axis != ImGuiAxis_Y ) {
         return result;
     }
@@ -311,7 +371,7 @@ DockResizeOverrun getDockResizeOverrun(ImGuiDockNode* node,
     const float parentPos    = getAxisValue(parent->Pos, axis);
     const float parentSize   = getAxisValue(parent->Size, axis);
     const float mouseAxis    = getAxisValue(mousePos, axis);
-    const bool  isFirstChild = parent->ChildNodes[0] == node;
+    const bool  isFirstChild = target.isFirstChild;
     const float boundary =
         isFirstChild ? parentPos + minValue
                      : parentPos + std::max(1.0f, parentSize - minValue);
@@ -325,15 +385,14 @@ DockResizeOverrun getDockResizeOverrun(ImGuiDockNode* node,
     return result;
 }
 
-/// @brief 判断鼠标位置是否落在当前 DockNode 所属 split 的分割条交互范围内。
-/// @warning UI 热路径：仅读取当前 DockNode 几何和 ImGui 样式。
-bool isDockResizeSplitterHit(ImGuiDockNode* node, ImVec2 mousePos)
+/// @brief 判断鼠标位置是否落在指定 split 的分割条交互范围内。
+/// @warning UI 热路径：仅读取 DockNode 几何和 ImGui 样式。
+bool isDockSplitResizeHandleHit(ImGuiDockNode* parent, ImVec2 mousePos)
 {
-    if ( !node || !node->ParentNode ) {
+    if ( !parent ) {
         return false;
     }
 
-    ImGuiDockNode* parent = node->ParentNode;
     ImGuiDockNode* child0 = parent->ChildNodes[0];
     ImGuiDockNode* child1 = parent->ChildNodes[1];
     if ( !child0 || !child1 ) {
@@ -357,6 +416,60 @@ bool isDockResizeSplitterHit(ImGuiDockNode* node, ImVec2 mousePos)
     splitterRect.Expand(axis == ImGuiAxis_Y ? ImVec2(0.0f, hoverExtend)
                                             : ImVec2(hoverExtend, 0.0f));
     return splitterRect.Contains(mousePos);
+}
+
+/// @brief 从当前窗口 DockNode 向上查找鼠标命中的 resize split。
+/// @warning UI 热路径：点击帧最多沿当前 DockNode 父链向上扫描。
+DockResizeTarget findDockResizeTargetAtPos(ImGuiDockNode* node, ImVec2 mousePos)
+{
+    ImGuiDockNode* child = node;
+    for ( ImGuiDockNode* parent = node ? node->ParentNode : nullptr; parent;
+          child = parent, parent = parent->ParentNode ) {
+        DockResizeTarget target = makeDockResizeTarget(child, parent);
+        if ( target.valid && isDockSplitResizeHandleHit(parent, mousePos) ) {
+            return target;
+        }
+    }
+    return DockResizeTarget{};
+}
+
+/// @brief 根据拖拽开始时保存的 ID 重新解析当前 resize split。
+/// @warning UI 热路径：拖拽期间每帧最多沿当前 DockNode 父链向上扫描。
+DockResizeTarget findDockResizeTargetByIds(ImGuiDockNode* node, ImGuiID splitId,
+                                           ImGuiID childId)
+{
+    if ( !node || splitId == 0 || childId == 0 ) {
+        return DockResizeTarget{};
+    }
+
+    ImGuiDockNode* child = node;
+    for ( ImGuiDockNode* parent = node->ParentNode; parent;
+          child = parent, parent = parent->ParentNode ) {
+        if ( parent->ID == splitId && child->ID == childId ) {
+            return makeDockResizeTarget(child, parent);
+        }
+    }
+    return DockResizeTarget{};
+}
+
+/// @brief 查找指定 DockNode 所属的最近轴向 split 子树。
+/// @warning UI 热路径：只在需要保护主画布尺寸时沿 DockNode 父链向上扫描。
+DockResizeTarget findDockNodeAxisTarget(ImGuiDockNode* node, ImGuiAxis axis)
+{
+    if ( !node || (axis != ImGuiAxis_X && axis != ImGuiAxis_Y) ) {
+        return DockResizeTarget{};
+    }
+
+    ImGuiDockNode* child = node;
+    for ( ImGuiDockNode* parent = node->ParentNode; parent;
+          child = parent, parent = parent->ParentNode ) {
+        DockResizeTarget target = makeDockResizeTarget(child, parent);
+        if ( target.valid && target.axis == axis ) {
+            return target;
+        }
+    }
+
+    return makeDockResizeTarget(node, node->ParentNode);
 }
 }  // namespace
 
@@ -411,12 +524,15 @@ void FloatingManagerUI::toggleSubView(const std::string& subViewId)
         m_minResizeLockAxis                = -1;
         m_dockResizeGestureActive          = false;
         m_dockResizeGestureAxis            = -1;
+        m_dockResizeGestureSplitId         = 0;
+        m_dockResizeGestureChildId         = 0;
         m_collapsedResizeDragActive        = false;
         m_collapsedResizeDragAxis          = -1;
         m_collapsedResizeResumeStateLogged = false;
         m_collapsedResizeResumeApplyLogged = false;
         m_collapsedDockId                  = 0;
         m_restoreMouseAfterDockSpace       = false;
+        clearCanvasDockSizeProtection();
     } else {
         m_currentSubViewId                 = subViewId;
         m_isVisible                        = true;  // 切换或显示
@@ -427,12 +543,15 @@ void FloatingManagerUI::toggleSubView(const std::string& subViewId)
         m_minResizeLockAxis                = -1;
         m_dockResizeGestureActive          = false;
         m_dockResizeGestureAxis            = -1;
+        m_dockResizeGestureSplitId         = 0;
+        m_dockResizeGestureChildId         = 0;
         m_collapsedResizeDragActive        = false;
         m_collapsedResizeDragAxis          = -1;
         m_collapsedResizeResumeStateLogged = false;
         m_collapsedResizeResumeApplyLogged = false;
         m_collapsedDockId                  = 0;
         m_restoreMouseAfterDockSpace       = false;
+        clearCanvasDockSizeProtection();
     }
 }
 
@@ -455,12 +574,15 @@ void FloatingManagerUI::restoreSubViewState(const std::string& subViewId,
         m_minResizeLockAxis                = -1;
         m_dockResizeGestureActive          = false;
         m_dockResizeGestureAxis            = -1;
+        m_dockResizeGestureSplitId         = 0;
+        m_dockResizeGestureChildId         = 0;
         m_collapsedResizeDragActive        = false;
         m_collapsedResizeDragAxis          = -1;
         m_collapsedResizeResumeStateLogged = false;
         m_collapsedResizeResumeApplyLogged = false;
         m_collapsedDockId                  = 0;
         m_restoreMouseAfterDockSpace       = false;
+        clearCanvasDockSizeProtection();
     }
 }
 
@@ -468,15 +590,18 @@ void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
 {
     const bool mouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
     if ( !dockNode || !dockNode->ParentNode || !mouseDown ) {
-        m_dockResizeGestureActive = false;
-        m_dockResizeGestureAxis   = -1;
-        m_minResizeLockActive     = false;
-        m_minResizeLockAxis       = -1;
+        m_dockResizeGestureActive  = false;
+        m_dockResizeGestureAxis    = -1;
+        m_dockResizeGestureSplitId = 0;
+        m_dockResizeGestureChildId = 0;
+        m_minResizeLockActive      = false;
+        m_minResizeLockAxis        = -1;
         if ( !mouseDown ) {
             m_collapsedResizeDragActive        = false;
             m_collapsedResizeDragAxis          = -1;
             m_collapsedResizeResumeStateLogged = false;
             m_collapsedResizeResumeApplyLogged = false;
+            clearCanvasDockSizeProtection();
         }
         return;
     }
@@ -485,14 +610,112 @@ void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
         return;
     }
 
-    const ImVec2 clickPos     = ImGui::GetIO().MouseClickedPos[0];
-    m_dockResizeGestureActive = isDockResizeSplitterHit(dockNode, clickPos);
-    m_dockResizeGestureAxis =
-        m_dockResizeGestureActive ? dockNode->ParentNode->SplitAxis : -1;
+    const ImVec2           clickPos = ImGui::GetIO().MouseClickedPos[0];
+    const DockResizeTarget target =
+        findDockResizeTargetAtPos(dockNode, clickPos);
+    m_dockResizeGestureActive = target.valid;
+    m_dockResizeGestureAxis   = target.valid ? target.axis : -1;
+    m_dockResizeGestureSplitId =
+        target.valid && target.parent ? target.parent->ID : 0;
+    m_dockResizeGestureChildId =
+        target.valid && target.node ? target.node->ID : 0;
     if ( !m_dockResizeGestureActive ) {
-        m_minResizeLockActive = false;
-        m_minResizeLockAxis   = -1;
+        m_minResizeLockActive      = false;
+        m_minResizeLockAxis        = -1;
+        m_dockResizeGestureSplitId = 0;
+        m_dockResizeGestureChildId = 0;
+        clearCanvasDockSizeProtection();
     }
+}
+
+void FloatingManagerUI::captureCanvasDockSizeProtection(
+    UIManager* sourceManager, int axis)
+{
+    if ( !sourceManager || !m_canvasDockSizeProtection.empty() ||
+         (axis != ImGuiAxis_X && axis != ImGuiAxis_Y) ) {
+        return;
+    }
+
+    const ImGuiAxis dockAxis = axis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    auto&           engine   = Logic::EditorEngine::instance();
+    const int32_t   size     = engine.getSessionCount();
+    m_canvasDockSizeProtection.reserve(static_cast<size_t>(size));
+
+    for ( int32_t i = 0; i < size; ++i ) {
+        const Logic::SessionEntry* entry = engine.getSessionEntry(i);
+        if ( !entry || entry->cameraId.empty() ) {
+            continue;
+        }
+
+        auto* canvas =
+            sourceManager->getView<Canvas::Basic2DCanvas>(entry->cameraId);
+        if ( !canvas ) {
+            continue;
+        }
+
+        const ImGuiID dockId = canvas->getDockId();
+        if ( dockId == 0 ) {
+            continue;
+        }
+
+        ImGuiDockNode* dockNode = ImGui::DockBuilderGetNode(dockId);
+        if ( !dockNode ) {
+            continue;
+        }
+
+        DockResizeTarget target = findDockNodeAxisTarget(dockNode, dockAxis);
+        ImGuiDockNode*   node   = target.valid ? target.node : dockNode;
+        if ( !node ) {
+            continue;
+        }
+
+        const ImGuiID protectedDockId = node->ID;
+        const bool    alreadyCaptured = std::any_of(
+            m_canvasDockSizeProtection.begin(),
+            m_canvasDockSizeProtection.end(),
+            [protectedDockId](const CanvasDockSizeSnapshot& snapshot) {
+                return snapshot.dockId == protectedDockId;
+            });
+        if ( alreadyCaptured ) {
+            continue;
+        }
+
+        const float axisSize = getAxisValue(node->Size, dockAxis);
+        if ( axisSize <= 1.0f ) {
+            continue;
+        }
+
+        m_canvasDockSizeProtection.push_back(
+            CanvasDockSizeSnapshot{ protectedDockId, axisSize });
+    }
+}
+
+void FloatingManagerUI::restoreCanvasDockSizeProtection(int axis)
+{
+    if ( m_canvasDockSizeProtection.empty() ||
+         (axis != ImGuiAxis_X && axis != ImGuiAxis_Y) ) {
+        return;
+    }
+
+    const ImGuiAxis dockAxis = axis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    for ( const CanvasDockSizeSnapshot& snapshot :
+          m_canvasDockSizeProtection ) {
+        if ( snapshot.dockId == 0 || snapshot.axisSize <= 1.0f ) {
+            continue;
+        }
+
+        ImGuiDockNode* dockNode = ImGui::DockBuilderGetNode(snapshot.dockId);
+        if ( !dockNode ) {
+            continue;
+        }
+
+        (void)resizeDockNodeAxis(dockNode, dockAxis, snapshot.axisSize, 1.0f);
+    }
+}
+
+void FloatingManagerUI::clearCanvasDockSizeProtection()
+{
+    m_canvasDockSizeProtection.clear();
 }
 
 /// @brief 记录自动收回前所在 DockNode 的分割轴和侧向。
@@ -505,11 +728,20 @@ void FloatingManagerUI::rememberCollapsedDockPlacement(ImGuiDockNode* dockNode)
         return;
     }
 
-    const ImGuiAxis axis = dockNode->ParentNode->SplitAxis;
-    m_collapsedDockAxis  = axis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
-    m_collapsedDockId    = dockNode->ID;
+    const ImGuiAxis  axis   = dockNode->ParentNode->SplitAxis;
+    DockResizeTarget target = findDockResizeTargetByIds(
+        dockNode, m_dockResizeGestureSplitId, m_dockResizeGestureChildId);
+    if ( !target.valid ) {
+        target = makeDockResizeTarget(dockNode, dockNode->ParentNode);
+    }
+
+    const ImGuiAxis rememberedAxis = target.valid ? target.axis : axis;
+    m_collapsedDockAxis =
+        rememberedAxis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
+    m_collapsedDockId = dockNode->ID;
     m_collapsedDockIsFirstChild =
-        dockNode->ParentNode->ChildNodes[0] == dockNode;
+        target.valid ? target.isFirstChild
+                     : dockNode->ParentNode->ChildNodes[0] == dockNode;
 }
 
 bool FloatingManagerUI::isVisible() const
@@ -600,16 +832,34 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     updateDockResizeGesture(dockNode);
     ImVec2 currentWindowSize =
         clampDockNodeToMinSize(window, dockNode->Size, minWindowSize);
+    DockResizeTarget resizeTarget = findDockResizeTargetByIds(
+        dockNode, m_dockResizeGestureSplitId, m_dockResizeGestureChildId);
+    if ( !resizeTarget.valid && m_dockResizeGestureActive ) {
+        DockResizeTarget directTarget =
+            makeDockResizeTarget(dockNode, dockNode->ParentNode);
+        if ( directTarget.valid &&
+             m_dockResizeGestureAxis == static_cast<int>(directTarget.axis) ) {
+            resizeTarget = directTarget;
+        }
+    }
+    const ImVec2            dockResizeMousePos = m_restoreMouseAfterDockSpace
+                                                     ? m_mousePosBeforeDockClamp
+                                                     : ImGui::GetMousePos();
     const DockResizeOverrun dockResizeOverrun =
-        getDockResizeOverrun(dockNode, minWindowSize, ImGui::GetMousePos());
+        getDockResizeOverrun(resizeTarget, minWindowSize, dockResizeMousePos);
 
     if ( !dockResizeOverrun.valid || !m_dockResizeGestureActive ||
          m_dockResizeGestureAxis != static_cast<int>(dockResizeOverrun.axis) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
+        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            clearCanvasDockSizeProtection();
+        }
         return;
     }
+
+    captureCanvasDockSizeProtection(sourceManager, dockResizeOverrun.axis);
 
     const float axisSize =
         getAxisValue(currentWindowSize, dockResizeOverrun.axis);
@@ -618,6 +868,14 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     const bool atMinBoundary = axisSize <= axisMinSize + 0.5f;
 
     if ( atMinBoundary && dockResizeOverrun.overrun > 0.0f ) {
+        const float lockedAxisSize =
+            lockDockResizeTargetToMinSize(resizeTarget, minWindowSize);
+        if ( resizeTarget.node == dockNode && lockedAxisSize > 0.0f ) {
+            setAxisValue(
+                currentWindowSize, dockResizeOverrun.axis, lockedAxisSize);
+        }
+        restoreCanvasDockSizeProtection(dockResizeOverrun.axis);
+
         if ( !m_minResizeLockActive ||
              m_minResizeLockAxis != static_cast<int>(dockResizeOverrun.axis) ) {
             m_minResizeLockActive       = true;
@@ -650,7 +908,7 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     }
 }
 
-/// @brief 主 DockSpace 渲染后恢复被临时钳住的鼠标位置。
+/// @brief 恢复被临时钳住的鼠标位置。
 void FloatingManagerUI::restoreDockResizeMouseAfterDockSpace()
 {
     if ( !m_restoreMouseAfterDockSpace ) {
@@ -690,11 +948,14 @@ void FloatingManagerUI::hideCurrentSubView(UIManager* sourceManager,
     m_minResizeLockAxis                = -1;
     m_dockResizeGestureActive          = false;
     m_dockResizeGestureAxis            = -1;
+    m_dockResizeGestureSplitId         = 0;
+    m_dockResizeGestureChildId         = 0;
     m_collapsedResizeDragActive        = false;
     m_collapsedResizeDragAxis          = -1;
     m_collapsedResizeResumeStateLogged = false;
     m_collapsedResizeResumeApplyLogged = false;
     m_restoreMouseAfterDockSpace       = false;
+    clearCanvasDockSizeProtection();
 }
 
 /// @brief 从自动收回透明拖拽热区恢复当前子视图并同步侧边栏选中状态。
@@ -724,10 +985,13 @@ void FloatingManagerUI::showCurrentSubViewFromCollapsedOverlay(
     m_minResizeLockAxis                = -1;
     m_dockResizeGestureActive          = true;
     m_dockResizeGestureAxis            = m_collapsedResizeDragAxis;
+    m_dockResizeGestureSplitId         = 0;
+    m_dockResizeGestureChildId         = 0;
     m_collapsedResizeDragActive        = true;
     m_collapsedResizeResumeStateLogged = false;
     m_collapsedResizeResumeApplyLogged = false;
     m_restoreMouseAfterDockSpace       = false;
+    clearCanvasDockSizeProtection();
 }
 
 /// @brief 绘制自动收回后的透明拖拽热区，并在拖出阈值后恢复子视图。
@@ -924,10 +1188,12 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     ImGuiDockNode* dockNode =
         isDocked && currentWindow ? currentWindow->DockNode : nullptr;
     if ( resumeCollapsedResize ) {
-        m_dockResizeGestureActive = true;
-        m_dockResizeGestureAxis   = resumeAxis;
-        m_minResizeLockActive     = false;
-        m_minResizeLockAxis       = -1;
+        m_dockResizeGestureActive  = true;
+        m_dockResizeGestureAxis    = resumeAxis;
+        m_dockResizeGestureSplitId = 0;
+        m_dockResizeGestureChildId = 0;
+        m_minResizeLockActive      = false;
+        m_minResizeLockAxis        = -1;
         if ( !m_collapsedResizeResumeStateLogged ) {
             XINFO(
                 "Sidebar collapsed resize resume begin: manager={}, "
@@ -953,8 +1219,21 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     } else {
         updateDockResizeGesture(dockNode);
     }
+    DockResizeTarget resizeTarget = findDockResizeTargetByIds(
+        dockNode, m_dockResizeGestureSplitId, m_dockResizeGestureChildId);
+    if ( !resizeTarget.valid && m_dockResizeGestureActive ) {
+        DockResizeTarget directTarget =
+            makeDockResizeTarget(dockNode, dockNode->ParentNode);
+        if ( directTarget.valid &&
+             m_dockResizeGestureAxis == static_cast<int>(directTarget.axis) ) {
+            resizeTarget = directTarget;
+        }
+    }
+    const ImVec2            dockResizeMousePos = m_restoreMouseAfterDockSpace
+                                                     ? m_mousePosBeforeDockClamp
+                                                     : ImGui::GetMousePos();
     const DockResizeOverrun dockResizeOverrun =
-        getDockResizeOverrun(dockNode, minWindowSize, ImGui::GetMousePos());
+        getDockResizeOverrun(resizeTarget, minWindowSize, dockResizeMousePos);
     if ( resumeCollapsedResize && isDocked && dockNode ) {
         const float appliedAxisSize =
             resizeDockNodeAxis(dockNode, resumeAxis, requestedAxisSize, 1.0f);
@@ -1020,7 +1299,12 @@ void FloatingManagerUI::update(UIManager* sourceManager)
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
+        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            clearCanvasDockSizeProtection();
+        }
     } else {
+        captureCanvasDockSizeProtection(sourceManager, dockResizeOverrun.axis);
+
         const float axisSize =
             getAxisValue(currentWindowSize, dockResizeOverrun.axis);
         const float axisMinSize =
@@ -1028,6 +1312,14 @@ void FloatingManagerUI::update(UIManager* sourceManager)
         const bool atMinBoundary = axisSize <= axisMinSize + 0.5f;
 
         if ( atMinBoundary && dockResizeOverrun.overrun > 0.0f ) {
+            const float lockedAxisSize =
+                lockDockResizeTargetToMinSize(resizeTarget, minWindowSize);
+            if ( resizeTarget.node == dockNode && lockedAxisSize > 0.0f ) {
+                setAxisValue(
+                    currentWindowSize, dockResizeOverrun.axis, lockedAxisSize);
+            }
+            restoreCanvasDockSizeProtection(dockResizeOverrun.axis);
+
             if ( !m_minResizeLockActive ||
                  m_minResizeLockAxis !=
                      static_cast<int>(dockResizeOverrun.axis) ) {

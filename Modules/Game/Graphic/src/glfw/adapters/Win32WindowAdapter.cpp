@@ -182,8 +182,8 @@ bool Win32WindowAdapter::handleClientCursorPos(double cursorX, double cursorY)
 
 void Win32WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& e)
 {
-    // 更新拖拽区域缓存
-    m_dragAreas = e.areas;
+    m_dragAreas        = e.areas;
+    m_blockedDragAreas = e.blockedAreas;
 }
 
 bool Win32WindowAdapter::windowPlacementWantsMaximized(HWND hWnd) const
@@ -390,7 +390,22 @@ LRESULT CALLBACK Win32WindowAdapter::WindowProc(HWND hWnd, UINT uMsg,
 
         // --- 核心修改：动态读取 UI 层上报的拖拽区域 ---
         if ( adapter ) {
+            for ( const auto& area : adapter->m_blockedDragAreas ) {
+                if ( area.w <= 0.0f || area.h <= 0.0f ) {
+                    continue;
+                }
+
+                if ( pt.x >= area.x && pt.x <= (area.x + area.w) &&
+                     pt.y >= area.y && pt.y <= (area.y + area.h) ) {
+                    return HTCLIENT;
+                }
+            }
+
             for ( const auto& area : adapter->m_dragAreas ) {
+                if ( area.w <= 0.0f || area.h <= 0.0f ) {
+                    continue;
+                }
+
                 if ( pt.x >= area.x && pt.x <= (area.x + area.w) &&
                      pt.y >= area.y && pt.y <= (area.y + area.h) ) {
                     return HTCAPTION;

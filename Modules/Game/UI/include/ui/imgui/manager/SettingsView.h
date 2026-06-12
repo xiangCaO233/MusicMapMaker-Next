@@ -9,6 +9,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -163,6 +164,9 @@ private:
     /// @brief 设置页切换事件订阅 ID。
     uint64_t m_tabSubId = 0;
 
+    /// @brief 当前帧 UI 管理器观察指针，不持有所有权。
+    UIManager* m_sourceManager{ nullptr };
+
     /// @brief 根级横向布局缓存。
     CLayHBox m_rootHBox;
 
@@ -200,6 +204,12 @@ private:
     ShortcutRecordTarget m_recordingShortcutTarget{
         ShortcutRecordTarget::None
     };
+
+    /// @brief 已扫描到的皮肤目录名缓存。
+    std::vector<std::string> m_availableSkinDirectories;
+
+    /// @brief 是否需要重新扫描皮肤目录。
+    bool m_availableSkinDirectoriesDirty{ true };
 
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
@@ -240,6 +250,20 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     /// @return 分类侧栏宽度。
     float getCategorySidebarWidth(float dpiScale) const;
+
+    /// @brief 刷新可选皮肤目录名缓存。
+    /// @warning 低频文件系统路径：只在设置窗口打开或缓存标脏时扫描
+    /// AppPaths::skinsRootPath()，禁止每帧无条件调用。
+    void refreshAvailableSkinDirectories();
+
+    /// @brief 应用皮肤选择并请求图形/音频资源热重载。
+    /// @param skinDirectoryName skins 根目录下的皮肤目录名。
+    /// @param skinLuaPath 皮肤入口脚本路径。
+    /// @return 切换成功时返回 true。
+    /// @warning 低频资源重载路径：会加载 Lua、清理音效池并请求 Vulkan
+    /// 资源重建，只能由设置页皮肤选择触发。
+    bool applySkinSelection(const std::string&           skinDirectoryName,
+                            const std::filesystem::path& skinLuaPath);
 
     /// @brief 绘制软件设置页。
     void drawSoftwareSettings();

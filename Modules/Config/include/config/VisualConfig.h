@@ -216,6 +216,8 @@ struct VisualConfig {
     }
     /// @brief 时间轴缩放
     float timelineZoom{ 1.0f };
+    /// @brief 滚动/跳转后的视觉平滑动画时间，单位秒；0 表示关闭动画
+    float scrollAnimationDuration{ 0.12f };
     /// @brief 是否启用线性滚动映射 (通常用于预览)
     bool enableLinearScrollMapping{ false };
     /// @brief 鼠标吸附阈值
@@ -247,6 +249,7 @@ inline void to_json(nlohmann::json& j, const VisualConfig& c)
         { "noteFillMode", c.noteFillMode },
         { "visualOffset", c.visualOffset },
         { "timelineZoom", c.timelineZoom },
+        { "scrollAnimationDuration", c.scrollAnimationDuration },
         { "enableLinearScrollMapping", c.enableLinearScrollMapping },
         { "snapThreshold", c.snapThreshold },
         { "beatLineAlpha", c.beatLineAlpha },
@@ -270,6 +273,7 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.noteFillMode      = j.value("noteFillMode", BackgroundFillMode::Stretch);
     c.visualOffset      = j.value("visualOffset", 0.0f);
     c.timelineZoom      = j.value("timelineZoom", 1.0f);
+    c.scrollAnimationDuration   = j.value("scrollAnimationDuration", 0.12f);
     c.enableLinearScrollMapping = j.value("enableLinearScrollMapping", false);
     c.snapThreshold             = j.value("snapThreshold", 16.0f);
     c.beatLineAlpha             = j.value("beatLineAlpha", 1.0f);

@@ -65,6 +65,18 @@ constexpr const char* BPM_METRONOME_HIGH_KEY = "metronome.downbeat_high";
 /// @brief BPM 工具节拍器播放时的额外音量倍率。
 constexpr float BPM_METRONOME_VOLUME_FACTOR = 2.0f;
 
+/// @brief BPM 测量工具默认浮动窗口宽度，单位为 ImGui 像素。
+constexpr float BPM_MEASURE_DEFAULT_WINDOW_WIDTH = 1120.0f;
+
+/// @brief BPM 测量工具默认浮动窗口高度，单位为 ImGui 像素。
+constexpr float BPM_MEASURE_DEFAULT_WINDOW_HEIGHT = 720.0f;
+
+/// @brief BPM 测量工具浮动窗口距主视口边缘的安全留白。
+constexpr float BPM_MEASURE_WINDOW_MARGIN = 24.0f;
+
+/// @brief BPM 测量工具浮动窗口避开主窗口标题栏的顶部安全距离。
+constexpr float BPM_MEASURE_WINDOW_TOP_SAFE_MARGIN = 56.0f;
+
 /// @brief 节拍器音效提前调度窗口，单位为秒。
 constexpr double BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS = 0.2;
 
@@ -117,6 +129,55 @@ struct PlaybackTimelineState {
     /// @brief 当前逻辑播放状态。
     bool isPlaying{ false };
 };
+
+/// @brief 将 BPM 测量工具默认尺寸限制在当前主视口可用区域内。
+/// @param viewport 当前 ImGui 主视口。
+/// @param dpiScale 当前窗口内容 DPI 缩放。
+/// @return BPM 测量工具首次打开时使用的窗口尺寸。
+ImVec2 calculateDefaultBpmMeasureWindowSize(const ImGuiViewport& viewport,
+                                            float                dpiScale)
+{
+    const float margin = std::floor(BPM_MEASURE_WINDOW_MARGIN * dpiScale);
+    const float topSafeMargin =
+        std::floor(BPM_MEASURE_WINDOW_TOP_SAFE_MARGIN * dpiScale);
+    const float maxWidth =
+        std::max(360.0f, viewport.WorkSize.x - margin * 2.0f);
+    const float maxHeight =
+        std::max(320.0f, viewport.WorkSize.y - topSafeMargin - margin);
+
+    return { std::min(BPM_MEASURE_DEFAULT_WINDOW_WIDTH, maxWidth),
+             std::min(BPM_MEASURE_DEFAULT_WINDOW_HEIGHT, maxHeight) };
+}
+
+/// @brief 计算 BPM 测量工具打开时避开主窗口标题栏的浮动位置。
+/// @param viewport 当前 ImGui 主视口。
+/// @param windowSize 将要使用的窗口尺寸。
+/// @param dpiScale 当前窗口内容 DPI 缩放。
+/// @return BPM 测量工具打开时使用的窗口左上角坐标。
+ImVec2 calculateDefaultBpmMeasureWindowPos(const ImGuiViewport& viewport,
+                                           const ImVec2&        windowSize,
+                                           float                dpiScale)
+{
+    const float margin = std::floor(BPM_MEASURE_WINDOW_MARGIN * dpiScale);
+    const float topSafeMargin =
+        std::floor(BPM_MEASURE_WINDOW_TOP_SAFE_MARGIN * dpiScale);
+    const float minX = viewport.WorkPos.x + margin;
+    const float minY = viewport.WorkPos.y + topSafeMargin;
+    const float maxX =
+        viewport.WorkPos.x + viewport.WorkSize.x - windowSize.x - margin;
+    const float maxY =
+        viewport.WorkPos.y + viewport.WorkSize.y - windowSize.y - margin;
+
+    const float centeredX =
+        viewport.WorkPos.x + (viewport.WorkSize.x - windowSize.x) * 0.5f;
+    const float visibleTop    = viewport.WorkPos.y + topSafeMargin;
+    const float visibleHeight = viewport.WorkSize.y - topSafeMargin;
+    const float centeredY = visibleTop + (visibleHeight - windowSize.y) * 0.5f;
+
+    const float posX = maxX >= minX ? std::clamp(centeredX, minX, maxX) : minX;
+    const float posY = maxY >= minY ? std::clamp(centeredY, minY, maxY) : minY;
+    return { posX, posY };
+}
 
 /// @brief 将皮肤颜色转换为 ImGui 颜色。
 /// @param color 皮肤颜色。
@@ -233,9 +294,9 @@ PlaybackTimelineState readPlaybackTimelineState()
     state.visualOffset = Config::AppConfig::instance()
                              .getVisualConfig()
                              .getEffectiveVisualOffset();
-    state.audioTime    = audioManager.getCurrentTime();
-    state.visualTime   = state.audioTime + state.visualOffset;
-    state.totalTime    = audioManager.getTotalTime();
+    state.audioTime  = audioManager.getCurrentTime();
+    state.visualTime = state.audioTime + state.visualOffset;
+    state.totalTime  = audioManager.getTotalTime();
     state.isPlaying =
         audioManager.getStatus() == Audio::PlaybackStatus::Playing;
 
@@ -364,7 +425,22 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     consumePendingAnalysis();
     updateMetronomePlayback();
 
-    ImGui::SetNextWindowSize(ImVec2(1120.0f, 720.0f), ImGuiCond_FirstUseEver);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float          dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    if ( viewport ) {
+        const ImVec2 defaultWindowSize =
+            calculateDefaultBpmMeasureWindowSize(*viewport, dpiScale);
+        const ImVec2 defaultWindowPos = calculateDefaultBpmMeasureWindowPos(
+            *viewport, defaultWindowSize, dpiScale);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowSize(defaultWindowSize, ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(defaultWindowPos, ImGuiCond_Appearing);
+    } else {
+        ImGui::SetNextWindowSize(ImVec2(BPM_MEASURE_DEFAULT_WINDOW_WIDTH,
+                                        BPM_MEASURE_DEFAULT_WINDOW_HEIGHT),
+                                 ImGuiCond_FirstUseEver);
+    }
     std::string windowTitle =
         std::string(TR("ui.tools.bpm_measure.title").data()) +
         "###BpmMeasurementTool";
@@ -1382,8 +1458,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         resetMetronomeScheduler(audioTime);
     }
@@ -1446,7 +1522,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                       const std::filesystem::path& fallback) {
+                                const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             return it->second;
@@ -1658,9 +1734,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -2718,9 +2794,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration = sampleRate > 0.0
-                     ? static_cast<double>(track->num_frames()) / sampleRate
-                     : 0.0;
+    m_duration      = sampleRate > 0.0
+                          ? static_cast<double>(track->num_frames()) / sampleRate
+                          : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
@@ -2745,7 +2821,7 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
-    m_analysisFuture = appThreadPool->enqueue([this,
+    m_analysisFuture                = appThreadPool->enqueue([this,
                                                stopToken,
                                                track    = std::move(track),
                                                duration = m_duration,
@@ -3080,7 +3156,7 @@ void BpmMeasurementToolView::analyzeTrack(
             for ( int i = binStart; i <= binEnd; ++i ) {
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude       = std::max(maxMagnitude, magSq);
+                maxMagnitude = std::max(maxMagnitude, magSq);
             }
             const double db =
                 maxMagnitude > 1e-9

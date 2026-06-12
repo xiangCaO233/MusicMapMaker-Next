@@ -85,9 +85,11 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 27> labels{
+        const std::array<const char*, 29> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
+            TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
+            "皮肤",
             TR_CACHE("ui.settings.software.theme").data(),
             TR_CACHE("ui.settings.software.font.ascii").data(),
             TR_CACHE("ui.settings.software.font.cjk").data(),
@@ -117,7 +119,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 27> labels{
+        const std::array<const char*, 28> labels{
             TR_CACHE("ui.settings.visual.layout_left").data(),
             TR_CACHE("ui.settings.visual.layout_top").data(),
             TR_CACHE("ui.settings.visual.layout_right").data(),
@@ -142,6 +144,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
             TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
             TR_CACHE("ui.settings.visual.timeline_zoom").data(),
+            TR_CACHE("ui.settings.visual.scroll_animation_duration").data(),
             TR_CACHE("ui.settings.visual.linear_scroll").data(),
             TR_CACHE("ui.settings.visual.snap_threshold").data(),
             TR_CACHE("ui.settings.visual.spectrum_detail").data(),
@@ -460,7 +463,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 7.0f + categorySpacing * 6.0f;
+                                 categorySize * 7.0f + categorySpacing * 6.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -544,10 +547,11 @@ ImVec2 SettingsView::getMinWindowSize(float dpiScale) const
 /// @param tab 需要激活的设置页。
 void SettingsView::open(Event::SettingsTab tab)
 {
-    m_currentTab            = tab;
-    m_isOpen                = true;
-    m_focusNextFrame        = true;
-    m_dockToCenterNextFrame = true;
+    m_currentTab                    = tab;
+    m_isOpen                        = true;
+    m_focusNextFrame                = true;
+    m_dockToCenterNextFrame         = true;
+    m_availableSkinDirectoriesDirty = true;
     if ( tab != Event::SettingsTab::Shortcut ) {
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -570,7 +574,7 @@ void SettingsView::requestFocus()
 /// @param sourceManager 当前 UI 管理器。
 void SettingsView::update(UIManager* sourceManager)
 {
-    (void)sourceManager;
+    m_sourceManager = sourceManager;
 
     std::string windowName =
         std::string(TR("title.settings_manager").data()) + "###SettingsWindow";
@@ -671,8 +675,8 @@ void SettingsView::drawContent()
             if ( iconFont ) ImGui::PushFont(iconFont, iconFont->LegacySize);
             ImFont* drawIconFont = iconFont ? iconFont : ImGui::GetFont();
             ImVec2  iconSize     = ImGui::CalcTextSize(iconStr);
-            ImVec2  iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                                rect.y + (rect.height - iconSize.y) * 0.5f };
+            ImVec2  iconPos      = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
+                                     rect.y + (rect.height - iconSize.y) * 0.5f };
             ImGui::GetWindowDrawList()->AddText(
                 drawIconFont,
                 ImGui::GetFontSize(),
@@ -695,9 +699,9 @@ void SettingsView::drawContent()
                 ImGui::PushFont(menuFont, menuFont->LegacySize);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos        = { sepX + textLeftPadding,
+                                           rect.y +
+                                               (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

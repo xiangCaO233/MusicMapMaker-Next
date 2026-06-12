@@ -96,6 +96,11 @@ public:
     /// @brief 处理导入音频指令
     void handleImportAudio(const CmdImportAudio& cmd);
 
+    /// @brief 重新预加载当前项目中的 Effect 音频资源。
+    /// @warning 低频资源重载路径：皮肤热切换清空音效池后调用；会访问项目资源表
+    /// 并触发音频解码缓存加载，禁止放入逻辑 update 热路径。
+    void reloadCurrentProjectEffectSoundEffects();
+
     /// @brief 更新音轨资源信息
     void handleUpdateAudioResource(const CmdUpdateAudioResource& cmd);
 
@@ -224,6 +229,13 @@ public:
     /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
     /// SessionRegistry 锁。
     bool canHoverScrollCamera(const std::string& cameraId) const;
+
+    /// @brief 更新指定主画布窗口在 UI 中的可见状态。
+    /// @param cameraId 目标主画布 cameraId。
+    /// @param isVisible 当前 ImGui 窗口是否真实可见。
+    /// @warning UI 热路径：Basic2DCanvas 每帧写入；只更新 SessionEntry
+    /// 中的可见脏状态，供逻辑线程裁剪隐藏 tab 快照。
+    void setSessionCanvasVisible(const std::string& cameraId, bool isVisible);
 
     /**
      * @brief 获取会话保护递归锁，以允许 UI 线程安全同步访问会话内部状态

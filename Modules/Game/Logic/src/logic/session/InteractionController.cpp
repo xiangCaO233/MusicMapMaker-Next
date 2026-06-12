@@ -62,7 +62,7 @@ struct SelectionScreenContext {
     /// @brief 当前视口的音符基础绘制高度。
     float noteH{ 0.0f };
 
-    /// @brief 当前视觉时间对应的绝对滚动坐标。
+    /// @brief 当前动画时间对应的绝对滚动坐标。
     double currentAbsY{ 0.0 };
 
     /// @brief 当前上下文是否有效。
@@ -210,7 +210,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -283,9 +283,9 @@ SelectionScreenContext makeSelectionScreenContext(
     screen.noteW = singleTrackW * ctx.lastConfig.visual.noteScaleX;
     screen.noteH =
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
-    screen.currentAbsY = cache->getAbsY(ctx.visualTime);
+    screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                         std::abs(screen.renderScaleY) > 1e-6f;
+                   std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -334,10 +334,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1 = screen.judgmentLineY -
-                      static_cast<float>(startAbsY - screen.currentAbsY) *
-                          screen.renderScaleY;
-    const float  y2 =
+    const float  y1        = screen.judgmentLineY -
+                     static_cast<float>(startAbsY - screen.currentAbsY) *
+                         screen.renderScaleY;
+    const float y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -374,9 +374,9 @@ void includeCarrierRect(SelectionRect&                target,
                                TextureID::HoldBodyVertical,
                                screen.noteW,
                                screen.noteH);
-        const float x  = screen.leftX +
-                         static_cast<float>(trackIndex) * screen.singleTrackW +
-                         (screen.singleTrackW - bodySize.x) * 0.5f;
+        const float x = screen.leftX +
+                        static_cast<float>(trackIndex) * screen.singleTrackW +
+                        (screen.singleTrackW - bodySize.x) * 0.5f;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
             screen,
@@ -418,9 +418,9 @@ void includePolylineTransitionRect(SelectionRect&                target,
                                   (current.type == ::MMM::NoteType::FLICK
                                        ? static_cast<float>(current.dtrack)
                                        : 0.0f);
-    const float currentX        = screen.leftX +
-                                  currentEndTrack * screen.singleTrackW +
-                                  (screen.singleTrackW - bodySize.x) * 0.5f;
+    const float currentX = screen.leftX +
+                           currentEndTrack * screen.singleTrackW +
+                           (screen.singleTrackW - bodySize.x) * 0.5f;
     const float nextX =
         screen.leftX +
         static_cast<float>(next.trackIndex) * screen.singleTrackW +

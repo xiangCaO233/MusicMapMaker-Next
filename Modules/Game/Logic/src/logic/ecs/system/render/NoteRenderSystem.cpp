@@ -80,7 +80,7 @@ void NoteRenderSystem::generateSnapshot(
 
     // Timeline 右键创建事件需要完整映射；其他画布只在播放亚帧插值时需要。
     if ( cameraId == "Timeline" || snapshot->isPlaying ) {
-        snapshot->scrollSegments = cache->getSegments();
+        cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }
 
     Batcher batcher(snapshot);
@@ -631,8 +631,9 @@ void NoteRenderSystem::generateTimelineSnapshot(
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
 
-        float y = judgmentLineY -
-                  static_cast<float>((seg.absY - currentAbsY) * seg.hs);
+        const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
+        float        y           = judgmentLineY -
+                  static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;
         el.time         = seg.time;

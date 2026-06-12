@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -107,6 +108,28 @@ glm::vec4 fromStoredColor(const std::array<float, 4>& color)
     return { color[0], color[1], color[2], color[3] };
 }
 
+/// @brief 用皮肤默认颜色填充调色盘缓存。
+void fillPaletteWithSkinDefaults(
+    std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT>& colors)
+{
+    for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
+        auto slot = static_cast<Logic::NoteColorSlot>(i);
+        colors[i] = toVec4(skinColorForSlot(slot));
+    }
+}
+
+/// @brief 在皮肤默认颜色基础上应用一个自定义调色盘方案。
+void applyStoredPaletteScheme(
+    std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT>& colors,
+    const Config::NoteColorPaletteScheme&                scheme)
+{
+    fillPaletteWithSkinDefaults(colors);
+    std::size_t count = std::min(scheme.colors.size(), colors.size());
+    for ( std::size_t i = 0; i < count; ++i ) {
+        colors[i] = fromStoredColor(scheme.colors[i]);
+    }
+}
+
 /// @brief 将 0 到 1 的颜色通道转换为 8 位整数。
 int colorChannelToByte(float value)
 {
@@ -193,6 +216,21 @@ bool parseHexColor(std::string_view text, glm::vec4& color)
 std::string defaultPaletteSchemeName()
 {
     return std::string(TR("ui.toolbar.note_palette.skin_default_scheme"));
+}
+
+/// @brief 获取继承软件默认调色盘方案名。
+std::string inheritedPaletteSchemeName()
+{
+    return std::string(TR("ui.settings.project.note_palette.inherit"));
+}
+
+/// @brief 判断方案名是否保留给内置调色盘选项。
+bool isReservedPaletteSchemeName(const std::string& name)
+{
+    return name.empty() ||
+           name == Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ||
+           name == defaultPaletteSchemeName() ||
+           name == inheritedPaletteSchemeName();
 }
 }  // namespace
 
@@ -491,7 +529,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                           : (btnHeight - swatchSize) * 0.5f),
+                                            : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -626,7 +664,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -933,11 +971,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1135,22 +1173,48 @@ void ToolbarView::update(UIManager* sourceManager)
 
 void ToolbarView::initializeColorPalette()
 {
-    const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    if ( !loadPaletteSchemeByName(
-             settings.defaultNoteColorPaletteSchemeName) ) {
-        loadSkinDefaultPalette();
-    }
+    loadSoftwareDefaultPalette();
     m_colorPaletteInitialized = true;
 }
 
 void ToolbarView::loadSkinDefaultPalette()
 {
-    for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-        auto slot          = static_cast<Logic::NoteColorSlot>(i);
-        m_paletteColors[i] = toVec4(skinColorForSlot(slot));
+    fillPaletteWithSkinDefaults(m_paletteColors);
+    m_activePaletteSchemeIndex = -1;
+    m_activePaletteSelection   = NotePaletteSelectionKind::SkinDefault;
+    m_paletteSchemeErrorKey.clear();
+    setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
+    pushPaletteToBrush();
+}
+
+void ToolbarView::loadSoftwareDefaultPalette()
+{
+    const auto& settings   = Config::AppConfig::instance().getEditorSettings();
+    const auto& schemeName = settings.defaultNoteColorPaletteSchemeName;
+    bool        loaded     = false;
+
+    if ( !schemeName.empty() &&
+         schemeName != Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID ) {
+        const auto& paletteConfig = settings.noteColorPalettes;
+        auto        it =
+            std::find_if(paletteConfig.schemes.begin(),
+                         paletteConfig.schemes.end(),
+                         [&](const Config::NoteColorPaletteScheme& scheme) {
+                             return scheme.name == schemeName;
+                         });
+        if ( it != paletteConfig.schemes.end() ) {
+            applyStoredPaletteScheme(m_paletteColors, *it);
+            loaded = true;
+        }
+    }
+
+    if ( !loaded ) {
+        fillPaletteWithSkinDefaults(m_paletteColors);
     }
     m_activePaletteSchemeIndex = -1;
-    setPaletteSchemeNameBuffer(defaultPaletteSchemeName());
+    m_activePaletteSelection = NotePaletteSelectionKind::InheritSoftwareDefault;
+    m_paletteSchemeErrorKey.clear();
+    setPaletteSchemeNameBuffer(inheritedPaletteSchemeName());
     pushPaletteToBrush();
 }
 
@@ -1204,6 +1268,10 @@ void ToolbarView::applyProjectPalettePreference()
     if ( applyKey == m_lastAppliedProjectPaletteKey ) return;
 
     m_lastAppliedProjectPaletteKey = applyKey;
+    if ( preferenceSource == "inherit" ) {
+        loadSoftwareDefaultPalette();
+        return;
+    }
     if ( !loadPaletteSchemeByName(schemeName) ) {
         loadSkinDefaultPalette();
     }
@@ -1227,21 +1295,53 @@ void ToolbarView::loadPaletteScheme(std::size_t schemeIndex)
     auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
     if ( schemeIndex >= paletteConfig.schemes.size() ) return;
 
-    for ( std::size_t i = 0; i < Logic::NOTE_COLOR_SLOT_COUNT; ++i ) {
-        auto slot          = static_cast<Logic::NoteColorSlot>(i);
-        m_paletteColors[i] = toVec4(skinColorForSlot(slot));
-    }
-
     const auto& scheme = paletteConfig.schemes[schemeIndex];
-    std::size_t count  = std::min(scheme.colors.size(), m_paletteColors.size());
-    for ( std::size_t i = 0; i < count; ++i ) {
-        m_paletteColors[i] = fromStoredColor(scheme.colors[i]);
-    }
+    applyStoredPaletteScheme(m_paletteColors, scheme);
 
     m_activePaletteSchemeIndex      = static_cast<int>(schemeIndex);
+    m_activePaletteSelection        = NotePaletteSelectionKind::Custom;
     paletteConfig.activeSchemeIndex = schemeIndex;
+    m_paletteSchemeErrorKey.clear();
     setPaletteSchemeNameBuffer(scheme.name);
     pushPaletteToBrush();
+}
+
+bool ToolbarView::canManageActivePaletteScheme() const
+{
+    const auto& paletteConfig =
+        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+    return m_activePaletteSelection == NotePaletteSelectionKind::Custom &&
+           m_activePaletteSchemeIndex >= 0 &&
+           static_cast<std::size_t>(m_activePaletteSchemeIndex) <
+               paletteConfig.schemes.size();
+}
+
+bool ToolbarView::hasPaletteSchemeNameConflict(
+    const std::string& name, std::optional<std::size_t> ignoredIndex) const
+{
+    const auto& paletteConfig =
+        Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
+    for ( std::size_t i = 0; i < paletteConfig.schemes.size(); ++i ) {
+        if ( ignoredIndex && *ignoredIndex == i ) continue;
+        if ( paletteConfig.schemes[i].name == name ) return true;
+    }
+    return false;
+}
+
+bool ToolbarView::validatePaletteSchemeNameForSave(
+    const std::string& name, std::optional<std::size_t> ignoredIndex)
+{
+    if ( isReservedPaletteSchemeName(name) ) {
+        m_paletteSchemeErrorKey = "ui.toolbar.note_palette.name_reserved_error";
+        return false;
+    }
+    if ( hasPaletteSchemeNameConflict(name, ignoredIndex) ) {
+        m_paletteSchemeErrorKey = "ui.toolbar.note_palette.name_conflict_error";
+        return false;
+    }
+
+    m_paletteSchemeErrorKey.clear();
+    return true;
 }
 
 void ToolbarView::savePaletteScheme(bool createNew)
@@ -1250,16 +1350,23 @@ void ToolbarView::savePaletteScheme(bool createNew)
     auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
 
     Config::NoteColorPaletteScheme scheme;
-    scheme.name = currentPaletteSchemeName();
+    scheme.name          = currentPaletteSchemeName();
+    bool hasActiveScheme = canManageActivePaletteScheme();
+    if ( !createNew && !hasActiveScheme ) return;
+
+    std::optional<std::size_t> ignoredIndex;
+    if ( !createNew && hasActiveScheme ) {
+        ignoredIndex = static_cast<std::size_t>(m_activePaletteSchemeIndex);
+    }
+    if ( !validatePaletteSchemeNameForSave(scheme.name, ignoredIndex) ) {
+        return;
+    }
+
     scheme.colors.reserve(Logic::NOTE_COLOR_SLOT_COUNT);
     for ( const auto& color : m_paletteColors ) {
         scheme.colors.push_back(toStoredColor(color));
     }
 
-    bool hasActiveScheme =
-        m_activePaletteSchemeIndex >= 0 &&
-        static_cast<std::size_t>(m_activePaletteSchemeIndex) <
-            paletteConfig.schemes.size();
     if ( createNew || !hasActiveScheme ) {
         paletteConfig.schemes.push_back(std::move(scheme));
         m_activePaletteSchemeIndex =
@@ -1272,6 +1379,9 @@ void ToolbarView::savePaletteScheme(bool createNew)
 
     paletteConfig.activeSchemeIndex =
         static_cast<std::size_t>(m_activePaletteSchemeIndex);
+    m_activePaletteSelection = NotePaletteSelectionKind::Custom;
+    setPaletteSchemeNameBuffer(
+        paletteConfig.schemes[paletteConfig.activeSchemeIndex].name);
     app.save();
 }
 
@@ -1279,14 +1389,67 @@ void ToolbarView::renamePaletteScheme()
 {
     auto& app           = Config::AppConfig::instance();
     auto& paletteConfig = app.getEditorSettings().noteColorPalettes;
-    if ( m_activePaletteSchemeIndex < 0 ) return;
+    if ( !canManageActivePaletteScheme() ) return;
 
     std::size_t index = static_cast<std::size_t>(m_activePaletteSchemeIndex);
     if ( index >= paletteConfig.schemes.size() ) return;
 
-    paletteConfig.schemes[index].name = currentPaletteSchemeName();
+    std::string name = currentPaletteSchemeName();
+    if ( !validatePaletteSchemeNameForSave(name, index) ) return;
+
+    paletteConfig.schemes[index].name = name;
     paletteConfig.activeSchemeIndex   = index;
+    setPaletteSchemeNameBuffer(name);
     app.save();
+}
+
+void ToolbarView::deletePaletteScheme(std::size_t schemeIndex)
+{
+    auto& app           = Config::AppConfig::instance();
+    auto& settings      = app.getEditorSettings();
+    auto& paletteConfig = settings.noteColorPalettes;
+    if ( schemeIndex >= paletteConfig.schemes.size() ) return;
+
+    const std::string deletedName = paletteConfig.schemes[schemeIndex].name;
+    paletteConfig.schemes.erase(paletteConfig.schemes.begin() +
+                                static_cast<std::ptrdiff_t>(schemeIndex));
+
+    const bool deletedNameStillExists =
+        std::any_of(paletteConfig.schemes.begin(),
+                    paletteConfig.schemes.end(),
+                    [&](const Config::NoteColorPaletteScheme& scheme) {
+                        return scheme.name == deletedName;
+                    });
+    if ( !deletedNameStillExists &&
+         settings.defaultNoteColorPaletteSchemeName == deletedName ) {
+        settings.defaultNoteColorPaletteSchemeName =
+            Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+    }
+
+    auto& engine         = Logic::EditorEngine::instance();
+    auto* project        = engine.getCurrentProject();
+    bool  projectChanged = false;
+    if ( !deletedNameStillExists && project &&
+         project->m_settings.m_noteColorPaletteSchemeName == deletedName ) {
+        project->m_settings.m_noteColorPaletteSchemeName.clear();
+        projectChanged = true;
+    }
+
+    if ( paletteConfig.schemes.empty() ) {
+        paletteConfig.activeSchemeIndex = 0;
+    } else {
+        paletteConfig.activeSchemeIndex =
+            std::min(schemeIndex, paletteConfig.schemes.size() - 1);
+    }
+
+    m_pendingDeletePaletteSchemeIndex.reset();
+    m_lastAppliedProjectPaletteKey.clear();
+    m_paletteSchemeErrorKey.clear();
+    loadSkinDefaultPalette();
+    app.save();
+    if ( projectChanged ) {
+        engine.saveProject();
+    }
 }
 
 void ToolbarView::setPaletteSchemeNameBuffer(const std::string& name)
@@ -1380,23 +1543,52 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         auto& paletteConfig =
             Config::AppConfig::instance().getEditorSettings().noteColorPalettes;
-        std::string previewName = defaultPaletteSchemeName();
-        if ( m_activePaletteSchemeIndex >= 0 ) {
+        std::string previewName;
+        if ( m_activePaletteSelection ==
+             NotePaletteSelectionKind::InheritSoftwareDefault ) {
+            previewName = inheritedPaletteSchemeName();
+        } else if ( m_activePaletteSelection ==
+                    NotePaletteSelectionKind::SkinDefault ) {
+            previewName = defaultPaletteSchemeName();
+        } else {
             std::size_t activeIndex =
-                static_cast<std::size_t>(m_activePaletteSchemeIndex);
-            if ( activeIndex < paletteConfig.schemes.size() ) {
-                previewName = paletteConfig.schemes[activeIndex].name;
-            }
+                m_activePaletteSchemeIndex >= 0
+                    ? static_cast<std::size_t>(m_activePaletteSchemeIndex)
+                    : paletteConfig.schemes.size();
+            previewName = activeIndex < paletteConfig.schemes.size()
+                              ? paletteConfig.schemes[activeIndex].name
+                              : defaultPaletteSchemeName();
         }
 
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.scheme").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        ImGui::BeginDisabled(paletteConfig.schemes.empty());
         if ( ImGui::BeginCombo("##NoteColorPaletteScheme",
                                previewName.c_str()) ) {
+            const bool inheritSelected =
+                m_activePaletteSelection ==
+                NotePaletteSelectionKind::InheritSoftwareDefault;
+            if ( ImGui::Selectable(inheritedPaletteSchemeName().c_str(),
+                                   inheritSelected) ) {
+                loadSoftwareDefaultPalette();
+            }
+            if ( inheritSelected ) ImGui::SetItemDefaultFocus();
+
+            const bool skinSelected = m_activePaletteSelection ==
+                                      NotePaletteSelectionKind::SkinDefault;
+            if ( ImGui::Selectable(defaultPaletteSchemeName().c_str(),
+                                   skinSelected) ) {
+                loadSkinDefaultPalette();
+            }
+            if ( skinSelected ) ImGui::SetItemDefaultFocus();
+
+            if ( !paletteConfig.schemes.empty() ) {
+                ImGui::Separator();
+            }
             for ( std::size_t i = 0; i < paletteConfig.schemes.size(); ++i ) {
                 bool selected =
+                    m_activePaletteSelection ==
+                        NotePaletteSelectionKind::Custom &&
                     m_activePaletteSchemeIndex == static_cast<int>(i);
                 if ( ImGui::Selectable(paletteConfig.schemes[i].name.c_str(),
                                        selected) ) {
@@ -1407,36 +1599,76 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             }
             ImGui::EndCombo();
         }
-        ImGui::EndDisabled();
 
         ImGui::TextUnformatted(
             TR("ui.toolbar.note_palette.scheme_name").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        ImGui::InputText("##NoteColorPaletteSchemeName",
-                         m_paletteSchemeNameBuffer.data(),
-                         m_paletteSchemeNameBuffer.size());
+        if ( ImGui::InputText("##NoteColorPaletteSchemeName",
+                              m_paletteSchemeNameBuffer.data(),
+                              m_paletteSchemeNameBuffer.size()) ) {
+            m_paletteSchemeErrorKey.clear();
+        }
 
-        const float schemeButtonH = std::floor(24.0f * dpiScale);
-        if ( ImGui::Button(
-                 TR("ui.toolbar.note_palette.save_scheme").data(),
-                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
+        const float schemeButtonH   = std::floor(24.0f * dpiScale);
+        const float schemeButtonW   = std::floor(78.0f * dpiScale);
+        const bool  canManageScheme = canManageActivePaletteScheme();
+        ImGui::BeginDisabled(!canManageScheme);
+        if ( ImGui::Button(TR("ui.toolbar.note_palette.save_scheme").data(),
+                           ImVec2(schemeButtonW, schemeButtonH)) ) {
             savePaletteScheme(false);
         }
+        ImGui::EndDisabled();
         ImGui::SameLine();
-        if ( ImGui::Button(
-                 TR("ui.toolbar.note_palette.new_scheme").data(),
-                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
+        if ( ImGui::Button(TR("ui.toolbar.note_palette.new_scheme").data(),
+                           ImVec2(schemeButtonW, schemeButtonH)) ) {
             savePaletteScheme(true);
         }
         ImGui::SameLine();
-        ImGui::BeginDisabled(m_activePaletteSchemeIndex < 0);
-        if ( ImGui::Button(
-                 TR("ui.toolbar.note_palette.rename_scheme").data(),
-                 ImVec2(std::floor(84.0f * dpiScale), schemeButtonH)) ) {
+        ImGui::BeginDisabled(!canManageScheme);
+        if ( ImGui::Button(TR("ui.toolbar.note_palette.rename_scheme").data(),
+                           ImVec2(schemeButtonW, schemeButtonH)) ) {
             renamePaletteScheme();
         }
         ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canManageScheme);
+        if ( ImGui::Button(TR("ui.common.delete").data(),
+                           ImVec2(schemeButtonW, schemeButtonH)) ) {
+            m_pendingDeletePaletteSchemeIndex =
+                static_cast<std::size_t>(m_activePaletteSchemeIndex);
+            ImGui::OpenPopup("DeleteNoteColorPaletteConfirm");
+        }
+        ImGui::EndDisabled();
+
+        if ( ImGui::BeginPopup("DeleteNoteColorPaletteConfirm") ) {
+            ImGui::TextWrapped(
+                "%s",
+                TR("ui.toolbar.note_palette.delete_scheme_confirm").data());
+            const float confirmButtonW = std::floor(92.0f * dpiScale);
+            if ( ImGui::Button(TR("ui.common.confirm").data(),
+                               ImVec2(confirmButtonW, schemeButtonH)) ) {
+                auto pendingIndex = m_pendingDeletePaletteSchemeIndex;
+                ImGui::CloseCurrentPopup();
+                if ( pendingIndex ) {
+                    deletePaletteScheme(*pendingIndex);
+                }
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.common.cancel").data(),
+                               ImVec2(confirmButtonW, schemeButtonH)) ) {
+                m_pendingDeletePaletteSchemeIndex.reset();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if ( !m_paletteSchemeErrorKey.empty() ) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  Utils::UIThemeUtils::getDangerColor());
+            ImGui::TextWrapped("%s",
+                               TR(m_paletteSchemeErrorKey.c_str()).data());
+            ImGui::PopStyleColor();
+        }
 
         ImGui::Separator();
 
@@ -1487,7 +1719,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
+        bool hexChanged       = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);

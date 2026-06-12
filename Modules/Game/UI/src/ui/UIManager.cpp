@@ -30,6 +30,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace MMM::UI
@@ -48,6 +49,86 @@ constexpr const char* BPM_MEASUREMENT_TOOL_VIEW_NAME = "BpmMeasurementTool";
 
 /// @brief 独立设置窗口的稳定 UIManager 视图名。
 constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
+
+/// @brief 主窗口标题栏宿主 ImGui 窗口名。
+constexpr std::string_view TOP_MENU_BAR_HOST_NAME = "TopMenuBarHost";
+
+/// @brief 判断两个拖拽矩形是否相交。
+/// @param lhs 第一个矩形。
+/// @param rhs 第二个矩形。
+/// @return 两个矩形存在正面积交集时返回 true。
+bool dragAreasIntersect(const Event::DragArea& lhs, const Event::DragArea& rhs)
+{
+    if ( lhs.w <= 0.0f || lhs.h <= 0.0f || rhs.w <= 0.0f || rhs.h <= 0.0f ) {
+        return false;
+    }
+
+    return lhs.x < rhs.x + rhs.w && lhs.x + lhs.w > rhs.x &&
+           lhs.y < rhs.y + rhs.h && lhs.y + lhs.h > rhs.y;
+}
+
+/// @brief 判断 ImGui 窗口是否应阻挡主窗口标题栏原生拖拽。
+/// @param window 候选 ImGui 窗口。
+/// @param viewport 当前主视口。
+/// @return 该窗口可阻挡标题栏原生拖拽时返回 true。
+bool shouldBlockNativeDragForWindow(const ImGuiWindow&   window,
+                                    const ImGuiViewport& viewport)
+{
+    if ( !window.WasActive || window.Hidden || window.Collapsed ) {
+        return false;
+    }
+    if ( window.Viewport != &viewport ) {
+        return false;
+    }
+    if ( (window.Flags & ImGuiWindowFlags_ChildWindow) != 0 ||
+         (window.Flags & ImGuiWindowFlags_NoMouseInputs) != 0 ) {
+        return false;
+    }
+
+    const std::string_view name = window.Name ? window.Name : "";
+    return name != TOP_MENU_BAR_HOST_NAME;
+}
+
+/// @brief 收集遮挡主窗口标题栏原生拖拽区的 ImGui 窗口矩形。
+/// @param dragAreas 当前标题栏基础拖拽区域。
+/// @return 与基础拖拽区相交且应排除的窗口矩形。
+/// @warning UI 热路径：每帧最多遍历当前 ImGui 根窗口列表；只做几何判断。
+std::vector<Event::DragArea> collectNativeDragBlockedAreas(
+    const std::vector<Event::DragArea>& dragAreas)
+{
+    std::vector<Event::DragArea> blockedAreas;
+    if ( dragAreas.empty() || !ImGui::GetCurrentContext() ) {
+        return blockedAreas;
+    }
+
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if ( !viewport ) {
+        return blockedAreas;
+    }
+
+    ImGuiContext& context = *ImGui::GetCurrentContext();
+    blockedAreas.reserve(static_cast<size_t>(context.WindowsFocusOrder.Size));
+    for ( ImGuiWindow* window : context.WindowsFocusOrder ) {
+        if ( !window || !shouldBlockNativeDragForWindow(*window, *viewport) ) {
+            continue;
+        }
+
+        const ImRect    rect    = window->Rect();
+        Event::DragArea blocker = {
+            rect.Min.x - viewport->Pos.x,
+            rect.Min.y - viewport->Pos.y,
+            rect.GetWidth(),
+            rect.GetHeight(),
+        };
+        for ( const auto& dragArea : dragAreas ) {
+            if ( dragAreasIntersect(blocker, dragArea) ) {
+                blockedAreas.push_back(blocker);
+                break;
+            }
+        }
+    }
+    return blockedAreas;
+}
 
 /// @brief 判断视图名是否是项目工作区动态视图。
 /// @param name UIManager 中注册的视图名。
@@ -197,6 +278,25 @@ Graphic::IWindowFrameAdapter* UIManager::getWindowFrameAdapter() const
     return m_nativeWindow ? m_nativeWindow->getWindowFrameAdapter() : nullptr;
 }
 
+void UIManager::setNativeWindowDragAreas(std::vector<Event::DragArea> areas)
+{
+    m_nativeWindowDragAreas = std::move(areas);
+}
+
+void UIManager::syncNativeWindowDragAreas()
+{
+    if ( !m_nativeWindow ) {
+        return;
+    }
+
+    Event::UpdateDragAreaEvent event;
+    event.uiManager    = this;
+    event.sourceUiName = std::string(TOP_MENU_BAR_HOST_NAME);
+    event.areas        = m_nativeWindowDragAreas;
+    event.blockedAreas = collectNativeDragBlockedAreas(m_nativeWindowDragAreas);
+    Event::EventBus::instance().publish(event);
+}
+
 void UIManager::captureProjectWorkspaceState()
 {
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
@@ -241,6 +341,14 @@ void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
         settingsView->requestDockToCenter();
         settingsView->requestFocus();
     }
+}
+
+/// @brief 请求下一次资源准备阶段重载皮肤相关图形资源。
+/// @warning 低频资源重载路径：皮肤热切换后调用，只置脏位；实际 Vulkan
+/// 资源释放和重建在 onPrepareResources 中执行。
+void UIManager::requestSkinResourceReload()
+{
+    m_skinResourceReloadRequested = true;
 }
 
 /// @brief 为新打开的音轨控制器选择默认 Dock 节点。
@@ -593,11 +701,41 @@ void UIManager::clearAllViews()
 
 /// @brief 准备资源
 /// @warning 热路径：每帧渲染准备阶段执行；重建和纹理重载只能由低频脏位触发。
+/// 皮肤热切换分支会调用 waitIdle，只能由设置页切换皮肤触发。
 void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
                                    vk::Device&           logicalDevice,
                                    Graphic::VKSwapchain& swapchain,
                                    vk::CommandPool& cmdPool, vk::Queue& queue)
 {
+    const bool forceSkinResourceReload =
+        std::exchange(m_skinResourceReloadRequested, false);
+
+    if ( forceSkinResourceReload ) {
+        (void)logicalDevice.waitIdle();
+        if ( auto context = Graphic::VKContext::get() ) {
+            context->get().getRenderer().reloadSkinTextures();
+        }
+
+        for ( const auto& name : m_renderableUiSequence ) {
+            auto renderableView = m_uiviews[name]->asRenderableView();
+            if ( renderableView ) {
+                renderableView->requestSkinResourceReload();
+                renderableView->reCreateFrameBuffer(
+                    physicalDevice, logicalDevice, swapchain, cmdPool, queue);
+            }
+        }
+
+        for ( const auto& name : m_textureLoaderSequence ) {
+            auto textureLoader = m_uiviews[name]->asTextureLoader();
+            if ( textureLoader ) {
+                textureLoader->reloadTextures(
+                    physicalDevice, logicalDevice, cmdPool, queue);
+                (void)textureLoader->needReload();
+            }
+        }
+        return;
+    }
+
     // 检查并重建所有离屏帧缓冲
     for ( const auto& name : m_renderableUiSequence ) {
         auto renderableView = m_uiviews[name]->asRenderableView();
@@ -710,6 +848,12 @@ void UIManager::onUpdateUI()
         // 内部触发 ImGui 渲染和画笔收集
         it->second->update(this);
     }
+
+    if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
+        sideBarManager->restoreDockResizeMouseAfterDockSpace();
+    }
+
+    syncNativeWindowDragAreas();
 }
 
 /// @brief 录制所有离屏渲染指令
@@ -752,7 +896,7 @@ void UIManager::onRecordOffscreenTask(vk::CommandBuffer& cmd,
     }
 
     auto renderableView = it->second->asRenderableView();
-    if ( renderableView ) {
+    if ( renderableView && renderableView->shouldRecordOffscreen() ) {
         renderableView->recordCmds(cmd, frameIndex);
     }
 }

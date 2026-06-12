@@ -395,7 +395,8 @@ void X11WindowAdapter::handleClientFocusChange(bool focused)
 
 void X11WindowAdapter::onUpdateDragArea(const Event::UpdateDragAreaEvent& event)
 {
-    m_dragAreas = event.areas;
+    m_dragAreas        = event.areas;
+    m_blockedDragAreas = event.blockedAreas;
 }
 
 std::optional<WindowFrameResizeEdge> X11WindowAdapter::resolveResizeEdge(
@@ -436,6 +437,19 @@ std::optional<WindowFrameResizeEdge> X11WindowAdapter::resolveResizeEdge(
 
 bool X11WindowAdapter::isInsideDragArea(double cursorX, double cursorY) const
 {
+    for ( const auto& area : m_blockedDragAreas ) {
+        if ( area.w <= 0.0f || area.h <= 0.0f ) {
+            continue;
+        }
+
+        if ( cursorX >= static_cast<double>(area.x) &&
+             cursorX <= static_cast<double>(area.x + area.w) &&
+             cursorY >= static_cast<double>(area.y) &&
+             cursorY <= static_cast<double>(area.y + area.h) ) {
+            return false;
+        }
+    }
+
     for ( const auto& area : m_dragAreas ) {
         if ( area.w <= 0.0f || area.h <= 0.0f ) {
             continue;

@@ -34,6 +34,9 @@ struct SessionEntry {
 
     /// @brief 是否应使用项目工作区 ini 中保存的停靠状态。
     bool restoreDockFromWorkspace{ false };
+
+    /// @brief 主画布窗口当前是否在 ImGui 中可见。
+    bool isCanvasVisible{ true };
 };
 
 /// @brief 逻辑线程使用的 Session 指针快照，保留原始列表索引用于匹配活跃项。
@@ -43,6 +46,9 @@ struct SessionSnapshotEntry {
 
     /// @brief 逻辑会话共享引用，保证锁外 update 期间生命周期有效。
     std::shared_ptr<BeatmapSession> session;
+
+    /// @brief 该 Session 对应主画布本帧是否可见。
+    bool isCanvasVisible{ true };
 };
 
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。

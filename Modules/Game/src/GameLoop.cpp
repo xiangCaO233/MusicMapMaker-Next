@@ -151,12 +151,14 @@ GameLoop::~GameLoop() {}
  * 该函数会阻塞直到窗口关闭。
  *
  * @param window 窗口上下文
+ * @param shutdownUiTask 关闭前可选 UI 收尾任务。
  * @return int 退出代码 (0 表示正常退出)
  */
 /// @warning 热路径：进入 while 后主线程逐帧执行渲染。
 /// 循环体禁止文件系统访问、完整 ECS 遍历、完整排序和每帧堆分配。
 // clang-format on
-int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
+int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
+                    ShutdownUiTask shutdownUiTask)
 {
     m_uiManager.setNativeWindow(&window);
 
@@ -332,6 +334,10 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[])
 
         // 保存配置
         Config::AppConfig::instance().save();
+
+        if ( shutdownUiTask ) {
+            shutdownUiTask(context, window);
+        }
 
         // 关闭音频引擎
         Audio::AudioManager::instance().shutdown();

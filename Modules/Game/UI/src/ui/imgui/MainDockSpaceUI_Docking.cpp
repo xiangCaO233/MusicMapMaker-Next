@@ -2,6 +2,7 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -9,6 +10,23 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 将当前活动的所有主画布窗口停靠到指定中心节点。
+/// @param dockId 目标中心 Dock 节点 ID。
+/// @warning 低频 UI 路径：仅在 DockBuilder
+/// 重建默认布局时执行；遍历当前打开会话列表。
+void dockActiveMainCanvasWindows(ImGuiID dockId)
+{
+    if ( dockId == 0 ) return;
+
+    auto entries = Logic::EditorEngine::instance().getSessionEntries();
+    for ( const auto& entry : entries ) {
+        if ( entry.cameraId.empty() ) continue;
+        ImGui::DockBuilderDockWindow(entry.cameraId.c_str(), dockId);
+    }
+}
+}  // namespace
 
 void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                                          float      menuBarHeight,
@@ -73,24 +91,18 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
-    if ( sideBarManager ) {
-        sideBarManager->restoreDockResizeMouseAfterDockSpace();
-    }
 
     if ( titleFont ) ImGui::PopFont();
 
-    static float lastDpiScale           = -1.0f;
-    static bool  lastFixedToolWindow    = true;
-    static bool  hasLastFixedToolWindow = false;
-    static bool  is_first_time          = true;
-    bool shouldResetLayout = (std::abs(dpiScale - lastDpiScale) > 0.001f) ||
-                             !hasLastFixedToolWindow ||
-                             lastFixedToolWindow != fixedToolWindow;
+    static bool lastFixedToolWindow    = true;
+    static bool hasLastFixedToolWindow = false;
+    static bool is_first_time          = true;
+    bool        shouldResetLayout =
+        !hasLastFixedToolWindow || lastFixedToolWindow != fixedToolWindow;
     bool projectLayoutLoaded =
         MainDockSpaceUI::consumeProjectWorkspaceLayoutLoaded();
     if ( projectLayoutLoaded ) {
         is_first_time          = false;
-        lastDpiScale           = dpiScale;
         lastFixedToolWindow    = fixedToolWindow;
         hasLastFixedToolWindow = true;
         shouldResetLayout      = false;
@@ -98,7 +110,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
     if ( is_first_time || shouldResetLayout ) {
         is_first_time          = false;
-        lastDpiScale           = dpiScale;
         lastFixedToolWindow    = fixedToolWindow;
         hasLastFixedToolWindow = true;
 
@@ -133,10 +144,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                 0.12f);
             ImGuiID dock_id_tool = 0;
             dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
-                                                               ImGuiDir_Right,
-                                                               toolNodeRatio,
-                                                               nullptr,
-                                                               &dock_id_work);
+                                                       ImGuiDir_Right,
+                                                       toolNodeRatio,
+                                                       nullptr,
+                                                       &dock_id_work);
             ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
             MainDockSpaceUI::setToolDockId(dock_id_tool);
         } else {
@@ -162,6 +173,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         ImGui::DockBuilderDockWindow("SideBarManager", dock_id_left);
         ImGui::DockBuilderDockWindow("Timeline", dock_id_timeline);
         ImGui::DockBuilderDockWindow("Basic2DCanvas", dock_id_center);
+        dockActiveMainCanvasWindows(dock_id_center);
         ImGui::DockBuilderDockWindow("PreviewWindow", dock_id_preview);
 
         MainDockSpaceUI::setCenterDockId(dock_id_center);

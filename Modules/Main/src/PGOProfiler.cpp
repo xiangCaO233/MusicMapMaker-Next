@@ -5,9 +5,14 @@
 #include "log/colorful-log.h"
 #include "mmmversion.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <future>
+#include <mutex>
 #include <string>
+#include <utility>
 
 #include <cstdlib>
 
@@ -68,6 +73,11 @@ namespace
 
 std::string                           s_profilePath;
 std::chrono::steady_clock::time_point s_profileStartTime;
+bool                                  s_profileInitialized{ false };
+bool                                  s_shutdownStarted{ false };
+std::future<void>                     s_shutdownFuture;
+std::mutex                            s_progressMutex;
+PGOProfilerShutdownProgress           s_shutdownProgress;
 
 /// @brief 默认 PGO profile 上传 URL。
 constexpr const char* kDefaultPGOUploadUrl =
@@ -125,6 +135,32 @@ long long elapsedRuntimeSeconds()
     return std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
 }
 
+/// @brief 更新 PGO 退出进度阶段。
+/// @param stage 当前阶段。
+/// @param message 状态说明。
+/// @param finished 是否已结束。
+void setShutdownStage(PGOProfilerShutdownStage stage, std::string message,
+                      bool finished)
+{
+    std::lock_guard<std::mutex> lock(s_progressMutex);
+    s_shutdownProgress.stage             = stage;
+    s_shutdownProgress.message           = std::move(message);
+    s_shutdownProgress.finished          = finished;
+    s_shutdownProgress.runtimeSeconds    = elapsedRuntimeSeconds();
+    s_shutdownProgress.minRuntimeSeconds = resolveMinUploadRuntimeSeconds();
+}
+
+/// @brief 更新 PGO 上传字节进度。
+/// @param uploadedBytes 已上传字节。
+/// @param totalBytes 预计总字节。
+void setUploadByteProgress(std::uint64_t uploadedBytes,
+                           std::uint64_t totalBytes)
+{
+    std::lock_guard<std::mutex> lock(s_progressMutex);
+    s_shutdownProgress.uploadedBytes = uploadedBytes;
+    s_shutdownProgress.totalBytes    = totalBytes;
+}
+
 /// @brief 添加 curl multipart 文本字段。
 void addMimeTextPart(curl_mime* mime, const char* name,
                      const std::string& value)
@@ -156,15 +192,34 @@ bool shouldUploadProfile(long long runtimeSeconds)
     return false;
 }
 
-/// @brief 在退出低频路径中通过 curl multipart POST 上传 profile 文件。
-void uploadProfile(const std::string& filePath, long long runtimeSeconds)
+/// @brief libcurl 上传进度回调。
+/// @return 返回 0 表示继续上传。
+int uploadProgressCallback(void*, curl_off_t, curl_off_t, curl_off_t ultotal,
+                           curl_off_t ulnow)
 {
-    if ( !shouldUploadProfile(runtimeSeconds) ) return;
+    auto safeTotal =
+        static_cast<std::uint64_t>(std::max<curl_off_t>(0, ultotal));
+    auto safeNow = static_cast<std::uint64_t>(std::max<curl_off_t>(0, ulnow));
+    if ( safeTotal > 0 && safeNow > safeTotal ) {
+        safeNow = safeTotal;
+    }
+    setUploadByteProgress(safeNow, safeTotal);
+    return 0;
+}
 
+/// @brief 在退出低频路径中通过 curl multipart POST 上传 profile 文件。
+/// @param filePath profile 文件路径。
+/// @param runtimeSeconds 本次运行时长。
+/// @return 上传成功时返回 true。
+bool uploadProfile(const std::string& filePath, long long runtimeSeconds)
+{
     std::string url = resolveUploadUrl();
     if ( url.empty() ) {
         XINFO("PGO: profile saved to {} (no upload URL configured)", filePath);
-        return;
+        setShutdownStage(PGOProfilerShutdownStage::Skipped,
+                         "PGO: no upload URL configured",
+                         true);
+        return false;
     }
 
     // 验证文件存在且非空
@@ -175,7 +230,10 @@ void uploadProfile(const std::string& filePath, long long runtimeSeconds)
             XERROR("PGO: cannot stat profile: {}", ec.message());
         else
             XERROR("PGO: profile file is empty, skipping upload");
-        return;
+        setShutdownStage(PGOProfilerShutdownStage::Failed,
+                         "PGO: profile file is not readable",
+                         true);
+        return false;
     }
 
     XINFO("PGO: uploading profile ({} KB, runtime {}s) ...",
@@ -187,8 +245,15 @@ void uploadProfile(const std::string& filePath, long long runtimeSeconds)
     auto curl = curl_easy_init();
     if ( !curl ) {
         XERROR("PGO: curl_easy_init failed");
-        return;
+        setShutdownStage(PGOProfilerShutdownStage::Failed,
+                         "PGO: curl_easy_init failed",
+                         true);
+        return false;
     }
+
+    setShutdownStage(
+        PGOProfilerShutdownStage::Uploading, "PGO: uploading profile", false);
+    setUploadByteProgress(0, static_cast<std::uint64_t>(fileSize));
 
     auto mime = curl_mime_init(curl);
     addMimeProfilePart(mime, filePath);
@@ -201,15 +266,108 @@ void uploadProfile(const std::string& filePath, long long runtimeSeconds)
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "MusicMapMaker-PGO/1.0");
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, uploadProgressCallback);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
     CURLcode res = curl_easy_perform(curl);
-    if ( res == CURLE_OK )
+    if ( res == CURLE_OK ) {
         XINFO("PGO: profile uploaded successfully");
-    else
+        setUploadByteProgress(static_cast<std::uint64_t>(fileSize),
+                              static_cast<std::uint64_t>(fileSize));
+        setShutdownStage(PGOProfilerShutdownStage::Succeeded,
+                         "PGO: profile uploaded successfully",
+                         true);
+    } else {
         XERROR("PGO: upload failed: {}", curl_easy_strerror(res));
+        setShutdownStage(
+            PGOProfilerShutdownStage::Failed, curl_easy_strerror(res), true);
+    }
 
     curl_mime_free(mime);
     curl_easy_cleanup(curl);
+    return res == CURLE_OK;
+}
+
+/// @brief 声明 PGO 退出流程开始，避免重复写出或上传。
+/// @return 本次调用成功取得执行权时返回 true。
+bool claimShutdownStart(bool uploadAllowed)
+{
+    std::lock_guard<std::mutex> lock(s_progressMutex);
+    if ( s_shutdownStarted ) return false;
+
+    s_shutdownStarted                    = true;
+    s_shutdownProgress                   = {};
+    s_shutdownProgress.uploadAllowed     = uploadAllowed;
+    s_shutdownProgress.runtimeSeconds    = elapsedRuntimeSeconds();
+    s_shutdownProgress.minRuntimeSeconds = resolveMinUploadRuntimeSeconds();
+    s_shutdownProgress.stage             = PGOProfilerShutdownStage::Idle;
+    s_shutdownProgress.finished          = false;
+    return true;
+}
+
+/// @brief 写出 profraw，并判断后续是否需要上传。
+/// @param uploadAllowed 用户是否允许自动上传。
+/// @return 需要执行上传时返回 true。
+bool writeProfileAndShouldUpload(bool uploadAllowed)
+{
+    if ( !s_profileInitialized ) {
+        setShutdownStage(PGOProfilerShutdownStage::Skipped,
+                         "PGO: profiler is not initialized",
+                         true);
+        return false;
+    }
+
+    setShutdownStage(
+        PGOProfilerShutdownStage::Writing, "PGO: writing profile", false);
+
+    int ret = __llvm_profile_write_file();
+    if ( ret != 0 ) {
+        XERROR("PGO: __llvm_profile_write_file() failed (code {})", ret);
+        setShutdownStage(PGOProfilerShutdownStage::Failed,
+                         "PGO: failed to write profile",
+                         true);
+        return false;
+    }
+
+    const long long runtimeSeconds = elapsedRuntimeSeconds();
+    {
+        std::lock_guard<std::mutex> lock(s_progressMutex);
+        s_shutdownProgress.runtimeSeconds = runtimeSeconds;
+    }
+
+    if ( !uploadAllowed ) {
+        XINFO("PGO: automatic profile upload disabled by user");
+        setShutdownStage(PGOProfilerShutdownStage::Skipped,
+                         "PGO: upload disabled by user",
+                         true);
+        return false;
+    }
+
+    if ( !shouldUploadProfile(runtimeSeconds) ) {
+        setShutdownStage(PGOProfilerShutdownStage::Skipped,
+                         "PGO: runtime is below upload threshold",
+                         true);
+        return false;
+    }
+
+    if ( resolveUploadUrl().empty() ) {
+        setShutdownStage(PGOProfilerShutdownStage::Skipped,
+                         "PGO: no upload URL configured",
+                         true);
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(s_progressMutex);
+        s_shutdownProgress.uploadAttempted = true;
+    }
+    return true;
+}
+
+/// @brief 执行已经准备好的 PGO 上传。
+void uploadPreparedProfile()
+{
+    uploadProfile(s_profilePath, elapsedRuntimeSeconds());
 }
 
 }  // namespace
@@ -222,8 +380,9 @@ void uploadProfile(const std::string& filePath, long long runtimeSeconds)
 void initPGOProfiler()
 {
 #ifdef MMM_PGO_INSTRUMENT
-    s_profileStartTime = std::chrono::steady_clock::now();
-    s_profilePath      = buildProfilePath();
+    s_profileStartTime   = std::chrono::steady_clock::now();
+    s_profilePath        = buildProfilePath();
+    s_profileInitialized = true;
     __llvm_profile_set_filename(s_profilePath.c_str());
     XINFO("PGO: instrumentation active → {}", s_profilePath);
 
@@ -235,16 +394,73 @@ void initPGOProfiler()
 #endif
 }
 
-void shutdownPGOProfiler()
+void shutdownPGOProfiler(bool uploadAllowed)
 {
 #ifdef MMM_PGO_INSTRUMENT
-    int ret = __llvm_profile_write_file();
-    if ( ret != 0 ) {
-        XERROR("PGO: __llvm_profile_write_file() failed (code {})", ret);
+    if ( !claimShutdownStart(uploadAllowed) ) {
+        waitForShutdownPGOProfiler();
         return;
     }
 
-    uploadProfile(s_profilePath, elapsedRuntimeSeconds());
+    if ( writeProfileAndShouldUpload(uploadAllowed) ) {
+        uploadPreparedProfile();
+    }
+#else
+    (void)uploadAllowed;
+#endif
+}
+
+bool beginShutdownPGOProfilerAsync(bool uploadAllowed)
+{
+#ifdef MMM_PGO_INSTRUMENT
+    if ( !claimShutdownStart(uploadAllowed) ) return false;
+    if ( !writeProfileAndShouldUpload(uploadAllowed) ) return false;
+
+    {
+        std::lock_guard<std::mutex> lock(s_progressMutex);
+        s_shutdownProgress.stage    = PGOProfilerShutdownStage::Uploading;
+        s_shutdownProgress.message  = "PGO: uploading profile";
+        s_shutdownProgress.finished = false;
+    }
+
+    s_shutdownFuture =
+        std::async(std::launch::async, []() { uploadPreparedProfile(); });
+    return true;
+#else
+    (void)uploadAllowed;
+    return false;
+#endif
+}
+
+PGOProfilerShutdownProgress getPGOProfilerShutdownProgress()
+{
+#ifdef MMM_PGO_INSTRUMENT
+    std::lock_guard<std::mutex> lock(s_progressMutex);
+    return s_shutdownProgress;
+#else
+    return PGOProfilerShutdownProgress{
+        .stage    = PGOProfilerShutdownStage::Skipped,
+        .finished = true,
+    };
+#endif
+}
+
+bool isShutdownPGOProfilerFinished()
+{
+#ifdef MMM_PGO_INSTRUMENT
+    std::lock_guard<std::mutex> lock(s_progressMutex);
+    return s_shutdownProgress.finished;
+#else
+    return true;
+#endif
+}
+
+void waitForShutdownPGOProfiler()
+{
+#ifdef MMM_PGO_INSTRUMENT
+    if ( s_shutdownFuture.valid() ) {
+        s_shutdownFuture.wait();
+    }
 #endif
 }
 

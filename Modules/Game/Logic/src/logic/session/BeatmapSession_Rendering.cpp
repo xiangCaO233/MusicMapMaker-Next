@@ -173,7 +173,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio    = config.visual.previewConfig.areaRatio;
+    float areaRatio = config.visual.previewConfig.areaRatio;
 
     if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
          areaRatio <= 0.0001f ) {
@@ -181,6 +181,31 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     }
 
     return previewDrawH / (mainEffectiveH * areaRatio);
+}
+
+/// @brief 将当前动画缩放比例同步到 ScrollCache。
+/// @param ctx 当前会话上下文。
+/// @param config 当前编辑器配置。
+/// @warning 逻辑/渲染热路径：每个 Session update 调用；只做常量级查找和赋值。
+void syncScrollCacheAnimatedZoom(SessionContext&             ctx,
+                                 const Config::EditorConfig& config)
+{
+    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( !cache ) {
+        return;
+    }
+
+    double targetZoom = static_cast<double>(config.visual.timelineZoom);
+    if ( !std::isfinite(targetZoom) || targetZoom <= 1e-9 ) {
+        targetZoom = 1.0;
+    }
+
+    double animateZoom = static_cast<double>(ctx.animatedTimelineZoom);
+    if ( !std::isfinite(animateZoom) || animateZoom <= 1e-9 ) {
+        animateZoom = targetZoom;
+    }
+
+    cache->setAnimatedZoomScale(animateZoom / targetZoom);
 }
 
 /// @brief 在生成视口快照前同步预览拖拽目标时间。
@@ -215,9 +240,9 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 
     float judgmentLineY =
         previewCamera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY   = cache->getAbsY(ctx.visualTime);
-    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
-                           static_cast<double>(renderScaleY);
+    double currentAbsY = cache->getAbsY(ctx.animateTime);
+    double deltaY      = (judgmentLineY - ctx.lastMousePos.y) /
+                    static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -308,6 +333,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
         &m_ctx->noteVisibilityIndexRevision);
 
+    syncScrollCacheAnimatedZoom(*m_ctx, config);
+
     // 1. 调用 ECS System 更新全局物理位置 (Logical Transform)
     // 注意：物理位置更新应基于逻辑时间 m_ctx->currentTime
     System::NoteTransformSystem::update(m_ctx->noteRegistry,
@@ -353,7 +380,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->uvMap = EditorEngine::instance().getAtlasUVMap(cameraId);
         snapshot->isPlaying =
             m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
-        snapshot->currentTime = m_ctx->visualTime;  // 快照使用视觉平滑时间
+        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
         snapshot->totalTime =
             SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
         snapshot->snapshotSysTime =
@@ -387,12 +414,12 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->isDirty = m_ctx->actionStack.isDirty();
         }
 
-        // 计算可见时间范围 (基于平滑视觉时间)
+        // 计算可见时间范围 (基于动画时间)
         auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
         if ( cache ) {
             float judgmentLineY =
                 camera.viewportHeight * config.visual.judgeline_pos;
-            double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+            double currentAbsY = cache->getAbsY(m_ctx->animateTime);
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             double scale = snapshot->renderScaleY;
             if ( !SessionUtils::isMainCanvasCameraId(cameraId) &&
@@ -414,8 +441,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->isHoveringCanvas   = isActiveSession &&
-                                       m_ctx->isMouseInCanvas &&
-                                       (m_ctx->mouseCameraId == cameraId);
+                                     m_ctx->isMouseInCanvas &&
+                                     (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
@@ -424,7 +451,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -450,7 +477,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
 
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+                double currentAbsY = cache->getAbsY(m_ctx->animateTime);
                 double deltaY      = (judgmentLineY - m_ctx->lastMousePos.y);
 
                 float renderScaleY = 1.0f;
@@ -494,7 +521,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         config,
                                                         bpmEvents,
                                                         m_ctx->timelineRegistry,
-                                                        m_ctx->visualTime,
+                                                        m_ctx->animateTime,
                                                         m_ctx->cameras);
 
                 // 判断是否在轨道框内
@@ -624,11 +651,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex = isBeforeFirstBpm
-                                          ? static_cast<int>(beatsInActive)
-                                          : static_cast<int>(totalBeatsPrefix +
+                    point.beatIndex   = isBeforeFirstBpm
+                                            ? static_cast<int>(beatsInActive)
+                                            : static_cast<int>(totalBeatsPrefix +
                                                              beatsInActive + 1);
-                    point.numerator = bestNum;
+                    point.numerator   = bestNum;
                     point.denominator = bestDen;
                     return point;
                 };
@@ -765,10 +792,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                 }
                                 inspect.showDtrack = true;
                             } else {
-                                inspect.kind = HoverInspectKind::Note;
-                                inspect.head = makeBeatPoint(note.m_timestamp,
+                                inspect.kind  = HoverInspectKind::Note;
+                                inspect.head  = makeBeatPoint(note.m_timestamp,
                                                              note.m_trackIndex);
-                                inspect.track     = note.m_trackIndex;
+                                inspect.track = note.m_trackIndex;
                                 inspect.showTrack = true;
                             }
 
@@ -796,7 +823,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             if ( cache ) {
                 float judgmentLineY =
                     camera.viewportHeight * config.visual.judgeline_pos;
-                double currentAbsY = cache->getAbsY(m_ctx->visualTime);
+                double currentAbsY = cache->getAbsY(m_ctx->animateTime);
                 double targetAbsY  = cache->getAbsY(snapshot->previewHoverTime);
 
                 float renderScaleY =
@@ -866,13 +893,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
 
         // 3. 调用 ECS System 针对当前 Camera 生成渲染快照
-        // 使用视觉时间 m_ctx->visualTime 进行剔除 and 位置映射
+        // 使用动画时间 m_ctx->animateTime 进行剔除和位置映射
         System::NoteRenderSystem::generateSnapshot(m_ctx->noteRegistry,
                                                    m_ctx->timelineRegistry,
                                                    bpmEvents,
                                                    snapshot,
                                                    cameraId,
-                                                   m_ctx->visualTime,
+                                                   m_ctx->animateTime,
                                                    camera.viewportWidth,
                                                    camera.viewportHeight,
                                                    judgmentLineY,

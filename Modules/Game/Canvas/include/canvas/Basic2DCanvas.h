@@ -93,6 +93,12 @@ public:
     ///@brief 是否需要重新记录命令 (比如数据变了)
     bool isDirty() const override;
 
+    /// @brief 当前帧是否需要录制主画布离屏渲染命令。
+    /// @return 主画布窗口可见时返回 true。
+    /// @warning 渲染热路径：每帧命令录制前调用，只读取 UI
+    /// 线程维护的可见状态。
+    bool shouldRecordOffscreen() const override;
+
     // --- 改变尺寸后的回调 ---
     void resizeCall(uint32_t oldW, uint32_t oldH, uint32_t w,
                     uint32_t h) const override;
@@ -155,6 +161,10 @@ protected:
     /// @warning 渲染热路径：每帧离屏命令录制时执行，只读取命令数量。
     bool hasOverlayDrawCmds() const override;
 
+    /// @brief 清空缓存的 shader 源码。
+    /// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+    void invalidateShaderSourceCache() override;
+
 private:
     /// @brief 画布名称
     std::string m_canvasName;
@@ -208,6 +218,9 @@ private:
 
     /// @brief 是否有后台准备结果等待主线程切换。
     bool m_hasPreparedSnapshot{ false };
+
+    /// @brief 当前主画布窗口是否真实可见。
+    bool m_isCanvasVisible{ true };
 
     /// @brief 是否显示保存确认弹窗
     bool m_showSaveConfirm{ false };

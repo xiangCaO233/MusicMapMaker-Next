@@ -617,6 +617,9 @@ struct EditorSettings {
     /// @brief UI 主题样式
     UITheme theme{ UITheme::Auto };
 
+    /// @brief 当前选择的皮肤目录名，位于 AppPaths::skinsRootPath() 下。
+    std::string selectedSkinDirectory{ "mmm-default" };
+
     /// @brief 节拍切分/分拍数 (例如 4 代表四分音符)
     int beatDivisor{ 4 };
 
@@ -646,6 +649,12 @@ struct EditorSettings {
 
     /// @brief 是否每隔固定时间输出渲染阶段平均耗时日志
     bool renderProfileLogging{ false };
+
+    /// @brief 是否允许退出时自动上传 PGO 性能热点原始数据。
+    bool autoUploadPgoProfiles{ false };
+
+    /// @brief 是否已经向用户询问过 PGO 性能数据上传授权。
+    bool pgoProfileUploadConsentAsked{ false };
 
     /// @brief 界面字体大小倍率 (1.0 代表原始大小)
     float fontSizeMultiplier{ 1.15f };
@@ -757,6 +766,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "filePickerStyle", c.filePickerStyle },
         { "cursorStyle", c.cursorStyle },
         { "theme", c.theme },
+        { "selectedSkinDirectory", c.selectedSkinDirectory },
         { "beatDivisor", c.beatDivisor },
         { "overlapTimeWindowMs", c.overlapTimeWindowMs },
         { "reverseScroll", c.reverseScroll },
@@ -767,6 +777,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "audioPlaybackBackend", c.audioPlaybackBackend },
         { "openALSpatialConfig", c.openALSpatialConfig },
         { "renderProfileLogging", c.renderProfileLogging },
+        { "autoUploadPgoProfiles", c.autoUploadPgoProfiles },
+        { "pgoProfileUploadConsentAsked", c.pgoProfileUploadConsentAsked },
         { "fontSizeMultiplier", c.fontSizeMultiplier },
         { "uiScaleMultiplier", c.uiScaleMultiplier },
         { "scrollSpeedMultiplier", c.scrollSpeedMultiplier },
@@ -807,11 +819,13 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
 
 inline void from_json(const nlohmann::json& j, EditorSettings& c)
 {
-    c.syncConfig          = j.value("syncConfig", SyncConfig());
-    c.sfxConfig           = j.value("sfxConfig", SfxConfig());
-    c.filePickerStyle     = j.value("filePickerStyle", FilePickerStyle::Native);
-    c.cursorStyle         = j.value("cursorStyle", CursorStyle::Software);
-    c.theme               = j.value("theme", UITheme::Auto);
+    c.syncConfig      = j.value("syncConfig", SyncConfig());
+    c.sfxConfig       = j.value("sfxConfig", SfxConfig());
+    c.filePickerStyle = j.value("filePickerStyle", FilePickerStyle::Native);
+    c.cursorStyle     = j.value("cursorStyle", CursorStyle::Software);
+    c.theme           = j.value("theme", UITheme::Auto);
+    c.selectedSkinDirectory =
+        j.value("selectedSkinDirectory", std::string("mmm-default"));
     c.beatDivisor         = j.value("beatDivisor", 4);
     c.overlapTimeWindowMs = j.value("overlapTimeWindowMs", 5.0f);
     c.reverseScroll       = j.value("reverseScroll", false);
@@ -828,7 +842,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
     c.openALSpatialConfig =
         j.value("openALSpatialConfig", OpenALSpatialConfig());
-    c.renderProfileLogging  = j.value("renderProfileLogging", false);
+    c.renderProfileLogging         = j.value("renderProfileLogging", false);
+    c.autoUploadPgoProfiles        = j.value("autoUploadPgoProfiles", false);
+    c.pgoProfileUploadConsentAsked = j.value(
+        "pgoProfileUploadConsentAsked", j.contains("autoUploadPgoProfiles"));
     c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
     c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
     c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);

@@ -15,6 +15,10 @@ class VKContext;
 class NativeWindow;
 }  // namespace Graphic
 
+/// @brief 窗口关闭后、图形上下文释放前执行的低频 UI 收尾任务。
+using ShutdownUiTask =
+    std::function<void(Graphic::VKContext&, Graphic::NativeWindow&)>;
+
 /**
  * @brief 游戏主循环类 (单例)
  *
@@ -48,9 +52,11 @@ public:
      * @param window 窗口上下文
      * @param argc 命令行参数数量
      * @param argv 命令行参数数组
+     * @param shutdownUiTask 关闭前可选 UI 收尾任务。
      * @return int 退出代码 (0 表示正常退出)
      */
-    int start(Graphic::NativeWindow& window, int argc = 0, char* argv[] = nullptr);
+    int start(Graphic::NativeWindow& window, int argc = 0,
+              char* argv[] = nullptr, ShutdownUiTask shutdownUiTask = {});
 
 private:
     GameLoop();

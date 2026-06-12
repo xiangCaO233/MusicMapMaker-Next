@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -34,6 +36,7 @@ inline std::optional<int32_t> parseRMInt32(std::string_view text)
     return value;
 }
 
+/// @brief 将谱面保存为 RM/IMD 二进制格式。
 inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     std::ofstream ofs(path, std::ios::binary);
@@ -46,20 +49,30 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         ofs.write(reinterpret_cast<const char*>(&value), sizeof(value));
     };
 
-    auto get_rm_map_int32 =
-        [&beatMap](const std::string& key) -> std::optional<int32_t> {
+    auto get_rm_map_property =
+        [&beatMap](const std::string& key) -> const std::string* {
         auto propsIt =
             beatMap.m_metadata.map_properties.find(MapMetadataType::RM);
         if ( propsIt == beatMap.m_metadata.map_properties.end() ) {
-            return std::nullopt;
+            return nullptr;
         }
 
         auto valueIt = propsIt->second.find(key);
         if ( valueIt == propsIt->second.end() ) {
-            return std::nullopt;
+            return nullptr;
         }
 
-        return parseRMInt32(valueIt->second);
+        return &valueIt->second;
+    };
+
+    auto get_rm_map_int32 =
+        [&get_rm_map_property](
+            const std::string& key) -> std::optional<int32_t> {
+        const auto* value = get_rm_map_property(key);
+        if ( value == nullptr ) {
+            return std::nullopt;
+        }
+        return parseRMInt32(*value);
     };
 
     // 0~4字节:int32 谱面时长
@@ -244,15 +257,39 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
         }
     }
 
-    table_rows = static_cast<int32_t>(std::min<size_t>(
-        rm_records.size(),
-        static_cast<size_t>(std::numeric_limits<int32_t>::max())));
-    if ( auto value = get_rm_map_int32("tabRows") ) {
-        table_rows = *value;
+    const size_t max_rows =
+        static_cast<size_t>(std::numeric_limits<int32_t>::max());
+    const size_t writable_record_count = std::min(rm_records.size(), max_rows);
+    table_rows = static_cast<int32_t>(writable_record_count);
+
+    const std::string* tab_rows_text = get_rm_map_property("tabRows");
+    if ( tab_rows_text != nullptr ) {
+        const auto declared_table_rows = parseRMInt32(*tab_rows_text);
+        if ( !declared_table_rows.has_value() ) {
+            XWARN(
+                "RM/IMD 导出: extra.tabRows='{}' 不是合法 "
+                "int32，已修正为实际物件行数 {}",
+                *tab_rows_text,
+                table_rows);
+        } else if ( *declared_table_rows != table_rows ) {
+            XWARN(
+                "RM/IMD 导出: extra.tabRows={} 与实际导出物件行数 {} "
+                "不一致，已修正为 {}",
+                *declared_table_rows,
+                table_rows,
+                table_rows);
+        }
+    }
+
+    if ( rm_records.size() > writable_record_count ) {
+        XWARN("RM/IMD 导出: 物件行数 {} 超过 int32 上限 {}，已截断导出",
+              rm_records.size(),
+              table_rows);
     }
     write_value(table_rows);
 
-    for ( const auto& rec : rm_records ) {
+    for ( size_t i = 0; i < writable_record_count; ++i ) {
+        const auto& rec = rm_records[i];
         write_value(rec.note_type_info);
         int8_t zero8 = 0;
         write_value(zero8);  // 固定没用的 00

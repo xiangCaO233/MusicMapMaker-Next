@@ -328,6 +328,11 @@ public:
     /// @param key 标识符
     void unloadSoundEffect(const std::string& key);
 
+    /// @brief 停止并释放所有已加载音效池。
+    /// @warning 低频资源重载路径：皮肤热切换时调用，会清空所有 SFX pool
+    /// 和调度状态，禁止放入播放热路径。
+    void clearSoundEffects();
+
     /// @brief 播放指定 key 的音效
     /// @param key 标识符
     /// @param volumeFactor 额外音量倍率 (默认 1.0)

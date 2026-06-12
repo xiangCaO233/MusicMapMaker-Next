@@ -192,8 +192,8 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float rowSpacingY =
         std::ceil(std::max(4.0f * scale, itemSpacing * 0.5f));
     const float labelPad   = std::floor(12.0f * scale);
-    const float footerPadX = std::floor(16.0f * scale);
-    const float rootPad    = std::floor(12.0f * scale);
+    const float rootPad    = std::floor(4.0f * scale);
+    const float footerPadX = rootPad;
     const float sectionSpacing =
         std::ceil(std::max(12.0f * scale, itemSpacing));
     const float footerSpacing =
@@ -782,6 +782,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             Sizing::Grow(),
             Sizing::Grow(),
             [&listVBox, &layoutContext](Clay_BoundingBox r, bool isHovered) {
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(0.0f, 0.0f));
                 ImGui::BeginChild("AudioListChild",
                                   { r.width, r.height },
                                   false,
@@ -799,6 +801,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 layoutContext.m_avail    = oldAvail;
 
                 ImGui::EndChild();
+                ImGui::PopStyleVar();
             });
 
     ImVec2 totalSize = rootVBox.renderInCurrent(

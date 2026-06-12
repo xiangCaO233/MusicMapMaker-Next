@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -8,14 +9,177 @@
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "logic/EditorEngine.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <filesystem>
 #include <nfd.h>
+#include <system_error>
+#include <vector>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 默认皮肤目录名。
+constexpr const char* kDefaultSkinDirectoryName = "mmm-default";
+
+/// @brief 获取指定皮肤目录的入口脚本路径。
+/// @param skinDirectoryName skins 根目录下的皮肤目录名。
+/// @return 皮肤入口脚本完整路径。
+std::filesystem::path skinLuaPathForDirectory(
+    const std::string& skinDirectoryName)
+{
+    std::filesystem::path path = Config::AppPaths::skinsRootPath();
+    path /= Config::utf8ToPath(skinDirectoryName);
+    path /= "skin.lua";
+    return path;
+}
+
+/// @brief 获取当前实际加载的皮肤目录名。
+/// @param settings 编辑器设置。
+/// @return 当前皮肤目录名。
+std::string currentSkinDirectoryName(const Config::EditorSettings& settings)
+{
+    auto loadedName = Config::pathToUtf8(
+        Config::SkinManager::instance().getData().skinPath.filename());
+    if ( !loadedName.empty() ) {
+        return loadedName;
+    }
+    if ( !settings.selectedSkinDirectory.empty() ) {
+        return settings.selectedSkinDirectory;
+    }
+    return kDefaultSkinDirectoryName;
+}
+
+/// @brief 检查皮肤入口脚本是否存在。
+/// @param skinLuaPath 皮肤入口脚本路径。
+/// @return 文件存在且是普通文件时返回 true。
+bool skinLuaFileExists(const std::filesystem::path& skinLuaPath)
+{
+    std::error_code ec;
+    return std::filesystem::exists(skinLuaPath, ec) &&
+           std::filesystem::is_regular_file(skinLuaPath, ec);
+}
+
+/// @brief 按当前皮肤配置预加载所有皮肤音效。
+/// @warning 低频资源重载路径：皮肤热切换后调用，会触发音频资源加载。
+void preloadCurrentSkinSoundEffects()
+{
+    const auto& skinData = Config::SkinManager::instance().getData();
+    for ( const auto& [key, path] : skinData.audioPaths ) {
+        const auto   leadInIt = skinData.audioLeadInSeconds.find(key);
+        const double leadInSeconds =
+            leadInIt != skinData.audioLeadInSeconds.end() ? leadInIt->second
+                                                          : 0.0;
+        Audio::AudioManager::instance().preloadSoundEffect(
+            key, Config::pathToUtf8(path), 1.0f, leadInSeconds);
+    }
+}
+}  // namespace
+
+/// @brief 刷新可选皮肤目录名缓存。
+/// @warning 低频文件系统路径：只在设置窗口打开或缓存标脏时扫描
+/// AppPaths::skinsRootPath()，禁止每帧无条件调用。
+void SettingsView::refreshAvailableSkinDirectories()
+{
+    m_availableSkinDirectories.clear();
+
+    std::error_code ec;
+    const auto      skinsRoot = Config::AppPaths::skinsRootPath();
+    if ( !std::filesystem::exists(skinsRoot, ec) ||
+         !std::filesystem::is_directory(skinsRoot, ec) ) {
+        m_availableSkinDirectoriesDirty = false;
+        return;
+    }
+
+    std::filesystem::directory_iterator it(
+        skinsRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        ec);
+    const std::filesystem::directory_iterator end;
+    while ( it != end ) {
+        std::error_code itemEc;
+        if ( it->is_directory(itemEc) ) {
+            const auto skinLuaPath = it->path() / "skin.lua";
+            if ( skinLuaFileExists(skinLuaPath) ) {
+                m_availableSkinDirectories.push_back(
+                    Config::pathToUtf8(it->path().filename()));
+            }
+        }
+        it.increment(ec);
+        if ( ec ) {
+            ec.clear();
+        }
+    }
+
+    std::sort(m_availableSkinDirectories.begin(),
+              m_availableSkinDirectories.end());
+    std::stable_sort(
+        m_availableSkinDirectories.begin(),
+        m_availableSkinDirectories.end(),
+        [](const std::string& lhs, const std::string& rhs) {
+            if ( lhs == rhs ) return false;
+            const bool lhsDefault = lhs == kDefaultSkinDirectoryName;
+            const bool rhsDefault = rhs == kDefaultSkinDirectoryName;
+            if ( lhsDefault != rhsDefault ) return lhsDefault;
+            return lhs < rhs;
+        });
+    m_availableSkinDirectories.erase(
+        std::unique(m_availableSkinDirectories.begin(),
+                    m_availableSkinDirectories.end()),
+        m_availableSkinDirectories.end());
+    m_availableSkinDirectoriesDirty = false;
+}
+
+/// @brief 应用皮肤选择并请求图形/音频资源热重载。
+/// @param skinDirectoryName skins 根目录下的皮肤目录名。
+/// @param skinLuaPath 皮肤入口脚本路径。
+/// @return 切换成功时返回 true。
+/// @warning 低频资源重载路径：会加载 Lua、清理音效池并请求 Vulkan
+/// 资源重建，只能由设置页皮肤选择触发。
+bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
+                                      const std::filesystem::path& skinLuaPath)
+{
+    if ( skinDirectoryName.empty() || !skinLuaFileExists(skinLuaPath) ) {
+        if ( auto ctx = Graphic::VKContext::get() ) {
+            ctx->get().showCenterNotification("皮肤入口不存在");
+        }
+        return false;
+    }
+
+    if ( !Config::SkinManager::instance().loadSkin(
+             Config::pathToUtf8(skinLuaPath)) ) {
+        if ( auto ctx = Graphic::VKContext::get() ) {
+            ctx->get().showCenterNotification("皮肤加载失败");
+        }
+        return false;
+    }
+
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.selectedSkinDirectory = skinDirectoryName;
+    m_layoutMetricsCache.valid     = false;
+    m_hasPreparedLayoutMetrics     = false;
+
+    auto& audio = Audio::AudioManager::instance();
+    audio.clearSoundEffects();
+    preloadCurrentSkinSoundEffects();
+    Logic::EditorEngine::instance().reloadCurrentProjectEffectSoundEffects();
+
+    if ( auto ctx = Graphic::VKContext::get() ) {
+        ctx->get().applyTheme();
+        ctx->get().requestFontRebuild();
+        ctx->get().showCenterNotification("皮肤已切换: " + skinDirectoryName);
+    }
+
+    if ( m_sourceManager ) {
+        m_sourceManager->requestSkinResourceReload();
+    }
+    return true;
+}
 
 /// @brief 渲染软件设置页。
 void SettingsView::drawSoftwareSettings()
@@ -154,6 +318,21 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                if ( ImGui::Checkbox("##AutoUploadPgoProfiles",
+                                     &settings.autoUploadPgoProfiles) ) {
+                    settings.pgoProfileUploadConsentAsked = true;
+                    changed                               = true;
+                }
+            });
+
         // 3. 音频播放后端
         addSettingItem(
             *sec,
@@ -283,6 +462,42 @@ void SettingsView::drawSoftwareSettings()
                     "%.2f");
             }
         }
+
+        if ( m_availableSkinDirectoriesDirty ) {
+            refreshAvailableSkinDirectories();
+        }
+        const std::string activeSkinDirectory =
+            currentSkinDirectoryName(settings);
+        addSettingItem(
+            *sec, rowIndex, "皮肤", maxLabelW, [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( m_availableSkinDirectories.empty() ) {
+                    ImGui::TextDisabled("%s", "未找到可用皮肤");
+                    return;
+                }
+
+                if ( ImGui::BeginCombo("##SkinCombo",
+                                       activeSkinDirectory.c_str()) ) {
+                    for ( const auto& directoryName :
+                          m_availableSkinDirectories ) {
+                        const bool selected =
+                            directoryName == activeSkinDirectory;
+                        if ( ImGui::Selectable(directoryName.c_str(),
+                                               selected) ) {
+                            if ( directoryName != activeSkinDirectory &&
+                                 applySkinSelection(
+                                     directoryName,
+                                     skinLuaPathForDirectory(directoryName)) ) {
+                                changed = true;
+                            }
+                        }
+                        if ( selected ) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+            });
 
         // 4. UI 主题
         addSettingItem(

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IUIView.h"
+#include "event/ui/UpdateDragAreaEvent.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/CLayWrapperCore.h"
@@ -69,12 +70,22 @@ public:
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
     [[nodiscard]] Graphic::IWindowFrameAdapter* getWindowFrameAdapter() const;
 
+    /// @brief 更新主窗口标题栏基础原生拖拽区域。
+    /// @param areas 当前标题栏允许原生窗口拖拽的矩形区域。
+    /// @warning UI 热路径：每帧由主菜单栏更新，只复制少量矩形。
+    void setNativeWindowDragAreas(std::vector<Event::DragArea> areas);
+
     /// @brief 捕获当前项目工作区 UI 状态到内存中的项目配置。
     void captureProjectWorkspaceState();
 
     /// @brief 打开独立设置窗口，切换到指定标签页并请求聚焦。
     /// @param tab 需要激活的设置标签页。
     void openSettingsWindow(MMM::Event::SettingsTab tab);
+
+    /// @brief 请求下一次资源准备阶段重载皮肤相关图形资源。
+    /// @warning 低频资源重载路径：皮肤热切换后调用，只置脏位；实际 Vulkan
+    /// 资源释放和重建在 onPrepareResources 中执行。
+    void requestSkinResourceReload();
 
     /// @brief 打开音轨控制器并默认停靠到谱面画布标签组。
     /// @param trackId 音轨标识符。
@@ -170,6 +181,11 @@ private:
     /// vkDeviceWaitIdle；只能在视图销毁等低频路径执行，严禁放入每帧路径。
     void waitForGpuBeforeDestroyView(IUIView& view);
 
+    /// @brief 将当前帧标题栏原生拖拽区域和 ImGui 遮挡区域同步到底层窗口系统。
+    /// @warning UI 热路径：每帧在所有 UI 绘制后执行；只遍历当前 ImGui
+    /// 窗口列表并投递少量矩形。
+    void syncNativeWindowDragAreas();
+
     /// @brief 所有ui接口
     std::unordered_map<std::string, std::unique_ptr<IUIView>> m_uiviews;
 
@@ -188,6 +204,9 @@ private:
     /// @brief 当前帧实际需要执行准备任务的视图缓存。
     std::vector<IParallelUiPreparable*> m_uiPrepareViews;
 
+    /// @brief 主窗口标题栏允许原生拖拽的基础区域。
+    std::vector<Event::DragArea> m_nativeWindowDragAreas;
+
     /// @brief 主原生窗口观察指针，不持有所有权。
     Graphic::NativeWindow* m_nativeWindow{ nullptr };
 
@@ -199,6 +218,9 @@ private:
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };
+
+    /// @brief 是否已请求重载皮肤相关图形资源。
+    bool m_skinResourceReloadRequested{ false };
 
     /// @brief 下一次允许捕获项目工作区的 ImGui 时间。
     double m_nextWorkspaceCaptureTime{ 0.0 };

@@ -242,6 +242,10 @@ private:
                           vk::DescriptorSet       defaultDescriptor,
                           uint32_t                frameIndex) override;
 
+    /// @brief 清空缓存的 shader 源码。
+    /// @warning 低频资源重载路径：皮肤热切换时执行，禁止放入命令录制热路径。
+    void invalidateShaderSourceCache() override;
+
     /// @brief 离屏绘制顶点缓存。
     std::vector<Graphic::Vertex::VKBasicVertex> m_vertices;
 

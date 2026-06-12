@@ -4,6 +4,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
@@ -39,6 +40,24 @@ bool isMouseHoveringCurrentWindowContent()
            mousePos.x <= contentPos.x + contentSize.x &&
            mousePos.y >= contentPos.y &&
            mousePos.y <= contentPos.y + contentSize.y;
+}
+
+/// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
+/// @return 窗口内容区域可见且不是隐藏 Dock Tab 时返回 true。
+/// @warning UI 热路径：主画布每帧更新时调用；只读取当前 ImGuiWindow 状态。
+bool isCurrentCanvasWindowVisible()
+{
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if ( !window || !window->WasActive || window->Hidden || window->Collapsed ||
+         window->SkipItems ) {
+        return false;
+    }
+    if ( window->DockIsActive && !window->DockTabIsVisible ) {
+        return false;
+    }
+
+    const ImVec2 contentSize = ImGui::GetContentRegionAvail();
+    return contentSize.x > 1.0f && contentSize.y > 1.0f;
 }
 }  // namespace
 
@@ -127,46 +146,56 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     if ( m_shouldDockToCenter && ImGui::IsWindowDocked() ) {
         m_shouldDockToCenter = false;
     }
-    RenderContext rctx(
-        this, m_canvasName.c_str(), m_targetWidth, m_targetHeight, nullptr);
 
-    // 检查是否聚焦该窗口，若是，同步给 EditorEngine 设为活动 Session
-    if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
-        int32_t activeIdx = engine.getActiveSessionIndex();
-        int32_t myIdx     = findSessionIndex();
-        if ( myIdx != -1 && myIdx != activeIdx ) {
-            engine.setActiveSessionIndex(myIdx);
-            XINFO(
-                "Basic2DCanvas: Focus switched active session to index {} "
-                "(cameraId={})",
-                myIdx,
-                m_cameraId);
+    m_isCanvasVisible = isCurrentCanvasWindowVisible();
+    engine.setSessionCanvasVisible(m_cameraId, m_isCanvasVisible);
+
+    if ( m_isCanvasVisible ) {
+        RenderContext rctx(
+            this, m_canvasName.c_str(), m_targetWidth, m_targetHeight, nullptr);
+
+        // 检查是否聚焦该窗口，若是，同步给 EditorEngine 设为活动 Session
+        if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
+            int32_t activeIdx = engine.getActiveSessionIndex();
+            int32_t myIdx     = findSessionIndex();
+            if ( myIdx != -1 && myIdx != activeIdx ) {
+                engine.setActiveSessionIndex(myIdx);
+                XINFO(
+                    "Basic2DCanvas: Focus switched active session to index {} "
+                    "(cameraId={})",
+                    myIdx,
+                    m_cameraId);
+            }
         }
-    }
 
-    if ( m_currentSnapshot ) {
-        // 更新背景纹理
-        /// @brief 仅在快照路径变化时同步背景纹理，避免热路径每帧访问文件系统。
-        if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
-            updateBackgroundTexture();
+        if ( m_currentSnapshot ) {
+            // 更新背景纹理
+            /// @brief
+            /// 仅在快照路径变化时同步背景纹理，避免热路径每帧访问文件系统。
+            if ( m_currentSnapshot->backgroundPath != m_loadedBgPath ) {
+                updateBackgroundTexture();
+            }
         }
-    }
 
-    // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
-    if ( engine.getActiveCameraId() == m_cameraId ) {
-        m_interaction->update(
-            sourceManager, m_currentSnapshot, m_logicalWidth, m_logicalHeight);
-    } else {
-        /// @brief 本帧普通滚轮是否发生在当前后台主画布内容区。
-        const bool isHoverWheelScroll =
-            isMouseHoveringCurrentWindowContent() &&
-            std::abs(ImGui::GetIO().MouseWheel) > 0.01f &&
-            !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
-        if ( isHoverWheelScroll && engine.canHoverScrollCamera(m_cameraId) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdScroll{ m_cameraId,
-                                  -ImGui::GetIO().MouseWheel,
-                                  ImGui::GetIO().KeyShift }));
+        // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
+        if ( engine.getActiveCameraId() == m_cameraId ) {
+            m_interaction->update(sourceManager,
+                                  m_currentSnapshot,
+                                  m_logicalWidth,
+                                  m_logicalHeight);
+        } else {
+            /// @brief 本帧普通滚轮是否发生在当前后台主画布内容区。
+            const bool isHoverWheelScroll =
+                isMouseHoveringCurrentWindowContent() &&
+                std::abs(ImGui::GetIO().MouseWheel) > 0.01f &&
+                !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+            if ( isHoverWheelScroll &&
+                 engine.canHoverScrollCamera(m_cameraId) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdScroll{ m_cameraId,
+                                      -ImGui::GetIO().MouseWheel,
+                                      ImGui::GetIO().KeyShift }));
+            }
         }
     }
 
@@ -256,8 +285,9 @@ bool Basic2DCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
     (void)snapshot;
-    return m_syncBuffer && (m_isOpen || m_showSaveConfirm ||
-                            (m_currentSnapshot && m_currentSnapshot->isDirty));
+    return m_syncBuffer && m_isCanvasVisible &&
+           (m_isOpen || m_showSaveConfirm ||
+            (m_currentSnapshot && m_currentSnapshot->isDirty));
 }
 
 /// @brief 在线程池中拉取并准备画布渲染快照。
@@ -290,7 +320,12 @@ void Basic2DCanvas::swapPreparedUiFrameData()
 
 bool Basic2DCanvas::isDirty() const
 {
-    return true;
+    return m_isCanvasVisible;
+}
+
+bool Basic2DCanvas::shouldRecordOffscreen() const
+{
+    return m_isCanvasVisible;
 }
 
 bool Basic2DCanvas::isOpen() const

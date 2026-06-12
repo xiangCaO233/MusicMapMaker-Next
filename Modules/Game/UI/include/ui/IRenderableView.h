@@ -44,6 +44,12 @@ public:
     ///@brief 是否需要重新记录命令 (比如数据变了)
     virtual bool isDirty() const = 0;
 
+    /// @brief 当前帧是否需要录制离屏渲染命令。
+    /// @return 需要录制时返回 true。
+    /// @warning 渲染热路径：UIManager 每帧命令录制前读取；默认复用
+    /// isDirty()，派生类可用可见性状态进一步裁剪。
+    virtual bool shouldRecordOffscreen() const { return isDirty(); }
+
     class RenderContext
     {
     public:

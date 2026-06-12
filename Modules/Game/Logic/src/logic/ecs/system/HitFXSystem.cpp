@@ -105,8 +105,9 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
 /// @brief 更新打击特效状态。
 /// @warning 逻辑热路径：每个 Session update
 /// 执行；只处理本帧事件和当前活跃特效表。
-void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
-                         const Config::EditorConfig& config)
+void HitFXSystem::update(double                       animateTime,
+                         const std::vector<HitEvent>& events,
+                         const Config::EditorConfig&  config)
 {
     for ( const auto& ev : events ) {
         triggerVisual(ev, config);
@@ -128,14 +129,14 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
             // 结束时间，且至少播放完一个完整的普通动画周期，则结束
             // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
             double animDuration = static_cast<double>(frameCount) / baseFps;
-            if ( visualTime > (active.startTime + active.duration) &&
-                 visualTime >= (active.startTime + animDuration) ) {
+            if ( animateTime > (active.startTime + active.duration) &&
+                 animateTime >= (active.startTime + animDuration) ) {
                 it = m_trackActiveEffects.erase(it);
                 continue;
             }
         } else {
             // 普通物件播放一次即结束
-            if ( active.isFinished(visualTime, baseFps, frameCount) ) {
+            if ( active.isFinished(animateTime, baseFps, frameCount) ) {
                 it = m_trackActiveEffects.erase(it);
                 continue;
             }
@@ -146,7 +147,7 @@ void HitFXSystem::update(double visualTime, const std::vector<HitEvent>& events,
 
 /// @brief 生成打击特效的渲染指令。
 /// @warning 渲染热路径：快照生成阶段执行；只遍历当前活跃特效表并追加几何。
-void HitFXSystem::generateSnapshot(Batcher& batcher, double visualTime,
+void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
                                    const Config::EditorConfig& config,
                                    int32_t trackCount, float judgmentLineY,
                                    float leftX, float singleTrackW)
@@ -164,7 +165,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double visualTime,
         if ( !seq || seq->frames.empty() ) continue;
 
         size_t frameCount = seq->frames.size();
-        double elapsed    = visualTime - active.startTime;
+        double elapsed    = animateTime - active.startTime;
         if ( elapsed < 0 )
             continue;  // 尚未到达触发点（虽然 logic 逻辑应该保证触发）
 

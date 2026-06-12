@@ -9,25 +9,7 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                              vk::Device&         logicalDevice,
                              vk::CommandPool commandPool, vk::Queue queue)
 {
-    auto& skin = Config::SkinManager::instance();
-
-    // RAII 自动加载、注册 ImGui 描述符、并在析构时自动销毁
-    m_texCursor = std::make_unique<VKTexture>(skin.getAssetPath("cursor"),
-                                              phyDevice,
-                                              logicalDevice,
-                                              commandPool,
-                                              queue);
-    m_texTrail  = std::make_unique<VKTexture>(skin.getAssetPath("cursortrail"),
-                                             phyDevice,
-                                             logicalDevice,
-                                             commandPool,
-                                             queue);
-
-    m_texSmoke = std::make_unique<VKTexture>(skin.getAssetPath("cursor_smoke"),
-                                             phyDevice,
-                                             logicalDevice,
-                                             commandPool,
-                                             queue);
+    reloadSkinTextures(phyDevice, logicalDevice, commandPool, queue);
 
     /// @brief 拖尾存活时间(秒)
     // float m_trailLifeTime = 0.3f;
@@ -40,6 +22,46 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
 }
 
 CursorManager::~CursorManager() {}
+
+/// @brief 重新加载软件光标相关皮肤纹理。
+/// @param phyDevice Vulkan 物理设备。
+/// @param logicalDevice Vulkan 逻辑设备。
+/// @param commandPool 上传命令池。
+/// @param queue 上传队列。
+/// @warning 低频资源重载路径：皮肤热切换时调用，会等待设备空闲并替换
+/// ImGui 光标纹理，禁止放入每帧绘制路径。
+void CursorManager::reloadSkinTextures(vk::PhysicalDevice& phyDevice,
+                                       vk::Device&         logicalDevice,
+                                       vk::CommandPool     commandPool,
+                                       vk::Queue           queue)
+{
+    auto& skin = Config::SkinManager::instance();
+
+    (void)logicalDevice.waitIdle();
+
+    auto cursorTexture =
+        std::make_unique<VKTexture>(skin.getAssetPath("cursor"),
+                                    phyDevice,
+                                    logicalDevice,
+                                    commandPool,
+                                    queue);
+    auto trailTexture =
+        std::make_unique<VKTexture>(skin.getAssetPath("cursortrail"),
+                                    phyDevice,
+                                    logicalDevice,
+                                    commandPool,
+                                    queue);
+    auto smokeTexture =
+        std::make_unique<VKTexture>(skin.getAssetPath("cursor_smoke"),
+                                    phyDevice,
+                                    logicalDevice,
+                                    commandPool,
+                                    queue);
+
+    m_texCursor = std::move(cursorTexture);
+    m_texTrail  = std::move(trailTexture);
+    m_texSmoke  = std::move(smokeTexture);
+}
 
 /// @brief 更新并绘制软件光标。
 /// @param smokeLifeOverride 烟雾存活时间覆盖值，小于等于 0 时使用配置值。

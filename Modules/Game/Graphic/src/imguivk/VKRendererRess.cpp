@@ -21,6 +21,23 @@ void VKRenderer::releaseCursorManager()
     m_cursorManager.reset();
 }
 
+/// @brief 重新加载渲染器内部持有的皮肤纹理。
+/// @warning 低频资源重载路径：皮肤热切换时调用，会等待设备空闲并替换
+/// 软件光标等渲染器自持有纹理，禁止放入每帧渲染路径。
+void VKRenderer::reloadSkinTextures()
+{
+    (void)m_vkLogicalDevice.waitIdle();
+    if ( !m_cursorManager ) {
+        initCursorManager(m_vkPhysicalDevice, m_vkLogicalDevice);
+        return;
+    }
+
+    m_cursorManager->reloadSkinTextures(m_vkPhysicalDevice,
+                                        m_vkLogicalDevice,
+                                        m_vkCommandPool,
+                                        m_LogicDeviceGraphicsQueue);
+}
+
 /// @brief 确保离屏录制任务槽数量足够。
 /// @param taskCount 当前帧需要的任务槽数量。
 /// @warning 渲染热路径低频分支：只有可渲染视图数量增加时才创建 Vulkan command

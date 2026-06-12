@@ -22,7 +22,9 @@ target_link_libraries(Audio
 		Config
 )
 
-if(MSVC)
+if(TARGET 3rd_fftw3)
+	target_link_libraries(Audio PUBLIC 3rd_fftw3)
+elseif(MSVC)
 	set(FFTW3_DIR "${VCPKG_ROOT}/installed/x64-windows-static/share/fftw3")
 	find_package(FFTW3 CONFIG REQUIRED)
 	target_link_libraries(Audio PUBLIC fftw3)

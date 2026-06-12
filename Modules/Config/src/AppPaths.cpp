@@ -35,6 +35,9 @@ constexpr const char* kImguiIniFileName = "imgui.ini";
 /// @brief 用户资源包目录名。
 constexpr const char* kAssetsDirectoryName = "assets";
 
+/// @brief 用户资源包中的皮肤目录名。
+constexpr const char* kSkinsDirectoryName = "skins";
+
 /// @brief 默认资源包中的皮肤脚本相对路径。
 constexpr const char* kDefaultSkinRelativePath = "skins/mmm-default/skin.lua";
 
@@ -187,6 +190,15 @@ std::filesystem::path AppPaths::assetsRootPath()
 {
     std::filesystem::path path = configRootPath();
     path /= kAssetsDirectoryName;
+    return path;
+}
+
+/// @brief 获取皮肤资源根目录。
+/// @return skins 目录在用户资源包根目录下的完整路径。
+std::filesystem::path AppPaths::skinsRootPath()
+{
+    std::filesystem::path path = assetsRootPath();
+    path /= kSkinsDirectoryName;
     return path;
 }
 

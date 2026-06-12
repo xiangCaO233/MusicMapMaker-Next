@@ -42,6 +42,18 @@ public:
     CursorManager(vk::PhysicalDevice& phyDevice, vk::Device& logicalDevice,
                   vk::CommandPool commandPool, vk::Queue queue);
     ~CursorManager();
+
+    /// @brief 重新加载软件光标相关皮肤纹理。
+    /// @param phyDevice Vulkan 物理设备。
+    /// @param logicalDevice Vulkan 逻辑设备。
+    /// @param commandPool 上传命令池。
+    /// @param queue 上传队列。
+    /// @warning 低频资源重载路径：皮肤热切换时调用，会等待设备空闲并替换
+    /// ImGui 光标纹理，禁止放入每帧绘制路径。
+    void reloadSkinTextures(vk::PhysicalDevice& phyDevice,
+                            vk::Device&         logicalDevice,
+                            vk::CommandPool commandPool, vk::Queue queue);
+
     void UpdateAndDraw(float smokeLifeOverride = -1.0f);
 };
 

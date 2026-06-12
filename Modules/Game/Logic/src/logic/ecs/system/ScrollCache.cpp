@@ -39,6 +39,16 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                           const Config::EditorConfig& config,
                           MMM::BeatMap*               beatmap)
 {
+    const double BASE_SPEED      = 500.0;
+    const auto&  visualConfig    = config.visual;
+    const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
+    const bool   enableEffects   = !isLinearMapping;
+    double       timelineZoom    = visualConfig.timelineZoom;
+    if ( !std::isfinite(timelineZoom) || timelineZoom <= 1e-9 ) {
+        timelineZoom = 1.0;
+    }
+    m_lastZoom = timelineZoom;
+
     m_rebuildScratch.clear();
     auto tlView = timelineRegistry.view<const TimelineComponent>();
     m_rebuildScratch.reserve(tlView.size());
@@ -75,13 +85,6 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
-
-    const double BASE_SPEED      = 500.0;
-    const auto&  visualConfig    = config.visual;
-    const bool   isLinearMapping = visualConfig.enableLinearScrollMapping;
-    const bool   enableEffects   = !isLinearMapping;
-    const double timelineZoom    = visualConfig.timelineZoom;
-    m_lastZoom                   = timelineZoom;
 
     // 1. 完整版 osu! 逻辑：计算 Most Common BPM 作为基准，并获取
     // SliderMultiplier
@@ -214,6 +217,17 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     ++m_revision;
 }
 
+/// @brief 设置渲染用动画时间线缩放比例。
+/// @warning 逻辑/渲染热路径：每个 Session update 执行；只做常量级赋值。
+void ScrollCache::setAnimatedZoomScale(double scale)
+{
+    if ( !std::isfinite(scale) || scale <= 1e-9 ) {
+        m_animatedZoomScale = 1.0;
+        return;
+    }
+    m_animatedZoomScale = scale;
+}
+
 std::pair<double, double> ScrollCache::getSegmentAbsYRange(
     std::size_t index) const
 {
@@ -306,7 +320,20 @@ void ScrollCache::rebuildMicroImpulseWindows()
     }
 }
 
-double ScrollCache::getRawAbsY(double t) const
+double ScrollCache::applyAnimatedZoomScale(double absY) const
+{
+    return absY * m_animatedZoomScale;
+}
+
+double ScrollCache::toUnscaledAbsY(double animatedAbsY) const
+{
+    if ( std::abs(m_animatedZoomScale) <= 1e-9 ) {
+        return animatedAbsY;
+    }
+    return animatedAbsY / m_animatedZoomScale;
+}
+
+double ScrollCache::getUnscaledRawAbsY(double t) const
 {
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) return t * DEFAULT_SPEED;
@@ -324,6 +351,11 @@ double ScrollCache::getRawAbsY(double t) const
     }
     --it;
     return it->absY + (t - it->time) * it->speed;
+}
+
+double ScrollCache::getRawAbsY(double t) const
+{
+    return applyAnimatedZoomScale(getUnscaledRawAbsY(t));
 }
 
 double ScrollCache::applyMicroImpulseWindow(double t, double rawAbsY) const
@@ -365,12 +397,14 @@ double ScrollCache::getAbsY(double t) const
 
 double ScrollCache::getVisualAnchorAbsY(double t) const
 {
-    return applyMicroImpulseWindow(t, getRawAbsY(t));
+    return applyAnimatedZoomScale(
+        applyMicroImpulseWindow(t, getUnscaledRawAbsY(t)));
 }
 
 double ScrollCache::getTime(double absY) const
 {
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
+    absY                       = toUnscaledAbsY(absY);
     if ( m_segments.empty() ) return absY / DEFAULT_SPEED;
 
     constexpr double EPS       = 1e-6;
@@ -405,16 +439,20 @@ double ScrollCache::getTime(double absY) const
 
 double ScrollCache::getSpeedAt(double t) const
 {
-    if ( m_segments.empty() ) return 1.0;
+    if ( m_segments.empty() ) {
+        return applyAnimatedZoomScale(500.0 * m_lastZoom);
+    }
     auto it = std::upper_bound(
         m_segments.begin(),
         m_segments.end(),
         t,
         [](double val, const ScrollSegment& seg) { return val < seg.time; });
 
-    if ( it == m_segments.begin() ) return m_segments[0].speed;
+    if ( it == m_segments.begin() ) {
+        return m_segments[0].speed * m_animatedZoomScale;
+    }
     --it;
-    return it->speed;
+    return it->speed * m_animatedZoomScale;
 }
 
 double ScrollCache::getHsAt(double t) const
@@ -436,7 +474,7 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
 {
     const double DEFAULT_SPEED = 500.0 * m_lastZoom;
     if ( m_segments.empty() ) {
-        return t * DEFAULT_SPEED - currentAbsY;
+        return applyAnimatedZoomScale(t * DEFAULT_SPEED) - currentAbsY;
     }
 
     auto it = std::upper_bound(
@@ -490,6 +528,11 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
     std::vector<std::pair<double, double>> ranges;
     if ( m_segments.empty() ) return ranges;
 
+    if ( minAbsY > maxAbsY ) {
+        std::swap(minAbsY, maxAbsY);
+    }
+    minAbsY = toUnscaledAbsY(minAbsY);
+    maxAbsY = toUnscaledAbsY(maxAbsY);
     if ( minAbsY > maxAbsY ) {
         std::swap(minAbsY, maxAbsY);
     }
@@ -559,6 +602,19 @@ std::vector<std::pair<double, double>> ScrollCache::getTimeRangesForAbsYWindow(
     }
 
     return ranges;
+}
+
+void ScrollCache::copyAnimatedSegmentsTo(std::vector<ScrollSegment>& out) const
+{
+    out = m_segments;
+    if ( std::abs(m_animatedZoomScale - 1.0) <= 1e-9 ) {
+        return;
+    }
+
+    for ( auto& segment : out ) {
+        segment.absY  = applyAnimatedZoomScale(segment.absY);
+        segment.speed = applyAnimatedZoomScale(segment.speed);
+    }
 }
 
 std::vector<std::pair<double, double>> ScrollCache::getTimeSlices(
