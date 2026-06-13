@@ -13,8 +13,47 @@
 #include "imgui_impl_glfw.h"
 #include "log/colorful-log.h"
 
+#include <fmt/format.h>
+
 namespace MMM::Graphic
 {
+namespace
+{
+/// @brief 将物理设备类型格式化为短文本。
+/// @param type Vulkan-Hpp 物理设备类型。
+/// @return 设备类型文本。
+const char* physicalDeviceTypeText(vk::PhysicalDeviceType type)
+{
+    switch ( type ) {
+    case vk::PhysicalDeviceType::eDiscreteGpu: return "discrete-gpu";
+    case vk::PhysicalDeviceType::eIntegratedGpu: return "integrated-gpu";
+    case vk::PhysicalDeviceType::eVirtualGpu: return "virtual-gpu";
+    case vk::PhysicalDeviceType::eCpu: return "cpu";
+    case vk::PhysicalDeviceType::eOther: return "other";
+    default: return "unknown";
+    }
+}
+
+/// @brief 物理设备与队列族选择结果。
+struct DeviceSelection final {
+    /// @brief 物理设备句柄。
+    vk::PhysicalDevice device{};
+
+    /// @brief 队列族索引。
+    QueueFamilyIndices indices{};
+
+    /// @brief 设备名称。
+    std::string deviceName;
+
+    /// @brief 是否为独立显卡。
+    bool isDiscreteGpu{ false };
+
+    /// @brief 检查是否找到了可用设备和队列族。
+    /// @return 找到可用设备和队列族时返回 true。
+    bool isValid() const { return device && indices; }
+};
+}  // namespace
+
 /**
  * @brief 获取 VKContext 单例实例
  *
@@ -53,10 +92,21 @@ VKContext::VKContext()
 
     // 初始化vk实例创建信息
     initVkInstanceCreateInfo();
+    collectVulkanInstanceCreateDiagnostics();
 
     // 创建vk实例
-    m_vkInstance = vk::createInstance(m_vkInstanceCreateInfo).value;
+    auto instanceResult = vk::createInstance(m_vkInstanceCreateInfo);
+    if ( instanceResult.result != vk::Result::eSuccess ) {
+        addStartupDiagnostic(fmt::format("vkCreateInstance failed: {}",
+                                         vk::to_string(instanceResult.result)));
+        logStartupDiagnostics("vkCreateInstance failed.");
+        releaseGLFW();
+        throw std::runtime_error("Fatal: Failed to create Vulkan instance.");
+    }
+    m_vkInstance = instanceResult.value;
+    addStartupDiagnostic("Vulkan instance created successfully.");
     XDEBUG("VK Instance created.");
+    collectPhysicalDeviceDiagnostics(false);
 
     // 初始化vk动态加载器(要在创建vkInstance后)
     // (它会去找到扩展函数 如 vkCreateDebugUtilsMessengerEXT的地址)
@@ -67,10 +117,20 @@ VKContext::VKContext()
         // debug模式初始化vk调试信息工具
         // 创建 Messenger 对象
         // 这里必须传入 dldy 否则会链接报错
-        m_vkDebugMessenger = m_vkInstance
-                                 .createDebugUtilsMessengerEXT(
-                                     m_vkDebugUtilCreateInfo, nullptr, m_vkDldy)
-                                 .value;
+        auto debugMessengerResult = m_vkInstance.createDebugUtilsMessengerEXT(
+            m_vkDebugUtilCreateInfo, nullptr, m_vkDldy);
+        if ( debugMessengerResult.result != vk::Result::eSuccess ) {
+            addStartupDiagnostic(
+                fmt::format("vkCreateDebugUtilsMessengerEXT failed: {}",
+                            vk::to_string(debugMessengerResult.result)));
+            logStartupDiagnostics("vkCreateDebugUtilsMessengerEXT failed.");
+            release();
+            releaseGLFW();
+            throw std::runtime_error(
+                "Fatal: Failed to create Vulkan debug messenger.");
+        }
+        m_vkDebugMessenger = debugMessengerResult.value;
+        addStartupDiagnostic("Vulkan debug messenger created successfully.");
         XDEBUG("Vulkan Debug Messenger Initialize Successed");
     }
 
@@ -228,17 +288,96 @@ void VKContext::release()
  */
 void VKContext::imguiAutoSelect()
 {
-    // Select Physical Device (GPU)
-    m_vkPhysicalDevice = ImGui_ImplVulkanH_SelectPhysicalDevice(m_vkInstance);
-    IM_ASSERT(m_vkPhysicalDevice != VK_NULL_HANDLE);
+    auto devicesResult = m_vkInstance.enumeratePhysicalDevices();
+    if ( devicesResult.result != vk::Result::eSuccess ||
+         devicesResult.value.empty() ) {
+        addStartupDiagnostic(
+            fmt::format("Physical device selection failed: result={}, count={}",
+                        vk::to_string(devicesResult.result),
+                        devicesResult.value.size()));
+        logStartupDiagnostics("No usable Vulkan physical device.");
+        throw std::runtime_error(
+            "Fatal: No usable Vulkan physical device was found.");
+    }
 
-    // Select graphics queue family
-    auto queueFamily =
-        ImGui_ImplVulkanH_SelectQueueFamilyIndex(m_vkPhysicalDevice);
-    IM_ASSERT(queueFamily != (uint32_t)-1);
+    DeviceSelection fallbackSelection{};
+    DeviceSelection preferredSelection{};
+    for ( const auto& device : devicesResult.value ) {
+        DeviceSelection selection{};
+        selection.device = device;
 
-    m_queueFamilyIndices.graphicsQueueIndex = queueFamily;
-    m_queueFamilyIndices.presentQueueIndex  = queueFamily;
+        const auto properties = device.getProperties();
+        selection.deviceName  = properties.deviceName.data();
+        selection.isDiscreteGpu =
+            properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu;
+
+        const auto queueFamilies = device.getQueueFamilyProperties();
+        for ( uint32_t queueIndex = 0;
+              queueIndex < static_cast<uint32_t>(queueFamilies.size());
+              ++queueIndex ) {
+            const bool supportsGraphics =
+                (queueFamilies[queueIndex].queueFlags &
+                 vk::QueueFlagBits::eGraphics) == vk::QueueFlagBits::eGraphics;
+            if ( supportsGraphics &&
+                 !selection.indices.graphicsQueueIndex.has_value() ) {
+                selection.indices.graphicsQueueIndex = queueIndex;
+            }
+
+            bool supportsPresent = !m_vkSurface && supportsGraphics;
+            if ( m_vkSurface ) {
+                auto presentResult =
+                    device.getSurfaceSupportKHR(queueIndex, m_vkSurface);
+                supportsPresent =
+                    presentResult.result == vk::Result::eSuccess &&
+                    presentResult.value == VK_TRUE;
+            }
+            if ( supportsPresent &&
+                 !selection.indices.presentQueueIndex.has_value() ) {
+                selection.indices.presentQueueIndex = queueIndex;
+            }
+        }
+
+        if ( !selection.isValid() ) {
+            addStartupDiagnostic(fmt::format(
+                "Rejected GPU \"{}\": graphicsQueue={}, presentQueue={}",
+                selection.deviceName,
+                selection.indices.graphicsQueueIndex.has_value(),
+                selection.indices.presentQueueIndex.has_value()));
+            continue;
+        }
+
+        if ( !fallbackSelection.isValid() ) {
+            fallbackSelection = selection;
+        }
+        if ( selection.isDiscreteGpu ) {
+            preferredSelection = selection;
+            break;
+        }
+    }
+
+    const DeviceSelection selected =
+        preferredSelection.isValid() ? preferredSelection : fallbackSelection;
+    if ( !selected.isValid() ) {
+        logStartupDiagnostics(
+            "No Vulkan physical device has graphics and present queues.");
+        throw std::runtime_error(
+            "Fatal: No Vulkan physical device has graphics and present "
+            "queues.");
+    }
+
+    m_vkPhysicalDevice   = selected.device;
+    m_queueFamilyIndices = selected.indices;
+
+    const auto properties = m_vkPhysicalDevice.getProperties();
+    addStartupDiagnostic(fmt::format(
+        "Selected GPU: \"{}\", type={}, graphicsQueue={}, presentQueue={}",
+        properties.deviceName.data(),
+        physicalDeviceTypeText(properties.deviceType),
+        m_queueFamilyIndices.graphicsQueueIndex.value(),
+        m_queueFamilyIndices.presentQueueIndex.value()));
+    XINFO("Selected Vulkan GPU: {} ({})",
+          properties.deviceName.data(),
+          physicalDeviceTypeText(properties.deviceType));
 }
 
 /**
@@ -253,23 +392,40 @@ void VKContext::imguiAutoSelect()
 void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 {
     m_nativeWindow_ptr = native_window_ptr;
+    addStartupDiagnostic(
+        fmt::format("Initializing Vulkan window resources: {}x{}", w, h));
+
+    if ( !native_window_ptr || !native_window_ptr->getWindowHandle() ) {
+        addStartupDiagnostic("Native window handle is null.");
+        logStartupDiagnostics("Native window handle is null.");
+        throw std::runtime_error(
+            "Failed to initialize Vulkan window resources: "
+            "native window is null.");
+    }
 
     // 初始化vk表面句柄
     // C 风格的 Surface 创建（GLFW 提供的快捷函数）
-    VkSurfaceKHR surface;
-    if ( glfwCreateWindowSurface(m_vkInstance,
-                                 native_window_ptr->getWindowHandle(),
-                                 nullptr,
-                                 &surface) != VK_SUCCESS ) {
+    VkSurfaceKHR   surface;
+    const VkResult surfaceResult = glfwCreateWindowSurface(
+        m_vkInstance, native_window_ptr->getWindowHandle(), nullptr, &surface);
+    if ( surfaceResult != VK_SUCCESS ) {
+        addStartupDiagnostic(
+            fmt::format("glfwCreateWindowSurface failed: {}",
+                        vk::to_string(static_cast<vk::Result>(surfaceResult))));
+        collectLastGLFWErrorDiagnostic("glfwCreateWindowSurface failed.");
+        logStartupDiagnostics("glfwCreateWindowSurface failed.");
         throw std::runtime_error("Failed to create window surface!");
     }
 
     // 转换为 vk::SurfaceKHR
     m_vkSurface = surface;
+    addStartupDiagnostic("Vulkan window surface created successfully.");
     XDEBUG("Vulkan Surface created.");
+    collectPhysicalDeviceDiagnostics(true);
 
     // 使用imgui自动选择物理设备和队列族
     imguiAutoSelect();
+    collectSelectedSurfaceDiagnostics(w, h);
 
     // 在创建交换链之前，根据配置预设全局呈现模式，避免启动后再次重建
     updateGlobalPresentMode(
@@ -460,7 +616,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                               minPos.y + ImGui::GetWindowHeight());
+                                      minPos.y + ImGui::GetWindowHeight());
 
         // 绘制毛玻璃/半透明背板 (深色磨砂)
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(

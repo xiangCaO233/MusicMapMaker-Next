@@ -12,7 +12,9 @@
 #include <atomic>
 #include <expected>
 #include <memory>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #ifndef VULKAN_HPP_NO_EXCEPTIONS
 #    define VULKAN_HPP_NO_EXCEPTIONS
@@ -193,12 +195,55 @@ private:
     /**
      * @brief 初始化 GLFW 上下文
      */
-    static void initGLFW();
+    void initGLFW();
 
     /**
      * @brief 释放 GLFW 资源
      */
     static void releaseGLFW();
+
+    /// @brief 追加一行启动阶段图形诊断信息。
+    /// @param line 诊断信息文本。
+    void addStartupDiagnostic(std::string line);
+
+    /// @brief 采集 GLFW 版本、平台和 Vulkan loader 可用性。
+    void collectGLFWDiagnostics();
+
+    /// @brief 采集 GLFW 最近一次错误信息。
+    /// @param context 触发 GLFW 错误查询的上下文。
+    void collectLastGLFWErrorDiagnostic(const char* context);
+
+    /// @brief 采集 Vulkan loader 版本、instance 扩展和 layer 信息。
+    void collectVulkanLoaderDiagnostics();
+
+    /// @brief 采集 Vulkan instance 创建请求信息。
+    void collectVulkanInstanceCreateDiagnostics();
+
+    /// @brief 采集 Vulkan instance 创建后的物理设备基础信息。
+    /// @param includeSurfaceSupport 是否同时查询窗口 surface 呈现支持。
+    void collectPhysicalDeviceDiagnostics(bool includeSurfaceSupport);
+
+    /// @brief 采集选中物理设备的窗口 surface 支持信息。
+    /// @param width 请求的窗口宽度。
+    /// @param height 请求的窗口高度。
+    void collectSelectedSurfaceDiagnostics(int width, int height);
+
+    /// @brief 采集逻辑设备创建请求信息。
+    /// @param deviceExtensions 请求启用的 device 扩展。
+    /// @param queueFamilies 请求创建队列的队列族索引。
+    void collectLogicalDeviceCreateDiagnostics(
+        const std::vector<const char*>& deviceExtensions,
+        const std::vector<uint32_t>&    queueFamilies);
+
+    /// @brief 打印启动阶段已经采集到的诊断快照。
+    /// @param reason 导致打印诊断信息的失败原因。
+    void logStartupDiagnostics(const char* reason);
+
+    /// @brief 启动阶段图形诊断信息缓存。
+    std::vector<std::string> m_startupDiagnosticLines;
+
+    /// @brief 启动诊断信息是否已因失败打印过。
+    bool m_startupDiagnosticsPrinted{ false };
 
     /// @brief 原生窗口指针
     NativeWindow* m_nativeWindow_ptr{ nullptr };
