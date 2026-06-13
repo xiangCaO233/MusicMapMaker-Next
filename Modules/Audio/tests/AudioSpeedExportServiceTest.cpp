@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -14,6 +15,7 @@
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
 #include <ice/thread/ThreadPool.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -48,19 +50,6 @@ void writeU32(std::ofstream& file, std::uint32_t value)
     file.write(bytes, 4);
 }
 
-/// @brief 从字节数组读取 16 位小端整数。
-/// @param bytes 输入字节。
-/// @param offset 偏移。
-/// @return 读取出的值。
-std::uint16_t readU16(const std::vector<unsigned char>& bytes,
-                      std::size_t                       offset)
-{
-    if ( offset + 2 > bytes.size() ) return 0;
-    return static_cast<std::uint16_t>(
-        static_cast<std::uint16_t>(bytes[offset]) |
-        (static_cast<std::uint16_t>(bytes[offset + 1]) << 8u));
-}
-
 /// @brief 从字节数组读取 32 位小端整数。
 /// @param bytes 输入字节。
 /// @param offset 偏移。
@@ -74,18 +63,6 @@ std::uint32_t readU32(const std::vector<unsigned char>& bytes,
            (static_cast<std::uint32_t>(bytes[offset + 2]) << 16u) |
            (static_cast<std::uint32_t>(bytes[offset + 3]) << 24u);
 }
-
-/// @brief WAV fmt chunk 信息。
-struct WavFormatInfo {
-    /// @brief 声道数。
-    std::uint16_t channels{ 0 };
-
-    /// @brief 采样率。
-    std::uint32_t sampleRate{ 0 };
-
-    /// @brief 每样本位数。
-    std::uint16_t bitsPerSample{ 0 };
-};
 
 /// @brief WAV chunk 位置。
 struct WavChunkInfo {
@@ -142,24 +119,6 @@ std::optional<std::uint32_t> readWavDataBytes(
         return std::nullopt;
     }
     return dataChunk->size;
-}
-
-/// @brief 读取 WAV 格式信息。
-/// @param bytes 文件字节。
-/// @return 格式信息。
-std::optional<WavFormatInfo> readWavFormatInfo(
-    const std::vector<unsigned char>& bytes)
-{
-    const auto fmtChunk = findWavChunk(bytes, "fmt ");
-    if ( !fmtChunk || fmtChunk->size < 16 ) {
-        return std::nullopt;
-    }
-
-    return WavFormatInfo{
-        readU16(bytes, fmtChunk->offset + 2),
-        readU32(bytes, fmtChunk->offset + 4),
-        readU16(bytes, fmtChunk->offset + 14),
-    };
 }
 
 /// @brief 输出测试断言。
@@ -259,7 +218,284 @@ bool readFile(const std::filesystem::path& path,
     return file.good();
 }
 
-/// @brief 使用 IonCachyEngine 读取 WAV 尾部，验证引擎可访问完整文件。
+/// @brief 单个解码读取窗口的统计信息。
+struct DecodeWindowStats {
+    /// @brief 读取起始帧。
+    std::size_t startFrame{ 0 };
+
+    /// @brief 请求读取的帧数。
+    std::size_t requestedFrames{ 0 };
+
+    /// @brief 实际读取的帧数。
+    std::size_t readFrames{ 0 };
+
+    /// @brief 窗口 RMS。
+    double rms{ 0.0 };
+
+    /// @brief 窗口峰值。
+    double peak{ 0.0 };
+
+    /// @brief 有限浮点样本数量。
+    std::size_t finiteSamples{ 0 };
+
+    /// @brief 近似静音帧数量。
+    std::size_t silentFrames{ 0 };
+
+    /// @brief 是否包含 NaN 或 Inf。
+    bool hasInvalidSamples{ false };
+};
+
+/// @brief 音频解码探针结果。
+struct DecodeProbeResult {
+    /// @brief 音轨是否创建成功。
+    bool trackCreated{ false };
+
+    /// @brief 解码器报告的总帧数。
+    std::size_t trackFrames{ 0 };
+
+    /// @brief 短读窗口数量。
+    std::size_t shortReadWindows{ 0 };
+
+    /// @brief 全静音窗口数量。
+    std::size_t silentWindows{ 0 };
+
+    /// @brief 非静音窗口数量。
+    std::size_t nonSilentWindows{ 0 };
+
+    /// @brief 是否发现非法浮点样本。
+    bool hasInvalidSamples{ false };
+
+    /// @brief 所有采样窗口。
+    std::vector<DecodeWindowStats> windows;
+};
+
+/// @brief 返回小写扩展名。
+/// @param path 文件路径。
+/// @return 小写扩展名。
+std::string lowerExtension(const std::filesystem::path& path)
+{
+    std::string extension = path.extension().string();
+    std::transform(
+        extension.begin(),
+        extension.end(),
+        extension.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return extension;
+}
+
+/// @brief 判断文件是否为音频资源。
+/// @param path 文件路径。
+/// @return 支持时返回 true。
+bool isAudioResourceFile(const std::filesystem::path& path)
+{
+    const std::string extension = lowerExtension(path);
+    return extension == ".wav" || extension == ".ogg" || extension == ".mp3" ||
+           extension == ".flac" || extension == ".m4a" ||
+           extension == ".opus" || extension == ".aac";
+}
+
+/// @brief 递归收集音频测试资源。
+/// @param root 资源根目录。
+/// @return 音频文件列表。
+std::vector<std::filesystem::path> collectAudioFiles(
+    const std::filesystem::path& root)
+{
+    std::vector<std::filesystem::path> files;
+    std::error_code                    error;
+    if ( !std::filesystem::is_directory(root, error) || error ) {
+        return files;
+    }
+
+    std::filesystem::recursive_directory_iterator it(
+        root,
+        std::filesystem::directory_options::skip_permission_denied,
+        error);
+    std::filesystem::recursive_directory_iterator end;
+    while ( !error && it != end ) {
+        const auto& path = it->path();
+        if ( it->is_regular_file(error) && !error &&
+             isAudioResourceFile(path) ) {
+            files.push_back(path);
+        }
+        it.increment(error);
+    }
+    std::sort(files.begin(), files.end());
+    return files;
+}
+
+/// @brief 统计一个解码窗口中的样本连续性。
+/// @param buffer 已读取的音频缓冲。
+/// @param startFrame 起始帧。
+/// @param requestedFrames 请求帧数。
+/// @param readFrames 实际读取帧数。
+/// @return 解码窗口统计。
+DecodeWindowStats analyzeDecodeWindow(ice::AudioBuffer& buffer,
+                                      std::size_t       startFrame,
+                                      std::size_t       requestedFrames,
+                                      std::size_t       readFrames)
+{
+    DecodeWindowStats stats;
+    stats.startFrame      = startFrame;
+    stats.requestedFrames = requestedFrames;
+    stats.readFrames      = readFrames;
+
+    const auto format   = ice::ICEConfig::internal_format;
+    const auto channels = static_cast<std::size_t>(format.channels);
+    const auto samples  = buffer.raw_ptrs();
+    if ( !samples || channels == 0 ) {
+        stats.hasInvalidSamples = true;
+        return stats;
+    }
+
+    double sumSquares = 0.0;
+    for ( std::size_t frame = 0; frame < readFrames; ++frame ) {
+        double framePeak = 0.0;
+        for ( std::size_t channel = 0; channel < channels; ++channel ) {
+            const float sample = samples[channel][frame];
+            if ( !std::isfinite(sample) ) {
+                stats.hasInvalidSamples = true;
+                continue;
+            }
+            const double value    = static_cast<double>(sample);
+            const double absValue = std::abs(value);
+            framePeak             = std::max(framePeak, absValue);
+            stats.peak            = std::max(stats.peak, absValue);
+            sumSquares += value * value;
+            ++stats.finiteSamples;
+        }
+        if ( framePeak < 1e-5 ) {
+            ++stats.silentFrames;
+        }
+    }
+
+    if ( stats.finiteSamples > 0 ) {
+        stats.rms =
+            std::sqrt(sumSquares / static_cast<double>(stats.finiteSamples));
+    }
+    return stats;
+}
+
+/// @brief 生成多个解码采样窗口的起始帧。
+/// @param trackFrames 音轨总帧数。
+/// @param windowFrames 单个窗口帧数。
+/// @return 起始帧列表。
+std::vector<std::size_t> makeDecodeWindowStarts(std::size_t trackFrames,
+                                                std::size_t windowFrames)
+{
+    std::vector<std::size_t> starts;
+    if ( trackFrames == 0 ) return starts;
+
+    starts.push_back(0);
+    starts.push_back(trackFrames / 4);
+    starts.push_back(trackFrames / 2);
+    starts.push_back((trackFrames * 3) / 4);
+    starts.push_back(trackFrames > windowFrames ? trackFrames - windowFrames
+                                                : std::size_t{ 0 });
+
+    std::sort(starts.begin(), starts.end());
+    starts.erase(std::unique(starts.begin(), starts.end()), starts.end());
+    return starts;
+}
+
+/// @brief 通过 IonCachyEngine 多窗口读取音频并收集诊断信息。
+/// @param path 音频路径。
+/// @return 解码探针结果。
+DecodeProbeResult probeAudioDecode(const std::filesystem::path& path)
+{
+    DecodeProbeResult result;
+    ice::ThreadPool   threadPool(1);
+    auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();
+    auto track          = ice::AudioTrack::create(MMM::Config::pathToUtf8(path),
+                                                  threadPool,
+                                                  decoderFactory,
+                                                  ice::CachingStrategy::CACHY);
+    if ( !track ) {
+        return result;
+    }
+
+    result.trackCreated = true;
+    result.trackFrames  = track->num_frames();
+    if ( result.trackFrames == 0 ) {
+        return result;
+    }
+
+    constexpr std::size_t windowFrames = 4096;
+    for ( std::size_t startFrame :
+          makeDecodeWindowStarts(result.trackFrames, windowFrames) ) {
+        const std::size_t requestedFrames =
+            std::min(windowFrames, result.trackFrames - startFrame);
+        ice::AudioBuffer buffer;
+        buffer.resize(ice::ICEConfig::internal_format, requestedFrames);
+        buffer.clear();
+        const std::size_t readFrames =
+            track->read(buffer, startFrame, requestedFrames);
+
+        DecodeWindowStats stats = analyzeDecodeWindow(
+            buffer, startFrame, requestedFrames, readFrames);
+        if ( readFrames < requestedFrames ) {
+            ++result.shortReadWindows;
+        }
+        if ( stats.peak < 1e-5 ) {
+            ++result.silentWindows;
+        } else {
+            ++result.nonSilentWindows;
+        }
+        result.hasInvalidSamples =
+            result.hasInvalidSamples || stats.hasInvalidSamples;
+        result.windows.push_back(stats);
+    }
+    return result;
+}
+
+/// @brief 输出并校验音频解码探针结果。
+/// @param path 音频路径。
+/// @param expectedMinimumFrames 预期最少帧数。
+/// @param label 测试标签。
+/// @param strictNonSilent 是否要求每个采样窗口都不是静音。
+/// @return 验证是否通过。
+bool checkEngineDecode(const std::filesystem::path& path,
+                       std::size_t                  expectedMinimumFrames,
+                       const std::string& label, bool strictNonSilent)
+{
+    const DecodeProbeResult probe = probeAudioDecode(path);
+    XINFO("[audio-speed-export] {} engine frames={} duration={:.3f}s",
+          label,
+          probe.trackFrames,
+          static_cast<double>(probe.trackFrames) /
+              static_cast<double>(ice::ICEConfig::internal_format.samplerate));
+    for ( const auto& window : probe.windows ) {
+        XINFO(
+            "[audio-speed-export] {} window start={} requested={} read={} "
+            "rms={:.8f} peak={:.8f} silent_frames={} invalid={}",
+            label,
+            window.startFrame,
+            window.requestedFrames,
+            window.readFrames,
+            window.rms,
+            window.peak,
+            window.silentFrames,
+            window.hasInvalidSamples);
+    }
+
+    bool ok = true;
+    ok &= check(probe.trackCreated, label + " engine track created");
+    ok &= check(probe.trackFrames >= expectedMinimumFrames,
+                label + " engine frame count covers output");
+    ok &= check(!probe.windows.empty(), label + " decode windows sampled");
+    ok &= check(probe.shortReadWindows == 0,
+                label + " decode windows have no short reads");
+    ok &= check(!probe.hasInvalidSamples, label + " decoded samples finite");
+    if ( strictNonSilent ) {
+        ok &= check(probe.silentWindows == 0,
+                    label + " decode windows are non-silent");
+    } else {
+        ok &= check(probe.nonSilentWindows > 0,
+                    label + " has at least one non-silent decode window");
+    }
+    return ok;
+}
+
+/// @brief 使用 IonCachyEngine 读取音频尾部和多个窗口，验证解码连续性。
 /// @param path 音频路径。
 /// @param expectedMinimumFrames 预期最少帧数。
 /// @param label 测试标签。
@@ -268,41 +504,82 @@ bool checkEngineCanReadTail(const std::filesystem::path& path,
                             std::size_t                  expectedMinimumFrames,
                             const std::string&           label)
 {
-    ice::ThreadPool threadPool(1);
-    auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();
-    auto track          = ice::AudioTrack::create(MMM::Config::pathToUtf8(path),
-                                                  threadPool,
-                                                  decoderFactory,
-                                                  ice::CachingStrategy::CACHY);
-    if ( !track ) {
-        return check(false, label + " engine track created");
+    return checkEngineDecode(path, expectedMinimumFrames, label, false);
+}
+
+/// @brief 运行真实音频资源解码覆盖测试。
+/// @param resourceRoot 测试资源根目录。
+/// @param outputRoot 输出目录。
+/// @return 通过时返回 true。
+bool runResourceAudioCoverage(const std::filesystem::path& resourceRoot,
+                              const std::filesystem::path& outputRoot)
+{
+    const auto files = collectAudioFiles(resourceRoot);
+    bool       ok    = true;
+    ok &= check(!files.empty(), "resource audio files discovered");
+
+    std::error_code createError;
+    std::filesystem::create_directories(outputRoot, createError);
+    ok &= check(!createError, "resource audio output directory created");
+
+    std::vector<std::string> exportedExtensions;
+    std::size_t              passed = 0;
+    for ( std::size_t i = 0; i < files.size(); ++i ) {
+        const auto extension = lowerExtension(files[i]);
+        XINFO("[audio-speed-export] Resource audio case {} / {}: {}",
+              i + 1,
+              files.size(),
+              MMM::Config::pathToUtf8(files[i]));
+        if ( checkEngineDecode(files[i],
+                               1,
+                               "resource " + files[i].filename().string(),
+                               false) ) {
+            ++passed;
+        } else {
+            ok = false;
+        }
+
+        if ( std::find(exportedExtensions.begin(),
+                       exportedExtensions.end(),
+                       extension) != exportedExtensions.end() ) {
+            continue;
+        }
+        exportedExtensions.push_back(extension);
+
+        const auto exportPath =
+            outputRoot / ("resource_export_" + std::to_string(i) + ".wav");
+        MMM::Audio::AudioSpeedExportOptions options;
+        options.inputPath     = files[i];
+        options.outputPath    = exportPath;
+        options.speed         = 1.25;
+        options.preservePitch = false;
+        const auto result =
+            MMM::Audio::AudioSpeedExportService::exportWav(options);
+        if ( !result.success ) {
+            XERROR("[audio-speed-export] resource export error: {}",
+                   result.errorMessage);
+        }
+        ok &=
+            check(result.success, "resource export succeeds for " + extension);
+        ok &= check(result.outputFrames > 0,
+                    "resource export writes frames for " + extension);
+        if ( result.success ) {
+            ok &= checkEngineDecode(exportPath,
+                                    minimumDecodedFrames(result.outputFrames),
+                                    "resource exported " + extension,
+                                    false);
+        }
     }
 
-    const std::size_t trackFrames = track->num_frames();
-    XINFO("[audio-speed-export] {} engine frames={} duration={:.3f}s",
-          label,
-          trackFrames,
-          static_cast<double>(trackFrames) /
-              static_cast<double>(ice::ICEConfig::internal_format.samplerate));
-    bool ok = true;
-    ok &= check(trackFrames >= expectedMinimumFrames,
-                label + " engine frame count covers output");
-
-    if ( trackFrames == 0 ) return false;
-    const std::size_t tailStart =
-        trackFrames > 2048 ? trackFrames - 2048 : std::size_t{ 0 };
-    ice::AudioBuffer tailBuffer;
-    tailBuffer.resize(ice::ICEConfig::internal_format, 2048);
-    tailBuffer.clear();
-    const std::size_t readFrames =
-        track->read(tailBuffer, tailStart, tailBuffer.num_frames());
-    ok &= check(readFrames > 0, label + " engine reads tail frames");
+    XINFO("[audio-speed-export] Resource audio decode coverage passed {}/{}",
+          passed,
+          files.size());
     return ok;
 }
 
 }  // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
     XLogger::init("AudioSpeedExportServiceTest");
 
@@ -571,38 +848,14 @@ int main()
     }
     ok &= checkEngineCanReadTail(paddedOutput, 3600, "minimum-duration output");
 
+    if ( argc >= 3 ) {
+        ok &= runResourceAudioCoverage(argv[1], argv[2]);
+    }
+
     if ( const char* externalProbePath = std::getenv("MMM_AUDIO_PROBE_FILE");
          externalProbePath && externalProbePath[0] != '\0' ) {
-        std::vector<unsigned char>  externalBytes;
         const std::filesystem::path probePath(externalProbePath);
-        const bool externalReadable = readFile(probePath, externalBytes);
-        ok &= check(externalReadable, "external probe wav readable");
-        if ( externalReadable ) {
-            std::size_t expectedFrames = 1;
-            const auto  wavFormat      = readWavFormatInfo(externalBytes);
-            const auto  wavDataBytes   = readWavDataBytes(externalBytes);
-            if ( wavFormat && wavDataBytes && wavFormat->channels > 0 &&
-                 wavFormat->bitsPerSample > 0 ) {
-                const auto bytesPerFrame =
-                    static_cast<std::uint32_t>(wavFormat->channels) *
-                    static_cast<std::uint32_t>(wavFormat->bitsPerSample / 8u);
-                expectedFrames = bytesPerFrame > 0
-                                     ? *wavDataBytes / bytesPerFrame
-                                     : std::size_t{ 1 };
-            }
-            XINFO(
-                "[audio-speed-export] external wav sampleRate={} "
-                "channels={} frames={} duration={:.3f}s",
-                wavFormat ? wavFormat->sampleRate : 0u,
-                wavFormat ? wavFormat->channels : 0u,
-                expectedFrames,
-                wavFormat && wavFormat->sampleRate > 0
-                    ? static_cast<double>(expectedFrames) /
-                          static_cast<double>(wavFormat->sampleRate)
-                    : 0.0);
-            ok &= checkEngineCanReadTail(
-                probePath, expectedFrames, "external probe");
-        }
+        ok &= checkEngineDecode(probePath, 1, "external probe", false);
     }
 
     std::filesystem::remove_all(root, cleanupError);

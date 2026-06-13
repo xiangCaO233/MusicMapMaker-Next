@@ -43,7 +43,12 @@ endif()
 
 target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-add_executable(AudioSpeedExportServiceTest
+mmm_add_test_executable(Audio AudioSpeedExportServiceTest
 	tests/AudioSpeedExportServiceTest.cpp
 )
 target_link_libraries(AudioSpeedExportServiceTest PRIVATE Audio Log Config)
+add_test(NAME AudioSpeedExportServiceTest
+	COMMAND AudioSpeedExportServiceTest
+	"${MMM_TEST_RESOURCE_DIR}/ma"
+	"${CMAKE_BINARY_DIR}/test_output/audio_speed_export_coverage"
+)

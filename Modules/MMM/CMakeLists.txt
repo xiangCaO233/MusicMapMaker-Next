@@ -15,7 +15,7 @@ set(TEST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/test_output")
 file(MAKE_DIRECTORY "${TEST_OUTPUT_DIR}")
 
 # 1. IMD Test
-add_executable(IMDConsistencyTest tests/IMDConsistencyTest.cpp)
+mmm_add_test_executable(MMM IMDConsistencyTest tests/IMDConsistencyTest.cpp)
 target_link_libraries(IMDConsistencyTest PRIVATE MMM Log)
 target_include_directories(IMDConsistencyTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_IMD_Consistency
@@ -25,7 +25,7 @@ add_test(NAME Test_IMD_Consistency
 )
 
 # 2. OSU Test
-add_executable(OSUConsistencyTest tests/OSUConsistencyTest.cpp)
+mmm_add_test_executable(MMM OSUConsistencyTest tests/OSUConsistencyTest.cpp)
 target_link_libraries(OSUConsistencyTest PRIVATE MMM Log)
 target_include_directories(OSUConsistencyTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_OSU_Consistency_Scandal
@@ -45,7 +45,7 @@ add_test(NAME Test_OSU_Consistency_Mopemope
 )
 
 # 3. Malody Test
-add_executable(MalodyConsistencyTest tests/MalodyConsistencyTest.cpp)
+mmm_add_test_executable(MMM MalodyConsistencyTest tests/MalodyConsistencyTest.cpp)
 target_link_libraries(MalodyConsistencyTest PRIVATE MMM Log)
 target_include_directories(MalodyConsistencyTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_Malody_Consistency_Unsan
@@ -60,7 +60,7 @@ add_test(NAME Test_Malody_Consistency_Collision
 )
 
 # 5. Malody Edge Case Test (程序化构造边缘情况)
-add_executable(MalodyEdgeCaseTest tests/MalodyEdgeCaseTest.cpp)
+mmm_add_test_executable(MMM MalodyEdgeCaseTest tests/MalodyEdgeCaseTest.cpp)
 target_link_libraries(MalodyEdgeCaseTest PRIVATE MMM Log)
 target_include_directories(MalodyEdgeCaseTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_Malody_Edge_Case
@@ -68,7 +68,7 @@ add_test(NAME Test_Malody_Edge_Case
 )
 
 # 4. MMM Native Format Test
-add_executable(MapConsistencyTest tests/MapConsistencyTest.cpp)
+mmm_add_test_executable(MMM MapConsistencyTest tests/MapConsistencyTest.cpp)
 target_link_libraries(MapConsistencyTest PRIVATE MMM Log)
 target_include_directories(MapConsistencyTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_test(NAME Test_MMM_Consistency_Scandal
@@ -82,5 +82,10 @@ add_test(NAME Test_MMM_Consistency_Collision
     "${TEST_OUTPUT_DIR}/Collision_export.mmm"
 )
 
-add_executable(BeatmapSpeedTransformTest tests/BeatmapSpeedTransformTest.cpp)
+mmm_add_test_executable(MMM BeatmapSpeedTransformTest tests/BeatmapSpeedTransformTest.cpp)
 target_link_libraries(BeatmapSpeedTransformTest PRIVATE MMM Log)
+add_test(NAME Test_Beatmap_Speed_Transform
+    COMMAND BeatmapSpeedTransformTest
+    "${MMM_TEST_RESOURCE_DIR}/ma"
+    "${TEST_OUTPUT_DIR}/speed_transform_coverage"
+)
