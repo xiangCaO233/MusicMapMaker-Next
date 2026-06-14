@@ -893,15 +893,28 @@ void InteractionController::handleCommand(const CmdEndDrag& cmd)
 /// 禁止 ECS 遍历、文件系统访问和阻塞操作。
 void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
 {
+    const bool hasFiniteMouse =
+        std::isfinite(cmd.mouseX) && std::isfinite(cmd.mouseY);
+    const bool hasFiniteViewport =
+        std::isfinite(cmd.viewportWidth) && std::isfinite(cmd.viewportHeight) &&
+        cmd.viewportWidth > 0.0f && cmd.viewportHeight > 0.0f;
+    const bool isInsideViewport =
+        hasFiniteMouse &&
+        (!hasFiniteViewport ||
+         (cmd.mouseX >= 0.0f && cmd.mouseX <= cmd.viewportWidth &&
+          cmd.mouseY >= 0.0f && cmd.mouseY <= cmd.viewportHeight));
+    const bool isHovering = cmd.isHovering && isInsideViewport;
+
     bool canUpdate = false;
-    if ( cmd.isHovering ) {
+    if ( isHovering ) {
         if ( !m_ctx.isDragging || m_ctx.mouseCameraId == cmd.cameraId ||
              m_ctx.mouseCameraId == "" ) {
             m_ctx.mouseCameraId   = cmd.cameraId;
             m_ctx.isMouseInCanvas = true;
             canUpdate             = true;
         }
-    } else if ( m_ctx.isDragging && m_ctx.mouseCameraId == cmd.cameraId ) {
+    } else if ( cmd.isDragging && hasFiniteMouse && m_ctx.isDragging &&
+                m_ctx.mouseCameraId == cmd.cameraId ) {
         // 如果正在往外拖拽，依然允许更新坐标以便主画布跟随
         canUpdate = true;
     }
@@ -910,7 +923,7 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
         m_ctx.lastMousePos = { cmd.mouseX, cmd.mouseY };
 
         // 如果命令携带了直接的时间戳，优先使用它（用于音频视图等非空间映射视口）
-        if ( cmd.hoverTime >= 0.0 ) {
+        if ( cmd.hoverTime >= 0.0 && std::isfinite(cmd.hoverTime) ) {
             m_ctx.previewHoverTime = cmd.hoverTime;
             m_ctx.isDragging       = cmd.isDragging;
             m_ctx.dragCameraId     = cmd.cameraId;
@@ -959,7 +972,19 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
         m_ctx.previewEdgeScrollVelocity = 0.0;
     }
 
-    if ( !cmd.isHovering && !m_ctx.isDragging ) {
+    const bool commandOwnsDragState = cmd.cameraId == "Preview" ||
+                                      cmd.cameraId == "AudioWaveform" ||
+                                      cmd.cameraId == "AudioSpectrum";
+    if ( commandOwnsDragState && !cmd.isDragging &&
+         (cmd.cameraId == m_ctx.mouseCameraId ||
+          cmd.cameraId == m_ctx.dragCameraId) ) {
+        m_ctx.isDragging = false;
+        if ( m_ctx.dragCameraId == cmd.cameraId ) {
+            m_ctx.dragCameraId.clear();
+        }
+    }
+
+    if ( !isHovering && !m_ctx.isDragging ) {
         if ( m_ctx.mouseCameraId == cmd.cameraId ) {
             m_ctx.mouseCameraId             = "";
             m_ctx.isMouseInCanvas           = false;

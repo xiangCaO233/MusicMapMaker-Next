@@ -276,13 +276,24 @@ void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
 {
-    ImVec2 mousePos      = ImGui::GetMousePos();
-    ImVec2 windowPos     = ImGui::GetCursorScreenPos();
-    ImVec2 localMousePos = { mousePos.x - windowPos.x,
-                             mousePos.y - windowPos.y };
+    ImVec2     mousePos         = ImGui::GetMousePos();
+    ImVec2     windowPos        = ImGui::GetCursorScreenPos();
+    const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
+                                  std::isfinite(mousePos.x) &&
+                                  std::isfinite(mousePos.y);
+    ImVec2     localMousePos{ 0.0f, 0.0f };
+    if ( hasValidMousePos ) {
+        localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
+    } else if ( m_lastMouseCommand.valid ) {
+        localMousePos = { m_lastMouseCommand.pos.x, m_lastMouseCommand.pos.y };
+    }
 
-    bool isHovered  = ImGui::IsWindowHovered();
-    bool isDragging = ImGui::IsMouseDragging(0);
+    const bool isInsideCanvas =
+        hasValidMousePos && targetWidth > 0.0f && targetHeight > 0.0f &&
+        localMousePos.x >= 0.0f && localMousePos.x <= targetWidth &&
+        localMousePos.y >= 0.0f && localMousePos.y <= targetHeight;
+    bool isHovered  = isInsideCanvas && ImGui::IsWindowHovered();
+    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0);
 
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
@@ -787,7 +798,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- Ctrl+右键：移除框选框（全局可用） ---
-    if ( ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
+    if ( isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRemoveMarqueeAt{
                 m_cameraId, localMousePos.x, localMousePos.y }));
