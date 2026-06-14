@@ -528,6 +528,12 @@ struct CmdRemoveBeatmap {
     std::string filePath;
 };
 
+/// @brief 将当前临时项目保存为正式项目。
+struct CmdSaveTemporaryProject {
+    /// @brief 用户选择的保存目录，使用 UTF-8 编码。
+    std::string destinationPath;
+};
+
 /**
  * @brief 所有可能的逻辑指令变体
  */
@@ -547,6 +553,6 @@ using LogicCommand = std::variant<
     CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush, CmdEndBrush,
     CmdStartErase, CmdUpdateErase, CmdEndErase, CmdUpdateBeatmapMetadata,
     CmdImportAudio, CmdUpdateAudioResource, CmdRemoveAudioResource,
-    CmdRemoveBeatmap>;
+    CmdRemoveBeatmap, CmdSaveTemporaryProject>;
 
 }  // namespace MMM::Logic

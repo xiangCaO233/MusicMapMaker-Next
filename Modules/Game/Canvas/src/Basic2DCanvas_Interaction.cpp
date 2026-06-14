@@ -20,12 +20,38 @@
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <system_error>
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief 将 ASCII 扩展名转换为小写。
+/// @param value 输入扩展名。
+/// @return 小写后的扩展名。
+std::string toLowerAscii(std::string value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    return value;
+}
+
+/// @brief 判断拖拽路径是否为 zip 兼容谱面包。
+/// @param path 拖拽路径。
+/// @return 扩展名匹配临时阅览包格式时返回 true。
+bool isTemporaryPackagePath(const std::filesystem::path& path)
+{
+    const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
+    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
+           extension == ".osz" || extension == ".mpk";
+}
+}  // namespace
 
 Basic2DCanvasInteraction::Basic2DCanvasInteraction(
     const std::string& canvasName, const std::string& cameraId)
@@ -109,8 +135,22 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
         for ( const auto& drop : m_pendingDrops ) {
             if ( !drop.paths.empty() ) {
                 std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+                if ( isTemporaryPackagePath(p) ) {
+                    XINFO("Package dropped on Canvas: {}",
+                          Config::pathToUtf8(p));
+
+                    Event::OpenTemporaryProjectPackageEvent ev;
+                    ev.m_packagePath = p;
+                    Event::EventBus::instance().publish(ev);
+                    continue;
+                }
+
+                std::error_code filesystemError;
+                const bool      isDirectory =
+                    std::filesystem::is_directory(p, filesystemError) &&
+                    !filesystemError;
                 std::filesystem::path projectPath =
-                    std::filesystem::is_directory(p) ? p : p.parent_path();
+                    isDirectory ? p : p.parent_path();
                 auto ext = Config::pathToUtf8(p.extension());
 
                 XINFO("File dropped on Canvas: {}, opening project: {}",
@@ -605,10 +645,11 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( ImGui::IsMouseDragging(0) ) {
         m_leftPressDragged = true;
 
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( m_leftPressStartedOnCanvas &&
+             currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
-        } else if ( !currentSnapshot->isPlaying &&
+        } else if ( m_leftPressStartedOnCanvas && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateBrush{ m_cameraId,
@@ -616,7 +657,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                        localMousePos.y,
                                        ImGui::GetIO().KeyShift,
                                        ImGui::GetIO().KeyCtrl }));
-        } else if ( !currentSnapshot->isPlaying &&
+        } else if ( m_leftPressStartedOnEntity && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateDrag{ m_cameraId,
@@ -635,15 +676,21 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     if ( ImGui::IsMouseReleased(0) ) {
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( m_leftPressStartedOnCanvas &&
+             currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
+        } else if ( m_leftPressStartedOnEntity &&
+                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+        }
+
+        if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
                  !m_leftPressDragged ) {
                 Event::EventBus::instance().publish(

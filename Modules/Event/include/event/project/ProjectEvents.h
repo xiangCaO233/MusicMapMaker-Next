@@ -29,6 +29,10 @@ struct ProjectSwitchEvent : public ProjectEvent {
 struct ProjectCloseRequestedEvent : public ProjectRequestEvent {
 };
 
+/// @brief 请求显示临时项目关闭确认弹窗。
+struct TemporaryProjectClosePromptRequestedEvent : public ProjectRequestEvent {
+};
+
 /// @brief 新建项目请求事件，由项目控制器创建目录并排队打开。
 struct ProjectCreateRequestedEvent : public ProjectRequestEvent {
     /// @brief 项目根目录路径。
@@ -76,6 +80,27 @@ struct ProjectClosedEvent : public ProjectLifecycleEvent {
     std::filesystem::path m_projectPath;
 };
 
+/// @brief 临时项目只读编辑被拦截事件。
+struct TemporaryProjectEditBlockedEvent : public ProjectLifecycleEvent {
+    /// @brief 用户拖拽打开的原始包文件路径。
+    std::string m_sourcePackagePath;
+
+    /// @brief 当前解压出来的临时项目缓存目录。
+    std::string m_cacheProjectPath;
+};
+
+/// @brief 临时项目保存到正式目录后的结果事件。
+struct TemporaryProjectSaveResultEvent : public ProjectLifecycleEvent {
+    /// @brief 是否保存成功。
+    bool m_success{ false };
+
+    /// @brief 保存成功后的正式项目目录。
+    std::string m_savedProjectPath;
+
+    /// @brief 失败时的错误信息。
+    std::string m_errorMessage;
+};
+
 }  // namespace MMM::Event
 
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectEvent, MMM::Event::BaseEvent);
@@ -87,6 +112,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchEvent,
                        MMM::Event::ProjectEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectCloseRequestedEvent,
                        MMM::Event::ProjectRequestEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectClosePromptRequestedEvent,
+                       MMM::Event::ProjectRequestEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectCreateRequestedEvent,
                        MMM::Event::ProjectRequestEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchNeedsCanvasCloseEvent,
@@ -96,4 +123,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCompletedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCancelledEvent,
                        MMM::Event::ProjectSwitchEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectClosedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectSaveResultEvent,
                        MMM::Event::ProjectLifecycleEvent);

@@ -869,7 +869,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             m_closeFileMenuNextFrame = false;
         }
 
-        auto* project    = Logic::EditorEngine::instance().getCurrentProject();
+        auto& engine     = Logic::EditorEngine::instance();
+        auto* project    = engine.getCurrentProject();
         bool  hasProject = (project != nullptr);
 
         if ( MenuItemWithFontIcon(
@@ -932,8 +933,13 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                                   TR("ui.file.close_pro"),
                                   nullptr,
                                   hasProject) ) {
-            Event::EventBus::instance().publish(
-                Event::ProjectCloseRequestedEvent{});
+            if ( engine.isTemporaryProjectOpen() ) {
+                Event::EventBus::instance().publish(
+                    Event::TemporaryProjectClosePromptRequestedEvent{});
+            } else {
+                Event::EventBus::instance().publish(
+                    Event::ProjectCloseRequestedEvent{});
+            }
         }
         ImGui::Separator();
 

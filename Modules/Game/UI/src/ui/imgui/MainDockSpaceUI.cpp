@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKContext.h"
@@ -15,8 +16,11 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
+#include <concurrentqueue.h>
 #include <filesystem>
 #include <fmt/format.h>
+#include <nfd.h>
+#include <string_view>
 #include <utility>
 
 namespace MMM::UI
@@ -48,6 +52,115 @@ struct NativeFrameHit {
     /// @brief 命中方向对应的 ImGui 鼠标光标。
     ImGuiMouseCursor m_cursor{ ImGuiMouseCursor_Arrow };
 };
+
+/// @brief 临时项目路径提示载荷。
+struct TemporaryProjectPromptPayload {
+    /// @brief 原始谱面包路径。
+    std::string sourcePackagePath;
+
+    /// @brief 临时项目缓存目录。
+    std::string cacheProjectPath;
+};
+
+/// @brief 临时项目保存结果载荷。
+struct TemporaryProjectSaveResultPayload {
+    /// @brief 是否保存成功。
+    bool success{ false };
+
+    /// @brief 保存成功后的正式项目目录。
+    std::string savedProjectPath;
+
+    /// @brief 失败时的错误信息。
+    std::string errorMessage;
+};
+
+/// @brief 获取临时项目只读提示队列。
+moodycamel::ConcurrentQueue<TemporaryProjectPromptPayload>&
+temporaryProjectEditBlockedQueue()
+{
+    static moodycamel::ConcurrentQueue<TemporaryProjectPromptPayload> queue;
+    return queue;
+}
+
+/// @brief 获取临时项目关闭提示队列。
+moodycamel::ConcurrentQueue<TemporaryProjectPromptPayload>&
+temporaryProjectClosePromptQueue()
+{
+    static moodycamel::ConcurrentQueue<TemporaryProjectPromptPayload> queue;
+    return queue;
+}
+
+/// @brief 获取临时项目保存结果队列。
+moodycamel::ConcurrentQueue<TemporaryProjectSaveResultPayload>&
+temporaryProjectSaveResultQueue()
+{
+    static moodycamel::ConcurrentQueue<TemporaryProjectSaveResultPayload> queue;
+    return queue;
+}
+
+/// @brief 根据当前临时项目构建提示载荷。
+TemporaryProjectPromptPayload makeCurrentTemporaryProjectPayload()
+{
+    const auto info =
+        Logic::EditorEngine::instance().currentTemporaryProjectInfo();
+    return TemporaryProjectPromptPayload{
+        Config::pathToUtf8(info.m_sourcePackagePath),
+        Config::pathToUtf8(info.m_cacheProjectPath),
+    };
+}
+
+/// @brief 订阅临时项目相关事件。
+void ensureTemporaryProjectSubscriptions()
+{
+    static bool subscribed = false;
+    if ( subscribed ) return;
+
+    auto& eventBus = Event::EventBus::instance();
+    eventBus.subscribe<Event::TemporaryProjectEditBlockedEvent>(
+        [](const Event::TemporaryProjectEditBlockedEvent& event) {
+            temporaryProjectEditBlockedQueue().enqueue(
+                TemporaryProjectPromptPayload{ event.m_sourcePackagePath,
+                                               event.m_cacheProjectPath });
+        });
+    eventBus.subscribe<Event::TemporaryProjectClosePromptRequestedEvent>(
+        [](const Event::TemporaryProjectClosePromptRequestedEvent&) {
+            temporaryProjectClosePromptQueue().enqueue(
+                makeCurrentTemporaryProjectPayload());
+        });
+    eventBus.subscribe<Event::TemporaryProjectSaveResultEvent>(
+        [](const Event::TemporaryProjectSaveResultEvent& event) {
+            temporaryProjectSaveResultQueue().enqueue(
+                TemporaryProjectSaveResultPayload{ event.m_success,
+                                                   event.m_savedProjectPath,
+                                                   event.m_errorMessage });
+        });
+
+    subscribed = true;
+}
+
+/// @brief 在当前内容区域内绘制可换行文本。
+/// @param text 待绘制文本。
+/// @warning UI 绘制路径：只设置 ImGui 文本换行位置并绘制文本。
+void drawWrappedText(std::string_view text)
+{
+    const char* textBegin = text.empty() ? "" : text.data();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                           ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted(textBegin, textBegin + text.size());
+    ImGui::PopTextWrapPos();
+}
+
+/// @brief 绘制标签和可换行值。
+/// @param label 标签文本。
+/// @param value 值文本。
+/// @warning UI 绘制路径：只绘制 ImGui 文本。
+void drawWrappedLabelValue(std::string_view label, std::string_view value)
+{
+    const char* labelBegin = label.empty() ? "" : label.data();
+    ImGui::TextUnformatted(labelBegin, labelBegin + label.size());
+    ImGui::SameLine();
+    drawWrappedText(value);
+}
 
 /// @brief 根据主视口和鼠标位置解析无边框窗口缩放命中。
 /// @param viewport 主 ImGui 视口。
@@ -124,6 +237,8 @@ NativeFrameHit resolveNativeFrameHit(const ImGuiViewport& viewport,
 
 void MainDockSpaceUI::update(UIManager* sourceManager)
 {
+    ensureTemporaryProjectSubscriptions();
+    consumeTemporaryProjectQueues();
     m_mainMenuview.update(sourceManager);
 
     auto&                engine   = Logic::EditorEngine::instance();
@@ -240,6 +355,40 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                     Event::OpenProjectEvent ev;
                     ev.m_projectPath = Config::utf8ToPath(folderPath);
                     Event::EventBus::instance().publish(ev);
+                }
+                ImGuiFileDialog::Instance()->Close();
+            }
+        }
+
+        // --- Temporary Project Save Folder Picker ---
+        {
+            Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+            if ( ImGuiFileDialog::Instance()->IsOpened(
+                     "TemporaryProjectSaveFolderPicker") ) {
+                Utils::prepareCenteredModalWindow({ 600, 400 });
+            }
+            if ( ImGuiFileDialog::Instance()->Display(
+                     "TemporaryProjectSaveFolderPicker",
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoSavedSettings,
+                     { 600, 400 }) ) {
+                if ( ImGuiFileDialog::Instance()->IsOk() ) {
+                    std::string folderPath =
+                        ImGuiFileDialog::Instance()->GetFilePathName();
+                    if ( folderPath.empty() ) {
+                        folderPath =
+                            ImGuiFileDialog::Instance()->GetCurrentPath();
+                    }
+
+                    auto config = engine.getEditorConfig();
+                    config.settings.lastFilePickerPath =
+                        ImGuiFileDialog::Instance()->GetCurrentPath();
+                    engine.setEditorConfig(config);
+
+                    m_temporaryProjectSaveInProgress = true;
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSaveTemporaryProject{ folderPath }));
                 }
                 ImGuiFileDialog::Instance()->Close();
             }
@@ -459,11 +608,32 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         }
     }
 
+    renderTemporaryProjectPopups(dpiScale, viewport);
+    if ( m_exitAfterTemporaryProjectSave && viewport->PlatformHandle ) {
+        m_temporaryProjectExitConfirmed = true;
+        glfwSetWindowShouldClose(
+            static_cast<GLFWwindow*>(viewport->PlatformHandle), GLFW_TRUE);
+        m_exitAfterTemporaryProjectSave = false;
+    }
+
     // --- 6. 退出确认模态弹窗 ---
     if ( viewport->PlatformHandle ) {
         GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle;
         if ( glfwWindowShouldClose(nativeWin) ) {
-            if ( engine.hasUnsavedChanges() ) {
+            if ( !m_temporaryProjectExitConfirmed &&
+                 engine.isTemporaryProjectOpen() ) {
+                glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
+                const auto info = engine.currentTemporaryProjectInfo();
+                m_temporaryProjectSourcePath =
+                    Config::pathToUtf8(info.m_sourcePackagePath);
+                m_temporaryProjectCachePath =
+                    Config::pathToUtf8(info.m_cacheProjectPath);
+                m_temporaryProjectSaveError.clear();
+                m_temporaryProjectAfterSaveAction =
+                    TemporaryProjectAfterSaveAction::ExitApp;
+                m_showTemporaryProjectCloseModal = true;
+            } else if ( !m_temporaryProjectExitConfirmed &&
+                        engine.hasUnsavedChanges() ) {
                 // 拦截关闭请求，显示确认对话框
                 glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
                 const std::string exitPopupName = fmt::format(
@@ -518,6 +688,197 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                ImVec2(120 * dpiScale, 0)) ) {
                 ImGui::CloseCurrentPopup();
             }
+            ImGui::EndPopup();
+        }
+    }
+}
+
+/// @brief 处理临时项目提示和保存结果队列。
+void MainDockSpaceUI::consumeTemporaryProjectQueues()
+{
+    TemporaryProjectPromptPayload prompt;
+    while ( temporaryProjectEditBlockedQueue().try_dequeue(prompt) ) {
+        m_temporaryProjectSourcePath = prompt.sourcePackagePath;
+        m_temporaryProjectCachePath  = prompt.cacheProjectPath;
+        m_temporaryProjectSaveError.clear();
+        m_temporaryProjectAfterSaveAction =
+            TemporaryProjectAfterSaveAction::None;
+        m_showTemporaryProjectReadOnlyModal = true;
+    }
+
+    while ( temporaryProjectClosePromptQueue().try_dequeue(prompt) ) {
+        m_temporaryProjectSourcePath = prompt.sourcePackagePath;
+        m_temporaryProjectCachePath  = prompt.cacheProjectPath;
+        m_temporaryProjectSaveError.clear();
+        m_temporaryProjectAfterSaveAction =
+            TemporaryProjectAfterSaveAction::CloseProject;
+        m_showTemporaryProjectCloseModal = true;
+    }
+
+    TemporaryProjectSaveResultPayload saveResult;
+    while ( temporaryProjectSaveResultQueue().try_dequeue(saveResult) ) {
+        m_temporaryProjectSaveInProgress = false;
+        if ( !saveResult.success ) {
+            m_temporaryProjectSaveError = saveResult.errorMessage.empty()
+                                              ? "保存临时项目失败"
+                                              : saveResult.errorMessage;
+            if ( m_temporaryProjectAfterSaveAction ==
+                 TemporaryProjectAfterSaveAction::None ) {
+                m_showTemporaryProjectReadOnlyModal = true;
+            } else {
+                m_showTemporaryProjectCloseModal = true;
+            }
+            continue;
+        }
+
+        m_temporaryProjectSaveError.clear();
+        m_temporaryProjectSourcePath.clear();
+        m_temporaryProjectCachePath = saveResult.savedProjectPath;
+        if ( m_temporaryProjectAfterSaveAction ==
+             TemporaryProjectAfterSaveAction::CloseProject ) {
+            Event::EventBus::instance().publish(
+                Event::ProjectCloseRequestedEvent{});
+        } else if ( m_temporaryProjectAfterSaveAction ==
+                    TemporaryProjectAfterSaveAction::ExitApp ) {
+            m_exitAfterTemporaryProjectSave = true;
+        }
+        m_temporaryProjectAfterSaveAction =
+            TemporaryProjectAfterSaveAction::None;
+    }
+}
+
+/// @brief 请求选择临时项目正式保存位置。
+void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
+{
+    m_temporaryProjectSaveError.clear();
+
+    auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
+    if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        nfdu8char_t* outPath = nullptr;
+        nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
+        if ( result == NFD_OKAY ) {
+            m_temporaryProjectSaveInProgress = true;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSaveTemporaryProject{ outPath }));
+            NFD_FreePath(outPath);
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig fdConfig;
+    fdConfig.path              = editorSettings.lastFilePickerPath;
+    fdConfig.countSelectionMax = 1;
+    fdConfig.flags             = ImGuiFileDialogFlags_Default;
+    ImGuiFileDialog::Instance()->OpenDialog(
+        "TemporaryProjectSaveFolderPicker", "保存临时项目", nullptr, fdConfig);
+}
+
+/// @brief 渲染临时项目只读和关闭确认弹窗。
+void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
+                                                   ImGuiViewport* viewport)
+{
+    if ( m_showTemporaryProjectReadOnlyModal ) {
+        ImGui::OpenPopup("临时项目只读###TemporaryProjectReadOnlyModal");
+        m_showTemporaryProjectReadOnlyModal = false;
+    }
+
+    {
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin("临时项目只读###TemporaryProjectReadOnlyModal",
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
+            drawWrappedText(
+                "当前打开的是临时项目。要修改谱面或项目资源，请先选择正式保存位"
+                "置。");
+            ImGui::Spacing();
+            drawWrappedLabelValue("打开文件：", m_temporaryProjectSourcePath);
+            drawWrappedLabelValue("缓存项目：", m_temporaryProjectCachePath);
+            if ( !m_temporaryProjectSaveError.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                   "%s",
+                                   m_temporaryProjectSaveError.c_str());
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
+            if ( ImGui::Button("选择保存位置",
+                               ImVec2(140.0f * dpiScale, 0.0f)) ) {
+                m_temporaryProjectAfterSaveAction =
+                    TemporaryProjectAfterSaveAction::None;
+                requestTemporaryProjectSaveFolder();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( ImGui::Button("继续只读", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+
+    if ( m_showTemporaryProjectCloseModal ) {
+        ImGui::OpenPopup("保存临时项目###TemporaryProjectCloseModal");
+        m_showTemporaryProjectCloseModal = false;
+    }
+
+    {
+        Utils::CenteredModalPopupScope modalScope(dpiScale);
+        if ( modalScope.begin("保存临时项目###TemporaryProjectCloseModal",
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
+            drawWrappedText("该项目为临时项目，是否保存项目？");
+            ImGui::Spacing();
+            drawWrappedLabelValue("打开文件：", m_temporaryProjectSourcePath);
+            drawWrappedLabelValue("缓存项目：", m_temporaryProjectCachePath);
+            if ( !m_temporaryProjectSaveError.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.35f, 1.0f),
+                                   "%s",
+                                   m_temporaryProjectSaveError.c_str());
+            }
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
+            if ( ImGui::Button("保存项目", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                requestTemporaryProjectSaveFolder();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( ImGui::Button("不保存", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                if ( m_temporaryProjectAfterSaveAction ==
+                     TemporaryProjectAfterSaveAction::ExitApp ) {
+                    if ( viewport && viewport->PlatformHandle ) {
+                        m_temporaryProjectExitConfirmed = true;
+                        glfwSetWindowShouldClose(
+                            static_cast<GLFWwindow*>(viewport->PlatformHandle),
+                            GLFW_TRUE);
+                    }
+                } else {
+                    Event::EventBus::instance().publish(
+                        Event::ProjectCloseRequestedEvent{});
+                }
+                m_temporaryProjectAfterSaveAction =
+                    TemporaryProjectAfterSaveAction::None;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if ( ImGui::Button(TR("ui.help.cancel").data(),
+                               ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                m_temporaryProjectAfterSaveAction =
+                    TemporaryProjectAfterSaveAction::None;
+                ImGui::CloseCurrentPopup();
+            }
+
             ImGui::EndPopup();
         }
     }

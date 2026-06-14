@@ -65,6 +65,14 @@ public:
         return ProjectController::instance().currentProject();
     }
 
+    /// @brief 当前是否打开了临时只读项目。
+    /// @return 当前项目为临时项目时返回 true。
+    bool isTemporaryProjectOpen() const;
+
+    /// @brief 获取当前临时项目的运行时路径信息。
+    /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
+    ProjectController::TemporaryProjectInfo currentTemporaryProjectInfo() const;
+
     /**
      * @brief 向当前活动的 Session 推送指令
      */
@@ -109,6 +117,10 @@ public:
 
     /// @brief 从项目中移除谱面
     void handleRemoveBeatmap(const CmdRemoveBeatmap& cmd);
+
+    /// @brief 将当前临时项目保存到正式项目目录。
+    /// @param cmd 保存临时项目指令。
+    void handleSaveTemporaryProject(const CmdSaveTemporaryProject& cmd);
 
     /// @brief 更新编辑器级剪贴板。
     void setClipboard(std::vector<ClipboardItem> items,
@@ -400,6 +412,15 @@ private:
         const std::filesystem::path& projectPath,
         const std::optional<ProjectController::ProjectCreationOptions>&
             creationOptions = std::nullopt);
+
+    /// @brief 打开谱面包为临时只读项目。
+    /// @param packagePath 需要临时阅览的谱面包路径。
+    void openTemporaryProjectPackage(const std::filesystem::path& packagePath);
+
+    /// @brief 应用项目控制器打开项目后的逻辑副作用。
+    /// @param openResult 项目控制器返回的打开结果。
+    void finishOpenProject(
+        const ProjectController::OpenProjectResult& openResult);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）

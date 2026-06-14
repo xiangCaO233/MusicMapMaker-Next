@@ -94,6 +94,48 @@ public:
         std::string m_sidebarActiveTab;
     };
 
+    /// @brief 项目打开请求的来源模式。
+    enum class ProjectOpenMode {
+        Normal,           ///< 直接打开普通项目目录或谱面文件。
+        TemporaryPackage  ///< 解压谱面包并作为临时只读项目打开。
+    };
+
+    /// @brief 当前临时项目的运行时信息。
+    struct TemporaryProjectInfo {
+        /// @brief 是否存在临时项目。
+        bool m_isTemporary{ false };
+
+        /// @brief 用户拖拽打开的原始谱面包路径。
+        std::filesystem::path m_sourcePackagePath;
+
+        /// @brief 当前临时项目缓存目录。
+        std::filesystem::path m_cacheProjectPath;
+    };
+
+    /// @brief 临时项目保存为正式项目的结果。
+    struct SaveTemporaryProjectResult {
+        /// @brief 是否保存成功。
+        bool m_success{ false };
+
+        /// @brief 保存成功后的正式项目目录。
+        std::filesystem::path m_savedProjectPath;
+
+        /// @brief 失败时的错误信息。
+        std::string m_errorMessage;
+    };
+
+    /// @brief 谱面包解压成临时项目目录的准备结果。
+    struct PreparedTemporaryProjectResult {
+        /// @brief 是否准备成功。
+        bool m_success{ false };
+
+        /// @brief 准备成功后的临时项目信息。
+        TemporaryProjectInfo m_temporaryInfo;
+
+        /// @brief 失败时的错误信息。
+        std::string m_errorMessage;
+    };
+
     /// @brief 逻辑线程本轮应执行的项目切换动作。
     struct PendingProjectAction {
         /// @brief 本轮是否需要关闭当前项目。
@@ -104,6 +146,9 @@ public:
 
         /// @brief 打开项目时需要应用的新建项目初始设置。
         std::optional<ProjectCreationOptions> m_projectCreationOptions;
+
+        /// @brief 本次打开项目的来源模式。
+        ProjectOpenMode m_projectOpenMode{ ProjectOpenMode::Normal };
     };
 
     /// @brief 获取当前项目。
@@ -117,6 +162,11 @@ public:
     /// @brief 请求打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
     void requestOpenProject(const std::filesystem::path& projectPath);
+
+    /// @brief 请求打开谱面包为临时只读项目。
+    /// @param packagePath 要解压阅览的谱面包路径。
+    void requestOpenTemporaryProjectPackage(
+        const std::filesystem::path& packagePath);
 
     /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要创建的项目根目录。
@@ -151,9 +201,39 @@ public:
     /// @brief 打开项目并启动项目目录监听。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
     /// @return 打开项目后的结果信息。
-    OpenProjectResult openProject(const std::filesystem::path& projectPath,
-                                  const std::optional<ProjectCreationOptions>&
-                                      creationOptions = std::nullopt);
+    OpenProjectResult openProject(
+        const std::filesystem::path&                 projectPath,
+        const std::optional<ProjectCreationOptions>& creationOptions =
+            std::nullopt,
+        const std::optional<TemporaryProjectInfo>& temporaryInfo =
+            std::nullopt);
+
+    /// @brief 解压谱面包并作为临时只读项目打开。
+    /// @param packagePath 要打开的谱面包路径。
+    /// @return 打开项目后的结果信息。
+    OpenProjectResult openTemporaryProjectPackage(
+        const std::filesystem::path& packagePath);
+
+    /// @brief 仅解压谱面包并准备临时项目目录，不切换当前项目。
+    /// @param packagePath 要准备的谱面包路径。
+    /// @return 临时项目准备结果。
+    PreparedTemporaryProjectResult prepareTemporaryProjectPackage(
+        const std::filesystem::path& packagePath) const;
+
+    /// @brief 当前是否打开了临时项目。
+    /// @return 当前项目是临时项目时返回 true。
+    bool isCurrentProjectTemporary() const;
+
+    /// @brief 获取当前临时项目信息。
+    /// @return 当前临时项目源文件与缓存路径；非临时项目时返回默认值。
+    TemporaryProjectInfo currentTemporaryProjectInfo() const;
+
+    /// @brief 将当前临时项目复制保存到正式目录。
+    /// @param destinationPath 用户选择的保存目录。
+    /// @return 保存结果。
+    SaveTemporaryProjectResult saveTemporaryProjectTo(
+        const std::filesystem::path& destinationPath) const;
+
 
     /// @brief 关闭当前项目并停止项目目录监听。
     /// @return 被关闭项目的信息。
@@ -237,6 +317,9 @@ private:
     /// @brief 新建项目请求事件订阅 ID。
     Event::SubscriptionID m_createProjectSubscription{ 0 };
 
+    /// @brief 打开临时谱面包请求事件订阅 ID。
+    Event::SubscriptionID m_openTemporaryProjectSubscription{ 0 };
+
     /// @brief 项目切换完成事件订阅 ID。
     Event::SubscriptionID m_projectSwitchCompletedSubscription{ 0 };
 
@@ -261,17 +344,26 @@ private:
     /// @brief 已确认可由逻辑线程直接打开的项目路径。
     std::filesystem::path m_pendingProjectPath;
 
+    /// @brief 已确认可由逻辑线程直接打开的项目模式。
+    ProjectOpenMode m_pendingProjectOpenMode{ ProjectOpenMode::Normal };
+
     /// @brief 已确认可由逻辑线程直接创建并打开的项目初始设置。
     std::optional<ProjectCreationOptions> m_pendingProjectCreationOptions;
 
     /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径。
     std::filesystem::path m_requestedProjectPath;
 
+    /// @brief 等待逻辑线程判定的项目打开模式。
+    ProjectOpenMode m_requestedProjectOpenMode{ ProjectOpenMode::Normal };
+
     /// @brief 等待逻辑线程判定的项目创建初始设置。
     std::optional<ProjectCreationOptions> m_requestedProjectCreationOptions;
 
     /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径。
     std::filesystem::path m_pendingProjectSwitchPath;
+
+    /// @brief 等待 UI 关闭旧谱面画布后的项目打开模式。
+    ProjectOpenMode m_pendingProjectSwitchOpenMode{ ProjectOpenMode::Normal };
 
     /// @brief 等待 UI 关闭旧谱面画布后的项目创建初始设置。
     std::optional<ProjectCreationOptions> m_pendingProjectSwitchCreationOptions;

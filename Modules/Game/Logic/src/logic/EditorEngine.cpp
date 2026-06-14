@@ -6,6 +6,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -518,6 +519,54 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
 }
+
+/// @brief 判断逻辑指令是否会修改临时项目内容。
+/// @param cmd 待检查的逻辑指令。
+/// @return 指令会修改谱面或项目资源时返回 true。
+/// @warning 逻辑热路径低频分支：仅在命令入队时做 variant 类型判断。
+bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
+{
+    if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ||
+         std::holds_alternative<CmdStartDrag>(cmd) ||
+         std::holds_alternative<CmdUpdateDrag>(cmd) ||
+         std::holds_alternative<CmdUpdateTrackCount>(cmd) ||
+         std::holds_alternative<CmdUndo>(cmd) ||
+         std::holds_alternative<CmdRedo>(cmd) ||
+         std::holds_alternative<CmdPaste>(cmd) ||
+         std::holds_alternative<CmdCut>(cmd) ||
+         std::holds_alternative<CmdDeleteSelected>(cmd) ||
+         std::holds_alternative<CmdMirrorSelected>(cmd) ||
+         std::holds_alternative<CmdAlignSelectedToCommonBeats>(cmd) ||
+         std::holds_alternative<CmdApplyNoteColorToSelection>(cmd) ||
+         std::holds_alternative<CmdApplyNotePaletteToSelection>(cmd) ||
+         std::holds_alternative<CmdApplyBrushPaletteToEntity>(cmd) ||
+         std::holds_alternative<CmdClearNoteColorOverrides>(cmd) ||
+         std::holds_alternative<CmdSaveBeatmap>(cmd) ||
+         std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
+         std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
+         std::holds_alternative<CmdReplaceBeatmapTimings>(cmd) ||
+         std::holds_alternative<CmdReplaceBeatmapData>(cmd) ||
+         std::holds_alternative<CmdStartBrush>(cmd) ||
+         std::holds_alternative<CmdUpdateBrush>(cmd) ||
+         std::holds_alternative<CmdStartErase>(cmd) ||
+         std::holds_alternative<CmdUpdateErase>(cmd) ||
+         std::holds_alternative<CmdUpdateBeatmapMetadata>(cmd) ||
+         std::holds_alternative<CmdImportAudio>(cmd) ||
+         std::holds_alternative<CmdUpdateAudioResource>(cmd) ||
+         std::holds_alternative<CmdRemoveAudioResource>(cmd) ||
+         std::holds_alternative<CmdRemoveBeatmap>(cmd) ) {
+        return true;
+    }
+
+    if ( const auto* pack = std::get_if<CmdPackBeatmap>(&cmd) ) {
+        return pack->saveConvertedBeatmapsToProject;
+    }
+
+    return false;
+}
 }  // namespace
 
 EditorEngine& EditorEngine::instance()
@@ -577,9 +626,6 @@ EditorEngine::EditorEngine()
             if ( std::holds_alternative<CmdUpdateEditorConfig>(e.command) ) {
                 setEditorConfig(
                     std::get<CmdUpdateEditorConfig>(e.command).config);
-            } else if ( std::holds_alternative<CmdCreateBeatmap>(e.command) ) {
-                // 将创建谱面指令拦截，交由 EditorEngine 引擎级别处理
-                handleCreateBeatmap(std::get<CmdCreateBeatmap>(e.command));
             } else {
                 pushCommand(MMM::Logic::LogicCommand(e.command));
             }
@@ -589,6 +635,21 @@ EditorEngine::EditorEngine()
 EditorEngine::~EditorEngine()
 {
     stop();
+}
+
+/// @brief 当前是否打开了临时只读项目。
+/// @return 当前项目为临时项目时返回 true。
+bool EditorEngine::isTemporaryProjectOpen() const
+{
+    return ProjectController::instance().isCurrentProjectTemporary();
+}
+
+/// @brief 获取当前临时项目的运行时路径信息。
+/// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
+ProjectController::TemporaryProjectInfo
+EditorEngine::currentTemporaryProjectInfo() const
+{
+    return ProjectController::instance().currentTemporaryProjectInfo();
 }
 
 void EditorEngine::publishRenderFps(float fps)
@@ -873,6 +934,42 @@ void EditorEngine::openProject(
     if ( !openResult.m_opened ) {
         return;
     }
+    finishOpenProject(openResult);
+}
+
+/// @brief 打开谱面包为临时只读项目。
+/// @param packagePath 需要临时阅览的谱面包路径。
+void EditorEngine::openTemporaryProjectPackage(
+    const std::filesystem::path& packagePath)
+{
+    auto prepared =
+        ProjectController::instance().prepareTemporaryProjectPackage(
+            packagePath);
+    if ( !prepared.m_success ) {
+        XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        return;
+    }
+
+    closeProject();
+
+    auto openResult = ProjectController::instance().openProject(
+        prepared.m_temporaryInfo.m_cacheProjectPath,
+        std::nullopt,
+        prepared.m_temporaryInfo);
+    if ( !openResult.m_opened ) {
+        std::error_code filesystemError;
+        std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
+                                    filesystemError);
+        return;
+    }
+    finishOpenProject(openResult);
+}
+
+/// @brief 应用项目控制器打开项目后的逻辑副作用。
+/// @param openResult 项目控制器返回的打开结果。
+void EditorEngine::finishOpenProject(
+    const ProjectController::OpenProjectResult& openResult)
+{
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         const auto& workspace = project->m_settings.m_workspace;
@@ -1167,6 +1264,23 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
+    if ( std::holds_alternative<CmdSaveTemporaryProject>(cmd) ) {
+        handleSaveTemporaryProject(std::get<CmdSaveTemporaryProject>(cmd));
+        return;
+    }
+
+    if ( ProjectController::instance().isCurrentProjectTemporary() &&
+         isTemporaryProjectMutationCommand(cmd) ) {
+        const auto info =
+            ProjectController::instance().currentTemporaryProjectInfo();
+        Event::TemporaryProjectEditBlockedEvent event;
+        event.m_sourcePackagePath =
+            Config::pathToUtf8(info.m_sourcePackagePath);
+        event.m_cacheProjectPath = Config::pathToUtf8(info.m_cacheProjectPath);
+        Event::EventBus::instance().publish(event);
+        return;
+    }
+
     // 拦截创建谱面等引擎级别的指令
     if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
         handleCreateBeatmap(std::get<CmdCreateBeatmap>(cmd));
@@ -2100,8 +2214,13 @@ void EditorEngine::loop()
             closeProject();
         }
         if ( !projectAction.m_projectPathToOpen.empty() ) {
-            openProject(projectAction.m_projectPathToOpen,
-                        projectAction.m_projectCreationOptions);
+            if ( projectAction.m_projectOpenMode ==
+                 ProjectController::ProjectOpenMode::TemporaryPackage ) {
+                openTemporaryProjectPackage(projectAction.m_projectPathToOpen);
+            } else {
+                openProject(projectAction.m_projectPathToOpen,
+                            projectAction.m_projectCreationOptions);
+            }
         }
 
         // 多 Session 轮询更新
@@ -2329,6 +2448,30 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     }
 
     saveProject();
+}
+
+/// @brief 将当前临时项目保存到正式项目目录。
+/// @param cmd 保存临时项目指令。
+void EditorEngine::handleSaveTemporaryProject(
+    const CmdSaveTemporaryProject& cmd)
+{
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        captureProjectWorkspaceState();
+    }
+    auto result = ProjectController::instance().saveTemporaryProjectTo(
+        Config::utf8ToPath(cmd.destinationPath));
+
+    Event::TemporaryProjectSaveResultEvent event;
+    event.m_success          = result.m_success;
+    event.m_savedProjectPath = Config::pathToUtf8(result.m_savedProjectPath);
+    event.m_errorMessage     = result.m_errorMessage;
+
+    if ( result.m_success ) {
+        openProject(result.m_savedProjectPath, std::nullopt);
+    }
+
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 更新项目内谱面文件路径关联并在项目发生变化时保存。
