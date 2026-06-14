@@ -659,13 +659,13 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
-    if ( currentSnapshot->currentTool == Logic::EditTool::Draw &&
-         !currentSnapshot->isPlaying ) {
-        if ( ImGui::IsMouseClicked(1) && isHovered ) {
+    if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
+             isHovered ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
-        if ( ImGui::IsMouseDragging(1) ) {
+        if ( !currentSnapshot->isPlaying && ImGui::IsMouseDragging(1) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateErase{ m_cameraId,
                                        localMousePos.x,

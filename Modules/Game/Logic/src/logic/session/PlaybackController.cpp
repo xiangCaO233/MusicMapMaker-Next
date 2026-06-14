@@ -136,6 +136,31 @@ bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
     audio.seek(ctx.currentTime);
     return true;
 }
+
+/// @brief 取消未完成的鼠标编辑状态，防止进入播放后交互预览残留。
+/// @param ctx 当前播放控制器所属的会话上下文。
+/// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
+void cancelActiveEditingState(SessionContext& ctx)
+{
+    ctx.isDragging  = false;
+    ctx.draggedPart = HoverPart::None;
+    ctx.dragCameraId.clear();
+    ctx.isSelecting             = false;
+    ctx.hasMarqueeSelection     = false;
+    ctx.marqueeIsAdditive       = false;
+    ctx.isMarqueeSelectionDirty = false;
+    ctx.marqueeBoxes.clear();
+
+    ctx.brushState.isActive = false;
+    ctx.brushState.polylineSegments.clear();
+    ctx.brushState.holdStartTime = -1.0;
+    ctx.brushState.duration      = 0.0;
+    ctx.brushState.dtrack        = 0;
+
+    ctx.eraserState.isActive    = false;
+    ctx.eraserState.isShiftDown = false;
+    ctx.eraserState.targetEntities.clear();
+}
 }  // namespace
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
@@ -143,6 +168,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
     m_ctx.isMainAudioSyncFollower = false;
     m_ctx.isPlaying               = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
+        cancelActiveEditingState(m_ctx);
         m_ctx.syncTimer             = 0.0;
         m_ctx.lastAudioPos          = 0.0;
         m_ctx.lastAudioSysTime      = 0.0;
