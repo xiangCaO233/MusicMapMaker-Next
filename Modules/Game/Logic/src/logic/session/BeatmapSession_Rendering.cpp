@@ -33,10 +33,10 @@ struct BeatmapStatusStats {
 };
 
 /// @brief 播放态辅助视图的渲染快照最小间隔。
-/// @warning 逻辑/渲染热路径常量：Preview/Timeline 播放时由 UI
-/// 补间维持视觉连续。
+/// @warning 逻辑/渲染热路径常量：Preview/Timeline 使用可见音符 AbsY
+/// 桶查询后允许提升快照频率；UI 补间仍负责快照间视觉连续。
 constexpr double PLAYBACK_SECONDARY_CAMERA_SNAPSHOT_MIN_INTERVAL_SECONDS =
-    1.0 / 60.0;
+    1.0 / 120.0;
 
 /// @brief 判断视图是否属于播放态可降频的辅助画布。
 /// @param cameraId 当前画布 ID。

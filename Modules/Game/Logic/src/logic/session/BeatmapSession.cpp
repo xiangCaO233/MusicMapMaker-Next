@@ -30,9 +30,10 @@ constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
 /// @brief 非忙碌状态下 Session 逻辑轻量轮询的最小间隔。
 constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS = 0.0005;
 
-/// @brief 播放/跟随状态下主动生成渲染快照的最小间隔，由 UI
-/// 亚帧补间负责视觉连续性。
-constexpr double ACTIVE_RENDER_SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0 / 240.0;
+/// @brief 播放/跟随状态下主动生成渲染快照的最小间隔。
+/// @warning 逻辑热路径常量：可见音符查询使用 AbsY 桶索引后允许提高快照频率；
+/// UI 亚帧补间仍负责快照间视觉连续性。
+constexpr double ACTIVE_RENDER_SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0 / 480.0;
 
 /// @brief 视觉动画目标值的吸附阈值。
 constexpr double VISUAL_ANIMATION_EPSILON = 0.0001;
