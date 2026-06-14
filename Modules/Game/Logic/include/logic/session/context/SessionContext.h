@@ -14,6 +14,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -93,6 +94,13 @@ struct SessionContext {
     bool      hasInitialAudioOffset{ false };  ///< 是否已初始化平滑偏移
     SyncClock syncClock;         ///< 用于平滑音频时间与逻辑时间的时钟
     double    syncTimer{ 0.0 };  ///< 音频强制同步计时器
+
+    /// @brief 当前 Session 主音频的绝对 UTF-8 路径；未成功加载时为空。
+    std::string loadedMainAudioPath;
+    /// @brief 当前 Session 主音频总时长，单位秒。
+    /// @warning 逻辑/UI 热路径缓存：由低频音频加载路径写入，播放、seek clamp
+    /// 和快照生成只读取该值，禁止在读取点改为文件系统探测或解码。
+    double mainAudioTotalTime{ 0.0 };
 
     /// @brief 播放开始时的系统时钟 (steady_clock, 秒)
     double playStartSysTime{ 0.0 };

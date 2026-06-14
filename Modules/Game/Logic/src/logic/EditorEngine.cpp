@@ -1838,22 +1838,15 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
             auto& ctx                   = activeSession->getContextMutable();
             ctx.isMainAudioSyncFollower = false;
+            ctx.loadedMainAudioPath.clear();
+            ctx.mainAudioTotalTime = 0.0;
             if ( shouldSyncTargetTime ) {
                 ctx.currentTime = syncedCurrentTime;
             }
             if ( ctx.currentBeatmap && !sessions[index].isLogoPlaceholder ) {
                 auto*                 project = getCurrentProject();
-                std::filesystem::path audioPath;
-                if ( project ) {
-                    audioPath =
-                        project->m_projectRoot /
-                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-                } else {
-                    audioPath =
-                        ctx.currentBeatmap->m_baseMapMetadata.map_path
-                            .parent_path() /
-                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-                }
+                std::filesystem::path audioPath =
+                    SessionUtils::resolveMainAudioPath(ctx, project);
 
                 if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
                           .empty() &&
@@ -1874,8 +1867,13 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                             }
                         }
                     }
-                    Audio::AudioManager::instance().loadBGM(
-                        Config::pathToUtf8(audioPath), config);
+                    const std::string audioPathUtf8 =
+                        Config::pathToUtf8(audioPath);
+                    auto& audio = Audio::AudioManager::instance();
+                    if ( audio.loadBGM(audioPathUtf8, config) ) {
+                        ctx.loadedMainAudioPath = audioPathUtf8;
+                        ctx.mainAudioTotalTime  = audio.getTotalTime();
+                    }
                 }
             }
 

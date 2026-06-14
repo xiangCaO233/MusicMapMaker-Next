@@ -1,13 +1,98 @@
 #include "logic/session/PlaybackController.h"
 #include "audio/AudioManager.h"
+#include "config/Utf8Path.h"
+#include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 
 namespace MMM::Logic
 {
+namespace
+{
+/// @brief 查找当前谱面主音频在项目资源表中的轨道配置。
+/// @param project 当前项目。
+/// @param mainAudioPath 谱面元数据中保存的主音频路径。
+/// @return 匹配到的音轨配置；找不到时返回默认配置。
+AudioTrackConfig findMainAudioConfig(const Project&               project,
+                                     const std::filesystem::path& mainAudioPath)
+{
+    const std::string audioFileName =
+        Config::pathToUtf8(mainAudioPath.filename());
+    const std::string audioPath = Config::pathToUtf8(mainAudioPath);
+    const std::string genericAudioPath =
+        Config::pathToUtf8Generic(mainAudioPath);
+
+    for ( const auto& resource : project.m_audioResources ) {
+        if ( resource.m_id == audioFileName || resource.m_path == audioPath ||
+             resource.m_path == genericAudioPath ) {
+            return resource.m_config;
+        }
+    }
+    return {};
+}
+
+/// @brief 确保播放前 AudioManager 已加载当前谱面的主音频。
+/// @param ctx 当前播放控制器所属的会话上下文。
+/// @return 已加载或成功补加载时返回 true；没有可用主音频时返回 false。
+/// @warning
+/// 低频播放控制路径：仅在用户切换到播放态时执行，可能访问文件系统并触发音频解码缓存加载，禁止放入每帧
+/// update。
+bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
+{
+    if ( !ctx.currentBeatmap ) {
+        ctx.loadedMainAudioPath.clear();
+        ctx.mainAudioTotalTime = 0.0;
+        return false;
+    }
+
+    const auto& meta = ctx.currentBeatmap->m_baseMapMetadata;
+    if ( meta.main_audio_path.empty() ) {
+        ctx.loadedMainAudioPath.clear();
+        ctx.mainAudioTotalTime = 0.0;
+        return false;
+    }
+
+    const auto* project   = EditorEngine::instance().getCurrentProject();
+    auto        audioPath = SessionUtils::resolveMainAudioPath(ctx, project);
+    std::error_code filesystemError;
+    const bool      isAudioFile =
+        std::filesystem::is_regular_file(audioPath, filesystemError);
+    if ( filesystemError || !isAudioFile ) {
+        ctx.loadedMainAudioPath.clear();
+        ctx.mainAudioTotalTime = 0.0;
+        XWARN("PlaybackController: main audio file is unavailable: {}",
+              Config::pathToUtf8(audioPath));
+        return false;
+    }
+
+    auto&             audio         = Audio::AudioManager::instance();
+    const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
+    if ( audio.getLoadedBGMPath() != audioPathUtf8 ) {
+        AudioTrackConfig config;
+        if ( project ) {
+            config = findMainAudioConfig(*project, meta.main_audio_path);
+        }
+        if ( !audio.loadBGM(audioPathUtf8, config) ) {
+            ctx.loadedMainAudioPath.clear();
+            ctx.mainAudioTotalTime = 0.0;
+            XERROR("PlaybackController: failed to load main audio: {}",
+                   audioPathUtf8);
+            return false;
+        }
+    }
+
+    ctx.loadedMainAudioPath = audioPathUtf8;
+    ctx.mainAudioTotalTime  = audio.getTotalTime();
+    audio.seek(ctx.currentTime);
+    return true;
+}
+}  // namespace
 
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
@@ -24,6 +109,7 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
                 std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         m_ctx.playStartVisualTime = m_ctx.currentTime;
+        (void)ensureCurrentBeatmapBgmLoaded(m_ctx);
         Audio::AudioManager::instance().play();
         m_ctx.syncClock.reset(m_ctx.currentTime);
         SessionUtils::syncHitIndex(m_ctx);

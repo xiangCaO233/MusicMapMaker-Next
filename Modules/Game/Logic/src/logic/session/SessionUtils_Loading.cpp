@@ -31,6 +31,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.isNoteOrderDirty = true;
     ctx.isNotePruneDirty = false;
     ctx.isNoteStatsDirty = true;
+    ctx.loadedMainAudioPath.clear();
+    ctx.mainAudioTotalTime = 0.0;
     Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
@@ -79,16 +81,11 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值
 
     // 加载音频
-    std::filesystem::path audioPath;
-    if ( project ) {
-        audioPath =
-            project->m_projectRoot / beatmap->m_baseMapMetadata.main_audio_path;
-    } else {
-        audioPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
-                    beatmap->m_baseMapMetadata.main_audio_path;
-    }
+    std::filesystem::path audioPath = resolveMainAudioPath(ctx, project);
+    std::error_code       audioFilesystemError;
     if ( !beatmap->m_baseMapMetadata.main_audio_path.empty() &&
-         std::filesystem::exists(audioPath) ) {
+         std::filesystem::is_regular_file(audioPath, audioFilesystemError) &&
+         !audioFilesystemError ) {
         // 查找对应的 AudioResource 配置
         AudioTrackConfig config;
         if ( project ) {
@@ -104,8 +101,12 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 }
             }
         }
-        Audio::AudioManager::instance().loadBGM(Utf8::pathToUtf8(audioPath),
-                                                config);
+        const std::string audioPathUtf8 = Utf8::pathToUtf8(audioPath);
+        auto&             audio         = Audio::AudioManager::instance();
+        if ( audio.loadBGM(audioPathUtf8, config) ) {
+            ctx.loadedMainAudioPath = audioPathUtf8;
+            ctx.mainAudioTotalTime  = audio.getTotalTime();
+        }
     }
 
     // 清空缓存上下文，以确保重新构建

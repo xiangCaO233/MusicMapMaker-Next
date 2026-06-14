@@ -8,6 +8,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include <filesystem>
@@ -44,16 +45,74 @@ void SettingsView::drawBeatmapSettings()
     auto& meta    = m_editingMeta;
     bool  changed = false;
 
+    auto stripProjectFolderPrefix = [&](const std::filesystem::path& path) {
+        if ( !project || project->m_projectRoot.empty() || path.empty() ||
+             path.is_absolute() ) {
+            return std::filesystem::path{};
+        }
+
+        auto iterator = path.begin();
+        if ( iterator == path.end() ||
+             *iterator != project->m_projectRoot.filename() ) {
+            return std::filesystem::path{};
+        }
+
+        std::filesystem::path stripped;
+        ++iterator;
+        for ( ; iterator != path.end(); ++iterator ) {
+            stripped /= *iterator;
+        }
+        return stripped.lexically_normal();
+    };
+
+    auto normalizeProjectResourcePath = [&](const std::filesystem::path& path) {
+        if ( path.empty() || path.is_absolute() || !project ) {
+            return path.lexically_normal();
+        }
+
+        const auto stripped = stripProjectFolderPrefix(path);
+        if ( !stripped.empty() ) {
+            std::error_code filesystemError;
+            if ( std::filesystem::exists(project->m_projectRoot / stripped,
+                                         filesystemError) &&
+                 !filesystemError ) {
+                return stripped.lexically_normal();
+            }
+        }
+        return path.lexically_normal();
+    };
+
     auto resolveProjectPath = [&](const std::filesystem::path& path) {
         if ( path.empty() || path.is_absolute() || !project ) {
             return path.lexically_normal();
         }
-        return (project->m_projectRoot / path).lexically_normal();
+
+        auto directPath = (project->m_projectRoot / path).lexically_normal();
+        std::error_code filesystemError;
+        if ( std::filesystem::exists(directPath, filesystemError) &&
+             !filesystemError ) {
+            return directPath;
+        }
+
+        const auto stripped = stripProjectFolderPrefix(path);
+        if ( !stripped.empty() ) {
+            auto strippedPath =
+                (project->m_projectRoot / stripped).lexically_normal();
+            filesystemError.clear();
+            if ( std::filesystem::exists(strippedPath, filesystemError) &&
+                 !filesystemError ) {
+                return strippedPath;
+            }
+        }
+
+        return directPath;
     };
 
     auto displayProjectPath = [&](const std::filesystem::path& path) {
         if ( path.empty() ) return std::string{};
-        if ( !project || path.is_relative() ) return Config::pathToUtf8(path);
+        if ( !project || path.is_relative() ) {
+            return Config::pathToUtf8(normalizeProjectResourcePath(path));
+        }
 
         std::error_code ec;
         auto            relativePath =
@@ -86,7 +145,7 @@ void SettingsView::drawBeatmapSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -409,7 +468,8 @@ void SettingsView::drawBeatmapSettings()
                                      (res.m_id + "##" + res.m_path).c_str(),
                                      isSelected) ) {
                                 meta.main_audio_path =
-                                    Config::utf8ToPath(res.m_path);
+                                    normalizeProjectResourcePath(
+                                        Config::utf8ToPath(res.m_path));
                                 changed = true;
                             }
                             if ( isSelected ) ImGui::SetItemDefaultFocus();

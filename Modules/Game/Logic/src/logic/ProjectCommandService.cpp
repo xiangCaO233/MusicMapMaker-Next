@@ -13,6 +13,115 @@ namespace MMM::Logic
 {
 namespace
 {
+/// @brief 判断相对路径是否位于项目根内。
+/// @param path 待检查的相对路径。
+/// @return 路径没有越出根目录时返回 true。
+bool isRelativePathInsideRoot(const std::filesystem::path& path)
+{
+    if ( path.empty() || path.is_absolute() ) return false;
+
+    const auto normalized = path.lexically_normal();
+    for ( const auto& part : normalized ) {
+        if ( part == ".." ) return false;
+        if ( part == "." ) continue;
+        return true;
+    }
+    return false;
+}
+
+/// @brief 尽量取得路径的弱规范化绝对路径。
+/// @param path 待规范化路径。
+/// @return 成功时返回 weakly_canonical，失败时退回 absolute/原路径。
+std::filesystem::path weaklyCanonicalAbsolutePath(
+    const std::filesystem::path& path)
+{
+    std::error_code filesystemError;
+    auto normalized = std::filesystem::weakly_canonical(path, filesystemError);
+    if ( !filesystemError ) return normalized.lexically_normal();
+
+    filesystemError.clear();
+    normalized = std::filesystem::absolute(path, filesystemError);
+    if ( !filesystemError ) return normalized.lexically_normal();
+
+    return path.lexically_normal();
+}
+
+/// @brief 若路径以项目文件夹名开头，则剥掉该多余前缀。
+/// @param projectRoot 项目根目录。
+/// @param path 待修正的相对路径。
+/// @return 可剥离时返回剥离后的路径，否则返回空。
+std::filesystem::path stripProjectFolderPrefix(
+    const std::filesystem::path& projectRoot, const std::filesystem::path& path)
+{
+    if ( projectRoot.empty() || path.empty() || path.is_absolute() ) {
+        return {};
+    }
+
+    auto iterator = path.begin();
+    if ( iterator == path.end() || *iterator != projectRoot.filename() ) {
+        return {};
+    }
+
+    std::filesystem::path stripped;
+    ++iterator;
+    for ( ; iterator != path.end(); ++iterator ) {
+        stripped /= *iterator;
+    }
+    return stripped.lexically_normal();
+}
+
+/// @brief 尝试将文件系统路径转换为项目根相对路径。
+/// @param projectRoot 项目根目录。
+/// @param path 待转换路径。
+/// @return 转换成功时返回相对路径，否则返回空。
+std::filesystem::path makeRelativeToProjectRoot(
+    const std::filesystem::path& projectRoot, const std::filesystem::path& path)
+{
+    if ( projectRoot.empty() || path.empty() ) return {};
+
+    const auto root = weaklyCanonicalAbsolutePath(projectRoot);
+    if ( path.is_relative() ) {
+        const auto stripped = stripProjectFolderPrefix(root, path);
+        if ( isRelativePathInsideRoot(stripped) ) {
+            return stripped.lexically_normal();
+        }
+
+        const auto direct = path.lexically_normal();
+        if ( isRelativePathInsideRoot(direct) ) {
+            const auto directCandidate = (root / direct).lexically_normal();
+            std::error_code filesystemError;
+            if ( std::filesystem::exists(directCandidate, filesystemError) &&
+                 !filesystemError ) {
+                return direct;
+            }
+        }
+    }
+
+    const auto      absolutePath = weaklyCanonicalAbsolutePath(path);
+    std::error_code filesystemError;
+    auto            relativePath =
+        std::filesystem::relative(absolutePath, root, filesystemError);
+    if ( !filesystemError && isRelativePathInsideRoot(relativePath) ) {
+        return relativePath.lexically_normal();
+    }
+    return {};
+}
+
+/// @brief 将项目中已存储的 UTF-8 路径归一化为项目根相对路径键。
+/// @param project 当前项目。
+/// @param path 已存储的 UTF-8 路径。
+/// @return 可用于稳定比较的项目根相对路径。
+std::string normalizeStoredProjectPath(const Project&     project,
+                                       const std::string& path)
+{
+    auto relativePath = makeRelativeToProjectRoot(project.m_projectRoot,
+                                                  Config::utf8ToPath(path));
+    if ( relativePath.empty() ) {
+        relativePath = Config::utf8ToPath(path).lexically_normal();
+    }
+    return Config::pathToUtf8(relativePath.lexically_normal());
+}
+
 /// @brief 清空目标谱面的物件数据并复制非折线物件。
 /// @param target 接收复制结果的新谱面。
 /// @param source 模板谱面。
@@ -223,17 +332,21 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
 
     /// @brief 新谱面在项目列表中的入口。
     Project::BeatmapEntry entry;
-    entry.m_name     = meta.name;
-    entry.m_filePath = Config::pathToUtf8(
-        std::filesystem::relative(mapPath, project.m_projectRoot));
+    entry.m_name = meta.name;
+    entry.m_filePath =
+        Config::pathToUtf8(makeProjectRelativePath(project, mapPath));
     entry.m_audioTrackId = Config::pathToUtf8(meta.main_audio_path.filename());
     removeExcludedPath(project.m_excludedBeatmapPaths, entry.m_filePath);
     project.m_beatmaps.push_back(entry);
 
     /// @brief 当前项目是否已经登记了新谱面声明的主音轨。
     bool audioExists = false;
+    /// @brief 新谱面主音轨的规范化项目相对路径。
+    const std::string normalizedMainAudioPath = normalizeStoredProjectPath(
+        project, Config::pathToUtf8(meta.main_audio_path));
     for ( const auto& resource : project.m_audioResources ) {
-        if ( resource.m_path == Config::pathToUtf8(meta.main_audio_path) ) {
+        if ( normalizeStoredProjectPath(project, resource.m_path) ==
+             normalizedMainAudioPath ) {
             audioExists = true;
             break;
         }
@@ -268,70 +381,69 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
 
     /// @brief 用户指定的源音频路径。
     std::filesystem::path audioPath = Config::utf8ToPath(cmd.path);
-    if ( !std::filesystem::exists(audioPath) ) {
+    std::error_code       filesystemError;
+    const auto            sourcePath = weaklyCanonicalAbsolutePath(audioPath);
+    if ( !std::filesystem::is_regular_file(sourcePath, filesystemError) ||
+         filesystemError ) {
         XERROR("Cannot import audio: File does not exist: {}", cmd.path);
         return result;
     }
 
     XINFO("Importing audio: {}", cmd.path);
 
-    /// @brief 音频资源最终写入项目配置的路径，复制后会转成项目相对路径。
-    std::filesystem::path finalPath = audioPath;
-    /// @brief 源文件是否需要复制进项目目录。
-    bool needsCopy = false;
+    /// @brief 项目根目录的绝对规范化路径。
+    const auto projectRoot = weaklyCanonicalAbsolutePath(project.m_projectRoot);
+    /// @brief 音频资源最终写入项目配置的项目相对路径。
+    std::filesystem::path finalRelativePath =
+        makeRelativeToProjectRoot(projectRoot, sourcePath);
+    /// @brief 音频资源最终落盘或已存在的绝对路径。
+    std::filesystem::path finalAbsolutePath =
+        finalRelativePath.empty()
+            ? std::filesystem::path{}
+            : (projectRoot / finalRelativePath).lexically_normal();
 
-    try {
-        /// @brief 源音频的绝对路径。
-        auto absAudioPath = std::filesystem::absolute(audioPath);
-        /// @brief 项目根目录的绝对路径。
-        auto absRoot = std::filesystem::absolute(project.m_projectRoot);
+    if ( finalRelativePath.empty() ) {
+        finalAbsolutePath = projectRoot / sourcePath.filename();
 
-        /// @brief 项目根路径和源音频路径的公共前缀比较迭代器。
-        auto [rootIt, pathIt] = std::mismatch(absRoot.begin(),
-                                              absRoot.end(),
-                                              absAudioPath.begin(),
-                                              absAudioPath.end());
-        (void)pathIt;
-
-        if ( rootIt != absRoot.end() ) {
-            needsCopy = true;
-            finalPath = project.m_projectRoot / audioPath.filename();
-
-            /// @brief 复制目标文件名冲突时递增追加的数字后缀。
-            int suffix = 1;
-            while ( std::filesystem::exists(finalPath) ) {
-                finalPath = project.m_projectRoot /
-                            Config::utf8ToPath(
-                                Config::pathToUtf8(audioPath.stem()) + "_" +
-                                std::to_string(suffix++) +
-                                Config::pathToUtf8(audioPath.extension()));
-            }
-        } else {
-            finalPath = std::filesystem::relative(absAudioPath, absRoot);
+        /// @brief 复制目标文件名冲突时递增追加的数字后缀。
+        int suffix = 1;
+        while ( std::filesystem::exists(finalAbsolutePath, filesystemError) &&
+                !filesystemError ) {
+            finalAbsolutePath =
+                projectRoot /
+                Config::utf8ToPath(Config::pathToUtf8(sourcePath.stem()) + "_" +
+                                   std::to_string(suffix++) +
+                                   Config::pathToUtf8(sourcePath.extension()));
         }
-    } catch ( ... ) {
-        needsCopy = true;
-        finalPath = project.m_projectRoot / audioPath.filename();
-    }
-
-    if ( needsCopy ) {
-        try {
-            std::filesystem::copy_file(audioPath, finalPath);
-            XINFO("Copied external audio to project: {}",
-                  Config::pathToUtf8(finalPath));
-            finalPath =
-                std::filesystem::relative(finalPath, project.m_projectRoot);
-        } catch ( const std::exception& e ) {
-            XERROR("Failed to copy audio file: {}", e.what());
+        if ( filesystemError ) {
+            XERROR("Failed to inspect audio import target: {}",
+                   Config::pathToUtf8(finalAbsolutePath));
             return result;
+        }
+
+        std::filesystem::copy_file(
+            sourcePath, finalAbsolutePath, filesystemError);
+        if ( filesystemError ) {
+            XERROR("Failed to copy audio file: {}", filesystemError.message());
+            return result;
+        }
+        XINFO("Copied external audio to project: {}",
+              Config::pathToUtf8(finalAbsolutePath));
+
+        finalRelativePath =
+            makeRelativeToProjectRoot(projectRoot, finalAbsolutePath);
+        if ( finalRelativePath.empty() ) {
+            finalRelativePath = finalAbsolutePath.filename();
         }
     }
 
     /// @brief 音频资源最终写入项目配置的 UTF-8 相对路径。
-    std::string relPathUtf8 = Config::pathToUtf8(finalPath);
+    std::string relPathUtf8 =
+        Config::pathToUtf8(finalRelativePath.lexically_normal());
     removeExcludedPath(project.m_excludedAudioPaths, relPathUtf8);
     for ( const auto& resource : project.m_audioResources ) {
-        if ( resource.m_path == relPathUtf8 ) {
+        if ( normalizeStoredProjectPath(project, resource.m_path) ==
+             normalizeStoredProjectPath(project, relPathUtf8) ) {
             XWARN("Audio already exists in project: {}", relPathUtf8);
             return result;
         }
@@ -339,10 +451,10 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
 
     /// @brief 新导入的项目音频资源。
     AudioResource resource;
-    resource.m_id                   = Config::pathToUtf8(finalPath.filename());
-    resource.m_path                 = relPathUtf8;
-    resource.m_type                 = cmd.trackType;
-    resource.m_config.volume        = 0.5f;
+    resource.m_id            = Config::pathToUtf8(finalRelativePath.filename());
+    resource.m_path          = relPathUtf8;
+    resource.m_type          = cmd.trackType;
+    resource.m_config.volume = 0.5f;
     resource.m_config.playbackSpeed = 1.0f;
     resource.m_config.playbackPitch = 0.0f;
     resource.m_config.muted         = false;
@@ -353,7 +465,7 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
         /// @brief 新导入音效的预加载请求。
         AudioPreloadRequest preloadRequest;
         preloadRequest.m_resource     = resource;
-        preloadRequest.m_absolutePath = project.m_projectRoot / finalPath;
+        preloadRequest.m_absolutePath = finalAbsolutePath;
         result.m_effectPreload        = preloadRequest;
     }
 
@@ -521,8 +633,8 @@ ProjectCommandService::updateAudioResource(
         result.m_updated = true;
         if ( resource.m_type == AudioTrackType::Effect ) {
             /// @brief 音频资源在项目目录中的绝对路径。
-            auto absPath =
-                project.m_projectRoot / Config::utf8ToPath(resource.m_path);
+            auto absPath = resolveProjectPath(
+                project, Config::utf8ToPath(resource.m_path));
             if ( std::filesystem::exists(absPath) ) {
                 /// @brief 更新后音效的预加载请求。
                 AudioPreloadRequest preloadRequest;
@@ -701,7 +813,26 @@ std::filesystem::path ProjectCommandService::resolveProjectPath(
     if ( path.empty() || path.is_absolute() ) {
         return path.lexically_normal();
     }
-    return (project.m_projectRoot / path).lexically_normal();
+
+    const auto      root = weaklyCanonicalAbsolutePath(project.m_projectRoot);
+    const auto      directCandidate = (root / path).lexically_normal();
+    std::error_code filesystemError;
+    if ( std::filesystem::exists(directCandidate, filesystemError) &&
+         !filesystemError ) {
+        return directCandidate;
+    }
+
+    const auto stripped = stripProjectFolderPrefix(root, path);
+    if ( !stripped.empty() ) {
+        const auto strippedCandidate = (root / stripped).lexically_normal();
+        filesystemError.clear();
+        if ( std::filesystem::exists(strippedCandidate, filesystemError) &&
+             !filesystemError ) {
+            return strippedCandidate;
+        }
+    }
+
+    return directCandidate;
 }
 
 /// @brief 将文件系统路径转换为项目相对路径。
@@ -712,20 +843,13 @@ std::filesystem::path ProjectCommandService::makeProjectRelativePath(
     const Project& project, const std::filesystem::path& path)
 {
     if ( path.empty() ) return {};
-    if ( path.is_relative() ) return path.lexically_normal();
 
-    /// @brief 文件系统路径转换错误码。
-    std::error_code filesystemError;
-    /// @brief 项目根目录绝对路径。
-    auto root =
-        std::filesystem::absolute(project.m_projectRoot, filesystemError);
-    if ( filesystemError ) return path.filename();
-
-    /// @brief 输入路径相对于项目根目录的路径。
-    auto relativePath = std::filesystem::relative(path, root, filesystemError);
-    if ( !filesystemError && !relativePath.empty() ) {
+    auto relativePath = makeRelativeToProjectRoot(project.m_projectRoot, path);
+    if ( !relativePath.empty() ) {
         return relativePath.lexically_normal();
     }
+
+    if ( path.is_relative() ) return path.lexically_normal();
     return path.filename();
 }
 

@@ -1074,22 +1074,17 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
         // 如果音频路径发生变化，重新加载音频
         if ( oldAudio != updatedMeta.main_audio_path ) {
             XINFO("BeatmapSession: Audio path changed, reloading...");
+            m_ctx->loadedMainAudioPath.clear();
+            m_ctx->mainAudioTotalTime = 0.0;
             // 如果当前正在播放，先暂停播放
             if ( m_ctx->isPlaying ) {
                 m_playback->handleCommand(CmdSetPlayState{ false });
             }
             // 复位画布时间为 0.0
             m_playback->handleCommand(CmdSeek{ 0.0 });
-            std::filesystem::path audioPath;
             auto* project = EditorEngine::instance().getCurrentProject();
-            if ( project ) {
-                audioPath =
-                    project->m_projectRoot / updatedMeta.main_audio_path;
-            } else {
-                audioPath = m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                                .parent_path() /
-                            updatedMeta.main_audio_path;
-            }
+            std::filesystem::path audioPath =
+                SessionUtils::resolveMainAudioPath(*m_ctx, project);
             if ( std::filesystem::exists(audioPath) ) {
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
@@ -1107,8 +1102,12 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                         }
                     }
                 }
-                Audio::AudioManager::instance().loadBGM(
-                    Config::pathToUtf8(audioPath), config);
+                const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
+                auto&             audio = Audio::AudioManager::instance();
+                if ( audio.loadBGM(audioPathUtf8, config) ) {
+                    m_ctx->loadedMainAudioPath = audioPathUtf8;
+                    m_ctx->mainAudioTotalTime  = audio.getTotalTime();
+                }
             } else {
                 XERROR(
                     "BeatmapSession: Audio file does not exist at resolved "

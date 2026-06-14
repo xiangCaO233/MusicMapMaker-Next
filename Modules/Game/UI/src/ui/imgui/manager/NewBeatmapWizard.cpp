@@ -7,6 +7,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/SessionUtils.h"
+#include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -18,6 +19,7 @@
 #include <fmt/format.h>
 #include <mutex>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace MMM::UI
@@ -52,6 +54,78 @@ bool resourcePathMatches(const std::filesystem::path& lhs,
     if ( lhsUtf8 == rhsUtf8 ) return true;
     return Config::pathToUtf8(lhs.filename()) ==
            Config::pathToUtf8(rhs.filename());
+}
+
+/// @brief 判断相对路径是否位于项目根内。
+/// @param path 待检查路径。
+/// @return 路径没有越出根目录时返回 true。
+bool isRelativePathInsideRoot(const std::filesystem::path& path)
+{
+    if ( path.empty() || path.is_absolute() ) return false;
+
+    const auto normalized = path.lexically_normal();
+    for ( const auto& part : normalized ) {
+        if ( part == ".." ) return false;
+        if ( part == "." ) continue;
+        return true;
+    }
+    return false;
+}
+
+/// @brief 若路径以项目文件夹名开头，则剥掉该多余前缀。
+/// @param projectRoot 项目根目录。
+/// @param path 待修正的相对路径。
+/// @return 可剥离时返回剥离后的路径，否则返回空。
+std::filesystem::path stripProjectFolderPrefix(
+    const std::filesystem::path& projectRoot, const std::filesystem::path& path)
+{
+    if ( projectRoot.empty() || path.empty() || path.is_absolute() ) {
+        return {};
+    }
+
+    auto iterator = path.begin();
+    if ( iterator == path.end() || *iterator != projectRoot.filename() ) {
+        return {};
+    }
+
+    std::filesystem::path stripped;
+    ++iterator;
+    for ( ; iterator != path.end(); ++iterator ) {
+        stripped /= *iterator;
+    }
+    return stripped.lexically_normal();
+}
+
+/// @brief 将项目资源路径规整为项目根相对路径。
+/// @param project 当前项目。
+/// @param path 资源路径。
+/// @return 可用于谱面元数据持久化的项目相对路径。
+std::filesystem::path normalizeProjectResourcePath(
+    const MMM::Project& project, const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+
+    const auto projectRoot = project.m_projectRoot.lexically_normal();
+    if ( path.is_relative() ) {
+        const auto stripped = stripProjectFolderPrefix(projectRoot, path);
+        if ( isRelativePathInsideRoot(stripped) ) {
+            std::error_code filesystemError;
+            if ( std::filesystem::exists(projectRoot / stripped,
+                                         filesystemError) &&
+                 !filesystemError ) {
+                return stripped.lexically_normal();
+            }
+        }
+        return path.lexically_normal();
+    }
+
+    std::error_code filesystemError;
+    auto            relativePath =
+        std::filesystem::relative(path, projectRoot, filesystemError);
+    if ( !filesystemError && isRelativePathInsideRoot(relativePath) ) {
+        return relativePath.lexically_normal();
+    }
+    return path.lexically_normal();
 }
 }  // namespace
 
@@ -145,7 +219,7 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
         m_trackCount = meta.track_count;
     }
     if ( meta.map_length > 0.0 ) {
-        m_audioDuration = meta.map_length;
+        m_audioDuration = meta.map_length / 1000.0;
     }
 
     if ( m_titleBuf[0] == '\0' && !meta.title.empty() ) {
@@ -212,7 +286,10 @@ void NewBeatmapWizard::syncMetaFromInputs()
     m_meta.version        = m_versionBuf;
     m_meta.track_count    = std::max(1, m_trackCount);
     m_meta.preference_bpm = m_bpm;
-    m_meta.map_length     = m_audioDuration;
+    m_meta.map_length =
+        (m_audioDuration > 0.0 && std::isfinite(m_audioDuration))
+            ? m_audioDuration * 1000.0
+            : 0.0;
 
     m_meta.main_audio_path = m_selectedAudioPath;
     m_meta.main_cover_path = m_selectedCoverPath;
@@ -352,9 +429,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                option.displayName,
-                                                option.internalName,
-                                                option.cameraId);
+                                                   option.displayName,
+                                                   option.internalName,
+                                                   option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ImGui::Selectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -634,8 +711,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
-                               ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
@@ -882,14 +959,18 @@ void NewBeatmapWizard::reset()
 
 void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
 {
-    m_selectedAudioPath = path;
     m_measuredTimings.clear();
 
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
-    if ( !project ) return;
+    if ( !project ) {
+        m_selectedAudioPath = path;
+        return;
+    }
+
+    m_selectedAudioPath = normalizeProjectResourcePath(*project, path);
 
     // 使用 ffmpeg 获取信息 (需要绝对路径)
-    auto absPath = project->m_projectRoot / path;
+    auto absPath = project->m_projectRoot / m_selectedAudioPath;
     auto infoOpt = MMM::Utils::AudioInfoUtils::probeAudioInfo(absPath);
     if ( infoOpt ) {
         auto& info = *infoOpt;
