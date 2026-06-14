@@ -88,9 +88,11 @@ void NoteRenderSystem::generateSnapshot(
     const double interpolationDuration =
         std::abs(snapshot->playbackSpeed) *
         UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS;
+    const bool supportsUiPlaybackInterpolation =
+        isMainCanvas || cameraId == "Preview" || cameraId == "Timeline";
     const bool canUsePlaybackInterpolation =
         snapshot->isPlaying && !snapshot->isPreviewDragging &&
-        (isMainCanvas || cameraId == "Preview") && std::isfinite(renderTime) &&
+        supportsUiPlaybackInterpolation && std::isfinite(renderTime) &&
         std::isfinite(interpolationDuration) &&
         cache->canInterpolateLinearly(renderTime, interpolationDuration);
     if ( canUsePlaybackInterpolation ) {
@@ -256,9 +258,11 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     // 记录静态边界 (此时 snapshot->vertices 包含了特效和布局的顶点)
-    snapshot->staticVertexCount =
-        static_cast<uint32_t>(snapshot->vertices.size());
-    snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+    if ( cameraId != "Timeline" ) {
+        snapshot->staticVertexCount =
+            static_cast<uint32_t>(snapshot->vertices.size());
+        snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+    }
 
     // --- Phase 2: 动态内容生成 (拍线、音符等) ---
     // 这些内容会受到 UI 线程 yOffset 补偿的影响，从而消除亚帧抖动
@@ -353,9 +357,11 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     // 记录动态顶点数量
-    snapshot->dynamicVertexCount =
-        static_cast<uint32_t>(snapshot->vertices.size()) -
-        snapshot->staticVertexCount;
+    if ( cameraId != "Timeline" ) {
+        snapshot->dynamicVertexCount =
+            static_cast<uint32_t>(snapshot->vertices.size()) -
+            snapshot->staticVertexCount;
+    }
 
     // --- Phase 3: 置顶层渲染 (静态或动态) ---
     // 将之前生成的打击特效命令插入到最后，使其绘制在物件上方
@@ -507,7 +513,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
     auto& skin    = Config::SkinManager::instance();
     auto  tickCol = skin.getColor("timeline.tick");
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
 
     float paddingX = 30.0f;
     float lineW    = std::max(1.0f, viewportWidth - paddingX * 2.0f);
@@ -697,6 +703,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
         element.markerIndexCount =
             static_cast<uint32_t>(snapshot->indices.size() - markerIndexOffset);
     }
+
+    snapshot->dynamicVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size()) -
+        snapshot->staticVertexCount;
 
     // 6. 绘制当前时间判定框，作为时间线最上层覆盖物。
     batcher.flush();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "logic/BeatmapSyncBuffer.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -30,7 +31,7 @@ inline double currentSteadySeconds()
         .count();
 }
 
-/// @brief 对快照动态顶点应用或还原 UI 侧播放插值偏移。
+/// @brief 对快照动态顶点和 Timeline 交互坐标应用或还原 UI 侧播放插值偏移。
 /// @param snapshot 待修改的渲染快照。
 /// @param yOffset 需要叠加到动态顶点上的 Y 偏移。
 /// @warning 后台线程路径：只允许在快照仍由 UI 侧持有、尚未归还逻辑线程前调用。
@@ -41,14 +42,20 @@ inline void applyDynamicVertexYOffset(Logic::RenderSnapshot* snapshot,
         return;
     }
 
-    const uint32_t startVtx = snapshot->staticVertexCount;
-    auto&          vertices = snapshot->vertices;
-    const uint32_t endVtx   = snapshot->dynamicVertexCount > 0
-                                  ? (startVtx + snapshot->dynamicVertexCount)
-                                  : static_cast<uint32_t>(vertices.size());
+    if ( snapshot->dynamicVertexCount > 0 ) {
+        const uint32_t startVtx = snapshot->staticVertexCount;
+        auto&          vertices = snapshot->vertices;
+        const uint32_t endVtx =
+            std::min(startVtx + snapshot->dynamicVertexCount,
+                     static_cast<uint32_t>(vertices.size()));
 
-    for ( size_t i = startVtx; i < endVtx && i < vertices.size(); ++i ) {
-        vertices[i].pos.y += yOffset;
+        for ( size_t i = startVtx; i < endVtx; ++i ) {
+            vertices[i].pos.y += yOffset;
+        }
+    }
+
+    for ( auto& element : snapshot->timelineElements ) {
+        element.y += yOffset;
     }
 }
 
