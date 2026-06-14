@@ -6,6 +6,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -39,6 +40,18 @@ constexpr int BACKGROUND_SESSION_MIN_UPS = 60;
 
 /// @brief 后台非活跃谱面画布的最高快照更新频率上限。
 constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
+
+/// @brief RenderSnapshot 自适应预算的最低刷新率。
+constexpr double RENDER_SNAPSHOT_MIN_HZ = 60.0;
+
+/// @brief 主画布 RenderSnapshot 自适应预算的最高刷新率。
+constexpr double RENDER_SNAPSHOT_MAIN_MAX_HZ = 480.0;
+
+/// @brief 辅助画布 RenderSnapshot 自适应预算的最高刷新率。
+constexpr double RENDER_SNAPSHOT_SECONDARY_MAX_HZ = 240.0;
+
+/// @brief 没有可用 FPS 统计时的 RenderSnapshot 回退刷新率。
+constexpr double RENDER_SNAPSHOT_FALLBACK_HZ = 240.0;
 
 /// @brief 同主音轨画布同步的逻辑时间变化阈值。
 constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
@@ -103,6 +116,58 @@ FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
     return std::chrono::duration_cast<FrameLimitClock::duration>(
         std::chrono::duration<double>(1.0 /
                                       static_cast<double>(backgroundUps)));
+}
+
+/// @brief 根据帧率限制设置计算逻辑线程目标 UPS。
+/// @param frameLimit 当前帧率限制偏好。
+/// @return 有固定目标时返回目标 UPS；Unlimited 返回 0。
+/// @warning 逻辑热路径：自适应快照预算调用；只读取设备刷新率并做常量级计算。
+double frameLimitTargetUps(Config::FrameLimitPreference frameLimit)
+{
+    int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
+    if ( refreshRate <= 0 ) {
+        refreshRate = 60;
+    }
+
+    switch ( frameLimit ) {
+    case Config::FrameLimitPreference::VSync:
+        return static_cast<double>(refreshRate);
+    case Config::FrameLimitPreference::Refresh2x:
+        return static_cast<double>(refreshRate * 2);
+    case Config::FrameLimitPreference::Refresh4x:
+        return static_cast<double>(refreshRate * 4);
+    case Config::FrameLimitPreference::Refresh8x:
+        return static_cast<double>(refreshRate * 8);
+    case Config::FrameLimitPreference::Unlimited:
+    default: return 0.0;
+    }
+}
+
+/// @brief 根据 UPS 健康度降低快照刷新率预算。
+/// @param snapshotHz 当前快照预算。
+/// @param logicUps 当前实测 UPS。
+/// @param targetUps 当前目标 UPS。
+/// @return 调整后的快照预算。
+/// @warning 逻辑热路径：只做常量级数值计算。
+double applyUpsBackpressure(double snapshotHz, double logicUps,
+                            double targetUps)
+{
+    if ( logicUps <= 1.0 || targetUps <= 1.0 || !std::isfinite(logicUps) ||
+         !std::isfinite(targetUps) ) {
+        return snapshotHz;
+    }
+
+    const double health = logicUps / targetUps;
+    if ( health < 0.70 ) {
+        return snapshotHz * 0.50;
+    }
+    if ( health < 0.85 ) {
+        return snapshotHz * 0.65;
+    }
+    if ( health < 0.95 ) {
+        return snapshotHz * 0.80;
+    }
+    return snapshotHz;
 }
 
 /// @brief 根据 Session 上下文计算软件光标 BPM 同步烟雾寿命。
@@ -454,6 +519,54 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.pgoProfileUploadConsentAsked =
         source.settings.pgoProfileUploadConsentAsked;
 }
+
+/// @brief 判断逻辑指令是否会修改临时项目内容。
+/// @param cmd 待检查的逻辑指令。
+/// @return 指令会修改谱面或项目资源时返回 true。
+/// @warning 逻辑热路径低频分支：仅在命令入队时做 variant 类型判断。
+bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
+{
+    if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ||
+         std::holds_alternative<CmdStartDrag>(cmd) ||
+         std::holds_alternative<CmdUpdateDrag>(cmd) ||
+         std::holds_alternative<CmdUpdateTrackCount>(cmd) ||
+         std::holds_alternative<CmdUndo>(cmd) ||
+         std::holds_alternative<CmdRedo>(cmd) ||
+         std::holds_alternative<CmdPaste>(cmd) ||
+         std::holds_alternative<CmdCut>(cmd) ||
+         std::holds_alternative<CmdDeleteSelected>(cmd) ||
+         std::holds_alternative<CmdMirrorSelected>(cmd) ||
+         std::holds_alternative<CmdAlignSelectedToCommonBeats>(cmd) ||
+         std::holds_alternative<CmdApplyNoteColorToSelection>(cmd) ||
+         std::holds_alternative<CmdApplyNotePaletteToSelection>(cmd) ||
+         std::holds_alternative<CmdApplyBrushPaletteToEntity>(cmd) ||
+         std::holds_alternative<CmdClearNoteColorOverrides>(cmd) ||
+         std::holds_alternative<CmdSaveBeatmap>(cmd) ||
+         std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
+         std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
+         std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
+         std::holds_alternative<CmdReplaceBeatmapTimings>(cmd) ||
+         std::holds_alternative<CmdReplaceBeatmapData>(cmd) ||
+         std::holds_alternative<CmdStartBrush>(cmd) ||
+         std::holds_alternative<CmdUpdateBrush>(cmd) ||
+         std::holds_alternative<CmdStartErase>(cmd) ||
+         std::holds_alternative<CmdUpdateErase>(cmd) ||
+         std::holds_alternative<CmdUpdateBeatmapMetadata>(cmd) ||
+         std::holds_alternative<CmdImportAudio>(cmd) ||
+         std::holds_alternative<CmdUpdateAudioResource>(cmd) ||
+         std::holds_alternative<CmdRemoveAudioResource>(cmd) ||
+         std::holds_alternative<CmdRemoveBeatmap>(cmd) ) {
+        return true;
+    }
+
+    if ( const auto* pack = std::get_if<CmdPackBeatmap>(&cmd) ) {
+        return pack->saveConvertedBeatmapsToProject;
+    }
+
+    return false;
+}
 }  // namespace
 
 EditorEngine& EditorEngine::instance()
@@ -513,9 +626,6 @@ EditorEngine::EditorEngine()
             if ( std::holds_alternative<CmdUpdateEditorConfig>(e.command) ) {
                 setEditorConfig(
                     std::get<CmdUpdateEditorConfig>(e.command).config);
-            } else if ( std::holds_alternative<CmdCreateBeatmap>(e.command) ) {
-                // 将创建谱面指令拦截，交由 EditorEngine 引擎级别处理
-                handleCreateBeatmap(std::get<CmdCreateBeatmap>(e.command));
             } else {
                 pushCommand(MMM::Logic::LogicCommand(e.command));
             }
@@ -525,6 +635,57 @@ EditorEngine::EditorEngine()
 EditorEngine::~EditorEngine()
 {
     stop();
+}
+
+/// @brief 当前是否打开了临时只读项目。
+/// @return 当前项目为临时项目时返回 true。
+bool EditorEngine::isTemporaryProjectOpen() const
+{
+    return ProjectController::instance().isCurrentProjectTemporary();
+}
+
+/// @brief 获取当前临时项目的运行时路径信息。
+/// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
+ProjectController::TemporaryProjectInfo
+EditorEngine::currentTemporaryProjectInfo() const
+{
+    return ProjectController::instance().currentTemporaryProjectInfo();
+}
+
+void EditorEngine::publishRenderFps(float fps)
+{
+    if ( !std::isfinite(fps) || fps <= 0.0f ) {
+        return;
+    }
+    m_renderFps.store(fps, std::memory_order_relaxed);
+}
+
+double EditorEngine::adaptiveRenderSnapshotMinInterval(
+    const Config::EditorConfig& config, bool secondaryCamera) const
+{
+    const double renderFps =
+        static_cast<double>(m_renderFps.load(std::memory_order_relaxed));
+    const double logicUps =
+        static_cast<double>(m_logicUps.load(std::memory_order_relaxed));
+    const double maxSnapshotHz = secondaryCamera
+                                     ? RENDER_SNAPSHOT_SECONDARY_MAX_HZ
+                                     : RENDER_SNAPSHOT_MAIN_MAX_HZ;
+    const double fpsDrivenHz   = std::isfinite(renderFps) && renderFps > 1.0
+                                     ? renderFps * (secondaryCamera ? 1.5 : 2.0)
+                                     : RENDER_SNAPSHOT_FALLBACK_HZ;
+    double       snapshotHz =
+        std::clamp(fpsDrivenHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
+
+    double targetUps = frameLimitTargetUps(config.settings.frameLimit);
+    if ( targetUps <= 1.0 && std::isfinite(renderFps) && renderFps > 1.0 ) {
+        targetUps = std::clamp(renderFps * 2.0,
+                               RENDER_SNAPSHOT_MIN_HZ,
+                               RENDER_SNAPSHOT_MAIN_MAX_HZ);
+    }
+
+    snapshotHz = applyUpsBackpressure(snapshotHz, logicUps, targetUps);
+    snapshotHz = std::clamp(snapshotHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
+    return 1.0 / snapshotHz;
 }
 
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
@@ -773,6 +934,42 @@ void EditorEngine::openProject(
     if ( !openResult.m_opened ) {
         return;
     }
+    finishOpenProject(openResult);
+}
+
+/// @brief 打开谱面包为临时只读项目。
+/// @param packagePath 需要临时阅览的谱面包路径。
+void EditorEngine::openTemporaryProjectPackage(
+    const std::filesystem::path& packagePath)
+{
+    auto prepared =
+        ProjectController::instance().prepareTemporaryProjectPackage(
+            packagePath);
+    if ( !prepared.m_success ) {
+        XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        return;
+    }
+
+    closeProject();
+
+    auto openResult = ProjectController::instance().openProject(
+        prepared.m_temporaryInfo.m_cacheProjectPath,
+        std::nullopt,
+        prepared.m_temporaryInfo);
+    if ( !openResult.m_opened ) {
+        std::error_code filesystemError;
+        std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
+                                    filesystemError);
+        return;
+    }
+    finishOpenProject(openResult);
+}
+
+/// @brief 应用项目控制器打开项目后的逻辑副作用。
+/// @param openResult 项目控制器返回的打开结果。
+void EditorEngine::finishOpenProject(
+    const ProjectController::OpenProjectResult& openResult)
+{
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         const auto& workspace = project->m_settings.m_workspace;
@@ -1067,6 +1264,23 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
+    if ( std::holds_alternative<CmdSaveTemporaryProject>(cmd) ) {
+        handleSaveTemporaryProject(std::get<CmdSaveTemporaryProject>(cmd));
+        return;
+    }
+
+    if ( ProjectController::instance().isCurrentProjectTemporary() &&
+         isTemporaryProjectMutationCommand(cmd) ) {
+        const auto info =
+            ProjectController::instance().currentTemporaryProjectInfo();
+        Event::TemporaryProjectEditBlockedEvent event;
+        event.m_sourcePackagePath =
+            Config::pathToUtf8(info.m_sourcePackagePath);
+        event.m_cacheProjectPath = Config::pathToUtf8(info.m_cacheProjectPath);
+        Event::EventBus::instance().publish(event);
+        return;
+    }
+
     // 拦截创建谱面等引擎级别的指令
     if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ) {
         handleCreateBeatmap(std::get<CmdCreateBeatmap>(cmd));
@@ -1189,6 +1403,17 @@ const std::unordered_map<uint32_t, glm::vec4>& EditorEngine::getAtlasUVMap(
     return m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
 
+/// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
+/// @warning 逻辑/渲染热路径：每个快照生成时调用；普通路径不复制 UV 表。
+void EditorEngine::updateSnapshotAtlasUVMap(
+    const std::string&                       cameraId,
+    std::unordered_map<uint32_t, glm::vec4>& target,
+    std::uint64_t&                           targetRevision) const
+{
+    m_renderSyncRegistry.updateSnapshotAtlasUVMap(
+        cameraId, target, targetRevision);
+}
+
 /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
 /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
 /// SessionRegistry 锁。
@@ -1222,7 +1447,11 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         if ( entry.cameraId == cameraId ) {
+            if ( entry.isCanvasVisible == isVisible ) {
+                return;
+            }
             entry.isCanvasVisible = isVisible;
+            m_sessionRegistry.publishSnapshotUnsafe();
             return;
         }
     }
@@ -1294,6 +1523,7 @@ void EditorEngine::refreshMainAudioSyncKeysUnsafe()
         entry.mainAudioSyncKey = getMainAudioSyncKey(ctx, currentProject);
     }
     refreshMainAudioSyncPeerStateUnsafe();
+    m_sessionRegistry.publishSnapshotUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
 }
 
@@ -1342,75 +1572,75 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
-    if ( sourceIndex < 0 ||
-         sourceIndex >= static_cast<int32_t>(sessions.size()) ||
-         !sessions[static_cast<size_t>(sourceIndex)].session ) {
+    {
+        const auto& sessions = m_sessionRegistry.publishedSnapshot().sessions;
+        const auto  sourceEntry =
+            std::find_if(sessions.begin(),
+                         sessions.end(),
+                         [sourceIndex](const SessionSnapshotEntry& entry) {
+                             return entry.index == sourceIndex;
+                         });
+        if ( sourceEntry == sessions.end() || !sourceEntry->session ) {
+            return;
+        }
+
+        auto&       sourceCtx = sourceEntry->session->getContext();
+        const auto& sourceKey = sourceEntry->mainAudioSyncKey;
+        if ( sourceKey.empty() ) {
+            return;
+        }
+        if ( sourceCtx.isMainAudioSyncFollower && !sourceCtx.isPlaying ) {
+            return;
+        }
+
+        for ( const auto& entry : sessions ) {
+            if ( entry.index == sourceIndex || !entry.session ||
+                 entry.mainAudioSyncKey != sourceKey ) {
+                continue;
+            }
+
+            auto& ctx = entry.session->getContextMutable();
+
+            const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
+            const double previousAnimateTime = ctx.animateTime;
+            const bool   shouldClearHitEffects =
+                wasFollowing != sourceCtx.isPlaying ||
+                sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                    previousAnimateTime ||
+                std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
+
+            ctx.currentTime       = sourceCtx.currentTime;
+            ctx.animateTime       = sourceCtx.animateTime;
+            ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
+            ctx.animateTimeAnimationActive =
+                sourceCtx.animateTimeAnimationActive;
+            ctx.animatedTimelineZoom = sourceCtx.animatedTimelineZoom;
+            ctx.animatedTimelineZoomTarget =
+                sourceCtx.animatedTimelineZoomTarget;
+            ctx.animatedTimelineZoomAnimationActive =
+                sourceCtx.animatedTimelineZoomAnimationActive;
+            ctx.isPlaying               = false;
+            ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
+            ctx.lastAudioPos            = 0.0;
+            ctx.lastAudioSysTime        = 0.0;
+            ctx.hasInitialAudioOffset   = false;
+            ctx.playStartSysTime =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now().time_since_epoch())
+                    .count();
+            ctx.playStartVisualTime = ctx.currentTime;
+            ctx.syncClock.reset(ctx.currentTime);
+            if ( shouldClearHitEffects ) {
+                ctx.hitFXSystem.clearActiveEffects();
+            }
+            if ( ctx.isMainAudioSyncFollower && entry.isCanvasVisible ) {
+                updateFollowerHitEffects(ctx,
+                                         previousAnimateTime,
+                                         m_editorConfig,
+                                         shouldClearHitEffects);
+            }
+        }
         return;
-    }
-
-    auto& sourceCtx =
-        sessions[static_cast<size_t>(sourceIndex)].session->getContext();
-    const auto& sourceKey =
-        sessions[static_cast<size_t>(sourceIndex)].mainAudioSyncKey;
-    if ( sourceKey.empty() ) {
-        return;
-    }
-    // 被动 follower 的时间变化来自本地视觉插值，不能反向覆盖真正的播放源。
-    if ( sourceCtx.isMainAudioSyncFollower && !sourceCtx.isPlaying ) {
-        return;
-    }
-
-    for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
-        if ( i == sourceIndex || !sessions[static_cast<size_t>(i)].session ) {
-            continue;
-        }
-
-        auto& ctx =
-            sessions[static_cast<size_t>(i)].session->getContextMutable();
-        if ( sessions[static_cast<size_t>(i)].mainAudioSyncKey != sourceKey ) {
-            continue;
-        }
-
-        const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
-        const double previousAnimateTime = ctx.animateTime;
-        const bool   shouldClearHitEffects =
-            wasFollowing != sourceCtx.isPlaying ||
-            sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
-                previousAnimateTime ||
-            std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
-
-        ctx.currentTime                = sourceCtx.currentTime;
-        ctx.animateTime                = sourceCtx.animateTime;
-        ctx.animateTimeTarget          = sourceCtx.animateTimeTarget;
-        ctx.animateTimeAnimationActive = sourceCtx.animateTimeAnimationActive;
-        ctx.animatedTimelineZoom       = sourceCtx.animatedTimelineZoom;
-        ctx.animatedTimelineZoomTarget = sourceCtx.animatedTimelineZoomTarget;
-        ctx.animatedTimelineZoomAnimationActive =
-            sourceCtx.animatedTimelineZoomAnimationActive;
-        ctx.isPlaying               = false;
-        ctx.isMainAudioSyncFollower = sourceCtx.isPlaying;
-        ctx.lastAudioPos            = 0.0;
-        ctx.lastAudioSysTime        = 0.0;
-        ctx.hasInitialAudioOffset   = false;
-        ctx.playStartSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        ctx.playStartVisualTime = ctx.currentTime;
-        ctx.syncClock.reset(ctx.currentTime);
-        if ( shouldClearHitEffects ) {
-            ctx.hitFXSystem.clearActiveEffects();
-        }
-        if ( ctx.isMainAudioSyncFollower &&
-             sessions[static_cast<size_t>(i)].isCanvasVisible ) {
-            updateFollowerHitEffects(ctx,
-                                     previousAnimateTime,
-                                     m_editorConfig,
-                                     shouldClearHitEffects);
-        }
     }
 }
 
@@ -1508,6 +1738,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
                 m_sessionRegistry.setActiveIndex(i);
                 refreshMainAudioSyncPeerStateUnsafe();
+                m_sessionRegistry.publishSnapshotUnsafe();
                 m_lastMainAudioSyncActiveIndex = -1;
 
                 XINFO("Reused Logo canvas {} for beatmap: {}",
@@ -1656,6 +1887,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
 
     m_sessionRegistry.setActiveIndex(index);
     refreshMainAudioSyncPeerStateUnsafe();
+    m_sessionRegistry.publishSnapshotUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
 
     if ( updateWorkspace ) {
@@ -1663,6 +1895,9 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     }
 }
 
+/// @brief 设置当前活跃 Session，并在同主音轨会话间保留播放倍率。
+/// @param index 目标 Session 索引。
+/// @warning 低频视图切换路径：可能访问文件系统并重新加载主音轨。
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1671,9 +1906,12 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
         // 1. 如果旧会话正在播放，先暂停它
         /// @brief 切换前的活跃 Session 索引快照。
-        int32_t     currentActive        = m_sessionRegistry.activeIndex();
-        double      syncedCurrentTime    = 0.0;
-        bool        shouldSyncTargetTime = false;
+        int32_t currentActive     = m_sessionRegistry.activeIndex();
+        double  syncedCurrentTime = 0.0;
+        double  syncedPlaybackSpeed =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+        bool        shouldSyncTargetTime          = false;
+        bool        shouldSyncTargetPlaybackSpeed = false;
         std::string oldMainAudioKey;
         if ( currentActive >= 0 &&
              currentActive < static_cast<int32_t>(sessions.size()) ) {
@@ -1706,6 +1944,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             shouldSyncTargetTime =
                 sessions[index].mainAudioSyncKey == oldMainAudioKey;
         }
+        if ( !oldMainAudioKey.empty() && sessions[index].session ) {
+            shouldSyncTargetPlaybackSpeed =
+                sessions[index].mainAudioSyncKey == oldMainAudioKey;
+        }
 
         m_sessionRegistry.setActiveIndex(index);
         XINFO("Switched active session to #{} cameraId={}",
@@ -1720,22 +1962,15 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
             auto& ctx                   = activeSession->getContextMutable();
             ctx.isMainAudioSyncFollower = false;
+            ctx.loadedMainAudioPath.clear();
+            ctx.mainAudioTotalTime = 0.0;
             if ( shouldSyncTargetTime ) {
                 ctx.currentTime = syncedCurrentTime;
             }
             if ( ctx.currentBeatmap && !sessions[index].isLogoPlaceholder ) {
                 auto*                 project = getCurrentProject();
-                std::filesystem::path audioPath;
-                if ( project ) {
-                    audioPath =
-                        project->m_projectRoot /
-                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-                } else {
-                    audioPath =
-                        ctx.currentBeatmap->m_baseMapMetadata.map_path
-                            .parent_path() /
-                        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
-                }
+                std::filesystem::path audioPath =
+                    SessionUtils::resolveMainAudioPath(ctx, project);
 
                 if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
                           .empty() &&
@@ -1756,8 +1991,17 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                             }
                         }
                     }
-                    Audio::AudioManager::instance().loadBGM(
-                        Config::pathToUtf8(audioPath), config);
+                    if ( shouldSyncTargetPlaybackSpeed ) {
+                        config.playbackSpeed =
+                            static_cast<float>(syncedPlaybackSpeed);
+                    }
+                    const std::string audioPathUtf8 =
+                        Config::pathToUtf8(audioPath);
+                    auto& audio = Audio::AudioManager::instance();
+                    if ( audio.loadBGM(audioPathUtf8, config) ) {
+                        ctx.loadedMainAudioPath = audioPathUtf8;
+                        ctx.mainAudioTotalTime  = audio.getTotalTime();
+                    }
                 }
             }
 
@@ -1958,37 +2202,38 @@ void EditorEngine::loop()
             m_lastUpsTime      = currentTime;
         }
 
-        /// @brief 释放上一轮锁外 update 持有的 Session 引用，并保留 vector
-        /// 容量供本轮复用。
-        m_sessionUpdateSnapshot.clear();
-
-        // 关键修复：使用 shared_ptr 在锁内获取引用。
-        // 这样即使 UI 线程在此时 closeSession 销毁了某个 Session，
-        // 逻辑线程持有的共享引用也能保证 session 在 update
-        // 期间一直有效。
         // 如果有待处理的项目路径，在锁外处理（避免 EventBus 锁内与 subscribe
         // 交叉）
         /// @brief 项目控制器消费出的本轮项目打开或关闭动作。
-        auto projectAction = projectController.consumePendingProjectAction(
-            needsCanvasCloseBeforeProjectOpen());
+        ProjectController::PendingProjectAction projectAction;
+        if ( projectController.hasPendingProjectAction() ) {
+            projectAction = projectController.consumePendingProjectAction(
+                needsCanvasCloseBeforeProjectOpen());
+        }
         if ( projectAction.m_closeProject ) {
             closeProject();
         }
         if ( !projectAction.m_projectPathToOpen.empty() ) {
-            openProject(projectAction.m_projectPathToOpen,
-                        projectAction.m_projectCreationOptions);
+            if ( projectAction.m_projectOpenMode ==
+                 ProjectController::ProjectOpenMode::TemporaryPackage ) {
+                openTemporaryProjectPackage(projectAction.m_projectPathToOpen);
+            } else {
+                openProject(projectAction.m_projectPathToOpen,
+                            projectAction.m_projectCreationOptions);
+            }
         }
 
         // 多 Session 轮询更新
-        /// @brief 当前所有有效 Session 指针快照，避免更新时持有注册表锁。
-        /// @warning 逻辑热路径/共享指针：这里的 shared_ptr
-        /// 拷贝用于保证会话在锁外 update 期间不被 UI 线程关闭释放。
-        m_sessionRegistry.fillIndexedSessionSnapshot(m_sessionUpdateSnapshot);
+        /// @brief 当前已发布的 Session 快照，避免每 update 获取注册表锁。
+        /// @warning 逻辑热路径/原子：只读取发布快照指针；快照自身保留
+        /// shared_ptr 所有权，不在本轮循环复制引用计数。
+        const auto& sessionUpdateSnapshot =
+            m_sessionRegistry.publishedSnapshot().sessions;
 
-        if ( !m_sessionUpdateSnapshot.empty() ) {
+        if ( !sessionUpdateSnapshot.empty() ) {
             int32_t activeIndex     = m_sessionRegistry.activeIndex();
             int32_t maxSessionIndex = -1;
-            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 maxSessionIndex = std::max(maxSessionIndex, entry.index);
             }
             if ( maxSessionIndex >= 0 &&
@@ -2002,7 +2247,7 @@ void EditorEngine::loop()
                 backgroundSessionUpdateInterval(refreshRate);
             /// @brief 本轮由指令驱动发生时间变化的 Session，用于同主音轨同步。
             int32_t commandSyncSourceIndex = -1;
-            for ( auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 const bool isActiveSession = entry.index == activeIndex;
                 const bool isVisibleSession =
                     isActiveSession || entry.isCanvasVisible;
@@ -2060,7 +2305,7 @@ void EditorEngine::loop()
             }
 
             bool shouldSyncMainAudioCanvases = false;
-            for ( const auto& entry : m_sessionUpdateSnapshot ) {
+            for ( const auto& entry : sessionUpdateSnapshot ) {
                 if ( entry.index != activeIndex || !entry.session ) {
                     continue;
                 }
@@ -2082,7 +2327,7 @@ void EditorEngine::loop()
             }
             m_cursorSmokeLifeOverride.store(
                 resolveActiveCursorSmokeLifeOverride(
-                    m_sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
+                    sessionUpdateSnapshot, m_sessionRegistry.activeIndex()),
                 std::memory_order_relaxed);
         } else {
             m_cursorSmokeLifeOverride.store(-1.0f, std::memory_order_relaxed);
@@ -2203,6 +2448,30 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     }
 
     saveProject();
+}
+
+/// @brief 将当前临时项目保存到正式项目目录。
+/// @param cmd 保存临时项目指令。
+void EditorEngine::handleSaveTemporaryProject(
+    const CmdSaveTemporaryProject& cmd)
+{
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        captureProjectWorkspaceState();
+    }
+    auto result = ProjectController::instance().saveTemporaryProjectTo(
+        Config::utf8ToPath(cmd.destinationPath));
+
+    Event::TemporaryProjectSaveResultEvent event;
+    event.m_success          = result.m_success;
+    event.m_savedProjectPath = Config::pathToUtf8(result.m_savedProjectPath);
+    event.m_errorMessage     = result.m_errorMessage;
+
+    if ( result.m_success ) {
+        openProject(result.m_savedProjectPath, std::nullopt);
+    }
+
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 更新项目内谱面文件路径关联并在项目发生变化时保存。

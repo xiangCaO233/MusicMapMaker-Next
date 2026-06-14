@@ -6,11 +6,18 @@
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <exception>
+#include <fmt/format.h>
 #include <fstream>
 #include <iomanip>
+#include <miniz.h>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <system_error>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -37,6 +44,398 @@ void applyProjectCreationOptions(
         options.m_sidebarActiveTab.empty() ? std::string{ "FileExplorer" }
                                            : options.m_sidebarActiveTab;
 }
+
+/// @brief 将 ASCII 扩展名转换为小写。
+/// @param value 输入扩展名。
+/// @return 小写后的扩展名。
+std::string toLowerAscii(std::string value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    return value;
+}
+
+/// @brief 判断文件扩展名是否是可按 zip 读取的谱面包。
+/// @param path 待检查路径。
+/// @return 扩展名受支持时返回 true。
+bool isTemporaryPackagePath(const std::filesystem::path& path)
+{
+    const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
+    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
+           extension == ".osz" || extension == ".mpk";
+}
+
+/// @brief 将文件名片段净化为临时目录名可用的 ASCII 字符串。
+/// @param name 原始 UTF-8 名称。
+/// @return 净化后的目录名片段。
+std::string sanitizeTemporaryFolderName(std::string name)
+{
+    for ( char& ch : name ) {
+        const unsigned char byte = static_cast<unsigned char>(ch);
+        const bool ok = (byte >= 'a' && byte <= 'z') ||
+                        (byte >= 'A' && byte <= 'Z') ||
+                        (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
+        if ( !ok ) ch = '_';
+    }
+    while ( !name.empty() && name.front() == '_' ) {
+        name.erase(name.begin());
+    }
+    while ( !name.empty() && name.back() == '_' ) {
+        name.pop_back();
+    }
+    if ( name.empty() ) return "package";
+    return name;
+}
+
+/// @brief 读取文件全部字节。
+/// @param path 文件路径。
+/// @param outBytes 输出字节。
+/// @return 读取成功返回 true。
+bool readFileBytes(const std::filesystem::path& path,
+                   std::vector<std::uint8_t>&   outBytes)
+{
+    outBytes.clear();
+
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if ( !file ) return false;
+
+    const std::ifstream::pos_type endPos = file.tellg();
+    if ( endPos <= 0 ) return false;
+
+    outBytes.resize(static_cast<std::size_t>(endPos));
+    file.seekg(0, std::ios::beg);
+    if ( !file.read(reinterpret_cast<char*>(outBytes.data()),
+                    static_cast<std::streamsize>(outBytes.size())) ) {
+        outBytes.clear();
+        return false;
+    }
+    return true;
+}
+
+/// @brief 写入文件字节并创建父目录。
+/// @param path 输出文件路径。
+/// @param data 文件字节指针。
+/// @param size 文件字节数。
+/// @return 写入成功返回 true。
+bool writeBytesToFile(const std::filesystem::path& path, const void* data,
+                      std::size_t size)
+{
+    std::error_code filesystemError;
+    const auto      parentPath = path.parent_path();
+    if ( !parentPath.empty() ) {
+        std::filesystem::create_directories(parentPath, filesystemError);
+        if ( filesystemError ) return false;
+    }
+
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    if ( !file ) return false;
+    if ( size > 0 ) {
+        file.write(reinterpret_cast<const char*>(data),
+                   static_cast<std::streamsize>(size));
+    }
+    return static_cast<bool>(file);
+}
+
+/// @brief 将 zip 包内路径归一化为通用分隔符。
+/// @param archiveName 原始包内路径。
+/// @return 归一化后的包内路径。
+std::string normalizeArchiveName(std::string archiveName)
+{
+    std::replace(archiveName.begin(), archiveName.end(), '\\', '/');
+    while ( !archiveName.empty() && archiveName.back() == '/' ) {
+        archiveName.pop_back();
+    }
+    return archiveName;
+}
+
+/// @brief 判断 zip 包内路径是否安全。
+/// @param archiveName 归一化后的包内路径。
+/// @return 不会越出目标目录时返回 true。
+bool isSafeArchiveName(const std::string& archiveName)
+{
+    if ( archiveName.empty() || archiveName.front() == '/' ||
+         archiveName.find(':') != std::string::npos ) {
+        return false;
+    }
+
+    const auto path = Config::utf8ToPath(archiveName);
+    if ( path.empty() || path.is_absolute() ) return false;
+    for ( const auto& part : path.lexically_normal() ) {
+        if ( part == ".." ) return false;
+    }
+    return true;
+}
+
+/// @brief 将 zip 兼容谱面包安全解压到目标目录。
+/// @param packagePath 谱面包路径。
+/// @param destinationRoot 解压目标目录。
+/// @param errorMessage 失败时写入错误信息。
+/// @return 解压成功返回 true。
+bool extractZipPackageToDirectory(const std::filesystem::path& packagePath,
+                                  const std::filesystem::path& destinationRoot,
+                                  std::string&                 errorMessage)
+{
+    errorMessage.clear();
+
+    std::vector<std::uint8_t> packageBytes;
+    if ( !readFileBytes(packagePath, packageBytes) ) {
+        errorMessage = "无法读取谱面包文件";
+        return false;
+    }
+
+    mz_zip_archive zipArchive{};
+    if ( !mz_zip_reader_init_mem(
+             &zipArchive, packageBytes.data(), packageBytes.size(), 0) ) {
+        errorMessage = "谱面包不是可读取的 zip 兼容格式";
+        return false;
+    }
+
+    bool          success   = true;
+    const mz_uint fileCount = mz_zip_reader_get_num_files(&zipArchive);
+    for ( mz_uint index = 0; index < fileCount; ++index ) {
+        mz_zip_archive_file_stat fileStat{};
+        if ( !mz_zip_reader_file_stat(&zipArchive, index, &fileStat) ) {
+            errorMessage = "读取谱面包条目失败";
+            success      = false;
+            break;
+        }
+
+        const std::string archiveName =
+            normalizeArchiveName(std::string(fileStat.m_filename));
+        if ( archiveName.empty() ) continue;
+        if ( !isSafeArchiveName(archiveName) ) {
+            errorMessage = "谱面包包含不安全路径：" + archiveName;
+            success      = false;
+            break;
+        }
+
+        const auto destinationPath =
+            (destinationRoot / Config::utf8ToPath(archiveName))
+                .lexically_normal();
+
+        if ( mz_zip_reader_is_file_a_directory(&zipArchive, index) ) {
+            std::error_code filesystemError;
+            std::filesystem::create_directories(destinationPath,
+                                                filesystemError);
+            if ( filesystemError ) {
+                errorMessage = filesystemError.message();
+                success      = false;
+                break;
+            }
+            continue;
+        }
+
+        std::size_t extractedSize = 0;
+        void*       extractedData = mz_zip_reader_extract_to_heap(
+            &zipArchive, index, &extractedSize, 0);
+        if ( !extractedData ) {
+            errorMessage = "解压谱面包条目失败：" + archiveName;
+            success      = false;
+            break;
+        }
+
+        success =
+            writeBytesToFile(destinationPath, extractedData, extractedSize);
+        mz_free(extractedData);
+        if ( !success ) {
+            errorMessage = "写入临时项目文件失败：" + archiveName;
+            break;
+        }
+    }
+
+    mz_zip_reader_end(&zipArchive);
+    return success;
+}
+
+/// @brief 创建唯一的临时项目目录。
+/// @param packagePath 原始谱面包路径。
+/// @param errorMessage 失败时写入错误信息。
+/// @return 成功时返回临时项目目录。
+std::optional<std::filesystem::path> createTemporaryProjectRoot(
+    const std::filesystem::path& packagePath, std::string& errorMessage)
+{
+    std::error_code filesystemError;
+    const auto      tempRoot =
+        std::filesystem::temp_directory_path(filesystemError) /
+        "MusicMapMaker-Next" / "temporary_projects";
+    if ( filesystemError ) {
+        errorMessage = filesystemError.message();
+        return std::nullopt;
+    }
+
+    std::filesystem::create_directories(tempRoot, filesystemError);
+    if ( filesystemError ) {
+        errorMessage = filesystemError.message();
+        return std::nullopt;
+    }
+
+    const auto tick = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+    const std::string baseName =
+        sanitizeTemporaryFolderName(Config::pathToUtf8(packagePath.stem()));
+
+    for ( int attempt = 0; attempt < 64; ++attempt ) {
+        const auto candidate =
+            tempRoot / fmt::format("{}_{}_{}", baseName, tick, attempt);
+        if ( std::filesystem::exists(candidate, filesystemError) &&
+             !filesystemError ) {
+            continue;
+        }
+        filesystemError.clear();
+        std::filesystem::create_directories(candidate, filesystemError);
+        if ( !filesystemError ) return candidate;
+    }
+
+    errorMessage = "无法创建唯一的临时项目目录";
+    return std::nullopt;
+}
+
+/// @brief 判断目录是否为空。
+/// @param path 待检查目录。
+/// @return 空目录返回 true。
+bool isDirectoryEmpty(const std::filesystem::path& path)
+{
+    std::error_code                     filesystemError;
+    std::filesystem::directory_iterator iterator(path, filesystemError);
+    if ( filesystemError ) return false;
+    const std::filesystem::directory_iterator endIterator;
+    return iterator == endIterator;
+}
+
+/// @brief 为保存临时项目选择不会覆盖用户文件的最终目录。
+/// @param selectedPath 用户选择的路径。
+/// @param project 当前临时项目。
+/// @return 实际用于保存的项目目录。
+std::filesystem::path resolveTemporaryProjectSaveRoot(
+    const std::filesystem::path& selectedPath, const Project& project)
+{
+    std::error_code filesystemError;
+    if ( selectedPath.empty() ) return {};
+    if ( !std::filesystem::exists(selectedPath, filesystemError) ||
+         filesystemError ) {
+        return selectedPath;
+    }
+    filesystemError.clear();
+    if ( !std::filesystem::is_directory(selectedPath, filesystemError) ||
+         filesystemError ) {
+        return {};
+    }
+    if ( isDirectoryEmpty(selectedPath) ) return selectedPath;
+
+    std::string baseName =
+        Config::pathToUtf8(project.m_temporarySourcePackagePath.stem());
+    if ( baseName.empty() ) {
+        baseName = project.m_metadata.m_title;
+    }
+    baseName = sanitizeTemporaryFolderName(baseName);
+
+    for ( int attempt = 0; attempt < 128; ++attempt ) {
+        const auto candidate =
+            selectedPath /
+            (attempt == 0 ? baseName : fmt::format("{}_{}", baseName, attempt));
+        if ( !std::filesystem::exists(candidate, filesystemError) &&
+             !filesystemError ) {
+            return candidate;
+        }
+        filesystemError.clear();
+    }
+    return {};
+}
+
+/// @brief 递归复制目录内容。
+/// @param sourceRoot 源目录。
+/// @param destinationRoot 目标目录。
+/// @param errorMessage 失败时写入错误信息。
+/// @return 复制成功返回 true。
+bool copyDirectoryContents(const std::filesystem::path& sourceRoot,
+                           const std::filesystem::path& destinationRoot,
+                           std::string&                 errorMessage)
+{
+    std::error_code filesystemError;
+    std::filesystem::create_directories(destinationRoot, filesystemError);
+    if ( filesystemError ) {
+        errorMessage = filesystemError.message();
+        return false;
+    }
+
+    constexpr auto directoryOptions =
+        std::filesystem::directory_options::skip_permission_denied;
+    std::filesystem::recursive_directory_iterator iterator(
+        sourceRoot, directoryOptions, filesystemError);
+    const std::filesystem::recursive_directory_iterator endIterator;
+    if ( filesystemError ) {
+        errorMessage = filesystemError.message();
+        return false;
+    }
+
+    while ( iterator != endIterator ) {
+        const auto entryPath = iterator->path();
+        auto       relativePath =
+            std::filesystem::relative(entryPath, sourceRoot, filesystemError);
+        if ( filesystemError ) {
+            errorMessage = filesystemError.message();
+            return false;
+        }
+
+        const auto destinationPath =
+            (destinationRoot / relativePath).lexically_normal();
+        filesystemError.clear();
+        if ( iterator->is_directory(filesystemError) && !filesystemError ) {
+            std::filesystem::create_directories(destinationPath,
+                                                filesystemError);
+        } else if ( iterator->is_regular_file(filesystemError) &&
+                    !filesystemError ) {
+            std::filesystem::create_directories(destinationPath.parent_path(),
+                                                filesystemError);
+            if ( !filesystemError ) {
+                std::filesystem::copy_file(
+                    entryPath,
+                    destinationPath,
+                    std::filesystem::copy_options::overwrite_existing,
+                    filesystemError);
+            }
+        }
+        if ( filesystemError ) {
+            errorMessage = filesystemError.message();
+            return false;
+        }
+
+        iterator.increment(filesystemError);
+        if ( filesystemError ) {
+            errorMessage = filesystemError.message();
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 将项目描述文件写入指定目录。
+/// @param project 项目数据。
+/// @param projectRoot 输出项目目录。
+/// @param errorMessage 失败时写入错误信息。
+/// @return 写入成功返回 true。
+bool writeProjectFileTo(const Project&               project,
+                        const std::filesystem::path& projectRoot,
+                        std::string&                 errorMessage)
+{
+    const auto    projectFile = projectRoot / "mmm_project.json";
+    std::ofstream file(projectFile, std::ios::trunc);
+    if ( !file ) {
+        errorMessage = "无法写入项目描述文件";
+        return false;
+    }
+
+    nlohmann::json jsonData = project;
+    file << std::setw(4) << jsonData << std::endl;
+    if ( !file ) {
+        errorMessage = "写入项目描述文件失败";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 获取项目控制器全局实例。
@@ -56,6 +455,11 @@ ProjectController::ProjectController()
         [this](const Event::OpenProjectEvent& event) {
             requestOpenProject(event.m_projectPath);
         });
+    m_openTemporaryProjectSubscription =
+        eventBus.subscribe<Event::OpenTemporaryProjectPackageEvent>(
+            [this](const Event::OpenTemporaryProjectPackageEvent& event) {
+                requestOpenTemporaryProjectPackage(event.m_packagePath);
+            });
     m_closeProjectSubscription =
         eventBus.subscribe<Event::ProjectCloseRequestedEvent>(
             [this](const Event::ProjectCloseRequestedEvent&) {
@@ -93,6 +497,10 @@ ProjectController::~ProjectController()
     if ( m_openProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::OpenProjectEvent>(
             m_openProjectSubscription);
+    }
+    if ( m_openTemporaryProjectSubscription != 0 ) {
+        eventBus.unsubscribe<Event::OpenTemporaryProjectPackageEvent>(
+            m_openTemporaryProjectSubscription);
     }
     if ( m_closeProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectCloseRequestedEvent>(
@@ -152,6 +560,38 @@ void ProjectController::requestOpenProject(
     /// @brief 保护本次打开请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_pendingProjectCreationOptions.reset();
+    m_requestedProjectCreationOptions.reset();
+    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+    m_requestedProjectClose    = false;
+    m_pendingProjectClose      = false;
+    m_projectCloseReady        = false;
+    if ( !m_pendingProjectSwitchPath.empty() ) {
+        m_requestedProjectPath.clear();
+        m_pendingProjectSwitchPath     = projectPath;
+        m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+        m_pendingProjectSwitchCreationOptions.reset();
+    } else {
+        m_requestedProjectPath     = projectPath;
+        m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+    }
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
+}
+
+/// @brief 请求打开谱面包为临时只读项目。
+/// @param packagePath 要解压阅览的谱面包路径。
+void ProjectController::requestOpenTemporaryProjectPackage(
+    const std::filesystem::path& packagePath)
+{
+    if ( packagePath.empty() ) {
+        return;
+    }
+
+    /// @brief 保护本次临时谱面包打开请求状态写入的锁。
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    m_pendingProjectPath.clear();
+    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectCreationOptions.reset();
     m_requestedProjectCreationOptions.reset();
     m_requestedProjectClose = false;
@@ -159,11 +599,14 @@ void ProjectController::requestOpenProject(
     m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
-        m_pendingProjectSwitchPath = projectPath;
+        m_pendingProjectSwitchPath     = packagePath;
+        m_pendingProjectSwitchOpenMode = ProjectOpenMode::TemporaryPackage;
         m_pendingProjectSwitchCreationOptions.reset();
     } else {
-        m_requestedProjectPath = projectPath;
+        m_requestedProjectPath     = packagePath;
+        m_requestedProjectOpenMode = ProjectOpenMode::TemporaryPackage;
     }
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
@@ -180,19 +623,24 @@ void ProjectController::requestCreateProject(
     /// @brief 保护本次新建项目请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectCreationOptions.reset();
     m_requestedProjectClose = false;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
         m_requestedProjectPath.clear();
+        m_requestedProjectOpenMode = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions.reset();
         m_pendingProjectSwitchPath            = projectPath;
+        m_pendingProjectSwitchOpenMode        = ProjectOpenMode::Normal;
         m_pendingProjectSwitchCreationOptions = options;
     } else {
         m_requestedProjectPath            = projectPath;
+        m_requestedProjectOpenMode        = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions = options;
     }
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 请求关闭当前项目，必要时等待 UI 完成旧画布关闭。
@@ -201,14 +649,18 @@ void ProjectController::requestCloseProject()
     /// @brief 保护本次关闭请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectCreationOptions.reset();
     m_requestedProjectPath.clear();
+    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
     m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectSwitchCreationOptions.reset();
     m_requestedProjectClose = true;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 是否存在等待旧谱面画布关闭后的项目打开或关闭流程。
@@ -228,15 +680,19 @@ void ProjectController::completePendingProjectSwitch()
     if ( m_pendingProjectClose ) {
         m_pendingProjectClose = false;
         m_projectCloseReady   = true;
+        m_hasPendingProjectAction.store(true, std::memory_order_release);
         return;
     }
 
     if ( m_pendingProjectSwitchPath.empty() ) return;
 
     m_pendingProjectPath            = m_pendingProjectSwitchPath;
+    m_pendingProjectOpenMode        = m_pendingProjectSwitchOpenMode;
     m_pendingProjectCreationOptions = m_pendingProjectSwitchCreationOptions;
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectSwitchCreationOptions.reset();
+    m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
 /// @brief 取消所有挂起项目切换流程。
@@ -245,14 +701,18 @@ void ProjectController::cancelPendingProjectSwitch()
     /// @brief 保护挂起项目切换状态清理的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     m_pendingProjectPath.clear();
+    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectCreationOptions.reset();
     m_requestedProjectPath.clear();
+    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
     m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
+    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
     m_pendingProjectSwitchCreationOptions.reset();
     m_requestedProjectClose = false;
     m_pendingProjectClose   = false;
     m_projectCloseReady     = false;
+    m_hasPendingProjectAction.store(false, std::memory_order_release);
 }
 
 /// @brief 消费逻辑线程本轮需要处理的项目切换动作。
@@ -261,10 +721,17 @@ void ProjectController::cancelPendingProjectSwitch()
 ProjectController::PendingProjectAction
 ProjectController::consumePendingProjectAction(bool needsCanvasClose)
 {
+    if ( !m_hasPendingProjectAction.exchange(false,
+                                             std::memory_order_acq_rel) ) {
+        return {};
+    }
+
     /// @brief 本轮要返回给逻辑线程的项目动作。
     PendingProjectAction action;
     /// @brief 本轮消费到的项目打开请求。
     std::filesystem::path requestedPath;
+    /// @brief 本轮消费到的项目打开模式。
+    ProjectOpenMode requestedOpenMode = ProjectOpenMode::Normal;
     /// @brief 本轮消费到的项目创建初始设置。
     std::optional<ProjectCreationOptions> requestedCreationOptions;
     /// @brief 本轮是否消费到项目关闭请求。
@@ -285,8 +752,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         }
         if ( !m_requestedProjectPath.empty() ) {
             requestedPath            = m_requestedProjectPath;
+            requestedOpenMode        = m_requestedProjectOpenMode;
             requestedCreationOptions = m_requestedProjectCreationOptions;
             m_requestedProjectPath.clear();
+            m_requestedProjectOpenMode = ProjectOpenMode::Normal;
             m_requestedProjectCreationOptions.reset();
         }
     }
@@ -296,8 +765,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             /// @brief 保护关闭请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_pendingProjectPath.clear();
+            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
             m_pendingProjectCreationOptions.reset();
             m_pendingProjectSwitchPath.clear();
+            m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
             m_pendingProjectSwitchCreationOptions.reset();
             m_pendingProjectClose    = true;
             shouldPublishCanvasClose = true;
@@ -314,9 +785,11 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             /// @brief 保护打开请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
             m_pendingProjectPath.clear();
+            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
             m_pendingProjectCreationOptions.reset();
             m_pendingProjectClose                 = false;
             m_pendingProjectSwitchPath            = requestedPath;
+            m_pendingProjectSwitchOpenMode        = requestedOpenMode;
             m_pendingProjectSwitchCreationOptions = requestedCreationOptions;
             shouldPublishCanvasClose              = true;
             canvasCloseProjectPath                = requestedPath;
@@ -328,6 +801,7 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         } else {
             action.m_projectPathToOpen      = requestedPath;
             action.m_projectCreationOptions = requestedCreationOptions;
+            action.m_projectOpenMode        = requestedOpenMode;
         }
     }
 
@@ -346,8 +820,10 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         if ( action.m_projectPathToOpen.empty() &&
              !m_pendingProjectPath.empty() ) {
             action.m_projectPathToOpen      = m_pendingProjectPath;
+            action.m_projectOpenMode        = m_pendingProjectOpenMode;
             action.m_projectCreationOptions = m_pendingProjectCreationOptions;
             m_pendingProjectPath.clear();
+            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
             m_pendingProjectCreationOptions.reset();
         }
     }
@@ -355,12 +831,19 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     return action;
 }
 
+/// @brief 判断是否存在待逻辑线程消费的项目切换动作。
+bool ProjectController::hasPendingProjectAction() const
+{
+    return m_hasPendingProjectAction.load(std::memory_order_acquire);
+}
+
 /// @brief 打开项目并启动项目目录监听。
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 /// @return 打开项目后的结果信息。
 ProjectController::OpenProjectResult ProjectController::openProject(
     const std::filesystem::path&                 projectPath,
-    const std::optional<ProjectCreationOptions>& creationOptions)
+    const std::optional<ProjectCreationOptions>& creationOptions,
+    const std::optional<TemporaryProjectInfo>&   temporaryInfo)
 {
     /// @brief 本次打开项目的返回结果。
     OpenProjectResult result;
@@ -406,6 +889,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     /// @brief 新创建并等待接管为当前项目的项目实例。
     auto newProject           = std::make_unique<Project>();
     newProject->m_projectRoot = actualProjectPath;
+    if ( temporaryInfo && temporaryInfo->m_isTemporary ) {
+        newProject->m_isTemporaryProject = true;
+        newProject->m_temporarySourcePackagePath =
+            temporaryInfo->m_sourcePackagePath;
+    }
     newProject->m_metadata.m_title =
         Config::pathToUtf8(actualProjectPath.filename());
 
@@ -468,8 +956,29 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             *creationOptions,
             Config::pathToUtf8(actualProjectPath.filename()));
     }
+    if ( temporaryInfo && temporaryInfo->m_isTemporary ) {
+        const auto packageTitle =
+            Config::pathToUtf8(temporaryInfo->m_sourcePackagePath.stem());
+        if ( !packageTitle.empty() ) {
+            newProject->m_metadata.m_title = packageTitle;
+        }
+    }
 
     m_projectResourceService.applyExcludedResources(*newProject);
+
+    if ( temporaryInfo && temporaryInfo->m_isTemporary &&
+         newProject->m_beatmaps.empty() ) {
+        XERROR("Temporary project package contains no supported beatmaps: {}",
+               Config::pathToUtf8(temporaryInfo->m_sourcePackagePath));
+        return result;
+    }
+
+    if ( temporaryInfo && temporaryInfo->m_isTemporary &&
+         targetBeatmapPath.empty() && !newProject->m_beatmaps.empty() ) {
+        targetBeatmapPath =
+            actualProjectPath /
+            Config::utf8ToPath(newProject->m_beatmaps.front().m_filePath);
+    }
 
     try {
         /// @brief 项目描述文件输出流。
@@ -501,8 +1010,10 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 
     m_currentProject = std::move(newProject);
     m_projectDirectoryWatcher.start(actualProjectPath);
-    Config::AppConfig::instance().addRecentProject(
-        Config::pathToUtf8(actualProjectPath));
+    if ( !temporaryInfo || !temporaryInfo->m_isTemporary ) {
+        Config::AppConfig::instance().addRecentProject(
+            Config::pathToUtf8(actualProjectPath));
+    }
 
     result.m_opened            = true;
     result.m_actualProjectPath = actualProjectPath;
@@ -517,6 +1028,137 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     loadedEvent.m_beatmapCount = result.m_beatmapCount;
     Event::EventBus::instance().publish(loadedEvent);
 
+    return result;
+}
+
+/// @brief 解压谱面包并作为临时只读项目打开。
+/// @param packagePath 要打开的谱面包路径。
+/// @return 打开项目后的结果信息。
+ProjectController::OpenProjectResult
+ProjectController::openTemporaryProjectPackage(
+    const std::filesystem::path& packagePath)
+{
+    OpenProjectResult result;
+    auto              prepared = prepareTemporaryProjectPackage(packagePath);
+    if ( !prepared.m_success ) {
+        XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        return result;
+    }
+
+    result = openProject(prepared.m_temporaryInfo.m_cacheProjectPath,
+                         std::nullopt,
+                         prepared.m_temporaryInfo);
+    if ( !result.m_opened ) {
+        std::error_code filesystemError;
+        std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
+                                    filesystemError);
+    }
+    return result;
+}
+
+/// @brief 仅解压谱面包并准备临时项目目录，不切换当前项目。
+/// @param packagePath 要准备的谱面包路径。
+/// @return 临时项目准备结果。
+ProjectController::PreparedTemporaryProjectResult
+ProjectController::prepareTemporaryProjectPackage(
+    const std::filesystem::path& packagePath) const
+{
+    PreparedTemporaryProjectResult result;
+    std::error_code                filesystemError;
+    if ( packagePath.empty() ||
+         !std::filesystem::is_regular_file(packagePath, filesystemError) ||
+         filesystemError ) {
+        result.m_errorMessage = "谱面包文件不存在";
+        return result;
+    }
+    if ( !isTemporaryPackagePath(packagePath) ) {
+        result.m_errorMessage = "不支持的谱面包扩展名";
+        return result;
+    }
+
+    std::string errorMessage;
+    auto        tempProjectRoot =
+        createTemporaryProjectRoot(packagePath, errorMessage);
+    if ( !tempProjectRoot ) {
+        result.m_errorMessage = errorMessage;
+        return result;
+    }
+
+    if ( !extractZipPackageToDirectory(
+             packagePath, *tempProjectRoot, errorMessage) ) {
+        std::filesystem::remove_all(*tempProjectRoot, filesystemError);
+        result.m_errorMessage = errorMessage;
+        return result;
+    }
+
+    result.m_success                           = true;
+    result.m_temporaryInfo.m_isTemporary       = true;
+    result.m_temporaryInfo.m_sourcePackagePath = packagePath;
+    result.m_temporaryInfo.m_cacheProjectPath  = *tempProjectRoot;
+    return result;
+}
+
+/// @brief 当前是否打开了临时项目。
+/// @return 当前项目是临时项目时返回 true。
+bool ProjectController::isCurrentProjectTemporary() const
+{
+    return m_currentProject && m_currentProject->m_isTemporaryProject;
+}
+
+/// @brief 获取当前临时项目信息。
+/// @return 当前临时项目源文件与缓存路径；非临时项目时返回默认值。
+ProjectController::TemporaryProjectInfo
+ProjectController::currentTemporaryProjectInfo() const
+{
+    TemporaryProjectInfo info;
+    if ( !m_currentProject || !m_currentProject->m_isTemporaryProject ) {
+        return info;
+    }
+
+    info.m_isTemporary       = true;
+    info.m_sourcePackagePath = m_currentProject->m_temporarySourcePackagePath;
+    info.m_cacheProjectPath  = m_currentProject->m_projectRoot;
+    return info;
+}
+
+/// @brief 将当前临时项目复制保存到正式目录。
+/// @param destinationPath 用户选择的保存目录。
+/// @return 保存结果。
+ProjectController::SaveTemporaryProjectResult
+ProjectController::saveTemporaryProjectTo(
+    const std::filesystem::path& destinationPath) const
+{
+    SaveTemporaryProjectResult result;
+    if ( !m_currentProject || !m_currentProject->m_isTemporaryProject ) {
+        result.m_errorMessage = "当前没有临时项目";
+        return result;
+    }
+
+    const auto saveRoot =
+        resolveTemporaryProjectSaveRoot(destinationPath, *m_currentProject);
+    if ( saveRoot.empty() ) {
+        result.m_errorMessage = "保存目录不可用";
+        return result;
+    }
+
+    std::string errorMessage;
+    if ( !copyDirectoryContents(
+             m_currentProject->m_projectRoot, saveRoot, errorMessage) ) {
+        result.m_errorMessage = errorMessage;
+        return result;
+    }
+
+    Project savedProject              = *m_currentProject;
+    savedProject.m_isTemporaryProject = false;
+    savedProject.m_temporarySourcePackagePath.clear();
+    savedProject.m_projectRoot = saveRoot;
+    if ( !writeProjectFileTo(savedProject, saveRoot, errorMessage) ) {
+        result.m_errorMessage = errorMessage;
+        return result;
+    }
+
+    result.m_success          = true;
+    result.m_savedProjectPath = saveRoot;
     return result;
 }
 

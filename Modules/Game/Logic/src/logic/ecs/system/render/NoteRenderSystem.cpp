@@ -1,7 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
-#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -20,6 +19,17 @@ namespace MMM::Logic::System
 
 namespace
 {
+
+/// @brief UI playback interpolation window in steady-clock seconds.
+/// @warning Snapshot hot path constant; keep in sync with
+/// CanvasSnapshotPrepare.
+constexpr double UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS = 0.1;
+
+/// @brief Timeline UI interpolation safety window in steady-clock seconds.
+/// @warning Snapshot hot path constant：Timeline 使用屏幕 Y 补偿，窗口取接近
+/// 辅助视图快照间隔的保守值，避免密集 Timing 过度关闭补间。
+constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
+    1.0 / 120.0;
 
 /// @brief 绘制时间线/预览用的小型判定框。
 /// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
@@ -75,18 +85,58 @@ void NoteRenderSystem::generateSnapshot(
     if ( !cache ) return;
 
     // 将 ScrollCache 指针存入 context 供 renderPolyline 等后续使用
-    registry.ctx().erase<const ScrollCache*>();
-    registry.ctx().emplace<const ScrollCache*>(cache);
+    if ( auto** cacheSlot = registry.ctx().find<const ScrollCache*>() ) {
+        *cacheSlot = cache;
+    } else {
+        registry.ctx().emplace<const ScrollCache*>(cache);
+    }
 
-    // Timeline 右键创建事件需要完整映射；其他画布只在播放亚帧插值时需要。
-    if ( cameraId == "Timeline" || snapshot->isPlaying ) {
+    const double interpolationWindow =
+        cameraId == "Timeline"
+            ? TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS
+            : UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS;
+    const double interpolationDuration =
+        std::abs(snapshot->playbackSpeed) * interpolationWindow;
+    const bool supportsUiPlaybackInterpolation =
+        isMainCanvas || cameraId == "Preview" || cameraId == "Timeline";
+    const bool canUsePlaybackInterpolation =
+        snapshot->isPlaying && !snapshot->isPreviewDragging &&
+        supportsUiPlaybackInterpolation && std::isfinite(renderTime) &&
+        std::isfinite(interpolationDuration) &&
+        cache->canInterpolateLinearly(renderTime, interpolationDuration);
+    if ( canUsePlaybackInterpolation ) {
+        const double interpolationSpeed =
+            cache->getSpeedAt(renderTime) * snapshot->playbackSpeed;
+        double interpolationYOffsetScale = 1.0;
+        if ( cameraId == "Timeline" ) {
+            interpolationYOffsetScale = cache->getHsAt(renderTime);
+            if ( !std::isfinite(interpolationYOffsetScale) ) {
+                interpolationYOffsetScale = 1.0;
+            }
+        }
+        snapshot->allowUiPlaybackInterpolation =
+            std::isfinite(interpolationSpeed) &&
+            std::isfinite(interpolationYOffsetScale);
+        snapshot->uiInterpolationAbsYSpeed =
+            snapshot->allowUiPlaybackInterpolation ? interpolationSpeed : 0.0;
+        snapshot->uiInterpolationYOffsetScale =
+            snapshot->allowUiPlaybackInterpolation ? interpolationYOffsetScale
+                                                   : 1.0;
+    } else {
+        snapshot->allowUiPlaybackInterpolation = false;
+        snapshot->uiInterpolationAbsYSpeed     = 0.0;
+        snapshot->uiInterpolationYOffsetScale  = 1.0;
+    }
+
+    // Timeline 右键创建事件需要完整映射；普通播放快照只携带线性补间速度。
+    if ( cameraId == "Timeline" ) {
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }
 
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-          singleTrackW = 0;
-    float renderScaleY = 1.0f;
+            singleTrackW = 0;
+    float   renderScaleY = 1.0f;
 
     // --- Phase 1: 静态布局与打击特效预生成 ---
     // 我们需要打击特效绘制在音符上方，但它的顶点位置是相对于判定线的（静态的，不随时间偏移）。
@@ -195,20 +245,10 @@ void NoteRenderSystem::generateSnapshot(
                     double      bpmTime    = currentBPM->m_timestamp;
                     double      bpmVal     = currentBPM->m_value;
                     if ( bpmVal <= 0.0 ) {
-                        bpmVal = 120.0;
-                        if ( auto session =
-                                 EditorEngine::instance().getActiveSession() ) {
-                            if ( auto beatmap =
-                                     session->getContext().currentBeatmap ) {
-                                if ( beatmap->m_baseMapMetadata.preference_bpm >
-                                     0.0 ) {
-                                    bpmVal = beatmap->m_baseMapMetadata
-                                                 .preference_bpm;
-                                }
-                            }
-                        }
+                        bpmVal = snapshot->fallbackBpm;
                     }
                     if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+                    if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
                     double nextBpmTime =
                         (i + 1 < bpmEvents.size())
@@ -239,9 +279,11 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     // 记录静态边界 (此时 snapshot->vertices 包含了特效和布局的顶点)
-    snapshot->staticVertexCount =
-        static_cast<uint32_t>(snapshot->vertices.size());
-    snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+    if ( cameraId != "Timeline" ) {
+        snapshot->staticVertexCount =
+            static_cast<uint32_t>(snapshot->vertices.size());
+        snapshot->staticCmdCount = static_cast<uint32_t>(snapshot->cmds.size());
+    }
 
     // --- Phase 2: 动态内容生成 (拍线、音符等) ---
     // 这些内容会受到 UI 线程 yOffset 补偿的影响，从而消除亚帧抖动
@@ -255,8 +297,8 @@ void NoteRenderSystem::generateSnapshot(
 
         if ( cameraId == "Preview" ) {
             // 预览区逻辑：若全局开启，则由预览区具体开关决定；若全局关闭，则强制关闭
-            shouldDrawBeatLines = config.visual.drawBeatLines &&
-                                  config.visual.previewConfig.drawBeatLines;
+            shouldDrawBeatLines   = config.visual.drawBeatLines &&
+                                    config.visual.previewConfig.drawBeatLines;
             shouldDrawTimingLines = config.visual.previewConfig.drawTimingLines;
         }
 
@@ -336,9 +378,11 @@ void NoteRenderSystem::generateSnapshot(
     }
 
     // 记录动态顶点数量
-    snapshot->dynamicVertexCount =
-        static_cast<uint32_t>(snapshot->vertices.size()) -
-        snapshot->staticVertexCount;
+    if ( cameraId != "Timeline" ) {
+        snapshot->dynamicVertexCount =
+            static_cast<uint32_t>(snapshot->vertices.size()) -
+            snapshot->staticVertexCount;
+    }
 
     // --- Phase 3: 置顶层渲染 (静态或动态) ---
     // 将之前生成的打击特效命令插入到最后，使其绘制在物件上方
@@ -490,7 +534,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
     auto& skin    = Config::SkinManager::instance();
     auto  tickCol = skin.getColor("timeline.tick");
 
-    double currentAbsY = cache->getAbsY(currentTime);
+    double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
 
     float paddingX = 30.0f;
     float lineW    = std::max(1.0f, viewportWidth - paddingX * 2.0f);
@@ -536,17 +580,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
             double      bpmTime    = currentBPM->m_timestamp;
             double      bpmVal     = currentBPM->m_value;
             if ( bpmVal <= 0.0 ) {
-                bpmVal = 120.0;
-                if ( auto session =
-                         EditorEngine::instance().getActiveSession() ) {
-                    if ( auto beatmap = session->getContext().currentBeatmap ) {
-                        if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                            bpmVal = beatmap->m_baseMapMetadata.preference_bpm;
-                        }
-                    }
-                }
+                bpmVal = snapshot->fallbackBpm;
             }
             if ( bpmVal > 10000.0 ) bpmVal = 10000.0;
+            if ( bpmVal <= 0.0 ) bpmVal = 120.0;
 
             double nextBpmTime  = (i + 1 < bpmEvents.size())
                                       ? bpmEvents[i + 1]->m_timestamp
@@ -587,7 +624,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     auto [color, width] = getBeatLineConfig(denominator);
-                    float y             = judgmentLineY -
+                    float y = judgmentLineY -
                               static_cast<float>(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
@@ -632,7 +669,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects == 0 ) continue;
 
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float        y           = judgmentLineY -
+        float y = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         TimelineInteractiveElement el;
@@ -687,6 +724,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
         element.markerIndexCount =
             static_cast<uint32_t>(snapshot->indices.size() - markerIndexOffset);
     }
+
+    snapshot->dynamicVertexCount =
+        static_cast<uint32_t>(snapshot->vertices.size()) -
+        snapshot->staticVertexCount;
 
     // 6. 绘制当前时间判定框，作为时间线最上层覆盖物。
     batcher.flush();

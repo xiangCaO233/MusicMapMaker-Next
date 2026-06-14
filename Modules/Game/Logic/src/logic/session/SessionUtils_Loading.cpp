@@ -14,6 +14,12 @@
 namespace MMM::Logic
 {
 
+/// @brief 将谱面载入会话上下文并加载对应主音轨。
+/// @param ctx 目标会话上下文。
+/// @param beatmap 待载入谱面；为空时清空当前谱面状态。
+/// @warning
+/// 低频谱面加载路径：会访问文件系统、加载图片尺寸并重建 ECS，不允许放入每帧
+/// update。
 void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                std::shared_ptr<MMM::BeatMap> beatmap)
 {
@@ -27,9 +33,12 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.actionStack.clear();
     ctx.sortedNoteEntities.clear();
     ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.lastCameraSnapshotTimes.clear();
     ctx.isNoteOrderDirty = true;
     ctx.isNotePruneDirty = false;
     ctx.isNoteStatsDirty = true;
+    ctx.loadedMainAudioPath.clear();
+    ctx.mainAudioTotalTime = 0.0;
     Audio::AudioManager::instance().stop();
 
     // m_isPlaying      = true;
@@ -78,16 +87,11 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     if ( ctx.trackCount <= 0 ) ctx.trackCount = 12;  // 默认值
 
     // 加载音频
-    std::filesystem::path audioPath;
-    if ( project ) {
-        audioPath =
-            project->m_projectRoot / beatmap->m_baseMapMetadata.main_audio_path;
-    } else {
-        audioPath = beatmap->m_baseMapMetadata.map_path.parent_path() /
-                    beatmap->m_baseMapMetadata.main_audio_path;
-    }
+    std::filesystem::path audioPath = resolveMainAudioPath(ctx, project);
+    std::error_code       audioFilesystemError;
     if ( !beatmap->m_baseMapMetadata.main_audio_path.empty() &&
-         std::filesystem::exists(audioPath) ) {
+         std::filesystem::is_regular_file(audioPath, audioFilesystemError) &&
+         !audioFilesystemError ) {
         // 查找对应的 AudioResource 配置
         AudioTrackConfig config;
         if ( project ) {
@@ -103,8 +107,15 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
                 }
             }
         }
-        Audio::AudioManager::instance().loadBGM(Utf8::pathToUtf8(audioPath),
-                                                config);
+        const std::string audioPathUtf8 = Utf8::pathToUtf8(audioPath);
+        auto&             audio         = Audio::AudioManager::instance();
+        if ( audio.getLoadedBGMPath() == audioPathUtf8 ) {
+            config.playbackSpeed = static_cast<float>(audio.getPlaybackSpeed());
+        }
+        if ( audio.loadBGM(audioPathUtf8, config) ) {
+            ctx.loadedMainAudioPath = audioPathUtf8;
+            ctx.mainAudioTotalTime  = audio.getTotalTime();
+        }
     }
 
     // 清空缓存上下文，以确保重新构建

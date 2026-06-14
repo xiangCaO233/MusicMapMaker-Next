@@ -14,7 +14,8 @@
 - **日志库**: `spdlog` 和 `fmt` (已封装为自定义宏)
 
 ## 目录结构限制
-- **`Modules/`**: 包含项目核心模块 (`Audio`, `Config`, `Event`, `Game`, `Log`, `Main`)。主要业务逻辑均位于此处。
+- **`Modules/`**: 包含项目核心模块 (`Audio`, `Config`, `Event`, `Game`, `Log`, `Main`, `MMM`, `Network`)。主要业务逻辑均位于此处。
+- **`tests/`**: 包含跨模块共享测试资源。`tests/data/` 下的资源文件必须通过 Git LFS 追踪，不要把测试运行输出写入该目录。
 - **`3rdpty/`**: 包含第三方依赖。
   - **严重警告**: **绝对不要** 修改或分析 `3rdpty/` 下的任何代码库，**除了** `3rdpty/sources/IonCachyEngine`。
   - 其他所有库（如 stb, glm, lunasvg 等）均为 GitHub 原始克隆，未做任何修改。修改它们会破坏构建过程或产生未跟踪的下游补丁。
@@ -30,9 +31,14 @@
 - **清理**: `cmake --build build --target clean`
 
 ### 2. 测试 (非常重要)
-- **警告**: 该项目目前 **没有** 集成自动化测试框架，也没有测试套件。
-- **不要尝试** 运行标准测试命令，如 `ctest`、`make test`。
-- **验证方式**: 修改代码后，必须确保项目构建成功 (`cmake --build build`)。如需验证逻辑，请编写独立的最小 `.cpp` 测试脚本，或要求用户运行编译后的程序验证。
+- **CTest 已集成**: 配置和构建完成后，使用 `ctest --test-dir build --output-on-failure` 运行测试套件；查看测试列表使用 `ctest --test-dir build -N`。
+- **测试构建规范**: 新增测试可执行文件必须通过顶层 `CMakeLists.txt` 中的 `mmm_add_test_executable(<ModuleName> <TargetName> ...)` 创建，保证二进制输出到 `${CMAKE_BINARY_DIR}/tests/<ModuleName>`。
+- **测试资源目录**: 跨模块测试资源根目录为 `${MMM_TEST_RESOURCE_DIR}`，默认指向 `${CMAKE_SOURCE_DIR}/tests/data`。需要资源覆盖的测试应通过命令行参数接收资源根目录和输出目录，避免硬编码绝对路径。
+- **测试输出目录**: 测试生成文件应写入 `${CMAKE_BINARY_DIR}/test_output` 或测试传入的输出目录，禁止写入源码资源目录。
+- **当前资源覆盖测试**:
+  - `BeatmapSpeedTransformTest` 会覆盖 `tests/data/ma` 下的 `.mc`、`.mmm`、`.osu`、`.imd` 谱面资源。
+  - `AudioSpeedExportServiceTest` 会覆盖 `tests/data/ma` 下的音频资源，并支持 `MMM_AUDIO_PROBE_FILE=/path/to/audio` 对单个外部音频文件进行解码探针诊断。
+- **验证方式**: 修改代码后，必须确保 `cmake --build build` 成功；修改测试或相关逻辑后，还必须运行相关 CTest，范围不明确时运行完整 `ctest --test-dir build --output-on-failure`。
 
 ### 3. 代码格式化
 - 任何修改过的 `.cpp`, `.h`, 或 `.hpp` 文件，必须在完成前运行 `clang-format -i <absolute_file_path>`。
@@ -87,54 +93,35 @@ XERROR("Failed to load skin lua: {}", err.what());
 - **格式**: `type(scope): 中文描述`
 - **要求**: 冒号 (`:`) 之前的部分必须使用英文（如 `feat`, `fix`, `refactor`, `docs` 等），冒号之后的部分必须使用中文描述。
 - **示例**: `feat(render): 重构渲染管线`
+- **测试资源 LFS**: `tests/data/**`、音频、图片、字体、`.mcz`、`.zip` 等资源由 Git LFS 追踪；新增测试资源前先确认 `.gitattributes` 中已有对应规则，必要时使用 `git lfs track` 补充。
 
-    ##智能体最佳实践
+## 智能体最佳实践
 
-    1. *
-    *善用联网搜索防过时** : 对于本项目中使用的现代化、更新较快的第三方库（如
-                                Vulkan,
-    sol2, ImGui,
-    Clay 等），在编写调用代码前，** 务必使用你的联网 /
-            搜索工具确认最新的函数签名和最佳实践**，严防使用已过时或消失的
-                API。 2. *
-            *谋定而后动** : 在修改前，广泛使用 `glob` 和 `grep`了解项目。 3. *
-            *保持纯粹** : 仅针对用户需求做最小化修改，不要进行未授权的大规模重构。绝对不要在代码里向用户写对话式的注释。
+1. **善用联网搜索防过时**: 对于本项目中使用的现代化、更新较快的第三方库（如 Vulkan、sol2、ImGui、Clay 等），在编写调用代码前，务必使用联网/搜索工具确认最新的函数签名和最佳实践，严防使用已过时或消失的 API。
+2. **谋定而后动**: 在修改前，广泛使用 `glob` 和 `grep` 了解项目。
+3. **保持纯粹**: 仅针对用户需求做最小化修改，不要进行未授权的大规模重构。绝对不要在代码里向用户写对话式的注释。
 
-                          ##当前进度与备忘(Current Status)
+## 当前进度与备忘(Current Status)
 
-                              ## #1. 已完成里程碑
-        -
-        **模块解耦** : `Graphic` 与 `UI` 模块已通过抽象回调 `onRecordDrawCmds` 彻底解耦。
-        - **命名空间规范** : UI 相关逻辑已全部迁移至 `MMM::UI`。 -
-        **高性能渲染** : `Brush` 类实现了状态机 API
-    和自动批处理（Batching），支持矩形和圆形几何生成，Vulkan 渲染性能大幅提升。
-        -
-        **UI
-         框架稳固** : 修复了 ImGui
-                      动态标题导致的停靠丢失问题，并解决了多重继承下的菱形继承冲突。
-        -
-        **ECS
-         交互层** : 引入 `entt` 库，建立基于 ECS
-                    的拾取与交互系统。支持音符的悬停高亮、点击选择以及跨线程鼠标拖拽（实时更新时间戳与轨道）。
-        -
-        **音符渲染优化** : 实现了
-                           Polyline（折线）的连续几何生成，支持斜向连接段和纹理批处理。
-        -
-        **判定线实现** : 在 `NoteRenderSystem` 中引入了判定线绘制逻辑，支持通过 `EditorConfig` 动态配置位置和线宽。
-        -
-        **核心模块重构** : 完成了 `BeatmapSession` 和 `NoteRenderSystem` 的职责拆分与解耦。建立了 `session/` 和 `render/` 子目录，并将内部批处理器提取为独立的 `Batcher.h`，提升了代码的可维护性和整洁度。
-        -
-        **预览区系统实现** : 实现了独立的 `PreviewCanvas` 视口，支持主画布视野包围框与同步判定线的绘制。
-        -
-        **配置系统升级** : 重构了 `SkinLoader` 的颜色解析逻辑，支持递归读取嵌套的 Lua 颜色表（如 `colors.preview.box`）。
-        -
-        **渲染修复与适配** : 在 `NoteRenderSystem` 中完成了所有物件在预览缩放下的适配，修复了折线物件（Polyline）在压缩比例下的几何断裂问题。
-        -
-        **音频引擎集成** : 初步集成 `AudioManager`，实现了逻辑线程与音频播放进度的同步。
+### 1. 已完成里程碑
+- **模块解耦**: `Graphic` 与 `UI` 模块已通过抽象回调 `onRecordDrawCmds` 彻底解耦。
+- **命名空间规范**: UI 相关逻辑已全部迁移至 `MMM::UI`。
+- **高性能渲染**: `Brush` 类实现了状态机 API 和自动批处理（Batching），支持矩形和圆形几何生成，Vulkan 渲染性能大幅提升。
+- **UI 框架稳固**: 修复了 ImGui 动态标题导致的停靠丢失问题，并解决了多重继承下的菱形继承冲突。
+- **ECS 交互层**: 引入 `entt` 库，建立基于 ECS 的拾取与交互系统。支持音符的悬停高亮、点击选择以及跨线程鼠标拖拽（实时更新时间戳与轨道）。
+- **音符渲染优化**: 实现了 Polyline（折线）的连续几何生成，支持斜向连接段和纹理批处理。
+- **判定线实现**: 在 `NoteRenderSystem` 中引入了判定线绘制逻辑，支持通过 `EditorConfig` 动态配置位置和线宽。
+- **核心模块重构**: 完成了 `BeatmapSession` 和 `NoteRenderSystem` 的职责拆分与解耦。建立了 `session/` 和 `render/` 子目录，并将内部批处理器提取为独立的 `Batcher.h`，提升了代码的可维护性和整洁度。
+- **预览区系统实现**: 实现了独立的 `PreviewCanvas` 视口，支持主画布视野包围框与同步判定线的绘制。
+- **配置系统升级**: 重构了 `SkinLoader` 的颜色解析逻辑，支持递归读取嵌套的 Lua 颜色表（如 `colors.preview.box`）。
+- **渲染修复与适配**: 在 `NoteRenderSystem` 中完成了所有物件在预览缩放下的适配，修复了折线物件（Polyline）在压缩比例下的几何断裂问题。
+- **音频引擎集成**: 初步集成 `AudioManager`，实现了逻辑线程与音频播放进度的同步。
+- **自动化测试基础**: 接入 CTest，统一测试可执行文件输出目录为 `${CMAKE_BINARY_DIR}/tests/<ModuleName>`，并建立 `tests/data/ma` 资源覆盖测试。
+- **音频解码诊断覆盖**: `AudioSpeedExportServiceTest` 已支持资源目录批量解码探针和 `MMM_AUDIO_PROBE_FILE` 单文件诊断入口。
 
-                           ## #2. 待办事项(Next Steps) -
-        **预览区交互跳转** : 实现点击预览区任意位置，主画布平滑跳转至对应时间点的功能。 -
-        **UI 细节优化** : 在预览区边缘添加时间刻度或小节线提示。 -
-        **性能压测** : 针对大规模谱面进行压力测试，验证预览区的渲染负载及剔除效率。 -
-        **脚本集成** : 将 `Brush` API 与 ECS 交互事件暴露给 Lua 环境。 -
-        **撤销 / 重做系统** : 基于指令队列实现编辑操作的 Undo / Redo 功能。
+### 2. 待办事项(Next Steps)
+- **预览区交互跳转**: 实现点击预览区任意位置，主画布平滑跳转至对应时间点的功能。
+- **UI 细节优化**: 在预览区边缘添加时间刻度或小节线提示。
+- **性能压测**: 针对大规模谱面进行压力测试，验证预览区的渲染负载及剔除效率。
+- **脚本集成**: 将 `Brush` API 与 ECS 交互事件暴露给 Lua 环境。
+- **撤销 / 重做系统**: 基于指令队列实现编辑操作的 Undo / Redo 功能。

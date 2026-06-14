@@ -32,6 +32,15 @@ struct BeatmapStatusStats {
     size_t maxCombo{ 0 };
 };
 
+/// @brief 判断视图是否属于播放态可背压的辅助画布。
+/// @param cameraId 当前画布 ID。
+/// @return Preview 或 Timeline 返回 true。
+/// @warning 逻辑热路径：只做固定字符串比较。
+bool isPlaybackSecondaryCameraId(const std::string& cameraId)
+{
+    return cameraId == "Preview" || cameraId == "Timeline";
+}
+
 /// @brief 计算 Hold 区间内的 1/4 拍连击增量。
 /// @param startTime Hold 起始时间。
 /// @param endTime Hold 结束时间。
@@ -173,7 +182,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio = config.visual.previewConfig.areaRatio;
+    float areaRatio    = config.visual.previewConfig.areaRatio;
 
     if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
          areaRatio <= 0.0001f ) {
@@ -240,9 +249,9 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 
     float judgmentLineY =
         previewCamera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY = cache->getAbsY(ctx.animateTime);
-    double deltaY      = (judgmentLineY - ctx.lastMousePos.y) /
-                    static_cast<double>(renderScaleY);
+    double currentAbsY   = cache->getAbsY(ctx.animateTime);
+    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
+                           static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -323,15 +332,36 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         rebuildNotePrefixAndStats(true);
     }
 
-    m_ctx->noteRegistry.ctx().erase<const std::vector<entt::entity>*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
-        &m_ctx->sortedNoteEntities);
-    m_ctx->noteRegistry.ctx().erase<const std::vector<double>*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
-        &m_ctx->sortedNoteMaxEndPrefix);
-    m_ctx->noteRegistry.ctx().erase<const std::uint64_t*>();
-    m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
-        &m_ctx->noteVisibilityIndexRevision);
+    if ( auto** sortedEntitiesPtr =
+             m_ctx->noteRegistry.ctx()
+                 .find<const std::vector<entt::entity>*>() ) {
+        *sortedEntitiesPtr = &m_ctx->sortedNoteEntities;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(
+            &m_ctx->sortedNoteEntities);
+    }
+    if ( auto** maxEndPrefixPtr =
+             m_ctx->noteRegistry.ctx().find<const std::vector<double>*>() ) {
+        *maxEndPrefixPtr = &m_ctx->sortedNoteMaxEndPrefix;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::vector<double>*>(
+            &m_ctx->sortedNoteMaxEndPrefix);
+    }
+    if ( auto** revisionPtr =
+             m_ctx->noteRegistry.ctx().find<const std::uint64_t*>() ) {
+        *revisionPtr = &m_ctx->noteVisibilityIndexRevision;
+    } else {
+        m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
+            &m_ctx->noteVisibilityIndexRevision);
+    }
+    if ( auto* pinnedEntities =
+             m_ctx->noteRegistry.ctx().find<DragRenderPinnedEntities>() ) {
+        pinnedEntities->entities = &m_ctx->dragRenderPinnedEntities;
+    } else {
+        auto& pinnedEntityView =
+            m_ctx->noteRegistry.ctx().emplace<DragRenderPinnedEntities>();
+        pinnedEntityView.entities = &m_ctx->dragRenderPinnedEntities;
+    }
 
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 
@@ -358,6 +388,46 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
     syncPreviewDragHoverTime(*m_ctx, config);
 
+    auto&        engine = EditorEngine::instance();
+    const double secondaryCameraSnapshotMinInterval =
+        engine.adaptiveRenderSnapshotMinInterval(config, true);
+    const bool snapshotIsPlaying =
+        m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+    const double snapshotTotalTime =
+        SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
+    const double snapshotSysTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    const double snapshotPlaybackSpeed =
+        Audio::AudioManager::instance().getPlaybackSpeed();
+
+    const bool  hasBeatmap = (m_ctx->currentBeatmap != nullptr);
+    std::string snapshotBackgroundPath;
+    std::string snapshotBeatmapPathKey;
+    std::string snapshotBeatmapName;
+    bool        snapshotIsDirty     = false;
+    double      snapshotFallbackBpm = 120.0;
+    if ( m_ctx->currentBeatmap ) {
+        const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+        if ( metadata.preference_bpm > 0.0 &&
+             std::isfinite(metadata.preference_bpm) ) {
+            snapshotFallbackBpm = metadata.preference_bpm;
+        }
+
+        std::filesystem::path bgPath;
+        auto*                 project = engine.getCurrentProject();
+        if ( project ) {
+            bgPath = project->m_projectRoot / metadata.main_cover_path;
+        } else {
+            bgPath = metadata.map_path.parent_path() / metadata.main_cover_path;
+        }
+        snapshotBackgroundPath = Config::pathToUtf8(bgPath);
+        snapshotBeatmapPathKey = Config::pathToUtf8(metadata.map_path);
+        snapshotBeatmapName    = metadata.name;
+        snapshotIsDirty        = m_ctx->actionStack.isDirty();
+    }
+
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
         // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
@@ -367,8 +437,37 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             continue;
         }
 
-        // 从 EditorEngine 获取该 Camera 专属的缓冲
-        auto syncBuffer = EditorEngine::instance().getSyncBuffer(cameraId);
+        const bool isSecondaryPlaybackCamera =
+            snapshotIsPlaying && isPlaybackSecondaryCameraId(cameraId);
+        const bool isPreviewExternalDrag =
+            cameraId == "Preview" && (m_ctx->dragCameraId == "AudioWaveform" ||
+                                      m_ctx->dragCameraId == "AudioSpectrum" ||
+                                      m_ctx->mouseCameraId == "AudioWaveform" ||
+                                      m_ctx->mouseCameraId == "AudioSpectrum");
+        const bool isCameraInteractionActive =
+            isActiveSession &&
+            (m_ctx->mouseCameraId == cameraId ||
+             m_ctx->dragCameraId == cameraId || isPreviewExternalDrag ||
+             m_ctx->isSelecting || m_ctx->brushState.isActive ||
+             m_ctx->eraserState.isActive);
+        if ( isSecondaryPlaybackCamera && !isCameraInteractionActive ) {
+            auto& lastCameraSnapshotTime =
+                m_ctx->lastCameraSnapshotTimes[cameraId];
+            if ( lastCameraSnapshotTime > 0.0 &&
+                 snapshotSysTime - lastCameraSnapshotTime <
+                     secondaryCameraSnapshotMinInterval ) {
+                continue;
+            }
+            lastCameraSnapshotTime = snapshotSysTime;
+        } else {
+            m_ctx->lastCameraSnapshotTimes[cameraId] = snapshotSysTime;
+        }
+
+        // 从 Session 本地缓存获取该 Camera 专属的同步缓冲，避免每帧查注册表锁。
+        auto& syncBuffer = m_ctx->syncBuffers[cameraId];
+        if ( !syncBuffer ) {
+            syncBuffer = engine.getSyncBuffer(cameraId);
+        }
         if ( !syncBuffer ) continue;
 
         RenderSnapshot* snapshot = syncBuffer->getWorkingSnapshot();
@@ -377,41 +476,23 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->clear();
 
         // 注入该 Camera 特有的 UV 映射到快照
-        snapshot->uvMap = EditorEngine::instance().getAtlasUVMap(cameraId);
-        snapshot->isPlaying =
-            m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
-        snapshot->currentTime = m_ctx->animateTime;  // 快照使用动画时间
-        snapshot->totalTime =
-            SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
-        snapshot->snapshotSysTime =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now().time_since_epoch())
-                .count();
-        snapshot->playbackSpeed =
-            Audio::AudioManager::instance().getPlaybackSpeed();
-        snapshot->hasBeatmap        = (m_ctx->currentBeatmap != nullptr);
+        engine.updateSnapshotAtlasUVMap(
+            cameraId, snapshot->uvMap, snapshot->atlasUvRevision);
+        snapshot->isPlaying         = snapshotIsPlaying;
+        snapshot->currentTime       = m_ctx->animateTime;  // 快照使用动画时间
+        snapshot->totalTime         = snapshotTotalTime;
+        snapshot->snapshotSysTime   = snapshotSysTime;
+        snapshot->playbackSpeed     = snapshotPlaybackSpeed;
+        snapshot->fallbackBpm       = snapshotFallbackBpm;
+        snapshot->hasBeatmap        = hasBeatmap;
         snapshot->lastActionMessage = m_ctx->lastActionMessage;
 
-        if ( m_ctx->currentBeatmap ) {
-            std::filesystem::path bgPath;
-            auto* project = EditorEngine::instance().getCurrentProject();
-            if ( project ) {
-                bgPath =
-                    project->m_projectRoot /
-                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
-            } else {
-                bgPath =
-                    m_ctx->currentBeatmap->m_baseMapMetadata.map_path
-                        .parent_path() /
-                    m_ctx->currentBeatmap->m_baseMapMetadata.main_cover_path;
-            }
-            snapshot->backgroundPath = Config::pathToUtf8(bgPath);
+        if ( hasBeatmap ) {
+            snapshot->backgroundPath = snapshotBackgroundPath;
             snapshot->bgSize         = m_ctx->bgSize;
-            snapshot->beatmapPathKey = Config::pathToUtf8(
-                m_ctx->currentBeatmap->m_baseMapMetadata.map_path);
-            snapshot->beatmapName =
-                m_ctx->currentBeatmap->m_baseMapMetadata.name;
-            snapshot->isDirty = m_ctx->actionStack.isDirty();
+            snapshot->beatmapPathKey = snapshotBeatmapPathKey;
+            snapshot->beatmapName    = snapshotBeatmapName;
+            snapshot->isDirty        = snapshotIsDirty;
         }
 
         // 计算可见时间范围 (基于动画时间)
@@ -441,8 +522,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->isHoveringCanvas   = isActiveSession &&
-                                     m_ctx->isMouseInCanvas &&
-                                     (m_ctx->mouseCameraId == cameraId);
+                                       m_ctx->isMouseInCanvas &&
+                                       (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
@@ -451,7 +532,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -522,7 +603,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                                         bpmEvents,
                                                         m_ctx->timelineRegistry,
                                                         m_ctx->animateTime,
-                                                        m_ctx->cameras);
+                                                        m_ctx->cameras,
+                                                        snapshotFallbackBpm);
 
                 // 判断是否在轨道框内
                 bool isInsideTrack = (m_ctx->lastMousePos.x >= leftX &&
@@ -651,164 +733,158 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex   = isBeforeFirstBpm
-                                            ? static_cast<int>(beatsInActive)
-                                            : static_cast<int>(totalBeatsPrefix +
+                    point.beatIndex = isBeforeFirstBpm
+                                          ? static_cast<int>(beatsInActive)
+                                          : static_cast<int>(totalBeatsPrefix +
                                                              beatsInActive + 1);
-                    point.numerator   = bestNum;
+                    point.numerator = bestNum;
                     point.denominator = bestDen;
                     return point;
                 };
 
                 // --- 智能拟合：计算当前悬停物件的最简分拍 ---
-                auto interView =
-                    m_ctx->noteRegistry.view<InteractionComponent>();
-                for ( auto entity : interView ) {
-                    const auto& inter =
-                        interView.get<InteractionComponent>(entity);
-                    if ( inter.isHovered || inter.isDragging ) {
-                        if ( m_ctx->noteRegistry.all_of<NoteComponent>(
-                                 entity) ) {
-                            const auto& note =
-                                m_ctx->noteRegistry.get<NoteComponent>(entity);
-                            auto hoveredPart =
-                                static_cast<HoverPart>(inter.hoveredPart);
+                const entt::entity inspectEntity =
+                    (m_ctx->hoveredEntity != entt::null) ? m_ctx->hoveredEntity
+                                                         : m_ctx->draggedEntity;
+                const bool useDragState = m_ctx->isDragging &&
+                                          inspectEntity != entt::null &&
+                                          inspectEntity == m_ctx->draggedEntity;
+                const auto* inter =
+                    (inspectEntity != entt::null &&
+                     m_ctx->noteRegistry.valid(inspectEntity))
+                        ? m_ctx->noteRegistry
+                              .try_get<const InteractionComponent>(
+                                  inspectEntity)
+                        : nullptr;
+                const bool shouldInspect =
+                    useDragState ||
+                    (inter && (inter->isHovered || inter->isDragging));
+                const auto* inspectNote =
+                    shouldInspect
+                        ? m_ctx->noteRegistry.try_get<const NoteComponent>(
+                              inspectEntity)
+                        : nullptr;
+                if ( inspectNote ) {
+                    const auto& note = *inspectNote;
+                    const auto  hoveredPart =
+                        useDragState
+                            ? m_ctx->draggedPart
+                            : static_cast<HoverPart>(inter->hoveredPart);
+                    const int32_t hoveredSubIndex =
+                        useDragState ? m_ctx->draggedSubIndex
+                                     : inter->hoveredSubIndex;
 
-                            HoverInspectInfo inspect;
-                            inspect.show = true;
+                    HoverInspectInfo inspect;
+                    inspect.show = true;
 
-                            auto setLegacyPoint =
-                                [&](const HoverBeatPoint& point) {
-                                    if ( !point.show ) return;
-                                    snapshot->hoveredNoteNumerator =
-                                        point.numerator;
-                                    snapshot->hoveredNoteDenominator =
-                                        point.denominator;
-                                    snapshot->hoveredNoteBeatIndex =
-                                        point.beatIndex;
-                                    snapshot->hoveredNoteTime  = point.time;
-                                    snapshot->hoveredNoteTrack = point.track;
-                                };
+                    auto setLegacyPoint = [&](const HoverBeatPoint& point) {
+                        if ( !point.show ) return;
+                        snapshot->hoveredNoteNumerator   = point.numerator;
+                        snapshot->hoveredNoteDenominator = point.denominator;
+                        snapshot->hoveredNoteBeatIndex   = point.beatIndex;
+                        snapshot->hoveredNoteTime        = point.time;
+                        snapshot->hoveredNoteTrack       = point.track;
+                    };
 
-                            if ( note.m_type == ::MMM::NoteType::POLYLINE &&
-                                 inter.hoveredSubIndex >= 0 &&
-                                 inter.hoveredSubIndex <
-                                     static_cast<int>(
-                                         note.m_subNotes.size()) ) {
-                                const auto& sub =
-                                    note.m_subNotes[inter.hoveredSubIndex];
-                                inspect.track = sub.trackIndex;
-                                if ( hoveredPart == HoverPart::PolylineNode ) {
-                                    inspect.kind =
-                                        (inter.hoveredSubIndex == 0)
-                                            ? HoverInspectKind::PolylineHead
-                                            : HoverInspectKind::PolylineNode;
-                                    inspect.body = makeBeatPoint(
-                                        sub.timestamp, sub.trackIndex);
-                                    inspect.showTrack = true;
-                                } else if ( hoveredPart == HoverPart::HoldEnd &&
-                                            sub.type ==
-                                                ::MMM::NoteType::HOLD ) {
-                                    inspect.kind =
-                                        HoverInspectKind::PolylineHoldEnd;
-                                    inspect.head = makeBeatPoint(
-                                        sub.timestamp, sub.trackIndex);
-                                    inspect.end = makeBeatPoint(
-                                        sub.timestamp + sub.duration,
-                                        sub.trackIndex);
-                                    inspect.showDuration = true;
-                                    inspect.duration     = sub.duration;
-                                    inspect.showTrack    = true;
-                                } else if ( hoveredPart ==
-                                                HoverPart::FlickArrow &&
-                                            sub.type ==
-                                                ::MMM::NoteType::FLICK ) {
-                                    inspect.kind =
-                                        HoverInspectKind::PolylineFlickEnd;
-                                    inspect.end = makeBeatPoint(
-                                        sub.timestamp,
-                                        sub.trackIndex + sub.dtrack);
-                                    inspect.showDtrack = true;
-                                    inspect.dtrack     = sub.dtrack;
-                                    inspect.showTrack  = true;
-                                    inspect.track = sub.trackIndex + sub.dtrack;
-                                } else if ( sub.type ==
-                                            ::MMM::NoteType::FLICK ) {
-                                    inspect.kind =
-                                        HoverInspectKind::PolylineFlickBody;
-                                    inspect.body = makeBeatPoint(
-                                        sub.timestamp, sub.trackIndex);
-                                    inspect.showDtrack = true;
-                                    inspect.dtrack     = sub.dtrack;
-                                } else {
-                                    inspect.kind =
-                                        HoverInspectKind::PolylineHoldBody;
-                                    inspect.showDuration = true;
-                                    inspect.duration     = sub.duration;
-                                    inspect.showTrack    = true;
-                                }
-                            } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
-                                inspect.duration = note.m_duration;
-                                inspect.track    = note.m_trackIndex;
-                                if ( hoveredPart == HoverPart::HoldEnd ) {
-                                    inspect.kind = HoverInspectKind::HoldEnd;
-                                    inspect.head = makeBeatPoint(
-                                        note.m_timestamp, note.m_trackIndex);
-                                    inspect.end = makeBeatPoint(
-                                        note.m_timestamp + note.m_duration,
-                                        note.m_trackIndex);
-                                } else if ( hoveredPart ==
-                                            HoverPart::HoldBody ) {
-                                    inspect.kind = HoverInspectKind::HoldBody;
-                                } else {
-                                    inspect.kind = HoverInspectKind::HoldHead;
-                                    inspect.head = makeBeatPoint(
-                                        note.m_timestamp, note.m_trackIndex);
-                                }
-                                inspect.showDuration = true;
-                                inspect.showTrack    = true;
-                            } else if ( note.m_type ==
-                                        ::MMM::NoteType::FLICK ) {
-                                inspect.dtrack = note.m_dtrack;
-                                if ( hoveredPart == HoverPart::FlickArrow ) {
-                                    inspect.kind = HoverInspectKind::FlickEnd;
-                                    inspect.end  = makeBeatPoint(
-                                        note.m_timestamp,
-                                        note.m_trackIndex + note.m_dtrack);
-                                    inspect.track =
-                                        note.m_trackIndex + note.m_dtrack;
-                                    inspect.showTrack = true;
-                                } else if ( hoveredPart ==
-                                            HoverPart::HoldBody ) {
-                                    inspect.kind = HoverInspectKind::FlickBody;
-                                    inspect.body = makeBeatPoint(
-                                        note.m_timestamp, note.m_trackIndex);
-                                } else {
-                                    inspect.kind = HoverInspectKind::FlickHead;
-                                    inspect.head = makeBeatPoint(
-                                        note.m_timestamp, note.m_trackIndex);
-                                    inspect.track     = note.m_trackIndex;
-                                    inspect.showTrack = true;
-                                }
-                                inspect.showDtrack = true;
-                            } else {
-                                inspect.kind  = HoverInspectKind::Note;
-                                inspect.head  = makeBeatPoint(note.m_timestamp,
-                                                             note.m_trackIndex);
-                                inspect.track = note.m_trackIndex;
-                                inspect.showTrack = true;
-                            }
-
-                            snapshot->hoverInspect = inspect;
-                            if ( inspect.head.show ) {
-                                setLegacyPoint(inspect.head);
-                            } else if ( inspect.body.show ) {
-                                setLegacyPoint(inspect.body);
-                            } else if ( inspect.end.show ) {
-                                setLegacyPoint(inspect.end);
-                            }
+                    if ( note.m_type == ::MMM::NoteType::POLYLINE &&
+                         hoveredSubIndex >= 0 &&
+                         hoveredSubIndex <
+                             static_cast<int>(note.m_subNotes.size()) ) {
+                        const auto& sub = note.m_subNotes[hoveredSubIndex];
+                        inspect.track   = sub.trackIndex;
+                        if ( hoveredPart == HoverPart::PolylineNode ) {
+                            inspect.kind = (hoveredSubIndex == 0)
+                                               ? HoverInspectKind::PolylineHead
+                                               : HoverInspectKind::PolylineNode;
+                            inspect.body =
+                                makeBeatPoint(sub.timestamp, sub.trackIndex);
+                            inspect.showTrack = true;
+                        } else if ( hoveredPart == HoverPart::HoldEnd &&
+                                    sub.type == ::MMM::NoteType::HOLD ) {
+                            inspect.kind = HoverInspectKind::PolylineHoldEnd;
+                            inspect.head =
+                                makeBeatPoint(sub.timestamp, sub.trackIndex);
+                            inspect.end = makeBeatPoint(
+                                sub.timestamp + sub.duration, sub.trackIndex);
+                            inspect.showDuration = true;
+                            inspect.duration     = sub.duration;
+                            inspect.showTrack    = true;
+                        } else if ( hoveredPart == HoverPart::FlickArrow &&
+                                    sub.type == ::MMM::NoteType::FLICK ) {
+                            inspect.kind = HoverInspectKind::PolylineFlickEnd;
+                            inspect.end  = makeBeatPoint(
+                                sub.timestamp, sub.trackIndex + sub.dtrack);
+                            inspect.showDtrack = true;
+                            inspect.dtrack     = sub.dtrack;
+                            inspect.showTrack  = true;
+                            inspect.track      = sub.trackIndex + sub.dtrack;
+                        } else if ( sub.type == ::MMM::NoteType::FLICK ) {
+                            inspect.kind = HoverInspectKind::PolylineFlickBody;
+                            inspect.body =
+                                makeBeatPoint(sub.timestamp, sub.trackIndex);
+                            inspect.showDtrack = true;
+                            inspect.dtrack     = sub.dtrack;
+                        } else {
+                            inspect.kind = HoverInspectKind::PolylineHoldBody;
+                            inspect.showDuration = true;
+                            inspect.duration     = sub.duration;
+                            inspect.showTrack    = true;
                         }
-                        break;  // 只处理一个悬停物体
+                    } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
+                        inspect.duration = note.m_duration;
+                        inspect.track    = note.m_trackIndex;
+                        if ( hoveredPart == HoverPart::HoldEnd ) {
+                            inspect.kind = HoverInspectKind::HoldEnd;
+                            inspect.head = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                            inspect.end  = makeBeatPoint(
+                                note.m_timestamp + note.m_duration,
+                                note.m_trackIndex);
+                        } else if ( hoveredPart == HoverPart::HoldBody ) {
+                            inspect.kind = HoverInspectKind::HoldBody;
+                        } else {
+                            inspect.kind = HoverInspectKind::HoldHead;
+                            inspect.head = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                        }
+                        inspect.showDuration = true;
+                        inspect.showTrack    = true;
+                    } else if ( note.m_type == ::MMM::NoteType::FLICK ) {
+                        inspect.dtrack = note.m_dtrack;
+                        if ( hoveredPart == HoverPart::FlickArrow ) {
+                            inspect.kind = HoverInspectKind::FlickEnd;
+                            inspect.end  = makeBeatPoint(
+                                note.m_timestamp,
+                                note.m_trackIndex + note.m_dtrack);
+                            inspect.track = note.m_trackIndex + note.m_dtrack;
+                            inspect.showTrack = true;
+                        } else if ( hoveredPart == HoverPart::HoldBody ) {
+                            inspect.kind = HoverInspectKind::FlickBody;
+                            inspect.body = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                        } else {
+                            inspect.kind  = HoverInspectKind::FlickHead;
+                            inspect.head  = makeBeatPoint(note.m_timestamp,
+                                                          note.m_trackIndex);
+                            inspect.track = note.m_trackIndex;
+                            inspect.showTrack = true;
+                        }
+                        inspect.showDtrack = true;
+                    } else {
+                        inspect.kind = HoverInspectKind::Note;
+                        inspect.head =
+                            makeBeatPoint(note.m_timestamp, note.m_trackIndex);
+                        inspect.track     = note.m_trackIndex;
+                        inspect.showTrack = true;
+                    }
+
+                    snapshot->hoverInspect = inspect;
+                    if ( inspect.head.show ) {
+                        setLegacyPoint(inspect.head);
+                    } else if ( inspect.body.show ) {
+                        setLegacyPoint(inspect.body);
+                    } else if ( inspect.end.show ) {
+                        setLegacyPoint(inspect.end);
                     }
                 }
             }

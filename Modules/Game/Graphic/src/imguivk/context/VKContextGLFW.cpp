@@ -1,25 +1,36 @@
 #include "graphic/imguivk/VKContext.h"
 #include "log/colorful-log.h"
 
+#include <fmt/format.h>
+
 namespace MMM::Graphic
 {
+
 /**
  * @brief 初始化 GLFW 上下文
  */
 void VKContext::initGLFW()
 {
+    glfwSetErrorCallback(glfw_error_callback);
+
     // 1.初始化GLFW
     if ( !glfwInit() ) {
+        collectLastGLFWErrorDiagnostic("glfwInit failed.");
+        logStartupDiagnostics("glfwInit failed.");
         // !此处可能退出
         throw std::runtime_error("GLFW init failed");
     };
     XDEBUG("GLFW initialized successfully.");
+    collectGLFWDiagnostics();
 
     // 1.1设置GLFW为NOAPI来适配vulkan
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
     // 1.2检查 GLFW 的 Vulkan 是否被支持
     if ( !glfwVulkanSupported() ) {
+        collectLastGLFWErrorDiagnostic("glfwVulkanSupported failed.");
+        collectVulkanLoaderDiagnostics();
+        logStartupDiagnostics("GLFW reports that Vulkan is not supported.");
         // 释放GLFW
         releaseGLFW();
         // !此处可能退出
@@ -39,16 +50,20 @@ void VKContext::registerGLFWExtensions()
     const char** glfwExtensions{ nullptr };
     glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
     if ( glfwExtensions == nullptr ) {
-        const char* description;
-        int         code = glfwGetError(&description);
-        if ( description ) {
-            // 打印出具体的错误原因
-            XCRITICAL("GLFW Error {} : {}", code, description);
-        }
+        collectLastGLFWErrorDiagnostic(
+            "glfwGetRequiredInstanceExtensions failed.");
+        addStartupDiagnostic(
+            fmt::format("GLFW required Vulkan extension "
+                        "count: {}",
+                        glfwExtensionCount));
+        collectVulkanLoaderDiagnostics();
+        logStartupDiagnostics(
+            "glfwGetRequiredInstanceExtensions returned null.");
         releaseGLFW();
         // !此处可能退出
         throw std::runtime_error(
-            "Fatal: Failed to get required GLFW extensions.");
+            "Fatal: Failed to get required GLFW "
+            "extensions for window surface creation.");
     }
 
     XDEBUG("Required GLFW extensions:");
@@ -58,6 +73,13 @@ void VKContext::registerGLFWExtensions()
         m_vkExtensions.push_back(glfwExtension);
         XDEBUG("  - {}", glfwExtension);
     }
+    addStartupDiagnostic(
+        fmt::format("GLFW required Vulkan extensions: {}", glfwExtensionCount));
+    for ( int i{ 0 }; i < glfwExtensionCount; ++i ) {
+        addStartupDiagnostic(
+            fmt::format("GLFW required extension: {}", glfwExtensions[i]));
+    }
+    collectVulkanLoaderDiagnostics();
 
 #ifdef __APPLE__
     m_vkExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);

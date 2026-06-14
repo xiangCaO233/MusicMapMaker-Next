@@ -4,6 +4,7 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -26,7 +27,7 @@ double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count();
-    const double dt = now - snapshot.snapshotSysTime;
+    const double dt  = now - snapshot.snapshotSysTime;
     if ( dt <= 0.0 || dt >= 0.1 ) {
         return animateTime;
     }
@@ -128,7 +129,17 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                             currentTimeText.c_str());
 
                 // 鼠标位置时间 (仅在主画布悬浮时显示)
-                if ( snapshot->isHoveringCanvas ) {
+                const double visibleStart = std::min(snapshot->visibleTimeStart,
+                                                     snapshot->visibleTimeEnd);
+                const double visibleEnd   = std::max(snapshot->visibleTimeStart,
+                                                     snapshot->visibleTimeEnd);
+                const bool   hasValidHoveredTime =
+                    std::isfinite(snapshot->hoveredTime) &&
+                    (!std::isfinite(visibleStart) ||
+                     snapshot->hoveredTime >= visibleStart - 1.0) &&
+                    (!std::isfinite(visibleEnd) ||
+                     snapshot->hoveredTime <= visibleEnd + 1.0);
+                if ( snapshot->isHoveringCanvas && hasValidHoveredTime ) {
                     const auto hoveredTimeText = Canvas::formatCanvasTime(
                         snapshot->hoveredTime, snapshot);
                     ImGui::SameLine();

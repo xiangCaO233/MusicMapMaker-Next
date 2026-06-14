@@ -55,6 +55,27 @@ void mirrorNoteComponent(NoteComponent& note, int trackCount)
     }
 }
 
+/// @brief 判断新建物件是否允许落在谱面时间线上。
+/// @param note 待创建物件。
+/// @return 物件和所有折线子物件的时间戳均非负且有限时返回 true。
+bool isPlaceableCreatedNote(const NoteComponent& note)
+{
+    if ( !std::isfinite(note.m_timestamp) || note.m_timestamp < 0.0 ) {
+        return false;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& subNote : note.m_subNotes ) {
+            if ( !std::isfinite(subNote.timestamp) ||
+                 subNote.timestamp < 0.0 ) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 /// @brief 将调色盘命令颜色转换为 NoteColorOverrides。
 NoteColorOverrides makeNoteColorOverrides(
     const std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT>& colors)
@@ -791,7 +812,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -844,7 +865,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -956,6 +977,9 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
     m_ctx.lastActionMessage = "Note palette cleared";
 }
 
+/// @brief 粘贴剪贴板中的物件，并拒绝会落到负时间的创建结果。
+/// @param cmd 粘贴指令。
+/// @warning 低频编辑路径：用户触发粘贴时执行，可能批量创建实体。
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
     auto clipboard = EditorEngine::instance().getClipboard();
@@ -977,7 +1001,39 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
     const bool selectPastedObjects = cmd.m_selectPastedObjects;
 
-    // 1. 如果之前有 Cut，需要删除那些 Cut 的物件
+    // 先预计算粘贴目标，确保不会在负时间创建新物件。
+    double pasteTime = m_ctx.animateTime;
+
+    double timeOffset = pasteTime - minTime;
+
+    int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
+    std::vector<NoteComponent> notesToPaste;
+    notesToPaste.reserve(clipboard.size());
+    for ( const auto& item : clipboard ) {
+        auto newNote        = item.note;
+        newNote.m_timestamp = item.note.m_timestamp + timeOffset;
+
+        // 折线物件：同步偏移所有子物件的时间戳
+        if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
+            for ( auto& sub : newNote.m_subNotes ) {
+                sub.timestamp += timeOffset;
+            }
+        }
+
+        if ( cmd.m_mirrored ) {
+            mirrorNoteComponent(newNote, mirrorTrackCount);
+        }
+
+        if ( !isPlaceableCreatedNote(newNote) ) {
+            XWARN("Paste blocked before 0s: target time={:.3f}",
+                  newNote.m_timestamp);
+            return;
+        }
+
+        notesToPaste.push_back(newNote);
+    }
+
+    // 如果之前有 Cut，需要删除那些 Cut 的物件。
     auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
     bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
     if ( isLocalCut ) {
@@ -1013,30 +1069,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         }
     }
 
-    // 2. 粘贴到当前动画时间 (判定线)
-    double pasteTime = m_ctx.animateTime;
-
-    // 尝试获取鼠标悬停处的时间作为基准 (如果有)
-    // 注意：这里为了简化直接使用动画时间。如果需要鼠标对齐，需要 UI 传入坐标。
-
-    double timeOffset = pasteTime - minTime;
-
-    int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
-    for ( const auto& item : clipboard ) {
-        auto newNote        = item.note;
-        newNote.m_timestamp = item.note.m_timestamp + timeOffset;
-
-        // 折线物件：同步偏移所有子物件的时间戳
-        if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( auto& sub : newNote.m_subNotes ) {
-                sub.timestamp += timeOffset;
-            }
-        }
-
-        if ( cmd.m_mirrored ) {
-            mirrorNoteComponent(newNote, mirrorTrackCount);
-        }
-
+    for ( const auto& newNote : notesToPaste ) {
         /// @brief 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
         entt::entity pastedEntity = m_ctx.noteRegistry.create();
         pastedEntities.push_back(pastedEntity);
@@ -1330,15 +1363,13 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
         double bVal = bpmVal;
         if ( bVal <= 0.0 ) {
-            bVal = 120.0;
-            if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                if ( auto beatmap = session->getContext().currentBeatmap ) {
-                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                        bVal = beatmap->m_baseMapMetadata.preference_bpm;
-                    }
-                }
+            if ( m_ctx.currentBeatmap &&
+                 m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm >
+                     0.0 ) {
+                bVal = m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
             }
         }
+        if ( bVal <= 0.0 ) bVal = 120.0;
 
         double beatDuration = 60.0 / bVal;
 
@@ -1510,7 +1541,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

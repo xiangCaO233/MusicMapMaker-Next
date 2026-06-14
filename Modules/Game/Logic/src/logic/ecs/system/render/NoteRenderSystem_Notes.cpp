@@ -8,6 +8,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace MMM::Logic::System
 {
@@ -22,7 +24,7 @@ namespace MMM::Logic::System
 /// @brief UI 侧亚帧补偿允许的最大滞后秒数，与 CanvasSnapshotPrepare 保持一致。
 constexpr double MAX_UI_INTERPOLATION_SECONDS = 0.1;
 
-/// @brief Jump 谱面音符 AbsY 索引桶尺寸。
+/// @brief 音符可见性 AbsY 索引桶尺寸。
 constexpr double NOTE_ABSY_BUCKET_SIZE = 2048.0;
 
 /// @brief 单个音符在 AbsY 空间覆盖的保守区间。
@@ -35,7 +37,7 @@ struct NoteAbsYRangeEntry {
     double maxAbsY{ 0.0 };
 };
 
-/// @brief Jump 谱面专用的音符 AbsY 分桶索引。
+/// @brief 音符可见性 AbsY 分桶索引。
 struct NoteAbsYBucketIndex {
     /// @brief 建立索引时使用的 ScrollCache。
     const ScrollCache* cache{ nullptr };
@@ -65,17 +67,35 @@ struct NoteAbsYBucketIndex {
     std::uint32_t querySerial{ 0 };
 };
 
+/// @brief 计算单个音符在时间维度上的保守覆盖范围。
+/// @param note 音符组件。
+/// @return 音符及其子段可能覆盖的最小/最大时间。
+/// @warning 索引重建路径：只读取 NoteComponent，不访问 ECS 或分配内存。
+static std::pair<double, double> getNoteTimeRange(const NoteComponent& note);
+
+/// @brief 枚举单个音符用于可见性判断的采样时间。
+/// @param note 音符组件。
+/// @param cache 当前 ScrollCache。
+/// @param callback 接收采样时间的回调。
+/// @warning 热路径候选精查：只遍历该音符时间范围内的 ScrollSegment
+/// 边界，避免完整扫描所有 Note 或所有 Timing。
+template<typename Callback>
+static void forEachNoteVisibilitySampleTime(const NoteComponent& note,
+                                            const ScrollCache*   cache,
+                                            Callback&&           callback);
+
 /// @brief 获取当前可视窗口附近的音符实体。
 /// @param currentTime 当前快照的动画时间。
 /// @param currentAbsY 当前快照动画时间对应的绝对 Y。
 /// @param visualPaddingPixels 当前皮肤与缩放下的候选视觉余量。
 /// @param interpolationSeconds UI 亚帧补偿需要覆盖的播放时间。
-/// @warning 热路径：每次音符快照生成时执行；只能使用已缓存排序实体与
-/// ScrollCache，不得完整遍历除 Jump 断层或高复杂 SV 索引失效兜底外的全量实体。
-static std::vector<entt::entity> getNotesInRange(
+/// @warning 热路径：每次音符快照生成时执行；只能查询已构建的 AbsY
+/// 分桶索引，不得完整遍历全量 Note，除非索引失效进入保守兜底。
+static void collectNotesInRange(
     entt::registry& registry, const ScrollCache* cache, double currentTime,
     double currentAbsY, float judgmentLineY, float topY, float bottomY,
-    float renderScaleY, float visualPaddingPixels, double interpolationSeconds);
+    float renderScaleY, float visualPaddingPixels, double interpolationSeconds,
+    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen);
 
 /// @brief 估算 UI 亚帧补偿期间 ScrollCache 可能产生的最大 AbsY 位移。
 /// @warning 热路径：每次音符候选反查前执行；只允许访问当前时间附近的
@@ -84,9 +104,9 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
                                                 double             currentTime,
                                                 double interpolationSeconds);
 
-/// @brief 获取或重建 Jump 谱面音符 AbsY 分桶索引。
+/// @brief 获取或重建音符 AbsY 分桶索引。
 /// @warning 逻辑热路径低频分支：仅在音符版本或 ScrollCache
-/// 版本变化时完整扫描音符。
+/// 版本变化时完整扫描音符；生成快照热路径只查询桶。
 static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     entt::registry& registry, const ScrollCache* cache,
     const std::vector<entt::entity>& entities, std::uint64_t noteRevision);
@@ -116,7 +136,9 @@ void NoteRenderSystem::renderNotes(
             registry, snapshot, currentTime, singleTrackW, config);
     if ( !ctx.cache ) return;
 
-    auto noteEntities = getNotesInRange(
+    auto& noteEntities = snapshot->noteQueryScratch;
+    auto& noteSeen     = snapshot->noteQuerySeenScratch;
+    collectNotesInRange(
         registry,
         ctx.cache,
         ctx.currentTime,
@@ -128,9 +150,12 @@ void NoteRenderSystem::renderNotes(
         std::max(ctx.noteH, 1.0f),
         snapshot->isPlaying
             ? std::abs(snapshot->playbackSpeed) * MAX_UI_INTERPOLATION_SECONDS
-            : 0.0);
+            : 0.0,
+        noteEntities,
+        noteSeen);
 
-    bool shouldGenerateHitboxes = snapshot->acceptsInteraction &&
+    bool shouldGenerateHitboxes = !snapshot->isPlaying &&
+                                  snapshot->acceptsInteraction &&
                                   SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
@@ -193,18 +218,20 @@ void NoteRenderSystem::renderNotes(
     }
 
     // 6. 顶层重叠遮罩
-    NoteRenderSystem::renderOverlapMasks(registry,
-                                         snapshot,
-                                         ctx,
-                                         config,
-                                         noteEntities,
-                                         judgmentLineY,
-                                         leftX,
-                                         rightX,
-                                         topY,
-                                         bottomY,
-                                         singleTrackW,
-                                         renderScaleY);
+    if ( !snapshot->isPlaying ) {
+        NoteRenderSystem::renderOverlapMasks(registry,
+                                             snapshot,
+                                             ctx,
+                                             config,
+                                             noteEntities,
+                                             judgmentLineY,
+                                             leftX,
+                                             rightX,
+                                             topY,
+                                             bottomY,
+                                             singleTrackW,
+                                             renderScaleY);
+    }
 }
 
 NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
@@ -254,6 +281,68 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     return ctx;
 }
 
+static std::pair<double, double> getNoteTimeRange(const NoteComponent& note)
+{
+    double minTime = note.m_timestamp;
+    double maxTime = note.m_timestamp + std::max(0.0, note.m_duration);
+    if ( minTime > maxTime ) {
+        std::swap(minTime, maxTime);
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            const double subStart = sub.timestamp;
+            const double subEnd   = sub.timestamp + std::max(0.0, sub.duration);
+            minTime = std::min(minTime, std::min(subStart, subEnd));
+            maxTime = std::max(maxTime, std::max(subStart, subEnd));
+        }
+    }
+
+    return { minTime, maxTime };
+}
+
+template<typename Callback>
+static void forEachNoteVisibilitySampleTime(const NoteComponent& note,
+                                            const ScrollCache*   cache,
+                                            Callback&&           callback)
+{
+    auto emitFinite = [&](double time) {
+        if ( std::isfinite(time) ) {
+            callback(time);
+        }
+    };
+
+    emitFinite(note.m_timestamp);
+    emitFinite(note.m_timestamp + std::max(0.0, note.m_duration));
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& sub : note.m_subNotes ) {
+            emitFinite(sub.timestamp);
+            emitFinite(sub.timestamp + std::max(0.0, sub.duration));
+        }
+    }
+
+    if ( !cache ) {
+        return;
+    }
+
+    const auto [minTime, maxTime] = getNoteTimeRange(note);
+    if ( !std::isfinite(minTime) || !std::isfinite(maxTime) ||
+         minTime > maxTime ) {
+        return;
+    }
+
+    const auto& segments = cache->getSegments();
+    auto it = std::lower_bound(segments.begin(),
+                               segments.end(),
+                               minTime,
+                               [](const ScrollSegment& segment, double value) {
+                                   return segment.time < value;
+                               });
+    for ( ; it != segments.end() && it->time <= maxTime; ++it ) {
+        emitFinite(it->time);
+    }
+}
+
 static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
                                                 double             currentTime,
                                                 double interpolationSeconds)
@@ -269,7 +358,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto         it      = std::upper_bound(segments.begin(),
+    auto it = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -356,7 +445,7 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
         double minAbsY = std::numeric_limits<double>::infinity();
         double maxAbsY = -std::numeric_limits<double>::infinity();
 
-        auto includeEndpoint = [&](double time) {
+        auto includeSampleTime = [&](double time) {
             if ( !std::isfinite(time) ) return;
 
             const double absY = cache->toUnscaledAbsY(cache->getAbsY(time));
@@ -374,14 +463,7 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
             index->maxHs = std::max(index->maxHs, hs);
         };
 
-        includeEndpoint(note.m_timestamp);
-        includeEndpoint(note.m_timestamp + std::max(0.0, note.m_duration));
-        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( const auto& sub : note.m_subNotes ) {
-                includeEndpoint(sub.timestamp);
-                includeEndpoint(sub.timestamp + std::max(0.0, sub.duration));
-            }
-        }
+        forEachNoteVisibilitySampleTime(note, cache, includeSampleTime);
 
         if ( !std::isfinite(minAbsY) || !std::isfinite(maxAbsY) ) {
             continue;
@@ -438,34 +520,23 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     return *index;
 }
 
-static std::vector<entt::entity> getNotesInRange(
+static void collectNotesInRange(
     entt::registry& registry, const ScrollCache* cache, double currentTime,
     double currentAbsY, float judgmentLineY, float topY, float bottomY,
-    float renderScaleY, float visualPaddingPixels, double interpolationSeconds)
+    float renderScaleY, float visualPaddingPixels, double interpolationSeconds,
+    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen)
 {
-    std::vector<entt::entity> result;
-    const auto**              sortedEntitiesPtr =
+    result.clear();
+    seen.clear();
+    const auto** sortedEntitiesPtr =
         registry.ctx().find<const std::vector<entt::entity>*>();
-    if ( !sortedEntitiesPtr || !(*sortedEntitiesPtr) ) return result;
-    const auto** maxEndPrefixPtr =
-        registry.ctx().find<const std::vector<double>*>();
+    if ( !sortedEntitiesPtr || !(*sortedEntitiesPtr) ) return;
 
     const auto& entities = **sortedEntitiesPtr;
     size_t      count    = entities.size();
     if ( count == 0 || !cache || std::abs(renderScaleY) < 1e-6f ) {
-        return result;
+        return;
     }
-
-    auto getCarrierEnd = [&](const NoteComponent& note) {
-        double carrierEnd = note.m_timestamp + std::max(0.0, note.m_duration);
-        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( const auto& sub : note.m_subNotes ) {
-                carrierEnd = std::max(
-                    carrierEnd, sub.timestamp + std::max(0.0, sub.duration));
-            }
-        }
-        return carrierEnd;
-    };
 
     double maxDelta =
         (judgmentLineY - topY) / static_cast<double>(renderScaleY);
@@ -477,23 +548,22 @@ static std::vector<entt::entity> getNotesInRange(
                           cache, currentTime, interpolationSeconds);
 
     auto isDisplayVisible = [&](const NoteComponent& note) {
-        double minDisplayDelta = cache->getDisplayDelta(
-            note.m_timestamp, currentAbsY, note.m_timestamp);
-        double maxDisplayDelta = minDisplayDelta;
+        double minDisplayDelta = std::numeric_limits<double>::infinity();
+        double maxDisplayDelta = -std::numeric_limits<double>::infinity();
 
         auto includeTime = [&](double time) {
             double displayDelta =
                 cache->getDisplayDelta(time, currentAbsY, time);
+            if ( !std::isfinite(displayDelta) ) return;
             minDisplayDelta = std::min(minDisplayDelta, displayDelta);
             maxDisplayDelta = std::max(maxDisplayDelta, displayDelta);
         };
 
-        includeTime(note.m_timestamp + std::max(0.0, note.m_duration));
-        if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( const auto& sub : note.m_subNotes ) {
-                includeTime(sub.timestamp);
-                includeTime(sub.timestamp + std::max(0.0, sub.duration));
-            }
+        forEachNoteVisibilitySampleTime(note, cache, includeTime);
+
+        if ( !std::isfinite(minDisplayDelta) ||
+             !std::isfinite(maxDisplayDelta) ) {
+            return false;
         }
 
         return maxDisplayDelta >= minDelta - padDelta &&
@@ -512,193 +582,126 @@ static std::vector<entt::entity> getNotesInRange(
         }
     };
 
-    const bool needsFullExactDisplayScan = cache->getSegments().size() > 2048 &&
-                                           cache->getSegments().size() > count;
-    if ( cache->hasJumpEffects() ) {
-        const auto** noteRevisionPtr =
-            registry.ctx().find<const std::uint64_t*>();
-        if ( !noteRevisionPtr || !(*noteRevisionPtr) ) {
-            runFullExactScan();
-            return result;
+    auto appendPinnedDragEntities = [&]() {
+        const auto* pinnedEntities =
+            registry.ctx().find<DragRenderPinnedEntities>();
+        if ( !pinnedEntities || !pinnedEntities->entities ||
+             pinnedEntities->entities->empty() ) {
+            return;
         }
 
-        auto& index = getOrBuildNoteAbsYBucketIndex(
-            registry, cache, entities, **noteRevisionPtr);
-        if ( index.requiresFullExactScan ) {
-            runFullExactScan();
-            return result;
-        }
-        if ( index.entries.empty() || index.buckets.empty() ) {
-            return result;
+        seen.clear();
+        seen.reserve(result.size() + pinnedEntities->entities->size());
+        for ( auto entity : result ) {
+            seen.insert(entity);
         }
 
-        const double displayMin     = minDelta - padDelta;
-        const double displayMax     = maxDelta + padDelta;
-        double       queryMinAbsY   = std::numeric_limits<double>::infinity();
-        double       queryMaxAbsY   = -std::numeric_limits<double>::infinity();
-        auto         includeHsBound = [&](double hs) {
-            if ( !std::isfinite(hs) || hs <= 1e-6 ) return;
-            const double a = currentAbsY + displayMin / hs;
-            const double b = currentAbsY + displayMax / hs;
-            queryMinAbsY   = std::min(queryMinAbsY, std::min(a, b));
-            queryMaxAbsY   = std::max(queryMaxAbsY, std::max(a, b));
-        };
-        includeHsBound(index.minHs);
-        includeHsBound(index.maxHs);
-        if ( !std::isfinite(queryMinAbsY) || !std::isfinite(queryMaxAbsY) ) {
-            runFullExactScan();
-            return result;
-        }
-        queryMinAbsY = cache->toUnscaledAbsY(queryMinAbsY);
-        queryMaxAbsY = cache->toUnscaledAbsY(queryMaxAbsY);
-        if ( queryMinAbsY > queryMaxAbsY ) {
-            std::swap(queryMinAbsY, queryMaxAbsY);
-        }
-
-        auto bucketForAbsY = [&](double absY) {
-            const double relative =
-                (absY - index.bucketOrigin) / NOTE_ABSY_BUCKET_SIZE;
-            if ( relative <= 0.0 ) return std::size_t{ 0 };
-            auto bucket = static_cast<std::size_t>(std::floor(relative));
-            return std::min(bucket, index.buckets.size() - 1);
-        };
-
-        const auto startBucket = bucketForAbsY(queryMinAbsY);
-        const auto endBucket   = bucketForAbsY(queryMaxAbsY);
-        ++index.querySerial;
-        if ( index.querySerial == 0 ) {
-            std::fill(index.seenSerials.begin(), index.seenSerials.end(), 0);
-            index.querySerial = 1;
-        }
-
-        result.reserve(256);
-        for ( std::size_t bucket = startBucket; bucket <= endBucket;
-              ++bucket ) {
-            for ( std::uint32_t entryIndex : index.buckets[bucket] ) {
-                if ( entryIndex >= index.entries.size() ) continue;
-                if ( index.seenSerials[entryIndex] == index.querySerial ) {
-                    continue;
-                }
-                index.seenSerials[entryIndex] = index.querySerial;
-
-                const auto& entry = index.entries[entryIndex];
-                if ( entry.maxAbsY < queryMinAbsY ||
-                     entry.minAbsY > queryMaxAbsY ) {
-                    continue;
-                }
-                if ( !registry.valid(entry.entity) ||
-                     !registry.all_of<NoteComponent>(entry.entity) ) {
-                    continue;
-                }
-
-                const auto& note =
-                    registry.get<const NoteComponent>(entry.entity);
-                if ( note.m_isSubNote ) continue;
-                if ( isDisplayVisible(note) ) {
-                    result.push_back(entry.entity);
-                }
+        for ( auto entity : *pinnedEntities->entities ) {
+            if ( !seen.insert(entity).second ) {
+                continue;
             }
-            if ( bucket == endBucket || bucket == index.buckets.size() - 1 ) {
-                break;
+            if ( !registry.valid(entity) ||
+                 !registry.all_of<NoteComponent>(entity) ) {
+                continue;
             }
-        }
 
-        return result;
-    }
-
-    if ( needsFullExactDisplayScan ) {
-        runFullExactScan();
-        return result;
-    }
-
-    double topAbsY = currentAbsY +
-                     (judgmentLineY - topY) / static_cast<double>(renderScaleY);
-    double bottomAbsY = currentAbsY + (judgmentLineY - bottomY) /
-                                          static_cast<double>(renderScaleY);
-    double padAbsY    = padDelta;
-    auto   timeRanges = cache->getTimeRangesForAbsYWindow(
-        std::min(topAbsY, bottomAbsY) - padAbsY,
-        std::max(topAbsY, bottomAbsY) + padAbsY);
-
-    std::vector<std::pair<double, double>> scanRanges;
-    scanRanges.reserve(timeRanges.size());
-    for ( const auto& [rangeStart, rangeEnd] : timeRanges ) {
-        double scanStart = std::max(0.0, rangeStart - 10.0);
-        if ( rangeEnd < scanStart ) continue;
-
-        if ( !scanRanges.empty() &&
-             scanStart <= scanRanges.back().second + 1e-6 ) {
-            scanRanges.back().second =
-                std::max(scanRanges.back().second, rangeEnd);
-            continue;
-        }
-        scanRanges.emplace_back(scanStart, rangeEnd);
-    }
-
-    const std::vector<double>* maxEndPrefix =
-        (maxEndPrefixPtr && *maxEndPrefixPtr &&
-         (*maxEndPrefixPtr)->size() == entities.size())
-            ? *maxEndPrefixPtr
-            : nullptr;
-
-    std::unordered_set<entt::entity> seen;
-    auto                             addEntity = [&](entt::entity entity) {
-        if ( seen.insert(entity).second ) {
-            result.push_back(entity);
+            const auto& note = registry.get<const NoteComponent>(entity);
+            if ( note.m_isSubNote ) continue;
+            if ( isDisplayVisible(note) ) {
+                result.push_back(entity);
+            }
         }
     };
 
-    for ( const auto& [rangeStart, rangeEnd] : scanRanges ) {
-        auto startIt = std::lower_bound(
-            entities.begin(),
-            entities.end(),
-            rangeStart,
-            [&](entt::entity entity, double val) {
-                return registry.get<const NoteComponent>(entity).m_timestamp <
-                       val;
-            });
-
-        auto historyBegin = entities.begin();
-        if ( maxEndPrefix && startIt != entities.begin() ) {
-            auto prefixSearchEnd =
-                maxEndPrefix->begin() + (startIt - entities.begin());
-            auto prefixIt = std::lower_bound(
-                maxEndPrefix->begin(), prefixSearchEnd, rangeStart);
-            historyBegin =
-                entities.begin() + (prefixIt - maxEndPrefix->begin());
-        }
-
-        for ( auto cur = historyBegin; cur != startIt; ++cur ) {
-            entt::entity entity = *cur;
-            const auto&  note   = registry.get<const NoteComponent>(entity);
-            if ( note.m_isSubNote ) continue;
-            if ( getCarrierEnd(note) >= rangeStart ) {
-                addEntity(entity);
-            }
-        }
-
-        auto it = std::lower_bound(
-            entities.begin(),
-            entities.end(),
-            rangeStart,
-            [&](entt::entity entity, double val) {
-                return registry.get<const NoteComponent>(entity).m_timestamp <
-                       val;
-            });
-
-        for ( auto cur = it; cur != entities.end(); ++cur ) {
-            entt::entity entity = *cur;
-            const auto&  note   = registry.get<const NoteComponent>(entity);
-            if ( note.m_timestamp > rangeEnd ) {
-                break;
-            }
-
-            if ( note.m_isSubNote ) continue;
-            addEntity(entity);
-        }
+    const auto** noteRevisionPtr = registry.ctx().find<const std::uint64_t*>();
+    if ( !noteRevisionPtr || !(*noteRevisionPtr) ) {
+        runFullExactScan();
+        appendPinnedDragEntities();
+        return;
     }
 
-    return result;
+    auto& index = getOrBuildNoteAbsYBucketIndex(
+        registry, cache, entities, **noteRevisionPtr);
+    if ( index.requiresFullExactScan ) {
+        runFullExactScan();
+        appendPinnedDragEntities();
+        return;
+    }
+    if ( index.entries.empty() || index.buckets.empty() ) {
+        appendPinnedDragEntities();
+        return;
+    }
+
+    const double displayMin     = std::min(minDelta, maxDelta) - padDelta;
+    const double displayMax     = std::max(minDelta, maxDelta) + padDelta;
+    double       queryMinAbsY   = std::numeric_limits<double>::infinity();
+    double       queryMaxAbsY   = -std::numeric_limits<double>::infinity();
+    auto         includeHsBound = [&](double hs) {
+        if ( !std::isfinite(hs) || hs <= 1e-6 ) return;
+        const double a = currentAbsY + displayMin / hs;
+        const double b = currentAbsY + displayMax / hs;
+        queryMinAbsY   = std::min(queryMinAbsY, std::min(a, b));
+        queryMaxAbsY   = std::max(queryMaxAbsY, std::max(a, b));
+    };
+    includeHsBound(index.minHs);
+    includeHsBound(index.maxHs);
+    if ( !std::isfinite(queryMinAbsY) || !std::isfinite(queryMaxAbsY) ) {
+        runFullExactScan();
+        appendPinnedDragEntities();
+        return;
+    }
+    queryMinAbsY = cache->toUnscaledAbsY(queryMinAbsY);
+    queryMaxAbsY = cache->toUnscaledAbsY(queryMaxAbsY);
+    if ( queryMinAbsY > queryMaxAbsY ) {
+        std::swap(queryMinAbsY, queryMaxAbsY);
+    }
+
+    auto bucketForAbsY = [&](double absY) {
+        const double relative =
+            (absY - index.bucketOrigin) / NOTE_ABSY_BUCKET_SIZE;
+        if ( relative <= 0.0 ) return std::size_t{ 0 };
+        auto bucket = static_cast<std::size_t>(std::floor(relative));
+        return std::min(bucket, index.buckets.size() - 1);
+    };
+
+    const auto startBucket = bucketForAbsY(queryMinAbsY);
+    const auto endBucket   = bucketForAbsY(queryMaxAbsY);
+    ++index.querySerial;
+    if ( index.querySerial == 0 ) {
+        std::fill(index.seenSerials.begin(), index.seenSerials.end(), 0);
+        index.querySerial = 1;
+    }
+
+    result.reserve(256);
+    for ( std::size_t bucket = startBucket; bucket <= endBucket; ++bucket ) {
+        for ( std::uint32_t entryIndex : index.buckets[bucket] ) {
+            if ( entryIndex >= index.entries.size() ) continue;
+            if ( index.seenSerials[entryIndex] == index.querySerial ) {
+                continue;
+            }
+            index.seenSerials[entryIndex] = index.querySerial;
+
+            const auto& entry = index.entries[entryIndex];
+            if ( entry.maxAbsY < queryMinAbsY ||
+                 entry.minAbsY > queryMaxAbsY ) {
+                continue;
+            }
+            if ( !registry.valid(entry.entity) ||
+                 !registry.all_of<NoteComponent>(entry.entity) ) {
+                continue;
+            }
+
+            const auto& note = registry.get<const NoteComponent>(entry.entity);
+            if ( note.m_isSubNote ) continue;
+            if ( isDisplayVisible(note) ) {
+                result.push_back(entry.entity);
+            }
+        }
+        if ( bucket == endBucket || bucket == index.buckets.size() - 1 ) {
+            break;
+        }
+    }
+    appendPinnedDragEntities();
 }
 
 void NoteRenderSystem::generateNoteHitboxes(
@@ -955,7 +958,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX = leftX + note.m_trackIndex * singleTrackW;
+        float trackX  = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -1095,11 +1098,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
+                                 note.m_timestamp + note.m_duration,
+                                 ctx.cache->getAbsY(note.m_timestamp),
+                                 note.m_timestamp)) *
+                             renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1445,9 +1448,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                              (singleTrackW - ctx.noteW) * 0.5f;
-                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h = std::abs(y0 - y1) + ctx.noteH;
+                               (singleTrackW - ctx.noteW) * 0.5f;
+                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h  = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1486,9 +1489,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                              (singleTrackW - w) * 0.5f;
-                    float y = std::min(y0, y1) - h0 * 0.5f;
-                    float h = std::abs(y0 - y1) + h0;
+                               (singleTrackW - w) * 0.5f;
+                    float y  = std::min(y0, y1) - h0 * 0.5f;
+                    float h  = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1527,7 +1530,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                      (singleTrackW - verticalBodySize.x) * 0.5f;
+                       (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1596,7 +1599,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                      singleTrackW * 0.5f;
+                       singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;

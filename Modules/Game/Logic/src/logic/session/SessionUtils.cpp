@@ -1,13 +1,15 @@
 #include "logic/session/SessionUtils.h"
 #include "audio/AudioManager.h"
-#include "logic/EditorEngine.h"
+#include "config/Utf8Path.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/project/Project.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <vector>
 
 namespace MMM::Logic::SessionUtils
 {
@@ -38,7 +40,20 @@ const CameraInfo* findMainCanvasCamera(
 
 double getEffectiveTotalTimeSeconds(const SessionContext& ctx)
 {
-    double totalTime = Audio::AudioManager::instance().getTotalTime();
+    double totalTime = 0.0;
+    if ( ctx.mainAudioTotalTime > 0.0 &&
+         std::isfinite(ctx.mainAudioTotalTime) ) {
+        totalTime = ctx.mainAudioTotalTime;
+    }
+
+    const auto& loadedBgmPath =
+        Audio::AudioManager::instance().getLoadedBGMPath();
+    if ( !ctx.loadedMainAudioPath.empty() &&
+         loadedBgmPath == ctx.loadedMainAudioPath ) {
+        totalTime =
+            std::max(totalTime, Audio::AudioManager::instance().getTotalTime());
+    }
+
     if ( ctx.currentBeatmap ) {
         const double mapLengthMs =
             ctx.currentBeatmap->m_baseMapMetadata.map_length;
@@ -49,12 +64,129 @@ double getEffectiveTotalTimeSeconds(const SessionContext& ctx)
     return std::max(0.0, totalTime);
 }
 
+namespace
+{
+/// @brief 判断路径是否指向可访问的普通文件。
+/// @param path 待检查路径。
+/// @return 路径存在且为普通文件时返回 true。
+bool isRegularFilePath(const std::filesystem::path& path)
+{
+    if ( path.empty() ) return false;
+
+    std::error_code filesystemError;
+    const bool      isRegular =
+        std::filesystem::is_regular_file(path, filesystemError);
+    return isRegular && !filesystemError;
+}
+
+/// @brief 将候选路径加入解析列表。
+/// @param candidates 候选路径列表。
+/// @param path 待加入路径。
+void appendAudioPathCandidate(std::vector<std::filesystem::path>& candidates,
+                              const std::filesystem::path&        path)
+{
+    if ( path.empty() ) return;
+    candidates.push_back(path.lexically_normal());
+}
+
+/// @brief 若路径形如 项目目录名/资源文件，则加入去掉项目前缀后的候选。
+/// @param candidates 候选路径列表。
+/// @param projectRoot 项目根目录。
+/// @param audioPath 元数据中的音频路径。
+void appendProjectFolderStrippedCandidate(
+    std::vector<std::filesystem::path>& candidates,
+    const std::filesystem::path&        projectRoot,
+    const std::filesystem::path&        audioPath)
+{
+    if ( projectRoot.empty() || audioPath.empty() || audioPath.is_absolute() ) {
+        return;
+    }
+
+    auto iterator = audioPath.begin();
+    if ( iterator == audioPath.end() || *iterator != projectRoot.filename() ) {
+        return;
+    }
+
+    std::filesystem::path stripped;
+    ++iterator;
+    for ( ; iterator != audioPath.end(); ++iterator ) {
+        stripped /= *iterator;
+    }
+    appendAudioPathCandidate(candidates, projectRoot / stripped);
+}
+}  // namespace
+
+std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
+                                           const ::MMM::Project* project)
+{
+    if ( !ctx.currentBeatmap ) return {};
+
+    const auto& meta      = ctx.currentBeatmap->m_baseMapMetadata;
+    const auto& audioPath = meta.main_audio_path;
+    if ( audioPath.empty() ) return {};
+
+    std::vector<std::filesystem::path> candidates;
+    candidates.reserve(8);
+
+    if ( audioPath.is_absolute() ) {
+        appendAudioPathCandidate(candidates, audioPath);
+    }
+
+    std::filesystem::path projectRoot;
+    if ( project && !project->m_projectRoot.empty() ) {
+        projectRoot = project->m_projectRoot.lexically_normal();
+        appendAudioPathCandidate(candidates, projectRoot / audioPath);
+        appendProjectFolderStrippedCandidate(
+            candidates, projectRoot, audioPath);
+
+        const std::string audioPathUtf8 = Config::pathToUtf8(audioPath);
+        const std::string genericAudioPathUtf8 =
+            Config::pathToUtf8Generic(audioPath);
+        const std::string audioFileNameUtf8 =
+            Config::pathToUtf8(audioPath.filename());
+        for ( const auto& resource : project->m_audioResources ) {
+            if ( resource.m_path != audioPathUtf8 &&
+                 resource.m_path != genericAudioPathUtf8 &&
+                 resource.m_id != audioFileNameUtf8 ) {
+                continue;
+            }
+            const auto resourcePath = Config::utf8ToPath(resource.m_path);
+            appendAudioPathCandidate(candidates, projectRoot / resourcePath);
+            appendProjectFolderStrippedCandidate(
+                candidates, projectRoot, resourcePath);
+        }
+    }
+
+    const std::filesystem::path mapDirectory =
+        meta.map_path.parent_path().lexically_normal();
+    if ( !mapDirectory.empty() ) {
+        if ( projectRoot.empty() ) {
+            appendAudioPathCandidate(candidates, mapDirectory / audioPath);
+        } else {
+            appendAudioPathCandidate(candidates,
+                                     projectRoot / mapDirectory / audioPath);
+        }
+    }
+
+    for ( const auto& candidate : candidates ) {
+        if ( isRegularFilePath(candidate) ) {
+            return candidate.lexically_normal();
+        }
+    }
+
+    if ( !candidates.empty() ) {
+        return candidates.front().lexically_normal();
+    }
+    return audioPath.lexically_normal();
+}
+
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
-    const std::unordered_map<std::string, CameraInfo>& cameras)
+    const std::unordered_map<std::string, CameraInfo>& cameras,
+    double                                             fallbackBpm)
 {
     SnapResult result;
     int        beatDivisor = config.settings.beatDivisor;
@@ -104,17 +236,10 @@ SnapResult getSnapResult(
         if ( rawTime > nextBpmTime ) continue;
 
         double bVal = bpmVal;
-        if ( bVal <= 0.0 ) {
-            bVal = 120.0;
-            // 获取全局活动 Session 里的 Beatmap 预设 BPM
-            if ( auto session = EditorEngine::instance().getActiveSession() ) {
-                if ( auto beatmap = session->getContext().currentBeatmap ) {
-                    if ( beatmap->m_baseMapMetadata.preference_bpm > 0.0 ) {
-                        bVal = beatmap->m_baseMapMetadata.preference_bpm;
-                    }
-                }
-            }
+        if ( !std::isfinite(bVal) || bVal <= 0.0 ) {
+            bVal = fallbackBpm;
         }
+        if ( !std::isfinite(bVal) || bVal <= 0.0 ) bVal = 120.0;
         double beatDuration = 60.0 / bVal;
         double stepDuration = beatDuration / beatDivisor;
 
@@ -130,7 +255,7 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float  snapY    = judgmentLineY -
+        float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( config.settings.scrollSnap ||
@@ -164,7 +289,7 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
+    auto it = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

@@ -59,28 +59,35 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     RenderContext rctx(this, windowName.c_str(), m_targetWidth, m_targetHeight);
 
     // --- 交互：发送鼠标位置指令给逻辑线程 ---
-    ImVec2 mousePos      = ImGui::GetMousePos();
-    ImVec2 windowPos     = ImGui::GetCursorScreenPos();
-    ImVec2 contentSize   = ImGui::GetContentRegionAvail();
-    ImVec2 localMousePos = { mousePos.x - windowPos.x,
-                             mousePos.y - windowPos.y };
+    ImVec2     mousePos         = ImGui::GetMousePos();
+    ImVec2     windowPos        = ImGui::GetCursorScreenPos();
+    ImVec2     contentSize      = ImGui::GetContentRegionAvail();
+    const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
+                                  std::isfinite(mousePos.x) &&
+                                  std::isfinite(mousePos.y);
+    ImVec2     localMousePos{ 0.0f, 0.0f };
+    if ( hasValidMousePos ) {
+        localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
+    } else if ( m_lastMouseCommand.valid ) {
+        localMousePos = { m_lastMouseCommand.pos.x, m_lastMouseCommand.pos.y };
+    }
 
-    bool isHoveringContent = mousePos.x >= windowPos.x &&
+    bool isHoveringContent = hasValidMousePos && mousePos.x >= windowPos.x &&
                              mousePos.x <= windowPos.x + contentSize.x &&
                              mousePos.y >= windowPos.y &&
                              mousePos.y <= windowPos.y + contentSize.y;
 
     bool isHovered = ImGui::IsWindowHovered() && isHoveringContent;
 
-    ImVec2 clickPos              = ImGui::GetIO().MouseClickedPos[0];
-    bool   clickStartedInContent = clickPos.x >= windowPos.x &&
-                                 clickPos.x <= windowPos.x + contentSize.x &&
-                                 clickPos.y >= windowPos.y &&
-                                 clickPos.y <= windowPos.y + contentSize.y;
+    ImVec2 clickPos = ImGui::GetIO().MouseClickedPos[0];
+    bool   clickStartedInContent =
+        hasValidMousePos && clickPos.x >= windowPos.x &&
+        clickPos.x <= windowPos.x + contentSize.x &&
+        clickPos.y >= windowPos.y && clickPos.y <= windowPos.y + contentSize.y;
 
     // 仅当点击起源于内容区，并且当前窗口拥有焦点时，才视为拖拽
-    bool isDragging = ImGui::IsMouseDragging(0) && clickStartedInContent &&
-                      ImGui::IsWindowFocused();
+    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0) &&
+                      clickStartedInContent && ImGui::IsWindowFocused();
 
     float viewportWidth  = ImGui::GetWindowWidth();
     float viewportHeight = ImGui::GetWindowHeight();

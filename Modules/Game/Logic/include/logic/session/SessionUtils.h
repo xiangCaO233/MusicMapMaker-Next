@@ -3,6 +3,12 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include <entt/entt.hpp>
+#include <filesystem>
+
+namespace MMM
+{
+class Project;
+}
 
 namespace MMM::Logic::SessionUtils
 {
@@ -31,6 +37,7 @@ struct SnapResult {
 /// @param timelineRegistry 时间轴注册表
 /// @param animateTime 当前动画渲染时间。
 /// @param cameras 所有的相机视口字典
+/// @param fallbackBpm 无效 BPM 事件使用的回退 BPM。
 /// @warning
 /// 逻辑热路径：鼠标悬停、绘制和拖拽物件时会频繁调用；禁止在此函数中加入文件系统访问、完整
 /// ECS 遍历、完整排序或 try/catch。
@@ -40,7 +47,8 @@ SnapResult getSnapResult(
     const Config::EditorConfig&                  config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
-    const std::unordered_map<std::string, CameraInfo>& cameras);
+    const std::unordered_map<std::string, CameraInfo>& cameras,
+    double                                             fallbackBpm);
 
 /// @brief 根据当前动画时间同步打击事件的索引。
 /// @param ctx 会话上下文引用
@@ -74,6 +82,15 @@ void rebuildHitEvents(SessionContext& ctx);
 /// @warning 逻辑/UI 热路径：播放、seek clamp 和快照生成会调用；只允许读取
 /// AudioManager 当前缓存时长和 currentBeatmap 元数据，禁止加入文件系统访问。
 double getEffectiveTotalTimeSeconds(const SessionContext& ctx);
+
+/// @brief 解析当前谱面主音频的可访问文件路径。
+/// @param ctx 会话上下文引用。
+/// @param project 当前项目；为空时回退到谱面文件所在目录。
+/// @return 优先返回存在的音频路径；没有可访问文件时返回最佳候选路径。
+/// @warning 低频资源路径解析：会访问文件系统和项目资源表，仅允许在载入谱面、
+/// 播放状态切换、切换画布或元数据变更时调用，禁止放入每帧 update。
+std::filesystem::path resolveMainAudioPath(const SessionContext& ctx,
+                                           const ::MMM::Project* project);
 
 /// @brief 载入新的谱面数据到上下文中
 /// @param ctx 会话上下文引用

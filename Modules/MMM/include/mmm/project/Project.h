@@ -71,6 +71,12 @@ public:
     /// @brief 项目实际在文件系统中的根路径
     std::filesystem::path m_projectRoot;
 
+    /// @brief 当前项目是否为拖拽谱面包创建的临时只读项目。
+    bool m_isTemporaryProject{ false };
+
+    /// @brief 临时项目对应的原始谱面包路径。
+    std::filesystem::path m_temporarySourcePackagePath;
+
     /// @brief 序列化项目配置。
     friend void to_json(nlohmann::json& j, const Project& p)
     {

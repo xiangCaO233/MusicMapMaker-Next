@@ -760,6 +760,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    Logic::EditorEngine::instance().publishRenderFps(ImGui::GetIO().Framerate);
+
     syncProjectWorkspaceState();
 
     // 清理已关闭的 IUIView

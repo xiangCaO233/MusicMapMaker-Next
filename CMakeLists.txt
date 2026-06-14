@@ -18,6 +18,33 @@ include("pgo")
 
 enable_testing()
 
+set(
+	MMM_TEST_RESOURCE_DIR
+	"${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+	CACHE
+		PATH
+		"Shared test resource directory."
+)
+
+function(mmm_set_test_target MODULE_NAME TARGET_NAME)
+	set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
+	set_target_properties(${TARGET_NAME}
+		PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${TEST_RUNTIME_DIR}"
+	)
+
+	foreach(CONFIG_NAME Debug Release RelWithDebInfo MinSizeRel)
+		string(TOUPPER "${CONFIG_NAME}" CONFIG_NAME_UPPER)
+		set_target_properties(${TARGET_NAME}
+			PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER} "${TEST_RUNTIME_DIR}"
+		)
+	endforeach()
+endfunction()
+
+function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
+	add_executable(${TARGET_NAME} ${ARGN})
+	mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
+endfunction()
+
 # 从源码编译依赖 默认开启
 option(SOURCES_BUILD "Build Deps from sources." ON)
 

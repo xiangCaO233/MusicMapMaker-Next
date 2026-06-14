@@ -20,6 +20,7 @@ void MainMenuView::startUpdateCheck()
     m_isSilentCheck       = false;
     m_showCheckingPopup   = true;
     m_updatePopupCanceled = false;
+    m_updateRestartError.clear();
     m_updateChecker->checkAsync();
 }
 
@@ -410,11 +411,9 @@ void MainMenuView::renderUpdateCheckingPopup()
         m_showCheckingPopup = false;
     }
 
-    bool  open     = true;
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    if ( modalScope.begin(TR("ui.help.check_update"), &open) ) {
-        if ( !open ) ImGui::CloseCurrentPopup();
+    if ( modalScope.begin(TR("ui.help.check_update")) ) {
         auto info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
@@ -486,17 +485,9 @@ void MainMenuView::renderUpdatePopup()
             ImGui::OpenPopup(TR("ui.help.update_found"));
     }
 
-    bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
-                      info.status == MMM::Network::UpdateStatus::kDownloaded);
-    bool open      = true;
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    if ( modalScope.begin(TR("ui.help.update_found"),
-                          isWorking ? nullptr : &open) ) {
-        if ( !open ) {
-            ImGui::CloseCurrentPopup();
-            m_updatePopupCanceled = true;
-        }
+    if ( modalScope.begin(TR("ui.help.update_found")) ) {
         info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
@@ -590,6 +581,7 @@ void MainMenuView::renderUpdatePopup()
             if ( !info.downloadUrl.empty() ) {
                 if ( ImGui::Button(TR("ui.help.download_and_install").data(),
                                    ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
+                    m_updateRestartError.clear();
                     m_updateChecker->downloadAsync();
                 }
                 ImGui::SameLine();
@@ -633,12 +625,31 @@ void MainMenuView::renderUpdatePopup()
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - textWidth) * 0.5f);
             ImGui::TextUnformatted(TR("ui.help.download_complete").data());
 
-            float btnWidth = 200.0f * dpiScale;
+            float btnWidth = std::max(
+                200.0f * dpiScale,
+                ImGui::CalcTextSize(TR("ui.help.restart_to_update").data()).x +
+                    48.0f * dpiScale);
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
             if ( ImGui::Button(TR("ui.help.restart_to_update").data(),
                                ImVec2(btnWidth, 40.0f * dpiScale)) ) {
-                MMM::Network::UpdateChecker::applyUpdateAndRestart(
-                    info.downloadedFilePath, info.updaterFilePath);
+                std::string restartError;
+                m_updateRestartError.clear();
+                if ( !MMM::Network::UpdateChecker::applyUpdateAndRestart(
+                         info.downloadedFilePath,
+                         info.updaterFilePath,
+                         &restartError) ) {
+                    m_updateRestartError = restartError.empty()
+                                               ? "Failed to launch updater"
+                                               : restartError;
+                }
+            }
+
+            if ( !m_updateRestartError.empty() ) {
+                ImGui::Spacing();
+                ImVec4 errColor(1.0f, 0.4f, 0.4f, 1.0f);
+                ImGui::PushStyleColor(ImGuiCol_Text, errColor);
+                ImGui::TextWrapped("%s", m_updateRestartError.c_str());
+                ImGui::PopStyleColor();
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
             ImVec4 errColor(1.0f, 0.4f, 0.4f, 1.0f);

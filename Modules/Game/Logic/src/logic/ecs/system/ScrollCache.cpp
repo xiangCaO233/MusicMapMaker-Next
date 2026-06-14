@@ -501,6 +501,75 @@ bool ScrollCache::hasJumpEffects() const
     return m_hasJumpEffects;
 }
 
+bool ScrollCache::canInterpolateLinearly(double startTime,
+                                         double duration) const
+{
+    if ( !std::isfinite(startTime) || !std::isfinite(duration) ||
+         duration <= 0.0 ) {
+        return false;
+    }
+
+    const double endTime = startTime + duration;
+    if ( !std::isfinite(endTime) || endTime <= startTime ) {
+        return false;
+    }
+
+    auto nextSegmentIt = std::upper_bound(
+        m_segments.begin(),
+        m_segments.end(),
+        startTime,
+        [](double val, const ScrollSegment& seg) { return val < seg.time; });
+
+    if ( nextSegmentIt != m_segments.end() && nextSegmentIt->time < endTime ) {
+        return false;
+    }
+
+    if ( nextSegmentIt != m_segments.begin() ) {
+        const auto& currentSegment = *std::prev(nextSegmentIt);
+        if ( (currentSegment.effects & SCROLL_EFFECT_JUMP) != 0 ) {
+            return false;
+        }
+    } else if ( !m_segments.empty() &&
+                (m_segments.front().effects & SCROLL_EFFECT_JUMP) != 0 ) {
+        return false;
+    }
+
+    if ( m_hasJumpEffects ) {
+        const double jumpQueryStart = startTime - duration;
+        auto         jumpIt =
+            std::lower_bound(m_segments.begin(),
+                             m_segments.end(),
+                             jumpQueryStart,
+                             [](const ScrollSegment& seg, double value) {
+                                 return seg.time < value;
+                             });
+
+        for ( ; jumpIt != m_segments.end() && jumpIt->time <= endTime;
+              ++jumpIt ) {
+            if ( (jumpIt->effects & SCROLL_EFFECT_JUMP) != 0 ) {
+                return false;
+            }
+        }
+    }
+
+    if ( !m_microImpulseWindows.empty() ) {
+        auto windowIt = std::lower_bound(
+            m_microImpulseWindows.begin(),
+            m_microImpulseWindows.end(),
+            startTime,
+            [](const MicroImpulseWindow& window, double value) {
+                return window.endTime < value;
+            });
+
+        if ( windowIt != m_microImpulseWindows.end() &&
+             windowIt->startTime < endTime ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 double ScrollCache::getMaxJumpSecondsInRange(double startTime, double endTime,
                                              double padding) const
 {

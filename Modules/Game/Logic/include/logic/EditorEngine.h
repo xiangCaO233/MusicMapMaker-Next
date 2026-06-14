@@ -65,6 +65,14 @@ public:
         return ProjectController::instance().currentProject();
     }
 
+    /// @brief 当前是否打开了临时只读项目。
+    /// @return 当前项目为临时项目时返回 true。
+    bool isTemporaryProjectOpen() const;
+
+    /// @brief 获取当前临时项目的运行时路径信息。
+    /// @return 当前临时项目源包与缓存目录；非临时项目时返回默认值。
+    ProjectController::TemporaryProjectInfo currentTemporaryProjectInfo() const;
+
     /**
      * @brief 向当前活动的 Session 推送指令
      */
@@ -109,6 +117,10 @@ public:
 
     /// @brief 从项目中移除谱面
     void handleRemoveBeatmap(const CmdRemoveBeatmap& cmd);
+
+    /// @brief 将当前临时项目保存到正式项目目录。
+    /// @param cmd 保存临时项目指令。
+    void handleSaveTemporaryProject(const CmdSaveTemporaryProject& cmd);
 
     /// @brief 更新编辑器级剪贴板。
     void setClipboard(std::vector<ClipboardItem> items,
@@ -272,6 +284,17 @@ public:
     const std::unordered_map<uint32_t, glm::vec4>& getAtlasUVMap(
         const std::string& cameraId) const;
 
+    /// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
+    /// @param cameraId 目标画布 cameraId。
+    /// @param target 目标快照中的 UV 映射表。
+    /// @param targetRevision 目标快照当前持有的 UV 修订号。
+    /// @warning 逻辑/渲染热路径：每个快照生成时调用；只有图集变化时才复制 UV
+    /// 表，普通路径只做锁内查找和 revision 比较。
+    void updateSnapshotAtlasUVMap(
+        const std::string&                       cameraId,
+        std::unordered_map<uint32_t, glm::vec4>& target,
+        std::uint64_t&                           targetRevision) const;
+
     /**
      * @brief 获取当前编辑器配置
      */
@@ -302,6 +325,30 @@ public:
     {
         return m_logicUps.load(std::memory_order_relaxed);
     }
+
+    /// @brief 发布主渲染线程实时帧率。
+    /// @param fps ImGui 或渲染循环统计出的当前 FPS。
+    /// @warning UI/逻辑热路径原子：UI 线程每帧写入，逻辑线程每 update
+    /// 读取；只承载自适应 RenderSnapshot 预算，使用 relaxed。
+    void publishRenderFps(float fps);
+
+    /// @brief 获取主渲染线程实时帧率。
+    /// @return 最近发布的 FPS；尚未发布时返回 0。
+    /// @warning
+    /// UI/逻辑热路径原子：状态栏和逻辑线程可每帧读取；只用于统计和快照预算。
+    float getRenderFps() const
+    {
+        return m_renderFps.load(std::memory_order_relaxed);
+    }
+
+    /// @brief 根据实时 UPS/FPS 计算 RenderSnapshot 最小生成间隔。
+    /// @param config 当前编辑器配置。
+    /// @param secondaryCamera 是否为 Preview/Timeline 等辅助视图。
+    /// @return 当前建议的最小快照间隔，单位秒。
+    /// @warning 逻辑热路径：每 update 或每辅助相机执行；仅读取 relaxed
+    /// 原子并做常量级数学运算，禁止访问 ECS 或同步缓冲区。
+    double adaptiveRenderSnapshotMinInterval(const Config::EditorConfig& config,
+                                             bool secondaryCamera) const;
 
     /// @brief 获取逻辑线程发布的软件光标 BPM 同步烟雾寿命。
     /// @return 当前 BPM 对应的一拍时长；无有效谱面或 BPM 时返回 -1。
@@ -366,6 +413,15 @@ private:
         const std::optional<ProjectController::ProjectCreationOptions>&
             creationOptions = std::nullopt);
 
+    /// @brief 打开谱面包为临时只读项目。
+    /// @param packagePath 需要临时阅览的谱面包路径。
+    void openTemporaryProjectPackage(const std::filesystem::path& packagePath);
+
+    /// @brief 应用项目控制器打开项目后的逻辑副作用。
+    /// @param openResult 项目控制器返回的打开结果。
+    void finishOpenProject(
+        const ProjectController::OpenProjectResult& openResult);
+
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
 
@@ -428,11 +484,6 @@ private:
     /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
     RenderSyncRegistry m_renderSyncRegistry;
 
-    /// @brief 逻辑线程复用的 Session 更新快照容器。
-    /// @warning 逻辑热路径/共享指针：每 update 复用容量以避免 vector
-    /// 分配；元素持有 shared_ptr 是为了保证锁外 update 生命周期安全。
-    std::vector<SessionSnapshotEntry> m_sessionUpdateSnapshot;
-
     /// @brief 非活跃 Session 最近一次生成渲染快照的时间点，按 Session
     /// 索引存储。
     /// @warning 逻辑热路径：每 update
@@ -447,6 +498,11 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 主渲染线程实时刷新率 (FPS)。
+    /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update
+    /// 读取；仅用于展示和 RenderSnapshot 自适应预算，使用 relaxed。
+    std::atomic<float> m_renderFps{ 0.0f };
 
     /// @brief 逻辑线程发布给渲染线程的软件光标烟雾寿命覆盖值。
     /// @warning 逻辑/UI 热路径/原子：逻辑线程每 update

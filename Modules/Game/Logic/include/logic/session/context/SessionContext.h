@@ -14,12 +14,15 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace MMM::Logic
 {
+
+class BeatmapSyncBuffer;
 
 /// @brief 相机/视口信息
 struct CameraInfo {
@@ -40,6 +43,12 @@ struct MarqueeBox {
 /// @brief 剪贴板条目
 struct ClipboardItem {
     NoteComponent note;  ///< 复制的音符组件数据
+};
+
+/// @brief 提供给渲染系统的拖动中实体列表视图。
+struct DragRenderPinnedEntities {
+    /// @brief 当前拖动手势中需要绕过静态可见性索引补充渲染的实体列表。
+    const std::vector<entt::entity>* entities{ nullptr };
 };
 
 /// @brief 共享的上下文状态，记录了当前会话的所有运行时数据，供各个 Controller
@@ -72,6 +81,18 @@ struct SessionContext {
               cameras;               ///< 当前所有活跃视口的信息
     glm::vec2 bgSize{ 0.0f, 0.0f };  ///< 背景图原始尺寸
 
+    /// @brief 当前 Session 已解析过的画布同步缓冲区缓存。
+    /// @warning 逻辑热路径共享指针：快照生成每 update 只读取 map
+    /// 中已有 shared_ptr 引用，不复制所有权；首次遇到新 cameraId
+    /// 时才从 RenderSyncRegistry 解析并保存所有权。
+    std::unordered_map<std::string, std::shared_ptr<BeatmapSyncBuffer>>
+        syncBuffers;
+
+    /// @brief 当前 Session 各画布最近一次发布渲染快照的系统时间。
+    /// @warning
+    /// 逻辑热路径状态：播放时用于给辅助画布快照生成施加背压；只在逻辑线程读写。
+    std::unordered_map<std::string, double> lastCameraSnapshotTimes;
+
     // --- 音频与播放状态 ---
     double    lastAudioPos{ 0.0 };         ///< 最近一次音频同步包中的时间戳
     double    lastAudioSysTime{ 0.0 };     ///< 最近一次音频同步包时的系统时间
@@ -79,6 +100,13 @@ struct SessionContext {
     bool      hasInitialAudioOffset{ false };  ///< 是否已初始化平滑偏移
     SyncClock syncClock;         ///< 用于平滑音频时间与逻辑时间的时钟
     double    syncTimer{ 0.0 };  ///< 音频强制同步计时器
+
+    /// @brief 当前 Session 主音频的绝对 UTF-8 路径；未成功加载时为空。
+    std::string loadedMainAudioPath;
+    /// @brief 当前 Session 主音频总时长，单位秒。
+    /// @warning 逻辑/UI 热路径缓存：由低频音频加载路径写入，播放、seek clamp
+    /// 和快照生成只读取该值，禁止在读取点改为文件系统探测或解码。
+    double mainAudioTotalTime{ 0.0 };
 
     /// @brief 播放开始时的系统时钟 (steady_clock, 秒)
     double playStartSysTime{ 0.0 };
@@ -130,6 +158,8 @@ struct SessionContext {
     std::optional<NoteComponent>
         dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
     std::string dragCameraId;  ///< 发起拖拽的视口 ID
+    /// @brief 当前拖动手势中需要补充渲染的实体列表。
+    std::vector<entt::entity> dragRenderPinnedEntities;
 
     bool isSelecting{ false };          ///< 是否正在进行框选操作
     bool hasMarqueeSelection{ false };  ///< 是否当前存在有效的框选结果

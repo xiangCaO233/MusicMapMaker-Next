@@ -7,6 +7,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 namespace MMM::Logic
@@ -14,6 +15,48 @@ namespace MMM::Logic
 
 namespace
 {
+/// @brief 最小允许放置物件的时间戳，单位秒。
+constexpr double MIN_PLACEABLE_NOTE_TIME = 0.0;
+
+/// @brief 判断绘制工具是否允许在指定时间创建物件。
+/// @param time 待检查时间戳，单位秒。
+/// @return 时间有限且不早于 0 秒时返回 true。
+bool isPlaceableNoteTime(double time)
+{
+    return std::isfinite(time) && time >= MIN_PLACEABLE_NOTE_TIME;
+}
+
+/// @brief 判断即将创建的物件及其子物件是否都位于可放置时间范围内。
+/// @param note 待检查物件。
+/// @return 所有时间戳均有效且不为负时返回 true。
+bool isPlaceableNote(const NoteComponent& note)
+{
+    if ( !isPlaceableNoteTime(note.m_timestamp) ) {
+        return false;
+    }
+
+    if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
+        for ( const auto& subNote : note.m_subNotes ) {
+            if ( !isPlaceableNoteTime(subNote.timestamp) ) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+/// @brief 清理当前绘制笔刷状态。
+/// @param ctx 会话上下文引用。
+void resetBrushState(SessionContext& ctx)
+{
+    ctx.brushState.polylineSegments.clear();
+    ctx.brushState.holdStartTime = -1.0;
+    ctx.brushState.duration      = 0.0;
+    ctx.brushState.dtrack        = 0;
+    ctx.brushState.isActive      = false;
+}
+
 /// @brief 判断批量操作条目中是否已经包含指定实体。
 bool hasBatchEntryForEntity(const std::vector<BatchNoteAction::Entry>& entries,
                             entt::entity                               entity)
@@ -128,8 +171,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -142,18 +185,27 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
     double rawTime = cache->getTime(currentAbsY + deltaY);
 
-    auto snap = SessionUtils::getSnapResult(rawTime,
-                                            cmd.mouseY,
-                                            itCamera->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto snap = SessionUtils::getSnapResult(
+        rawTime,
+        cmd.mouseY,
+        itCamera->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
-    float trackAreaW    = rightX - leftX;
-    float singleTrackW  = trackAreaW / static_cast<float>(ctx.trackCount);
+    if ( !isPlaceableNoteTime(ctx.brushState.time) ) {
+        resetBrushState(ctx);
+        return;
+    }
+
+    float trackAreaW   = rightX - leftX;
+    float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   track =
         static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     ctx.brushState.track = std::clamp(track, 0, ctx.trackCount - 1);
@@ -335,8 +387,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -348,17 +400,26 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     deltaY /= renderScaleY;
 
     double rawTime = cache->getTime(currentAbsY + deltaY);
-    auto   snap    = SessionUtils::getSnapResult(rawTime,
-                                            cmd.mouseY,
-                                            itCamera->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto   snap    = SessionUtils::getSnapResult(
+        rawTime,
+        cmd.mouseY,
+        itCamera->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     double currentPosTime =
         (snap.isSnapped && !cmd.isCtrlDown) ? snap.snappedTime : rawTime;
+    if ( !std::isfinite(currentPosTime) ) {
+        resetBrushState(ctx);
+        return;
+    }
+    currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
 
     float leftX =
         itCamera->second.viewportWidth * ctx.lastConfig.visual.trackLayout.left;
@@ -996,6 +1057,13 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         }
     }
 
+    if ( !isPlaceableNote(note) ) {
+        XWARN("DrawTool: blocked note placement before 0s (time={:.3f})",
+              note.m_timestamp);
+        resetBrushState(ctx);
+        return;
+    }
+
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         // 创建折线父实体及所有子物件实体
         entt::entity parentEnt = ctx.noteRegistry.create();
@@ -1029,11 +1097,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     }
 
     // 重置状态
-    ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = -1.0;
-    ctx.brushState.duration      = 0.0;
-    ctx.brushState.dtrack        = 0;
-    ctx.brushState.isActive      = false;
+    resetBrushState(ctx);
 }
 
 void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)

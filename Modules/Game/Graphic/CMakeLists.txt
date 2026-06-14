@@ -11,6 +11,7 @@ add_library(Graphic STATIC
  src/glfw/adapters/Win32WindowAdapter.cpp
  src/glfw/adapters/X11WindowAdapter.cpp
  src/imguivk/context/VKContext.cpp
+ src/imguivk/context/VKContextDiagnostics.cpp
  src/imguivk/context/VKContextGLFW.cpp
  src/imguivk/context/VKContextDevice.cpp
  src/imguivk/context/VKContextDebugFeats.cpp

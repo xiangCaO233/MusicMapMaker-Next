@@ -37,7 +37,14 @@ bool parseCanvasCameraId(const std::string& cameraId, int32_t& canvasId)
 }
 }  // namespace
 
-/// @brief 获取保护会话列表的递归锁。
+/// @brief 构造空会话注册表并发布初始空快照。
+SessionRegistry::SessionRegistry()
+{
+    /// @brief 初始化发布快照的短临界区。
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    publishSnapshotUnsafe();
+}
+
 std::recursive_mutex& SessionRegistry::mutex() const
 {
     return m_mutex;
@@ -202,9 +209,27 @@ void SessionRegistry::fillIndexedSessionSnapshot(
           ++index ) {
         const auto& entry = m_entries[static_cast<size_t>(index)];
         if ( entry.session ) {
-            sessions.push_back({ index, entry.session, entry.isCanvasVisible });
+            sessions.push_back({ index,
+                                 entry.session,
+                                 entry.isCanvasVisible,
+                                 entry.mainAudioSyncKey,
+                                 entry.isLogoPlaceholder });
         }
     }
+}
+
+/// @brief 获取当前发布给逻辑线程的不可变 Session 快照。
+/// @warning 逻辑热路径原子：只做 acquire 指针读取，不获取注册表锁。
+const PublishedSessionSnapshot& SessionRegistry::publishedSnapshot() const
+{
+    const auto* snapshot = m_publishedSnapshot.load(std::memory_order_acquire);
+    if ( snapshot ) {
+        return *snapshot;
+    }
+
+    /// @brief 极早期访问时使用的空快照兜底。
+    static const PublishedSessionSnapshot emptySnapshot;
+    return emptySnapshot;
 }
 
 /// @brief 查找第一个 Logo 占位 Session。
@@ -243,6 +268,7 @@ int32_t SessionRegistry::append(SessionEntry entry)
     /// @brief 新添加 Session 的列表索引。
     const int32_t newIndex = static_cast<int32_t>(m_entries.size()) - 1;
     setActiveIndex(newIndex);
+    publishSnapshotUnsafe();
     return newIndex;
 }
 
@@ -259,6 +285,7 @@ std::string SessionRegistry::erase(int32_t index)
     std::string cameraId = m_entries[index].cameraId;
     m_entries.erase(m_entries.begin() + index);
     normalizeActiveIndexAfterErase(index);
+    publishSnapshotUnsafe();
     return cameraId;
 }
 
@@ -272,6 +299,28 @@ std::vector<SessionEntry>& SessionRegistry::entriesUnsafe()
 const std::vector<SessionEntry>& SessionRegistry::entriesUnsafe() const
 {
     return m_entries;
+}
+
+/// @brief 将当前 SessionEntry 列表发布为新的逻辑线程只读快照。
+void SessionRegistry::publishSnapshotUnsafe()
+{
+    auto snapshot = std::make_unique<PublishedSessionSnapshot>();
+    snapshot->sessions.reserve(m_entries.size());
+    for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
+          ++index ) {
+        const auto& entry = m_entries[static_cast<size_t>(index)];
+        if ( entry.session ) {
+            snapshot->sessions.push_back({ index,
+                                           entry.session,
+                                           entry.isCanvasVisible,
+                                           entry.mainAudioSyncKey,
+                                           entry.isLogoPlaceholder });
+        }
+    }
+
+    const auto* publishedSnapshot = snapshot.get();
+    m_snapshotStorage.push_back(std::move(snapshot));
+    m_publishedSnapshot.store(publishedSnapshot, std::memory_order_release);
 }
 
 /// @brief 在调用者已持锁时判断索引是否有效。

@@ -40,6 +40,13 @@ private:
     static inline ImGuiID s_toolDockId{ 0 };
     static inline bool    s_projectWorkspaceLayoutLoaded{ false };
 
+    /// @brief 临时项目保存后需要继续执行的 UI 动作。
+    enum class TemporaryProjectAfterSaveAction {
+        None,          ///< 保存后不继续执行额外动作。
+        CloseProject,  ///< 保存后关闭当前项目。
+        ExitApp        ///< 保存后退出应用。
+    };
+
 public:
     MainDockSpaceUI(const std::string& name)
         : IUIView(name), ITextureLoader(name)
@@ -115,6 +122,20 @@ public:
     void renderStatusBar(UIManager* sourceManager, float statusBarHeight,
                          float dpiScale);
 
+    /// @brief 请求选择临时项目正式保存位置。
+    /// @warning UI 低频路径：用户点击保存临时项目时调用系统/统一文件选择器。
+    void requestTemporaryProjectSaveFolder();
+
+    /// @brief 渲染临时项目只读和关闭确认弹窗。
+    /// @param dpiScale 当前 DPI 缩放。
+    /// @param viewport 主 ImGui 视口。
+    /// @warning UI 热路径低频分支：只在弹窗打开时绘制少量文本和按钮。
+    void renderTemporaryProjectPopups(float dpiScale, ImGuiViewport* viewport);
+
+    /// @brief 处理临时项目提示和保存结果队列。
+    /// @warning UI 热路径：每帧只消费少量跨线程 UI 事件载荷。
+    void consumeTemporaryProjectQueues();
+
     ///@brief 是否需要重载
     bool m_needReload{ true };
 
@@ -142,6 +163,27 @@ public:
     bool                  m_showOverwriteModal = false;
     std::string           m_pendingOverwritePath;
     std::function<void()> m_onOverwriteConfirm;
+
+    /// @brief 是否显示临时项目只读提示弹窗。
+    bool m_showTemporaryProjectReadOnlyModal{ false };
+    /// @brief 是否显示临时项目关闭确认弹窗。
+    bool m_showTemporaryProjectCloseModal{ false };
+    /// @brief 是否正在等待临时项目保存结果。
+    bool m_temporaryProjectSaveInProgress{ false };
+    /// @brief 临时项目保存成功后需要继续执行的动作。
+    TemporaryProjectAfterSaveAction m_temporaryProjectAfterSaveAction{
+        TemporaryProjectAfterSaveAction::None
+    };
+    /// @brief 当前临时项目的原始包文件路径。
+    std::string m_temporaryProjectSourcePath;
+    /// @brief 当前临时项目的缓存目录路径。
+    std::string m_temporaryProjectCachePath;
+    /// @brief 临时项目保存失败时显示的错误信息。
+    std::string m_temporaryProjectSaveError;
+    /// @brief 临时项目保存成功后是否需要设置主窗口退出标记。
+    bool m_exitAfterTemporaryProjectSave{ false };
+    /// @brief 临时项目退出弹窗是否已经确认允许本次窗口关闭。
+    bool m_temporaryProjectExitConfirmed{ false };
 };
 
 }  // namespace MMM::UI

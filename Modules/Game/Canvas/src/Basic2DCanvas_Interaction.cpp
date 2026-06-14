@@ -20,12 +20,41 @@
 #include "ui/imgui/SideBarUI.h"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <system_error>
 
 namespace MMM::Canvas
 {
+namespace
+{
+/// @brief 连续拖动编辑命令的像素去重阈值。
+constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
+
+/// @brief 将 ASCII 扩展名转换为小写。
+/// @param value 输入扩展名。
+/// @return 小写后的扩展名。
+std::string toLowerAscii(std::string value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    return value;
+}
+
+/// @brief 判断拖拽路径是否为 zip 兼容谱面包。
+/// @param path 拖拽路径。
+/// @return 扩展名匹配临时阅览包格式时返回 true。
+bool isTemporaryPackagePath(const std::filesystem::path& path)
+{
+    const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
+    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
+           extension == ".osz" || extension == ".mpk";
+}
+}  // namespace
 
 Basic2DCanvasInteraction::Basic2DCanvasInteraction(
     const std::string& canvasName, const std::string& cameraId)
@@ -42,6 +71,35 @@ Basic2DCanvasInteraction::Basic2DCanvasInteraction(
 Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 {
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
+}
+
+/// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
+bool Basic2DCanvasInteraction::shouldSendContinuousEditCommand(
+    LastContinuousEditCommand& last, glm::vec2 pos, bool primaryModifier,
+    bool secondaryModifier)
+{
+    const bool shouldSend =
+        !last.valid ||
+        std::abs(last.pos.x - pos.x) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        std::abs(last.pos.y - pos.y) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        last.primaryModifier != primaryModifier ||
+        last.secondaryModifier != secondaryModifier;
+    if ( shouldSend ) {
+        last.valid             = true;
+        last.pos               = pos;
+        last.primaryModifier   = primaryModifier;
+        last.secondaryModifier = secondaryModifier;
+    }
+    return shouldSend;
+}
+
+/// @brief 清空连续拖动编辑命令缓存。
+void Basic2DCanvasInteraction::resetContinuousEditCommands()
+{
+    m_lastMarqueeUpdateCommand.valid = false;
+    m_lastBrushUpdateCommand.valid   = false;
+    m_lastMoveUpdateCommand.valid    = false;
+    m_lastEraseUpdateCommand.valid   = false;
 }
 
 void Basic2DCanvasInteraction::update(
@@ -109,8 +167,22 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
         for ( const auto& drop : m_pendingDrops ) {
             if ( !drop.paths.empty() ) {
                 std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+                if ( isTemporaryPackagePath(p) ) {
+                    XINFO("Package dropped on Canvas: {}",
+                          Config::pathToUtf8(p));
+
+                    Event::OpenTemporaryProjectPackageEvent ev;
+                    ev.m_packagePath = p;
+                    Event::EventBus::instance().publish(ev);
+                    continue;
+                }
+
+                std::error_code filesystemError;
+                const bool      isDirectory =
+                    std::filesystem::is_directory(p, filesystemError) &&
+                    !filesystemError;
                 std::filesystem::path projectPath =
-                    std::filesystem::is_directory(p) ? p : p.parent_path();
+                    isDirectory ? p : p.parent_path();
                 auto ext = Config::pathToUtf8(p.extension());
 
                 XINFO("File dropped on Canvas: {}, opening project: {}",
@@ -204,13 +276,24 @@ void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
 {
-    ImVec2 mousePos      = ImGui::GetMousePos();
-    ImVec2 windowPos     = ImGui::GetCursorScreenPos();
-    ImVec2 localMousePos = { mousePos.x - windowPos.x,
-                             mousePos.y - windowPos.y };
+    ImVec2     mousePos         = ImGui::GetMousePos();
+    ImVec2     windowPos        = ImGui::GetCursorScreenPos();
+    const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
+                                  std::isfinite(mousePos.x) &&
+                                  std::isfinite(mousePos.y);
+    ImVec2     localMousePos{ 0.0f, 0.0f };
+    if ( hasValidMousePos ) {
+        localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
+    } else if ( m_lastMouseCommand.valid ) {
+        localMousePos = { m_lastMouseCommand.pos.x, m_lastMouseCommand.pos.y };
+    }
 
-    bool isHovered  = ImGui::IsWindowHovered();
-    bool isDragging = ImGui::IsMouseDragging(0);
+    const bool isInsideCanvas =
+        hasValidMousePos && targetWidth > 0.0f && targetHeight > 0.0f &&
+        localMousePos.x >= 0.0f && localMousePos.x <= targetWidth &&
+        localMousePos.y >= 0.0f && localMousePos.y <= targetHeight;
+    bool isHovered  = isInsideCanvas && ImGui::IsWindowHovered();
+    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0);
 
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
@@ -555,6 +638,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnEntity = hoveredEntity != entt::null;
         m_leftPressDragged         = false;
         m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
 
         if ( isHovered ) {
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
@@ -605,24 +689,44 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( ImGui::IsMouseDragging(0) ) {
         m_leftPressDragged = true;
 
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
-        } else if ( !currentSnapshot->isPlaying &&
+        if ( m_leftPressStartedOnCanvas &&
+             currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            if ( shouldSendContinuousEditCommand(
+                     m_lastMarqueeUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyCtrl,
+                     false) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
+                        localMousePos.x, localMousePos.y }));
+            }
+        } else if ( m_leftPressStartedOnCanvas && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateBrush{ m_cameraId,
-                                       localMousePos.x,
-                                       localMousePos.y,
-                                       ImGui::GetIO().KeyShift,
-                                       ImGui::GetIO().KeyCtrl }));
-        } else if ( !currentSnapshot->isPlaying &&
+            if ( shouldSendContinuousEditCommand(
+                     m_lastBrushUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyShift,
+                     ImGui::GetIO().KeyCtrl) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateBrush{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           ImGui::GetIO().KeyShift,
+                                           ImGui::GetIO().KeyCtrl }));
+            }
+        } else if ( m_leftPressStartedOnEntity && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateDrag{ m_cameraId,
-                                      localMousePos.x,
-                                      localMousePos.y,
-                                      ImGui::GetIO().KeyCtrl }));
+            if ( shouldSendContinuousEditCommand(
+                     m_lastMoveUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyCtrl,
+                     false) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateDrag{ m_cameraId,
+                                          localMousePos.x,
+                                          localMousePos.y,
+                                          ImGui::GetIO().KeyCtrl }));
+            }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -635,15 +739,21 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     if ( ImGui::IsMouseReleased(0) ) {
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( m_leftPressStartedOnCanvas &&
+             currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
-        } else if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
+        } else if ( m_leftPressStartedOnEntity &&
+                    currentSnapshot->currentTool == Logic::EditTool::Move ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+        }
+
+        if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
                  !m_leftPressDragged ) {
                 Event::EventBus::instance().publish(
@@ -656,30 +766,39 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnEntity = false;
         m_leftPressDragged         = false;
         m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
-    if ( currentSnapshot->currentTool == Logic::EditTool::Draw &&
-         !currentSnapshot->isPlaying ) {
-        if ( ImGui::IsMouseClicked(1) && isHovered ) {
+    if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
+             isHovered ) {
+            m_lastEraseUpdateCommand.valid = false;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
-        if ( ImGui::IsMouseDragging(1) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateErase{ m_cameraId,
-                                       localMousePos.x,
-                                       localMousePos.y,
-                                       ImGui::GetIO().KeyShift }));
+        if ( !currentSnapshot->isPlaying && ImGui::IsMouseDragging(1) ) {
+            if ( shouldSendContinuousEditCommand(
+                     m_lastEraseUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyShift,
+                     false) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateErase{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           ImGui::GetIO().KeyShift }));
+            }
         }
         if ( ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            m_lastEraseUpdateCommand.valid = false;
         }
     }
 
     // --- Ctrl+右键：移除框选框（全局可用） ---
-    if ( ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
+    if ( isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRemoveMarqueeAt{
                 m_cameraId, localMousePos.x, localMousePos.y }));

@@ -83,11 +83,12 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
 
     auto&       visual        = Config::AppConfig::instance().getVisualConfig();
     float       judgmentLineY = size.y * visual.judgeline_pos;
-    const auto& segments      = m_currentSnapshot->scrollSegments;
+    const float compensatedMouseY = localMouseY - m_lastAppliedYOffset;
+    const auto& segments          = m_currentSnapshot->scrollSegments;
     if ( segments.empty() ) {
         float  zoom  = visual.timelineZoom;
         double speed = 500.0 * zoom;
-        return (judgmentLineY - localMouseY) / speed +
+        return (judgmentLineY - compensatedMouseY) / speed +
                m_currentSnapshot->currentTime;
     }
 
@@ -110,7 +111,7 @@ double TimelineCanvas::canvasTimeAtLocalY(const ImVec2& size,
             (m_currentSnapshot->currentTime - prev->time) * prev->speed;
     }
 
-    double targetAbsY = currentAbsY + (judgmentLineY - localMouseY);
+    double targetAbsY = currentAbsY + (judgmentLineY - compensatedMouseY);
     auto   itTime = std::lower_bound(segments.begin(),
                                      segments.end(),
                                      targetAbsY,
@@ -148,7 +149,8 @@ double TimelineCanvas::canvasYAtTime(const ImVec2& size, double time) const
     if ( segments.empty() ) {
         float  zoom  = visual.timelineZoom;
         double speed = 500.0 * zoom;
-        return judgmentLineY - (time - m_currentSnapshot->currentTime) * speed;
+        return judgmentLineY - (time - m_currentSnapshot->currentTime) * speed +
+               m_lastAppliedYOffset;
     }
 
     auto resolveAbsYAndHs = [&](double queryTime) {
@@ -173,7 +175,8 @@ double TimelineCanvas::canvasYAtTime(const ImVec2& size, double time) const
         resolveAbsYAndHs(m_currentSnapshot->currentTime);
     const auto [targetAbsY, targetHs] = resolveAbsYAndHs(time);
     (void)unusedHs;
-    return judgmentLineY - (targetAbsY - currentAbsY) * targetHs;
+    return judgmentLineY - (targetAbsY - currentAbsY) * targetHs +
+           m_lastAppliedYOffset;
 }
 
 /// @brief 将时间吸附到附近已有 Timing 事件或分拍网格。

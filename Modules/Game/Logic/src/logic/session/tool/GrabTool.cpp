@@ -2,7 +2,6 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
-#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/EditorAction.h"
@@ -227,7 +226,9 @@ void clearDraggingFlags(SessionContext& ctx, const InitialStateMap& entities)
 
 void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 {
-    m_isPolylineSubDrag = false;
+    m_isPolylineSubDrag        = false;
+    m_hasLastAppliedDragTarget = false;
+    ctx.dragRenderPinnedEntities.clear();
 
     if ( cmd.entity != entt::null && ctx.noteRegistry.valid(cmd.entity) ) {
         ctx.draggedEntity   = cmd.entity;
@@ -298,6 +299,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         if ( m_initialStates.count(cmd.entity) ) {
             ctx.dragInitialNote = m_initialStates[cmd.entity].note;
         }
+
+        ctx.dragRenderPinnedEntities.reserve(m_initialStates.size());
+        for ( const auto& [entity, state] : m_initialStates ) {
+            (void)state;
+            ctx.dragRenderPinnedEntities.push_back(entity);
+        }
     }
 }
 
@@ -322,9 +329,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -340,25 +347,21 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     double targetTime = cache->getTime(targetAbsY);
 
     // 磁吸处理
-    std::vector<const TimelineComponent*> bpmEvents;
-    auto tlView = ctx.timelineRegistry.view<const TimelineComponent>();
-    for ( auto entity : tlView ) {
-        const auto& tl = tlView.get<const TimelineComponent>(entity);
-        if ( tl.m_effect == ::MMM::TimingEffect::BPM ) bpmEvents.push_back(&tl);
-    }
-    std::stable_sort(
-        bpmEvents.begin(), bpmEvents.end(), [](const auto* a, const auto* b) {
-            return a->m_timestamp < b->m_timestamp;
-        });
+    SessionUtils::ensureBpmEvents(ctx);
+    const auto& bpmEvents = ctx.bpmEvents;
 
-    auto snap = SessionUtils::getSnapResult(targetTime,
-                                            cmd.mouseY,
-                                            it->second,
-                                            ctx.lastConfig,
-                                            bpmEvents,
-                                            ctx.timelineRegistry,
-                                            ctx.animateTime,
-                                            ctx.cameras);
+    auto snap = SessionUtils::getSnapResult(
+        targetTime,
+        cmd.mouseY,
+        it->second,
+        ctx.lastConfig,
+        bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
         targetTime = snap.snappedTime;
     }
@@ -443,6 +446,19 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
     m_isPolylineSubDrag = isPolylineSubDrag;
 
+    if ( isPolylineSubDrag || isMultiDrag ) {
+        constexpr double TARGET_TIME_EPSILON = 1e-7;
+        if ( m_hasLastAppliedDragTarget &&
+             std::abs(m_lastAppliedDragTargetTime - targetTime) <=
+                 TARGET_TIME_EPSILON &&
+             m_lastAppliedDragTargetTrack == targetTrack ) {
+            return;
+        }
+        m_hasLastAppliedDragTarget   = true;
+        m_lastAppliedDragTargetTime  = targetTime;
+        m_lastAppliedDragTargetTrack = targetTrack;
+    }
+
     if ( isPolylineSubDrag ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
         if ( !note ) return;
@@ -522,12 +538,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW = (it->second.viewportWidth *
-                             (ctx.lastConfig.visual.trackLayout.right -
-                              ctx.lastConfig.visual.trackLayout.left)) /
-                            static_cast<float>(ctx.trackCount);
-            float lx = it->second.viewportWidth *
-                       ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW  = (it->second.viewportWidth *
+                              (ctx.lastConfig.visual.trackLayout.right -
+                               ctx.lastConfig.visual.trackLayout.left)) /
+                             static_cast<float>(ctx.trackCount);
+            float lx       = it->second.viewportWidth *
+                             ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {
@@ -637,7 +653,9 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
     if ( ctx.draggedEntity == entt::null ) return;
 
     if ( m_isPolylineSubDrag && tryPolylineSubDragMerge(ctx) ) {
-        m_isPolylineSubDrag = false;
+        m_isPolylineSubDrag        = false;
+        m_hasLastAppliedDragTarget = false;
+        ctx.dragRenderPinnedEntities.clear();
         return;
     }
 
@@ -665,8 +683,10 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 
     SessionUtils::rebuildHitEvents(ctx);
 
-    ctx.draggedEntity   = entt::null;
-    ctx.dragInitialNote = std::nullopt;
+    ctx.draggedEntity          = entt::null;
+    ctx.dragInitialNote        = std::nullopt;
+    m_hasLastAppliedDragTarget = false;
+    ctx.dragRenderPinnedEntities.clear();
     m_initialStates.clear();
 }
 

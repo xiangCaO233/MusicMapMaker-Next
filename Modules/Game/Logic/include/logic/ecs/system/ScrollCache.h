@@ -105,6 +105,14 @@ public:
     /// @brief 是否存在 Jump 效果，存在时可见物件集合不再是连续时间区间
     bool hasJumpEffects() const;
 
+    /// @brief 判断给定播放窗口是否可以用当前瞬时速度做 UI 侧线性补间。
+    /// @param startTime 播放窗口起点时间。
+    /// @param duration 播放窗口持续时间。
+    /// @return 窗口内不跨 ScrollSegment 边界、微脉冲窗口或 Jump 事件时返回
+    /// true。
+    /// @warning 热路径：渲染快照生成时调用；只做二分查找和局部邻近检查。
+    bool canInterpolateLinearly(double startTime, double duration) const;
+
     /// @brief 获取指定时间范围附近 Jump 的最大影响秒数
     double getMaxJumpSecondsInRange(double startTime, double endTime,
                                     double padding = 0.0) const;

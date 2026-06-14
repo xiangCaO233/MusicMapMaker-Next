@@ -14,11 +14,37 @@
 #include <nfd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <system_error>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 将 ASCII 扩展名转换为小写。
+/// @param value 输入扩展名。
+/// @return 小写后的扩展名。
+std::string toLowerAscii(std::string value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    return value;
+}
+
+/// @brief 判断拖拽文件是否为 zip 兼容谱面包。
+/// @param path 拖拽文件路径。
+/// @return 支持按临时项目打开时返回 true。
+bool isTemporaryPackagePath(const std::filesystem::path& path)
+{
+    const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
+    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
+           extension == ".osz" || extension == ".mpk";
+}
+}  // namespace
 
 void FileManagerView::handleDragDrop(UIManager* sourceManager)
 {
@@ -28,40 +54,57 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
         ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 
-    if ( isHovered ) {
-        for ( const auto& drop : m_pendingDrops ) {
-            if ( !drop.paths.empty() ) {
-                std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
-                std::filesystem::path projectPath =
-                    std::filesystem::is_directory(p) ? p : p.parent_path();
-
-                XINFO("File dropped on FileManager: {}, opening project: {}",
-                      Config::pathToUtf8(p),
-                      Config::pathToUtf8(projectPath));
-
-                Event::OpenProjectEvent ev;
-                ev.m_projectPath = projectPath;
-                Event::EventBus::instance().publish(ev);
-
-                auto       ext       = Config::pathToUtf8(p.extension());
-                SideBarTab targetTab = SideBarTab::FileExplorer;
-                if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
-                    targetTab = SideBarTab::BeatMapExplorer;
-                } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
-                            ext == ".flac" || ext == ".opus" || ext == ".aac" ||
-                            ext == ".m4a" ) {
-                    targetTab = SideBarTab::AudioExplorer;
-                }
-
-                Event::UISubViewToggleEvent evt;
-                evt.sourceUiName           = m_subViewName;
-                evt.uiManager              = sourceManager;
-                evt.targetFloatManagerName = "SideBarManager";
-                evt.subViewId              = TabToSubViewId(targetTab);
-                evt.showSubView            = true;
-                Event::EventBus::instance().publish(evt);
-            }
+    for ( const auto& drop : m_pendingDrops ) {
+        if ( drop.paths.empty() ) {
+            continue;
         }
+
+        std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+        if ( !isHovered ) {
+            continue;
+        }
+
+        if ( isTemporaryPackagePath(p) ) {
+            XINFO("Package dropped: {}", Config::pathToUtf8(p));
+
+            Event::OpenTemporaryProjectPackageEvent ev;
+            ev.m_packagePath = p;
+            Event::EventBus::instance().publish(ev);
+            continue;
+        }
+
+        std::error_code filesystemError;
+        filesystemError.clear();
+        const bool isDirectory =
+            std::filesystem::is_directory(p, filesystemError) &&
+            !filesystemError;
+        std::filesystem::path projectPath = isDirectory ? p : p.parent_path();
+
+        XINFO("File dropped on FileManager: {}, opening project: {}",
+              Config::pathToUtf8(p),
+              Config::pathToUtf8(projectPath));
+
+        Event::OpenProjectEvent ev;
+        ev.m_projectPath = projectPath;
+        Event::EventBus::instance().publish(ev);
+
+        auto       ext       = Config::pathToUtf8(p.extension());
+        SideBarTab targetTab = SideBarTab::FileExplorer;
+        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+            targetTab = SideBarTab::BeatMapExplorer;
+        } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||
+                    ext == ".flac" || ext == ".opus" || ext == ".aac" ||
+                    ext == ".m4a" ) {
+            targetTab = SideBarTab::AudioExplorer;
+        }
+
+        Event::UISubViewToggleEvent evt;
+        evt.sourceUiName           = m_subViewName;
+        evt.uiManager              = sourceManager;
+        evt.targetFloatManagerName = "SideBarManager";
+        evt.subViewId              = TabToSubViewId(targetTab);
+        evt.showSubView            = true;
+        Event::EventBus::instance().publish(evt);
     }
     m_pendingDrops.clear();
 }

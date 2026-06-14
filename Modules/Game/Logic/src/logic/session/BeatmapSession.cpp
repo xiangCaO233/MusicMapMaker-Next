@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
@@ -26,6 +27,9 @@ namespace
 {
 /// @brief Note 编辑后延迟同步 BeatMap 的空闲等待时间（秒）。
 constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
+
+/// @brief 非忙碌状态下 Session 逻辑轻量轮询的最小间隔。
+constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS = 0.0005;
 
 /// @brief 视觉动画目标值的吸附阈值。
 constexpr double VISUAL_ANIMATION_EPSILON = 0.0001;
@@ -161,6 +165,24 @@ void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
     m_lastDeferredBeatmapSyncTime = currentSysTime;
 }
 
+/// @brief 判断本轮是否需要生成并发布渲染快照。
+/// @warning 逻辑热路径：只做常量时间背压判断，禁止访问 ECS 或同步缓冲区。
+bool BeatmapSession::shouldUpdateRenderSnapshot(
+    double currentSysTime, bool forceImmediate,
+    const Config::EditorConfig& config) const
+{
+    if ( forceImmediate ) {
+        return true;
+    }
+    if ( m_lastRenderSnapshotTime <= 0.0 ) {
+        return true;
+    }
+    const double minInterval =
+        EditorEngine::instance().adaptiveRenderSnapshotMinInterval(config,
+                                                                   false);
+    return currentSysTime - m_lastRenderSnapshotTime >= minInterval;
+}
+
 /// @brief 根据逻辑时间刷新动画渲染时间。
 /// @warning 逻辑热路径：每个 Session update
 /// 执行；只做常量级指数平滑计算，不访问文件系统或 ECS。
@@ -257,10 +279,6 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     m_ctx->lastConfig = config;
     bool processed    = processCommands();
 
-    // --- 性能节流 (Performance Throttling) ---
-    // 逻辑：如果 VSync 关闭，逻辑线程会极其频繁地执行。
-    // 我们限制渲染快照和 ECS 变换的最高频率（约为 2000Hz），
-    // 除非有关键状态变化（如指令输入、正在播放或正在交互）。
     double currentSysTime =
         std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch())
@@ -280,8 +298,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
 
     if ( config.settings.frameLimit != Config::FrameLimitPreference::VSync &&
          !isBusy && !processed ) {
-        // 阈值设为 0.5ms (2000Hz)。这对于非播放状态下的 UI 响应已经绰绰有余。
-        if ( currentSysTime - m_ctx->lastSnapshotTime < 0.0005 ) {
+        if ( currentSysTime - m_ctx->lastSnapshotTime <
+             IDLE_UPDATE_MIN_INTERVAL_SECONDS ) {
             return;
         }
     }
@@ -314,11 +332,12 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     // --- Playback 更新 ---
     const bool isPlaybackClockActive =
         m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
+    bool playbackJumped = false;
     if ( isPlaybackClockActive ) {
         SessionUtils::ensureHitEvents(*m_ctx);
 
-        float  speed = Audio::AudioManager::instance().getPlaybackSpeed();
-        double currentSysTime =
+        float speed = Audio::AudioManager::instance().getPlaybackSpeed();
+        currentSysTime =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now().time_since_epoch())
                 .count();
@@ -373,6 +392,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         bool isJump =
             (std::abs(m_ctx->animateTime - previousAnimateTime) > 0.2) ||
             (m_ctx->animateTime < previousAnimateTime) || !m_wasPlaying;
+        playbackJumped = isJump;
 
         if ( isJump ) {
             if ( m_ctx->isPlaying ) {
@@ -436,7 +456,25 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
 
     m_wasPlaying = isPlaybackClockActive;
 
-    updateECSAndRender(config, isActiveSession);
+    const auto* scrollCache =
+        m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
+    const bool isTimelineCacheDirty = scrollCache && scrollCache->isDirty;
+    const bool hasRenderDirtyState =
+        m_ctx->isNoteOrderDirty || m_ctx->isNotePruneDirty ||
+        m_ctx->isNoteStatsDirty || m_ctx->isTransformDirty ||
+        m_ctx->isBpmEventsDirty || m_ctx->isMarqueeSelectionDirty ||
+        isTimelineCacheDirty;
+    const bool isVisualAnimationStillActive =
+        m_ctx->animateTimeAnimationActive ||
+        m_ctx->animatedTimelineZoomAnimationActive;
+    const bool forceRenderSnapshot = processed || isEdgeScrollActive ||
+                                     isVisualAnimationStillActive ||
+                                     playbackJumped || hasRenderDirtyState;
+    if ( shouldUpdateRenderSnapshot(
+             currentSysTime, forceRenderSnapshot, config) ) {
+        updateECSAndRender(config, isActiveSession);
+        m_lastRenderSnapshotTime = currentSysTime;
+    }
 }
 
 }  // namespace MMM::Logic
