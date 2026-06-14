@@ -222,6 +222,11 @@ struct RenderSnapshot {
     /// 边界附近必须置零。
     double uiInterpolationAbsYSpeed{ 0.0 };
 
+    /// @brief UI 播放补间从 AbsY 到画布 Y 偏移的倍率。
+    /// @warning UI 每帧路径读取；Timeline 需要乘当前 HS，Preview
+    /// 仍由 CanvasSnapshotPrepare 按 renderScaleY 额外缩放。
+    double uiInterpolationYOffsetScale{ 1.0 };
+
     /// @brief 无效 BPM 事件的会话级回退 BPM。
     double fallbackBpm{ 120.0 };
 
@@ -333,7 +338,7 @@ struct RenderSnapshot {
              !std::isfinite(uiInterpolationAbsYSpeed) ) {
             return 0.0;
         }
-        return uiInterpolationAbsYSpeed * dt;
+        return uiInterpolationAbsYSpeed * uiInterpolationYOffsetScale * dt;
     }
 
     /// @brief 清理当前快照数据（保留内存容量）
@@ -359,6 +364,7 @@ struct RenderSnapshot {
         playbackSpeed                = 1.0;
         allowUiPlaybackInterpolation = false;
         uiInterpolationAbsYSpeed     = 0.0;
+        uiInterpolationYOffsetScale  = 1.0;
         fallbackBpm                  = 120.0;
         currentTool                  = EditTool::Move;
         acceptsInteraction           = false;

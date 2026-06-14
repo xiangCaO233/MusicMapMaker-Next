@@ -25,6 +25,12 @@ namespace
 /// CanvasSnapshotPrepare.
 constexpr double UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS = 0.1;
 
+/// @brief Timeline UI interpolation safety window in steady-clock seconds.
+/// @warning Snapshot hot path constant：Timeline 使用屏幕 Y 补偿，窗口取接近
+/// 辅助视图快照间隔的保守值，避免密集 Timing 过度关闭补间。
+constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
+    1.0 / 120.0;
+
 /// @brief 绘制时间线/预览用的小型判定框。
 /// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
 void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
@@ -85,9 +91,12 @@ void NoteRenderSystem::generateSnapshot(
         registry.ctx().emplace<const ScrollCache*>(cache);
     }
 
+    const double interpolationWindow =
+        cameraId == "Timeline"
+            ? TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS
+            : UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS;
     const double interpolationDuration =
-        std::abs(snapshot->playbackSpeed) *
-        UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS;
+        std::abs(snapshot->playbackSpeed) * interpolationWindow;
     const bool supportsUiPlaybackInterpolation =
         isMainCanvas || cameraId == "Preview" || cameraId == "Timeline";
     const bool canUsePlaybackInterpolation =
@@ -98,13 +107,25 @@ void NoteRenderSystem::generateSnapshot(
     if ( canUsePlaybackInterpolation ) {
         const double interpolationSpeed =
             cache->getSpeedAt(renderTime) * snapshot->playbackSpeed;
+        double interpolationYOffsetScale = 1.0;
+        if ( cameraId == "Timeline" ) {
+            interpolationYOffsetScale = cache->getHsAt(renderTime);
+            if ( !std::isfinite(interpolationYOffsetScale) ) {
+                interpolationYOffsetScale = 1.0;
+            }
+        }
         snapshot->allowUiPlaybackInterpolation =
-            std::isfinite(interpolationSpeed);
+            std::isfinite(interpolationSpeed) &&
+            std::isfinite(interpolationYOffsetScale);
         snapshot->uiInterpolationAbsYSpeed =
             snapshot->allowUiPlaybackInterpolation ? interpolationSpeed : 0.0;
+        snapshot->uiInterpolationYOffsetScale =
+            snapshot->allowUiPlaybackInterpolation ? interpolationYOffsetScale
+                                                   : 1.0;
     } else {
         snapshot->allowUiPlaybackInterpolation = false;
         snapshot->uiInterpolationAbsYSpeed     = 0.0;
+        snapshot->uiInterpolationYOffsetScale  = 1.0;
     }
 
     // Timeline 右键创建事件需要完整映射；普通播放快照只携带线性补间速度。
