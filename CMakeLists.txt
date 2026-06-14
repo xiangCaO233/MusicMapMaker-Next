@@ -21,23 +21,21 @@ enable_testing()
 set(
 	MMM_TEST_RESOURCE_DIR
 	"${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
-	CACHE PATH "Shared test resource directory."
+	CACHE
+		PATH
+		"Shared test resource directory."
 )
 
 function(mmm_set_test_target MODULE_NAME TARGET_NAME)
 	set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
-	set_target_properties(
-		${TARGET_NAME}
+	set_target_properties(${TARGET_NAME}
 		PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${TEST_RUNTIME_DIR}"
 	)
 
 	foreach(CONFIG_NAME Debug Release RelWithDebInfo MinSizeRel)
 		string(TOUPPER "${CONFIG_NAME}" CONFIG_NAME_UPPER)
-		set_target_properties(
-			${TARGET_NAME}
-			PROPERTIES
-				RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER}
-					"${TEST_RUNTIME_DIR}"
+		set_target_properties(${TARGET_NAME}
+			PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER} "${TEST_RUNTIME_DIR}"
 		)
 	endforeach()
 endfunction()

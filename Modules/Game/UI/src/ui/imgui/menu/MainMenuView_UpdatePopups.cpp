@@ -411,11 +411,9 @@ void MainMenuView::renderUpdateCheckingPopup()
         m_showCheckingPopup = false;
     }
 
-    bool  open     = true;
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    if ( modalScope.begin(TR("ui.help.check_update"), &open) ) {
-        if ( !open ) ImGui::CloseCurrentPopup();
+    if ( modalScope.begin(TR("ui.help.check_update")) ) {
         auto info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
@@ -487,17 +485,9 @@ void MainMenuView::renderUpdatePopup()
             ImGui::OpenPopup(TR("ui.help.update_found"));
     }
 
-    bool isWorking = (info.status == MMM::Network::UpdateStatus::kDownloading ||
-                      info.status == MMM::Network::UpdateStatus::kDownloaded);
-    bool open      = true;
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    if ( modalScope.begin(TR("ui.help.update_found"),
-                          isWorking ? nullptr : &open) ) {
-        if ( !open ) {
-            ImGui::CloseCurrentPopup();
-            m_updatePopupCanceled = true;
-        }
+    if ( modalScope.begin(TR("ui.help.update_found")) ) {
         info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {

@@ -14,6 +14,12 @@
 namespace MMM::Logic
 {
 
+/// @brief 将谱面载入会话上下文并加载对应主音轨。
+/// @param ctx 目标会话上下文。
+/// @param beatmap 待载入谱面；为空时清空当前谱面状态。
+/// @warning
+/// 低频谱面加载路径：会访问文件系统、加载图片尺寸并重建 ECS，不允许放入每帧
+/// update。
 void SessionUtils::loadBeatmap(SessionContext&               ctx,
                                std::shared_ptr<MMM::BeatMap> beatmap)
 {
@@ -103,6 +109,9 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
         }
         const std::string audioPathUtf8 = Utf8::pathToUtf8(audioPath);
         auto&             audio         = Audio::AudioManager::instance();
+        if ( audio.getLoadedBGMPath() == audioPathUtf8 ) {
+            config.playbackSpeed = static_cast<float>(audio.getPlaybackSpeed());
+        }
         if ( audio.loadBGM(audioPathUtf8, config) ) {
             ctx.loadedMainAudioPath = audioPathUtf8;
             ctx.mainAudioTotalTime  = audio.getTotalTime();

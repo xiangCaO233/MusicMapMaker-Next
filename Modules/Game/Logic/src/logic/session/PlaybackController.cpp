@@ -15,12 +15,12 @@ namespace MMM::Logic
 {
 namespace
 {
-/// @brief 查找当前谱面主音频在项目资源表中的轨道配置。
-/// @param project 当前项目。
+/// @brief 判断项目音频资源是否匹配谱面主音频路径。
+/// @param resource 待匹配的项目音频资源。
 /// @param mainAudioPath 谱面元数据中保存的主音频路径。
-/// @return 匹配到的音轨配置；找不到时返回默认配置。
-AudioTrackConfig findMainAudioConfig(const Project&               project,
-                                     const std::filesystem::path& mainAudioPath)
+/// @return ID、原始路径或通用分隔符路径任一匹配时返回 true。
+bool matchesMainAudioPath(const AudioResource&         resource,
+                          const std::filesystem::path& mainAudioPath)
 {
     const std::string audioFileName =
         Config::pathToUtf8(mainAudioPath.filename());
@@ -28,13 +28,57 @@ AudioTrackConfig findMainAudioConfig(const Project&               project,
     const std::string genericAudioPath =
         Config::pathToUtf8Generic(mainAudioPath);
 
+    return resource.m_id == audioFileName || resource.m_path == audioPath ||
+           resource.m_path == genericAudioPath;
+}
+
+/// @brief 查找当前谱面主音频在项目资源表中的轨道配置。
+/// @param project 当前项目。
+/// @param mainAudioPath 谱面元数据中保存的主音频路径。
+/// @return 匹配到的音轨配置；找不到时返回默认配置。
+AudioTrackConfig findMainAudioConfig(const Project&               project,
+                                     const std::filesystem::path& mainAudioPath)
+{
     for ( const auto& resource : project.m_audioResources ) {
-        if ( resource.m_id == audioFileName || resource.m_path == audioPath ||
-             resource.m_path == genericAudioPath ) {
+        if ( matchesMainAudioPath(resource, mainAudioPath) ) {
             return resource.m_config;
         }
     }
     return {};
+}
+
+/// @brief 将当前播放倍率写回当前谱面主音轨的项目资源配置。
+/// @param ctx 当前播放控制器所属的会话上下文。
+/// @param playbackSpeed 已应用到音频管理器的播放倍率。
+/// @warning
+/// 低频播放控制路径：仅在用户修改播放倍率时执行，遍历项目音频资源表，不放入每帧
+/// update。
+void syncMainAudioPlaybackSpeedToProjectResource(SessionContext& ctx,
+                                                 double          playbackSpeed)
+{
+    if ( !ctx.currentBeatmap ) {
+        return;
+    }
+
+    auto* project = EditorEngine::instance().getCurrentProject();
+    if ( !project ) {
+        return;
+    }
+
+    const auto& mainAudioPath =
+        ctx.currentBeatmap->m_baseMapMetadata.main_audio_path;
+    if ( mainAudioPath.empty() ) {
+        return;
+    }
+
+    for ( auto& resource : project->m_audioResources ) {
+        if ( !matchesMainAudioPath(resource, mainAudioPath) ) {
+            continue;
+        }
+
+        resource.m_config.playbackSpeed = static_cast<float>(playbackSpeed);
+        return;
+    }
 }
 
 /// @brief 确保播放前 AudioManager 已加载当前谱面的主音频。
@@ -155,11 +199,17 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
     m_ctx.hitFXSystem.clearActiveEffects();
 }
 
+/// @brief 处理播放倍率切换，并同步当前主音轨的项目资源配置。
+/// @param cmd 设置播放倍率指令。
+/// @warning
+/// 低频播放控制路径：仅在用户修改播放倍率时执行；播放中会重置同步基准，不放入每帧
+/// update。
 void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
 {
-    float oldSpeed =
-        static_cast<float>(Audio::AudioManager::instance().getPlaybackSpeed());
+    auto& audio    = Audio::AudioManager::instance();
+    float oldSpeed = static_cast<float>(audio.getPlaybackSpeed());
     if ( std::abs(static_cast<float>(cmd.speed) - oldSpeed) < 1e-6f ) {
+        syncMainAudioPlaybackSpeedToProjectResource(m_ctx, oldSpeed);
         return;
     }
 
@@ -189,7 +239,9 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
         SessionUtils::syncHitIndex(m_ctx);
     }
 
-    Audio::AudioManager::instance().setPlaybackSpeed(cmd.speed);
+    audio.setPlaybackSpeed(cmd.speed);
+    syncMainAudioPlaybackSpeedToProjectResource(m_ctx,
+                                                audio.getPlaybackSpeed());
 }
 
 void PlaybackController::handleCommand(const CmdScroll& cmd)

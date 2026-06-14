@@ -1781,6 +1781,9 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     }
 }
 
+/// @brief 设置当前活跃 Session，并在同主音轨会话间保留播放倍率。
+/// @param index 目标 Session 索引。
+/// @warning 低频视图切换路径：可能访问文件系统并重新加载主音轨。
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1789,9 +1792,12 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
         // 1. 如果旧会话正在播放，先暂停它
         /// @brief 切换前的活跃 Session 索引快照。
-        int32_t     currentActive        = m_sessionRegistry.activeIndex();
-        double      syncedCurrentTime    = 0.0;
-        bool        shouldSyncTargetTime = false;
+        int32_t currentActive     = m_sessionRegistry.activeIndex();
+        double  syncedCurrentTime = 0.0;
+        double  syncedPlaybackSpeed =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+        bool        shouldSyncTargetTime          = false;
+        bool        shouldSyncTargetPlaybackSpeed = false;
         std::string oldMainAudioKey;
         if ( currentActive >= 0 &&
              currentActive < static_cast<int32_t>(sessions.size()) ) {
@@ -1822,6 +1828,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         if ( m_syncSameMainAudioCanvases.load(std::memory_order_relaxed) &&
              !oldMainAudioKey.empty() && sessions[index].session ) {
             shouldSyncTargetTime =
+                sessions[index].mainAudioSyncKey == oldMainAudioKey;
+        }
+        if ( !oldMainAudioKey.empty() && sessions[index].session ) {
+            shouldSyncTargetPlaybackSpeed =
                 sessions[index].mainAudioSyncKey == oldMainAudioKey;
         }
 
@@ -1866,6 +1876,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                                 break;
                             }
                         }
+                    }
+                    if ( shouldSyncTargetPlaybackSpeed ) {
+                        config.playbackSpeed =
+                            static_cast<float>(syncedPlaybackSpeed);
                     }
                     const std::string audioPathUtf8 =
                         Config::pathToUtf8(audioPath);
