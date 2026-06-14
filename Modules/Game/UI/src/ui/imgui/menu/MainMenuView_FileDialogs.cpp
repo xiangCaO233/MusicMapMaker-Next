@@ -121,6 +121,40 @@ bool drawCenteredButton(const char* label, ImVec2 size)
     return ImGui::Button(label, size);
 }
 
+/// @brief 在当前内容区域内绘制自动换行文本。
+/// @param text 待绘制的 UTF-8 文本。
+/// @warning UI 绘制路径：只设置 ImGui 文本换行位置并绘制文本。
+void drawWrappedText(std::string_view text)
+{
+    const char* textBegin = text.empty() ? "" : text.data();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
+                           ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted(textBegin, textBegin + text.size());
+    ImGui::PopTextWrapPos();
+}
+
+/// @brief 绘制可自动换行的项目符号文本。
+/// @param text 项目符号后的 UTF-8 文本。
+/// @warning UI 绘制路径：只绘制 ImGui 项目符号和换行文本。
+void drawWrappedBulletText(std::string_view text)
+{
+    ImGui::Bullet();
+    ImGui::SameLine();
+    drawWrappedText(text);
+}
+
+/// @brief 绘制标签和值，并让值在当前内容区域内自动换行。
+/// @param label 标签文本。
+/// @param value 值文本。
+/// @warning UI 绘制路径：只绘制 ImGui 文本，不执行阻塞操作。
+void drawWrappedLabelValue(std::string_view label, std::string_view value)
+{
+    const char* labelBegin = label.empty() ? "" : label.data();
+    ImGui::TextUnformatted(labelBegin, labelBegin + label.size());
+    ImGui::SameLine();
+    drawWrappedText(value);
+}
+
 /// @brief 从文件选择器过滤器文本中解析扩展名。
 std::string extensionFromFilterText(const std::string& filterText)
 {
@@ -256,11 +290,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title            = !meta.title_unicode.empty()
-                                   ? meta.title_unicode
-                                   : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount         = meta.track_count;
-            version          = meta.version.empty() ? "default" : meta.version;
+            title    = !meta.title_unicode.empty()
+                           ? meta.title_unicode
+                           : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount = meta.track_count;
+            version  = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -493,11 +527,11 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
             ImGui::Spacing();
 
             for ( const auto& warning : m_pendingExportWarnings ) {
-                ImGui::BulletText("%s", warning.c_str());
+                drawWrappedBulletText(warning);
             }
 
             ImGui::Spacing();
-            ImGui::TextWrapped("目标文件：%s", m_pendingExportPath.c_str());
+            drawWrappedLabelValue("目标文件：", m_pendingExportPath);
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -653,8 +687,8 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                         ImGuiFileDialogFlags_HideColumnType |
-                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                     ImGuiFileDialogFlags_HideColumnType |
+                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),
