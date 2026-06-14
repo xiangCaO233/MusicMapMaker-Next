@@ -83,7 +83,7 @@ struct SessionContext {
 
     /// @brief 当前 Session 各画布最近一次发布渲染快照的系统时间。
     /// @warning
-    /// 逻辑热路径状态：播放时用于降低辅助画布快照频率；只在逻辑线程读写。
+    /// 逻辑热路径状态：播放时用于给辅助画布快照生成施加背压；只在逻辑线程读写。
     std::unordered_map<std::string, double> lastCameraSnapshotTimes;
 
     // --- 音频与播放状态 ---

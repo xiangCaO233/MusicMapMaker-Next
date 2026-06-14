@@ -314,6 +314,30 @@ public:
         return m_logicUps.load(std::memory_order_relaxed);
     }
 
+    /// @brief 发布主渲染线程实时帧率。
+    /// @param fps ImGui 或渲染循环统计出的当前 FPS。
+    /// @warning UI/逻辑热路径原子：UI 线程每帧写入，逻辑线程每 update
+    /// 读取；只承载自适应 RenderSnapshot 预算，使用 relaxed。
+    void publishRenderFps(float fps);
+
+    /// @brief 获取主渲染线程实时帧率。
+    /// @return 最近发布的 FPS；尚未发布时返回 0。
+    /// @warning
+    /// UI/逻辑热路径原子：状态栏和逻辑线程可每帧读取；只用于统计和快照预算。
+    float getRenderFps() const
+    {
+        return m_renderFps.load(std::memory_order_relaxed);
+    }
+
+    /// @brief 根据实时 UPS/FPS 计算 RenderSnapshot 最小生成间隔。
+    /// @param config 当前编辑器配置。
+    /// @param secondaryCamera 是否为 Preview/Timeline 等辅助视图。
+    /// @return 当前建议的最小快照间隔，单位秒。
+    /// @warning 逻辑热路径：每 update 或每辅助相机执行；仅读取 relaxed
+    /// 原子并做常量级数学运算，禁止访问 ECS 或同步缓冲区。
+    double adaptiveRenderSnapshotMinInterval(const Config::EditorConfig& config,
+                                             bool secondaryCamera) const;
+
     /// @brief 获取逻辑线程发布的软件光标 BPM 同步烟雾寿命。
     /// @return 当前 BPM 对应的一拍时长；无有效谱面或 BPM 时返回 -1。
     /// @warning UI
@@ -453,6 +477,11 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 主渲染线程实时刷新率 (FPS)。
+    /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update
+    /// 读取；仅用于展示和 RenderSnapshot 自适应预算，使用 relaxed。
+    std::atomic<float> m_renderFps{ 0.0f };
 
     /// @brief 逻辑线程发布给渲染线程的软件光标烟雾寿命覆盖值。
     /// @warning 逻辑/UI 热路径/原子：逻辑线程每 update

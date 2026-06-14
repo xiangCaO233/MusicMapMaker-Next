@@ -40,6 +40,18 @@ constexpr int BACKGROUND_SESSION_MIN_UPS = 60;
 /// @brief 后台非活跃谱面画布的最高快照更新频率上限。
 constexpr int BACKGROUND_SESSION_MAX_UPS = 240;
 
+/// @brief RenderSnapshot 自适应预算的最低刷新率。
+constexpr double RENDER_SNAPSHOT_MIN_HZ = 60.0;
+
+/// @brief 主画布 RenderSnapshot 自适应预算的最高刷新率。
+constexpr double RENDER_SNAPSHOT_MAIN_MAX_HZ = 480.0;
+
+/// @brief 辅助画布 RenderSnapshot 自适应预算的最高刷新率。
+constexpr double RENDER_SNAPSHOT_SECONDARY_MAX_HZ = 240.0;
+
+/// @brief 没有可用 FPS 统计时的 RenderSnapshot 回退刷新率。
+constexpr double RENDER_SNAPSHOT_FALLBACK_HZ = 240.0;
+
 /// @brief 同主音轨画布同步的逻辑时间变化阈值。
 constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 
@@ -103,6 +115,58 @@ FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
     return std::chrono::duration_cast<FrameLimitClock::duration>(
         std::chrono::duration<double>(1.0 /
                                       static_cast<double>(backgroundUps)));
+}
+
+/// @brief 根据帧率限制设置计算逻辑线程目标 UPS。
+/// @param frameLimit 当前帧率限制偏好。
+/// @return 有固定目标时返回目标 UPS；Unlimited 返回 0。
+/// @warning 逻辑热路径：自适应快照预算调用；只读取设备刷新率并做常量级计算。
+double frameLimitTargetUps(Config::FrameLimitPreference frameLimit)
+{
+    int refreshRate = Config::AppConfig::instance().getDeviceRefreshRate();
+    if ( refreshRate <= 0 ) {
+        refreshRate = 60;
+    }
+
+    switch ( frameLimit ) {
+    case Config::FrameLimitPreference::VSync:
+        return static_cast<double>(refreshRate);
+    case Config::FrameLimitPreference::Refresh2x:
+        return static_cast<double>(refreshRate * 2);
+    case Config::FrameLimitPreference::Refresh4x:
+        return static_cast<double>(refreshRate * 4);
+    case Config::FrameLimitPreference::Refresh8x:
+        return static_cast<double>(refreshRate * 8);
+    case Config::FrameLimitPreference::Unlimited:
+    default: return 0.0;
+    }
+}
+
+/// @brief 根据 UPS 健康度降低快照刷新率预算。
+/// @param snapshotHz 当前快照预算。
+/// @param logicUps 当前实测 UPS。
+/// @param targetUps 当前目标 UPS。
+/// @return 调整后的快照预算。
+/// @warning 逻辑热路径：只做常量级数值计算。
+double applyUpsBackpressure(double snapshotHz, double logicUps,
+                            double targetUps)
+{
+    if ( logicUps <= 1.0 || targetUps <= 1.0 || !std::isfinite(logicUps) ||
+         !std::isfinite(targetUps) ) {
+        return snapshotHz;
+    }
+
+    const double health = logicUps / targetUps;
+    if ( health < 0.70 ) {
+        return snapshotHz * 0.50;
+    }
+    if ( health < 0.85 ) {
+        return snapshotHz * 0.65;
+    }
+    if ( health < 0.95 ) {
+        return snapshotHz * 0.80;
+    }
+    return snapshotHz;
 }
 
 /// @brief 根据 Session 上下文计算软件光标 BPM 同步烟雾寿命。
@@ -525,6 +589,42 @@ EditorEngine::EditorEngine()
 EditorEngine::~EditorEngine()
 {
     stop();
+}
+
+void EditorEngine::publishRenderFps(float fps)
+{
+    if ( !std::isfinite(fps) || fps <= 0.0f ) {
+        return;
+    }
+    m_renderFps.store(fps, std::memory_order_relaxed);
+}
+
+double EditorEngine::adaptiveRenderSnapshotMinInterval(
+    const Config::EditorConfig& config, bool secondaryCamera) const
+{
+    const double renderFps =
+        static_cast<double>(m_renderFps.load(std::memory_order_relaxed));
+    const double logicUps =
+        static_cast<double>(m_logicUps.load(std::memory_order_relaxed));
+    const double maxSnapshotHz = secondaryCamera
+                                     ? RENDER_SNAPSHOT_SECONDARY_MAX_HZ
+                                     : RENDER_SNAPSHOT_MAIN_MAX_HZ;
+    const double fpsDrivenHz   = std::isfinite(renderFps) && renderFps > 1.0
+                                     ? renderFps * (secondaryCamera ? 1.5 : 2.0)
+                                     : RENDER_SNAPSHOT_FALLBACK_HZ;
+    double       snapshotHz =
+        std::clamp(fpsDrivenHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
+
+    double targetUps = frameLimitTargetUps(config.settings.frameLimit);
+    if ( targetUps <= 1.0 && std::isfinite(renderFps) && renderFps > 1.0 ) {
+        targetUps = std::clamp(renderFps * 2.0,
+                               RENDER_SNAPSHOT_MIN_HZ,
+                               RENDER_SNAPSHOT_MAIN_MAX_HZ);
+    }
+
+    snapshotHz = applyUpsBackpressure(snapshotHz, logicUps, targetUps);
+    snapshotHz = std::clamp(snapshotHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
+    return 1.0 / snapshotHz;
 }
 
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const

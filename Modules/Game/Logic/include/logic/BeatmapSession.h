@@ -81,11 +81,12 @@ private:
     /// @brief 判断本轮是否需要生成并发布渲染快照。
     /// @param currentSysTime 当前单调系统时间（秒）。
     /// @param forceImmediate 是否因命令、跳转、交互或脏缓存强制立即发布。
+    /// @param config 当前编辑器配置。
     /// @return 需要发布渲染快照时返回 true。
-    /// @warning 逻辑热路径：每个 Session update 调用；只做常量时间节流判断，
+    /// @warning 逻辑热路径：每个 Session update 调用；只做常量时间背压判断，
     /// 禁止访问 ECS 或同步缓冲区。
-    bool shouldUpdateRenderSnapshot(double currentSysTime,
-                                    bool   forceImmediate) const;
+    bool shouldUpdateRenderSnapshot(double currentSysTime, bool forceImmediate,
+                                    const Config::EditorConfig& config) const;
 
     /// @brief 更新 ECS 状态并为所有活跃视口生成渲染快照
     /// @param config 全局编辑器配置。
@@ -134,8 +135,8 @@ private:
     };  ///< 最近一次刷新延迟同步的时间
 
     /// @brief 最近一次生成渲染快照的单调系统时间（秒）。
-    /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于让
-    /// 播放逻辑和渲染快照生成解耦。
+    /// @warning 逻辑热路径：每 update 读取，只有发布渲染快照后写入；用于给
+    /// RenderSnapshot 生成施加背压，避免压低逻辑 UPS。
     double m_lastRenderSnapshotTime{ 0.0 };
 
     /// @brief 当前会话已加载或成功保存过的谱面文件哈希，键为规范化路径。

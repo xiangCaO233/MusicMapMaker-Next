@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 
@@ -29,11 +30,6 @@ constexpr double DEFERRED_BEATMAP_SYNC_IDLE_SECONDS = 1.0;
 
 /// @brief 非忙碌状态下 Session 逻辑轻量轮询的最小间隔。
 constexpr double IDLE_UPDATE_MIN_INTERVAL_SECONDS = 0.0005;
-
-/// @brief 播放/跟随状态下主动生成渲染快照的最小间隔。
-/// @warning 逻辑热路径常量：可见音符查询使用 AbsY 桶索引后允许提高快照频率；
-/// UI 亚帧补间仍负责快照间视觉连续性。
-constexpr double ACTIVE_RENDER_SNAPSHOT_MIN_INTERVAL_SECONDS = 1.0 / 480.0;
 
 /// @brief 视觉动画目标值的吸附阈值。
 constexpr double VISUAL_ANIMATION_EPSILON = 0.0001;
@@ -170,9 +166,10 @@ void BeatmapSession::flushDeferredBeatmapSync(double currentSysTime,
 }
 
 /// @brief 判断本轮是否需要生成并发布渲染快照。
-/// @warning 逻辑热路径：只做常量时间节流判断，禁止访问 ECS 或同步缓冲区。
-bool BeatmapSession::shouldUpdateRenderSnapshot(double currentSysTime,
-                                                bool   forceImmediate) const
+/// @warning 逻辑热路径：只做常量时间背压判断，禁止访问 ECS 或同步缓冲区。
+bool BeatmapSession::shouldUpdateRenderSnapshot(
+    double currentSysTime, bool forceImmediate,
+    const Config::EditorConfig& config) const
 {
     if ( forceImmediate ) {
         return true;
@@ -180,8 +177,10 @@ bool BeatmapSession::shouldUpdateRenderSnapshot(double currentSysTime,
     if ( m_lastRenderSnapshotTime <= 0.0 ) {
         return true;
     }
-    return currentSysTime - m_lastRenderSnapshotTime >=
-           ACTIVE_RENDER_SNAPSHOT_MIN_INTERVAL_SECONDS;
+    const double minInterval =
+        EditorEngine::instance().adaptiveRenderSnapshotMinInterval(config,
+                                                                   false);
+    return currentSysTime - m_lastRenderSnapshotTime >= minInterval;
 }
 
 /// @brief 根据逻辑时间刷新动画渲染时间。
@@ -471,7 +470,8 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     const bool forceRenderSnapshot =
         processed || isInteracting || isEdgeScrollActive ||
         isVisualAnimationStillActive || playbackJumped || hasRenderDirtyState;
-    if ( shouldUpdateRenderSnapshot(currentSysTime, forceRenderSnapshot) ) {
+    if ( shouldUpdateRenderSnapshot(
+             currentSysTime, forceRenderSnapshot, config) ) {
         updateECSAndRender(config, isActiveSession);
         m_lastRenderSnapshotTime = currentSysTime;
     }

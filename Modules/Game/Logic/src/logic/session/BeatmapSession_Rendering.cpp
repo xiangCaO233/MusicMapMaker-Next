@@ -32,13 +32,7 @@ struct BeatmapStatusStats {
     size_t maxCombo{ 0 };
 };
 
-/// @brief 播放态辅助视图的渲染快照最小间隔。
-/// @warning 逻辑/渲染热路径常量：Preview/Timeline 使用可见音符 AbsY
-/// 桶查询后允许提升快照频率；UI 补间仍负责快照间视觉连续。
-constexpr double PLAYBACK_SECONDARY_CAMERA_SNAPSHOT_MIN_INTERVAL_SECONDS =
-    1.0 / 480.0;
-
-/// @brief 判断视图是否属于播放态可降频的辅助画布。
+/// @brief 判断视图是否属于播放态可背压的辅助画布。
 /// @param cameraId 当前画布 ID。
 /// @return Preview 或 Timeline 返回 true。
 /// @warning 逻辑热路径：只做固定字符串比较。
@@ -386,7 +380,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
     syncPreviewDragHoverTime(*m_ctx, config);
 
-    auto&      engine = EditorEngine::instance();
+    auto&        engine = EditorEngine::instance();
+    const double secondaryCameraSnapshotMinInterval =
+        engine.adaptiveRenderSnapshotMinInterval(config, true);
     const bool snapshotIsPlaying =
         m_ctx->isPlaying || m_ctx->isMainAudioSyncFollower;
     const double snapshotTotalTime =
@@ -451,7 +447,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 m_ctx->lastCameraSnapshotTimes[cameraId];
             if ( lastCameraSnapshotTime > 0.0 &&
                  snapshotSysTime - lastCameraSnapshotTime <
-                     PLAYBACK_SECONDARY_CAMERA_SNAPSHOT_MIN_INTERVAL_SECONDS ) {
+                     secondaryCameraSnapshotMinInterval ) {
                 continue;
             }
             lastCameraSnapshotTime = snapshotSysTime;
