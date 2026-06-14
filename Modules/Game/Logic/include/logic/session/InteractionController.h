@@ -95,8 +95,9 @@ public:
     void handleCommand(const CmdUpdateTrackCount& cmd);
 
     /// @brief 更新当前所有实体的框选选中状态
-    /// @warning 逻辑热路径：仅在框选脏标记置位时调用；内部会遍历所有音符，
-    /// 禁止改为每帧无条件执行。
+    /// @warning
+    /// 逻辑热路径：仅在框选脏标记置位时调用；优先按排序时间段缓存扫描候选，
+    /// 禁止改为每帧无条件执行或完整扫描所有音符。
     /// @param forceFullSync 是否强制全量同步（忽略加选模式）
     void updateMarqueeSelection(bool forceFullSync = false);
 

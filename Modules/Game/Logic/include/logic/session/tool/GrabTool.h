@@ -26,6 +26,15 @@ private:
     /// @brief 记录当前是否为折线内部子段拖拽模式
     bool m_isPolylineSubDrag{ false };
 
+    /// @brief 当前拖拽手势是否已经应用过目标格点。
+    bool m_hasLastAppliedDragTarget{ false };
+
+    /// @brief 当前拖拽手势上一次应用的目标时间。
+    double m_lastAppliedDragTargetTime{ 0.0 };
+
+    /// @brief 当前拖拽手势上一次应用的目标轨道。
+    int m_lastAppliedDragTargetTrack{ 0 };
+
     /// @brief 将父折线的 m_subNotes 数据同步到所有子物件实体
     void syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
                                  const NoteComponent& note);

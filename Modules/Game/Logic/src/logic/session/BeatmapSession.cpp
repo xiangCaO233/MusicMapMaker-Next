@@ -467,9 +467,9 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     const bool isVisualAnimationStillActive =
         m_ctx->animateTimeAnimationActive ||
         m_ctx->animatedTimelineZoomAnimationActive;
-    const bool forceRenderSnapshot =
-        processed || isInteracting || isEdgeScrollActive ||
-        isVisualAnimationStillActive || playbackJumped || hasRenderDirtyState;
+    const bool forceRenderSnapshot = processed || isEdgeScrollActive ||
+                                     isVisualAnimationStillActive ||
+                                     playbackJumped || hasRenderDirtyState;
     if ( shouldUpdateRenderSnapshot(
              currentSysTime, forceRenderSnapshot, config) ) {
         updateECSAndRender(config, isActiveSession);

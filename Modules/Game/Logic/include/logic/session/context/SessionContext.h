@@ -45,6 +45,12 @@ struct ClipboardItem {
     NoteComponent note;  ///< 复制的音符组件数据
 };
 
+/// @brief 提供给渲染系统的拖动中实体列表视图。
+struct DragRenderPinnedEntities {
+    /// @brief 当前拖动手势中需要绕过静态可见性索引补充渲染的实体列表。
+    const std::vector<entt::entity>* entities{ nullptr };
+};
+
 /// @brief 共享的上下文状态，记录了当前会话的所有运行时数据，供各个 Controller
 /// 和 Tool 访问。
 struct SessionContext {
@@ -152,6 +158,8 @@ struct SessionContext {
     std::optional<NoteComponent>
         dragInitialNote;  ///< 拖拽开始时的初始音符数据 (用于取消或增量计算)
     std::string dragCameraId;  ///< 发起拖拽的视口 ID
+    /// @brief 当前拖动手势中需要补充渲染的实体列表。
+    std::vector<entt::entity> dragRenderPinnedEntities;
 
     bool isSelecting{ false };          ///< 是否正在进行框选操作
     bool hasMarqueeSelection{ false };  ///< 是否当前存在有效的框选结果

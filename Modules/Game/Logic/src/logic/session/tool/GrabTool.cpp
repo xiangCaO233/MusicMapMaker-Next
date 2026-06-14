@@ -226,7 +226,9 @@ void clearDraggingFlags(SessionContext& ctx, const InitialStateMap& entities)
 
 void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 {
-    m_isPolylineSubDrag = false;
+    m_isPolylineSubDrag        = false;
+    m_hasLastAppliedDragTarget = false;
+    ctx.dragRenderPinnedEntities.clear();
 
     if ( cmd.entity != entt::null && ctx.noteRegistry.valid(cmd.entity) ) {
         ctx.draggedEntity   = cmd.entity;
@@ -296,6 +298,12 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         // 兼容旧代码 (保留主拖拽物件的初始备份)
         if ( m_initialStates.count(cmd.entity) ) {
             ctx.dragInitialNote = m_initialStates[cmd.entity].note;
+        }
+
+        ctx.dragRenderPinnedEntities.reserve(m_initialStates.size());
+        for ( const auto& [entity, state] : m_initialStates ) {
+            (void)state;
+            ctx.dragRenderPinnedEntities.push_back(entity);
         }
     }
 }
@@ -437,6 +445,19 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         }
     }
     m_isPolylineSubDrag = isPolylineSubDrag;
+
+    if ( isPolylineSubDrag || isMultiDrag ) {
+        constexpr double TARGET_TIME_EPSILON = 1e-7;
+        if ( m_hasLastAppliedDragTarget &&
+             std::abs(m_lastAppliedDragTargetTime - targetTime) <=
+                 TARGET_TIME_EPSILON &&
+             m_lastAppliedDragTargetTrack == targetTrack ) {
+            return;
+        }
+        m_hasLastAppliedDragTarget   = true;
+        m_lastAppliedDragTargetTime  = targetTime;
+        m_lastAppliedDragTargetTrack = targetTrack;
+    }
 
     if ( isPolylineSubDrag ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
@@ -632,7 +653,9 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
     if ( ctx.draggedEntity == entt::null ) return;
 
     if ( m_isPolylineSubDrag && tryPolylineSubDragMerge(ctx) ) {
-        m_isPolylineSubDrag = false;
+        m_isPolylineSubDrag        = false;
+        m_hasLastAppliedDragTarget = false;
+        ctx.dragRenderPinnedEntities.clear();
         return;
     }
 
@@ -660,8 +683,10 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 
     SessionUtils::rebuildHitEvents(ctx);
 
-    ctx.draggedEntity   = entt::null;
-    ctx.dragInitialNote = std::nullopt;
+    ctx.draggedEntity          = entt::null;
+    ctx.dragInitialNote        = std::nullopt;
+    m_hasLastAppliedDragTarget = false;
+    ctx.dragRenderPinnedEntities.clear();
     m_initialStates.clear();
 }
 

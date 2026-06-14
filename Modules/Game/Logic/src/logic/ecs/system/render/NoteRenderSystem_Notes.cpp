@@ -8,6 +8,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -581,9 +582,41 @@ static void collectNotesInRange(
         }
     };
 
+    auto appendPinnedDragEntities = [&]() {
+        const auto* pinnedEntities =
+            registry.ctx().find<DragRenderPinnedEntities>();
+        if ( !pinnedEntities || !pinnedEntities->entities ||
+             pinnedEntities->entities->empty() ) {
+            return;
+        }
+
+        seen.clear();
+        seen.reserve(result.size() + pinnedEntities->entities->size());
+        for ( auto entity : result ) {
+            seen.insert(entity);
+        }
+
+        for ( auto entity : *pinnedEntities->entities ) {
+            if ( !seen.insert(entity).second ) {
+                continue;
+            }
+            if ( !registry.valid(entity) ||
+                 !registry.all_of<NoteComponent>(entity) ) {
+                continue;
+            }
+
+            const auto& note = registry.get<const NoteComponent>(entity);
+            if ( note.m_isSubNote ) continue;
+            if ( isDisplayVisible(note) ) {
+                result.push_back(entity);
+            }
+        }
+    };
+
     const auto** noteRevisionPtr = registry.ctx().find<const std::uint64_t*>();
     if ( !noteRevisionPtr || !(*noteRevisionPtr) ) {
         runFullExactScan();
+        appendPinnedDragEntities();
         return;
     }
 
@@ -591,9 +624,11 @@ static void collectNotesInRange(
         registry, cache, entities, **noteRevisionPtr);
     if ( index.requiresFullExactScan ) {
         runFullExactScan();
+        appendPinnedDragEntities();
         return;
     }
     if ( index.entries.empty() || index.buckets.empty() ) {
+        appendPinnedDragEntities();
         return;
     }
 
@@ -612,6 +647,7 @@ static void collectNotesInRange(
     includeHsBound(index.maxHs);
     if ( !std::isfinite(queryMinAbsY) || !std::isfinite(queryMaxAbsY) ) {
         runFullExactScan();
+        appendPinnedDragEntities();
         return;
     }
     queryMinAbsY = cache->toUnscaledAbsY(queryMinAbsY);
@@ -665,6 +701,7 @@ static void collectNotesInRange(
             break;
         }
     }
+    appendPinnedDragEntities();
 }
 
 void NoteRenderSystem::generateNoteHitboxes(

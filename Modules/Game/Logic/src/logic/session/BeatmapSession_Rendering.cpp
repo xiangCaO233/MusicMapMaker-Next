@@ -354,6 +354,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         m_ctx->noteRegistry.ctx().emplace<const std::uint64_t*>(
             &m_ctx->noteVisibilityIndexRevision);
     }
+    if ( auto* pinnedEntities =
+             m_ctx->noteRegistry.ctx().find<DragRenderPinnedEntities>() ) {
+        pinnedEntities->entities = &m_ctx->dragRenderPinnedEntities;
+    } else {
+        auto& pinnedEntityView =
+            m_ctx->noteRegistry.ctx().emplace<DragRenderPinnedEntities>();
+        pinnedEntityView.entities = &m_ctx->dragRenderPinnedEntities;
+    }
 
     syncScrollCacheAnimatedZoom(*m_ctx, config);
 

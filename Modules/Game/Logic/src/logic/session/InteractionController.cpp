@@ -10,8 +10,11 @@
 #include "logic/session/tool/MarqueeTool.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -81,6 +84,9 @@ struct PreparedMarqueeBox {
     SelectionScreenContext screen;
 };
 
+/// @brief 框选候选实体时间范围的保守扩展，覆盖音符纹理高度和特殊 SV 误差。
+constexpr double MARQUEE_CANDIDATE_TIME_PADDING_SECONDS = 2.0;
+
 /// @brief 清空实体选中状态和框选运行状态。
 void clearSelection(SessionContext& ctx)
 {
@@ -104,6 +110,18 @@ void detachMarqueeSelection(SessionContext& ctx)
     ctx.marqueeIsAdditive       = false;
     ctx.isMarqueeSelectionDirty = false;
     ctx.marqueeBoxes.clear();
+}
+
+/// @brief 清空已经存在的实体选中标记。
+/// @param ctx 会话上下文。
+/// @warning 逻辑热路径：框选重算时只遍历已创建 InteractionComponent 的实体，
+/// 避免完整扫描 NoteComponent。
+void clearSelectedEntityFlags(SessionContext& ctx)
+{
+    auto view = ctx.noteRegistry.view<InteractionComponent>();
+    for ( auto entity : view ) {
+        ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = false;
+    }
 }
 
 /// @brief 判断屏幕矩形是否与另一个矩形相交。
@@ -210,7 +228,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -285,7 +303,7 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     screen.currentAbsY = cache->getAbsY(ctx.animateTime);
     screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                   std::abs(screen.renderScaleY) > 1e-6f;
+                         std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -334,10 +352,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1        = screen.judgmentLineY -
-                     static_cast<float>(startAbsY - screen.currentAbsY) *
-                         screen.renderScaleY;
-    const float y2 =
+    const float  y1 = screen.judgmentLineY -
+                      static_cast<float>(startAbsY - screen.currentAbsY) *
+                          screen.renderScaleY;
+    const float  y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     return makeRect(x1, y1, x2, y2);
@@ -374,9 +392,9 @@ void includeCarrierRect(SelectionRect&                target,
                                TextureID::HoldBodyVertical,
                                screen.noteW,
                                screen.noteH);
-        const float x = screen.leftX +
-                        static_cast<float>(trackIndex) * screen.singleTrackW +
-                        (screen.singleTrackW - bodySize.x) * 0.5f;
+        const float x  = screen.leftX +
+                         static_cast<float>(trackIndex) * screen.singleTrackW +
+                         (screen.singleTrackW - bodySize.x) * 0.5f;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
             screen,
@@ -418,9 +436,9 @@ void includePolylineTransitionRect(SelectionRect&                target,
                                   (current.type == ::MMM::NoteType::FLICK
                                        ? static_cast<float>(current.dtrack)
                                        : 0.0f);
-    const float currentX = screen.leftX +
-                           currentEndTrack * screen.singleTrackW +
-                           (screen.singleTrackW - bodySize.x) * 0.5f;
+    const float currentX        = screen.leftX +
+                                  currentEndTrack * screen.singleTrackW +
+                                  (screen.singleTrackW - bodySize.x) * 0.5f;
     const float nextX =
         screen.leftX +
         static_cast<float>(next.trackIndex) * screen.singleTrackW +
@@ -596,6 +614,143 @@ bool noteMatchesSelection(const NoteComponent&          note,
     }
     return selectionMatchesRect(
         selection, makeNoteScreenRect(note, screen), mode);
+}
+
+/// @brief 获取实体的主时间戳，失效实体排序到末尾。
+/// @warning 逻辑热路径：框选候选二分时调用，只做 registry 有效性检查。
+double getNoteStartTimeForSelection(const SessionContext& ctx,
+                                    entt::entity          entity)
+{
+    if ( !ctx.noteRegistry.valid(entity) ||
+         !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+        return std::numeric_limits<double>::infinity();
+    }
+    return ctx.noteRegistry.get<const NoteComponent>(entity).m_timestamp;
+}
+
+/// @brief 收集所有主音符实体作为候选。
+/// @warning 逻辑热路径兜底：只在排序缓存不可用时完整扫描 NoteComponent。
+void collectAllPrimaryNoteCandidates(SessionContext&            ctx,
+                                     std::vector<entt::entity>& candidates)
+{
+    auto view = ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& note = view.get<NoteComponent>(entity);
+        if ( !note.m_isSubNote ) {
+            candidates.push_back(entity);
+        }
+    }
+}
+
+/// @brief 根据单个框选框的时间范围收集排序缓存中的候选实体。
+/// @warning 逻辑热路径：框选更新时按框数量执行二分和局部线性扫描。
+bool collectMarqueeBoxCandidates(SessionContext&                   ctx,
+                                 const PreparedMarqueeBox&         box,
+                                 std::vector<entt::entity>&        candidates,
+                                 std::unordered_set<entt::entity>& seen)
+{
+    const auto& entities     = ctx.sortedNoteEntities;
+    const auto& maxEndPrefix = ctx.sortedNoteMaxEndPrefix;
+    if ( entities.empty() || maxEndPrefix.size() != entities.size() ||
+         !box.screen.valid || !box.screen.cache || !box.rect.valid ) {
+        return false;
+    }
+
+    auto collectTimeRangeCandidates = [&](double minTime, double maxTime) {
+        minTime -= MARQUEE_CANDIDATE_TIME_PADDING_SECONDS;
+        maxTime += MARQUEE_CANDIDATE_TIME_PADDING_SECONDS;
+        if ( !std::isfinite(minTime) || !std::isfinite(maxTime) ||
+             minTime > maxTime ) {
+            return;
+        }
+
+        auto startIt =
+            std::lower_bound(maxEndPrefix.begin(), maxEndPrefix.end(), minTime);
+        std::size_t startIndex = static_cast<std::size_t>(
+            std::distance(maxEndPrefix.begin(), startIt));
+        if ( startIndex >= entities.size() ) {
+            return;
+        }
+
+        auto endIt = std::upper_bound(
+            entities.begin() + static_cast<std::ptrdiff_t>(startIndex),
+            entities.end(),
+            maxTime,
+            [&ctx](double value, entt::entity entity) {
+                return value < getNoteStartTimeForSelection(ctx, entity);
+            });
+
+        candidates.reserve(
+            candidates.size() +
+            static_cast<std::size_t>(std::distance(
+                entities.begin() + static_cast<std::ptrdiff_t>(startIndex),
+                endIt)));
+        for ( auto it =
+                  entities.begin() + static_cast<std::ptrdiff_t>(startIndex);
+              it != endIt;
+              ++it ) {
+            const auto entity = *it;
+            if ( !seen.insert(entity).second ) {
+                continue;
+            }
+            if ( !ctx.noteRegistry.valid(entity) ||
+                 !ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                continue;
+            }
+
+            const auto& note =
+                ctx.noteRegistry.get<const NoteComponent>(entity);
+            if ( note.m_isSubNote ) continue;
+            candidates.push_back(entity);
+        }
+    };
+
+    const double paddedTopY    = box.rect.top - box.screen.noteH;
+    const double paddedBottomY = box.rect.bottom + box.screen.noteH;
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+        std::min(absA, absB), std::max(absA, absB));
+    if ( ranges.empty() ) {
+        collectTimeRangeCandidates(
+            std::min(box.box.startTime, box.box.endTime),
+            std::max(box.box.startTime, box.box.endTime));
+        return true;
+    }
+
+    for ( const auto& [minTime, maxTime] : ranges ) {
+        collectTimeRangeCandidates(minTime, maxTime);
+    }
+    return true;
+}
+
+/// @brief 收集当前框选框影响到的候选主音符实体。
+/// @warning 逻辑热路径：优先使用已排序的时间段缓存；缓存不可用时才全量兜底。
+void collectMarqueeSelectionCandidates(
+    SessionContext& ctx, const std::vector<PreparedMarqueeBox>& boxes,
+    std::vector<entt::entity>& candidates)
+{
+    std::unordered_set<entt::entity> seen;
+    seen.reserve(256);
+
+    bool usedIndexedCandidates = true;
+    for ( const auto& box : boxes ) {
+        if ( !collectMarqueeBoxCandidates(ctx, box, candidates, seen) ) {
+            usedIndexedCandidates = false;
+            break;
+        }
+    }
+
+    if ( usedIndexedCandidates ) {
+        return;
+    }
+
+    candidates.clear();
+    collectAllPrimaryNoteCandidates(ctx, candidates);
 }
 
 /// @brief 准备所有有效框选区域的屏幕矩形。
@@ -931,12 +1086,21 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
     if ( preparedBoxes.empty() ) return;
 
     auto mode = m_ctx.lastConfig.settings.selectionMode;
-    auto view = m_ctx.noteRegistry.view<NoteComponent>();
+    if ( forceFullSync || !m_ctx.marqueeIsAdditive ) {
+        clearSelectedEntityFlags(m_ctx);
+    }
 
-    for ( auto entity : view ) {
-        const auto& note = view.get<NoteComponent>(entity);
+    std::vector<entt::entity> candidates;
+    collectMarqueeSelectionCandidates(m_ctx, preparedBoxes, candidates);
+
+    for ( auto entity : candidates ) {
+        if ( !m_ctx.noteRegistry.valid(entity) ||
+             !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+            continue;
+        }
+
+        const auto& note = m_ctx.noteRegistry.get<const NoteComponent>(entity);
         if ( note.m_isSubNote ) continue;
-
         bool isSelectedInAny = false;
         for ( const auto& box : preparedBoxes ) {
             if ( noteMatchesSelection(note, box.screen, box.rect, mode) ) {
@@ -945,18 +1109,12 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
             }
         }
 
+        if ( !isSelectedInAny ) continue;
+
         if ( !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) ) {
             m_ctx.noteRegistry.emplace<InteractionComponent>(entity);
         }
-
-        auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
-        if ( m_ctx.marqueeIsAdditive && !forceFullSync ) {
-            if ( isSelectedInAny ) {
-                ic.isSelected = true;
-            }
-        } else {
-            ic.isSelected = isSelectedInAny;
-        }
+        m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected = true;
     }
 }
 

@@ -702,10 +702,7 @@ bool BeatmapSession::processCommands()
                                !std::is_same_v<T, CmdSetHoveredEntity> ) {
                     processed = true;
                 }
-                if constexpr ( std::is_same_v<T, CmdStartDrag> ||
-                               std::is_same_v<T, CmdUpdateDrag> ||
-                               std::is_same_v<T, CmdEndDrag> ||
-                               std::is_same_v<T, CmdUndo> ||
+                if constexpr ( std::is_same_v<T, CmdUndo> ||
                                std::is_same_v<T, CmdRedo> ||
                                std::is_same_v<T, CmdLoadBeatmap> ||
                                std::is_same_v<T, CmdCreateBeatmap> ||

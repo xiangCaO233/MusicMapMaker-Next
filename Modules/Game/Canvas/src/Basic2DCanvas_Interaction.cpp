@@ -30,6 +30,9 @@ namespace MMM::Canvas
 {
 namespace
 {
+/// @brief 连续拖动编辑命令的像素去重阈值。
+constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
+
 /// @brief 将 ASCII 扩展名转换为小写。
 /// @param value 输入扩展名。
 /// @return 小写后的扩展名。
@@ -68,6 +71,35 @@ Basic2DCanvasInteraction::Basic2DCanvasInteraction(
 Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 {
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
+}
+
+/// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
+bool Basic2DCanvasInteraction::shouldSendContinuousEditCommand(
+    LastContinuousEditCommand& last, glm::vec2 pos, bool primaryModifier,
+    bool secondaryModifier)
+{
+    const bool shouldSend =
+        !last.valid ||
+        std::abs(last.pos.x - pos.x) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        std::abs(last.pos.y - pos.y) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        last.primaryModifier != primaryModifier ||
+        last.secondaryModifier != secondaryModifier;
+    if ( shouldSend ) {
+        last.valid             = true;
+        last.pos               = pos;
+        last.primaryModifier   = primaryModifier;
+        last.secondaryModifier = secondaryModifier;
+    }
+    return shouldSend;
+}
+
+/// @brief 清空连续拖动编辑命令缓存。
+void Basic2DCanvasInteraction::resetContinuousEditCommands()
+{
+    m_lastMarqueeUpdateCommand.valid = false;
+    m_lastBrushUpdateCommand.valid   = false;
+    m_lastMoveUpdateCommand.valid    = false;
+    m_lastEraseUpdateCommand.valid   = false;
 }
 
 void Basic2DCanvasInteraction::update(
@@ -595,6 +627,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnEntity = hoveredEntity != entt::null;
         m_leftPressDragged         = false;
         m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
 
         if ( isHovered ) {
             if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
@@ -647,23 +680,42 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         if ( m_leftPressStartedOnCanvas &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateMarquee{ localMousePos.x, localMousePos.y }));
+            if ( shouldSendContinuousEditCommand(
+                     m_lastMarqueeUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyCtrl,
+                     false) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
+                        localMousePos.x, localMousePos.y }));
+            }
         } else if ( m_leftPressStartedOnCanvas && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateBrush{ m_cameraId,
-                                       localMousePos.x,
-                                       localMousePos.y,
-                                       ImGui::GetIO().KeyShift,
-                                       ImGui::GetIO().KeyCtrl }));
+            if ( shouldSendContinuousEditCommand(
+                     m_lastBrushUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyShift,
+                     ImGui::GetIO().KeyCtrl) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateBrush{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           ImGui::GetIO().KeyShift,
+                                           ImGui::GetIO().KeyCtrl }));
+            }
         } else if ( m_leftPressStartedOnEntity && !currentSnapshot->isPlaying &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateDrag{ m_cameraId,
-                                      localMousePos.x,
-                                      localMousePos.y,
-                                      ImGui::GetIO().KeyCtrl }));
+            if ( shouldSendContinuousEditCommand(
+                     m_lastMoveUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyCtrl,
+                     false) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateDrag{ m_cameraId,
+                                          localMousePos.x,
+                                          localMousePos.y,
+                                          ImGui::GetIO().KeyCtrl }));
+            }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -703,25 +755,34 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnEntity = false;
         m_leftPressDragged         = false;
         m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
     }
 
     // --- 右键交互：画笔工具下为擦除 ---
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
         if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
              isHovered ) {
+            m_lastEraseUpdateCommand.valid = false;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
         if ( !currentSnapshot->isPlaying && ImGui::IsMouseDragging(1) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdUpdateErase{ m_cameraId,
-                                       localMousePos.x,
-                                       localMousePos.y,
-                                       ImGui::GetIO().KeyShift }));
+            if ( shouldSendContinuousEditCommand(
+                     m_lastEraseUpdateCommand,
+                     { localMousePos.x, localMousePos.y },
+                     ImGui::GetIO().KeyShift,
+                     false) ) {
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdUpdateErase{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           ImGui::GetIO().KeyShift }));
+            }
         }
         if ( ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+            m_lastEraseUpdateCommand.valid = false;
         }
     }
 
