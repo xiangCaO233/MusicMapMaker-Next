@@ -14,7 +14,14 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
 		list(REMOVE_ITEM CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo")
 		list(APPEND CMAKE_CONFIGURATION_TYPES "RelWithDebInfo")
 		list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
-		set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}" CACHE STRING "Available build configurations" FORCE)
+		set(
+			CMAKE_CONFIGURATION_TYPES
+			"${CMAKE_CONFIGURATION_TYPES}"
+			CACHE
+				STRING
+				"Available build configurations"
+			FORCE
+		)
 		message(WARNING
 			"CMAKE_CONFIGURATION_TYPES contained non-standard RelWithDbgInfo; "
 			"using RelWithDebInfo instead."
@@ -23,11 +30,19 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
 	unset(_MMM_RELWITHDBGINFO_INDEX)
 endif()
 
-project(MusicMapMaker-Next VERSION 0.4.3 LANGUAGES CXX)
+project(MusicMapMaker-Next VERSION 0.4.4 LANGUAGES CXX)
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "Build type" FORCE)
-	set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+	set_property(
+		CACHE CMAKE_BUILD_TYPE
+		PROPERTY
+			STRINGS
+			Debug
+			Release
+			RelWithDebInfo
+			MinSizeRel
+	)
 endif()
 
 if(MSVC)
