@@ -21,6 +21,9 @@ endif()
 
 # Unit test
 mmm_add_test_executable(Network UpdateCheckerTest tests/UpdateCheckerTest.cpp)
+if(WIN32)
+    target_sources(UpdateCheckerTest PRIVATE tests/UpdateCheckerTest.rc)
+endif()
 target_link_libraries(UpdateCheckerTest PRIVATE Network Log)
 target_include_directories(UpdateCheckerTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
