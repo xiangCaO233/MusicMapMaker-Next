@@ -86,13 +86,13 @@ macro(add_strip_command_for_release TARGET_NAME)
 	add_custom_command(
 		TARGET ${TARGET_NAME}
 		POST_BUILD
-		COMMAND $<$<CONFIG:Release,MinSizeRel>:${CMAKE_STRIP}> $<$<CONFIG:Release,MinSizeRel>:-s>
-			$<$<CONFIG:Release,MinSizeRel>:$<TARGET_FILE:${TARGET_NAME}>>
-		COMMENT "Stripping symbols from ${TARGET_NAME} in Release/MinSizeRel mode"
+		COMMAND $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:${CMAKE_STRIP}> $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:-s>
+			$<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:$<TARGET_FILE:${TARGET_NAME}>>
+		COMMENT "Stripping symbols from ${TARGET_NAME} in Release/MinSizeRel/RelWithDebInfo mode"
 		VERBATIM
 	)
 	message(STATUS
-		"Added post-build strip command for target '${TARGET_NAME}' in Release/MinSizeRel."
+		"Added post-build strip command for target '${TARGET_NAME}' in Release/MinSizeRel/RelWithDebInfo."
 	)
 endmacro()
 
