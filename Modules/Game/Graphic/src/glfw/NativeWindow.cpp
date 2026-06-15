@@ -40,6 +40,60 @@ namespace
 /// @brief 判断历史尺寸是否贴近显示器工作区时允许的像素误差。
 constexpr int MAXIMIZED_PLACEMENT_TOLERANCE = 8;
 
+/// @brief 用于判断保存窗口尺寸是否贴近显示器边界的尺寸信息。
+struct MonitorPlacementBounds {
+    /// @brief 可用于窗口最大化尺寸判断的显示器宽度。
+    int width{ 0 };
+
+    /// @brief 可用于窗口最大化尺寸判断的显示器高度。
+    int height{ 0 };
+};
+
+/// @brief 查询主显示器上可用于窗口位置恢复判断的尺寸。
+/// @param bounds 输出显示器尺寸。
+/// @return 查询成功时返回 true。
+/// @warning 低频窗口恢复路径：仅在应用项目窗口状态时执行；macOS 上避免
+/// glfwGetMonitorWorkarea 触发 Cocoa 无 NSScreen 的平台错误。
+bool queryPrimaryMonitorPlacementBounds(MonitorPlacementBounds& bounds)
+{
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    if ( !monitor ) {
+        return false;
+    }
+
+#if defined(__APPLE__)
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    if ( !mode ) {
+        return false;
+    }
+
+    bounds.width  = mode->width;
+    bounds.height = mode->height;
+    return true;
+#else
+    int workAreaX      = 0;
+    int workAreaY      = 0;
+    int workAreaWidth  = 0;
+    int workAreaHeight = 0;
+    glfwGetMonitorWorkarea(
+        monitor, &workAreaX, &workAreaY, &workAreaWidth, &workAreaHeight);
+
+    if ( workAreaWidth <= 0 || workAreaHeight <= 0 ) {
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        if ( !mode ) {
+            return false;
+        }
+
+        workAreaWidth  = mode->width;
+        workAreaHeight = mode->height;
+    }
+
+    bounds.width  = workAreaWidth;
+    bounds.height = workAreaHeight;
+    return true;
+#endif
+}
+
 #ifdef _WIN32
 /// @brief HWND 属性名，与 Win32WindowAdapter/renderer
 /// 协同保留最小化前最大化状态。
@@ -749,30 +803,11 @@ bool NativeWindow::isLikelyMaximizedPlacement(int width, int height) const
         return false;
     }
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    if ( !monitor ) {
-        return false;
-    }
+    MonitorPlacementBounds bounds;
+    if ( !queryPrimaryMonitorPlacementBounds(bounds) ) return false;
 
-    int workAreaX      = 0;
-    int workAreaY      = 0;
-    int workAreaWidth  = 0;
-    int workAreaHeight = 0;
-    glfwGetMonitorWorkarea(
-        monitor, &workAreaX, &workAreaY, &workAreaWidth, &workAreaHeight);
-
-    if ( workAreaWidth <= 0 || workAreaHeight <= 0 ) {
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-        if ( !mode ) {
-            return false;
-        }
-
-        workAreaWidth  = mode->width;
-        workAreaHeight = mode->height;
-    }
-
-    return width >= workAreaWidth - MAXIMIZED_PLACEMENT_TOLERANCE ||
-           height >= workAreaHeight - MAXIMIZED_PLACEMENT_TOLERANCE;
+    return width >= bounds.width - MAXIMIZED_PLACEMENT_TOLERANCE ||
+           height >= bounds.height - MAXIMIZED_PLACEMENT_TOLERANCE;
 }
 
 void NativeWindow::rememberCurrentWindowPlacement()
