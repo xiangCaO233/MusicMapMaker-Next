@@ -1,6 +1,34 @@
 cmake_minimum_required(VERSION 3.31)
 
+if(CMAKE_BUILD_TYPE STREQUAL "RelWithDbgInfo")
+	message(WARNING
+		"CMAKE_BUILD_TYPE=RelWithDbgInfo is not a standard CMake configuration; "
+		"using RelWithDebInfo instead."
+	)
+	set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
+endif()
+
+if(DEFINED CMAKE_CONFIGURATION_TYPES)
+	list(FIND CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo" _MMM_RELWITHDBGINFO_INDEX)
+	if(NOT _MMM_RELWITHDBGINFO_INDEX EQUAL -1)
+		list(REMOVE_ITEM CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo")
+		list(APPEND CMAKE_CONFIGURATION_TYPES "RelWithDebInfo")
+		list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
+		set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}" CACHE STRING "Available build configurations" FORCE)
+		message(WARNING
+			"CMAKE_CONFIGURATION_TYPES contained non-standard RelWithDbgInfo; "
+			"using RelWithDebInfo instead."
+		)
+	endif()
+	unset(_MMM_RELWITHDBGINFO_INDEX)
+endif()
+
 project(MusicMapMaker-Next VERSION 0.4.3 LANGUAGES CXX)
+
+if(NOT CMAKE_CONFIGURATION_TYPES)
+	set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "Build type" FORCE)
+	set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+endif()
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
