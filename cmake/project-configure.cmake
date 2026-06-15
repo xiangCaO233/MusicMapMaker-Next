@@ -51,7 +51,10 @@ else()
 		# --- 每个函数/数据放入独立 section，供链接器 GC 丢弃未引用部分 ---
 		add_compile_options("-ffunction-sections")
 		add_compile_options("-fdata-sections")
-		if(NOT WIN32)
+		if(APPLE)
+			# macOS 使用 Apple ld，死代码剥离参数不同于 GNU ld/lld。
+			add_link_options("-Wl,-dead_strip")
+		elseif(NOT WIN32)
 			# Linux 上由链接器丢弃死节
 			add_link_options("-Wl,--gc-sections")
 		endif()
@@ -66,10 +69,18 @@ else()
 		# 与 Clang 对齐：分离函数/数据节以支持链接器死代码消除
 		add_compile_options("-ffunction-sections")
 		add_compile_options("-fdata-sections")
-		if(NOT WIN32)
+		if(APPLE)
+			add_link_options("-Wl,-dead_strip")
+		elseif(NOT WIN32)
 			add_link_options("-Wl,--gc-sections")
 		endif()
 	endif()
+endif()
+
+if(APPLE)
+	set(MMM_RELEASE_STRIP_FLAG "-x")
+else()
+	set(MMM_RELEASE_STRIP_FLAG "-s")
 endif()
 
 # ==============================================================================
@@ -86,7 +97,7 @@ macro(add_strip_command_for_release TARGET_NAME)
 	add_custom_command(
 		TARGET ${TARGET_NAME}
 		POST_BUILD
-		COMMAND $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:${CMAKE_STRIP}> $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:-s>
+		COMMAND $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:${CMAKE_STRIP}> $<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:${MMM_RELEASE_STRIP_FLAG}>
 			$<$<CONFIG:Release,MinSizeRel,RelWithDebInfo>:$<TARGET_FILE:${TARGET_NAME}>>
 		COMMENT "Stripping symbols from ${TARGET_NAME} in Release/MinSizeRel/RelWithDebInfo mode"
 		VERBATIM
