@@ -303,7 +303,11 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 #endif
 
     XINFO("UpdateChecker: Exiting for update...");
+#if defined(_WIN32)
+    ExitProcess(0);
+#else
     std::exit(0);
+#endif
     return true;
 }
 
@@ -499,7 +503,11 @@ void UpdateChecker::downloadAsync()
         if ( !result.updaterUrl.empty() ) {
             std::filesystem::path updaterTempPath =
                 std::filesystem::temp_directory_path() /
+#ifdef _WIN32
+                "MusicMapMakerHelper.exe";
+#else
                 "MusicMapMaker_updater";
+#endif
 
 #ifdef _WIN32
             FILE* uFile = _wfopen(updaterTempPath.wstring().c_str(), L"wb");

@@ -45,20 +45,17 @@ namespace
 /// @brief 检查指定 PID 进程是否仍在运行
 bool isProcessAlive(DWORD pid)
 {
-    HANDLE hProcess =
-        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, pid);
     if ( !hProcess ) return false;
-    DWORD exitCode;
-    GetExitCodeProcess(hProcess, &exitCode);
+    const DWORD waitResult = WaitForSingleObject(hProcess, 0);
     CloseHandle(hProcess);
-    return exitCode == STILL_ACTIVE;
+    return waitResult == WAIT_TIMEOUT;
 }
 
 /// @brief 等待父进程退出（最多等待 30 秒）
 void waitForParent(DWORD pid)
 {
-    HANDLE hProcess =
-        OpenProcess(SYNCHRONIZE | PROCESS_QUERY_INFORMATION, FALSE, pid);
+    HANDLE hProcess = OpenProcess(SYNCHRONIZE, FALSE, pid);
     if ( hProcess ) {
         WaitForSingleObject(hProcess, 30000);
         CloseHandle(hProcess);
