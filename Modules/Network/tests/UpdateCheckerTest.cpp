@@ -155,9 +155,9 @@ static int testIsFinished()
         bool isTransient = (tc.status == UpdateStatus::kChecking ||
                             tc.status == UpdateStatus::kDownloading);
         bool isDone      = (tc.status == UpdateStatus::kUpToDate ||
-                       tc.status == UpdateStatus::kUpdateFound ||
-                       tc.status == UpdateStatus::kDownloaded ||
-                       tc.status == UpdateStatus::kError);
+                            tc.status == UpdateStatus::kUpdateFound ||
+                            tc.status == UpdateStatus::kDownloaded ||
+                            tc.status == UpdateStatus::kError);
 
         // 检查枚举值分类一致性
         if ( isTransient != isDone && tc.expectFinished == isDone ) {
@@ -316,7 +316,8 @@ static int testUpdateSuccessMarker()
     int pass = 0, fail = 0;
 
     // 创建临时标记文件（模拟 Updater 写入的标记）
-    std::string markerPath = "/tmp/.mm_update_success_test";
+    std::filesystem::path markerPath =
+        std::filesystem::temp_directory_path() / ".mm_update_success_test";
     {
         std::ofstream marker(markerPath);
         marker << "test";

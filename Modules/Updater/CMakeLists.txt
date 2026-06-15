@@ -1,8 +1,13 @@
 # Updater - 最小独立的更新器辅助可执行文件
 # 完全静态链接，不依赖任何项目库
 
+if(WIN32)
+    set(UPDATER_RESOURCE MusicMapMaker-Updater.rc)
+endif()
+
 add_executable(MusicMapMaker-Updater
     main.cpp
+    ${UPDATER_RESOURCE}
 )
 
 # 输出到与主程序相同的 bin 目录

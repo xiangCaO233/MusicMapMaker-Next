@@ -66,7 +66,7 @@ std::string readTextFile(const std::filesystem::path& path)
 /// @brief 将本地路径转换为 libcurl 可读取的 file URL。
 std::string fileUrlFor(const std::filesystem::path& path)
 {
-    return "file://" + MMM::Config::pathToUtf8(path);
+    return "file://" + MMM::Config::pathToUtf8Generic(path);
 }
 
 /// @brief 创建 zip 文件。
