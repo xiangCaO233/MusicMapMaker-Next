@@ -93,6 +93,17 @@ public:
     /// @param height 窗口高度。
     void setNormalFramePlacement(int x, int y, int width, int height) override;
 
+    /// @brief 判断当前平台窗口是否处于最大化状态。
+    /// @return 当前窗口应被视为最大化时返回 true。
+    [[nodiscard]] bool isFrameMaximized() const override;
+
+    /// @brief 为标题栏拖动还原最大化窗口，并保持鼠标相对窗口位置。
+    /// @param cursorX 鼠标在窗口客户区中的 X 坐标。
+    /// @param cursorY 鼠标在窗口客户区中的 Y 坐标。
+    /// @return 成功从最大化状态还原时返回 true。
+    /// @warning 输入低频路径：仅在标题栏拖动超过阈值后执行，会修改窗口矩形。
+    bool restoreFrameForClientMove(double cursorX, double cursorY) override;
+
     /**
      * @brief 全屏
      */

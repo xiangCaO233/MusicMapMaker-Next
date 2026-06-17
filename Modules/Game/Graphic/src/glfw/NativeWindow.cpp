@@ -31,6 +31,7 @@
 #endif
 
 #if defined(__APPLE__)
+#    include "graphic/glfw/window/adapters/MacOSWindowAdapter.h"
 #    include "graphic/glfw/window/adapters/MacOSWindowUtils.h"
 #endif
 
@@ -517,9 +518,13 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
     }
 
     // 在 glfwCreateWindow 之后调用
-#ifdef _WIN32
+#if defined(_WIN32)
     m_windowFrameAdapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
-#elif defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+#endif
+#if defined(__APPLE__)
+    m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
+#endif
+#if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
     if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
         m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
     }
@@ -909,6 +914,62 @@ void NativeWindow::getNormalFramePlacement(int& x, int& y, int& width,
 void NativeWindow::setNormalFramePlacement(int x, int y, int width, int height)
 {
     rememberWindowPlacement(x, y, width, height);
+}
+
+bool NativeWindow::isFrameMaximized() const
+{
+    return isWindowMaximized();
+}
+
+bool NativeWindow::restoreFrameForClientMove(double cursorX, double cursorY)
+{
+    if ( !m_windowHandle || !isWindowMaximized() ) {
+        return false;
+    }
+
+    int windowX      = 0;
+    int windowY      = 0;
+    int windowWidth  = 0;
+    int windowHeight = 0;
+    glfwGetWindowPos(m_windowHandle, &windowX, &windowY);
+    glfwGetWindowSize(m_windowHandle, &windowWidth, &windowHeight);
+    if ( windowWidth <= 0 || windowHeight <= 0 ) {
+        return false;
+    }
+
+    const int   rootCursorX   = windowX + static_cast<int>(cursorX);
+    const int   rootCursorY   = windowY + static_cast<int>(cursorY);
+    const int   restoreWidth  = std::max(1, m_normalWindowSize[0]);
+    const int   restoreHeight = std::max(1, m_normalWindowSize[1]);
+    const float cursorRatioX  = std::clamp(
+        static_cast<float>(cursorX) / static_cast<float>(windowWidth),
+        0.0f,
+        1.0f);
+    const int restoreX =
+        rootCursorX -
+        static_cast<int>(static_cast<float>(restoreWidth) * cursorRatioX);
+    const int restoreY =
+        rootCursorY -
+        std::clamp(static_cast<int>(cursorY), 0, restoreHeight - 1);
+
+    m_lastRequestedMaximized       = false;
+    m_restoreMaximizedAfterIconify = false;
+    m_emulatedMaximized            = false;
+#ifdef _WIN32
+    setWin32RestoreMaximizedProperty(m_windowHandle, false);
+    clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+#endif
+#if !defined(__APPLE__)
+    if ( glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ) {
+        glfwRestoreWindow(m_windowHandle);
+    }
+#endif
+    setWindowPlacementWithoutRemembering(
+        restoreX, restoreY, restoreWidth, restoreHeight);
+    rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
+    publishWindowMaximizedState(false);
+    refreshWindowFrameShape();
+    return true;
 }
 
 void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)

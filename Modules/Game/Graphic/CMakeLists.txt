@@ -59,7 +59,10 @@ if(WIN32)
 endif()
 
 if(APPLE)
-    target_sources(Graphic PRIVATE src/glfw/adapters/MacOSWindowUtils.mm)
+    target_sources(Graphic PRIVATE
+        src/glfw/adapters/MacOSWindowAdapter.mm
+        src/glfw/adapters/MacOSWindowUtils.mm
+    )
     target_link_libraries(Graphic PRIVATE "-framework AppKit")
 endif()
 
