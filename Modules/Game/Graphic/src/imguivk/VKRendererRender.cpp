@@ -1,3 +1,9 @@
+#ifdef _WIN32
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#endif
+
 #include "config/AppConfig.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
@@ -494,8 +500,8 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
     }
 
 #ifdef _WIN32
-    // Windows 提窗顺序很关键：主窗口先拿回前台焦点，随后独立
-    // ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
+    // 在 Windows 下提窗顺序很关键：主窗口先拿回前台焦点，随后独立
+    // 独立 ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
     raiseGlfwWindowToTop(mainWindow, true);
 #endif
 
@@ -707,7 +713,7 @@ void VKRenderer::render(NativeWindow&                window,
 
     // 渲染区域
     auto swapchainCreateInfo = m_vkSwapChain.info();
-    // clearmask - 类似opengl的清屏颜色
+    // 清除掩码 - 类似 OpenGL 的清屏颜色
     std::array<vk::ClearValue, 2> clearValues;
     vk::ClearColorValue           clearColorValue(s_clear_color);
     clearValues[0].setColor(clearColorValue);
@@ -781,7 +787,7 @@ void VKRenderer::render(NativeWindow&                window,
             // 设置要绘制到哪个帧缓冲上(上面查到了索引直接用)
             .setFramebuffer(
                 m_vkSwapChain.m_vkImageBuffers[imageIndex].vk_frameBuffer)
-            // clearmask - 类似opengl的清屏颜色
+            // 清除掩码 - 类似 OpenGL 的清屏颜色
             .setClearValues(clearValues);
 
         // 真 - 命令录制
