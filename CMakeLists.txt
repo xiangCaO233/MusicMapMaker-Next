@@ -54,7 +54,10 @@ endif()
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
-	set(VCPKG_ROOT "C:/coding/vcpkg")
+	if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
+		message(FATAL_ERROR "VCPKG_ROOT environment variable is required when building with MSVC.")
+	endif()
+	file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
 	# 强制 MSVC 使用静态运行时 (/MT)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
