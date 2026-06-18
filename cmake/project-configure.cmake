@@ -91,6 +91,11 @@ endif()
 # 宏是简单的文本替换，变量作用域与调用处相同。
 # 函数有自己的变量作用域。对于这种简单的命令添加，宏更直观。
 macro(add_strip_command_for_release TARGET_NAME)
+	if(NOT CMAKE_STRIP OR CMAKE_STRIP MATCHES "-NOTFOUND$")
+		message(STATUS
+			"Skipping post-build strip command for target '${TARGET_NAME}': CMAKE_STRIP is not available."
+		)
+	else()
 	# $<TARGET_FILE:...>: 获取目标的完整路径
 	# 配置 Release/MinSizeRel: 在这些模式下执行此命令
 	# 构建后步骤:             在目标成功构建之后执行
@@ -105,6 +110,7 @@ macro(add_strip_command_for_release TARGET_NAME)
 	message(STATUS
 		"Added post-build strip command for target '${TARGET_NAME}' in Release/MinSizeRel/RelWithDebInfo."
 	)
+	endif()
 endmacro()
 
 # ==============================================================================
