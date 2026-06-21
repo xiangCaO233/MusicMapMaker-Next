@@ -1335,7 +1335,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     }
 
     // 主画布滚轮按 cameraId 路由，以允许同主音轨后台画布在 hover
-    // 状态下接收滚动，但不同主音轨画布不会被滚轮同步或切换。
+    // 状态下接收滚动，但不抢占当前活跃画布焦点。
     if ( std::holds_alternative<CmdScroll>(cmd) ) {
         const auto& scroll = std::get<CmdScroll>(cmd);
         if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
@@ -1353,9 +1353,6 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                 return;
             }
 
-            if ( targetIndex != activeIndex ) {
-                setActiveSessionIndex(targetIndex);
-            }
             sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
                 std::move(cmd));
             return;
@@ -1601,19 +1598,37 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 
             auto& ctx = entry.session->getContextMutable();
 
+            const double sourceAnimateTarget =
+                sourceCtx.currentTime +
+                m_editorConfig.visual.getEffectiveVisualOffset();
+            const double sourceResetTime     = sourceCtx.isPlaying
+                                                   ? sourceCtx.animateTime
+                                                   : sourceAnimateTarget;
             const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
             const double previousAnimateTime = ctx.animateTime;
             const bool   shouldClearHitEffects =
                 wasFollowing != sourceCtx.isPlaying ||
-                sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                sourceResetTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
                     previousAnimateTime ||
-                std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
+                std::abs(sourceResetTime - previousAnimateTime) > 0.2;
 
-            ctx.currentTime       = sourceCtx.currentTime;
-            ctx.animateTime       = sourceCtx.animateTime;
-            ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
-            ctx.animateTimeAnimationActive =
-                sourceCtx.animateTimeAnimationActive;
+            ctx.currentTime = sourceCtx.currentTime;
+            if ( sourceCtx.isPlaying ) {
+                ctx.animateTime       = sourceCtx.animateTime;
+                ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
+                ctx.animateTimeAnimationActive =
+                    sourceCtx.animateTimeAnimationActive;
+            } else if ( std::isfinite(ctx.animateTime) &&
+                        std::isfinite(sourceAnimateTarget) ) {
+                ctx.animateTimeTarget = sourceAnimateTarget;
+                ctx.animateTimeAnimationActive =
+                    std::abs(ctx.animateTimeTarget - ctx.animateTime) >
+                    MAIN_AUDIO_SYNC_TIME_EPSILON;
+            } else {
+                ctx.animateTime                = sourceAnimateTarget;
+                ctx.animateTimeTarget          = sourceAnimateTarget;
+                ctx.animateTimeAnimationActive = false;
+            }
             ctx.animatedTimelineZoom = sourceCtx.animatedTimelineZoom;
             ctx.animatedTimelineZoomTarget =
                 sourceCtx.animatedTimelineZoomTarget;
