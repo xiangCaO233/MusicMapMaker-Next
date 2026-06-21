@@ -238,6 +238,27 @@ bool snapCanvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
     return true;
 }
 
+/// @brief 跳转到主画布当前悬浮时间点。
+/// @param snapshot 当前渲染快照，时间字段使用视觉时间域。
+/// @return 成功发送跳转命令时返回 true。
+/// @warning UI 输入路径：只在点击导航手势触发时调用；不访问 ECS 或文件系统。
+bool publishCanvasHoverSeek(const Logic::RenderSnapshot& snapshot)
+{
+    const double targetTime =
+        snapshot.isSnapped ? snapshot.snappedTime : snapshot.hoveredTime;
+    if ( !std::isfinite(targetTime) ||
+         std::abs(targetTime - snapshot.currentTime) <= 1e-6 ) {
+        return false;
+    }
+
+    const double visualOffset = Config::AppConfig::instance()
+                                    .getVisualConfig()
+                                    .getEffectiveVisualOffset();
+    Event::EventBus::instance().publish(
+        Event::LogicCommandEvent(Logic::CmdSeek{ targetTime - visualOffset }));
+    return true;
+}
+
 /// @brief 获取无 ScrollSegment 快照下的默认绝对 Y 速度。
 /// @return 默认绝对 Y 速度，单位像素/秒。
 double defaultSnapshotAbsYSpeed()
@@ -692,6 +713,16 @@ void Basic2DCanvasInteraction::handleInteractions(
     bool isHovered  = isInsideCanvas && ImGui::IsWindowHovered();
     bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0);
 
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout = visual.trackLayout;
+    const float normX =
+        targetWidth > 0.0f ? localMousePos.x / targetWidth : 0.0f;
+    const float normY =
+        targetHeight > 0.0f ? localMousePos.y / targetHeight : 0.0f;
+    const bool isMouseInTrackLayout =
+        isHovered && normX >= layout.left && normX <= layout.right &&
+        normY >= layout.top && normY <= layout.bottom;
+
     constexpr float mouseEpsilon = 0.1f;
     bool            shouldSendMouse =
         !m_lastMouseCommand.valid ||
@@ -724,16 +755,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     // --- 交互：显示精确时间戳工具提示 ---
     if ( isHovered && currentSnapshot->isHoveringCanvas &&
          !currentSnapshot->isPlaying ) {
-        auto& visual = Config::AppConfig::instance().getVisualConfig();
-        auto& layout = visual.trackLayout;
-
-        float normX = localMousePos.x / targetWidth;
-        float normY = localMousePos.y / targetHeight;
-
-        bool isInTrackLayout = (normX >= layout.left && normX <= layout.right &&
-                                normY >= layout.top && normY <= layout.bottom);
-
-        if ( isInTrackLayout ) {
+        if ( isMouseInTrackLayout ) {
             bool isEditTool =
                 (currentSnapshot->currentTool != Logic::EditTool::Move &&
                  currentSnapshot->currentTool != Logic::EditTool::Marquee);
@@ -1030,11 +1052,33 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     };
 
-    if ( ImGui::IsMouseClicked(0) ) {
-        m_leftPressStartedOnCanvas = isHovered;
-        m_leftPressStartedOnEntity = hoveredEntity != entt::null;
-        m_leftPressDragged         = false;
-        m_isCanvasPanning          = false;
+    const bool leftClicked =
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
+    const bool leftDoubleClicked =
+        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+    const bool leftSeekClicked =
+        isMouseInTrackLayout && currentSnapshot->isHoveringCanvas &&
+        currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
+        currentSnapshot->currentTool != Logic::EditTool::Draw &&
+        leftDoubleClicked;
+
+    if ( leftSeekClicked ) {
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressDragged              = false;
+        m_isCanvasPanning               = false;
+        m_canvasPanStartTime            = 0.0;
+        m_canvasPanAnchorMouseY         = 0.0f;
+        m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
+        publishCanvasHoverSeek(*currentSnapshot);
+    } else if ( leftClicked ) {
+        m_leftPressStartedOnCanvas      = isHovered;
+        m_leftPressStartedInTrackLayout = isMouseInTrackLayout;
+        m_leftPressStartedOnEntity      = hoveredEntity != entt::null;
+        m_leftPressDragged              = false;
+        m_isCanvasPanning               = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
 
@@ -1162,6 +1206,13 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     if ( ImGui::IsMouseReleased(0) ) {
+        const bool shiftReleaseSeek =
+            m_leftPressStartedOnCanvas && m_leftPressStartedInTrackLayout &&
+            isMouseInTrackLayout && !m_leftPressDragged &&
+            ImGui::GetIO().KeyShift && currentSnapshot->isHoveringCanvas &&
+            currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
+            currentSnapshot->currentTool == Logic::EditTool::Move;
+
         if ( m_leftPressStartedOnCanvas &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             Event::EventBus::instance().publish(
@@ -1178,19 +1229,24 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
-                 !m_leftPressDragged ) {
+                 !m_leftPressDragged && !shiftReleaseSeek ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdSelectEntity{
                         entt::null, !ImGui::GetIO().KeyCtrl }));
             }
         }
 
-        m_leftPressStartedOnCanvas = false;
-        m_leftPressStartedOnEntity = false;
-        m_leftPressDragged         = false;
-        m_isCanvasPanning          = false;
-        m_canvasPanStartTime       = 0.0;
-        m_canvasPanAnchorMouseY    = 0.0f;
+        if ( shiftReleaseSeek ) {
+            publishCanvasHoverSeek(*currentSnapshot);
+        }
+
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressDragged              = false;
+        m_isCanvasPanning               = false;
+        m_canvasPanStartTime            = 0.0;
+        m_canvasPanAnchorMouseY         = 0.0f;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
     }

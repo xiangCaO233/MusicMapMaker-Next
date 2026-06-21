@@ -108,6 +108,8 @@ private:
     bool m_hasLastHovered{ false };
     /// @brief 左键按下时是否位于画布内。
     bool m_leftPressStartedOnCanvas{ false };
+    /// @brief 左键按下时是否位于轨道布局内。
+    bool m_leftPressStartedInTrackLayout{ false };
     /// @brief 左键按下时是否命中实体。
     bool m_leftPressStartedOnEntity{ false };
     /// @brief 当前左键手势是否已经发生拖动。
