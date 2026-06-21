@@ -86,7 +86,22 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             beatMap.m_metadata.map_properties[MapMetadataType::MALODY];
         malody_props["id"]      = std::to_string(meta.value("id", 0));
         malody_props["preview"] = std::to_string(meta.value("preview", 0));
-        malody_props["mode"]    = std::to_string(meta.value("mode", 0));
+        const int malodyMode    = meta.value("mode", 0);
+        malody_props["mode"]    = std::to_string(malodyMode);
+        if ( meta.contains("free") ) {
+            const auto& free = meta["free"];
+            if ( free.is_number_integer() ) {
+                malody_props["free"] = std::to_string(free.get<int>());
+            } else if ( free.is_string() ) {
+                malody_props["free"] = free.get<std::string>();
+            } else {
+                malody_props["free"] = free.dump();
+            }
+        } else if ( malodyMode == 7 ) {
+            malody_props["free"] = "1";
+        } else if ( malodyMode == 0 ) {
+            malody_props["free"] = "0";
+        }
         if ( meta.contains("$ver") ) {
             malody_props["$ver"] = std::to_string(meta["$ver"].get<int>());
         }

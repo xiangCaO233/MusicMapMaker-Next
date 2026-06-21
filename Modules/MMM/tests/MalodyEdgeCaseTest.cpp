@@ -226,6 +226,8 @@ void test_key_mode_hold_uses_endbeat()
 
     TEST_ASSERT(j.contains("meta") && j["meta"].value("mode", -1) == 0,
                 "mode should be 0 (Key)");
+    TEST_ASSERT(j["meta"].value("free", -1) == 0,
+                "free should be 0 in Key mode");
 
     auto gameNotes = json::array();
     for ( const auto& n : j["note"] ) {
@@ -265,6 +267,8 @@ void test_slide_mode_saves_xw()
 
     TEST_ASSERT(j.contains("meta") && j["meta"].value("mode", -1) == 7,
                 "mode should be 7 (Slide)");
+    TEST_ASSERT(j["meta"].value("free", -1) == 1,
+                "free should be 1 in Slide mode");
 
     auto gameNotes = json::array();
     for ( const auto& n2 : j["note"] ) {
@@ -434,6 +438,34 @@ void test_audio_node_type_is_string()
                 "type should be 'SOUND'");
 
     XINFO("PASS: Audio node type is 'SOUND' string");
+}
+
+/// @brief 确认内部兼容 offset 元数据不会导出到 Malody meta。
+void test_internal_offset_metadata_not_exported()
+{
+    XINFO("=== Test: Internal offset metadata not exported ===");
+
+    auto  bm    = makeMinimalBeatMap(7 /*Slide*/, 4);
+    auto& props = bm.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
+    props["initialDelay"] = "123";
+    props["audioOffset"]  = "456";
+
+    fs::path outPath =
+        std::filesystem::temp_directory_path() / "edge_no_internal_meta.mc";
+    TEST_ASSERT(bm.saveToFile(outPath),
+                "map with internal metadata should save");
+
+    std::ifstream ifs(outPath);
+    json          j;
+    ifs >> j;
+
+    TEST_ASSERT(j.contains("meta"), "output should contain meta");
+    TEST_ASSERT(!j["meta"].contains("initialDelay"),
+                "initialDelay should not be exported to Malody meta");
+    TEST_ASSERT(!j["meta"].contains("audioOffset"),
+                "audioOffset should not be exported to Malody meta");
+
+    XINFO("PASS: Internal offset metadata hidden from Malody meta");
 }
 
 /// @brief 确认 BGM/SOUND 物件的 column 不参与 key 数量推断。
@@ -618,6 +650,7 @@ int main()
     test_key_mode_polyline_exports_key_fields();
     test_key_mode_flick_exports_single_note();
     test_audio_node_type_is_string();
+    test_internal_offset_metadata_not_exported();
     test_sound_column_does_not_expand_key_count();
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();

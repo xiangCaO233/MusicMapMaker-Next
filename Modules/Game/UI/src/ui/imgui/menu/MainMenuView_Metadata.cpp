@@ -164,6 +164,45 @@ int32_t clampDoubleToInt32(double value)
         std::round(std::clamp(value, minValue, maxValue)));
 }
 
+/// @brief 判断 Malody 元数据键是否只用于内部兼容，不应在格式元数据中显示。
+/// @warning UI 每帧绘制路径：只做固定字符串比较。
+bool isHiddenMalodyMetadataKey(std::string_view key)
+{
+    return key == "initialDelay" || key == "audioOffset";
+}
+
+/// @brief 根据 Malody mode 自动同步 free 字段。
+/// @warning UI 每帧绘制路径：只解析一个 int32 并更新一个小字符串。
+bool syncMalodyFreeFromMode(MetadataPropertyMap& props)
+{
+    auto modeIt = props.find("mode");
+    if ( modeIt == props.end() ) {
+        return false;
+    }
+
+    auto mode = parseInt32Metadata(modeIt->second);
+    if ( !mode ) {
+        return false;
+    }
+
+    const char* freeValue = nullptr;
+    if ( *mode == 7 ) {
+        freeValue = "1";
+    } else if ( *mode == 0 ) {
+        freeValue = "0";
+    } else {
+        return false;
+    }
+
+    auto freeIt = props.find("free");
+    if ( freeIt != props.end() && freeIt->second == freeValue ) {
+        return false;
+    }
+
+    props["free"] = freeValue;
+    return true;
+}
+
 /// @brief 读取状态栏同源的当前判定线时间，并转换为预览元数据毫秒文本。
 /// @return 非负毫秒整数字符串。
 std::string readCurrentJudgelinePreviewMsText()
@@ -392,7 +431,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool       known = std::find_if(knownKeys.begin(),
+            const bool known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -1348,13 +1387,13 @@ void MainMenuView::renderMetadataEditorWindow()
                                   "音频预览时间戳 (ms) - 选歌界面试听起点" },
                                 { "mode",
                                   "游戏模式 - 0=Key 模式，7=Slide 模式" },
+                                { "free",
+                                  "自由模式标记 - mode=7 时为 1，mode=0 时为 "
+                                  "0" },
                                 { "$ver", "文件格式版本" },
                                 { "aimode", "AI 辅助模式配置" },
                                 { "mode_ext", "模式额外扩展配置 (JSON 串)" },
-                                { "extra", "额外顶层扩展配置 (JSON 串)" },
-                                { "initialDelay",
-                                  "初始节拍延迟 / 时间戳首点 (ms)" },
-                                { "audioOffset", "音频时间偏移 (ms)" }
+                                { "extra", "额外顶层扩展配置 (JSON 串)" }
                             };
 
                         auto& props =
@@ -1365,6 +1404,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                  takeMetadataJsonEditResult(metadataScopeId) ) {
                             props[result->key] = result->value;
                         }
+                        syncMalodyFreeFromMode(props);
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -1443,6 +1483,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                          valBuf,
                                          sizeof(valBuf)) ) {
                                     props[key] = valBuf;
+                                    syncMalodyFreeFromMode(props);
                                 }
 
                                 ImGui::TableNextColumn();
@@ -1486,7 +1527,8 @@ void MainMenuView::renderMetadataEditorWindow()
                                         break;
                                     }
                                 }
-                                if ( !isPredefined ) {
+                                if ( !isPredefined &&
+                                     !isHiddenMalodyMetadataKey(k) ) {
                                     customKeys.push_back(k);
                                 }
                             }
@@ -1521,6 +1563,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                          valBuf,
                                          sizeof(valBuf)) ) {
                                     props[key] = valBuf;
+                                    syncMalodyFreeFromMode(props);
                                 }
 
                                 ImGui::TableNextColumn();
@@ -1561,7 +1604,8 @@ void MainMenuView::renderMetadataEditorWindow()
                         if ( ImGui::Button("添加##add_mld_field") ) {
                             std::string nk = newMldKey;
                             if ( !nk.empty() ) {
-                                props[nk]    = newMldVal;
+                                props[nk] = newMldVal;
+                                syncMalodyFreeFromMode(props);
                                 newMldKey[0] = '\0';
                                 newMldVal[0] = '\0';
                             }
@@ -1897,8 +1941,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2072,8 +2116,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2254,8 +2298,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |

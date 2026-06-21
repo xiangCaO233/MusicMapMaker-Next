@@ -154,6 +154,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
              beatMap.m_metadata.map_properties.find(MapMetadataType::MALODY);
          it != beatMap.m_metadata.map_properties.end() ) {
         for ( const auto& [key, val] : it->second ) {
+            if ( key == "initialDelay" || key == "audioOffset" ) {
+                continue;
+            }
             if ( key == "mode_ext" ) {
                 try {
                     meta["mode_ext"] = json::parse(val);
@@ -181,6 +184,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
         }
     }
+    meta["mode"] = mode;
+    meta["free"] = saveAsSlideMode ? 1 : 0;
     if ( saveAsKeyMode ) {
         if ( !meta["mode_ext"].is_object() ) {
             meta["mode_ext"] = json::object();
