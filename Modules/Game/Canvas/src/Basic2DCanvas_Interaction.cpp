@@ -386,6 +386,64 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
     return edge.time + (absY - edge.absY) / edge.speed;
 }
 
+/// @brief 计算框选拖出画布上下边缘时的自动滚动目标时间。
+/// @param snapshot 当前渲染快照，时间字段使用视觉时间域。
+/// @param viewportHeight 当前画布高度，单位像素。
+/// @param mouseY 当前本地鼠标 Y 坐标，单位像素。
+/// @param deltaTime 当前 UI 帧间隔，单位秒。
+/// @param scrolled 输出是否需要执行自动滚动。
+/// @return 自动滚动后的显示时间，单位秒。
+/// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
+double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
+                                   float viewportHeight, float mouseY,
+                                   float deltaTime, bool& scrolled)
+{
+    scrolled = false;
+    if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
+         viewportHeight <= 1.0f ||
+         (mouseY >= 0.0f && mouseY <= viewportHeight) ) {
+        return snapshot.currentTime;
+    }
+
+    const double direction = mouseY < 0.0f ? 1.0 : -1.0;
+    const float  outsidePixels =
+        mouseY < 0.0f ? -mouseY : mouseY - viewportHeight;
+    if ( outsidePixels <= 0.0f ) {
+        return snapshot.currentTime;
+    }
+
+    const auto&  visual = Config::AppConfig::instance().getVisualConfig();
+    const double sensitivity =
+        std::max(0.0f, visual.previewConfig.edgeScrollSensitivity);
+    if ( sensitivity <= 1e-6 ) {
+        return snapshot.currentTime;
+    }
+
+    const double dt = std::clamp(std::isfinite(deltaTime) && deltaTime > 0.0f
+                                     ? static_cast<double>(deltaTime)
+                                     : 1.0 / 60.0,
+                                 1.0 / 240.0,
+                                 1.0 / 15.0);
+    const double ramp =
+        std::max(0.0,
+                 static_cast<double>(outsidePixels) /
+                     std::max(1.0, static_cast<double>(viewportHeight) * 0.18));
+    const double acceleratedRamp = ramp * ramp;
+    const double pixelsPerSecond =
+        (6000.0 + 24000.0 * acceleratedRamp) * sensitivity;
+    const double scale = std::abs(snapshot.renderScaleY) > 1e-6f
+                             ? static_cast<double>(snapshot.renderScaleY)
+                             : 1.0;
+    const double currentAbsY =
+        snapshotAbsYAtTime(snapshot, snapshot.currentTime);
+    const double targetAbsY =
+        currentAbsY + direction * pixelsPerSecond * dt / scale;
+    const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
+    scrolled = std::isfinite(targetTime) &&
+               std::abs(targetTime - snapshot.currentTime) > 1e-6;
+    return scrolled ? targetTime : snapshot.currentTime;
+}
+
 /// @brief 根据画布 Y 坐标计算鼠标下方的显示时间。
 /// @param snapshot 当前渲染快照。
 /// @param viewportHeight 当前画布高度，单位像素。
@@ -1139,11 +1197,32 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         if ( m_leftPressStartedOnCanvas &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            if ( shouldSendContinuousEditCommand(
-                     m_lastMarqueeUpdateCommand,
-                     { localMousePos.x, localMousePos.y },
-                     ImGui::GetIO().KeyCtrl,
-                     false) ) {
+            bool autoScrolled = false;
+            if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying ) {
+                const double autoScrollTargetTime =
+                    marqueeAutoScrollTargetTime(*currentSnapshot,
+                                                targetHeight,
+                                                localMousePos.y,
+                                                ImGui::GetIO().DeltaTime,
+                                                autoScrolled);
+                if ( autoScrolled ) {
+                    const double visualOffset = Config::AppConfig::instance()
+                                                    .getVisualConfig()
+                                                    .getEffectiveVisualOffset();
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(Logic::CmdSeek{
+                            autoScrollTargetTime - visualOffset }));
+                }
+            }
+
+            const bool shouldUpdateMarquee =
+                shouldSendContinuousEditCommand(
+                    m_lastMarqueeUpdateCommand,
+                    { localMousePos.x, localMousePos.y },
+                    ImGui::GetIO().KeyCtrl,
+                    false) ||
+                autoScrolled;
+            if ( shouldUpdateMarquee ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
                         localMousePos.x, localMousePos.y }));
