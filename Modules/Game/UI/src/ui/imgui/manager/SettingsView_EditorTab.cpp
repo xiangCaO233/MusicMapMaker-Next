@@ -31,7 +31,7 @@ void SettingsView::drawEditorSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -148,6 +148,20 @@ void SettingsView::drawEditorSettings()
                 changed |= ImGui::Checkbox("##SelectPastedObjects",
                                            &settings.selectPastedObjects);
             });
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.editor.copy_paste_time_basis").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.editor.copy_paste_time_basis.timestamp")
+                    .data(),
+                (int)Config::CopyPasteTimeBasis::Timestamp },
+              { TR_CACHE("ui.settings.editor.copy_paste_time_basis.beat")
+                    .data(),
+                (int)Config::CopyPasteTimeBasis::Beat } },
+            (int&)settings.copyPasteTimeBasis,
+            changed);
         addSettingItem(
             *sec,
             rowIndex,

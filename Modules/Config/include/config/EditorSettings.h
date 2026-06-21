@@ -600,6 +600,18 @@ NLOHMANN_JSON_SERIALIZE_ENUM(TimeFormatPreference,
                                  { TimeFormatPreference::Beat, "Beat" },
                              })
 
+/// @brief 复制粘贴时用于计算相对偏移的时间基准。
+enum class CopyPasteTimeBasis {
+    Timestamp,  ///< 按时间戳秒数保持相对偏移
+    Beat        ///< 按 BPM 分拍位置保持相对偏移
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
+                             {
+                                 { CopyPasteTimeBasis::Timestamp, "Timestamp" },
+                                 { CopyPasteTimeBasis::Beat, "Beat" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -716,6 +728,9 @@ struct EditorSettings {
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 
+    /// @brief 复制粘贴时按时间戳或分拍位置计算相对偏移。
+    CopyPasteTimeBasis copyPasteTimeBasis{ CopyPasteTimeBasis::Timestamp };
+
     /// @brief 时间线窗口多选是否允许选中 BPM 红线
     bool timelineSelectionIncludesBpm{ false };
 
@@ -803,6 +818,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
           c.disableScrollAccelerationWhileDrawing },
         { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
         { "selectPastedObjects", c.selectPastedObjects },
+        { "copyPasteTimeBasis", c.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
         { "softwareCursorConfig", c.softwareCursorConfig },
         { "preferredAsciiFont", c.preferredAsciiFont },
@@ -875,6 +891,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
     c.selectPastedObjects = j.value("selectPastedObjects", false);
+    c.copyPasteTimeBasis =
+        j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     c.timelineSelectionIncludesBpm =
         j.value("timelineSelectionIncludesBpm", false);
     c.softwareCursorConfig =
