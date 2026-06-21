@@ -468,6 +468,36 @@ void test_internal_offset_metadata_not_exported()
     XINFO("PASS: Internal offset metadata hidden from Malody meta");
 }
 
+/// @brief 确认空难度名导出 MC 时会写出可显示的默认 version。
+void test_empty_version_exports_default_metadata()
+{
+    XINFO("=== Test: Empty Malody version exports default metadata ===");
+
+    auto bm                      = makeMinimalBeatMap(7 /*Slide*/, 4);
+    bm.m_baseMapMetadata.version = "";
+    bm.m_baseMapMetadata.title   = "EmptyVersionTitle";
+    bm.m_baseMapMetadata.artist  = "EmptyVersionArtist";
+    fs::path outPath             = std::filesystem::temp_directory_path() /
+                                   "edge_empty_version_metadata.mc";
+    TEST_ASSERT(bm.saveToFile(outPath), "empty version map should save");
+
+    std::ifstream ifs(outPath);
+    json          j;
+    ifs >> j;
+
+    TEST_ASSERT(j.contains("meta"), "empty version output should contain meta");
+    TEST_ASSERT(j["meta"].contains("version"),
+                "empty version output should contain meta.version");
+    TEST_ASSERT(j["meta"].value("version", "") == "default",
+                "empty version should export as default");
+    TEST_ASSERT(j["meta"].contains("song"),
+                "empty version output should keep song metadata");
+    TEST_ASSERT(j["meta"]["song"].value("title", "") == "EmptyVersionTitle",
+                "empty version output should keep title metadata");
+
+    XINFO("PASS: Empty Malody version exports default metadata");
+}
+
 /// @brief 确认 BGM/SOUND 物件的 column 不参与 key 数量推断。
 void test_sound_column_does_not_expand_key_count()
 {
@@ -651,6 +681,7 @@ int main()
     test_key_mode_flick_exports_single_note();
     test_audio_node_type_is_string();
     test_internal_offset_metadata_not_exported();
+    test_empty_version_exports_default_metadata();
     test_sound_column_does_not_expand_key_count();
     test_original_structure_not_leaked();
     test_hold_stay_at_head_creates_valid_seg();

@@ -104,10 +104,13 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     };
 
     // Meta
-    auto& meta         = fileData["meta"];
-    meta["creator"]    = beatMap.m_baseMapMetadata.author;
-    meta["version"]    = beatMap.m_baseMapMetadata.version;
-    meta["background"] = Config::pathToUtf8(
+    const std::string malodyVersion = beatMap.m_baseMapMetadata.version.empty()
+                                          ? "default"
+                                          : beatMap.m_baseMapMetadata.version;
+    auto&             meta          = fileData["meta"];
+    meta["creator"]                 = beatMap.m_baseMapMetadata.author;
+    meta["version"]                 = malodyVersion;
+    meta["background"]              = Config::pathToUtf8(
         beatMap.m_baseMapMetadata.main_cover_path.filename());
     meta["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.cover_path.filename());
