@@ -333,6 +333,110 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
     return result;
 }
 
+/// @brief 将显示时间按当前分拍规则吸附到拍线。
+/// @param rawTime 未吸附的显示时间，单位秒。
+/// @return 吸附后的显示时间；无可用 BPM 时返回原时间。
+/// @warning UI 热路径：仅在 Shift 拖动总时间进度条时调用；只读取当前快照。
+double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
+{
+    if ( !m_currentSnapshot || !std::isfinite(rawTime) ) {
+        return rawTime;
+    }
+
+    const auto& appConfig    = Config::AppConfig::instance();
+    const auto& editorConfig = appConfig.getEditorConfig();
+    const auto& visual       = appConfig.getVisualConfig();
+
+    struct BpmSnapPoint {
+        /// @brief BPM 段起始时间，单位秒。
+        double time{ 0.0 };
+
+        /// @brief BPM 值。
+        double bpm{ 120.0 };
+    };
+
+    std::vector<BpmSnapPoint> bpmPoints;
+    bpmPoints.reserve(m_currentSnapshot->scrollSegments.size());
+    for ( const auto& segment : m_currentSnapshot->scrollSegments ) {
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ) {
+            continue;
+        }
+
+        double bpm = segment.bpmValue;
+        if ( bpm <= 0.0 || !std::isfinite(bpm) ) {
+            bpm = m_currentSnapshot->fallbackBpm;
+        }
+        if ( bpm <= 0.0 || !std::isfinite(bpm) ) {
+            bpm = 120.0;
+        }
+        bpm = std::min(bpm, 10000.0);
+
+        if ( !bpmPoints.empty() &&
+             std::abs(bpmPoints.back().time - segment.time) < 1e-6 ) {
+            bpmPoints.back().bpm = bpm;
+        } else {
+            bpmPoints.push_back({ segment.time, bpm });
+        }
+    }
+
+    if ( bpmPoints.empty() ) {
+        return rawTime;
+    }
+
+    int beatDivisor = editorConfig.settings.beatDivisor;
+    if ( beatDivisor <= 0 ) {
+        beatDivisor = 4;
+    }
+
+    if ( rawTime < bpmPoints.front().time &&
+         !visual.drawBeatLinesBeforeFirstTiming ) {
+        return rawTime;
+    }
+
+    double nearestTime     = rawTime;
+    double nearestDistance = std::numeric_limits<double>::max();
+    for ( size_t i = 0; i < bpmPoints.size(); ++i ) {
+        const auto& point       = bpmPoints[i];
+        double      nextBpmTime = (i + 1 < bpmPoints.size())
+                                      ? bpmPoints[i + 1].time
+                                      : std::numeric_limits<double>::infinity();
+
+        if ( rawTime < point.time && i > 0 ) {
+            continue;
+        }
+        if ( rawTime > nextBpmTime ) {
+            continue;
+        }
+
+        double beatDuration = 60.0 / point.bpm;
+        double stepDuration = beatDuration / static_cast<double>(beatDivisor);
+        if ( stepDuration <= 1e-9 || !std::isfinite(stepDuration) ) {
+            continue;
+        }
+
+        double relativeTime = rawTime - point.time;
+        double stepCount = editorConfig.settings.snapFloor
+                               ? std::floor(relativeTime / stepDuration + 1e-6)
+                               : std::round(relativeTime / stepDuration);
+        double candidate = point.time + stepCount * stepDuration;
+        if ( candidate > nextBpmTime ) {
+            candidate = nextBpmTime;
+        }
+        candidate = std::max(0.0, candidate);
+        if ( !std::isfinite(candidate) ) {
+            continue;
+        }
+
+        double distance = std::abs(candidate - rawTime);
+        if ( distance < nearestDistance ) {
+            nearestTime     = candidate;
+            nearestDistance = distance;
+        }
+    }
+
+    return nearestTime;
+}
+
 /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseY 鼠标相对画布左上角的 Y 坐标。

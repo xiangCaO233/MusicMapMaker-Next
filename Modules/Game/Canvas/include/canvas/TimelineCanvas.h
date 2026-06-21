@@ -70,9 +70,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -171,6 +171,12 @@ private:
     /// @return 吸附后的谱面时间，单位秒。
     double snapTimingTime(const ImVec2& size, double rawTime, float localMouseY,
                           bool& snapped) const;
+
+    /// @brief 将显示时间按当前分拍规则吸附到拍线。
+    /// @param rawTime 未吸附的显示时间，单位秒。
+    /// @return 吸附后的显示时间；无可用 BPM 时返回原时间。
+    /// @warning UI 热路径：仅在 Shift 拖动总时间进度条时调用；只读取当前快照。
+    double snapTimeToBeatLine(double rawTime) const;
 
     /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
     /// @param size 当前 Timeline 画布尺寸。
