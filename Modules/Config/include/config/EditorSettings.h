@@ -749,6 +749,9 @@ struct EditorSettings {
     /// @brief 是否显示时间线窗口。
     bool showTimelineWindow{ true };
 
+    /// @brief 时间线窗口是否启用专业分轨显示模式。
+    bool timelineProfessionalMode{ false };
+
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };
 
@@ -826,6 +829,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
         { "snapFloor", c.snapFloor },
         { "showTimelineWindow", c.showTimelineWindow },
+        { "timelineProfessionalMode", c.timelineProfessionalMode },
         { "showPreviewWindow", c.showPreviewWindow },
         { "showToolLabels", c.showToolLabels },
         { "fixedToolWindow", c.fixedToolWindow },
@@ -900,14 +904,15 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredAsciiFont =
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
-    c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
-    c.snapFloor            = j.value("snapFloor", false);
-    c.showTimelineWindow   = j.value("showTimelineWindow", true);
-    c.showPreviewWindow    = j.value("showPreviewWindow", true);
-    c.showToolLabels       = j.value("showToolLabels", false);
-    c.fixedToolWindow      = j.value("fixedToolWindow", true);
-    c.showManagerLabels    = j.value("showManagerLabels", true);
-    c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
+    c.stopPlaybackOnScroll     = j.value("stopPlaybackOnScroll", false);
+    c.snapFloor                = j.value("snapFloor", false);
+    c.showTimelineWindow       = j.value("showTimelineWindow", true);
+    c.timelineProfessionalMode = j.value("timelineProfessionalMode", false);
+    c.showPreviewWindow        = j.value("showPreviewWindow", true);
+    c.showToolLabels           = j.value("showToolLabels", false);
+    c.fixedToolWindow          = j.value("fixedToolWindow", true);
+    c.showManagerLabels        = j.value("showManagerLabels", true);
+    c.aesthetics               = j.value("aesthetics", UIAestheticsConfig());
     c.noteColorPalettes =
         j.value("noteColorPalettes", NoteColorPaletteConfig());
     c.defaultNoteColorPaletteSchemeName =

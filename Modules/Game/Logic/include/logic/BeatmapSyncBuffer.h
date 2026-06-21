@@ -127,6 +127,20 @@ struct Hitbox {
  * @brief 时间线上的交互元素 (BPM/Scroll 调整点)
  */
 struct TimelineInteractiveElement {
+    /// @brief 单个 Timing marker 的快照几何范围。
+    struct MarkerGeometry {
+        /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
+        bool hasMarkerGeometry{ false };
+        /// @brief 该 Timing 标记在快照顶点数组中的起点。
+        uint32_t markerVertexOffset{ 0 };
+        /// @brief 该 Timing 标记占用的顶点数量。
+        uint32_t markerVertexCount{ 0 };
+        /// @brief 该 Timing 标记在快照索引数组中的起点。
+        uint32_t markerIndexOffset{ 0 };
+        /// @brief 该 Timing 标记占用的索引数量。
+        uint32_t markerIndexCount{ 0 };
+    };
+
     double       time;
     float        y;
     uint32_t     effects;
@@ -138,6 +152,14 @@ struct TimelineInteractiveElement {
     double       scrollValue{ 0.0 };
     double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
     double       hsValue{ 1.0 };    /// @brief HS 原始参数
+    /// @brief BPM 标记的快照几何范围。
+    MarkerGeometry bpmMarker;
+    /// @brief Scroll 标记的快照几何范围。
+    MarkerGeometry scrollMarker;
+    /// @brief Jump 标记的快照几何范围。
+    MarkerGeometry jumpMarker;
+    /// @brief HS 标记的快照几何范围。
+    MarkerGeometry hsMarker;
     /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
     bool hasMarkerGeometry{ false };
     /// @brief 该 Timing 标记在快照顶点数组中的起点。
@@ -148,6 +170,15 @@ struct TimelineInteractiveElement {
     uint32_t markerIndexOffset{ 0 };
     /// @brief 该 Timing 标记占用的索引数量。
     uint32_t markerIndexCount{ 0 };
+};
+
+/// @brief Timeline 专业模式中显示的主音轨快照。
+struct TimelineAudioTrackSnapshot {
+    /// @brief 显示名称。
+    std::string label;
+
+    /// @brief 音频时长，单位秒。
+    double duration{ 0.0 };
 };
 
 /**
@@ -161,6 +192,7 @@ struct RenderSnapshot {
     std::vector<UI::BrushDrawCmd>               overlayCmds;
     std::vector<Hitbox>                         hitboxes;
     std::vector<TimelineInteractiveElement>     timelineElements;
+    std::vector<TimelineAudioTrackSnapshot>     mainAudioTracks;
     std::vector<System::ScrollSegment>
         scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
 
@@ -352,6 +384,7 @@ struct RenderSnapshot {
         hitboxes.clear();
         overlapMasks.clear();
         timelineElements.clear();
+        mainAudioTracks.clear();
         scrollSegments.clear();
         noteQueryScratch.clear();
         noteQuerySeenScratch.clear();

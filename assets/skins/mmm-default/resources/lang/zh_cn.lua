@@ -689,6 +689,9 @@ return {
 	-- 时间点表格
 	["ui.timeline.timing_points_table_btn"] = "时间点",
 	["ui.timeline.timing_points_table_btn_tooltip"] = "打开时间点表格 (批量编辑)",
+	["ui.timeline.menu.tooltip"] = "时间线选项",
+	["ui.timeline.menu.professional_mode"] = "切换专业模式",
+	["ui.timeline.menu.open_timing_table"] = "打开时间线表格",
 	["ui.timeline.timing_points_table.title"] = "时间点批量编辑###TimingPointsTable",
 
 	-- 状态栏

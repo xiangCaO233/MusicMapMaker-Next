@@ -8,6 +8,7 @@
 #include <cmath>
 #include <fmt/format.h>
 #include <limits>
+#include <optional>
 
 namespace MMM::Canvas
 {
@@ -61,6 +62,20 @@ double getTimingValue(const Logic::TimelineInteractiveElement& element,
     return 0.0;
 }
 
+/// @brief 取 Timeline 元素中指定类型的 marker 几何范围。
+const Logic::TimelineInteractiveElement::MarkerGeometry&
+getTimingMarkerGeometry(const Logic::TimelineInteractiveElement& element,
+                        ::MMM::TimingEffect                      effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return element.bpmMarker;
+    case ::MMM::TimingEffect::SCROLL: return element.scrollMarker;
+    case ::MMM::TimingEffect::JUMP: return element.jumpMarker;
+    case ::MMM::TimingEffect::HS: return element.hsMarker;
+    }
+    return element.scrollMarker;
+}
+
 /// @brief Timeline 画布中按类型排列的 Timing 类型列表。
 constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
     ::MMM::TimingEffect::BPM,
@@ -68,6 +83,44 @@ constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
     ::MMM::TimingEffect::HS,
     ::MMM::TimingEffect::SCROLL,
 };
+
+/// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
+int professionalTimingLane(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 1;
+    case ::MMM::TimingEffect::SCROLL: return 2;
+    case ::MMM::TimingEffect::JUMP: return 3;
+    case ::MMM::TimingEffect::HS: return 4;
+    }
+    return 1;
+}
+
+/// @brief 将专业模式轨道位置转换为创建弹窗类型索引。
+/// @param size 当前 Timeline 画布尺寸。
+/// @param localMouseX 鼠标相对画布左上角的 X 坐标。
+/// @return 可创建 Timing 的轨道返回类型索引；BGM 或越界轨道返回空。
+std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
+                                             float         localMouseX)
+{
+    if ( size.x <= 1.0f || localMouseX < 0.0f || localMouseX > size.x ) {
+        return std::nullopt;
+    }
+
+    constexpr int laneCount = 5;
+    const float   laneWidth = size.x / static_cast<float>(laneCount);
+    int           lane =
+        static_cast<int>(std::floor(localMouseX / std::max(1.0f, laneWidth)));
+    lane = std::clamp(lane, 0, laneCount - 1);
+    switch ( lane ) {
+    case 1: return 0;
+    case 2: return 1;
+    case 3: return 2;
+    case 4: return 3;
+    case 0:
+    default: return std::nullopt;
+    }
+}
 
 /// @brief Timeline 复制粘贴按 beat 换算使用的 BPM 锚点。
 struct TimelineClipboardBeatPoint {
@@ -565,13 +618,25 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
 /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseY 鼠标相对画布左上角的 Y 坐标。
+/// @param localMouseX 鼠标相对画布左上角的 X 坐标。
 /// @param useCurrentTime 是否使用当前播放时间而非鼠标命中时间。
 void TimelineCanvas::openTimingCreatePopupAtY(const ImVec2& size,
                                               float         localMouseY,
+                                              float         localMouseX,
                                               bool          useCurrentTime)
 {
     if ( !m_currentSnapshot ) {
         return;
+    }
+
+    if ( Config::AppConfig::instance()
+             .getEditorSettings()
+             .timelineProfessionalMode ) {
+        auto createType = professionalCreateTypeAtX(size, localMouseX);
+        if ( !createType ) {
+            return;
+        }
+        m_createType = *createType;
     }
 
     m_createTimeRaw = canvasTimeAtLocalY(size, localMouseY);
@@ -600,7 +665,7 @@ TimelineCanvas::collectVisibleTimingTargets() const
         return targets;
     }
 
-    targets.reserve(m_currentSnapshot->timelineElements.size());
+    targets.reserve(m_currentSnapshot->timelineElements.size() * 2U);
     for ( const auto& element : m_currentSnapshot->timelineElements ) {
         for ( auto effect : TIMELINE_EFFECT_ORDER ) {
             if ( (element.effects & getTimingEffectMask(effect)) == 0 ) {
@@ -611,16 +676,28 @@ TimelineCanvas::collectVisibleTimingTargets() const
                 continue;
             }
 
+            const auto& markerGeometry =
+                getTimingMarkerGeometry(element, effect);
+            const bool hasMarkerGeometry =
+                markerGeometry.hasMarkerGeometry || element.hasMarkerGeometry;
             targets.push_back({ entity,
                                 effect,
                                 element.time,
                                 getTimingValue(element, effect),
                                 element.y,
-                                element.hasMarkerGeometry,
-                                element.markerVertexOffset,
-                                element.markerVertexCount,
-                                element.markerIndexOffset,
-                                element.markerIndexCount });
+                                hasMarkerGeometry,
+                                markerGeometry.hasMarkerGeometry
+                                    ? markerGeometry.markerVertexOffset
+                                    : element.markerVertexOffset,
+                                markerGeometry.hasMarkerGeometry
+                                    ? markerGeometry.markerVertexCount
+                                    : element.markerVertexCount,
+                                markerGeometry.hasMarkerGeometry
+                                    ? markerGeometry.markerIndexOffset
+                                    : element.markerIndexOffset,
+                                markerGeometry.hasMarkerGeometry
+                                    ? markerGeometry.markerIndexCount
+                                    : element.markerIndexCount });
         }
     }
     return targets;
@@ -652,6 +729,15 @@ float TimelineCanvas::timingTargetCenterX(const TimelineHitTarget& target,
                                           const ImVec2&            canvasPos,
                                           const ImVec2&            size) const
 {
+    if ( Config::AppConfig::instance()
+             .getEditorSettings()
+             .timelineProfessionalMode ) {
+        constexpr float laneCount = 5.0f;
+        const int       lane      = professionalTimingLane(target.effect);
+        return canvasPos.x +
+               size.x * (static_cast<float>(lane) + 0.5f) / laneCount;
+    }
+
     float x = canvasPos.x + TIMING_MARKER_PADDING + TIMING_MARKER_SIZE * 0.5f;
     if ( target.effect == ::MMM::TimingEffect::SCROLL ) {
         x = canvasPos.x + size.x - TIMING_MARKER_PADDING -
@@ -686,8 +772,24 @@ TimelineCanvas::pickTimingTarget(const ImVec2& canvasPos, const ImVec2& size,
     const ImVec2 mousePos  = ImGui::GetMousePos();
     float        bestScore = std::numeric_limits<float>::max();
     std::optional<TimelineHitTarget> bestTarget;
+    const bool professionalMode = Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .timelineProfessionalMode;
+    int        mouseLane        = -1;
+    if ( professionalMode && size.x > 1.0f ) {
+        constexpr int laneCount   = 5;
+        const float   localMouseX = mousePos.x - canvasPos.x;
+        const float   laneWidth   = size.x / static_cast<float>(laneCount);
+        mouseLane                 = static_cast<int>(
+            std::floor(localMouseX / std::max(1.0f, laneWidth)));
+        mouseLane = std::clamp(mouseLane, 0, laneCount - 1);
+    }
     for ( const auto& target : collectVisibleTimingTargets() ) {
         if ( !isTimingTargetSelectable(target) ) {
+            continue;
+        }
+        if ( professionalMode &&
+             mouseLane != professionalTimingLane(target.effect) ) {
             continue;
         }
         float dy = std::abs(localMouseY - target.y);
@@ -916,6 +1018,9 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const float localMouseX = io.MousePos.x - canvasPos.x;
     const bool  overMenuButton =
         localMouseX >= size.x - 56.0f && localMouseY <= 56.0f;
+    const bool professionalMode = Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .timelineProfessionalMode;
     auto hoveredTarget    = isHovered && !overMenuButton
                                 ? pickTimingTarget(canvasPos, size, localMouseY)
                                 : std::nullopt;
@@ -944,9 +1049,26 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
 
-    const bool ctrl              = io.KeyCtrl;
-    const bool shift             = io.KeyShift;
-    const bool additiveSelection = ctrl || shift;
+    const bool ctrl                        = io.KeyCtrl;
+    const bool shift                       = io.KeyShift;
+    const bool additiveSelection           = ctrl || shift;
+    auto       applyProfessionalCreateType = [&]() {
+        if ( !professionalMode ) {
+            return true;
+        }
+
+        auto createType = professionalCreateTypeAtX(size, localMouseX);
+        if ( !createType ) {
+            return false;
+        }
+
+        if ( m_createType != *createType ) {
+            m_createType  = *createType;
+            m_createValue = defaultTimingCreateValue(
+                timingEffectFromCreateType(m_createType));
+        }
+        return true;
+    };
     if ( ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
@@ -996,7 +1118,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     switch ( m_currentSnapshot->currentTool ) {
     case Logic::EditTool::Draw:
         if ( !m_isTimingErasing && isHovered && !hoveredTarget &&
-             ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             applyProfessionalCreateType() ) {
             m_isTimingDrawPreviewing = true;
             bool snapped             = false;
             m_timingDrawPreviewTime =
@@ -1012,6 +1135,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
              ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            if ( !applyProfessionalCreateType() ) {
+                m_isTimingDrawPreviewing = false;
+                break;
+            }
             bool snapped = false;
             m_timingDrawPreviewTime =
                 snapTimingTime(size,
@@ -1023,7 +1150,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
              ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
-            openTimingCreatePopupAtY(size, localMouseY, false);
+            openTimingCreatePopupAtY(size, localMouseY, localMouseX, false);
             m_isTimingDrawPreviewing = false;
         }
         break;

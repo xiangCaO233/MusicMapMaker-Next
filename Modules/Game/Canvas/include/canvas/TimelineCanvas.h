@@ -181,9 +181,10 @@ private:
     /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
     /// @param size 当前 Timeline 画布尺寸。
     /// @param localMouseY 鼠标相对画布左上角的 Y 坐标。
+    /// @param localMouseX 鼠标相对画布左上角的 X 坐标。
     /// @param useCurrentTime 是否使用当前播放时间而非鼠标命中时间。
     void openTimingCreatePopupAtY(const ImVec2& size, float localMouseY,
-                                  bool useCurrentTime);
+                                  float localMouseX, bool useCurrentTime);
 
     /// @brief 处理 Timeline 画布上的 Timing 选择、框选、拖动和快捷键。
     /// @param canvasPos 画布左上角屏幕坐标。
@@ -199,6 +200,12 @@ private:
     /// @param size 当前 Timeline 画布尺寸。
     void renderTimingInteractionOverlay(const ImVec2& canvasPos,
                                         const ImVec2& size);
+
+    /// @brief 绘制 Timeline 专业模式分轨覆盖层。
+    /// @param canvasPos 画布左上角屏幕坐标。
+    /// @param size 当前 Timeline 画布尺寸。
+    void renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
+                                           const ImVec2& size);
 
     /// @brief 清除上一帧追加到 Timeline 快照中的交互修饰。
     void resetTimelineInteractionDecoration();
