@@ -68,6 +68,34 @@ constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
     ::MMM::TimingEffect::HS,
     ::MMM::TimingEffect::SCROLL,
 };
+
+/// @brief 将创建弹窗索引转换为 Timing 类型。
+/// @param createType 创建弹窗中的类型索引。
+/// @return 对应的 Timing 类型。
+::MMM::TimingEffect timingEffectFromCreateType(int createType)
+{
+    switch ( createType ) {
+    case 0: return ::MMM::TimingEffect::BPM;
+    case 2: return ::MMM::TimingEffect::JUMP;
+    case 3: return ::MMM::TimingEffect::HS;
+    case 1:
+    default: return ::MMM::TimingEffect::SCROLL;
+    }
+}
+
+/// @brief 获取指定 Timing 类型在创建弹窗中的默认参数。
+/// @param effect Timing 类型。
+/// @return 新建该类型 Timing 时使用的默认参数。
+double defaultTimingCreateValue(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 120.0;
+    case ::MMM::TimingEffect::SCROLL: return 1.0;
+    case ::MMM::TimingEffect::JUMP: return 1000.0;
+    case ::MMM::TimingEffect::HS: return 1.0;
+    }
+    return 1.0;
+}
 }  // namespace
 
 /// @brief 根据画布本地 Y 坐标换算谱面时间。
@@ -327,7 +355,8 @@ void TimelineCanvas::openTimingCreatePopupAtY(const ImVec2& size,
     m_createTimeManual = useCurrentTime ? m_currentSnapshot->currentTime
                                         : (m_isTimeSnapped ? m_createTimeSnapped
                                                            : m_createTimeRaw);
-    m_createValue = std::max(0.0, m_createValue) > 0.0 ? m_createValue : 120.0;
+    m_createValue =
+        defaultTimingCreateValue(timingEffectFromCreateType(m_createType));
     m_isCreatePopupOpen = true;
     ImGui::OpenPopup("TimelineCreateEvent");
 }
