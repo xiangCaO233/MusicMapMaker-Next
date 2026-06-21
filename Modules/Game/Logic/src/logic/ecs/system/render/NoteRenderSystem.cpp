@@ -64,7 +64,8 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
 
 /// @brief 生成指定画布的批量渲染快照。
 /// @warning 热路径：每帧/每 update 执行；禁止引入文件系统访问、
-/// registry 全量无缓存扫描或阻塞同步。
+/// registry 全量无缓存扫描或阻塞同步；Timeline 与活跃主画布 Move
+/// 工具会复制 ScrollSegment 供 UI 精确时间映射。
 void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     const std::vector<const TimelineComponent*>& bpmEvents,
@@ -128,8 +129,11 @@ void NoteRenderSystem::generateSnapshot(
         snapshot->uiInterpolationYOffsetScale  = 1.0;
     }
 
-    // Timeline 右键创建事件需要完整映射；普通播放快照只携带线性补间速度。
-    if ( cameraId == "Timeline" ) {
+    // Timeline 右键创建事件与主画布 Move 工具空白拖动需要完整映射；
+    // 普通播放快照只携带线性补间速度。
+    if ( cameraId == "Timeline" ||
+         (isMainCanvas && snapshot->acceptsInteraction &&
+          snapshot->currentTool == EditTool::Move) ) {
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }
 
