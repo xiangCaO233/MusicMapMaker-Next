@@ -168,6 +168,26 @@ bool isSafeArchiveName(const std::string& archiveName)
     return true;
 }
 
+/// @brief 尽量取得路径的绝对规范形式。
+/// @param path 待规范化路径。
+/// @return 成功时返回 weakly_canonical/absolute
+/// 路径，失败时退回词法规范化路径。
+std::filesystem::path makeAbsoluteNormalizedPath(
+    const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+
+    std::error_code filesystemError;
+    auto normalized = std::filesystem::weakly_canonical(path, filesystemError);
+    if ( !filesystemError ) return normalized.lexically_normal();
+
+    filesystemError.clear();
+    normalized = std::filesystem::absolute(path, filesystemError);
+    if ( !filesystemError ) return normalized.lexically_normal();
+
+    return path.lexically_normal();
+}
+
 /// @brief 将 zip 兼容谱面包安全解压到目标目录。
 /// @param packagePath 谱面包路径。
 /// @param destinationRoot 解压目标目录。
@@ -847,32 +867,40 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 {
     /// @brief 本次打开项目的返回结果。
     OpenProjectResult result;
+    /// @brief 调用方传入路径的绝对规范形式。
+    const std::filesystem::path requestedProjectPath =
+        makeAbsoluteNormalizedPath(projectPath);
     /// @brief 实际打开的项目目录路径。
-    std::filesystem::path actualProjectPath = projectPath;
+    std::filesystem::path actualProjectPath = requestedProjectPath;
     /// @brief 若传入谱面文件，则记录需要自动打开的谱面路径。
     std::filesystem::path targetBeatmapPath;
 
     if ( creationOptions ) {
         std::error_code filesystemError;
-        if ( !std::filesystem::exists(projectPath, filesystemError) ) {
-            std::filesystem::create_directories(projectPath, filesystemError);
+        if ( !std::filesystem::exists(actualProjectPath, filesystemError) ) {
+            std::filesystem::create_directories(actualProjectPath,
+                                                filesystemError);
             if ( filesystemError ) {
                 XERROR("Failed to create project directory: {}",
-                       Config::pathToUtf8(projectPath));
+                       Config::pathToUtf8(actualProjectPath));
                 return result;
             }
         }
 
-        if ( !std::filesystem::is_directory(projectPath, filesystemError) ||
+        filesystemError.clear();
+        if ( !std::filesystem::is_directory(actualProjectPath,
+                                            filesystemError) ||
              filesystemError ) {
             XERROR("Failed to create project: Target is not a directory: {}",
-                   Config::pathToUtf8(projectPath));
+                   Config::pathToUtf8(actualProjectPath));
             return result;
         }
-    } else if ( std::filesystem::exists(projectPath) &&
-                std::filesystem::is_regular_file(projectPath) ) {
-        actualProjectPath = projectPath.parent_path();
-        targetBeatmapPath = projectPath;
+        actualProjectPath = makeAbsoluteNormalizedPath(actualProjectPath);
+    } else if ( std::filesystem::exists(requestedProjectPath) &&
+                std::filesystem::is_regular_file(requestedProjectPath) ) {
+        targetBeatmapPath = requestedProjectPath;
+        actualProjectPath =
+            makeAbsoluteNormalizedPath(requestedProjectPath.parent_path());
     }
 
     if ( !std::filesystem::exists(actualProjectPath) ||
