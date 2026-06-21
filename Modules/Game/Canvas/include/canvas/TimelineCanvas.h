@@ -267,11 +267,17 @@ private:
         /// @brief 相对剪贴板锚点时间，单位秒。
         double relativeTime{ 0.0 };
 
+        /// @brief 相对剪贴板锚点的连续 beat 偏移。
+        double relativeBeat{ 0.0 };
+
         /// @brief Timing 类型。
         ::MMM::TimingEffect effect{ ::MMM::TimingEffect::SCROLL };
 
         /// @brief Timing 原始参数值。
         double value{ 0.0 };
+
+        /// @brief 是否已记录可用于按分拍粘贴的位置。
+        bool hasBeatPosition{ false };
     };
 
     /// @brief 拖动开始时记录的 Timing 原始状态。

@@ -69,6 +69,131 @@ constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
     ::MMM::TimingEffect::SCROLL,
 };
 
+/// @brief Timeline 复制粘贴按 beat 换算使用的 BPM 锚点。
+struct TimelineClipboardBeatPoint {
+    double time{ 0.0 };   ///< BPM 时间点，单位秒
+    double bpm{ 120.0 };  ///< 当前段 BPM
+    double beat{ 0.0 };   ///< 该时间点对应的连续 beat
+};
+
+/// @brief Timeline 复制粘贴按 beat 换算使用的 BPM 时间线。
+using TimelineClipboardBeatTimeline = std::vector<TimelineClipboardBeatPoint>;
+
+/// @brief 规整 Timeline 复制粘贴换算用的 BPM 值。
+double sanitizeTimelineClipboardBpm(double bpm, double fallbackBpm)
+{
+    if ( std::isfinite(bpm) && bpm > 0.0 ) {
+        return std::min(bpm, 10000.0);
+    }
+    if ( std::isfinite(fallbackBpm) && fallbackBpm > 0.0 ) {
+        return std::min(fallbackBpm, 10000.0);
+    }
+    return 120.0;
+}
+
+/// @brief 取得 Timeline 快照中的有效回退 BPM。
+double timelineClipboardFallbackBpm(const Logic::RenderSnapshot& snapshot)
+{
+    return sanitizeTimelineClipboardBpm(snapshot.fallbackBpm, 120.0);
+}
+
+/// @brief 从 Timeline 当前快照构建可双向换算的连续 beat 时间线。
+/// @param snapshot 当前渲染快照。
+/// @return 按时间排序并去重后的 BPM/beat 锚点列表。
+TimelineClipboardBeatTimeline buildTimelineClipboardBeatTimeline(
+    const Logic::RenderSnapshot& snapshot)
+{
+    struct BpmEvent {
+        double time{ 0.0 };   ///< BPM 时间点，单位秒
+        double bpm{ 120.0 };  ///< BPM 值
+    };
+
+    const double          fallbackBpm = timelineClipboardFallbackBpm(snapshot);
+    std::vector<BpmEvent> bpmEvents;
+    bpmEvents.reserve(snapshot.scrollSegments.size());
+    for ( const auto& segment : snapshot.scrollSegments ) {
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ||
+             !std::isfinite(segment.time) ) {
+            continue;
+        }
+
+        bpmEvents.push_back(
+            { segment.time,
+              sanitizeTimelineClipboardBpm(segment.bpmValue, fallbackBpm) });
+    }
+    std::stable_sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.time < rhs.time; });
+
+    TimelineClipboardBeatTimeline timeline;
+    timeline.reserve(bpmEvents.size());
+    for ( const auto& event : bpmEvents ) {
+        if ( !timeline.empty() &&
+             std::abs(timeline.back().time - event.time) < 1e-6 ) {
+            timeline.back().bpm = event.bpm;
+            continue;
+        }
+
+        if ( timeline.empty() ) {
+            timeline.push_back({ event.time, event.bpm, 0.0 });
+            continue;
+        }
+
+        const auto&  previous = timeline.back();
+        const double beat =
+            previous.beat + (event.time - previous.time) * previous.bpm / 60.0;
+        timeline.push_back({ event.time, event.bpm, beat });
+    }
+    return timeline;
+}
+
+/// @brief 将秒时间转换为连续 beat 位置。
+double timelineClipboardTimeToBeat(
+    const TimelineClipboardBeatTimeline& timeline, double time,
+    double fallbackBpm)
+{
+    if ( !std::isfinite(time) ) return 0.0;
+
+    const double bpm = sanitizeTimelineClipboardBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return time * bpm / 60.0;
+    }
+
+    auto it = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        time,
+        [](double value, const TimelineClipboardBeatPoint& point) {
+            return value < point.time;
+        });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.beat + (time - point.time) * point.bpm / 60.0;
+}
+
+/// @brief 将连续 beat 位置转换为秒时间。
+double timelineClipboardBeatToTime(
+    const TimelineClipboardBeatTimeline& timeline, double beat,
+    double fallbackBpm)
+{
+    if ( !std::isfinite(beat) ) return 0.0;
+
+    const double bpm = sanitizeTimelineClipboardBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return beat * 60.0 / bpm;
+    }
+
+    auto it = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        beat,
+        [](double value, const TimelineClipboardBeatPoint& point) {
+            return value < point.beat;
+        });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.time + (beat - point.beat) * 60.0 / point.bpm;
+}
+
 /// @brief 将创建弹窗索引转换为 Timing 类型。
 /// @param createType 创建弹窗中的类型索引。
 /// @return 对应的 Timing 类型。
@@ -700,11 +825,23 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
                          return static_cast<int>(lhs.effect) <
                                 static_cast<int>(rhs.effect);
                      });
-    const double anchorTime = selectedTargets.front().time;
+    const double anchorTime  = selectedTargets.front().time;
+    const double fallbackBpm = timelineClipboardFallbackBpm(*m_currentSnapshot);
+    const auto   beatTimeline =
+        buildTimelineClipboardBeatTimeline(*m_currentSnapshot);
+    const double anchorBeat =
+        timelineClipboardTimeToBeat(beatTimeline, anchorTime, fallbackBpm);
     m_timingClipboard.reserve(selectedTargets.size());
     for ( const auto& target : selectedTargets ) {
-        m_timingClipboard.push_back(
-            { target.time - anchorTime, target.effect, target.value });
+        TimelineClipboardEntry entry;
+        entry.relativeTime    = target.time - anchorTime;
+        entry.relativeBeat    = timelineClipboardTimeToBeat(
+                                    beatTimeline, target.time, fallbackBpm) -
+                                anchorBeat;
+        entry.effect          = target.effect;
+        entry.value           = target.value;
+        entry.hasBeatPosition = true;
+        m_timingClipboard.push_back(entry);
     }
 
     if ( cut ) {
@@ -723,10 +860,31 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
     m_selectedTimingEntities.clear();
     Logic::CmdCreateTimelineEvents batch;
     batch.events.reserve(m_timingClipboard.size());
+    const bool pasteByBeat =
+        Config::AppConfig::instance().getEditorSettings().copyPasteTimeBasis ==
+            Config::CopyPasteTimeBasis::Beat &&
+        m_currentSnapshot &&
+        std::all_of(m_timingClipboard.begin(),
+                    m_timingClipboard.end(),
+                    [](const auto& entry) { return entry.hasBeatPosition; });
+    const double fallbackBpm =
+        m_currentSnapshot ? timelineClipboardFallbackBpm(*m_currentSnapshot)
+                          : 120.0;
+    const auto beatTimeline =
+        pasteByBeat ? buildTimelineClipboardBeatTimeline(*m_currentSnapshot)
+                    : TimelineClipboardBeatTimeline{};
+    const double anchorBeat =
+        pasteByBeat
+            ? timelineClipboardTimeToBeat(beatTimeline, anchorTime, fallbackBpm)
+            : 0.0;
     for ( const auto& entry : m_timingClipboard ) {
-        batch.events.push_back({ std::max(0.0, anchorTime + entry.relativeTime),
-                                 entry.effect,
-                                 entry.value });
+        double targetTime = anchorTime + entry.relativeTime;
+        if ( pasteByBeat ) {
+            targetTime = timelineClipboardBeatToTime(
+                beatTimeline, anchorBeat + entry.relativeBeat, fallbackBpm);
+        }
+        batch.events.push_back(
+            { std::max(0.0, targetTime), entry.effect, entry.value });
     }
     if ( !batch.events.empty() ) {
         Event::EventBus::instance().publish(
