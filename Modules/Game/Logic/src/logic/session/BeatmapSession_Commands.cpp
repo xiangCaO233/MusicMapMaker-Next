@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 #include <fstream>
 #include <miniz.h>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -278,6 +279,137 @@ bool writePackageOutputFile(const std::filesystem::path& path, const void* data,
     return file.good();
 }
 
+/// @brief 构建 EX Rhythm Master VI 上架用 Malody mode_ext。
+/// @return 固定的 mode_ext JSON 对象。
+nlohmann::json makeMalodyStoreModeExtJson()
+{
+    nlohmann::json modeExt = nlohmann::json::object();
+    modeExt["bar_begin"]   = 0;
+    modeExt["freenote"]    = "请访问商店或官网下载最新EX Rhythm Master VI皮肤";
+    modeExt["skin"]        = "info.asm";
+    modeExt["skinid"]      = 6091;
+    return modeExt;
+}
+
+/// @brief 判断路径是否为 Malody MC 谱面。
+/// @param path 待检查路径。
+/// @return 扩展名为 .mc 时返回 true。
+bool isMalodyChartPath(const std::filesystem::path& path)
+{
+    return MMM::packageExtensionEquals(
+        MMM::Config::pathToUtf8(path.extension()), ".mc");
+}
+
+/// @brief 临时写入上架用 mode_ext 到谱面元数据。
+/// @param beatMap 待导出的谱面。
+void applyMalodyStoreModeExtMetadata(MMM::BeatMap& beatMap)
+{
+    beatMap.m_metadata
+        .map_properties[MMM::MapMetadataType::MALODY]["mode_ext"] =
+        makeMalodyStoreModeExtJson().dump();
+}
+
+/// @brief 在 MC JSON 文本中替换上架用 mode_ext。
+/// @param inputBytes 输入文件字节。
+/// @param outBytes 输出文件字节。
+/// @return 替换成功时返回 true。
+bool patchMalodyStoreModeExtBytes(const std::vector<std::uint8_t>& inputBytes,
+                                  std::vector<std::uint8_t>&       outBytes)
+{
+    std::string text(inputBytes.begin(), inputBytes.end());
+    auto        fileData = nlohmann::json::parse(text, nullptr, false, true);
+    if ( fileData.is_discarded() || !fileData.is_object() ) {
+        return false;
+    }
+
+    if ( !fileData.contains("meta") || !fileData["meta"].is_object() ) {
+        fileData["meta"] = nlohmann::json::object();
+    }
+    fileData["meta"]["mode_ext"] = makeMalodyStoreModeExtJson();
+    const std::string outputText = fileData.dump(4);
+    outBytes.assign(outputText.begin(), outputText.end());
+    return true;
+}
+
+/// @brief 在已写出的 MC 文件中替换上架用 mode_ext。
+/// @param path MC 文件路径。
+/// @return 替换成功时返回 true。
+bool patchMalodyStoreModeExtFile(const std::filesystem::path& path)
+{
+    std::vector<std::uint8_t> inputBytes;
+    std::vector<std::uint8_t> outputBytes;
+    if ( !readPackageSourceFile(path, inputBytes) ) {
+        return false;
+    }
+    if ( !patchMalodyStoreModeExtBytes(inputBytes, outputBytes) ) {
+        return false;
+    }
+    return writePackageOutputFile(
+        path,
+        outputBytes.empty() ? nullptr : outputBytes.data(),
+        outputBytes.size());
+}
+
+/// @brief 保存谱面，并按需仅在 MC 导出产物上写入上架 mode_ext。
+/// @param beatMap 待保存谱面。
+/// @param outputPath 输出路径。
+/// @param addStoreModeExtForMalodyExport 是否写入上架 mode_ext。
+/// @return 是否保存成功。
+bool saveBeatmapWithOptionalMalodyStoreModeExt(
+    MMM::BeatMap& beatMap, const std::filesystem::path& outputPath,
+    bool addStoreModeExtForMalodyExport)
+{
+    if ( !addStoreModeExtForMalodyExport || !isMalodyChartPath(outputPath) ) {
+        return beatMap.saveToFile(outputPath);
+    }
+
+    const bool hadMalodyProps =
+        beatMap.m_metadata.map_properties.find(MMM::MapMetadataType::MALODY) !=
+        beatMap.m_metadata.map_properties.end();
+    auto& props =
+        beatMap.m_metadata.map_properties[MMM::MapMetadataType::MALODY];
+    const auto        modeExtIt  = props.find("mode_ext");
+    const bool        hadModeExt = modeExtIt != props.end();
+    const std::string previousModeExt =
+        hadModeExt ? modeExtIt->second : std::string();
+
+    applyMalodyStoreModeExtMetadata(beatMap);
+    bool ok = beatMap.saveToFile(outputPath);
+    if ( ok ) {
+        ok = patchMalodyStoreModeExtFile(outputPath);
+    }
+
+    if ( hadModeExt ) {
+        props["mode_ext"] = previousModeExt;
+    } else {
+        props.erase("mode_ext");
+    }
+    if ( !hadMalodyProps && props.empty() ) {
+        beatMap.m_metadata.map_properties.erase(MMM::MapMetadataType::MALODY);
+    }
+    return ok;
+}
+
+/// @brief 读取源文件，并按需在 MC 字节中替换上架 mode_ext。
+/// @param sourcePath 源文件路径。
+/// @param addStoreModeExtForMalodyExport 是否写入上架 mode_ext。
+/// @param outBytes 输出文件字节。
+/// @return 是否读取成功。
+bool readPackageSourceFileWithOptionalMalodyStoreModeExt(
+    const std::filesystem::path& sourcePath,
+    bool addStoreModeExtForMalodyExport, std::vector<std::uint8_t>& outBytes)
+{
+    std::vector<std::uint8_t> inputBytes;
+    if ( !readPackageSourceFile(sourcePath, inputBytes) ) {
+        return false;
+    }
+    if ( !addStoreModeExtForMalodyExport || !isMalodyChartPath(sourcePath) ) {
+        outBytes = std::move(inputBytes);
+        return true;
+    }
+    return patchMalodyStoreModeExtBytes(inputBytes, outBytes);
+}
+
 /// @brief 取得打包格式要求的主谱面扩展名。
 /// @param packageTypes 输出包格式对应的文件类型规则。
 /// @return 带前导点的目标谱面扩展名。
@@ -325,10 +457,12 @@ std::filesystem::path makeTemporaryConvertedBeatmapPath(
 /// @param sourcePath 来源谱面路径。
 /// @param outputPath 转换后输出路径。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
+/// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
 /// @return 是否转换成功。
 bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
                                const std::filesystem::path& outputPath,
-                               const MMM::BaseMapMeta*      metadataOverride)
+                               const MMM::BaseMapMeta*      metadataOverride,
+                               bool addStoreModeExtForMalodyExport)
 {
     auto beatMap = MMM::BeatMap::loadFromFile(sourcePath);
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
@@ -336,7 +470,8 @@ bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
         beatMap.m_baseMapMetadata = *metadataOverride;
     }
     beatMap.m_baseMapMetadata.map_path = outputPath;
-    return beatMap.saveToFile(outputPath);
+    return saveBeatmapWithOptionalMalodyStoreModeExt(
+        beatMap, outputPath, addStoreModeExtForMalodyExport);
 }
 
 /// @brief 读取转换后的目标谱面字节。
@@ -345,14 +480,15 @@ bool convertPackageBeatmapFile(const std::filesystem::path& sourcePath,
 /// @param outputExtension 目标谱面扩展名。
 /// @param saveToProject 是否将转换产物留在项目目录中。
 /// @param metadataOverride 转换时覆盖的基础谱面元数据；为空则使用源谱面元数据。
+/// @param addStoreModeExtForMalodyExport 是否为 MC 转换产物写入上架 mode_ext。
 /// @param outBytes 输出文件字节。
 /// @return 是否成功读取转换结果。
 bool readConvertedPackageBeatmapBytes(
     const std::filesystem::path& sourcePath,
     const std::filesystem::path& projectOutputPath,
     const std::string& outputExtension, bool saveToProject,
-    const MMM::BaseMapMeta*    metadataOverride,
-    std::vector<std::uint8_t>& outBytes)
+    const MMM::BaseMapMeta* metadataOverride,
+    bool addStoreModeExtForMalodyExport, std::vector<std::uint8_t>& outBytes)
 {
     const auto conversionPath =
         saveToProject
@@ -369,8 +505,10 @@ bool readConvertedPackageBeatmapBytes(
         }
     }
 
-    if ( !convertPackageBeatmapFile(
-             sourcePath, conversionPath, metadataOverride) ) {
+    if ( !convertPackageBeatmapFile(sourcePath,
+                                    conversionPath,
+                                    metadataOverride,
+                                    addStoreModeExtForMalodyExport) ) {
         if ( !saveToProject ) {
             std::error_code removeError;
             std::filesystem::remove(conversionPath, removeError);
@@ -490,6 +628,8 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 /// @param metadataOverrides 转换指定谱面时临时覆盖的基础元数据列表。
 /// @param saveConvertedBeatmapsToProject 是否将转换后的谱面文件保存回项目目录。
 /// @param includeLegacyImdBeatmapsInPackage 是否额外写入旧皮肤兼容的 IMD 谱面。
+/// @param addStoreModeExtForMalodyExport 是否为写出的 MC 谱面写入上架
+/// mode_ext。
 /// @return 是否打包成功。
 bool writeBeatmapPackage(
     const std::filesystem::path&          projectRoot,
@@ -498,7 +638,8 @@ bool writeBeatmapPackage(
     const MMM::PackageSupportedFileTypes& packageTypes,
     const std::vector<MMM::Logic::PackageBeatmapMetadataOverride>&
          metadataOverrides,
-    bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage)
+    bool saveConvertedBeatmapsToProject, bool includeLegacyImdBeatmapsInPackage,
+    bool addStoreModeExtForMalodyExport)
 {
     if ( selectedRelativePaths.empty() ) return false;
 
@@ -514,6 +655,9 @@ bool writeBeatmapPackage(
         getPackageBeatmapOutputExtension(packageTypes);
     const bool includeLegacyImdBeatmaps =
         includeLegacyImdBeatmapsInPackage &&
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    const bool addStoreModeExtToMc =
+        addStoreModeExtForMalodyExport &&
         MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
     const auto selectedImdArchiveNames =
         includeLegacyImdBeatmaps
@@ -574,13 +718,16 @@ bool writeBeatmapPackage(
                              packageBeatmapExtension,
                              saveConvertedBeatmapsToProject,
                              metadataOverride,
+                             addStoreModeExtToMc,
                              fileBytes) ) {
                         XERROR("PackBeatmap: failed to convert source file: {}",
                                relativeUtf8);
                         success = false;
                         break;
                     }
-                } else if ( !readPackageSourceFile(sourcePath, fileBytes) ) {
+                } else if (
+                    !readPackageSourceFileWithOptionalMalodyStoreModeExt(
+                        sourcePath, addStoreModeExtToMc, fileBytes) ) {
                     XERROR("PackBeatmap: failed to read source file: {}",
                            relativeUtf8);
                     success = false;
@@ -625,6 +772,7 @@ bool writeBeatmapPackage(
                                  ".imd",
                                  false,
                                  nullptr,
+                                 false,
                                  fileBytes) ) {
                             XERROR(
                                 "PackBeatmap: failed to convert legacy IMD "
@@ -961,7 +1109,10 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         SessionUtils::syncBeatmap(*m_ctx);
         SessionUtils::ensureHitEvents(*m_ctx);
         auto savePath = resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
-        bool ok       = m_ctx->currentBeatmap->saveToFile(savePath);
+        bool ok       = saveBeatmapWithOptionalMalodyStoreModeExt(
+            *m_ctx->currentBeatmap,
+            savePath,
+            cmd.addStoreModeExtForMalodyExport);
         if ( !ok ) {
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);
             Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
@@ -1016,7 +1167,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             *packageTypes,
                             cmd.metadataOverrides,
                             cmd.saveConvertedBeatmapsToProject,
-                            cmd.includeLegacyImdBeatmapsInPackage);
+                            cmd.includeLegacyImdBeatmapsInPackage,
+                            cmd.addStoreModeExtForMalodyExport);
     if ( success ) {
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
     } else {

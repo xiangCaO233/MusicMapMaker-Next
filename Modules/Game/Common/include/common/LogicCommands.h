@@ -348,6 +348,10 @@ struct CmdSaveBeatmap {
  * @brief 另存为谱面指令
  */
 struct CmdSaveBeatmapAs {
+    /// @brief 导出 MC 时是否写入上架皮肤 mode_ext。
+    bool addStoreModeExtForMalodyExport{ false };
+
+    /// @brief 导出目标路径，使用 UTF-8 编码。
     std::string path;
 };
 
@@ -375,6 +379,9 @@ struct CmdPackBeatmap {
 
     /// @brief MCZ 打包时是否额外在包内写入旧皮肤兼容的 IMD 谱面。
     bool includeLegacyImdBeatmapsInPackage{ false };
+
+    /// @brief MCZ 打包时是否为写出的 MC 谱面写入上架皮肤 mode_ext。
+    bool addStoreModeExtForMalodyExport{ false };
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;

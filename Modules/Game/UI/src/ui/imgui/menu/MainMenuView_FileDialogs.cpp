@@ -98,6 +98,31 @@ std::optional<int> resolveMalodyModeForCompatibilityWarning(
     return mode;
 }
 
+/// @brief 判断谱面是否包含需要上架皮肤 mode_ext 的 Malody 元素。
+/// @param beatMap 当前谱面。
+/// @return 含 Flick 或折线时返回 true。
+bool hasMalodyStoreModeExtEligibleElements(const BeatMap& beatMap)
+{
+    return !beatMap.m_noteData.flicks.empty() ||
+           !beatMap.m_noteData.polylines.empty();
+}
+
+/// @brief 判断当前导出目标是否需要显示 Malody 上架 mode_ext 选项。
+/// @param path 目标导出路径。
+/// @return 导出 MC 且当前谱面含 Flick/折线时返回 true。
+bool shouldOfferMalodyStoreModeExtForCurrentExport(const std::string& path)
+{
+    if ( getLowerExtension(path) != ".mc" ) return false;
+
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session || !session->getContext().currentBeatmap ) return false;
+
+    return hasMalodyStoreModeExtEligibleElements(
+        *session->getContext().currentBeatmap);
+}
+
 /// @brief 将下一项控件放到当前内容区域的水平中心。
 /// @param itemWidth 控件宽度。
 /// @warning UI 绘制路径：只调整当前 ImGui 游标位置。
@@ -336,9 +361,14 @@ std::string MainMenuView::applySaveAsSelectedFormatToPath(
 
 /// @brief 直接分发谱面导出命令并显示保存提示。
 /// @param path 目标导出路径。
-void MainMenuView::dispatchSaveBeatmapAs(const std::string& path)
+/// @param addStoreModeExtForMalodyExport 是否为 MC 导出写入上架皮肤 mode_ext。
+void MainMenuView::dispatchSaveBeatmapAs(const std::string& path,
+                                         bool addStoreModeExtForMalodyExport)
 {
-    dispatchCommand(Logic::CmdSaveBeatmapAs{ path });
+    dispatchCommand(Logic::CmdSaveBeatmapAs{
+        .addStoreModeExtForMalodyExport = addStoreModeExtForMalodyExport,
+        .path                           = path,
+    });
 }
 
 /// @brief 直接分发当前谱面保存命令。
@@ -476,15 +506,19 @@ void MainMenuView::requestSaveBeatmap(bool allowExternallyModifiedOverwrite)
     m_pendingCompatibilityWarningIsCurrentSave = true;
     m_pendingCompatibilityWarningAllowOverwrite =
         allowExternallyModifiedOverwrite;
-    m_showExportCompatibilityWarning = true;
+    m_pendingExportShowStoreModeExtOption = false;
+    m_pendingExportAddStoreModeExt        = false;
+    m_showExportCompatibilityWarning      = true;
 }
 
 /// @brief 请求导出当前谱面，必要时先展示格式兼容性警告。
 /// @param path 目标导出路径。
 void MainMenuView::requestSaveBeatmapAs(std::string path)
 {
-    auto warnings = collectExportCompatibilityWarnings(path);
-    if ( warnings.empty() ) {
+    auto       warnings = collectExportCompatibilityWarnings(path);
+    const bool showStoreModeExtOption =
+        shouldOfferMalodyStoreModeExtForCurrentExport(path);
+    if ( warnings.empty() && !showStoreModeExtOption ) {
         dispatchSaveBeatmapAs(path);
         return;
     }
@@ -493,10 +527,14 @@ void MainMenuView::requestSaveBeatmapAs(std::string path)
     m_pendingExportPath     = std::move(path);
     m_pendingExportWarnings = std::move(warnings);
     m_pendingExportFormatName =
-        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "RM" : "Malody Key");
+        (ext == ".osu") ? "osu!" : ((ext == ".imd") ? "RM" : "Malody Chart");
     m_pendingCompatibilityWarningIsCurrentSave  = false;
     m_pendingCompatibilityWarningAllowOverwrite = false;
-    m_showExportCompatibilityWarning            = true;
+    m_pendingExportShowStoreModeExtOption       = showStoreModeExtOption;
+    m_pendingExportAddStoreModeExt   = Config::AppConfig::instance()
+                                           .getEditorSettings()
+                                           .autoAddStoreModeExtForMalodyExport;
+    m_showExportCompatibilityWarning = true;
 }
 
 /// @brief 渲染导出兼容性警告弹窗。
@@ -519,15 +557,43 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                               ImVec2(520.0f * dpiScale, 0.0f)) ) {
             const char* actionText =
                 m_pendingCompatibilityWarningIsCurrentSave ? "保存" : "导出";
-            ImGui::Text("%s %s 前需要确认以下兼容性变化：",
-                        actionText,
-                        m_pendingExportFormatName.c_str());
+            if ( m_pendingExportWarnings.empty() &&
+                 m_pendingExportShowStoreModeExtOption ) {
+                ImGui::Text("%s %s 前可以选择附加上架元数据：",
+                            actionText,
+                            m_pendingExportFormatName.c_str());
+            } else {
+                ImGui::Text("%s %s 前需要确认以下兼容性变化：",
+                            actionText,
+                            m_pendingExportFormatName.c_str());
+            }
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
             for ( const auto& warning : m_pendingExportWarnings ) {
                 drawWrappedBulletText(warning);
+            }
+            if ( m_pendingExportShowStoreModeExtOption ) {
+                if ( !m_pendingExportWarnings.empty() ) {
+                    ImGui::Spacing();
+                }
+                bool addStoreModeExt = m_pendingExportAddStoreModeExt;
+                if ( ImGui::Checkbox("自动添加上架皮肤 mode_ext",
+                                     &addStoreModeExt) ) {
+                    m_pendingExportAddStoreModeExt = addStoreModeExt;
+                    auto& settings =
+                        Config::AppConfig::instance().getEditorSettings();
+                    settings.autoAddStoreModeExtForMalodyExport =
+                        addStoreModeExt;
+                    Config::AppConfig::instance().save();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        "会替换导出 MC 的 mode_ext，用于 EX Rhythm Master VI "
+                        "皮肤上架提示。");
+                }
             }
 
             ImGui::Spacing();
@@ -549,13 +615,16 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                     dispatchSaveBeatmap(
                         m_pendingCompatibilityWarningAllowOverwrite);
                 } else {
-                    dispatchSaveBeatmapAs(m_pendingExportPath);
+                    dispatchSaveBeatmapAs(m_pendingExportPath,
+                                          m_pendingExportAddStoreModeExt);
                 }
                 m_pendingExportPath.clear();
                 m_pendingExportFormatName.clear();
                 m_pendingExportWarnings.clear();
                 m_pendingCompatibilityWarningIsCurrentSave  = false;
                 m_pendingCompatibilityWarningAllowOverwrite = false;
+                m_pendingExportShowStoreModeExtOption       = false;
+                m_pendingExportAddStoreModeExt              = false;
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
@@ -567,6 +636,8 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
                 m_pendingCompatibilityWarningIsCurrentSave  = false;
                 m_pendingCompatibilityWarningAllowOverwrite = false;
                 m_currentSaveKeyConversionWarningConfirmed  = false;
+                m_pendingExportShowStoreModeExtOption       = false;
+                m_pendingExportAddStoreModeExt              = false;
                 ImGui::CloseCurrentPopup();
             }
 

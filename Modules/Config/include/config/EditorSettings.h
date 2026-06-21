@@ -695,6 +695,9 @@ struct EditorSettings {
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
+    /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
+    bool autoAddStoreModeExtForMalodyExport{ false };
+
     /// @brief 画布时间戳显示格式偏好
     TimeFormatPreference timeFormatPreference{ TimeFormatPreference::Seconds };
 
@@ -792,6 +795,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "marqueeThickness", c.marqueeThickness },
         { "marqueeRounding", c.marqueeRounding },
         { "saveFormatPreference", c.saveFormatPreference },
+        { "autoAddStoreModeExtForMalodyExport",
+          c.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", c.timeFormatPreference },
         { "lastFilePickerPath", c.lastFilePickerPath },
         { "disableScrollAccelerationWhileDrawing",
@@ -860,6 +865,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
     c.saveFormatPreference =
         j.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+    c.autoAddStoreModeExtForMalodyExport =
+        j.value("autoAddStoreModeExtForMalodyExport", false);
     c.timeFormatPreference =
         j.value("timeFormatPreference", TimeFormatPreference::Seconds);
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
