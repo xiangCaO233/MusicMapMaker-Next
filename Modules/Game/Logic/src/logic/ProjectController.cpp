@@ -150,22 +150,102 @@ std::string normalizeArchiveName(std::string archiveName)
     return archiveName;
 }
 
-/// @brief 判断 zip 包内路径是否安全。
-/// @param archiveName 归一化后的包内路径。
-/// @return 不会越出目标目录时返回 true。
-bool isSafeArchiveName(const std::string& archiveName)
+/// @brief 判断 Windows 文件名片段是否包含不兼容字符或形式。
+/// @param name 单个文件名片段，不包含路径分隔符。
+/// @return 不兼容时返回原因，否则返回空。
+std::optional<std::string> describeWindowsIncompatibleFileName(
+    const std::string& name)
 {
-    if ( archiveName.empty() || archiveName.front() == '/' ||
-         archiveName.find(':') != std::string::npos ) {
-        return false;
+    if ( name.empty() ) return "空文件名片段";
+
+    for ( const unsigned char ch : name ) {
+        if ( ch < 32 ) return "控制字符";
+        switch ( ch ) {
+        case '<':
+        case '>':
+        case ':':
+        case '"':
+        case '|':
+        case '?':
+        case '*':
+            return std::string("Windows 不支持的字符 '") +
+                   static_cast<char>(ch) + "'";
+        default: break;
+        }
+    }
+
+    if ( name.back() == ' ' || name.back() == '.' ) {
+        return "文件名不能以空格或点结尾";
+    }
+
+    std::string baseName = name;
+    if ( const auto dotPos = baseName.find('.'); dotPos != std::string::npos ) {
+        baseName.resize(dotPos);
+    }
+    std::transform(
+        baseName.begin(),
+        baseName.end(),
+        baseName.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+
+    if ( baseName == "CON" || baseName == "PRN" || baseName == "AUX" ||
+         baseName == "NUL" ) {
+        return "Windows 保留设备名";
+    }
+    if ( baseName.size() == 4 &&
+         (baseName.starts_with("COM") || baseName.starts_with("LPT")) &&
+         baseName[3] >= '1' && baseName[3] <= '9' ) {
+        return "Windows 保留设备名";
+    }
+
+    return std::nullopt;
+}
+
+/// @brief 检查 zip 包内路径是否安全且可在 Windows 上落盘。
+/// @param archiveName 归一化后的包内路径。
+/// @return 不安全或不兼容时返回原因，否则返回空。
+std::optional<std::string> describeUnsafeArchiveName(
+    const std::string& archiveName)
+{
+    if ( archiveName.empty() ) {
+        return "谱面包包含空路径";
+    }
+    if ( archiveName.front() == '/' ) {
+        return "谱面包包含绝对路径";
     }
 
     const auto path = Config::utf8ToPath(archiveName);
-    if ( path.empty() || path.is_absolute() ) return false;
-    for ( const auto& part : path.lexically_normal() ) {
-        if ( part == ".." ) return false;
+    if ( path.empty() || path.is_absolute() ) {
+        return "谱面包包含绝对路径";
     }
-    return true;
+    for ( const auto& part : path.lexically_normal() ) {
+        if ( part == ".." ) {
+            return "谱面包路径越出目标目录";
+        }
+        if ( part == "." ) {
+            continue;
+        }
+        const auto partText = Config::pathToUtf8(part);
+        if ( auto reason = describeWindowsIncompatibleFileName(partText) ) {
+            return *reason;
+        }
+    }
+
+    return std::nullopt;
+}
+
+/// @brief 发布项目或谱面包打开失败事件。
+/// @param path 尝试打开的路径。
+/// @param message 失败原因。
+/// @param isPackage 是否为谱面包打开失败。
+void publishProjectOpenFailed(const std::filesystem::path& path,
+                              const std::string& message, bool isPackage)
+{
+    Event::ProjectOpenFailedEvent event;
+    event.m_projectPath  = Config::pathToUtf8(path);
+    event.m_errorMessage = message;
+    event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 尽量取得路径的绝对规范形式。
@@ -225,8 +305,8 @@ bool extractZipPackageToDirectory(const std::filesystem::path& packagePath,
         const std::string archiveName =
             normalizeArchiveName(std::string(fileStat.m_filename));
         if ( archiveName.empty() ) continue;
-        if ( !isSafeArchiveName(archiveName) ) {
-            errorMessage = "谱面包包含不安全路径：" + archiveName;
+        if ( auto unsafeReason = describeUnsafeArchiveName(archiveName) ) {
+            errorMessage = fmt::format("{}：{}", *unsafeReason, archiveName);
             success      = false;
             break;
         }
@@ -874,6 +954,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     std::filesystem::path actualProjectPath = requestedProjectPath;
     /// @brief 若传入谱面文件，则记录需要自动打开的谱面路径。
     std::filesystem::path targetBeatmapPath;
+    /// @brief 本次打开是否来自临时谱面包。
+    const bool isPackageOpen = temporaryInfo && temporaryInfo->m_isTemporary;
+    /// @brief 失败提示中展示给用户的源路径。
+    const std::filesystem::path failureDisplayPath =
+        isPackageOpen ? temporaryInfo->m_sourcePackagePath : projectPath;
 
     if ( creationOptions ) {
         std::error_code filesystemError;
@@ -881,8 +966,13 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             std::filesystem::create_directories(actualProjectPath,
                                                 filesystemError);
             if ( filesystemError ) {
+                const std::string message =
+                    "无法创建项目目录：" +
+                    Config::pathToUtf8(actualProjectPath);
                 XERROR("Failed to create project directory: {}",
                        Config::pathToUtf8(actualProjectPath));
+                publishProjectOpenFailed(
+                    failureDisplayPath, message, isPackageOpen);
                 return result;
             }
         }
@@ -891,8 +981,12 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         if ( !std::filesystem::is_directory(actualProjectPath,
                                             filesystemError) ||
              filesystemError ) {
+            const std::string message = "创建项目失败，目标不是文件夹：" +
+                                        Config::pathToUtf8(actualProjectPath);
             XERROR("Failed to create project: Target is not a directory: {}",
                    Config::pathToUtf8(actualProjectPath));
+            publishProjectOpenFailed(
+                failureDisplayPath, message, isPackageOpen);
             return result;
         }
         actualProjectPath = makeAbsoluteNormalizedPath(actualProjectPath);
@@ -905,10 +999,13 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 
     if ( !std::filesystem::exists(actualProjectPath) ||
          !std::filesystem::is_directory(actualProjectPath) ) {
+        const std::string message =
+            "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
             Config::pathToUtf8(actualProjectPath));
+        publishProjectOpenFailed(failureDisplayPath, message, isPackageOpen);
         return result;
     }
 
@@ -996,8 +1093,11 @@ ProjectController::OpenProjectResult ProjectController::openProject(
 
     if ( temporaryInfo && temporaryInfo->m_isTemporary &&
          newProject->m_beatmaps.empty() ) {
+        const std::string message = "谱面包内没有可打开的谱面文件";
         XERROR("Temporary project package contains no supported beatmaps: {}",
                Config::pathToUtf8(temporaryInfo->m_sourcePackagePath));
+        publishProjectOpenFailed(
+            temporaryInfo->m_sourcePackagePath, message, true);
         return result;
     }
 
@@ -1070,6 +1170,7 @@ ProjectController::openTemporaryProjectPackage(
     auto              prepared = prepareTemporaryProjectPackage(packagePath);
     if ( !prepared.m_success ) {
         XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        publishProjectOpenFailed(packagePath, prepared.m_errorMessage, true);
         return result;
     }
 

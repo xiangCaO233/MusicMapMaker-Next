@@ -59,6 +59,20 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
+/// @brief 发布项目或谱面包打开失败事件。
+/// @param path 尝试打开的路径。
+/// @param message 失败原因。
+/// @param isPackage 是否为谱面包打开失败。
+void publishProjectOpenFailed(const std::filesystem::path& path,
+                              const std::string& message, bool isPackage)
+{
+    Event::ProjectOpenFailedEvent event;
+    event.m_projectPath  = Config::pathToUtf8(path);
+    event.m_errorMessage = message;
+    event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
+}
+
 /// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
 /// hitEvents，只有音符变更后的脏分支允许重建事件序列。
@@ -919,10 +933,13 @@ void EditorEngine::openProject(
     if ( !creationOptions &&
          (!std::filesystem::exists(actualProjectPath) ||
           !std::filesystem::is_directory(actualProjectPath)) ) {
+        const std::string message =
+            "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
             Config::pathToUtf8(actualProjectPath));
+        publishProjectOpenFailed(projectPath, message, false);
         return;
     }
 
@@ -947,6 +964,7 @@ void EditorEngine::openTemporaryProjectPackage(
             packagePath);
     if ( !prepared.m_success ) {
         XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        publishProjectOpenFailed(packagePath, prepared.m_errorMessage, true);
         return;
     }
 

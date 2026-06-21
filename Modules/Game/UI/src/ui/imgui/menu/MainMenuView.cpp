@@ -53,6 +53,18 @@ struct SaveConflictPayload {
     std::string path;
 };
 
+/// @brief 跨线程传递给 UI 帧内消费的项目打开失败载荷。
+struct ProjectOpenFailedPayload {
+    /// @brief 尝试打开的路径，使用 UTF-8 字符串。
+    std::string path;
+
+    /// @brief 失败原因。
+    std::string errorMessage;
+
+    /// @brief 是否是打开谱面包失败。
+    bool isPackage{ false };
+};
+
 /// @brief 最近项目子菜单中项目名的最大显示宽度。
 constexpr float RECENT_PROJECT_NAME_MAX_WIDTH = 260.0f;
 
@@ -207,6 +219,14 @@ moodycamel::ConcurrentQueue<SaveConflictPayload>& getSaveConflictQueue()
     return queue;
 }
 
+/// @brief 获取项目打开失败提示队列。
+moodycamel::ConcurrentQueue<ProjectOpenFailedPayload>&
+getProjectOpenFailedQueue()
+{
+    static moodycamel::ConcurrentQueue<ProjectOpenFailedPayload> queue;
+    return queue;
+}
+
 /// @brief 根据保存结果事件构建用户可见的提示文本。
 std::string buildSaveTooltipMessage(const SaveTooltipPayload& payload)
 {
@@ -264,6 +284,23 @@ void ensureSaveConflictSubscription()
     subscribed = true;
 }
 
+/// @brief 订阅项目打开失败事件，将事件转交 UI 帧内处理。
+void ensureProjectOpenFailedSubscription()
+{
+    static bool subscribed = false;
+    if ( subscribed ) return;
+
+    Event::EventBus::instance().subscribe<Event::ProjectOpenFailedEvent>(
+        [](const Event::ProjectOpenFailedEvent& event) {
+            getProjectOpenFailedQueue().enqueue(ProjectOpenFailedPayload{
+                .path         = event.m_projectPath,
+                .errorMessage = event.m_errorMessage,
+                .isPackage    = event.m_isPackage,
+            });
+        });
+    subscribed = true;
+}
+
 /// @brief 将项目谱面路径规范化为候选比较键。
 /// @param projectRoot 当前项目根目录。
 /// @param path 谱面路径，可为项目相对路径或绝对路径。
@@ -311,6 +348,7 @@ MainMenuView::MainMenuView()
 {
     ensureSaveResultSubscription();
     ensureSaveConflictSubscription();
+    ensureProjectOpenFailedSubscription();
 }
 
 /// @brief 销毁主菜单视图。
@@ -468,6 +506,14 @@ void MainMenuView::update(UIManager* sourceManager)
         m_showSaveConflictWarning = true;
     }
 
+    ProjectOpenFailedPayload openFailedPayload;
+    while ( getProjectOpenFailedQueue().try_dequeue(openFailedPayload) ) {
+        m_pendingProjectOpenFailedPath      = openFailedPayload.path;
+        m_pendingProjectOpenFailedMessage   = openFailedPayload.errorMessage;
+        m_pendingProjectOpenFailedIsPackage = openFailedPayload.isPackage;
+        m_showProjectOpenFailedPopup        = true;
+    }
+
     if ( m_statusMessageTimer > 0.0f )
         m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
 
@@ -548,6 +594,56 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
             if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
                 m_pendingSaveConflictPath.clear();
                 m_currentSaveKeyConversionWarningConfirmed = false;
+                ImGui::CloseCurrentPopup();
+            }
+
+            ImGui::EndPopup();
+        }
+    }
+}
+
+/// @brief 渲染项目或谱面包打开失败弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void MainMenuView::renderProjectOpenFailedPopup(float dpiScale)
+{
+    constexpr const char* popupId = "打开失败###ProjectOpenFailedModal";
+    if ( m_showProjectOpenFailedPopup ) {
+        ImGui::OpenPopup(popupId);
+        m_showProjectOpenFailedPopup = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    {
+        Utils::CenteredModalPopupScope popupStyle(dpiScale);
+        if ( popupStyle.begin(popupId,
+                              nullptr,
+                              ImGuiWindowFlags_None,
+                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
+            ImGui::TextWrapped("%s",
+                               m_pendingProjectOpenFailedIsPackage
+                                   ? "打开谱面包失败。"
+                                   : "打开项目失败。");
+            if ( !m_pendingProjectOpenFailedMessage.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextWrapped("%s",
+                                   m_pendingProjectOpenFailedMessage.c_str());
+            }
+            if ( !m_pendingProjectOpenFailedPath.empty() ) {
+                ImGui::Spacing();
+                ImGui::TextWrapped("目标路径：%s",
+                                   m_pendingProjectOpenFailedPath.c_str());
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            if ( ImGui::Button(TR("ui.common.confirm").data(), buttonSize) ) {
+                m_pendingProjectOpenFailedPath.clear();
+                m_pendingProjectOpenFailedMessage.clear();
+                m_pendingProjectOpenFailedIsPackage = false;
                 ImGui::CloseCurrentPopup();
             }
 
@@ -1192,6 +1288,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderDataSourceReplaceWindow(dpiScale);
     renderPgoUploadConsentWindow(dpiScale);
     renderSaveConflictWarningPopup(dpiScale);
+    renderProjectOpenFailedPopup(dpiScale);
     renderExportFormatPickerPopup(dpiScale);
     renderExportCompatibilityWarningPopup(dpiScale);
     renderPackageFormatPickerPopup(dpiScale);
