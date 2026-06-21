@@ -2455,21 +2455,63 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 void EditorEngine::handleSaveTemporaryProject(
     const CmdSaveTemporaryProject& cmd)
 {
+    ProjectController::SaveTemporaryProjectResult result;
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+
+        if ( const auto* currentProject =
+                 ProjectController::instance().currentProject() ) {
+            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            for ( auto& entry : sessions ) {
+                if ( entry.isLogoPlaceholder || !entry.session ) {
+                    continue;
+                }
+
+                const auto& ctx = entry.session->getContext();
+                if ( ctx.currentBeatmap ) {
+                    normalizeBeatmapMetadataPathsForProject(*ctx.currentBeatmap,
+                                                            *currentProject);
+                }
+            }
+        }
+
         captureProjectWorkspaceState();
+        result = ProjectController::instance().saveTemporaryProjectTo(
+            Config::utf8ToPath(cmd.destinationPath));
+
+        if ( result.m_success ) {
+            if ( const auto* currentProject =
+                     ProjectController::instance().currentProject() ) {
+                auto& sessions = m_sessionRegistry.entriesUnsafe();
+                for ( auto& entry : sessions ) {
+                    if ( entry.isLogoPlaceholder || !entry.session ) {
+                        entry.beatmapPathKey.clear();
+                        continue;
+                    }
+
+                    const auto& ctx = entry.session->getContext();
+                    if ( !ctx.currentBeatmap ) {
+                        entry.beatmapPathKey.clear();
+                        continue;
+                    }
+
+                    normalizeBeatmapMetadataPathsForProject(*ctx.currentBeatmap,
+                                                            *currentProject);
+                    entry.beatmapPathKey = makeBeatmapPathKey(
+                        currentProject,
+                        ctx.currentBeatmap->m_baseMapMetadata.map_path);
+                }
+            }
+            refreshMainAudioSyncKeysUnsafe();
+            captureProjectWorkspaceState();
+            ProjectController::instance().saveProject();
+        }
     }
-    auto result = ProjectController::instance().saveTemporaryProjectTo(
-        Config::utf8ToPath(cmd.destinationPath));
 
     Event::TemporaryProjectSaveResultEvent event;
     event.m_success          = result.m_success;
     event.m_savedProjectPath = Config::pathToUtf8(result.m_savedProjectPath);
     event.m_errorMessage     = result.m_errorMessage;
-
-    if ( result.m_success ) {
-        openProject(result.m_savedProjectPath, std::nullopt);
-    }
 
     Event::EventBus::instance().publish(event);
 }

@@ -1121,12 +1121,12 @@ ProjectController::currentTemporaryProjectInfo() const
     return info;
 }
 
-/// @brief 将当前临时项目复制保存到正式目录。
+/// @brief 将当前临时项目复制保存到正式目录，并原地转为正式项目。
 /// @param destinationPath 用户选择的保存目录。
 /// @return 保存结果。
 ProjectController::SaveTemporaryProjectResult
 ProjectController::saveTemporaryProjectTo(
-    const std::filesystem::path& destinationPath) const
+    const std::filesystem::path& destinationPath)
 {
     SaveTemporaryProjectResult result;
     if ( !m_currentProject || !m_currentProject->m_isTemporaryProject ) {
@@ -1156,6 +1156,11 @@ ProjectController::saveTemporaryProjectTo(
         result.m_errorMessage = errorMessage;
         return result;
     }
+
+    *m_currentProject = savedProject;
+    m_projectDirectoryWatcher.start(saveRoot);
+    Config::AppConfig::instance().addRecentProject(
+        Config::pathToUtf8(saveRoot));
 
     result.m_success          = true;
     result.m_savedProjectPath = saveRoot;
