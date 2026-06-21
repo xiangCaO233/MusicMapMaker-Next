@@ -272,9 +272,23 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             float localMouseY = mousePos.y - canvasPos.y;
             bool  overMenuButton =
                 localMouseX >= size.x - 56.0f && localMouseY <= 56.0f;
+            const bool timelineHoveringForSnap = isHovered && !overMenuButton;
+            const bool timelineDragging =
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSetMousePosition{
+                    .cameraId       = m_name,
+                    .mouseX         = localMouseX,
+                    .mouseY         = localMouseY - m_lastAppliedYOffset,
+                    .viewportWidth  = size.x,
+                    .viewportHeight = size.y,
+                    .isHovering     = timelineHoveringForSnap,
+                    .isDragging     = timelineDragging }));
             bool   hoveredSnapped = false;
             double hoveredTime    = 0.0;
-            if ( isHovered && !overMenuButton ) {
+            if ( timelineHoveringForSnap ) {
                 double rawHoveredTime = canvasTimeAtLocalY(size, localMouseY);
                 hoveredTime           = snapTimingTime(
                     size, rawHoveredTime, localMouseY, hoveredSnapped);

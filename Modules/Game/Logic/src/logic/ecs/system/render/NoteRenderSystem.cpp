@@ -710,6 +710,28 @@ void NoteRenderSystem::generateTimelineSnapshot(
                         const float beatLineW =
                             professionalMode ? viewportWidth : lineW;
                         batcher.setTexture(TextureID::None);
+                        if ( snapshot->isSnapped &&
+                             std::abs(t - snapshot->snappedTime) < 1e-6 ) {
+                            glm::vec4 glowCol = color;
+                            glowCol.a *= 0.6f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 4.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 4.0f,
+                                             glowCol);
+                            glowCol.a *= 0.5f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 10.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 10.0f,
+                                             glowCol);
+                            glowCol.a *= 0.5f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 20.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 20.0f,
+                                             glowCol);
+                        }
                         batcher.pushQuad(beatLineX,
                                          y + width * 0.5f,
                                          beatLineW,
