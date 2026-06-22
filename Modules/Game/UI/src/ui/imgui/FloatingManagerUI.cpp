@@ -1,5 +1,6 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "canvas/Basic2DCanvas.h"
+#include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
@@ -637,9 +638,45 @@ void FloatingManagerUI::captureCanvasDockSizeProtection(
     }
 
     const ImGuiAxis dockAxis = axis == ImGuiAxis_Y ? ImGuiAxis_Y : ImGuiAxis_X;
-    auto&           engine   = Logic::EditorEngine::instance();
-    const int32_t   size     = engine.getSessionCount();
-    m_canvasDockSizeProtection.reserve(static_cast<size_t>(size));
+    auto            captureDockNode = [&](ImGuiID dockId) {
+        if ( dockId == 0 ) {
+            return;
+        }
+
+        ImGuiDockNode* dockNode = ImGui::DockBuilderGetNode(dockId);
+        if ( !dockNode ) {
+            return;
+        }
+
+        DockResizeTarget target = findDockNodeAxisTarget(dockNode, dockAxis);
+        ImGuiDockNode*   node   = target.valid ? target.node : dockNode;
+        if ( !node ) {
+            return;
+        }
+
+        const ImGuiID protectedDockId = node->ID;
+        const bool    alreadyCaptured = std::any_of(
+            m_canvasDockSizeProtection.begin(),
+            m_canvasDockSizeProtection.end(),
+            [protectedDockId](const CanvasDockSizeSnapshot& snapshot) {
+                return snapshot.dockId == protectedDockId;
+            });
+        if ( alreadyCaptured ) {
+            return;
+        }
+
+        const float axisSize = getAxisValue(node->Size, dockAxis);
+        if ( axisSize <= 1.0f ) {
+            return;
+        }
+
+        m_canvasDockSizeProtection.push_back(
+            CanvasDockSizeSnapshot{ protectedDockId, axisSize });
+    };
+
+    auto&         engine = Logic::EditorEngine::instance();
+    const int32_t size   = engine.getSessionCount();
+    m_canvasDockSizeProtection.reserve(static_cast<size_t>(size) + 1U);
 
     for ( int32_t i = 0; i < size; ++i ) {
         const Logic::SessionEntry* entry = engine.getSessionEntry(i);
@@ -653,40 +690,13 @@ void FloatingManagerUI::captureCanvasDockSizeProtection(
             continue;
         }
 
-        const ImGuiID dockId = canvas->getDockId();
-        if ( dockId == 0 ) {
-            continue;
-        }
+        captureDockNode(canvas->getDockId());
+    }
 
-        ImGuiDockNode* dockNode = ImGui::DockBuilderGetNode(dockId);
-        if ( !dockNode ) {
-            continue;
-        }
-
-        DockResizeTarget target = findDockNodeAxisTarget(dockNode, dockAxis);
-        ImGuiDockNode*   node   = target.valid ? target.node : dockNode;
-        if ( !node ) {
-            continue;
-        }
-
-        const ImGuiID protectedDockId = node->ID;
-        const bool    alreadyCaptured = std::any_of(
-            m_canvasDockSizeProtection.begin(),
-            m_canvasDockSizeProtection.end(),
-            [protectedDockId](const CanvasDockSizeSnapshot& snapshot) {
-                return snapshot.dockId == protectedDockId;
-            });
-        if ( alreadyCaptured ) {
-            continue;
-        }
-
-        const float axisSize = getAxisValue(node->Size, dockAxis);
-        if ( axisSize <= 1.0f ) {
-            continue;
-        }
-
-        m_canvasDockSizeProtection.push_back(
-            CanvasDockSizeSnapshot{ protectedDockId, axisSize });
+    auto* timeline =
+        sourceManager->getView<Canvas::TimelineCanvas>("TimelineWindow");
+    if ( timeline ) {
+        captureDockNode(timeline->getDockId());
     }
 }
 
@@ -1062,13 +1072,13 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
     bool  shouldShowSubView = false;
     float mouseAxis         = 0.0f;
     float dragDistance      = 0.0f;
-    float separatorAxis     = axis == ImGuiAxis_Y
-                                  ? (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.y
-                                         : hostWindow->Pos.y + hostWindow->Size.y)
-                                  : (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.x
-                                         : hostWindow->Pos.x + hostWindow->Size.x);
+    float separatorAxis = axis == ImGuiAxis_Y
+                              ? (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.y
+                                     : hostWindow->Pos.y + hostWindow->Size.y)
+                              : (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.x
+                                     : hostWindow->Pos.x + hostWindow->Size.x);
 
     if ( !overlayActive ) {
         m_collapsedResizeDragActive        = false;
@@ -1179,9 +1189,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     std::string    windowName   = m_currentSubViewId + "###" + m_name;
     const ImGuiID  resumeDockId = resumeCollapsedResize ? m_collapsedDockId : 0;
     LayoutContext  lctx{ m_layoutCtx,     windowName,
-                        false,           ImGuiWindowFlags_NoTitleBar,
-                        nullptr,         resumeDockId,
-                        ImGuiCond_Always };
+                         false,           ImGuiWindowFlags_NoTitleBar,
+                         nullptr,         resumeDockId,
+                         ImGuiCond_Always };
     ImVec2         currentWindowSize = ImGui::GetWindowSize();
     const bool     isDocked          = ImGui::IsWindowDocked();
     ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();

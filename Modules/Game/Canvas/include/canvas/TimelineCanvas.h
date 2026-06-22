@@ -85,6 +85,10 @@ public:
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
     void requestFocus();
 
+    /// @brief 获取时间线窗口当前所在的 ImGui Dock 节点。
+    /// @return 当前窗口停靠节点 ID；未停靠时返回 0。
+    ImGuiID getDockId() const;
+
     /// @brief 判断时间线上一帧是否拥有 Timing 编辑焦点。
     /// @return 上一帧时间线拥有 Timing 编辑焦点时返回 true。
     bool wasFocusedLastFrame() const { return m_wasFocusedLastFrame; }
@@ -392,6 +396,8 @@ private:
     bool m_wasFocusedLastFrame{ false };
     /// @brief Timeline Timing 编辑焦点是否仍归属于时间线窗口。
     bool m_hasTimingInteractionFocus{ false };
+    /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
+    ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
     std::string  m_tableBeatmapKey;
     entt::entity m_editingEntity{ entt::null };
