@@ -188,6 +188,7 @@ include_directories("${CMAKE_BINARY_DIR}/generated")
 # 强制 编译器 以 UTF-8 处理输入和执行字符集
 if(MSVC)
 	add_compile_options(/utf-8)
+	add_compile_options(/wd4875)
 else()
 	add_compile_options(-finput-charset=UTF-8 -fexec-charset=UTF-8)
 endif()

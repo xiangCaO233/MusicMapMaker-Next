@@ -294,6 +294,22 @@ bool isAudioResourceFile(const std::filesystem::path& path)
            extension == ".opus" || extension == ".aac";
 }
 
+/// @brief 判断容器导出失败是否来自当前环境缺少可用编码器。
+/// @param extension 输出文件扩展名。
+/// @param errorMessage 导出错误信息。
+/// @return 可以跳过该环境相关用例时返回 true。
+bool isOptionalContainerEncoderUnavailable(const std::string& extension,
+                                           const std::string& errorMessage)
+{
+    if ( extension != ".mp3" ) {
+        return false;
+    }
+    return errorMessage.find("FFmpeg encoder is not available") !=
+               std::string::npos ||
+           errorMessage.find("Failed to open audio encoder") !=
+               std::string::npos;
+}
+
 /// @brief 递归收集音频测试资源。
 /// @param root 资源根目录。
 /// @return 音频文件列表。
@@ -662,6 +678,12 @@ int main(int argc, char* argv[])
             XERROR("[audio-speed-export] {} error: {}",
                    label,
                    containerResult.errorMessage);
+            if ( isOptionalContainerEncoderUnavailable(
+                     extension, containerResult.errorMessage) ) {
+                XINFO("[audio-speed-export] SKIP: {} encoder unavailable",
+                      label);
+                continue;
+            }
         }
         ok &= check(containerResult.success, label + " speed export succeeds");
         ok &= check(containerResult.outputFrames == 48000,

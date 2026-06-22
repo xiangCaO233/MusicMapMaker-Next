@@ -18,6 +18,7 @@ function Invoke-Native {
 Invoke-Native git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
 Invoke-Native git checkout --force -B ci origin/ci
 Invoke-Native git reset --hard origin/ci
+Invoke-Native git submodule update --init --recursive
 Invoke-Native git lfs pull
 
 Remove-Item -Recurse -Force -LiteralPath build_msvc -ErrorAction SilentlyContinue
