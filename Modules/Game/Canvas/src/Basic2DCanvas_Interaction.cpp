@@ -35,6 +35,9 @@ namespace
 /// @brief 连续拖动编辑命令的像素去重阈值。
 constexpr float CONTINUOUS_EDIT_MOUSE_EPSILON = 0.75f;
 
+/// @brief 画布悬浮信息相对鼠标的屏幕偏移。
+constexpr float CANVAS_HOVER_OVERLAY_OFFSET = 15.0f;
+
 /// @brief 将 ASCII 扩展名转换为小写。
 /// @param value 输入扩展名。
 /// @return 小写后的扩展名。
@@ -530,6 +533,40 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
     }
     return rawTargetTime;
 }
+
+/// @brief 开始一个固定在当前 ImGui viewport 内的画布悬浮信息窗口。
+/// @param mousePos 当前鼠标屏幕坐标。
+/// @return `ImGui::Begin` 的返回值；调用方必须始终调用 `ImGui::End`。
+bool beginCanvasHoverOverlay(const ImVec2& mousePos)
+{
+    ImGuiViewport* viewport = ImGui::GetWindowViewport();
+    ImVec2         pivot{ 0.0f, 0.0f };
+    float          xOffset = CANVAS_HOVER_OVERLAY_OFFSET;
+    float          yOffset = CANVAS_HOVER_OVERLAY_OFFSET;
+    if ( viewport && mousePos.x > viewport->Pos.x + viewport->Size.x * 0.5f ) {
+        pivot.x = 1.0f;
+        xOffset = -CANVAS_HOVER_OVERLAY_OFFSET;
+    }
+    if ( viewport && mousePos.y > viewport->Pos.y + viewport->Size.y * 0.5f ) {
+        pivot.y = 1.0f;
+        yOffset = -CANVAS_HOVER_OVERLAY_OFFSET;
+    }
+
+    if ( viewport ) {
+        ImGui::SetNextWindowViewport(viewport->ID);
+    }
+    ImGui::SetNextWindowPos(ImVec2(mousePos.x + xOffset, mousePos.y + yOffset),
+                            ImGuiCond_Always,
+                            pivot);
+    ImGui::SetNextWindowBgAlpha(0.7f);
+
+    constexpr ImGuiWindowFlags overlayFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoDocking;
+    return ImGui::Begin("##CanvasHoverInspectOverlay", nullptr, overlayFlags);
+}
 }  // namespace
 
 Basic2DCanvasInteraction::Basic2DCanvasInteraction(
@@ -820,203 +857,212 @@ void Basic2DCanvasInteraction::handleInteractions(
 
             if ( currentSnapshot->isSnapped || isEditTool ||
                  currentSnapshot->hoverInspect.show ) {
-                ImGui::SetNextWindowPos(
-                    ImVec2(mousePos.x + 15, mousePos.y + 15));
-                ImGui::SetNextWindowBgAlpha(0.7f);
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                                     ImVec2(12, 12));
                 ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
 
-                ImGui::BeginTooltip();
-
-                if ( currentSnapshot->hoverInspect.show ) {
-                    const auto& inspect = currentSnapshot->hoverInspect;
-                    auto drawPoint = [currentSnapshot](
-                                         const char*                  labelKey,
-                                         const Logic::HoverBeatPoint& point,
-                                         bool showTrack) {
-                        if ( !point.show ) return;
-                        const auto label = TR(labelKey);
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                           "%s %s: %d + %d/%d",
-                                           label.data(),
-                                           TR("ui.canvas.note_fraction").data(),
-                                           point.beatIndex,
-                                           point.numerator,
-                                           point.denominator);
-                        const auto timeText =
-                            formatCanvasTime(point.time, currentSnapshot);
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                           "%s %s: %s",
-                                           label.data(),
-                                           TR("ui.canvas.note_time").data(),
-                                           timeText.c_str());
-                        if ( showTrack ) {
+                const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
+                if ( showHoverOverlay ) {
+                    if ( currentSnapshot->hoverInspect.show ) {
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
+                                             const char* labelKey,
+                                             const Logic::HoverBeatPoint& point,
+                                             bool showTrack) {
+                            if ( !point.show ) return;
+                            const auto label = TR(labelKey);
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s %s: %d + %d/%d",
+                                label.data(),
+                                TR("ui.canvas.note_fraction").data(),
+                                point.beatIndex,
+                                point.numerator,
+                                point.denominator);
+                            const auto timeText =
+                                formatCanvasTime(point.time, currentSnapshot);
                             ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                               "%s %s: %d",
+                                               "%s %s: %s",
                                                label.data(),
+                                               TR("ui.canvas.note_time").data(),
+                                               timeText.c_str());
+                            if ( showTrack ) {
+                                ImGui::TextColored(
+                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                    "%s %s: %d",
+                                    label.data(),
+                                    TR("ui.canvas.track").data(),
+                                    point.track + 1);
+                            }
+                        };
+
+                        switch ( inspect.kind ) {
+                        case Logic::HoverInspectKind::Note:
+                            drawPoint("ui.canvas.hover.note",
+                                      inspect.head,
+                                      inspect.showTrack);
+                            break;
+                        case Logic::HoverInspectKind::HoldHead:
+                            drawPoint(
+                                "ui.canvas.hover.head", inspect.head, true);
+                            break;
+                        case Logic::HoverInspectKind::HoldEnd:
+                        case Logic::HoverInspectKind::PolylineHoldEnd:
+                            drawPoint(
+                                "ui.canvas.hover.hold_end", inspect.end, true);
+                            break;
+                        case Logic::HoverInspectKind::FlickHead:
+                            drawPoint("ui.canvas.hover.flick_head",
+                                      inspect.head,
+                                      true);
+                            break;
+                        case Logic::HoverInspectKind::FlickBody:
+                        case Logic::HoverInspectKind::PolylineFlickBody:
+                            drawPoint("ui.canvas.hover.flick_body",
+                                      inspect.body,
+                                      false);
+                            break;
+                        case Logic::HoverInspectKind::FlickEnd:
+                        case Logic::HoverInspectKind::PolylineFlickEnd:
+                            drawPoint(
+                                "ui.canvas.hover.flick_end", inspect.end, true);
+                            break;
+                        case Logic::HoverInspectKind::PolylineHead:
+                            drawPoint("ui.canvas.hover.polyline_head",
+                                      inspect.body,
+                                      inspect.showTrack);
+                            break;
+                        case Logic::HoverInspectKind::PolylineNode:
+                            drawPoint("ui.canvas.hover.polyline_node",
+                                      inspect.body,
+                                      inspect.showTrack);
+                            break;
+                        case Logic::HoverInspectKind::HoldBody:
+                        case Logic::HoverInspectKind::PolylineHoldBody:
+                        case Logic::HoverInspectKind::None: break;
+                        }
+
+                        if ( inspect.showDuration ) {
+                            const auto durationText =
+                                formatCanvasDuration(inspect.duration);
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %s",
+                                TR("ui.canvas.hover.duration").data(),
+                                durationText.c_str());
+                        }
+                        if ( inspect.showDtrack ) {
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %d",
+                                TR("ui.canvas.hover.dtrack").data(),
+                                inspect.dtrack);
+                        }
+                        if ( inspect.showTrack &&
+                             (inspect.kind ==
+                                  Logic::HoverInspectKind::HoldBody ||
+                              inspect.kind ==
+                                  Logic::HoverInspectKind::PolylineHoldBody) ) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                               "%s: %d",
                                                TR("ui.canvas.track").data(),
-                                               point.track + 1);
+                                               inspect.track + 1);
                         }
-                    };
 
-                    switch ( inspect.kind ) {
-                    case Logic::HoverInspectKind::Note:
-                        drawPoint("ui.canvas.hover.note",
-                                  inspect.head,
-                                  inspect.showTrack);
-                        break;
-                    case Logic::HoverInspectKind::HoldHead:
-                        drawPoint("ui.canvas.hover.head", inspect.head, true);
-                        break;
-                    case Logic::HoverInspectKind::HoldEnd:
-                    case Logic::HoverInspectKind::PolylineHoldEnd:
-                        drawPoint(
-                            "ui.canvas.hover.hold_end", inspect.end, true);
-                        break;
-                    case Logic::HoverInspectKind::FlickHead:
-                        drawPoint(
-                            "ui.canvas.hover.flick_head", inspect.head, true);
-                        break;
-                    case Logic::HoverInspectKind::FlickBody:
-                    case Logic::HoverInspectKind::PolylineFlickBody:
-                        drawPoint(
-                            "ui.canvas.hover.flick_body", inspect.body, false);
-                        break;
-                    case Logic::HoverInspectKind::FlickEnd:
-                    case Logic::HoverInspectKind::PolylineFlickEnd:
-                        drawPoint(
-                            "ui.canvas.hover.flick_end", inspect.end, true);
-                        break;
-                    case Logic::HoverInspectKind::PolylineHead:
-                        drawPoint("ui.canvas.hover.polyline_head",
-                                  inspect.body,
-                                  inspect.showTrack);
-                        break;
-                    case Logic::HoverInspectKind::PolylineNode:
-                        drawPoint("ui.canvas.hover.polyline_node",
-                                  inspect.body,
-                                  inspect.showTrack);
-                        break;
-                    case Logic::HoverInspectKind::HoldBody:
-                    case Logic::HoverInspectKind::PolylineHoldBody:
-                    case Logic::HoverInspectKind::None: break;
-                    }
-
-                    if ( inspect.showDuration ) {
-                        const auto durationText =
-                            formatCanvasDuration(inspect.duration);
-                        ImGui::TextColored(
-                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                            "%s: %s",
-                            TR("ui.canvas.hover.duration").data(),
-                            durationText.c_str());
-                    }
-                    if ( inspect.showDtrack ) {
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                           "%s: %d",
-                                           TR("ui.canvas.hover.dtrack").data(),
-                                           inspect.dtrack);
-                    }
-                    if ( inspect.showTrack &&
-                         (inspect.kind == Logic::HoverInspectKind::HoldBody ||
-                          inspect.kind ==
-                              Logic::HoverInspectKind::PolylineHoldBody) ) {
-                        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                           "%s: %d",
-                                           TR("ui.canvas.track").data(),
-                                           inspect.track + 1);
-                    }
-
-                    // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
-                    int overlappingCount = std::max(1, inspect.overlapCount);
-                    for ( const auto& mask : currentSnapshot->overlapMasks ) {
-                        if ( localMousePos.x >= mask.x &&
-                             localMousePos.x <= mask.x + mask.w &&
-                             localMousePos.y >= mask.y &&
-                             localMousePos.y <= mask.y + mask.h ) {
-                            overlappingCount =
-                                std::max(overlappingCount, mask.objectCount);
+                        // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
+                        int overlappingCount =
+                            std::max(1, inspect.overlapCount);
+                        for ( const auto& mask :
+                              currentSnapshot->overlapMasks ) {
+                            if ( localMousePos.x >= mask.x &&
+                                 localMousePos.x <= mask.x + mask.w &&
+                                 localMousePos.y >= mask.y &&
+                                 localMousePos.y <= mask.y + mask.h ) {
+                                overlappingCount = std::max(overlappingCount,
+                                                            mask.objectCount);
+                            }
                         }
+
+                        if ( overlappingCount > 1 ) {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+                                "%s: %d%s",
+                                TR("ui.canvas.overlapping_hitboxes").data(),
+                                overlappingCount,
+                                TR("ui.canvas.overlapping_warning").data());
+                        } else {
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %d",
+                                TR("ui.canvas.overlapping_hitboxes").data(),
+                                overlappingCount);
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::Spacing();
                     }
 
-                    if ( overlappingCount > 1 ) {
-                        ImGui::TextColored(
-                            ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
-                            "%s: %d%s",
-                            TR("ui.canvas.overlapping_hitboxes").data(),
-                            overlappingCount,
-                            TR("ui.canvas.overlapping_warning").data());
+                    if ( currentSnapshot->isSnapped ) {
+                        const auto timeText = formatCanvasTime(
+                            currentSnapshot->snappedTime, currentSnapshot);
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                                           "%s: %s",
+                                           TR("ui.canvas.snap").data(),
+                                           timeText.c_str());
+
+                        if ( currentSnapshot->snappedNumerator == 1 &&
+                             currentSnapshot->snappedDenominator == 1 ) {
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                "%s (1/1)",
+                                TR("ui.canvas.beat_fraction").data());
+                        } else {
+                            ImGui::TextColored(
+                                ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                                "%s (%d/%d)",
+                                TR("ui.canvas.beat_fraction").data(),
+                                currentSnapshot->snappedNumerator,
+                                currentSnapshot->snappedDenominator);
+                        }
                     } else {
-                        ImGui::TextColored(
-                            ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                            "%s: %d",
-                            TR("ui.canvas.overlapping_hitboxes").data(),
-                            overlappingCount);
+                        const auto timeText = formatCanvasTime(
+                            currentSnapshot->hoveredTime, currentSnapshot);
+                        ImGui::Text("%s: %s",
+                                    TR("ui.canvas.time").data(),
+                                    timeText.c_str());
                     }
+
+                    if ( currentSnapshot->hoveredBeatIndex > 0 ) {
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.beat_index").data(),
+                                    currentSnapshot->hoveredBeatIndex);
+                    }
+
+                    ImGui::Text("%s: %d",
+                                TR("ui.canvas.track").data(),
+                                currentSnapshot->hoveredTrack + 1);
 
                     ImGui::Spacing();
                     ImGui::Separator();
                     ImGui::Spacing();
-                }
 
-                if ( currentSnapshot->isSnapped ) {
-                    const auto timeText = formatCanvasTime(
-                        currentSnapshot->snappedTime, currentSnapshot);
-                    ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                                       "%s: %s",
-                                       TR("ui.canvas.snap").data(),
-                                       timeText.c_str());
-
-                    if ( currentSnapshot->snappedNumerator == 1 &&
-                         currentSnapshot->snappedDenominator == 1 ) {
+                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
+                                       "%s: %d",
+                                       TR("ui.canvas.beat_divisor").data(),
+                                       currentSnapshot->currentBeatDivisor);
+                    if ( m_hoverLayerCount > 1 ) {
                         ImGui::TextColored(
-                            ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-                            "%s (1/1)",
-                            TR("ui.canvas.beat_fraction").data());
-                    } else {
-                        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
-                                           "%s (%d/%d)",
-                                           TR("ui.canvas.beat_fraction").data(),
-                                           currentSnapshot->snappedNumerator,
-                                           currentSnapshot->snappedDenominator);
+                            ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                            "%s: %d/%d  %s",
+                            TR("ui.canvas.hover.layer").data(),
+                            m_hoverLayerIndex + 1,
+                            m_hoverLayerCount,
+                            TR("ui.canvas.hover.layer_hint").data());
                     }
-                } else {
-                    const auto timeText = formatCanvasTime(
-                        currentSnapshot->hoveredTime, currentSnapshot);
-                    ImGui::Text("%s: %s",
-                                TR("ui.canvas.time").data(),
-                                timeText.c_str());
                 }
 
-                if ( currentSnapshot->hoveredBeatIndex > 0 ) {
-                    ImGui::Text("%s: %d",
-                                TR("ui.canvas.beat_index").data(),
-                                currentSnapshot->hoveredBeatIndex);
-                }
-
-                ImGui::Text("%s: %d",
-                            TR("ui.canvas.track").data(),
-                            currentSnapshot->hoveredTrack + 1);
-
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
-                                   "%s: %d",
-                                   TR("ui.canvas.beat_divisor").data(),
-                                   currentSnapshot->currentBeatDivisor);
-                if ( m_hoverLayerCount > 1 ) {
-                    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
-                                       "%s: %d/%d  %s",
-                                       TR("ui.canvas.hover.layer").data(),
-                                       m_hoverLayerIndex + 1,
-                                       m_hoverLayerCount,
-                                       TR("ui.canvas.hover.layer_hint").data());
-                }
-
-                ImGui::EndTooltip();
+                ImGui::End();
                 ImGui::PopStyleVar(2);
             }
         }
