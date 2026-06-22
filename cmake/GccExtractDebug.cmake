@@ -13,11 +13,15 @@ if(NOT TARGET_FILE)
     message(FATAL_ERROR "GccExtractDebug: TARGET_FILE not set")
 endif()
 
-message(STATUS "GCC debug extraction: ${TARGET_FILE}.dbg")
+set(DEBUG_FILE "${TARGET_FILE}.dbg")
+get_filename_component(TARGET_DIR "${TARGET_FILE}" DIRECTORY)
+get_filename_component(DEBUG_LINK_NAME "${DEBUG_FILE}" NAME)
+
+message(STATUS "GCC debug extraction: ${DEBUG_FILE}")
 
 # 1. 将调试信息提取到独立 .dbg 文件
 execute_process(
-    COMMAND "${OBJCOPY}" --only-keep-debug "${TARGET_FILE}" "${TARGET_FILE}.dbg"
+    COMMAND "${OBJCOPY}" --only-keep-debug "${TARGET_FILE}" "${DEBUG_FILE}"
     RESULT_VARIABLE _ret
 )
 if(NOT _ret EQUAL 0)
@@ -36,11 +40,12 @@ endif()
 
 # 3. 在 exe 中添加对 .dbg 文件的引用
 execute_process(
-    COMMAND "${OBJCOPY}" --add-gnu-debuglink="${TARGET_FILE}.dbg" "${TARGET_FILE}"
+    COMMAND "${OBJCOPY}" --add-gnu-debuglink="${DEBUG_LINK_NAME}" "${TARGET_FILE}"
+    WORKING_DIRECTORY "${TARGET_DIR}"
     RESULT_VARIABLE _ret
 )
 if(NOT _ret EQUAL 0)
     message(WARNING "GccExtractDebug: objcopy --add-gnu-debuglink failed for ${TARGET_FILE}")
 endif()
 
-message(STATUS "GCC debug extraction done: ${TARGET_FILE}.dbg")
+message(STATUS "GCC debug extraction done: ${DEBUG_FILE}")
