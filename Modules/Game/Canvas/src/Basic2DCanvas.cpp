@@ -42,6 +42,16 @@ bool isMouseHoveringCurrentWindowContent()
            mousePos.y <= contentPos.y + contentSize.y;
 }
 
+/// @brief 判断当前主画布内容区是否正在接收带修饰键的滚轮操作。
+/// @return Ctrl、Alt 或 Ctrl+Alt 滚轮发生在当前窗口内容区时返回 true。
+/// @warning UI 热路径：主画布每帧更新时调用；只读取 ImGui 输入状态和窗口几何。
+bool isModifierWheelOverCurrentWindowContent()
+{
+    const auto& io = ImGui::GetIO();
+    return std::abs(io.MouseWheel) > 0.01f && (io.KeyCtrl || io.KeyAlt) &&
+           isMouseHoveringCurrentWindowContent();
+}
+
 /// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
 /// @return 窗口内容区域可见且不是隐藏 Dock Tab 时返回 true。
 /// @warning UI 热路径：主画布每帧更新时调用；只读取当前 ImGuiWindow 状态。
@@ -82,7 +92,8 @@ Basic2DCanvas::~Basic2DCanvas() {}
 
 /// @brief 更新画布 ImGui 窗口和交互状态。
 /// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内，
-/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径。
+/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径；修饰键滚轮仅在
+/// 鼠标位于当前画布内容区时触发焦点切换。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     auto& engine           = Logic::EditorEngine::instance();
@@ -178,6 +189,19 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
 
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
+        if ( engine.getActiveCameraId() != m_cameraId &&
+             isModifierWheelOverCurrentWindowContent() ) {
+            if ( myIndex != -1 ) {
+                engine.setActiveSessionIndex(myIndex);
+                m_shouldFocusNextFrame = true;
+                XINFO(
+                    "Basic2DCanvas: Modifier wheel switched active session to "
+                    "index {} (cameraId={})",
+                    myIndex,
+                    m_cameraId);
+            }
+        }
+
         if ( engine.getActiveCameraId() == m_cameraId ) {
             m_interaction->update(sourceManager,
                                   m_currentSnapshot,
