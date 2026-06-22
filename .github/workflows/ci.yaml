@@ -1,4 +1,4 @@
-name: Test Self Hosted Runner
+name: Self Hosted CI Runner
 
 on:
   push:
