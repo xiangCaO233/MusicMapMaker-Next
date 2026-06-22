@@ -286,7 +286,6 @@ nlohmann::json makeMalodyStoreModeExtJson()
     nlohmann::json modeExt = nlohmann::json::object();
     modeExt["bar_begin"]   = 0;
     modeExt["freenote"]    = "请访问商店或官网下载最新EX Rhythm Master VI皮肤";
-    modeExt["skin"]        = "info.asm";
     modeExt["skinid"]      = 6091;
     return modeExt;
 }
