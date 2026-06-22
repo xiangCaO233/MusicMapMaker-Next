@@ -121,6 +121,9 @@ private:
     /// @brief Timeline 画布中的一个可拾取 Timing 目标。
     struct TimelineHitTarget;
 
+    /// @brief Timeline Timing 选择使用的屏幕空间矩形。
+    struct TimingSelectionRect;
+
     // 渲染编辑器弹窗
     void renderEventEditorPopup();
 
@@ -191,6 +194,8 @@ private:
     /// @param size 当前 Timeline 画布尺寸。
     /// @param isHovered 鼠标是否悬浮在画布 Image 上。
     /// @param isFocused Timeline 窗口是否聚焦。
+    /// @warning UI 热路径：每帧处理 Timeline Timing
+    /// 交互；禁止引入文件系统访问或阻塞操作。
     void handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                        const ImVec2& size, bool isHovered,
                                        bool isFocused);
@@ -198,6 +203,7 @@ private:
     /// @brief 绘制 Timeline Timing 的 hover、选中、拖动和框选反馈。
     /// @param canvasPos 画布左上角屏幕坐标。
     /// @param size 当前 Timeline 画布尺寸。
+    /// @warning UI 热路径：每帧绘制交互覆盖层；只提交 ImGui 绘制命令。
     void renderTimingInteractionOverlay(const ImVec2& canvasPos,
                                         const ImVec2& size);
 
@@ -269,6 +275,24 @@ private:
         uint32_t markerIndexCount{ 0 };
     };
 
+    /// @brief Timeline Timing 选择使用的屏幕空间矩形。
+    struct TimingSelectionRect {
+        /// @brief 左边界。
+        float left{ 0.0f };
+
+        /// @brief 上边界。
+        float top{ 0.0f };
+
+        /// @brief 右边界。
+        float right{ 0.0f };
+
+        /// @brief 下边界。
+        float bottom{ 0.0f };
+
+        /// @brief 当前矩形是否有效。
+        bool valid{ false };
+    };
+
     /// @brief Timeline 本地剪贴板条目。
     struct TimelineClipboardEntry {
         /// @brief 相对剪贴板锚点时间，单位秒。
@@ -322,6 +346,8 @@ private:
     /// @param size 当前 Timeline 画布尺寸。
     /// @param localMouseY 鼠标相对画布左上角的 Y 坐标。
     /// @return 命中的 Timing 目标；未命中时为空。
+    /// @warning UI 热路径：每帧 hover
+    /// 和点击时调用；只读取当前快照并做局部命中计算。
     std::optional<TimelineHitTarget> pickTimingTarget(const ImVec2& canvasPos,
                                                       const ImVec2& size,
                                                       float localMouseY) const;
@@ -334,6 +360,17 @@ private:
     float timingTargetCenterX(const TimelineHitTarget& target,
                               const ImVec2&            canvasPos,
                               const ImVec2&            size) const;
+
+    /// @brief 计算 Timing 目标当前可视 marker 的屏幕空间 hitbox。
+    /// @param target Timing 目标。
+    /// @param canvasPos 画布左上角屏幕坐标。
+    /// @param size 当前 Timeline 画布尺寸。
+    /// @return 可用于拾取和框选的屏幕空间矩形。
+    /// @warning UI 热路径：拾取、hover
+    /// 和框选时调用；只读取当前快照顶点缓存并做常量矩形计算。
+    TimingSelectionRect timingTargetScreenRect(const TimelineHitTarget& target,
+                                               const ImVec2& canvasPos,
+                                               const ImVec2& size) const;
 
     /// @brief 将 Timing 类型转换为 ImGui 绘制颜色。
     /// @param effect Timing 类型。
@@ -426,6 +463,15 @@ private:
 
     /// @brief Timeline 框选终点 Y 坐标。
     float m_timingMarqueeEndY{ 0.0f };
+
+    /// @brief Timeline 框选起点 X 坐标。
+    float m_timingMarqueeStartX{ 0.0f };
+
+    /// @brief Timeline 框选终点 X 坐标。
+    float m_timingMarqueeEndX{ 0.0f };
+
+    /// @brief Timeline 框选开始前保留的选中集合，用于拖动时重算选区。
+    std::unordered_set<entt::entity> m_timingMarqueeBaseSelection;
 
     /// @brief 画笔工具是否正在预览放置 Timing。
     bool m_isTimingDrawPreviewing{ false };

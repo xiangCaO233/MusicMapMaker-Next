@@ -757,15 +757,81 @@ float TimelineCanvas::timingTargetCenterX(const TimelineHitTarget& target,
     return x;
 }
 
+/// @brief 计算 Timing 目标当前可视 marker 的屏幕空间 hitbox。
+/// @param target Timing 目标。
+/// @param canvasPos 画布左上角屏幕坐标。
+/// @param size 当前 Timeline 画布尺寸。
+/// @return 可用于拾取和框选的屏幕空间矩形。
+/// @warning UI 热路径：拾取、hover
+/// 和框选时调用；只读取当前快照顶点缓存并做常量矩形计算。
+TimelineCanvas::TimingSelectionRect TimelineCanvas::timingTargetScreenRect(
+    const TimelineHitTarget& target, const ImVec2& canvasPos,
+    const ImVec2& size) const
+{
+    auto makeRect = [](float left, float top, float right, float bottom) {
+        TimingSelectionRect rect;
+        rect.left   = std::min(left, right);
+        rect.right  = std::max(left, right);
+        rect.top    = std::min(top, bottom);
+        rect.bottom = std::max(top, bottom);
+        rect.valid  = rect.right > rect.left && rect.bottom > rect.top;
+        return rect;
+    };
+
+    const bool professionalMode = Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .timelineProfessionalMode;
+    if ( professionalMode && m_currentSnapshot && target.hasMarkerGeometry &&
+         target.markerVertexCount > 0U ) {
+        const uint32_t startVertex = target.markerVertexOffset;
+        const uint32_t endVertex =
+            std::min(startVertex + target.markerVertexCount,
+                     static_cast<uint32_t>(m_currentSnapshot->vertices.size()));
+        if ( startVertex < endVertex ) {
+            float minX = std::numeric_limits<float>::max();
+            float minY = std::numeric_limits<float>::max();
+            float maxX = std::numeric_limits<float>::lowest();
+            float maxY = std::numeric_limits<float>::lowest();
+            for ( uint32_t i = startVertex; i < endVertex; ++i ) {
+                const auto& pos = m_currentSnapshot->vertices[i].pos;
+                minX            = std::min(minX, pos.x);
+                minY            = std::min(minY, pos.y);
+                maxX            = std::max(maxX, pos.x);
+                maxY            = std::max(maxY, pos.y);
+            }
+
+            auto rect = makeRect(canvasPos.x + minX,
+                                 canvasPos.y + minY,
+                                 canvasPos.x + maxX,
+                                 canvasPos.y + maxY);
+            if ( rect.valid ) {
+                return rect;
+            }
+        }
+    }
+
+    const float centerX = timingTargetCenterX(target, canvasPos, size);
+    const float centerY = canvasPos.y + target.y;
+    const float halfSize =
+        std::max(TIMING_MARKER_SIZE, TIMING_PICK_RADIUS) * 0.5f;
+    return makeRect(centerX - halfSize,
+                    centerY - halfSize,
+                    centerX + halfSize,
+                    centerY + halfSize);
+}
+
 /// @brief 拾取鼠标附近的 Timing 目标。
 /// @param canvasPos 画布左上角屏幕坐标。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseY 鼠标相对画布左上角的 Y 坐标。
 /// @return 命中的 Timing 目标；未命中时为空。
+/// @warning UI 热路径：每帧 hover
+/// 和点击时调用；只读取当前快照并做局部命中计算。
 std::optional<TimelineCanvas::TimelineHitTarget>
 TimelineCanvas::pickTimingTarget(const ImVec2& canvasPos, const ImVec2& size,
                                  float localMouseY) const
 {
+    (void)localMouseY;
     if ( !m_currentSnapshot ) {
         return std::nullopt;
     }
@@ -773,33 +839,20 @@ TimelineCanvas::pickTimingTarget(const ImVec2& canvasPos, const ImVec2& size,
     const ImVec2 mousePos  = ImGui::GetMousePos();
     float        bestScore = std::numeric_limits<float>::max();
     std::optional<TimelineHitTarget> bestTarget;
-    const bool professionalMode = Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .timelineProfessionalMode;
-    int        mouseLane        = -1;
-    if ( professionalMode && size.x > 1.0f ) {
-        constexpr int laneCount   = 5;
-        const float   localMouseX = mousePos.x - canvasPos.x;
-        const float   laneWidth   = size.x / static_cast<float>(laneCount);
-        mouseLane                 = static_cast<int>(
-            std::floor(localMouseX / std::max(1.0f, laneWidth)));
-        mouseLane = std::clamp(mouseLane, 0, laneCount - 1);
-    }
     for ( const auto& target : collectVisibleTimingTargets() ) {
         if ( !isTimingTargetSelectable(target) ) {
             continue;
         }
-        if ( professionalMode &&
-             mouseLane != professionalTimingLane(target.effect) ) {
-            continue;
-        }
-        float dy = std::abs(localMouseY - target.y);
-        if ( dy > TIMING_PICK_RADIUS ) {
+        const auto rect = timingTargetScreenRect(target, canvasPos, size);
+        if ( !rect.valid || mousePos.x < rect.left || mousePos.x > rect.right ||
+             mousePos.y < rect.top || mousePos.y > rect.bottom ) {
             continue;
         }
 
-        float markerX = timingTargetCenterX(target, canvasPos, size);
-        float dx      = std::abs(mousePos.x - markerX);
+        float centerX = (rect.left + rect.right) * 0.5f;
+        float centerY = (rect.top + rect.bottom) * 0.5f;
+        float dx      = std::abs(mousePos.x - centerX);
+        float dy      = std::abs(mousePos.y - centerY);
         float score   = dy + dx * 0.15f;
         if ( score < bestScore ) {
             bestScore  = score;
@@ -1020,6 +1073,8 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 /// @param size 当前 Timeline 画布尺寸。
 /// @param isHovered 鼠标是否悬浮在画布 Image 上。
 /// @param isFocused Timeline 窗口是否聚焦。
+/// @warning UI 热路径：每帧处理 Timeline Timing
+/// 交互；禁止引入文件系统访问或阻塞操作。
 void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                                    const ImVec2& size,
                                                    bool          isHovered,
@@ -1234,14 +1289,60 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         break;
     case Logic::EditTool::Marquee: {
-        auto addMarqueeTargets = [&]() {
-            const float minY =
-                std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
-            const float maxY =
-                std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
+        auto makeMarqueeRect = [&]() {
+            TimingSelectionRect rect;
+            rect.left   = canvasPos.x +
+                          std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.right  = canvasPos.x +
+                          std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.top    = canvasPos.y +
+                          std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
+            rect.bottom = canvasPos.y +
+                          std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
+            rect.valid =
+                rect.right > rect.left + 0.5f && rect.bottom > rect.top + 0.5f;
+            return rect;
+        };
+
+        auto rectIntersects = [](TimingSelectionRect lhs,
+                                 TimingSelectionRect rhs) {
+            if ( !lhs.valid || !rhs.valid ) return false;
+            constexpr float EPS = 0.5f;
+            return std::max(lhs.left, rhs.left) <=
+                       std::min(lhs.right, rhs.right) + EPS &&
+                   std::max(lhs.top, rhs.top) <=
+                       std::min(lhs.bottom, rhs.bottom) + EPS;
+        };
+
+        auto rectContains = [](TimingSelectionRect outer,
+                               TimingSelectionRect inner) {
+            if ( !outer.valid || !inner.valid ) return false;
+            constexpr float EPS = 0.5f;
+            return inner.left >= outer.left - EPS &&
+                   inner.right <= outer.right + EPS &&
+                   inner.top >= outer.top - EPS &&
+                   inner.bottom <= outer.bottom + EPS;
+        };
+
+        const auto selectionMode =
+            Config::AppConfig::instance().getEditorSettings().selectionMode;
+        auto selectionMatchesTarget = [&](TimingSelectionRect      selection,
+                                          const TimelineHitTarget& target) {
+            auto targetRect = timingTargetScreenRect(target, canvasPos, size);
+            return selectionMode == Config::SelectionMode::Strict
+                       ? rectContains(selection, targetRect)
+                       : rectIntersects(selection, targetRect);
+        };
+
+        auto refreshMarqueeTargets = [&]() {
+            m_selectedTimingEntities = m_timingMarqueeBaseSelection;
+            const auto selectionRect = makeMarqueeRect();
+            if ( !selectionRect.valid ) {
+                return;
+            }
             for ( const auto& target : collectVisibleTimingTargets() ) {
-                if ( isTimingTargetSelectable(target) && target.y >= minY &&
-                     target.y <= maxY ) {
+                if ( isTimingTargetSelectable(target) &&
+                     selectionMatchesTarget(selectionRect, target) ) {
                     m_selectedTimingEntities.insert(target.entity);
                 }
             }
@@ -1249,22 +1350,30 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 
         if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
             m_isTimingMarqueeSelecting = true;
+            m_timingMarqueeStartX      = localMouseX;
+            m_timingMarqueeEndX        = localMouseX;
             m_timingMarqueeStartY      = localMouseY;
             m_timingMarqueeEndY        = localMouseY;
+            m_timingMarqueeBaseSelection.clear();
+            if ( additiveSelection ) {
+                m_timingMarqueeBaseSelection = m_selectedTimingEntities;
+            }
             if ( !additiveSelection ) {
                 m_selectedTimingEntities.clear();
             }
-            addMarqueeTargets();
+            refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&
              ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            m_timingMarqueeEndX = localMouseX;
             m_timingMarqueeEndY = localMouseY;
-            addMarqueeTargets();
+            refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            addMarqueeTargets();
+            refreshMarqueeTargets();
             m_isTimingMarqueeSelecting = false;
+            m_timingMarqueeBaseSelection.clear();
         }
         break;
     }
@@ -1276,6 +1385,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 /// @brief 绘制 Timeline Timing 的 hover、选中、拖动和框选反馈。
 /// @param canvasPos 画布左上角屏幕坐标。
 /// @param size 当前 Timeline 画布尺寸。
+/// @warning UI 热路径：每帧绘制交互覆盖层；只提交 ImGui 绘制命令。
 void TimelineCanvas::renderTimingInteractionOverlay(const ImVec2& canvasPos,
                                                     const ImVec2& size)
 {
@@ -1297,15 +1407,19 @@ void TimelineCanvas::renderTimingInteractionOverlay(const ImVec2& canvasPos,
     }
 
     if ( m_isTimingMarqueeSelecting ) {
+        const float minX =
+            canvasPos.x + std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
+        const float maxX =
+            canvasPos.x + std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
         const float minY =
             canvasPos.y + std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
         const float maxY =
             canvasPos.y + std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
-        drawList->AddRectFilled(ImVec2(canvasPos.x, minY),
-                                ImVec2(canvasPos.x + size.x, maxY),
+        drawList->AddRectFilled(ImVec2(minX, minY),
+                                ImVec2(maxX, maxY),
                                 IM_COL32(120, 170, 255, 42));
-        drawList->AddRect(ImVec2(canvasPos.x, minY),
-                          ImVec2(canvasPos.x + size.x, maxY),
+        drawList->AddRect(ImVec2(minX, minY),
+                          ImVec2(maxX, maxY),
                           IM_COL32(120, 170, 255, 180),
                           0.0f,
                           0,
