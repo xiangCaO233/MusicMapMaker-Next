@@ -1,0 +1,16 @@
+name: Test Self Hosted Runner
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted, win10-x64]
+
+    steps:
+      - name: cd C:/ and pwd
+        shell: powershell
+        run: |
+          cd C:/
+          pwd
