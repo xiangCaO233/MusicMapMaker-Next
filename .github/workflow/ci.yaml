@@ -12,5 +12,5 @@ jobs:
       - name: cd C:/ and pwd
         shell: powershell
         run: |
-          cd C:/
+          cd C:/dev-shells
           pwd
