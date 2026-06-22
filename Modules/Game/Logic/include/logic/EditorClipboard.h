@@ -37,9 +37,21 @@ public:
     void set(std::vector<ClipboardItem> items,
              const SessionContext* sourceContext, bool isCut);
 
+    /// @brief 更新编辑器级 Timeline 剪贴板内容。
+    /// @param items 新的 Timeline 剪贴板条目列表。
+    /// @param sourceContext 剪贴板来源 Session
+    /// 上下文，仅用于身份比较，不拥有生命周期。
+    /// @param isCut 当前剪贴板内容是否来自剪切操作。
+    void setTimelines(std::vector<TimelineClipboardItem> items,
+                      const SessionContext* sourceContext, bool isCut);
+
     /// @brief 获取编辑器级剪贴板内容副本。
     /// @return 当前剪贴板条目列表副本。
     std::vector<ClipboardItem> get() const;
+
+    /// @brief 获取编辑器级 Timeline 剪贴板内容副本。
+    /// @return 当前 Timeline 剪贴板条目列表副本。
+    std::vector<TimelineClipboardItem> getTimelines() const;
 
     /// @brief 判断当前剪贴板是否是指定 Session 的剪切内容。
     /// @param context 待比较的 Session 上下文。
@@ -62,6 +74,9 @@ private:
 
     /// @brief 编辑器级共享剪贴板条目列表。
     std::vector<ClipboardItem> m_items;
+
+    /// @brief 编辑器级共享 Timeline 剪贴板条目列表。
+    std::vector<TimelineClipboardItem> m_timelineItems;
 
     /// @brief 当前剪贴板内容是否来自剪切操作。
     bool m_isCut{ false };

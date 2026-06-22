@@ -92,6 +92,70 @@ static bool renderCollapsingHeader(const char* label, bool* p_state,
 }
 
 /**
+ * @brief 在 Clay 布局块中渲染带水平自动滚动文本的 CollapsingHeader。
+ */
+static bool renderScrollingCollapsingHeader(const std::string&      id,
+                                            const std::string&      text,
+                                            bool*                   p_state,
+                                            struct Clay_BoundingBox r,
+                                            ImGuiTreeNodeFlags      flags = 0)
+{
+    ImGui::SetCursorScreenPos({ r.x, r.y });
+
+    ImGuiWindow* win         = ImGui::GetCurrentWindow();
+    float        savedWRMaxX = win->WorkRect.Max.x;
+    win->WorkRect.Max.x      = r.x + r.width;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
+
+    const std::string hiddenLabel = "##" + id;
+    bool              open        = ImGui::CollapsingHeader(
+        hiddenLabel.c_str(),
+        flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
+    *p_state = open;
+
+    ImVec2 itemMin = ImGui::GetItemRectMin();
+    ImVec2 itemMax = ImGui::GetItemRectMax();
+
+    ImGui::PopStyleVar();
+    win->WorkRect.Max.x = savedWRMaxX;
+
+    const ImGuiStyle& style        = ImGui::GetStyle();
+    const float       targetHeight = std::max(itemMax.y - itemMin.y, r.height);
+    const float       arrowWidth   = ImGui::GetTreeNodeToLabelSpacing();
+    const float       textPadding  = style.FramePadding.x;
+    const ImVec2      textStartPos = { itemMin.x + arrowWidth, itemMin.y };
+    const float       textAvailableWidth =
+        std::max(0.0f, itemMax.x - textStartPos.x - textPadding);
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+
+    float offset       = 0.0f;
+    float visibleWidth = std::max(0.0f, textAvailableWidth);
+    if ( textSize.x > visibleWidth ) {
+        float scrollRange = textSize.x - visibleWidth + 40.0f;
+        float time        = static_cast<float>(ImGui::GetTime());
+        float t           = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
+        t                 = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+        offset            = t * scrollRange;
+    }
+
+    const float textH   = ImGui::GetFontSize();
+    const float offsetY = (targetHeight - textH) * 0.5f;
+
+    ImGui::PushClipRect(textStartPos,
+                        ImVec2(textStartPos.x + textAvailableWidth,
+                               textStartPos.y + targetHeight),
+                        true);
+    ImGui::GetWindowDrawList()->AddText(
+        ImVec2(textStartPos.x - offset, textStartPos.y + offsetY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        text.c_str());
+    ImGui::PopClipRect();
+
+    return open;
+}
+
+/**
  * @brief 渲染带自动滚动的树节点（针对文件浏览器）。
  */
 template<typename OnClick>

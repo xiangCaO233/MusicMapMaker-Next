@@ -92,7 +92,7 @@ public:
                                 vk::Queue&          queue) override;
 
 private:
-    /// @brief 主画布 DockNode 轴向尺寸保护快照。
+    /// @brief 编辑区相关 DockNode 轴向尺寸保护快照。
     struct CanvasDockSizeSnapshot {
         /// @brief 需要保护的 DockNode ID。
         ImGuiID dockId{ 0 };
@@ -128,20 +128,20 @@ private:
     /// @warning UI 热路径：每帧最多读取鼠标状态和 DockNode 几何，不做遍历。
     void updateDockResizeGesture(ImGuiDockNode* dockNode);
 
-    /// @brief 记录当前主画布 DockNode 轴向尺寸，供最小边界锁定期间恢复。
+    /// @brief 记录当前编辑区相关 DockNode 轴向尺寸，供最小边界锁定期间恢复。
     /// @param sourceManager 当前 UIManager。
     /// @param axis 当前 dock resize 轴向。
     /// @warning UI 热路径：仅在 FloatingManager resize 手势开始后执行一次；
     /// 遍历当前会话列表并读取对应主画布 DockNode。
     void captureCanvasDockSizeProtection(UIManager* sourceManager, int axis);
 
-    /// @brief 恢复被保护的主画布 DockNode 轴向尺寸。
+    /// @brief 恢复被保护的编辑区相关 DockNode 轴向尺寸。
     /// @param axis 当前 dock resize 轴向。
     /// @warning UI 热路径：仅在 FloatingManager
     /// 已到最小尺寸并继续越界拖拽时执行。
     void restoreCanvasDockSizeProtection(int axis);
 
-    /// @brief 清除主画布 DockNode 尺寸保护快照。
+    /// @brief 清除编辑区相关 DockNode 尺寸保护快照。
     void clearCanvasDockSizeProtection();
 
     ///@brief 是否需要重载
@@ -183,7 +183,7 @@ private:
     /// @brief 当前 dock resize 手势命中的 split 子节点 ID。
     ImGuiID m_dockResizeGestureChildId{ 0 };
 
-    /// @brief FloatingManager 最小尺寸锁定期间的主画布尺寸保护快照。
+    /// @brief FloatingManager 最小尺寸锁定期间的编辑区尺寸保护快照。
     std::vector<CanvasDockSizeSnapshot> m_canvasDockSizeProtection;
 
     /// @brief 自动收回透明热区当前是否正在拖拽展开。

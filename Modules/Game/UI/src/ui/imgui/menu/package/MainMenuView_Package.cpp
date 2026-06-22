@@ -61,6 +61,35 @@ bool drawCenteredButton(const char* label, ImVec2 size)
     return ImGui::Button(label, size);
 }
 
+/// @brief 估算 Checkbox 绘制指定标签时需要的宽度。
+/// @param label Checkbox 标签文本。
+/// @return 当前字体和样式下的控件宽度。
+/// @warning UI 绘制路径：只读取当前 ImGui 样式和字体测量结果。
+float getCheckboxDisplayWidth(const char* label)
+{
+    const ImGuiStyle& style     = ImGui::GetStyle();
+    const ImVec2      labelSize = ImGui::CalcTextSize(label, nullptr, true);
+    float             width     = ImGui::GetFrameHeight();
+    if ( labelSize.x > 0.0f ) {
+        width += style.ItemInnerSpacing.x + labelSize.x;
+    }
+    return width;
+}
+
+/// @brief 若下一控件还能放进当前行，则把光标移动到同一行。
+/// @param nextItemWidth 下一控件预计宽度。
+/// @warning UI 绘制路径：只根据上一控件位置和内容边界决定是否调用 SameLine。
+void sameLineIfItemFits(float nextItemWidth)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float nextItemX   = ImGui::GetItemRectMax().x + style.ItemSpacing.x;
+    const float contentMaxX =
+        ImGui::GetWindowPos().x + ImGui::GetContentRegionMax().x;
+    if ( nextItemX + nextItemWidth <= contentMaxX ) {
+        ImGui::SameLine();
+    }
+}
+
 /// @brief 替换文件名中不适合作为普通文件名的路径分隔字符。
 std::string sanitizePackageFileNamePart(std::string value)
 {
@@ -740,22 +769,21 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                               [](const PackageCandidateFile& file) {
                                   return file.selected;
                               }));
-            ImGui::Text(
-                "目标格式：%s",
-                getPackageTypeDisplayName(m_package.selectedFileType).c_str());
-            ImGui::SameLine();
-            ImGui::Text("已选择：%d / %d",
-                        selectedCount,
-                        static_cast<int>(m_package.candidateFiles.size()));
+            ImGui::TextWrapped(
+                "目标格式：%s  已选择：%d / %d",
+                getPackageTypeDisplayName(m_package.selectedFileType).c_str(),
+                selectedCount,
+                static_cast<int>(m_package.candidateFiles.size()));
 
-            if ( ImGui::Button("全选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+            const ImVec2 selectButtonSize(88.0f * dpiScale, 0.0f);
+            if ( ImGui::Button("全选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
                     file.selected = true;
                 }
                 syncPackageDependencySelection();
             }
-            ImGui::SameLine();
-            if ( ImGui::Button("全不选", ImVec2(88.0f * dpiScale, 0.0f)) ) {
+            sameLineIfItemFits(selectButtonSize.x);
+            if ( ImGui::Button("全不选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
                     file.selected = false;
                 }
@@ -763,11 +791,12 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             }
             if ( shouldShowConvertedBeatmapSaveOption(
                      m_package.selectedFileType) ) {
-                ImGui::SameLine();
                 const std::string saveConvertedLabel =
                     "保存转换出的 " +
                     getPackageBeatmapExtension(m_package.selectedFileType) +
                     " 到项目中";
+                sameLineIfItemFits(
+                    getCheckboxDisplayWidth(saveConvertedLabel.c_str()));
                 const bool canSaveConvertedBeatmaps =
                     hasSelectedPackageBeatmapSourceRequiringConversion(
                         m_package.selectedFileType, m_package.candidateFiles);
@@ -788,18 +817,21 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             }
             if ( shouldShowLegacyImdPackageOption(
                      m_package.selectedFileType) ) {
-                ImGui::SameLine();
-                ImGui::Checkbox("同时打包兼容旧皮肤的 .imd",
+                constexpr const char* legacyImdLabel =
+                    "同时打包兼容旧皮肤的 .imd";
+                sameLineIfItemFits(getCheckboxDisplayWidth(legacyImdLabel));
+                ImGui::Checkbox(legacyImdLabel,
                                 &m_package.includeLegacyImdBeatmaps);
             }
             if ( hasSelectedPackageStoreModeExtCandidates() ) {
-                ImGui::SameLine();
+                constexpr const char* storeModeExtLabel =
+                    "自动添加上架皮肤 mode_ext";
+                sameLineIfItemFits(getCheckboxDisplayWidth(storeModeExtLabel));
                 auto& settings =
                     Config::AppConfig::instance().getEditorSettings();
                 bool addStoreModeExt =
                     settings.autoAddStoreModeExtForMalodyExport;
-                if ( ImGui::Checkbox("自动添加上架皮肤 mode_ext",
-                                     &addStoreModeExt) ) {
+                if ( ImGui::Checkbox(storeModeExtLabel, &addStoreModeExt) ) {
                     settings.autoAddStoreModeExtForMalodyExport =
                         addStoreModeExt;
                     Config::AppConfig::instance().save();

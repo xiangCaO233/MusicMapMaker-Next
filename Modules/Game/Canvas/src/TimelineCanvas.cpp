@@ -154,6 +154,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                            true,
                            ImGuiWindowFlags_NoScrollbar,
                            &windowOpen);
+    m_lastDockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
     if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
         m_hasTimingInteractionFocus = true;
     }
@@ -718,6 +719,13 @@ void TimelineCanvas::requestFocus()
     m_shouldFocusNextFrame      = true;
     m_hasTimingInteractionFocus = true;
     m_wasFocusedLastFrame       = true;
+}
+
+/// @brief 获取时间线窗口当前所在的 ImGui Dock 节点。
+/// @return 当前窗口停靠节点 ID；未停靠时返回 0。
+ImGuiID TimelineCanvas::getDockId() const
+{
+    return m_lastDockId;
 }
 
 const std::vector<Graphic::Vertex::VKBasicVertex>&

@@ -42,21 +42,20 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     treeVBox.setSpacing(compactGap);
 
     // 1. Root 节点作为 CollapsingHeader
-    treeVBox.addElement(
-        "ProjectRootHeader",
-        Sizing::Grow(),
-        Sizing::Fixed(ImGui::GetFrameHeight()),
-        [this, project](Clay_BoundingBox r, bool isHovered) {
-            std::string rootName =
-                Config::pathToUtf8(project->m_projectRoot.filename());
-            std::string label = rootName;
-            Utils::renderCollapsingHeader(label.c_str(), &m_showRoot, r);
-            if ( ImGui::IsItemHovered() ) {
-                std::string fullPath =
-                    Config::pathToUtf8(project->m_projectRoot);
-                ImGui::SetTooltip("%s", fullPath.c_str());
-            }
-        });
+    treeVBox.addElement("ProjectRootHeader",
+                        Sizing::Grow(),
+                        Sizing::Fixed(ImGui::GetFrameHeight()),
+                        [this, project](Clay_BoundingBox r, bool isHovered) {
+                            std::string rootName = Config::pathToUtf8(
+                                project->m_projectRoot.filename());
+                            Utils::renderScrollingCollapsingHeader(
+                                "ProjectRootHeader", rootName, &m_showRoot, r);
+                            if ( ImGui::IsItemHovered() ) {
+                                std::string fullPath =
+                                    Config::pathToUtf8(project->m_projectRoot);
+                                ImGui::SetTooltip("%s", fullPath.c_str());
+                            }
+                        });
 
     if ( m_showRoot ) {
         treeVBox.addElement(
@@ -183,9 +182,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                                         audio.m_id,
                                         audio.m_id,
                                         audio.m_type == AudioTrackType::Main
-                                             ? AudioTrackControllerUI::
+                                            ? AudioTrackControllerUI::
                                                   TrackType::Main
-                                             : AudioTrackControllerUI::
+                                            : AudioTrackControllerUI::
                                                   TrackType::Effect);
                                     break;
                                 }
