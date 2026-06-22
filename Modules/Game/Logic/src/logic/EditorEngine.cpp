@@ -1166,10 +1166,24 @@ void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
     m_clipboard.set(std::move(items), sourceContext, isCut);
 }
 
+/// @brief 更新编辑器级 Timeline 剪贴板。
+void EditorEngine::setTimelineClipboard(
+    std::vector<TimelineClipboardItem> items,
+    const SessionContext* sourceContext, bool isCut)
+{
+    m_clipboard.setTimelines(std::move(items), sourceContext, isCut);
+}
+
 /// @brief 获取编辑器级剪贴板副本。
 std::vector<ClipboardItem> EditorEngine::getClipboard() const
 {
     return m_clipboard.get();
+}
+
+/// @brief 获取编辑器级 Timeline 剪贴板副本。
+std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard() const
+{
+    return m_clipboard.getTimelines();
 }
 
 /// @brief 判断当前剪贴板是否为指定会话的剪切内容。

@@ -50,6 +50,21 @@ struct ClipboardItem {
     bool hasBeatPositions{ false };        ///< 是否已记录可用于按分拍粘贴的位置
 };
 
+/// @brief Timeline 事件剪贴板条目。
+struct TimelineClipboardItem {
+    /// @brief 复制的 Timeline 组件数据。
+    TimelineComponent timeline;
+
+    /// @brief 相对剪贴板锚点时间，单位秒。
+    double relativeTime{ 0.0 };
+
+    /// @brief 相对剪贴板锚点的连续 beat 偏移。
+    double relativeBeat{ 0.0 };
+
+    /// @brief 是否已记录可用于按分拍粘贴的位置。
+    bool hasBeatPosition{ false };
+};
+
 /// @brief 提供给渲染系统的拖动中实体列表视图。
 struct DragRenderPinnedEntities {
     /// @brief 当前拖动手势中需要绕过静态可见性索引补充渲染的实体列表。

@@ -1149,158 +1149,213 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
 /// @warning 低频编辑路径：用户触发粘贴时执行，可能批量创建实体。
 void ActionController::handleCommand(const CmdPaste& cmd)
 {
-    auto clipboard = EditorEngine::instance().getClipboard();
-    if ( clipboard.empty() ) {
+    auto clipboard         = EditorEngine::instance().getClipboard();
+    auto timelineClipboard = EditorEngine::instance().getTimelineClipboard();
+    if ( clipboard.empty() && timelineClipboard.empty() ) {
         clipboard = m_ctx.clipboard;
     }
-    if ( clipboard.empty() ) return;
-
-    // 计算基准点 (目前取所有选中音符的最小时间)
-    double minTime = clipboard[0].note.m_timestamp;
-    for ( const auto& item : clipboard ) {
-        minTime = std::min(minTime, item.note.m_timestamp);
-    }
-    double minBeat = clipboard[0].startBeat;
-    for ( const auto& item : clipboard ) {
-        minBeat = std::min(minBeat, item.startBeat);
-    }
-
-    std::vector<BatchNoteAction::Entry> entries;
-    /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
-    std::vector<entt::entity> pastedEntities;
-    pastedEntities.reserve(clipboard.size());
-    /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
-    const bool selectPastedObjects = cmd.m_selectPastedObjects;
+    if ( clipboard.empty() && timelineClipboard.empty() ) return;
 
     // 先预计算粘贴目标，确保不会在负时间创建新物件。
     double pasteTime = m_ctx.animateTime;
 
-    double     timeOffset = pasteTime - minTime;
-    const bool pasteByBeat =
-        m_ctx.lastConfig.settings.copyPasteTimeBasis ==
-            Config::CopyPasteTimeBasis::Beat &&
-        std::all_of(clipboard.begin(), clipboard.end(), [](const auto& item) {
-            return item.hasBeatPositions;
-        });
-    const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
-    auto         pasteBeatTimeline =
-        pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                    : ClipboardBeatTimeline{};
-    const double pasteBeat =
-        pasteByBeat ? clipboardTimeToBeat(
-                          pasteBeatTimeline, pasteTime, pasteFallbackBpm)
-                    : 0.0;
+    if ( !clipboard.empty() ) {
+        // 计算基准点 (目前取所有选中音符的最小时间)
+        double minTime = clipboard[0].note.m_timestamp;
+        for ( const auto& item : clipboard ) {
+            minTime = std::min(minTime, item.note.m_timestamp);
+        }
+        double minBeat = clipboard[0].startBeat;
+        for ( const auto& item : clipboard ) {
+            minBeat = std::min(minBeat, item.startBeat);
+        }
 
-    int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
-    std::vector<NoteComponent> notesToPaste;
-    notesToPaste.reserve(clipboard.size());
-    for ( const auto& item : clipboard ) {
-        auto newNote = item.note;
-        if ( pasteByBeat ) {
-            applyBeatPastePosition(newNote,
-                                   item,
-                                   pasteBeatTimeline,
-                                   pasteFallbackBpm,
-                                   pasteBeat,
-                                   minBeat);
-        } else {
-            newNote.m_timestamp = item.note.m_timestamp + timeOffset;
+        std::vector<BatchNoteAction::Entry> entries;
+        /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
+        std::vector<entt::entity> pastedEntities;
+        pastedEntities.reserve(clipboard.size());
+        /// @brief 是否在粘贴完成后只保留新粘贴物件为选中状态。
+        const bool selectPastedObjects = cmd.m_selectPastedObjects;
 
-            // 折线物件：同步偏移所有子物件的时间戳
-            if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
-                for ( auto& sub : newNote.m_subNotes ) {
-                    sub.timestamp += timeOffset;
+        double     timeOffset = pasteTime - minTime;
+        const bool pasteByBeat =
+            m_ctx.lastConfig.settings.copyPasteTimeBasis ==
+                Config::CopyPasteTimeBasis::Beat &&
+            std::all_of(clipboard.begin(),
+                        clipboard.end(),
+                        [](const auto& item) { return item.hasBeatPositions; });
+        const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
+        auto         pasteBeatTimeline =
+            pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
+                        : ClipboardBeatTimeline{};
+        const double pasteBeat =
+            pasteByBeat ? clipboardTimeToBeat(
+                              pasteBeatTimeline, pasteTime, pasteFallbackBpm)
+                        : 0.0;
+
+        int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
+        std::vector<NoteComponent> notesToPaste;
+        notesToPaste.reserve(clipboard.size());
+        for ( const auto& item : clipboard ) {
+            auto newNote = item.note;
+            if ( pasteByBeat ) {
+                applyBeatPastePosition(newNote,
+                                       item,
+                                       pasteBeatTimeline,
+                                       pasteFallbackBpm,
+                                       pasteBeat,
+                                       minBeat);
+            } else {
+                newNote.m_timestamp = item.note.m_timestamp + timeOffset;
+
+                // 折线物件：同步偏移所有子物件的时间戳
+                if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
+                    for ( auto& sub : newNote.m_subNotes ) {
+                        sub.timestamp += timeOffset;
+                    }
                 }
             }
+
+            if ( cmd.m_mirrored ) {
+                mirrorNoteComponent(newNote, mirrorTrackCount);
+            }
+
+            if ( !isPlaceableCreatedNote(newNote) ) {
+                XWARN("Paste blocked before 0s: target time={:.3f}",
+                      newNote.m_timestamp);
+                return;
+            }
+
+            notesToPaste.push_back(newNote);
         }
 
-        if ( cmd.m_mirrored ) {
-            mirrorNoteComponent(newNote, mirrorTrackCount);
-        }
+        // 如果之前有 Cut，需要删除那些 Cut 的物件。
+        auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
+        bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
+        if ( isLocalCut ) {
+            for ( auto entity : view ) {
+                auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
+                if ( ic.isCut ) {
+                    if ( !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
+                        continue;
+                    }
 
-        if ( !isPlaceableCreatedNote(newNote) ) {
-            XWARN("Paste blocked before 0s: target time={:.3f}",
-                  newNote.m_timestamp);
-            return;
-        }
+                    auto oldNote =
+                        m_ctx.noteRegistry.get<NoteComponent>(entity);
+                    entries.push_back({ entity, oldNote, std::nullopt });
 
-        notesToPaste.push_back(newNote);
-    }
-
-    // 如果之前有 Cut，需要删除那些 Cut 的物件。
-    auto view       = m_ctx.noteRegistry.view<InteractionComponent>();
-    bool isLocalCut = EditorEngine::instance().isClipboardCutFrom(&m_ctx);
-    if ( isLocalCut ) {
-        for ( auto entity : view ) {
-            auto& ic = m_ctx.noteRegistry.get<InteractionComponent>(entity);
-            if ( ic.isCut ) {
-                if ( !m_ctx.noteRegistry.all_of<NoteComponent>(entity) ) {
-                    continue;
-                }
-
-                auto oldNote = m_ctx.noteRegistry.get<NoteComponent>(entity);
-                entries.push_back({ entity, oldNote, std::nullopt });
-
-                // 同时删除 Polyline 的子物件实体
-                if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
-                     !oldNote.m_subNotes.empty() ) {
-                    for ( auto subEnt :
-                          m_ctx.noteRegistry.view<NoteComponent>() ) {
-                        const auto& subNC =
-                            m_ctx.noteRegistry.get<NoteComponent>(subEnt);
-                        if ( subNC.m_isSubNote &&
-                             subNC.m_parentPolyline == entity ) {
-                            entries.push_back({ subEnt, subNC, std::nullopt });
+                    // 同时删除 Polyline 的子物件实体
+                    if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
+                         !oldNote.m_subNotes.empty() ) {
+                        for ( auto subEnt :
+                              m_ctx.noteRegistry.view<NoteComponent>() ) {
+                            const auto& subNC =
+                                m_ctx.noteRegistry.get<NoteComponent>(subEnt);
+                            if ( subNC.m_isSubNote &&
+                                 subNC.m_parentPolyline == entity ) {
+                                entries.push_back(
+                                    { subEnt, subNC, std::nullopt });
+                            }
                         }
                     }
                 }
             }
+        } else {
+            EditorEngine::instance().consumeCrossSessionCutClipboard(&m_ctx);
+            for ( auto entity : view ) {
+                m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut =
+                    false;
+            }
         }
-    } else {
-        EditorEngine::instance().consumeCrossSessionCutClipboard(&m_ctx);
+
+        for ( const auto& newNote : notesToPaste ) {
+            // 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
+            entt::entity pastedEntity = m_ctx.noteRegistry.create();
+            pastedEntities.push_back(pastedEntity);
+            entries.push_back({ pastedEntity, std::nullopt, newNote });
+        }
+
+        auto action = std::make_unique<BatchNoteAction>(
+            std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+
+        if ( selectPastedObjects ) {
+            m_ctx.isSelecting         = false;
+            m_ctx.hasMarqueeSelection = false;
+            m_ctx.marqueeIsAdditive   = false;
+            m_ctx.marqueeBoxes.clear();
+            // 先清空所有旧选择，再只选中本次粘贴创建出的实体。
+            for ( auto entity :
+                  m_ctx.noteRegistry.view<InteractionComponent>() ) {
+                m_ctx.noteRegistry.get<InteractionComponent>(entity)
+                    .isSelected = false;
+            }
+
+            for ( auto entity : pastedEntities ) {
+                if ( !m_ctx.noteRegistry.valid(entity) ||
+                     !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) )
+                    continue;
+
+                m_ctx.noteRegistry.get<InteractionComponent>(entity)
+                    .isSelected = true;
+            }
+        }
+
+        // 清除剪切状态
         for ( auto entity : view ) {
             m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
         }
-    }
-
-    for ( const auto& newNote : notesToPaste ) {
-        /// @brief 为新粘贴物件预分配实体，避免执行后再从撤销栈动作反查实体。
-        entt::entity pastedEntity = m_ctx.noteRegistry.create();
-        pastedEntities.push_back(pastedEntity);
-        entries.push_back({ pastedEntity, std::nullopt, newNote });
-    }
-
-    auto action = std::make_unique<BatchNoteAction>(
-        std::move(entries), cmd.m_mirrored ? "Mirror Paste" : "Paste");
-    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
-
-    if ( selectPastedObjects ) {
-        m_ctx.isSelecting         = false;
-        m_ctx.hasMarqueeSelection = false;
-        m_ctx.marqueeIsAdditive   = false;
-        m_ctx.marqueeBoxes.clear();
-        // 先清空所有旧选择，再只选中本次粘贴创建出的实体。
-        for ( auto entity : m_ctx.noteRegistry.view<InteractionComponent>() ) {
-            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
-                false;
+        if ( isLocalCut ) {
+            EditorEngine::instance().markCutClipboardConsumed();
         }
+    }
 
-        for ( auto entity : pastedEntities ) {
-            if ( !m_ctx.noteRegistry.valid(entity) ||
-                 !m_ctx.noteRegistry.all_of<InteractionComponent>(entity) )
+    if ( !timelineClipboard.empty() ) {
+        const bool pasteByBeat =
+            m_ctx.lastConfig.settings.copyPasteTimeBasis ==
+                Config::CopyPasteTimeBasis::Beat &&
+            std::all_of(timelineClipboard.begin(),
+                        timelineClipboard.end(),
+                        [](const auto& item) { return item.hasBeatPosition; });
+        const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
+        auto         pasteBeatTimeline =
+            pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
+                        : ClipboardBeatTimeline{};
+        const double pasteBeat =
+            pasteByBeat ? clipboardTimeToBeat(
+                              pasteBeatTimeline, pasteTime, pasteFallbackBpm)
+                        : 0.0;
+
+        std::vector<BatchTimelineAction::Entry> timelineEntries;
+        timelineEntries.reserve(timelineClipboard.size());
+        for ( const auto& item : timelineClipboard ) {
+            auto   newTimeline = item.timeline;
+            double targetTime  = pasteTime + item.relativeTime;
+            if ( pasteByBeat ) {
+                targetTime = clipboardBeatToTime(pasteBeatTimeline,
+                                                 pasteBeat + item.relativeBeat,
+                                                 pasteFallbackBpm);
+            }
+            if ( !std::isfinite(targetTime) ||
+                 !std::isfinite(newTimeline.m_value) ) {
                 continue;
+            }
+            if ( newTimeline.m_effect == ::MMM::TimingEffect::BPM &&
+                 newTimeline.m_value <= 0.0 ) {
+                continue;
+            }
 
-            m_ctx.noteRegistry.get<InteractionComponent>(entity).isSelected =
-                true;
+            newTimeline.m_timestamp = std::max(0.0, targetTime);
+            timelineEntries.push_back(
+                { entt::null, std::nullopt, newTimeline });
         }
-    }
 
-    // 清除剪切状态
-    for ( auto entity : view ) {
-        m_ctx.noteRegistry.get<InteractionComponent>(entity).isCut = false;
-    }
-    if ( isLocalCut ) {
-        EditorEngine::instance().markCutClipboardConsumed();
+        if ( !timelineEntries.empty() ) {
+            auto action = std::make_unique<BatchTimelineAction>(
+                std::move(timelineEntries), "Paste");
+            m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+            m_ctx.isBpmEventsDirty = true;
+        }
     }
 }
 

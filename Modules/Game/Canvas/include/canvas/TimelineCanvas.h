@@ -228,11 +228,11 @@ private:
     /// @brief 提交当前 Timeline 画笔右键擦除目标。
     void commitTimingEraseTargets();
 
-    /// @brief 将当前选中的 Timing 复制到 Timeline 本地剪贴板。
+    /// @brief 将当前选中的 Timing 复制到编辑器级 Timeline 剪贴板。
     /// @param cut 是否在复制后删除原 Timing。
     void copySelectedTimingEvents(bool cut);
 
-    /// @brief 将 Timeline 本地剪贴板粘贴到指定锚点时间。
+    /// @brief 将编辑器级 Timeline 剪贴板粘贴到指定锚点时间。
     /// @param anchorTime 粘贴锚点时间，单位秒。
     void pasteTimingClipboard(double anchorTime);
 
@@ -397,7 +397,7 @@ private:
     /// @brief Timeline 当前选中的 Timing 实体集合。
     std::unordered_set<entt::entity> m_selectedTimingEntities;
 
-    /// @brief Timeline 本地 Timing 剪贴板。
+    /// @brief Timeline 本地 Timing 剪贴板镜像，用于兼容现有交互状态。
     std::vector<TimelineClipboardEntry> m_timingClipboard;
 
     /// @brief 是否正在拖动 Timeline Timing。

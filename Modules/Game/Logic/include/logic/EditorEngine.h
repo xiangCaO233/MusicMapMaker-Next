@@ -126,8 +126,15 @@ public:
     void setClipboard(std::vector<ClipboardItem> items,
                       const SessionContext* sourceContext, bool isCut);
 
+    /// @brief 更新编辑器级 Timeline 剪贴板。
+    void setTimelineClipboard(std::vector<TimelineClipboardItem> items,
+                              const SessionContext* sourceContext, bool isCut);
+
     /// @brief 获取编辑器级剪贴板副本。
     std::vector<ClipboardItem> getClipboard() const;
+
+    /// @brief 获取编辑器级 Timeline 剪贴板副本。
+    std::vector<TimelineClipboardItem> getTimelineClipboard() const;
 
     /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
     bool isClipboardCutFrom(const SessionContext* context) const;

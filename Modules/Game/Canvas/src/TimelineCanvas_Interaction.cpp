@@ -4,6 +4,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/EditorEngine.h"
 #include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
@@ -897,12 +898,14 @@ void TimelineCanvas::commitTimingEraseTargets()
     }
 }
 
-/// @brief 将当前选中的 Timing 复制到 Timeline 本地剪贴板。
+/// @brief 将当前选中的 Timing 复制到编辑器级 Timeline 剪贴板。
 /// @param cut 是否在复制后删除原 Timing。
 void TimelineCanvas::copySelectedTimingEvents(bool cut)
 {
     m_timingClipboard.clear();
     if ( m_selectedTimingEntities.empty() ) {
+        Logic::EditorEngine::instance().setTimelineClipboard(
+            {}, nullptr, false);
         return;
     }
 
@@ -915,6 +918,8 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         }
     }
     if ( selectedTargets.empty() ) {
+        Logic::EditorEngine::instance().setTimelineClipboard(
+            {}, nullptr, false);
         return;
     }
 
@@ -934,6 +939,8 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
     const double anchorBeat =
         timelineClipboardTimeToBeat(beatTimeline, anchorTime, fallbackBpm);
     m_timingClipboard.reserve(selectedTargets.size());
+    std::vector<Logic::TimelineClipboardItem> sharedClipboard;
+    sharedClipboard.reserve(selectedTargets.size());
     for ( const auto& target : selectedTargets ) {
         TimelineClipboardEntry entry;
         entry.relativeTime    = target.time - anchorTime;
@@ -944,30 +951,43 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         entry.value           = target.value;
         entry.hasBeatPosition = true;
         m_timingClipboard.push_back(entry);
+
+        Logic::TimelineClipboardItem sharedEntry;
+        sharedEntry.timeline        = Logic::TimelineComponent{ target.time,
+                                                                target.effect,
+                                                                target.value };
+        sharedEntry.relativeTime    = entry.relativeTime;
+        sharedEntry.relativeBeat    = entry.relativeBeat;
+        sharedEntry.hasBeatPosition = entry.hasBeatPosition;
+        sharedClipboard.push_back(std::move(sharedEntry));
     }
+    Logic::EditorEngine::instance().setTimelineClipboard(
+        std::move(sharedClipboard), nullptr, false);
 
     if ( cut ) {
         deleteSelectedTimingEvents();
     }
 }
 
-/// @brief 将 Timeline 本地剪贴板粘贴到指定锚点时间。
+/// @brief 将编辑器级 Timeline 剪贴板粘贴到指定锚点时间。
 /// @param anchorTime 粘贴锚点时间，单位秒。
 void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 {
-    if ( m_timingClipboard.empty() ) {
+    auto timingClipboard =
+        Logic::EditorEngine::instance().getTimelineClipboard();
+    if ( timingClipboard.empty() ) {
         return;
     }
 
     m_selectedTimingEntities.clear();
     Logic::CmdCreateTimelineEvents batch;
-    batch.events.reserve(m_timingClipboard.size());
+    batch.events.reserve(timingClipboard.size());
     const bool pasteByBeat =
         Config::AppConfig::instance().getEditorSettings().copyPasteTimeBasis ==
             Config::CopyPasteTimeBasis::Beat &&
         m_currentSnapshot &&
-        std::all_of(m_timingClipboard.begin(),
-                    m_timingClipboard.end(),
+        std::all_of(timingClipboard.begin(),
+                    timingClipboard.end(),
                     [](const auto& entry) { return entry.hasBeatPosition; });
     const double fallbackBpm =
         m_currentSnapshot ? timelineClipboardFallbackBpm(*m_currentSnapshot)
@@ -979,14 +999,15 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
         pasteByBeat
             ? timelineClipboardTimeToBeat(beatTimeline, anchorTime, fallbackBpm)
             : 0.0;
-    for ( const auto& entry : m_timingClipboard ) {
+    for ( const auto& entry : timingClipboard ) {
         double targetTime = anchorTime + entry.relativeTime;
         if ( pasteByBeat ) {
             targetTime = timelineClipboardBeatToTime(
                 beatTimeline, anchorBeat + entry.relativeBeat, fallbackBpm);
         }
-        batch.events.push_back(
-            { std::max(0.0, targetTime), entry.effect, entry.value });
+        batch.events.push_back({ std::max(0.0, targetTime),
+                                 entry.timeline.m_effect,
+                                 entry.timeline.m_value });
     }
     if ( !batch.events.empty() ) {
         Event::EventBus::instance().publish(
