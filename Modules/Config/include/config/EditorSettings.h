@@ -656,6 +656,12 @@ struct EditorSettings {
     /// @brief 音频播放后端偏好。
     AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
 
+    /// @brief SDL 音频后端的输出设备名称，空字符串表示默认设备。
+    std::string sdlAudioOutputDeviceName;
+
+    /// @brief OpenAL 音频后端的输出设备名称，空字符串表示默认设备。
+    std::string openALAudioOutputDeviceName;
+
     /// @brief OpenAL 后端空间化输出配置。
     OpenALSpatialConfig openALSpatialConfig;
 
@@ -796,6 +802,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "language", c.language },
         { "frameLimit", c.frameLimit },
         { "audioPlaybackBackend", c.audioPlaybackBackend },
+        { "sdlAudioOutputDeviceName", c.sdlAudioOutputDeviceName },
+        { "openALAudioOutputDeviceName", c.openALAudioOutputDeviceName },
         { "openALSpatialConfig", c.openALSpatialConfig },
         { "renderProfileLogging", c.renderProfileLogging },
         { "autoUploadPgoProfiles", c.autoUploadPgoProfiles },
@@ -865,6 +873,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
                                     : FrameLimitPreference::Refresh2x);
     c.audioPlaybackBackend =
         j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
+    c.sdlAudioOutputDeviceName =
+        j.value("sdlAudioOutputDeviceName", std::string());
+    c.openALAudioOutputDeviceName =
+        j.value("openALAudioOutputDeviceName", std::string());
     c.openALSpatialConfig =
         j.value("openALSpatialConfig", OpenALSpatialConfig());
     c.renderProfileLogging         = j.value("renderProfileLogging", false);
