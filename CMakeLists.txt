@@ -30,14 +30,13 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
 	unset(_MMM_RELWITHDBGINFO_INDEX)
 endif()
 
-set(APPVER "0.4.5")
+set(APPVER "0.4.6")
 
 if(APPLE)
 	project(MusicMapMaker-Next VERSION ${APPVER} LANGUAGES C CXX OBJC OBJCXX)
 else()
 	project(MusicMapMaker-Next VERSION ${APPVER} LANGUAGES C CXX)
 endif()
-
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "Build type" FORCE)
@@ -55,7 +54,9 @@ endif()
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
 	if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
-		message(FATAL_ERROR "VCPKG_ROOT environment variable is required when building with MSVC.")
+		message(FATAL_ERROR
+			"VCPKG_ROOT environment variable is required when building with MSVC."
+		)
 	endif()
 	file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
 	# 强制 MSVC 使用静态运行时 (/MT)
