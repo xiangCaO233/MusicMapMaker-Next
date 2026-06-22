@@ -4,6 +4,7 @@ set -euo pipefail
 git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
 git checkout --force -B ci origin/ci
 git reset --hard origin/ci
+git submodule update --init --recursive
 git lfs pull
 
 rm -rf build_gcc
