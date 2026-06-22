@@ -1,0 +1,64 @@
+name: Self Hosted CI Runner
+
+on:
+  push:
+    branches: [ci]
+  workflow_dispatch:
+
+concurrency:
+  group: self-hosted-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mmm-windows-ci:
+    runs-on: [self-hosted, win10-x64]
+
+    steps:
+      - name: ci->Sync Repository
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Invoke-Native {
+            param(
+              [Parameter(Mandatory = $true)]
+              [string]$FilePath,
+
+              [Parameter(ValueFromRemainingArguments = $true)]
+              [string[]]$Arguments
+            )
+
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          Set-Location C:/ci/c_cpp/MusicMapMaker-Next
+          Invoke-Native git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
+          Invoke-Native git clean -fd -- scripts/ci
+          Invoke-Native git checkout --force -B ci origin/ci
+          Invoke-Native git reset --hard origin/ci
+          Invoke-Native git lfs pull
+
+      - name: ci->MSVC Build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location C:/dev-shells
+          . ./enter-vs2026.ps1
+          Set-Location C:/ci/c_cpp/MusicMapMaker-Next
+          & ./scripts/ci/msvc-build.ps1
+
+      - name: ci->MinGW UCRT GCC Build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:\msys64\msys2_shell.cmd -ucrt64 -shell bash -defterm -no-start -here -c "cd /c/ci/c_cpp/MusicMapMaker-Next && bash scripts/ci/mingw-ucrt64-build.sh"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: ci->MinGW Clang Build
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & C:\msys64\msys2_shell.cmd -clang64 -shell bash -defterm -no-start -here -c "cd /c/ci/c_cpp/MusicMapMaker-Next && bash scripts/ci/mingw-clang64-build.sh"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
