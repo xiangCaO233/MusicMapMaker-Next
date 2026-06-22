@@ -33,6 +33,9 @@ struct PackageCandidateFile {
 
     /// @brief 当前文件被多少个已选中谱面依赖；大于 0 时不可取消。
     uint32_t requiredBySelectedBeatmaps{ 0 };
+
+    /// @brief 谱面是否含 Flick/折线，决定是否显示 MCZ 上架 mode_ext 选项。
+    bool hasStoreModeExtEligibleElements{ false };
 };
 
 /// @brief 打包转换前临时编辑的目标谱面元数据。

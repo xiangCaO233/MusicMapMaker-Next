@@ -6,6 +6,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/imguivk/VKContext.h"
 #include "imgui.h"
@@ -248,11 +249,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
 
-    if ( viewport->PlatformHandle ) {
-        if ( GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle ) {
-            m_isMaximized =
-                glfwGetWindowAttrib(nativeWin, GLFW_MAXIMIZED) == GLFW_TRUE;
-        }
+    if ( auto* nativeWindow =
+             sourceManager ? sourceManager->getNativeWindow() : nullptr ) {
+        m_isMaximized = nativeWindow->isWindowMaximized();
     }
 
     auto& editorSettings = engine.getEditorConfig().settings;

@@ -59,6 +59,20 @@ constexpr double MAIN_AUDIO_SYNC_TIME_EPSILON = 1e-6;
 /// @brief 同步播放中 follower 本地插值领先 active 时允许的回退容差。
 constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 
+/// @brief 发布项目或谱面包打开失败事件。
+/// @param path 尝试打开的路径。
+/// @param message 失败原因。
+/// @param isPackage 是否为谱面包打开失败。
+void publishProjectOpenFailed(const std::filesystem::path& path,
+                              const std::string& message, bool isPackage)
+{
+    Event::ProjectOpenFailedEvent event;
+    event.m_projectPath  = Config::pathToUtf8(path);
+    event.m_errorMessage = message;
+    event.m_isPackage    = isPackage;
+    Event::EventBus::instance().publish(event);
+}
+
 /// @brief 为同主音轨后台跟随谱面推进动画时间上的打击特效事件。
 /// @warning 逻辑热路径：同主音轨同步时调用；普通路径只线性消费已排序
 /// hitEvents，只有音符变更后的脏分支允许重建事件序列。
@@ -919,10 +933,13 @@ void EditorEngine::openProject(
     if ( !creationOptions &&
          (!std::filesystem::exists(actualProjectPath) ||
           !std::filesystem::is_directory(actualProjectPath)) ) {
+        const std::string message =
+            "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
             "Failed to open project: Path does not exist or is not a "
             "directory: {}",
             Config::pathToUtf8(actualProjectPath));
+        publishProjectOpenFailed(projectPath, message, false);
         return;
     }
 
@@ -947,6 +964,7 @@ void EditorEngine::openTemporaryProjectPackage(
             packagePath);
     if ( !prepared.m_success ) {
         XERROR("Temporary package open failed: {}", prepared.m_errorMessage);
+        publishProjectOpenFailed(packagePath, prepared.m_errorMessage, true);
         return;
     }
 
@@ -1335,7 +1353,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     }
 
     // 主画布滚轮按 cameraId 路由，以允许同主音轨后台画布在 hover
-    // 状态下接收滚动，但不同主音轨画布不会被滚轮同步或切换。
+    // 状态下接收滚动，但不抢占当前活跃画布焦点。
     if ( std::holds_alternative<CmdScroll>(cmd) ) {
         const auto& scroll = std::get<CmdScroll>(cmd);
         if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
@@ -1353,9 +1371,6 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                 return;
             }
 
-            if ( targetIndex != activeIndex ) {
-                setActiveSessionIndex(targetIndex);
-            }
             sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
                 std::move(cmd));
             return;
@@ -1601,19 +1616,37 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
 
             auto& ctx = entry.session->getContextMutable();
 
+            const double sourceAnimateTarget =
+                sourceCtx.currentTime +
+                m_editorConfig.visual.getEffectiveVisualOffset();
+            const double sourceResetTime     = sourceCtx.isPlaying
+                                                   ? sourceCtx.animateTime
+                                                   : sourceAnimateTarget;
             const bool   wasFollowing        = ctx.isMainAudioSyncFollower;
             const double previousAnimateTime = ctx.animateTime;
             const bool   shouldClearHitEffects =
                 wasFollowing != sourceCtx.isPlaying ||
-                sourceCtx.animateTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
+                sourceResetTime + MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON <
                     previousAnimateTime ||
-                std::abs(sourceCtx.animateTime - previousAnimateTime) > 0.2;
+                std::abs(sourceResetTime - previousAnimateTime) > 0.2;
 
-            ctx.currentTime       = sourceCtx.currentTime;
-            ctx.animateTime       = sourceCtx.animateTime;
-            ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
-            ctx.animateTimeAnimationActive =
-                sourceCtx.animateTimeAnimationActive;
+            ctx.currentTime = sourceCtx.currentTime;
+            if ( sourceCtx.isPlaying ) {
+                ctx.animateTime       = sourceCtx.animateTime;
+                ctx.animateTimeTarget = sourceCtx.animateTimeTarget;
+                ctx.animateTimeAnimationActive =
+                    sourceCtx.animateTimeAnimationActive;
+            } else if ( std::isfinite(ctx.animateTime) &&
+                        std::isfinite(sourceAnimateTarget) ) {
+                ctx.animateTimeTarget = sourceAnimateTarget;
+                ctx.animateTimeAnimationActive =
+                    std::abs(ctx.animateTimeTarget - ctx.animateTime) >
+                    MAIN_AUDIO_SYNC_TIME_EPSILON;
+            } else {
+                ctx.animateTime                = sourceAnimateTarget;
+                ctx.animateTimeTarget          = sourceAnimateTarget;
+                ctx.animateTimeAnimationActive = false;
+            }
             ctx.animatedTimelineZoom = sourceCtx.animatedTimelineZoom;
             ctx.animatedTimelineZoomTarget =
                 sourceCtx.animatedTimelineZoomTarget;
@@ -2455,21 +2488,63 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 void EditorEngine::handleSaveTemporaryProject(
     const CmdSaveTemporaryProject& cmd)
 {
+    ProjectController::SaveTemporaryProjectResult result;
     {
         std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+
+        if ( const auto* currentProject =
+                 ProjectController::instance().currentProject() ) {
+            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            for ( auto& entry : sessions ) {
+                if ( entry.isLogoPlaceholder || !entry.session ) {
+                    continue;
+                }
+
+                const auto& ctx = entry.session->getContext();
+                if ( ctx.currentBeatmap ) {
+                    normalizeBeatmapMetadataPathsForProject(*ctx.currentBeatmap,
+                                                            *currentProject);
+                }
+            }
+        }
+
         captureProjectWorkspaceState();
+        result = ProjectController::instance().saveTemporaryProjectTo(
+            Config::utf8ToPath(cmd.destinationPath));
+
+        if ( result.m_success ) {
+            if ( const auto* currentProject =
+                     ProjectController::instance().currentProject() ) {
+                auto& sessions = m_sessionRegistry.entriesUnsafe();
+                for ( auto& entry : sessions ) {
+                    if ( entry.isLogoPlaceholder || !entry.session ) {
+                        entry.beatmapPathKey.clear();
+                        continue;
+                    }
+
+                    const auto& ctx = entry.session->getContext();
+                    if ( !ctx.currentBeatmap ) {
+                        entry.beatmapPathKey.clear();
+                        continue;
+                    }
+
+                    normalizeBeatmapMetadataPathsForProject(*ctx.currentBeatmap,
+                                                            *currentProject);
+                    entry.beatmapPathKey = makeBeatmapPathKey(
+                        currentProject,
+                        ctx.currentBeatmap->m_baseMapMetadata.map_path);
+                }
+            }
+            refreshMainAudioSyncKeysUnsafe();
+            captureProjectWorkspaceState();
+            ProjectController::instance().saveProject();
+        }
     }
-    auto result = ProjectController::instance().saveTemporaryProjectTo(
-        Config::utf8ToPath(cmd.destinationPath));
 
     Event::TemporaryProjectSaveResultEvent event;
     event.m_success          = result.m_success;
     event.m_savedProjectPath = Config::pathToUtf8(result.m_savedProjectPath);
     event.m_errorMessage     = result.m_errorMessage;
-
-    if ( result.m_success ) {
-        openProject(result.m_savedProjectPath, std::nullopt);
-    }
 
     Event::EventBus::instance().publish(event);
 }

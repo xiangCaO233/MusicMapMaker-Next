@@ -1,11 +1,13 @@
 #pragma once
 
+#include "audio/AudioManager.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -187,6 +189,17 @@ private:
     bool m_showPermanentSFX   = true;
     bool m_showMainTracks     = true;
     bool m_showProjectSFX     = true;
+
+    /// @brief 当前后端缓存的输出设备列表。
+    std::vector<Audio::AudioOutputDevice> m_cachedOutputDevices;
+
+    /// @brief 输出设备缓存对应的播放后端。
+    Config::AudioPlaybackBackend m_cachedOutputDeviceBackend{
+        Config::AudioPlaybackBackend::SDL
+    };
+
+    /// @brief 输出设备列表是否需要重新枚举。
+    bool m_outputDevicesDirty{ true };
 
     // --- 音轨管理相关 ---
     std::string    m_manageTrackId;

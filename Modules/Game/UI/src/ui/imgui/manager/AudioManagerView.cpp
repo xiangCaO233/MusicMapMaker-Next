@@ -227,12 +227,13 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font             = snapshot.fileManagerFont
-                                   ? snapshot.fileManagerFont
-                                   : (snapshot.contentFont ? snapshot.contentFont
-                                                           : snapshot.fallbackFont);
+    ImFont* font = snapshot.fileManagerFont
+                       ? snapshot.fileManagerFont
+                       : (snapshot.contentFont ? snapshot.contentFont
+                                               : snapshot.fallbackFont);
 
-    const std::array<const char*, 3> controlLabels{
+    const std::array<const char*, 4> controlLabels{
+        TR("ui.audio_manager.output_device").data(),
         TR("ui.audio_manager.global_volume").data(),
         TR("ui.audio_manager.bgm_gain").data(),
         TR("ui.audio_manager.sfx_gain").data()
@@ -271,7 +272,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float       listHeight = 0.0f;
@@ -312,7 +313,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
 
     float footerH = cache.footerHeaderHeight;
     if ( input.showGlobalSettings ) {
-        footerH += 3.0f * controlRowH + 3.0f * footerSpacing;
+        footerH += 4.0f * controlRowH + 4.0f * footerSpacing;
     }
     footerH += importButtonH + importButtonGap;
     cache.globalControlsHeight = footerH - (importButtonH + importButtonGap);
@@ -395,6 +396,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto        toLayoutPixels = [](float value) {
         return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
     };
+    const auto playbackBackend = audioManager.getPlaybackBackend();
+    if ( m_outputDevicesDirty ||
+         m_cachedOutputDeviceBackend != playbackBackend ) {
+        m_cachedOutputDevices       = audioManager.listOutputDevices();
+        m_cachedOutputDeviceBackend = playbackBackend;
+        m_outputDevicesDirty        = false;
+    }
 
     CLayVBox rootVBox;
 
@@ -538,6 +546,91 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          Sizing::Fixed(layoutMetrics.controlRowHeight));
     };
 
+    auto addDeviceComboRow = [&](CLayVBox&   parent,
+                                 const char* id,
+                                 const char* label,
+                                 float       labelWidth) {
+        CLayHBox& row = this->getRow(rowIndex++);
+        row.clear();
+        row.setPadding(0, 0, 0, 0)
+            .setSpacing(toLayoutPixels(layoutMetrics.controlColumnGap))
+            .setAlignment(Alignment::Center());
+
+        CLayHBox& leftBox = this->getSubHBox(subHBoxIndex++);
+        leftBox.clear();
+        leftBox.setSpacing(toLayoutPixels(layoutMetrics.labelColumnGap))
+            .setAlignment(Alignment::Center());
+        leftBox.addElement(std::string(id) + "_lbl",
+                           Sizing::Fixed(ImGui::CalcTextSize(label).x),
+                           Sizing::Grow(),
+                           [label](Clay_BoundingBox r, bool) {
+                               const float textH = ImGui::CalcTextSize(label).y;
+                               ImGui::SetCursorScreenPos(
+                                   { r.x, r.y + (r.height - textH) * 0.5f });
+                               ImGui::Text("%s", label);
+                           });
+        leftBox.addSpring();
+
+        row.addLayout((std::string(id) + "_left").c_str(),
+                      leftBox,
+                      Sizing::Fixed(labelWidth),
+                      Sizing::Grow());
+
+        CLayHBox& rightBox = this->getSubHBox(subHBoxIndex++);
+        rightBox.clear();
+        rightBox.setAlignment(Alignment::Center());
+        rightBox.addElement(
+            std::string(id) + "_combo",
+            Sizing::Grow(),
+            Sizing::Fixed(layoutMetrics.controlRowHeight),
+            [&, id](Clay_BoundingBox r, bool) {
+                const std::string defaultDeviceLabel =
+                    TR("ui.audio_manager.output_device_default").data();
+                const std::string currentDeviceName =
+                    audioManager.getOutputDeviceName();
+                const std::string previewName = currentDeviceName.empty()
+                                                    ? defaultDeviceLabel
+                                                    : currentDeviceName;
+
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::BeginCombo((std::string("##Combo") + id).c_str(),
+                                       previewName.c_str()) ) {
+                    for ( const auto& device : m_cachedOutputDevices ) {
+                        const std::string optionLabel =
+                            device.isDefault ? defaultDeviceLabel : device.name;
+                        const bool selected = currentDeviceName == device.name;
+                        if ( ImGui::Selectable(optionLabel.c_str(),
+                                               selected) ) {
+                            if ( audioManager.setOutputDeviceName(
+                                     device.name) ) {
+                                m_outputDevicesDirty = true;
+                            }
+                        }
+                        if ( selected ) {
+                            ImGui::SetItemDefaultFocus();
+                        }
+                    }
+                    ImGui::EndCombo();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.audio_manager.output_device_tooltip").data());
+                }
+            });
+
+        row.addLayout((std::string(id) + "_right").c_str(),
+                      rightBox,
+                      Sizing::Grow(),
+                      Sizing::Grow());
+        parent.addLayout((std::string(id) + "_row").c_str(),
+                         row,
+                         Sizing::Grow(),
+                         Sizing::Fixed(layoutMetrics.controlRowHeight));
+    };
+
     // 渲染音轨列表项的辅助函数
     auto renderAudioItem = [&](const AudioResource& audio,
                                bool                 isPermanentEffect = false) {
@@ -561,31 +654,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             audio.m_id, audio.m_id, type);
                     });
 
-                static int s_audioLogCounter = 0;
                 if ( !isPermanentEffect ) {
-                    bool hovered = ImGui::IsItemHovered();
-                    bool rclicked =
+                    const bool hovered = ImGui::IsItemHovered();
+                    const bool rclicked =
                         ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-                    if ( (hovered || rclicked) && s_audioLogCounter < 10 ) {
-                        XINFO(
-                            "AudioItem [{}]: hovered={} rclicked={} "
-                            "isPermanent={} pos=({},{}) size=({},{}) "
-                            "mouse=({},{})",
-                            audio.m_id,
-                            hovered,
-                            rclicked,
-                            isPermanentEffect,
-                            r.x,
-                            r.y,
-                            r.width,
-                            r.height,
-                            ImGui::GetMousePos().x,
-                            ImGui::GetMousePos().y);
-                        s_audioLogCounter++;
-                    }
                     if ( hovered && rclicked ) {
-                        XINFO("AudioItem RIGHT-CLICK TRIGGERED: {}",
-                              audio.m_id);
                         m_manageTrackId   = audio.m_id;
                         m_manageTrackType = audio.m_type;
                         m_openManageModal = true;
@@ -717,6 +790,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                           });
 
     if ( m_showGlobalSettings ) {
+        addDeviceComboRow(footerVBox,
+                          "OutputDevice",
+                          TR("ui.audio_manager.output_device").data(),
+                          maxLabelW);
+
         addControlRow(
             footerVBox,
             "Global",

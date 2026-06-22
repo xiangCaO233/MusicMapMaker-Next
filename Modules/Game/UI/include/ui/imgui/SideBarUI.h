@@ -46,24 +46,27 @@ static std::string TabToTooltip(SideBarTab tab)
     }
 }
 
+/// @brief 将侧边栏标签页转换为本地化短标签。
+/// @param tab 侧边栏标签页标识。
+/// @return 侧边栏标签页的短标签文本。
 static std::string TabToShortLabel(SideBarTab tab)
 {
     std::string label = "";
     switch ( tab ) {
     case SideBarTab::Search:
-        label = std::string(TR("ui.sidebar.search.short"));
+        label = TR("ui.sidebar.search.short").data();
         break;
     case SideBarTab::FileExplorer:
-        label = std::string(TR("ui.sidebar.file.short"));
+        label = TR("ui.sidebar.file.short").data();
         break;
     case SideBarTab::AudioExplorer:
-        label = std::string(TR("ui.sidebar.audio.short"));
+        label = TR("ui.sidebar.audio.short").data();
         break;
     case SideBarTab::BeatMapExplorer:
-        label = std::string(TR("ui.sidebar.beatmap.short"));
+        label = TR("ui.sidebar.beatmap.short").data();
         break;
     case SideBarTab::Settings:
-        label = std::string(TR("ui.sidebar.settings.short"));
+        label = TR("ui.sidebar.settings.short").data();
         break;
     default: break;
     }

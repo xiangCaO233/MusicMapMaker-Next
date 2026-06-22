@@ -70,6 +70,7 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
             Config::pathToUtf8(project->m_projectRoot.filename());
         minWidth  = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x +
                     ImGui::CalcTextSize(rootName.c_str()).x;
+        minWidth  = std::max(minWidth * 0.5f, 96.0f * scale);
         minHeight = ImGui::GetFrameHeight();
         if ( m_showRoot ) {
             minHeight += 24.0f * scale + 2.0f;

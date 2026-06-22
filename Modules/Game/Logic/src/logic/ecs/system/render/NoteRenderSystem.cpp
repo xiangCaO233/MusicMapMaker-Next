@@ -31,6 +31,46 @@ constexpr double UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS = 0.1;
 constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
     1.0 / 120.0;
 
+/// @brief Timeline 专业模式轨道数量。
+constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 5;
+
+/// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
+int professionalTimelineLane(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 1;
+    case ::MMM::TimingEffect::SCROLL: return 2;
+    case ::MMM::TimingEffect::JUMP: return 3;
+    case ::MMM::TimingEffect::HS: return 4;
+    }
+    return 1;
+}
+
+/// @brief 获取 Timeline Timing 类型的快照效果掩码。
+uint32_t timelineEffectMask(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return SCROLL_EFFECT_BPM;
+    case ::MMM::TimingEffect::SCROLL: return SCROLL_EFFECT_SCROLL;
+    case ::MMM::TimingEffect::JUMP: return SCROLL_EFFECT_JUMP;
+    case ::MMM::TimingEffect::HS: return SCROLL_EFFECT_HS;
+    }
+    return 0;
+}
+
+/// @brief 获取 Timeline 元素中指定 Timing 类型的 marker 几何槽。
+TimelineInteractiveElement::MarkerGeometry& markerGeometryForEffect(
+    TimelineInteractiveElement& element, ::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return element.bpmMarker;
+    case ::MMM::TimingEffect::SCROLL: return element.scrollMarker;
+    case ::MMM::TimingEffect::JUMP: return element.jumpMarker;
+    case ::MMM::TimingEffect::HS: return element.hsMarker;
+    }
+    return element.scrollMarker;
+}
+
 /// @brief 绘制时间线/预览用的小型判定框。
 /// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
 void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
@@ -64,7 +104,8 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
 
 /// @brief 生成指定画布的批量渲染快照。
 /// @warning 热路径：每帧/每 update 执行；禁止引入文件系统访问、
-/// registry 全量无缓存扫描或阻塞同步。
+/// registry 全量无缓存扫描或阻塞同步；Timeline 与活跃主画布 Move
+/// 工具会复制 ScrollSegment 供 UI 精确时间映射。
 void NoteRenderSystem::generateSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     const std::vector<const TimelineComponent*>& bpmEvents,
@@ -128,8 +169,11 @@ void NoteRenderSystem::generateSnapshot(
         snapshot->uiInterpolationYOffsetScale  = 1.0;
     }
 
-    // Timeline 右键创建事件需要完整映射；普通播放快照只携带线性补间速度。
-    if ( cameraId == "Timeline" ) {
+    // Timeline 右键创建事件与主画布 Move 工具空白拖动需要完整映射；
+    // 普通播放快照只携带线性补间速度。
+    if ( cameraId == "Timeline" ||
+         (isMainCanvas && snapshot->acceptsInteraction &&
+          snapshot->currentTool == EditTool::Move) ) {
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }
 
@@ -531,13 +575,45 @@ void NoteRenderSystem::generateTimelineSnapshot(
     batcher.pushQuad(
         0, viewportHeight, viewportWidth, viewportHeight, { 0, 0, 0, 0.01f });
 
-    auto& skin    = Config::SkinManager::instance();
-    auto  tickCol = skin.getColor("timeline.tick");
+    auto&      skin             = Config::SkinManager::instance();
+    auto       tickCol          = skin.getColor("timeline.tick");
+    const bool professionalMode = Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .timelineProfessionalMode;
 
     double currentAbsY = cache->getVisualAnchorAbsY(currentTime);
 
     float paddingX = 30.0f;
     float lineW    = std::max(1.0f, viewportWidth - paddingX * 2.0f);
+
+    if ( professionalMode ) {
+        constexpr glm::vec4 laneColors[PROFESSIONAL_TIMELINE_LANE_COUNT] = {
+            { 0.39f, 0.69f, 0.75f, 0.22f }, { 1.0f, 0.28f, 0.28f, 0.20f },
+            { 0.28f, 1.0f, 0.38f, 0.18f },  { 0.34f, 0.55f, 1.0f, 0.18f },
+            { 1.0f, 0.87f, 0.28f, 0.18f },
+        };
+        const float laneWidth =
+            viewportWidth /
+            static_cast<float>(PROFESSIONAL_TIMELINE_LANE_COUNT);
+        batcher.setTexture(TextureID::None);
+        for ( int lane = 0; lane < PROFESSIONAL_TIMELINE_LANE_COUNT; ++lane ) {
+            const float laneX = laneWidth * static_cast<float>(lane);
+            batcher.pushQuad(laneX,
+                             viewportHeight,
+                             lane == PROFESSIONAL_TIMELINE_LANE_COUNT - 1
+                                 ? viewportWidth - laneX
+                                 : laneWidth,
+                             viewportHeight,
+                             laneColors[lane]);
+            if ( lane > 0 ) {
+                batcher.pushQuad(laneX,
+                                 viewportHeight,
+                                 1.0f,
+                                 viewportHeight,
+                                 { 1.0f, 1.0f, 1.0f, 0.16f });
+            }
+        }
+    }
 
     // 记录静态边界
     snapshot->staticVertexCount =
@@ -629,9 +705,38 @@ void NoteRenderSystem::generateTimelineSnapshot(
                                   cache->getDisplayDelta(t, currentAbsY, t));
                     if ( y >= 0.0f && y <= viewportHeight ) {
                         color.a *= 0.75f;
+                        const float beatLineX =
+                            professionalMode ? 0.0f : paddingX;
+                        const float beatLineW =
+                            professionalMode ? viewportWidth : lineW;
                         batcher.setTexture(TextureID::None);
-                        batcher.pushQuad(
-                            paddingX, y + width * 0.5f, lineW, width, color);
+                        if ( snapshot->isSnapped &&
+                             std::abs(t - snapshot->snappedTime) < 1e-6 ) {
+                            glm::vec4 glowCol = color;
+                            glowCol.a *= 0.6f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 4.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 4.0f,
+                                             glowCol);
+                            glowCol.a *= 0.5f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 10.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 10.0f,
+                                             glowCol);
+                            glowCol.a *= 0.5f;
+                            batcher.pushQuad(beatLineX,
+                                             y + (width + 20.0f) * 0.5f,
+                                             beatLineW,
+                                             width + 20.0f,
+                                             glowCol);
+                        }
+                        batcher.pushQuad(beatLineX,
+                                         y + width * 0.5f,
+                                         beatLineW,
+                                         width,
+                                         color);
                     }
 
                     stepOffset++;
@@ -642,7 +747,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
     }
 
     // 5. 绘制 Timing 事件为普通 Note 形状。
-    float noteW = lineW;
+    const float professionalLaneWidth =
+        viewportWidth / static_cast<float>(PROFESSIONAL_TIMELINE_LANE_COUNT);
+    float noteW =
+        professionalMode ? std::max(1.0f, professionalLaneWidth - 2.0f) : lineW;
     float noteH = noteW * 0.36f;
     if ( auto uvIt =
              snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
@@ -653,17 +761,49 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     int markerRows =
         std::max(1, static_cast<int>(std::ceil(viewportHeight)) + 1);
-    std::vector<uint8_t> occupiedMarkerRows(static_cast<size_t>(markerRows), 0);
-    auto                 occupyMarkerRow = [&](float y) {
+    const int markerLaneCount =
+        professionalMode ? PROFESSIONAL_TIMELINE_LANE_COUNT : 1;
+    std::vector<uint8_t> occupiedMarkerRows(
+        static_cast<size_t>(markerRows * markerLaneCount), 0);
+    auto occupyMarkerRow = [&](int lane, float y) {
         if ( y < 0.0f || y > viewportHeight ) return false;
-        int row = static_cast<int>(std::floor(y));
-        row     = std::clamp(row, 0, markerRows - 1);
-        if ( occupiedMarkerRows[static_cast<size_t>(row)] != 0 ) {
+        int row            = static_cast<int>(std::floor(y));
+        row                = std::clamp(row, 0, markerRows - 1);
+        lane               = std::clamp(lane, 0, markerLaneCount - 1);
+        const size_t index = static_cast<size_t>(lane * markerRows + row);
+        if ( occupiedMarkerRows[index] != 0 ) {
             return false;
         }
-        occupiedMarkerRows[static_cast<size_t>(row)] = 1;
+        occupiedMarkerRows[index] = 1;
         return true;
     };
+
+    auto markerColorForEffect = [&](::MMM::TimingEffect effect) {
+        switch ( effect ) {
+        case ::MMM::TimingEffect::BPM:
+            return glm::vec4{ 1.0f, 0.2f, 0.2f, 0.8f };
+        case ::MMM::TimingEffect::SCROLL:
+            return glm::vec4{ 0.2f, 1.0f, 0.2f, 0.8f };
+        case ::MMM::TimingEffect::JUMP:
+            return glm::vec4{ 0.2f, 0.45f, 1.0f, 0.8f };
+        case ::MMM::TimingEffect::HS:
+            return glm::vec4{ 1.0f, 0.85f, 0.2f, 0.8f };
+        }
+        return glm::vec4{ tickCol.r, tickCol.g, tickCol.b, 0.8f };
+    };
+
+    auto writeMarkerGeometry =
+        [&](TimelineInteractiveElement::MarkerGeometry& geometry,
+            uint32_t                                    markerVertexOffset,
+            uint32_t                                    markerIndexOffset) {
+            geometry.hasMarkerGeometry  = true;
+            geometry.markerVertexOffset = markerVertexOffset;
+            geometry.markerVertexCount  = static_cast<uint32_t>(
+                snapshot->vertices.size() - markerVertexOffset);
+            geometry.markerIndexOffset = markerIndexOffset;
+            geometry.markerIndexCount  = static_cast<uint32_t>(
+                snapshot->indices.size() - markerIndexOffset);
+        };
 
     for ( const auto& seg : cache->getSegments() ) {
         if ( seg.effects == 0 ) continue;
@@ -687,20 +827,68 @@ void NoteRenderSystem::generateTimelineSnapshot(
         snapshot->timelineElements.push_back(el);
         size_t interactiveElementIdx = snapshot->timelineElements.size() - 1;
 
-        if ( !occupyMarkerRow(y) ) continue;
+        if ( professionalMode ) {
+            constexpr ::MMM::TimingEffect professionalEffects[] = {
+                ::MMM::TimingEffect::BPM,
+                ::MMM::TimingEffect::SCROLL,
+                ::MMM::TimingEffect::JUMP,
+                ::MMM::TimingEffect::HS,
+            };
+            for ( auto effect : professionalEffects ) {
+                if ( (seg.effects & timelineEffectMask(effect)) == 0 ) {
+                    continue;
+                }
+
+                const int lane = professionalTimelineLane(effect);
+                if ( !occupyMarkerRow(lane, y) ) {
+                    continue;
+                }
+
+                noteX = professionalLaneWidth * static_cast<float>(lane) +
+                        (professionalLaneWidth - noteW) * 0.5f;
+                batcher.setTexture(TextureID::Note);
+                const uint32_t markerVertexOffset =
+                    static_cast<uint32_t>(snapshot->vertices.size());
+                const uint32_t markerIndexOffset =
+                    static_cast<uint32_t>(snapshot->indices.size());
+                batcher.pushFilledQuad(noteX,
+                                       y + noteH * 0.5f,
+                                       noteW,
+                                       noteH,
+                                       { 1.0f, 1.0f },
+                                       config.visual.noteFillMode,
+                                       markerColorForEffect(effect));
+
+                auto& element =
+                    snapshot->timelineElements[interactiveElementIdx];
+                auto& geometry = markerGeometryForEffect(element, effect);
+                writeMarkerGeometry(
+                    geometry, markerVertexOffset, markerIndexOffset);
+                if ( !element.hasMarkerGeometry ) {
+                    element.hasMarkerGeometry  = geometry.hasMarkerGeometry;
+                    element.markerVertexOffset = geometry.markerVertexOffset;
+                    element.markerVertexCount  = geometry.markerVertexCount;
+                    element.markerIndexOffset  = geometry.markerIndexOffset;
+                    element.markerIndexCount   = geometry.markerIndexCount;
+                }
+            }
+            continue;
+        }
+
+        if ( !occupyMarkerRow(0, y) ) continue;
 
         glm::vec4 color = { tickCol.r, tickCol.g, tickCol.b, 0.8f };
         if ( (seg.effects & SCROLL_EFFECT_BPM) &&
              (seg.effects & SCROLL_EFFECT_SCROLL) ) {
             color = { 1.0f, 0.5f, 0.0f, 0.8f };
         } else if ( seg.effects & SCROLL_EFFECT_BPM ) {
-            color = { 1.0f, 0.2f, 0.2f, 0.8f };
+            color = markerColorForEffect(::MMM::TimingEffect::BPM);
         } else if ( seg.effects & SCROLL_EFFECT_JUMP ) {
-            color = { 0.2f, 0.45f, 1.0f, 0.8f };
+            color = markerColorForEffect(::MMM::TimingEffect::JUMP);
         } else if ( seg.effects & SCROLL_EFFECT_HS ) {
-            color = { 1.0f, 0.85f, 0.2f, 0.8f };
+            color = markerColorForEffect(::MMM::TimingEffect::HS);
         } else if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
-            color = { 0.2f, 1.0f, 0.2f, 0.8f };
+            color = markerColorForEffect(::MMM::TimingEffect::SCROLL);
         }
 
         batcher.setTexture(TextureID::Note);
@@ -723,6 +911,22 @@ void NoteRenderSystem::generateTimelineSnapshot(
         element.markerIndexOffset = markerIndexOffset;
         element.markerIndexCount =
             static_cast<uint32_t>(snapshot->indices.size() - markerIndexOffset);
+        if ( seg.effects & SCROLL_EFFECT_BPM ) {
+            writeMarkerGeometry(
+                element.bpmMarker, markerVertexOffset, markerIndexOffset);
+        }
+        if ( seg.effects & SCROLL_EFFECT_SCROLL ) {
+            writeMarkerGeometry(
+                element.scrollMarker, markerVertexOffset, markerIndexOffset);
+        }
+        if ( seg.effects & SCROLL_EFFECT_JUMP ) {
+            writeMarkerGeometry(
+                element.jumpMarker, markerVertexOffset, markerIndexOffset);
+        }
+        if ( seg.effects & SCROLL_EFFECT_HS ) {
+            writeMarkerGeometry(
+                element.hsMarker, markerVertexOffset, markerIndexOffset);
+        }
     }
 
     snapshot->dynamicVertexCount =

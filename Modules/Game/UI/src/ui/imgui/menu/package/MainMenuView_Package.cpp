@@ -467,6 +467,15 @@ void appendUniquePackageDependency(std::vector<std::string>& dependencies,
     dependencies.push_back(relativePath);
 }
 
+/// @brief 谱面打包扫描结果。
+struct PackageBeatmapInfo {
+    /// @brief 谱面引用的资源路径列表。
+    std::vector<std::string> dependencyRelativePaths;
+
+    /// @brief 是否包含 Flick 或折线。
+    bool hasStoreModeExtEligibleElements{ false };
+};
+
 /// @brief 将单个 metadata 资源路径解析并追加到依赖列表。
 /// @param dependencies 依赖路径列表。
 /// @param projectRoot 项目根目录。
@@ -525,21 +534,22 @@ void appendPackageBeatmapEntryAudioDependency(
         dependencies, normalizePackageRelativeUtf8(audioIt->m_path));
 }
 
-/// @brief 收集一个谱面打包时必须一起选中的资源路径。
+/// @brief 收集一个谱面打包时需要的资源和元素信息。
 /// @param project 当前项目。
 /// @param beatmapRelativePath UTF-8 项目相对谱面路径。
-/// @return 去重后的资源路径列表。
-std::vector<std::string> collectPackageBeatmapDependencyPaths(
+/// @return 谱面依赖和元素扫描结果。
+PackageBeatmapInfo collectPackageBeatmapInfo(
     const Project& project, const std::string& beatmapRelativePath)
 {
-    std::vector<std::string> dependencies;
-    const auto               normalizedBeatmapPath =
+    PackageBeatmapInfo result;
+    const auto         normalizedBeatmapPath =
         normalizePackageRelativeUtf8(beatmapRelativePath);
-    if ( normalizedBeatmapPath.empty() ) return dependencies;
+    if ( normalizedBeatmapPath.empty() ) return result;
 
     if ( const auto* entry =
              findPackageBeatmapEntry(project, normalizedBeatmapPath) ) {
-        appendPackageBeatmapEntryAudioDependency(dependencies, project, *entry);
+        appendPackageBeatmapEntryAudioDependency(
+            result.dependencyRelativePaths, project, *entry);
     }
 
     const auto relativePath = Config::utf8ToPath(normalizedBeatmapPath);
@@ -553,27 +563,32 @@ std::vector<std::string> collectPackageBeatmapDependencyPaths(
     const bool preferProjectRoot = packageExtensionEquals(mapExtension, ".mmm");
     const auto& meta             = beatMap.m_baseMapMetadata;
 
-    appendPackageMetadataDependency(dependencies,
+    result.hasStoreModeExtEligibleElements =
+        !beatMap.m_noteData.flicks.empty() ||
+        !beatMap.m_noteData.polylines.empty();
+
+    appendPackageMetadataDependency(result.dependencyRelativePaths,
                                     project.m_projectRoot,
                                     mapDirectory,
                                     meta.main_audio_path,
                                     preferProjectRoot);
-    appendPackageMetadataDependency(dependencies,
+    appendPackageMetadataDependency(result.dependencyRelativePaths,
                                     project.m_projectRoot,
                                     mapDirectory,
                                     meta.main_cover_path,
                                     preferProjectRoot);
-    appendPackageMetadataDependency(dependencies,
+    appendPackageMetadataDependency(result.dependencyRelativePaths,
                                     project.m_projectRoot,
                                     mapDirectory,
                                     meta.cover_path,
                                     preferProjectRoot);
 
-    dependencies.erase(
-        std::remove(
-            dependencies.begin(), dependencies.end(), normalizedBeatmapPath),
-        dependencies.end());
-    return dependencies;
+    result.dependencyRelativePaths.erase(
+        std::remove(result.dependencyRelativePaths.begin(),
+                    result.dependencyRelativePaths.end(),
+                    normalizedBeatmapPath),
+        result.dependencyRelativePaths.end());
+    return result;
 }
 }  // namespace
 
@@ -613,6 +628,11 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
         .includeLegacyImdBeatmapsInPackage =
             shouldShowLegacyImdPackageOption(m_package.selectedFileType) &&
             m_package.includeLegacyImdBeatmaps,
+        .addStoreModeExtForMalodyExport =
+            hasSelectedPackageStoreModeExtCandidates() &&
+            Config::AppConfig::instance()
+                .getEditorSettings()
+                .autoAddStoreModeExtForMalodyExport,
         .metadataOverrides = m_package.pendingMetadataOverrides,
     });
     m_package.pendingRelativePaths.clear();
@@ -771,6 +791,23 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 ImGui::SameLine();
                 ImGui::Checkbox("同时打包兼容旧皮肤的 .imd",
                                 &m_package.includeLegacyImdBeatmaps);
+            }
+            if ( hasSelectedPackageStoreModeExtCandidates() ) {
+                ImGui::SameLine();
+                auto& settings =
+                    Config::AppConfig::instance().getEditorSettings();
+                bool addStoreModeExt =
+                    settings.autoAddStoreModeExtForMalodyExport;
+                if ( ImGui::Checkbox("自动添加上架皮肤 mode_ext",
+                                     &addStoreModeExt) ) {
+                    settings.autoAddStoreModeExtForMalodyExport =
+                        addStoreModeExt;
+                    Config::AppConfig::instance().save();
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s", "打包 MCZ 时会替换所有写出的 .mc 的 mode_ext。");
+                }
             }
             const bool hasMissingDependencies =
                 hasSelectedPackageMissingDependencies();
@@ -1237,8 +1274,12 @@ void MainMenuView::rebuildPackageCandidateFiles()
     for ( auto& file : m_package.candidateFiles ) {
         if ( file.resourceType != PackageResourceType::Beatmap ) continue;
 
+        auto beatmapInfo =
+            collectPackageBeatmapInfo(*project, file.relativePath);
         file.dependencyRelativePaths =
-            collectPackageBeatmapDependencyPaths(*project, file.relativePath);
+            std::move(beatmapInfo.dependencyRelativePaths);
+        file.hasStoreModeExtEligibleElements =
+            beatmapInfo.hasStoreModeExtEligibleElements;
         file.missingDependencyRelativePaths.clear();
         for ( const auto& dependencyPath : file.dependencyRelativePaths ) {
             if ( candidateIndexByPath.find(dependencyPath) ==
@@ -1335,6 +1376,24 @@ bool MainMenuView::hasSelectedPackageMissingDependencies() const
                                   file.resourceType ==
                                       PackageResourceType::Beatmap &&
                                   !file.missingDependencyRelativePaths.empty();
+                       });
+}
+
+/// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
+/// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+/// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
+bool MainMenuView::hasSelectedPackageStoreModeExtCandidates() const
+{
+    if ( m_package.selectedFileType != PackageFileType::Mcz ) {
+        return false;
+    }
+    return std::any_of(m_package.candidateFiles.begin(),
+                       m_package.candidateFiles.end(),
+                       [](const PackageCandidateFile& file) {
+                           return file.selected &&
+                                  file.resourceType ==
+                                      PackageResourceType::Beatmap &&
+                                  file.hasStoreModeExtEligibleElements;
                        });
 }
 

@@ -52,6 +52,9 @@ struct TimelineGearInfo {
     /// @brief 对应 TimelineInteractiveElement 的效果掩码。
     uint32_t mask;
 
+    /// @brief 对应 Timing 类型。
+    ::MMM::TimingEffect effect;
+
     /// @brief 对应 TimelineInteractiveElement 的实体字段。
     entt::entity Logic::TimelineInteractiveElement::* entity;
 
@@ -93,6 +96,18 @@ glm::vec4 timelineEffectColor(::MMM::TimingEffect effect, float alpha)
     case ::MMM::TimingEffect::HS: return { 1.0f, 0.87f, 0.28f, alpha };
     }
     return { 1.0f, 1.0f, 1.0f, alpha };
+}
+
+/// @brief 获取专业模式中指定 Timing 类型所属的轨道索引。
+int professionalTimingLane(::MMM::TimingEffect effect)
+{
+    switch ( effect ) {
+    case ::MMM::TimingEffect::BPM: return 1;
+    case ::MMM::TimingEffect::SCROLL: return 2;
+    case ::MMM::TimingEffect::JUMP: return 3;
+    case ::MMM::TimingEffect::HS: return 4;
+    }
+    return 1;
 }
 
 /// @brief 生成用于去重同一个 marker glow 命令的键。
@@ -172,12 +187,19 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                      0.0f,
                                      total,
                                      "") ) {
-                float visualOffset = Config::AppConfig::instance()
-                                         .getVisualConfig()
-                                         .getEffectiveVisualOffset();
+                float  visualOffset = Config::AppConfig::instance()
+                                          .getVisualConfig()
+                                          .getEffectiveVisualOffset();
+                double targetTime   = static_cast<double>(time);
+                if ( ImGui::GetIO().KeyShift ) {
+                    targetTime = std::clamp(snapTimeToBeatLine(targetTime),
+                                            0.0,
+                                            static_cast<double>(total));
+                    time       = static_cast<float>(targetTime);
+                }
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdSeek{
-                        static_cast<double>(time) - visualOffset }));
+                        targetTime - static_cast<double>(visualOffset) }));
             }
 
             if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
@@ -250,9 +272,23 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             float localMouseY = mousePos.y - canvasPos.y;
             bool  overMenuButton =
                 localMouseX >= size.x - 56.0f && localMouseY <= 56.0f;
+            const bool timelineHoveringForSnap = isHovered && !overMenuButton;
+            const bool timelineDragging =
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
+                ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSetMousePosition{
+                    .cameraId       = m_name,
+                    .mouseX         = localMouseX,
+                    .mouseY         = localMouseY - m_lastAppliedYOffset,
+                    .viewportWidth  = size.x,
+                    .viewportHeight = size.y,
+                    .isHovering     = timelineHoveringForSnap,
+                    .isDragging     = timelineDragging }));
             bool   hoveredSnapped = false;
             double hoveredTime    = 0.0;
-            if ( isHovered && !overMenuButton ) {
+            if ( timelineHoveringForSnap ) {
                 double rawHoveredTime = canvasTimeAtLocalY(size, localMouseY);
                 hoveredTime           = snapTimingTime(
                     size, rawHoveredTime, localMouseY, hoveredSnapped);
@@ -260,6 +296,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             const TimelineGearInfo gears[] = {
                 { Logic::System::SCROLL_EFFECT_BPM,
+                  ::MMM::TimingEffect::BPM,
                   &Logic::TimelineInteractiveElement::bpmEntity,
                   &Logic::TimelineInteractiveElement::bpmValue,
                   "BPM",
@@ -267,6 +304,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                   ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
                   false },
                 { Logic::System::SCROLL_EFFECT_SCROLL,
+                  ::MMM::TimingEffect::SCROLL,
                   &Logic::TimelineInteractiveElement::scrollEntity,
                   &Logic::TimelineInteractiveElement::scrollValue,
                   "Scroll",
@@ -274,6 +312,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                   ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
                   true },
                 { Logic::System::SCROLL_EFFECT_JUMP,
+                  ::MMM::TimingEffect::JUMP,
                   &Logic::TimelineInteractiveElement::jumpEntity,
                   &Logic::TimelineInteractiveElement::jumpValue,
                   "Jump",
@@ -281,6 +320,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                   ImVec4(0.2f, 0.45f, 1.0f, 1.0f),
                   false },
                 { Logic::System::SCROLL_EFFECT_HS,
+                  ::MMM::TimingEffect::HS,
                   &Logic::TimelineInteractiveElement::hsEntity,
                   &Logic::TimelineInteractiveElement::hsValue,
                   "HS",
@@ -291,8 +331,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Logic::TimelineInteractiveElement& el) {
-                    bool isNearTime = hoveredSnapped &&
-                                      std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime  = hoveredSnapped &&
+                                       std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     return isNearTime || isNearPixel;
                 };
@@ -311,30 +351,45 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     return count;
                 };
 
-            auto inlineGearPos =
-                [&](const Logic::TimelineInteractiveElement& el,
-                    const TimelineGearInfo&                  gear,
-                    int                                      index,
-                    int                                      count) {
-                    float yOffset = 0.0f;
-                    if ( count > 1 ) {
-                        yOffset = (static_cast<float>(index) -
-                                   (static_cast<float>(count) - 1.0f) * 0.5f) *
-                                  (iconSize + 4.0f);
-                    }
-
-                    float x    = gear.rightSide
-                                     ? canvasPos.x + size.x - iconSize - padding
-                                     : canvasPos.x + padding;
-                    float minY = canvasPos.y;
-                    float maxY =
+            auto inlineGearPos = [&](const Logic::TimelineInteractiveElement&
+                                                             el,
+                                     const TimelineGearInfo& gear,
+                                     int                     index,
+                                     int                     count) {
+                if ( editorSettings.timelineProfessionalMode ) {
+                    constexpr float laneCount = 5.0f;
+                    const int       lane = professionalTimingLane(gear.effect);
+                    const float     centerX =
+                        canvasPos.x +
+                        size.x * (static_cast<float>(lane) + 0.5f) / laneCount;
+                    const float minX = canvasPos.x + padding;
+                    const float maxX = std::max(
+                        minX, canvasPos.x + size.x - iconSize - padding);
+                    const float minY = canvasPos.y;
+                    const float maxY =
                         std::max(minY, canvasPos.y + size.y - iconSize);
-                    float y = std::clamp(
-                        canvasPos.y + el.y + yOffset - iconSize * 0.5f,
-                        minY,
-                        maxY);
-                    return ImVec2(x, y);
-                };
+                    return ImVec2(
+                        std::clamp(centerX - iconSize * 0.5f, minX, maxX),
+                        std::clamp(
+                            canvasPos.y + el.y - iconSize * 0.5f, minY, maxY));
+                }
+
+                float yOffset = 0.0f;
+                if ( count > 1 ) {
+                    yOffset = (static_cast<float>(index) -
+                               (static_cast<float>(count) - 1.0f) * 0.5f) *
+                              (iconSize + 4.0f);
+                }
+
+                float x    = gear.rightSide
+                                 ? canvasPos.x + size.x - iconSize - padding
+                                 : canvasPos.x + padding;
+                float minY = canvasPos.y;
+                float maxY = std::max(minY, canvasPos.y + size.y - iconSize);
+                float y    = std::clamp(
+                    canvasPos.y + el.y + yOffset - iconSize * 0.5f, minY, maxY);
+                return ImVec2(x, y);
+            };
 
             /// @brief 当前鼠标命中的 Timeline 齿轮按钮。
             struct InlineGearHit {
@@ -418,8 +473,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                           size,
                                           isHovered && !inlineGearHit,
                                           hasTimingInteractionFocus);
-            renderTimingInteractionOverlay(canvasPos, size);
             refreshTimelineInteractionDecoration(size);
+            if ( editorSettings.timelineProfessionalMode ) {
+                renderProfessionalTimelineOverlay(canvasPos, size);
+            }
+            renderTimingInteractionOverlay(canvasPos, size);
 
             // 4. 绘制交互层元件 (齿轮按钮)
             for ( const auto& el : m_currentSnapshot->timelineElements ) {
@@ -492,16 +550,33 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 15.0f);
             UI::Utils::pushFixedButtonStyleVars();
             if ( ImGui::Button(UI::ICON_MMM_BARS, ImVec2(30.0f, 30.0f)) ) {
-                m_isTableWindowOpen = !m_isTableWindowOpen;
+                ImGui::OpenPopup("TimelineOptionsMenu");
             }
             UI::Utils::popFixedButtonStyleVars();
             ImGui::PopStyleVar();
             ImGui::PopStyleColor(3);
 
             if ( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip(
-                    "%s",
-                    TR("ui.timeline.timing_points_table_btn_tooltip").data());
+                ImGui::SetTooltip("%s", TR("ui.timeline.menu.tooltip").data());
+            }
+
+            if ( ImGui::BeginPopup("TimelineOptionsMenu") ) {
+                const bool professionalMode =
+                    editorSettings.timelineProfessionalMode;
+                if ( ImGui::MenuItem(
+                         TR("ui.timeline.menu.professional_mode").data(),
+                         nullptr,
+                         professionalMode) ) {
+                    editorSettings.timelineProfessionalMode = !professionalMode;
+                    appConfig.save();
+                }
+                if ( ImGui::MenuItem(
+                         TR("ui.timeline.menu.open_timing_table").data(),
+                         nullptr,
+                         m_isTableWindowOpen) ) {
+                    m_isTableWindowOpen = true;
+                }
+                ImGui::EndPopup();
             }
 
             // 5. 渲染弹窗
@@ -511,6 +586,130 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             renderTimingPointsTableWindow();
         }
     }
+}
+
+/// @brief 绘制 Timeline 专业模式分轨覆盖层。
+/// @param canvasPos 画布左上角屏幕坐标。
+/// @param size 当前 Timeline 画布尺寸。
+void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
+                                                       const ImVec2& size)
+{
+    if ( !m_currentSnapshot || size.x <= 1.0f || size.y <= 1.0f ) {
+        return;
+    }
+
+    ImDrawList*  drawList = ImGui::GetWindowDrawList();
+    const ImVec2 clipMax(canvasPos.x + size.x, canvasPos.y + size.y);
+    drawList->PushClipRect(canvasPos, clipMax, true);
+
+    constexpr int laneCount = 5;
+    const float   laneWidth = size.x / static_cast<float>(laneCount);
+    const char*   laneLabels[laneCount] = {
+        "BGM", "BPM", "Scroll", "Jump", "HS"
+    };
+    const ImU32 laneTextColor = IM_COL32(240, 235, 225, 210);
+
+    const float bgmLaneX0  = canvasPos.x + 6.0f;
+    const float bgmLaneX1  = canvasPos.x + laneWidth - 6.0f;
+    const int   audioCount = static_cast<int>(
+        std::max<size_t>(1, m_currentSnapshot->mainAudioTracks.size()));
+    const float audioColumnWidth = std::max(
+        5.0f, (bgmLaneX1 - bgmLaneX0) / static_cast<float>(audioCount));
+    for ( size_t i = 0; i < m_currentSnapshot->mainAudioTracks.size(); ++i ) {
+        const auto& track    = m_currentSnapshot->mainAudioTracks[i];
+        double      duration = track.duration;
+        if ( !(std::isfinite(duration) && duration > 0.0) ) {
+            duration = m_currentSnapshot->totalTime;
+        }
+        if ( !(std::isfinite(duration) && duration > 0.0) ) {
+            continue;
+        }
+
+        float rawStartY =
+            canvasPos.y + static_cast<float>(canvasYAtTime(size, 0.0));
+        float rawEndY =
+            canvasPos.y + static_cast<float>(canvasYAtTime(size, duration));
+        float rectY0 =
+            std::clamp(std::min(rawStartY, rawEndY), canvasPos.y, clipMax.y);
+        float rectY1 =
+            std::clamp(std::max(rawStartY, rawEndY), canvasPos.y, clipMax.y);
+        if ( rectY1 - rectY0 < 2.0f ) {
+            continue;
+        }
+
+        const float x0 =
+            bgmLaneX0 + audioColumnWidth * static_cast<float>(i) + 2.0f;
+        const float x1 =
+            std::min(bgmLaneX1, x0 + std::max(4.0f, audioColumnWidth - 4.0f));
+        drawList->AddRectFilled(ImVec2(x0, rectY0),
+                                ImVec2(x1, rectY1),
+                                IM_COL32(92, 196, 210, 116),
+                                4.0f);
+        drawList->AddRect(ImVec2(x0, rectY0),
+                          ImVec2(x1, rectY1),
+                          IM_COL32(190, 245, 255, 185),
+                          4.0f,
+                          0,
+                          1.2f);
+
+        if ( rectY1 - rectY0 > 22.0f && x1 - x0 > 18.0f ) {
+            const char* label =
+                track.label.empty() ? "BGM" : track.label.c_str();
+            const ImVec2 textSize     = ImGui::CalcTextSize(label);
+            const float  textPadding  = 6.0f;
+            const float  visibleWidth = std::max(1.0f, x1 - x0 - textPadding);
+            float        offset       = 0.0f;
+            if ( textSize.x > visibleWidth ) {
+                const float scrollRange = textSize.x - visibleWidth + 40.0f;
+                const float time        = static_cast<float>(ImGui::GetTime());
+                float       t =
+                    static_cast<float>(std::sin(time * 0.5f - 1.57f)) * 0.5f +
+                    0.5f;
+                t      = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+                offset = t * scrollRange;
+            }
+
+            const float  textX = textSize.x > visibleWidth
+                                     ? x0 + textPadding * 0.5f - offset
+                                     : x0 + (x1 - x0 - textSize.x) * 0.5f;
+            const ImVec2 textPos(
+                textX, rectY0 + (rectY1 - rectY0 - textSize.y) * 0.5f);
+            drawList->PushClipRect(
+                ImVec2(x0 + textPadding * 0.5f, rectY0 + 3.0f),
+                ImVec2(x1 - textPadding * 0.5f, rectY1 - 3.0f),
+                true);
+            drawList->AddText(textPos, IM_COL32(242, 255, 255, 220), label);
+            drawList->PopClipRect();
+        }
+    }
+
+    const float currentY =
+        canvasPos.y +
+        static_cast<float>(canvasYAtTime(size, m_currentSnapshot->currentTime));
+    if ( currentY >= canvasPos.y && currentY <= clipMax.y ) {
+        drawList->AddLine(ImVec2(canvasPos.x, currentY),
+                          ImVec2(clipMax.x, currentY),
+                          IM_COL32(255, 255, 255, 190),
+                          1.5f);
+    }
+
+    for ( int lane = 0; lane < laneCount; ++lane ) {
+        const float laneX0 = canvasPos.x + laneWidth * lane;
+        const float laneX1 =
+            lane == laneCount - 1 ? clipMax.x : laneX0 + laneWidth;
+        const ImVec2 textSize = ImGui::CalcTextSize(laneLabels[lane]);
+        const float  labelX =
+            laneX0 + std::max(4.0f, (laneX1 - laneX0 - textSize.x) * 0.5f);
+        const float labelY = clipMax.y - textSize.y - 8.0f;
+        drawList->PushClipRect(ImVec2(laneX0 + 3.0f, clipMax.y - 32.0f),
+                               ImVec2(laneX1 - 3.0f, clipMax.y),
+                               true);
+        drawList->AddText(
+            ImVec2(labelX, labelY), laneTextColor, laneLabels[lane]);
+        drawList->PopClipRect();
+    }
+
+    drawList->PopClipRect();
 }
 
 /// @brief 请求下一帧将时间线窗口聚焦到前台。
@@ -650,14 +849,41 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     bool                         hasDecoration = false;
     std::unordered_set<uint64_t> glowMarkers;
     std::unordered_set<uint64_t> dimMarkers;
-    float                        paddingX = 30.0f;
-    float noteW = std::max(1.0f, size.x - paddingX * 2.0f);
-    float noteH = noteW * 0.36f;
-    if ( auto uvIt = m_currentSnapshot->uvMap.find(
-             static_cast<uint32_t>(Logic::TextureID::Note));
-         uvIt != m_currentSnapshot->uvMap.end() && uvIt->second.w > 0.0f ) {
-        noteH = noteW * (uvIt->second.w / uvIt->second.z);
-    }
+    const bool professionalMode = Config::AppConfig::instance()
+                                      .getEditorSettings()
+                                      .timelineProfessionalMode;
+    float      paddingX         = 30.0f;
+
+    /// @brief Timeline marker 的绘制矩形参数。
+    struct MarkerDrawRect {
+        /// @brief 左侧 X 坐标。
+        float x{ 0.0f };
+        /// @brief 宽度。
+        float w{ 0.0f };
+        /// @brief 高度。
+        float h{ 0.0f };
+    };
+
+    auto markerDrawRect = [&](::MMM::TimingEffect effect) {
+        float noteW = std::max(1.0f, size.x - paddingX * 2.0f);
+        float noteX = paddingX;
+        if ( professionalMode ) {
+            constexpr float laneCount = 5.0f;
+            const float     laneWidth = size.x / laneCount;
+            const int       lane      = professionalTimingLane(effect);
+            noteW                     = std::max(1.0f, laneWidth - 2.0f);
+            noteX                     = laneWidth * static_cast<float>(lane) +
+                                        (laneWidth - noteW) * 0.5f;
+        }
+
+        float noteH = noteW * 0.36f;
+        if ( auto uvIt = m_currentSnapshot->uvMap.find(
+                 static_cast<uint32_t>(Logic::TextureID::Note));
+             uvIt != m_currentSnapshot->uvMap.end() && uvIt->second.w > 0.0f ) {
+            noteH = noteW * (uvIt->second.w / uvIt->second.z);
+        }
+        return MarkerDrawRect{ noteX, noteW, noteH };
+    };
 
     auto appendGlowRange =
         [&](uint32_t indexOffset, uint32_t indexCount, uint64_t key) {
@@ -671,9 +897,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             cmd.vertexOffset    = 0;
             cmd.customTextureId = static_cast<uint32_t>(Logic::TextureID::Note);
             cmd.scissor         = vk::Rect2D{
-                        { 0, 0 },
-                        { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
-                          static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
+                { 0, 0 },
+                { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
+                  static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
             };
             m_currentSnapshot->glowCmds.push_back(cmd);
             hasDecoration = true;
@@ -681,16 +907,17 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
 
     auto appendPreviewMarker =
         [&](float y, ::MMM::TimingEffect effect, float alpha) {
-            const uint32_t previewIndexOffset =
+            const MarkerDrawRect rect = markerDrawRect(effect);
+            const uint32_t       previewIndexOffset =
                 static_cast<uint32_t>(m_currentSnapshot->indices.size());
             Logic::System::Batcher previewBatcher(m_currentSnapshot,
                                                   &m_currentSnapshot->cmds);
             previewBatcher.setTexture(Logic::TextureID::Note);
             previewBatcher.pushFilledQuad(
-                paddingX,
-                y + noteH * 0.5f,
-                noteW,
-                noteH,
+                rect.x,
+                y + rect.h * 0.5f,
+                rect.w,
+                rect.h,
                 { 1.0f, 1.0f },
                 Config::AppConfig::instance().getVisualConfig().noteFillMode,
                 timelineEffectColor(effect, alpha));
@@ -735,9 +962,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     for ( const auto& target : collectVisibleTimingTargets() ) {
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered = target.entity == m_hoveredTimingEntity;
-        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
-                             m_timingEraseTargetEntities.end();
+        const bool hovered  = target.entity == m_hoveredTimingEntity;
+        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
+                              m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;
@@ -766,7 +993,8 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
                 std::max(0.0, target.time + m_timingDragPreviewDelta);
             const float previewY =
                 static_cast<float>(canvasYAtTime(size, previewTime));
-            if ( previewY >= -noteH && previewY <= size.y + noteH ) {
+            const MarkerDrawRect rect = markerDrawRect(target.effect);
+            if ( previewY >= -rect.h && previewY <= size.y + rect.h ) {
                 appendPreviewMarker(previewY, target.effect, 0.42f);
             }
         }

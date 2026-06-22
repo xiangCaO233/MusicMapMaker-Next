@@ -76,6 +76,168 @@ bool isPlaceableCreatedNote(const NoteComponent& note)
     return true;
 }
 
+/// @brief 复制粘贴分拍换算使用的 BPM 时间点。
+struct ClipboardBeatTimelinePoint {
+    double timestamp{ 0.0 };  ///< BPM 时间点，单位秒
+    double bpm{ 120.0 };      ///< 当前段 BPM
+    double beat{ 0.0 };       ///< 该时间点对应的连续拍数
+};
+
+/// @brief 复制粘贴分拍换算用的连续 BPM 时间线。
+using ClipboardBeatTimeline = std::vector<ClipboardBeatTimelinePoint>;
+
+/// @brief 获取复制粘贴分拍换算使用的默认 BPM。
+/// @param ctx 当前会话上下文。
+/// @return 有效首选 BPM，缺失时返回 120。
+double getClipboardFallbackBpm(const SessionContext& ctx)
+{
+    if ( ctx.currentBeatmap ) {
+        double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+        if ( std::isfinite(bpm) && bpm > 0.0 ) return bpm;
+    }
+    return 120.0;
+}
+
+/// @brief 规整 BPM 值，保证分拍换算不会除以零或使用非数值。
+double sanitizeClipboardBpm(double bpm, double fallbackBpm)
+{
+    if ( std::isfinite(bpm) && bpm > 0.0 ) return bpm;
+    if ( std::isfinite(fallbackBpm) && fallbackBpm > 0.0 ) {
+        return fallbackBpm;
+    }
+    return 120.0;
+}
+
+/// @brief 从当前 BPM 缓存构建可双向换算的连续 beat 时间线。
+/// @param ctx 当前会话上下文。
+/// @param fallbackBpm BPM 无效时使用的默认 BPM。
+/// @return 按时间排序的 BPM/beat 锚点列表。
+/// @warning 低频编辑路径：复制或按分拍粘贴时调用，允许在 BPM 脏时重建缓存。
+ClipboardBeatTimeline buildClipboardBeatTimeline(SessionContext& ctx,
+                                                 double          fallbackBpm)
+{
+    SessionUtils::ensureBpmEvents(ctx);
+
+    ClipboardBeatTimeline timeline;
+    timeline.reserve(ctx.bpmEvents.size());
+    for ( const auto* event : ctx.bpmEvents ) {
+        if ( !event || !std::isfinite(event->m_timestamp) ) continue;
+
+        const double bpm = sanitizeClipboardBpm(event->m_value, fallbackBpm);
+        if ( timeline.empty() ) {
+            timeline.push_back({ event->m_timestamp, bpm, 0.0 });
+            continue;
+        }
+
+        const auto&  previous = timeline.back();
+        const double beat =
+            previous.beat +
+            (event->m_timestamp - previous.timestamp) * previous.bpm / 60.0;
+        timeline.push_back({ event->m_timestamp, bpm, beat });
+    }
+    return timeline;
+}
+
+/// @brief 将秒时间转换为连续 beat 位置。
+double clipboardTimeToBeat(const ClipboardBeatTimeline& timeline,
+                           double timestamp, double fallbackBpm)
+{
+    if ( !std::isfinite(timestamp) ) return 0.0;
+
+    const double bpm = sanitizeClipboardBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return timestamp * bpm / 60.0;
+    }
+
+    auto it = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        timestamp,
+        [](double value, const ClipboardBeatTimelinePoint& point) {
+            return value < point.timestamp;
+        });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.beat + (timestamp - point.timestamp) * point.bpm / 60.0;
+}
+
+/// @brief 将连续 beat 位置转换为秒时间。
+double clipboardBeatToTime(const ClipboardBeatTimeline& timeline, double beat,
+                           double fallbackBpm)
+{
+    if ( !std::isfinite(beat) ) return 0.0;
+
+    const double bpm = sanitizeClipboardBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return beat * 60.0 / bpm;
+    }
+
+    auto it = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        beat,
+        [](double value, const ClipboardBeatTimelinePoint& point) {
+            return value < point.beat;
+        });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.timestamp + (beat - point.beat) * 60.0 / point.bpm;
+}
+
+/// @brief 为剪贴板条目记录复制瞬间的 beat 位置。
+void populateClipboardBeatPositions(ClipboardItem&               item,
+                                    const ClipboardBeatTimeline& timeline,
+                                    double                       fallbackBpm)
+{
+    item.startBeat =
+        clipboardTimeToBeat(timeline, item.note.m_timestamp, fallbackBpm);
+    item.endBeat = clipboardTimeToBeat(
+        timeline, item.note.m_timestamp + item.note.m_duration, fallbackBpm);
+    item.subStartBeats.clear();
+    item.subEndBeats.clear();
+
+    if ( item.note.m_type == ::MMM::NoteType::POLYLINE ) {
+        item.subStartBeats.reserve(item.note.m_subNotes.size());
+        item.subEndBeats.reserve(item.note.m_subNotes.size());
+        for ( const auto& sub : item.note.m_subNotes ) {
+            item.subStartBeats.push_back(
+                clipboardTimeToBeat(timeline, sub.timestamp, fallbackBpm));
+            item.subEndBeats.push_back(clipboardTimeToBeat(
+                timeline, sub.timestamp + sub.duration, fallbackBpm));
+        }
+    }
+
+    item.hasBeatPositions = true;
+}
+
+/// @brief 按 beat 偏移将剪贴板条目落到新的粘贴时间。
+void applyBeatPastePosition(NoteComponent& note, const ClipboardItem& item,
+                            const ClipboardBeatTimeline& timeline,
+                            double fallbackBpm, double pasteBeat,
+                            double minBeat)
+{
+    const double startBeat = pasteBeat + item.startBeat - minBeat;
+    const double endBeat   = pasteBeat + item.endBeat - minBeat;
+    note.m_timestamp = clipboardBeatToTime(timeline, startBeat, fallbackBpm);
+    const double endTime = clipboardBeatToTime(timeline, endBeat, fallbackBpm);
+    note.m_duration      = std::max(0.0, endTime - note.m_timestamp);
+
+    if ( note.m_type != ::MMM::NoteType::POLYLINE ||
+         item.subStartBeats.size() != note.m_subNotes.size() ||
+         item.subEndBeats.size() != note.m_subNotes.size() ) {
+        return;
+    }
+
+    for ( std::size_t i = 0; i < note.m_subNotes.size(); ++i ) {
+        auto&        sub          = note.m_subNotes[i];
+        const double subStartBeat = pasteBeat + item.subStartBeats[i] - minBeat;
+        const double subEndBeat   = pasteBeat + item.subEndBeats[i] - minBeat;
+        sub.timestamp =
+            clipboardBeatToTime(timeline, subStartBeat, fallbackBpm);
+        const double subEndTime =
+            clipboardBeatToTime(timeline, subEndBeat, fallbackBpm);
+        sub.duration = std::max(0.0, subEndTime - sub.timestamp);
+    }
+}
+
 /// @brief 将调色盘命令颜色转换为 NoteColorOverrides。
 NoteColorOverrides makeNoteColorOverrides(
     const std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT>& colors)
@@ -741,12 +903,17 @@ void ActionController::handleCommand(const CmdRedo& cmd)
 void ActionController::handleCommand(const CmdCopy& cmd)
 {
     m_ctx.clipboard.clear();
+    const double fallbackBpm  = getClipboardFallbackBpm(m_ctx);
+    auto         beatTimeline = buildClipboardBeatTimeline(m_ctx, fallbackBpm);
     auto view = m_ctx.noteRegistry.view<NoteComponent, InteractionComponent>();
     for ( auto entity : view ) {
         const auto& ic = view.get<InteractionComponent>(entity);
         if ( ic.isSelected ) {
-            const auto& note = view.get<NoteComponent>(entity);
-            m_ctx.clipboard.push_back({ note });
+            const auto&   note = view.get<NoteComponent>(entity);
+            ClipboardItem item;
+            item.note = note;
+            populateClipboardBeatPositions(item, beatTimeline, fallbackBpm);
+            m_ctx.clipboard.push_back(std::move(item));
         }
     }
     EditorEngine::instance().setClipboard(m_ctx.clipboard, &m_ctx, false);
@@ -993,6 +1160,10 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     for ( const auto& item : clipboard ) {
         minTime = std::min(minTime, item.note.m_timestamp);
     }
+    double minBeat = clipboard[0].startBeat;
+    for ( const auto& item : clipboard ) {
+        minBeat = std::min(minBeat, item.startBeat);
+    }
 
     std::vector<BatchNoteAction::Entry> entries;
     /// @brief 本次粘贴预先分配的新实体 ID 列表，用于动作执行后选中新物件。
@@ -1004,19 +1175,42 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     // 先预计算粘贴目标，确保不会在负时间创建新物件。
     double pasteTime = m_ctx.animateTime;
 
-    double timeOffset = pasteTime - minTime;
+    double     timeOffset = pasteTime - minTime;
+    const bool pasteByBeat =
+        m_ctx.lastConfig.settings.copyPasteTimeBasis ==
+            Config::CopyPasteTimeBasis::Beat &&
+        std::all_of(clipboard.begin(), clipboard.end(), [](const auto& item) {
+            return item.hasBeatPositions;
+        });
+    const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
+    auto         pasteBeatTimeline =
+        pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
+                    : ClipboardBeatTimeline{};
+    const double pasteBeat =
+        pasteByBeat ? clipboardTimeToBeat(
+                          pasteBeatTimeline, pasteTime, pasteFallbackBpm)
+                    : 0.0;
 
     int mirrorTrackCount = cmd.m_mirrored ? getMirrorTrackCount(m_ctx) : 0;
     std::vector<NoteComponent> notesToPaste;
     notesToPaste.reserve(clipboard.size());
     for ( const auto& item : clipboard ) {
-        auto newNote        = item.note;
-        newNote.m_timestamp = item.note.m_timestamp + timeOffset;
+        auto newNote = item.note;
+        if ( pasteByBeat ) {
+            applyBeatPastePosition(newNote,
+                                   item,
+                                   pasteBeatTimeline,
+                                   pasteFallbackBpm,
+                                   pasteBeat,
+                                   minBeat);
+        } else {
+            newNote.m_timestamp = item.note.m_timestamp + timeOffset;
 
-        // 折线物件：同步偏移所有子物件的时间戳
-        if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
-            for ( auto& sub : newNote.m_subNotes ) {
-                sub.timestamp += timeOffset;
+            // 折线物件：同步偏移所有子物件的时间戳
+            if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
+                for ( auto& sub : newNote.m_subNotes ) {
+                    sub.timestamp += timeOffset;
+                }
             }
         }
 

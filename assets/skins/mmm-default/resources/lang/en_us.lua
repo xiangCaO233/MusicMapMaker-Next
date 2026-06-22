@@ -286,6 +286,9 @@ return {
 	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "Disable Scroll Accel While Drawing",
 	["ui.settings.editor.remove_objects_on_polyline_path"] = "Remove objects on polyline path",
 	["ui.settings.editor.select_pasted_objects"] = "Select pasted objects after paste",
+	["ui.settings.editor.copy_paste_time_basis"] = "Copy/Paste Basis",
+	["ui.settings.editor.copy_paste_time_basis.timestamp"] = "Timestamp",
+	["ui.settings.editor.copy_paste_time_basis.beat"] = "Measure/Beat",
 	["ui.settings.editor.timeline_selection_includes_bpm"] = "Include red BPM lines in timeline multi-select",
 	["ui.settings.editor.selection"] = "Selection (Marquee) Behavior",
 	["ui.settings.editor.selection.strict"] = "Strict (Full Inclusion)",
@@ -364,6 +367,9 @@ return {
     ["ui.beatmap_manager.remove_confirm"] = "Are you sure you want to remove this beatmap from the project? (File will not be deleted)",
 	["ui.audio_manager.permanent_sfx"] = "Permanent SFX",
 	["ui.audio_manager.global_settings"] = "Global Audio Settings",
+	["ui.audio_manager.output_device"] = "Output Device",
+	["ui.audio_manager.output_device_default"] = "Default Device",
+	["ui.audio_manager.output_device_tooltip"] = "Select the output device used by the current audio backend.",
 	["ui.audio_manager.global_volume"] = "Global Volume",
 	["ui.audio_manager.bgm_gain"] = "All Main Track Gain",
 	["ui.audio_manager.sfx_gain"] = "All Effect Track Gain",
@@ -682,6 +688,9 @@ return {
 	-- Timing Points Table
 	["ui.timeline.timing_points_table_btn"] = "Timing",
 	["ui.timeline.timing_points_table_btn_tooltip"] = "Open Timing Points Table (Bulk Edit)",
+	["ui.timeline.menu.tooltip"] = "Timeline Options",
+	["ui.timeline.menu.professional_mode"] = "Toggle Professional Mode",
+	["ui.timeline.menu.open_timing_table"] = "Open Timeline Table",
 	["ui.timeline.timing_points_table.title"] = "Bulk Edit Timing Points###TimingPointsTable",
 
 	-- Status Bar

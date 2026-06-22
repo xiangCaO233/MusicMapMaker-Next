@@ -12,6 +12,7 @@
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -29,6 +30,11 @@
 #    include "graphic/glfw/window/adapters/X11WindowAdapter.h"
 #endif
 
+#if defined(__APPLE__)
+#    include "graphic/glfw/window/adapters/MacOSWindowAdapter.h"
+#    include "graphic/glfw/window/adapters/MacOSWindowUtils.h"
+#endif
+
 namespace MMM::Graphic
 {
 double NativeWindow::s_lastMouseX{ 0. };
@@ -39,6 +45,160 @@ namespace
 {
 /// @brief 判断历史尺寸是否贴近显示器工作区时允许的像素误差。
 constexpr int MAXIMIZED_PLACEMENT_TOLERANCE = 8;
+
+/// @brief 用于判断保存窗口尺寸是否贴近显示器边界的尺寸信息。
+struct MonitorPlacementBounds {
+    /// @brief 显示器可用区域左上角 X 坐标。
+    int m_x{ 0 };
+
+    /// @brief 显示器可用区域左上角 Y 坐标。
+    int m_y{ 0 };
+
+    /// @brief 可用于窗口最大化尺寸判断的显示器宽度。
+    int m_width{ 0 };
+
+    /// @brief 可用于窗口最大化尺寸判断的显示器高度。
+    int m_height{ 0 };
+};
+
+/// @brief 查询显示器完整视频模式边界。
+/// @param monitor GLFW 显示器句柄。
+/// @param bounds 输出显示器尺寸。
+/// @return 查询成功时返回 true。
+bool queryMonitorVideoBounds(GLFWmonitor*            monitor,
+                             MonitorPlacementBounds& bounds)
+{
+    if ( !monitor ) {
+        return false;
+    }
+
+    int monitorX = 0;
+    int monitorY = 0;
+    glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+
+    const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+    if ( !mode ) {
+        return false;
+    }
+
+    bounds.m_x      = monitorX;
+    bounds.m_y      = monitorY;
+    bounds.m_width  = mode->width;
+    bounds.m_height = mode->height;
+    return true;
+}
+
+/// @brief 查询显示器工作区边界，失败时回落到完整视频模式边界。
+/// @param monitor GLFW 显示器句柄。
+/// @param bounds 输出显示器尺寸。
+/// @return 查询成功时返回 true。
+bool queryMonitorWorkAreaBounds(GLFWmonitor*            monitor,
+                                MonitorPlacementBounds& bounds)
+{
+    if ( !monitor ) {
+        return false;
+    }
+
+#if defined(__APPLE__)
+    return queryMonitorVideoBounds(monitor, bounds);
+#else
+    int workAreaX      = 0;
+    int workAreaY      = 0;
+    int workAreaWidth  = 0;
+    int workAreaHeight = 0;
+    glfwGetMonitorWorkarea(
+        monitor, &workAreaX, &workAreaY, &workAreaWidth, &workAreaHeight);
+
+    if ( workAreaWidth <= 0 || workAreaHeight <= 0 ) {
+        return queryMonitorVideoBounds(monitor, bounds);
+    }
+
+    bounds.m_x      = workAreaX;
+    bounds.m_y      = workAreaY;
+    bounds.m_width  = workAreaWidth;
+    bounds.m_height = workAreaHeight;
+    return true;
+#endif
+}
+
+/// @brief 查询主显示器上可用于窗口位置恢复判断的尺寸。
+/// @param bounds 输出显示器尺寸。
+/// @return 查询成功时返回 true。
+/// @warning 低频窗口恢复路径：仅在应用项目窗口状态时执行；macOS 上避免
+/// glfwGetMonitorWorkarea 触发 Cocoa 无 NSScreen 的平台错误。
+bool queryPrimaryMonitorPlacementBounds(MonitorPlacementBounds& bounds)
+{
+    return queryMonitorWorkAreaBounds(glfwGetPrimaryMonitor(), bounds);
+}
+
+/// @brief 计算两个一维区间重叠长度。
+/// @param firstMin 第一个区间起点。
+/// @param firstMax 第一个区间终点。
+/// @param secondMin 第二个区间起点。
+/// @param secondMax 第二个区间终点。
+/// @return 重叠长度；不重叠时返回 0。
+int intervalOverlap(int firstMin, int firstMax, int secondMin, int secondMax)
+{
+    return std::max(
+        0, std::min(firstMax, secondMax) - std::max(firstMin, secondMin));
+}
+
+/// @brief 根据窗口与显示器的重叠面积选择当前显示器。
+/// @param window GLFW 窗口句柄。
+/// @return 最匹配的显示器；无法解析时返回主显示器。
+GLFWmonitor* findBestMonitorForWindow(GLFWwindow* window)
+{
+    if ( !window ) {
+        return glfwGetPrimaryMonitor();
+    }
+
+    int windowX      = 0;
+    int windowY      = 0;
+    int windowWidth  = 0;
+    int windowHeight = 0;
+    glfwGetWindowPos(window, &windowX, &windowY);
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    int           monitorCount = 0;
+    GLFWmonitor** monitors     = glfwGetMonitors(&monitorCount);
+    GLFWmonitor*  bestMonitor  = nullptr;
+    int           bestArea     = -1;
+
+    for ( int i = 0; monitors && i < monitorCount; ++i ) {
+        MonitorPlacementBounds monitorBounds;
+        if ( !queryMonitorVideoBounds(monitors[i], monitorBounds) ) {
+            continue;
+        }
+
+        const int overlapX =
+            intervalOverlap(windowX,
+                            windowX + windowWidth,
+                            monitorBounds.m_x,
+                            monitorBounds.m_x + monitorBounds.m_width);
+        const int overlapY =
+            intervalOverlap(windowY,
+                            windowY + windowHeight,
+                            monitorBounds.m_y,
+                            monitorBounds.m_y + monitorBounds.m_height);
+        const int overlapArea = overlapX * overlapY;
+        if ( overlapArea > bestArea ) {
+            bestArea    = overlapArea;
+            bestMonitor = monitors[i];
+        }
+    }
+
+    return bestMonitor ? bestMonitor : glfwGetPrimaryMonitor();
+}
+
+/// @brief 广播窗口最大化状态变化给自绘标题栏。
+/// @param isMaximized 当前窗口是否最大化。
+void publishWindowMaximizedState(bool isMaximized)
+{
+    Event::EventBus::instance().publish(Event::GLFWNativeEvent{
+        .type           = Event::NativeEventType::GLFW_TOGGLE_WINDOW_MAXIMIZE,
+        .hasStateChange = true,
+        .isMaximized    = isMaximized });
+}
 
 #ifdef _WIN32
 /// @brief HWND 属性名，与 Win32WindowAdapter/renderer
@@ -231,6 +391,9 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     // 设置窗口图标
     if ( m_windowHandle ) {
+#if defined(__APPLE__)
+        enableMacOSFirstMouse(m_windowHandle);
+#endif
         /// @brief 用户 .config/mmm 资源包中的窗口图标路径。
         const std::filesystem::path iconPath =
             Config::AppPaths::windowIconFilePath();
@@ -322,12 +485,19 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
               xscale / fbScaleX);
 
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
-        const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+#if defined(__APPLE__)
+        if ( centerMacOSWindowInVisibleFrame(m_windowHandle, w, h) ) {
+            glfwGetWindowSize(m_windowHandle, &actualW, &actualH);
+        } else if ( monitor && mode ) {
+#else
         if ( monitor && mode ) {
+#endif
             int xPos = (mode->width - actualW) / 2;
             int yPos = (mode->height - actualH) / 2;
             glfwSetWindowPos(m_windowHandle, xPos, yPos);
-
+        }
+        if ( monitor && mode ) {
             // 写入屏幕刷新率到全局配置，供逻辑线程等限制最高帧率使用
             Config::AppConfig::instance().setDeviceRefreshRate(
                 mode->refreshRate);
@@ -338,14 +508,23 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 
     rememberCurrentWindowPlacement();
     if ( m_windowHandle ) {
+#if defined(__APPLE__)
+        m_lastRequestedMaximized = false;
+        publishWindowMaximizedState(false);
+#else
         m_lastRequestedMaximized =
             glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+#endif
     }
 
     // 在 glfwCreateWindow 之后调用
-#ifdef _WIN32
+#if defined(_WIN32)
     m_windowFrameAdapter = std::make_unique<Win32WindowAdapter>(m_windowHandle);
-#elif defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+#endif
+#if defined(__APPLE__)
+    m_windowFrameAdapter = std::make_unique<MacOSWindowAdapter>(*this);
+#endif
+#if defined(MMM_ENABLE_X11_FRAME_INTERACTION)
     if ( glfwGetPlatform() == GLFW_PLATFORM_X11 ) {
         m_windowFrameAdapter = std::make_unique<X11WindowAdapter>(*this);
     }
@@ -418,32 +597,41 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
             auto app =
                 reinterpret_cast<NativeWindow*>(glfwGetWindowUserPointer(w));
             if ( app ) {
-                const bool isMaximized = maximized == GLFW_TRUE;
+#if defined(__APPLE__)
+                (void)maximized;
+                app->m_lastRequestedMaximized = app->m_emulatedMaximized;
+                app->refreshWindowFrameShape();
+                publishWindowMaximizedState(app->m_emulatedMaximized);
+                return;
+#else
+                const bool isMaximized   = maximized == GLFW_TRUE;
+                app->m_emulatedMaximized = false;
                 if ( isMaximized ) {
                     app->m_lastRequestedMaximized = true;
-#ifdef _WIN32
+#    ifdef _WIN32
                     setWin32RestoreMaximizedProperty(w, false);
-#endif
+#    endif
                 } else {
-#ifdef _WIN32
+#    ifdef _WIN32
                     const bool keepMaximizedRestore =
                         shouldPreserveWin32MaximizedRestore(
                             w, false, app->m_restoreMaximizedAfterIconify);
-#else
+#    else
                     constexpr bool keepMaximizedRestore = false;
-#endif
+#    endif
                     if ( !keepMaximizedRestore ) {
                         app->m_lastRequestedMaximized = false;
                         app->rememberCurrentWindowPlacement();
-#ifdef _WIN32
+#    ifdef _WIN32
                         setWin32RestoreMaximizedProperty(w, false);
                         clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(w));
-#endif
+#    endif
                     } else {
                         app->m_lastRequestedMaximized = true;
                     }
                 }
                 app->refreshWindowFrameShape();
+#endif
             }
 
             Event::EventBus::instance().publish(Event::GLFWNativeEvent{
@@ -544,8 +732,12 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle)
 #ifdef _WIN32
                 iconifyWin32WindowPreservingMaximize(m_windowHandle,
                                                      m_lastRequestedMaximized);
+#elif defined(__APPLE__)
+                if ( !miniaturizeMacOSWindow(m_windowHandle) ) {
+                    glfwIconifyWindow(m_windowHandle);
+                }
 #else
-                glfwIconifyWindow(m_windowHandle);
+            glfwIconifyWindow(m_windowHandle);
 #endif
                 XINFO("Window iconified.");
                 break;
@@ -586,8 +778,7 @@ void NativeWindow::getWindowPlacement(int& x, int& y, int& width, int& height,
 
     glfwGetWindowPos(m_windowHandle, &x, &y);
     glfwGetWindowSize(m_windowHandle, &width, &height);
-    maximized =
-        glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+    maximized = isWindowMaximized();
 
     if ( maximized ) {
         x      = m_normalWindowPos[0];
@@ -616,6 +807,7 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
     }
 
     rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
+    m_emulatedMaximized = false;
 
     m_lastRequestedMaximized = maximized;
 #ifdef _WIN32
@@ -630,11 +822,19 @@ void NativeWindow::applyWindowPlacement(int x, int y, int width, int height,
         glfwRestoreWindow(m_windowHandle);
     }
 
-    glfwSetWindowPos(m_windowHandle, restoreX, restoreY);
-    glfwSetWindowSize(m_windowHandle, restoreWidth, restoreHeight);
+    setWindowPlacementWithoutRemembering(
+        restoreX, restoreY, restoreWidth, restoreHeight);
 
     if ( maximized ) {
+#if defined(__APPLE__)
+        if ( applyEmulatedMaximizedPlacement() ) {
+            publishWindowMaximizedState(true);
+        } else {
+            glfwMaximizeWindow(m_windowHandle);
+        }
+#else
         glfwMaximizeWindow(m_windowHandle);
+#endif
         rememberWindowPlacement(
             restoreX, restoreY, restoreWidth, restoreHeight);
     }
@@ -647,14 +847,23 @@ void NativeWindow::toggleMaximized()
         return;
     }
 
-    const int maximized = glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED);
+    const bool maximized = isWindowMaximized();
     if ( maximized ) {
         m_lastRequestedMaximized       = false;
         m_restoreMaximizedAfterIconify = false;
 #ifdef _WIN32
         setWin32RestoreMaximizedProperty(m_windowHandle, false);
 #endif
+#if defined(__APPLE__)
+        m_emulatedMaximized = false;
+        setWindowPlacementWithoutRemembering(m_normalWindowPos[0],
+                                             m_normalWindowPos[1],
+                                             m_normalWindowSize[0],
+                                             m_normalWindowSize[1]);
+        publishWindowMaximizedState(false);
+#else
         glfwRestoreWindow(m_windowHandle);
+#endif
 #ifdef _WIN32
         clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
 #endif
@@ -669,7 +878,15 @@ void NativeWindow::toggleMaximized()
     const int restoreWidth   = m_normalWindowSize[0];
     const int restoreHeight  = m_normalWindowSize[1];
     m_lastRequestedMaximized = true;
+#if defined(__APPLE__)
+    if ( applyEmulatedMaximizedPlacement() ) {
+        publishWindowMaximizedState(true);
+    } else {
+        glfwMaximizeWindow(m_windowHandle);
+    }
+#else
     glfwMaximizeWindow(m_windowHandle);
+#endif
     rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
     XINFO("Window maximized.");
     refreshWindowFrameShape();
@@ -697,6 +914,62 @@ void NativeWindow::getNormalFramePlacement(int& x, int& y, int& width,
 void NativeWindow::setNormalFramePlacement(int x, int y, int width, int height)
 {
     rememberWindowPlacement(x, y, width, height);
+}
+
+bool NativeWindow::isFrameMaximized() const
+{
+    return isWindowMaximized();
+}
+
+bool NativeWindow::restoreFrameForClientMove(double cursorX, double cursorY)
+{
+    if ( !m_windowHandle || !isWindowMaximized() ) {
+        return false;
+    }
+
+    int windowX      = 0;
+    int windowY      = 0;
+    int windowWidth  = 0;
+    int windowHeight = 0;
+    glfwGetWindowPos(m_windowHandle, &windowX, &windowY);
+    glfwGetWindowSize(m_windowHandle, &windowWidth, &windowHeight);
+    if ( windowWidth <= 0 || windowHeight <= 0 ) {
+        return false;
+    }
+
+    const int   rootCursorX   = windowX + static_cast<int>(cursorX);
+    const int   rootCursorY   = windowY + static_cast<int>(cursorY);
+    const int   restoreWidth  = std::max(1, m_normalWindowSize[0]);
+    const int   restoreHeight = std::max(1, m_normalWindowSize[1]);
+    const float cursorRatioX  = std::clamp(
+        static_cast<float>(cursorX) / static_cast<float>(windowWidth),
+        0.0f,
+        1.0f);
+    const int restoreX =
+        rootCursorX -
+        static_cast<int>(static_cast<float>(restoreWidth) * cursorRatioX);
+    const int restoreY =
+        rootCursorY -
+        std::clamp(static_cast<int>(cursorY), 0, restoreHeight - 1);
+
+    m_lastRequestedMaximized       = false;
+    m_restoreMaximizedAfterIconify = false;
+    m_emulatedMaximized            = false;
+#ifdef _WIN32
+    setWin32RestoreMaximizedProperty(m_windowHandle, false);
+    clearWin32RestoreToMaximizedFlag(glfwGetWin32Window(m_windowHandle));
+#endif
+#if !defined(__APPLE__)
+    if ( glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE ) {
+        glfwRestoreWindow(m_windowHandle);
+    }
+#endif
+    setWindowPlacementWithoutRemembering(
+        restoreX, restoreY, restoreWidth, restoreHeight);
+    rememberWindowPlacement(restoreX, restoreY, restoreWidth, restoreHeight);
+    publishWindowMaximizedState(false);
+    refreshWindowFrameShape();
+    return true;
 }
 
 void NativeWindow::framebufferResizeCallback(GLFWwindow* window, int w, int h)
@@ -738,9 +1011,27 @@ void NativeWindow::windowSizeCallback(GLFWwindow* window, int width, int height)
 
 bool NativeWindow::canRememberCurrentWindowPlacement() const
 {
-    return m_windowHandle && glfwGetWindowMonitor(m_windowHandle) == nullptr &&
+#if defined(__APPLE__)
+    return !m_ignoreWindowPlacementCallbacks && !m_emulatedMaximized &&
+           m_windowHandle && glfwGetWindowMonitor(m_windowHandle) == nullptr &&
+           glfwGetWindowAttrib(m_windowHandle, GLFW_ICONIFIED) != GLFW_TRUE;
+#else
+    return !m_ignoreWindowPlacementCallbacks && !m_emulatedMaximized &&
+           m_windowHandle && glfwGetWindowMonitor(m_windowHandle) == nullptr &&
            glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) != GLFW_TRUE &&
            glfwGetWindowAttrib(m_windowHandle, GLFW_ICONIFIED) != GLFW_TRUE;
+#endif
+}
+
+bool NativeWindow::isWindowMaximized() const
+{
+#if defined(__APPLE__)
+    return m_emulatedMaximized;
+#else
+    return m_emulatedMaximized ||
+           (m_windowHandle &&
+            glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE);
+#endif
 }
 
 bool NativeWindow::isLikelyMaximizedPlacement(int width, int height) const
@@ -749,30 +1040,11 @@ bool NativeWindow::isLikelyMaximizedPlacement(int width, int height) const
         return false;
     }
 
-    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-    if ( !monitor ) {
-        return false;
-    }
+    MonitorPlacementBounds bounds;
+    if ( !queryPrimaryMonitorPlacementBounds(bounds) ) return false;
 
-    int workAreaX      = 0;
-    int workAreaY      = 0;
-    int workAreaWidth  = 0;
-    int workAreaHeight = 0;
-    glfwGetMonitorWorkarea(
-        monitor, &workAreaX, &workAreaY, &workAreaWidth, &workAreaHeight);
-
-    if ( workAreaWidth <= 0 || workAreaHeight <= 0 ) {
-        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-        if ( !mode ) {
-            return false;
-        }
-
-        workAreaWidth  = mode->width;
-        workAreaHeight = mode->height;
-    }
-
-    return width >= workAreaWidth - MAXIMIZED_PLACEMENT_TOLERANCE ||
-           height >= workAreaHeight - MAXIMIZED_PLACEMENT_TOLERANCE;
+    return width >= bounds.m_width - MAXIMIZED_PLACEMENT_TOLERANCE ||
+           height >= bounds.m_height - MAXIMIZED_PLACEMENT_TOLERANCE;
 }
 
 void NativeWindow::rememberCurrentWindowPlacement()
@@ -788,6 +1060,50 @@ void NativeWindow::rememberCurrentWindowPlacement()
     glfwGetWindowPos(m_windowHandle, &x, &y);
     glfwGetWindowSize(m_windowHandle, &width, &height);
     rememberWindowPlacement(x, y, width, height);
+}
+
+void NativeWindow::setWindowPlacementWithoutRemembering(int x, int y, int width,
+                                                        int height)
+{
+    if ( !m_windowHandle || width <= 0 || height <= 0 ) {
+        return;
+    }
+
+    m_ignoreWindowPlacementCallbacks = true;
+    glfwSetWindowPos(m_windowHandle, x, y);
+    glfwSetWindowSize(m_windowHandle, width, height);
+    m_ignoreWindowPlacementCallbacks = false;
+    m_lastResizeTime                 = std::chrono::steady_clock::now();
+    m_resizePending.store(true, std::memory_order_relaxed);
+}
+
+bool NativeWindow::applyEmulatedMaximizedPlacement()
+{
+#if defined(__APPLE__)
+    if ( !m_windowHandle ) {
+        return false;
+    }
+
+    m_emulatedMaximized = true;
+    if ( applyMacOSVisibleWindowFrame(m_windowHandle) ) {
+        m_lastResizeTime = std::chrono::steady_clock::now();
+        m_resizePending.store(true, std::memory_order_relaxed);
+        return true;
+    }
+
+    MonitorPlacementBounds bounds;
+    if ( queryMonitorWorkAreaBounds(findBestMonitorForWindow(m_windowHandle),
+                                    bounds) ) {
+        setWindowPlacementWithoutRemembering(
+            bounds.m_x, bounds.m_y, bounds.m_width, bounds.m_height);
+        return true;
+    }
+
+    m_emulatedMaximized = false;
+    return false;
+#else
+    return false;
+#endif
 }
 
 void NativeWindow::refreshWindowFrameShape()
@@ -829,8 +1145,7 @@ void NativeWindow::handleWindowIconify(int iconified)
                                          m_restoreMaximizedAfterIconify);
 #else
         m_restoreMaximizedAfterIconify =
-            m_lastRequestedMaximized ||
-            glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) == GLFW_TRUE;
+            m_lastRequestedMaximized || isWindowMaximized();
 #endif
         return;
     }
@@ -841,10 +1156,17 @@ void NativeWindow::handleWindowIconify(int iconified)
                                             m_lastRequestedMaximized,
                                             m_restoreMaximizedAfterIconify);
 #endif
-    if ( m_restoreMaximizedAfterIconify &&
-         glfwGetWindowAttrib(m_windowHandle, GLFW_MAXIMIZED) != GLFW_TRUE ) {
+    if ( m_restoreMaximizedAfterIconify && !isWindowMaximized() ) {
         m_lastRequestedMaximized = true;
+#if defined(__APPLE__)
+        if ( applyEmulatedMaximizedPlacement() ) {
+            publishWindowMaximizedState(true);
+        } else {
+            glfwMaximizeWindow(m_windowHandle);
+        }
+#else
         glfwMaximizeWindow(m_windowHandle);
+#endif
     }
     m_restoreMaximizedAfterIconify = false;
     refreshWindowFrameShape();
@@ -952,7 +1274,11 @@ void NativeWindow::ToggleFullscreen()
 
         // 执行全屏切换
         GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
-        const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
+        const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+        if ( !monitor || !mode ) {
+            XERROR("Failed to enter fullscreen mode: no primary monitor.");
+            return;
+        }
         glfwSetWindowMonitor(m_windowHandle,
                              monitor,
                              0,

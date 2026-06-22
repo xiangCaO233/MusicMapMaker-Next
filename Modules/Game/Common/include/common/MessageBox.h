@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 #include <string>
 
 #ifdef _WIN32
@@ -22,11 +23,14 @@ inline void showFatalError(const std::string& title, const std::string& message)
     MessageBoxA(NULL, message.c_str(), title.c_str(), MB_OK | MB_ICONERROR);
 #else
     // Linux 下尝试使用 zenity, kdialog 或 notify-send
-    std::string cmd = "zenity --error --title=\"" + title + "\" --text=\"" + message +
+    std::string cmd = "zenity --error --title=\"" + title + "\" --text=\"" +
+                      message +
                       "\" 2>/dev/null || "
-                      "kdialog --error \"" + message + "\" --title \"" + title +
+                      "kdialog --error \"" +
+                      message + "\" --title \"" + title +
                       "\" 2>/dev/null || "
-                      "notify-send \"" + title + "\" \"" + message + "\"";
+                      "notify-send \"" +
+                      title + "\" \"" + message + "\"";
     (void)std::system(cmd.c_str());
 #endif
 }

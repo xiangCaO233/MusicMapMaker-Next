@@ -12,7 +12,7 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
                                        SessionContext&                ctx)
 {
     ctx.lastActionMessage = fmt::format(
-        "{} {}", TR("ui.status.category.action"), action->getName());
+        "{} {}", TR("ui.status.category.action").data(), action->getName());
     action->execute(ctx);
     m_undoStack.push_back(std::move(action));
     m_redoStack.clear();
@@ -26,8 +26,8 @@ void EditorActionStack::undo(SessionContext& ctx)
     if ( m_undoStack.empty() ) return;
     auto action = std::move(m_undoStack.back());
     m_undoStack.pop_back();
-    ctx.lastActionMessage =
-        fmt::format("{} {}", TR("ui.status.category.undo"), action->getName());
+    ctx.lastActionMessage = fmt::format(
+        "{} {}", TR("ui.status.category.undo").data(), action->getName());
     action->undo(ctx);
     m_redoStack.push_back(std::move(action));
     if ( ctx.m_needsTimingsSync ) {
@@ -40,8 +40,8 @@ void EditorActionStack::redo(SessionContext& ctx)
     if ( m_redoStack.empty() ) return;
     auto action = std::move(m_redoStack.back());
     m_redoStack.pop_back();
-    ctx.lastActionMessage =
-        fmt::format("{} {}", TR("ui.status.category.redo"), action->getName());
+    ctx.lastActionMessage = fmt::format(
+        "{} {}", TR("ui.status.category.redo").data(), action->getName());
     action->redo(ctx);
     m_undoStack.push_back(std::move(action));
     if ( ctx.m_needsTimingsSync ) {

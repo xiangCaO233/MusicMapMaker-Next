@@ -58,6 +58,14 @@ if(WIN32)
     target_link_libraries(Graphic PRIVATE dwmapi comctl32)
 endif()
 
+if(APPLE)
+    target_sources(Graphic PRIVATE
+        src/glfw/adapters/MacOSWindowAdapter.mm
+        src/glfw/adapters/MacOSWindowUtils.mm
+    )
+    target_link_libraries(Graphic PRIVATE "-framework AppKit")
+endif()
+
 if(UNIX AND NOT APPLE)
     find_package(X11)
     if(X11_FOUND)

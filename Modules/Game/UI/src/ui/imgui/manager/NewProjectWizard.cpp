@@ -26,6 +26,21 @@ namespace
 /// @brief 统一文件选择器弹窗 ID。
 constexpr const char* PARENT_FOLDER_PICKER_ID = "NewProjectParentFolderPicker";
 
+/// @brief 尽量将路径转换为绝对规范路径。
+/// @param path 待规范化路径。
+/// @return 成功时返回绝对路径；失败时退回词法规范化路径。
+std::filesystem::path makeAbsoluteNormalizedPath(
+    const std::filesystem::path& path)
+{
+    if ( path.empty() ) return {};
+
+    std::error_code filesystemError;
+    auto normalized = std::filesystem::absolute(path, filesystemError);
+    if ( !filesystemError ) return normalized.lexically_normal();
+
+    return path.lexically_normal();
+}
+
 /// @brief 判断字符是否适合保留在文件夹名中。
 /// @param ch 待检查字符。
 /// @return 字符可保留时返回 true。
@@ -189,7 +204,8 @@ std::filesystem::path NewProjectWizard::targetProjectPath() const
     if ( m_parentDirectory.empty() || m_folderNameBuf[0] == '\0' ) {
         return {};
     }
-    return m_parentDirectory / Config::utf8ToPath(m_folderNameBuf);
+    return makeAbsoluteNormalizedPath(m_parentDirectory /
+                                      Config::utf8ToPath(m_folderNameBuf));
 }
 
 bool NewProjectWizard::targetHasProjectFile() const

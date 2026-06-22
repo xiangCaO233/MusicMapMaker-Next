@@ -19,9 +19,9 @@ if(WIN32)
     target_link_libraries(Network PUBLIC shell32)
 endif()
 
-# Unit test
+# 单元测试
 mmm_add_test_executable(Network UpdateCheckerTest tests/UpdateCheckerTest.cpp)
-if(WIN32)
+if(WIN32 AND NOT MSVC)
     target_sources(UpdateCheckerTest PRIVATE tests/UpdateCheckerTest.rc)
 endif()
 target_link_libraries(UpdateCheckerTest PRIVATE Network Log)

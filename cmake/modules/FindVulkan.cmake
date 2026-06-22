@@ -1,5 +1,45 @@
 # cmake/modules/FindVulkan.cmake 包装器 (Wrapper)。 在 Windows 上，它会尝试设置路径提示以使用项目内置的
 # Vulkan SDK。 在 Linux/macOS 上，它直接透传给系统的标准 FindVulkan。
+function(mmm_set_vulkan_sdk_from_env)
+	set(_MMM_VULKAN_SDK_ROOT_SET FALSE PARENT_SCOPE)
+
+	if(NOT DEFINED ENV{VULKAN_SDK} OR "$ENV{VULKAN_SDK}" STREQUAL "")
+		return()
+	endif()
+
+	file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}" VULKAN_SDK_ROOT)
+	set(_MMM_VULKAN_INCLUDE_DIR "${VULKAN_SDK_ROOT}/Include")
+	set(_MMM_VULKAN_LIBRARY "${VULKAN_SDK_ROOT}/Lib/vulkan-1.lib")
+
+	if(NOT EXISTS "${_MMM_VULKAN_INCLUDE_DIR}")
+		message(FATAL_ERROR
+			"VULKAN_SDK points to '${VULKAN_SDK_ROOT}', but "
+			"'${_MMM_VULKAN_INCLUDE_DIR}' does not exist."
+		)
+	endif()
+
+	if(NOT EXISTS "${_MMM_VULKAN_LIBRARY}")
+		message(FATAL_ERROR
+			"VULKAN_SDK points to '${VULKAN_SDK_ROOT}', but "
+			"'${_MMM_VULKAN_LIBRARY}' does not exist."
+		)
+	endif()
+
+	set(ENV{VULKAN_SDK} "${VULKAN_SDK_ROOT}")
+	set(VULKAN_SDK_ROOT "${VULKAN_SDK_ROOT}" PARENT_SCOPE)
+	set(Vulkan_INCLUDE_DIR
+		"${_MMM_VULKAN_INCLUDE_DIR}"
+		CACHE PATH "Vulkan include directory" FORCE
+	)
+	set(Vulkan_LIBRARY
+		"${_MMM_VULKAN_LIBRARY}"
+		CACHE FILEPATH "Vulkan loader library" FORCE
+	)
+	set(Vulkan_INCLUDE_DIR "${_MMM_VULKAN_INCLUDE_DIR}" PARENT_SCOPE)
+	set(Vulkan_LIBRARY "${_MMM_VULKAN_LIBRARY}" PARENT_SCOPE)
+	set(_MMM_VULKAN_SDK_ROOT_SET TRUE PARENT_SCOPE)
+endfunction()
+
 if(CMAKE_CROSSCOMPILING)
 	if(MSVC)
 		message(STATUS "Using CMAKE_CROSSCOMPILING clang-cl msvc like Toolchain")
@@ -8,13 +48,17 @@ if(CMAKE_CROSSCOMPILING)
 		# =============================================================================
 		# CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
 		if(MSVC)
-			set(VULKAN_SDK_ROOT "/mnt/windows_c/VulkanSDK/1.4.341.1")
-			set(Vulkan_INCLUDE_DIR "${VULKAN_SDK_ROOT}/Include")
-			set(Vulkan_LIBRARY "${VULKAN_SDK_ROOT}/Lib/vulkan-1.lib")
+			mmm_set_vulkan_sdk_from_env()
+			if(NOT _MMM_VULKAN_SDK_ROOT_SET)
+				message(FATAL_ERROR
+					"VULKAN_SDK environment variable is required when cross-compiling with "
+					"an MSVC-like toolchain."
+				)
+			endif()
 
 			# 也可以通过设置环境变量让标准模块去找
-			set(ENV{VULKAN_SDK} "${VULKAN_SDK_ROOT}")
-			list(APPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
+			list(PREPEND CMAKE_INCLUDE_PATH "${VULKAN_SDK_ROOT}/Include")
+			list(PREPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
 		endif()
 		include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
 	endif()
@@ -65,8 +109,11 @@ else()
 			# =============================================================================
 			# CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
 			if(MSVC)
-				set(VULKAN_SDK_ROOT "C:/VulkanSDK/1.4.341.1")
-				set(Vulkan_INCLUDE_DIR "${VULKAN_SDK_ROOT}/Include")
+				mmm_set_vulkan_sdk_from_env()
+				if(_MMM_VULKAN_SDK_ROOT_SET)
+					list(PREPEND CMAKE_INCLUDE_PATH "${VULKAN_SDK_ROOT}/Include")
+					list(PREPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
+				endif()
 			endif()
 			include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
 		endif()

@@ -80,6 +80,18 @@ struct ProjectClosedEvent : public ProjectLifecycleEvent {
     std::filesystem::path m_projectPath;
 };
 
+/// @brief 项目或谱面包打开失败事件。
+struct ProjectOpenFailedEvent : public ProjectLifecycleEvent {
+    /// @brief 尝试打开的项目目录、谱面文件或谱面包路径。
+    std::string m_projectPath;
+
+    /// @brief 失败原因。
+    std::string m_errorMessage;
+
+    /// @brief 是否是打开谱面包为临时项目时失败。
+    bool m_isPackage{ false };
+};
+
 /// @brief 临时项目只读编辑被拦截事件。
 struct TemporaryProjectEditBlockedEvent : public ProjectLifecycleEvent {
     /// @brief 用户拖拽打开的原始包文件路径。
@@ -123,6 +135,8 @@ EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCompletedEvent,
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectSwitchCancelledEvent,
                        MMM::Event::ProjectSwitchEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::ProjectClosedEvent,
+                       MMM::Event::ProjectLifecycleEvent);
+EVENT_REGISTER_PARENTS(MMM::Event::ProjectOpenFailedEvent,
                        MMM::Event::ProjectLifecycleEvent);
 EVENT_REGISTER_PARENTS(MMM::Event::TemporaryProjectEditBlockedEvent,
                        MMM::Event::ProjectLifecycleEvent);

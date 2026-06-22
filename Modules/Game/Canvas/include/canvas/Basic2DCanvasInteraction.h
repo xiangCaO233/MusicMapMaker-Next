@@ -108,10 +108,20 @@ private:
     bool m_hasLastHovered{ false };
     /// @brief 左键按下时是否位于画布内。
     bool m_leftPressStartedOnCanvas{ false };
+    /// @brief 左键按下时是否位于轨道布局内。
+    bool m_leftPressStartedInTrackLayout{ false };
     /// @brief 左键按下时是否命中实体。
     bool m_leftPressStartedOnEntity{ false };
     /// @brief 当前左键手势是否已经发生拖动。
     bool m_leftPressDragged{ false };
+    /// @brief 当前左键手势是否正在用 Move 工具拖动画布。
+    bool m_isCanvasPanning{ false };
+    /// @brief 拖动画布开始时的当前显示时间，单位秒。
+    double m_canvasPanStartTime{ 0.0 };
+    /// @brief 拖动画布开始时鼠标抓住的显示时间，单位秒。
+    double m_canvasPanAnchorTime{ 0.0 };
+    /// @brief 拖动画布开始时鼠标所在的本地 Y 坐标，单位像素。
+    float m_canvasPanAnchorMouseY{ 0.0f };
     /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 上一次发送的框选拖动更新。

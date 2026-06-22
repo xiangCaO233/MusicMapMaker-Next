@@ -25,6 +25,7 @@
 // clang-format on
 #elif defined(__APPLE__)
 #    include <mach-o/dyld.h>
+#    include <unistd.h>
 #else
 #    include <unistd.h>
 #endif
@@ -256,10 +257,10 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 #if defined(_WIN32)
     std::filesystem::path dlPath    = Config::utf8ToPath(downloadedFilePath);
     std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
-    std::wstring cmdLine = L"\"" + updaterPath.wstring() + L"\" \"" +
+    std::wstring          cmdLine   = L"\"" + updaterPath.wstring() + L"\" \"" +
                            dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
                            L"\" " + std::to_wstring(pid);
-    STARTUPINFOW si{ sizeof(si) };
+    STARTUPINFOW        si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessW(nullptr,
                         cmdLine.data(),

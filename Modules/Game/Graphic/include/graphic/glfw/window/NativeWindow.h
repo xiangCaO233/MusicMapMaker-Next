@@ -66,6 +66,10 @@ public:
     /// @brief 切换窗口最大化或还原状态。
     void toggleMaximized();
 
+    /// @brief 判断窗口是否处于原生或 macOS 模拟最大化状态。
+    /// @return 当前窗口应被视为最大化时返回 true。
+    [[nodiscard]] bool isWindowMaximized() const;
+
     /// @brief 获取无原生装饰窗口的平台适配器。
     /// @return 平台适配器观察指针；当前平台无适配器时返回 nullptr。
     [[nodiscard]] IWindowFrameAdapter* getWindowFrameAdapter() const;
@@ -88,6 +92,17 @@ public:
     /// @param width 窗口宽度。
     /// @param height 窗口高度。
     void setNormalFramePlacement(int x, int y, int width, int height) override;
+
+    /// @brief 判断当前平台窗口是否处于最大化状态。
+    /// @return 当前窗口应被视为最大化时返回 true。
+    [[nodiscard]] bool isFrameMaximized() const override;
+
+    /// @brief 为标题栏拖动还原最大化窗口，并保持鼠标相对窗口位置。
+    /// @param cursorX 鼠标在窗口客户区中的 X 坐标。
+    /// @param cursorY 鼠标在窗口客户区中的 Y 坐标。
+    /// @return 成功从最大化状态还原时返回 true。
+    /// @warning 输入低频路径：仅在标题栏拖动超过阈值后执行，会修改窗口矩形。
+    bool restoreFrameForClientMove(double cursorX, double cursorY) override;
 
     /**
      * @brief 全屏
@@ -152,6 +167,18 @@ private:
     /// @brief 从 GLFW 当前状态更新普通窗口还原矩形。
     void rememberCurrentWindowPlacement();
 
+    /// @brief 程序化设置窗口位置和尺寸，不写入普通窗口还原矩形。
+    /// @param x 目标窗口左上角 X 坐标。
+    /// @param y 目标窗口左上角 Y 坐标。
+    /// @param width 目标窗口宽度。
+    /// @param height 目标窗口高度。
+    void setWindowPlacementWithoutRemembering(int x, int y, int width,
+                                              int height);
+
+    /// @brief 在 macOS 上应用无边框窗口的模拟最大化矩形。
+    /// @return 成功进入模拟最大化状态时返回 true。
+    bool applyEmulatedMaximizedPlacement();
+
     /// @brief 刷新无原生装饰窗口的平台外形。
     void refreshWindowFrameShape();
 
@@ -194,6 +221,12 @@ private:
 
     /// @brief 最近一次由用户或系统请求的主窗口最大化状态。
     bool m_lastRequestedMaximized{ false };
+
+    /// @brief 是否正在忽略程序化窗口位置或尺寸回调。
+    bool m_ignoreWindowPlacementCallbacks{ false };
+
+    /// @brief macOS 无边框窗口是否处于应用层模拟最大化状态。
+    bool m_emulatedMaximized{ false };
 
     /// @brief 无原生装饰窗口的平台行为适配器。
     std::unique_ptr<IWindowFrameAdapter> m_windowFrameAdapter;

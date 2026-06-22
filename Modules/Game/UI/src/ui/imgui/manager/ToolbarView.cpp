@@ -215,13 +215,13 @@ bool parseHexColor(std::string_view text, glm::vec4& color)
 /// @brief 获取默认调色盘方案名。
 std::string defaultPaletteSchemeName()
 {
-    return std::string(TR("ui.toolbar.note_palette.skin_default_scheme"));
+    return TR("ui.toolbar.note_palette.skin_default_scheme").data();
 }
 
 /// @brief 获取继承软件默认调色盘方案名。
 std::string inheritedPaletteSchemeName()
 {
-    return std::string(TR("ui.settings.project.note_palette.inherit"));
+    return TR("ui.settings.project.note_palette.inherit").data();
 }
 
 /// @brief 判断方案名是否保留给内置调色盘选项。
@@ -529,7 +529,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -664,7 +664,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -850,7 +850,7 @@ void ToolbarView::update(UIManager* sourceManager)
         if ( pushedIconFont ) ImGui::PopFont();
     }
     ImGui::End();
-    ImGui::PopStyleVar(3);  // WindowPadding, WindowBorderSize, WindowRounding
+    ImGui::PopStyleVar(3);  // 窗口内边距、窗口边框大小、窗口圆角
     Utils::popFixedButtonStyleVars();
     ImGui::PopStyleVar(4);
 
@@ -867,8 +867,8 @@ void ToolbarView::update(UIManager* sourceManager)
         float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
         float viewportLeft   = mainViewport->Pos.x;
 
-        // X = 工具栏左边缘往左 4px
-        // Y = 按钮的顶部对齐
+        // 横向位置 = 工具栏左边缘往左 4px
+        // 纵向位置 = 按钮的顶部对齐
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastBtnY;
 
@@ -887,7 +887,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         ImVec2 popupPos = ImVec2(targetX, targetY);
 
-        // Pivot(1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
+        // 枢轴点 (1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
         ImGui::SetNextWindowViewport(mainViewport->ID);
         ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
 
@@ -971,11 +971,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1079,8 +1079,8 @@ void ToolbarView::update(UIManager* sourceManager)
         float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
         float viewportLeft   = mainViewport->Pos.x;
 
-        // X = 工具栏左边缘往左 4px
-        // Y = 按钮的顶部对齐
+        // 横向位置 = 工具栏左边缘往左 4px
+        // 纵向位置 = 按钮的顶部对齐
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastKeyBtnY;
 
@@ -1719,7 +1719,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);

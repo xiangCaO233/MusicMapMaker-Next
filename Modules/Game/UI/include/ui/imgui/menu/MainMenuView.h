@@ -184,7 +184,10 @@ private:
 
     /// @brief 直接分发谱面导出命令并显示保存提示。
     /// @param path 目标导出路径。
-    void dispatchSaveBeatmapAs(const std::string& path);
+    /// @param addStoreModeExtForMalodyExport 是否为 MC 导出写入上架皮肤
+    /// mode_ext。
+    void dispatchSaveBeatmapAs(const std::string& path,
+                               bool addStoreModeExtForMalodyExport = false);
 
     /// @brief 请求保存当前谱面，必要时先展示格式兼容性警告。
     /// @param allowExternallyModifiedOverwrite
@@ -209,6 +212,10 @@ private:
     /// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderSaveConflictWarningPopup(float dpiScale);
+
+    /// @brief 渲染项目或谱面包打开失败弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderProjectOpenFailedPopup(float dpiScale);
 
     /// @brief 渲染首次启动 PGO 性能数据上传授权弹窗。
     /// @param dpiScale 当前窗口内容缩放。
@@ -269,6 +276,10 @@ private:
     /// @brief 判断当前选中谱面是否存在未能绑定的依赖资源。
     /// @return 存在缺失依赖时返回 true。
     bool hasSelectedPackageMissingDependencies() const;
+
+    /// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
+    /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+    bool hasSelectedPackageStoreModeExtCandidates() const;
 
     /// @brief 为选中的谱面准备打包转换前的元数据补充项。
     /// @param selectedRelativePaths 当前已选的项目相对路径列表。
@@ -357,6 +368,8 @@ private:
     bool m_showExportCompatibilityWarning = false;
     /// @brief 是否在下一帧打开保存覆盖风险确认弹窗。
     bool m_showSaveConflictWarning = false;
+    /// @brief 是否在下一帧打开项目或谱面包打开失败弹窗。
+    bool m_showProjectOpenFailedPopup = false;
     /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
     bool m_showExportFormatPicker = false;
     /// @brief 是否显示谱面倍速制作弹窗。
@@ -411,8 +424,18 @@ private:
     bool m_pendingCompatibilityWarningAllowOverwrite = false;
     /// @brief 当前保存的 key 模式降级警告是否已经确认。
     bool m_currentSaveKeyConversionWarningConfirmed = false;
+    /// @brief 待确认导出是否显示上架 mode_ext 选项。
+    bool m_pendingExportShowStoreModeExtOption = false;
+    /// @brief 待确认导出是否写入上架 mode_ext。
+    bool m_pendingExportAddStoreModeExt = false;
     /// @brief 待确认覆盖的保存目标路径。
     std::string m_pendingSaveConflictPath;
+    /// @brief 打开失败的项目目录、谱面文件或谱面包路径。
+    std::string m_pendingProjectOpenFailedPath;
+    /// @brief 打开失败的错误说明。
+    std::string m_pendingProjectOpenFailedMessage;
+    /// @brief 打开失败是否来自谱面包。
+    bool m_pendingProjectOpenFailedIsPackage = false;
 
     /// @brief 打包流程的格式、候选文件和临时弹窗状态。
     PackageDialogState m_package;

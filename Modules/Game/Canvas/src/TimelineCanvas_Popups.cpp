@@ -489,34 +489,40 @@ void TimelineCanvas::renderEventCreationPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
-        ImGui::TextUnformatted(TR("ui.timeline.event_creator.type").data());
-        if ( ImGui::RadioButton("BPM", &m_createType, 0) ) {
-            m_createValue =
-                getDefaultCreateValue(getCreateEffect(m_createType));
+        const bool professionalMode = Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .timelineProfessionalMode;
+        if ( !professionalMode ) {
+            ImGui::TextUnformatted(TR("ui.timeline.event_creator.type").data());
+            if ( ImGui::RadioButton("BPM", &m_createType, 0) ) {
+                m_createValue =
+                    getDefaultCreateValue(getCreateEffect(m_createType));
+            }
+
+            wrapToNextLineIfNoSpace(getRadioButtonWidth("Scroll"));
+
+            if ( ImGui::RadioButton("Scroll", &m_createType, 1) ) {
+                m_createValue =
+                    getDefaultCreateValue(getCreateEffect(m_createType));
+            }
+
+            wrapToNextLineIfNoSpace(getRadioButtonWidth("Jump"));
+
+            if ( ImGui::RadioButton("Jump", &m_createType, 2) ) {
+                m_createValue =
+                    getDefaultCreateValue(getCreateEffect(m_createType));
+            }
+
+            wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
+
+            if ( ImGui::RadioButton("HS", &m_createType, 3) ) {
+                m_createValue =
+                    getDefaultCreateValue(getCreateEffect(m_createType));
+            }
+
+            ImGui::Spacing();
         }
 
-        wrapToNextLineIfNoSpace(getRadioButtonWidth("Scroll"));
-
-        if ( ImGui::RadioButton("Scroll", &m_createType, 1) ) {
-            m_createValue =
-                getDefaultCreateValue(getCreateEffect(m_createType));
-        }
-
-        wrapToNextLineIfNoSpace(getRadioButtonWidth("Jump"));
-
-        if ( ImGui::RadioButton("Jump", &m_createType, 2) ) {
-            m_createValue =
-                getDefaultCreateValue(getCreateEffect(m_createType));
-        }
-
-        wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
-
-        if ( ImGui::RadioButton("HS", &m_createType, 3) ) {
-            m_createValue =
-                getDefaultCreateValue(getCreateEffect(m_createType));
-        }
-
-        ImGui::Spacing();
         ::MMM::TimingEffect createEffect = getCreateEffect(m_createType);
         if ( createEffect == ::MMM::TimingEffect::BPM ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_editor.bpm").data());

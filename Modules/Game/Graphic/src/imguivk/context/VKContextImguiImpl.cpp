@@ -72,8 +72,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // 禁用保存
     // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
 
-    // Enable Multi-Viewport / Platform
-    // Windows
+    // Enable Multi-Viewport / Platform Windows.
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     io.ConfigViewportsNoAutoMerge        = false;
     io.ConfigViewportsNoTaskBarIcon      = true;

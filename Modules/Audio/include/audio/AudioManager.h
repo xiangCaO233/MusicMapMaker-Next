@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace ice
 {
@@ -64,6 +65,15 @@ enum class MixerChannelMode {
     CopyRightToLeft   ///< 将右声道复制到左声道，两侧都播放右声道。
 };
 
+/// @brief 音频输出设备列表项。
+struct AudioOutputDevice {
+    /// @brief 后端报告的设备名称；为空时表示系统默认设备。
+    std::string name;
+
+    /// @brief 是否为“系统默认设备”占位项。
+    bool isDefault{ false };
+};
+
 /**
  * @brief 音频管理器，封装 IonCachyEngine 的核心功能
  */
@@ -86,6 +96,22 @@ public:
     /// @brief 获取当前正在使用的音频播放后端。
     /// @return 当前播放后端。
     Config::AudioPlaybackBackend getPlaybackBackend() const;
+
+    /// @brief 枚举当前播放后端可用的输出设备。
+    /// @return 输出设备列表，第一项始终为系统默认设备。
+    /// @warning 低频 UI 路径：可能查询系统音频后端，调用方必须缓存结果，
+    /// 禁止在每帧热路径中重复枚举。
+    std::vector<AudioOutputDevice> listOutputDevices() const;
+
+    /// @brief 设置当前播放后端使用的输出设备。
+    /// @param deviceName 设备名称；空字符串表示系统默认设备。
+    /// @return 成功切换并持久化时返回 true。
+    /// @warning 低频后端切换路径：会重建音频播放器，禁止在播放热路径中调用。
+    bool setOutputDeviceName(const std::string& deviceName);
+
+    /// @brief 获取当前播放后端配置的输出设备名称。
+    /// @return 设备名称；空字符串表示系统默认设备。
+    const std::string& getOutputDeviceName() const;
 
     /// @brief 设置 OpenAL 后端空间化输出参数。
     /// @param config OpenAL 空间化配置。
@@ -388,11 +414,25 @@ private:
 
     /// @brief 创建并启动指定播放后端。
     /// @param backend 目标播放后端。
+    /// @param allowDefaultDeviceFallback 指定设备打开失败时是否回退到默认设备。
     /// @return 成功创建并启动时返回 true。
-    bool createPlaybackBackend(Config::AudioPlaybackBackend backend);
+    bool createPlaybackBackend(Config::AudioPlaybackBackend backend,
+                               bool allowDefaultDeviceFallback = true);
 
     /// @brief 停止并释放当前播放后端。
     void destroyPlaybackBackend();
+
+    /// @brief 获取指定后端配置的输出设备名称。
+    /// @param backend 目标播放后端。
+    /// @return 设备名称；空字符串表示系统默认设备。
+    const std::string& getConfiguredOutputDeviceName(
+        Config::AudioPlaybackBackend backend) const;
+
+    /// @brief 更新指定后端配置的输出设备名称。
+    /// @param backend 目标播放后端。
+    /// @param deviceName 设备名称；空字符串表示系统默认设备。
+    void setConfiguredOutputDeviceName(Config::AudioPlaybackBackend backend,
+                                       const std::string&           deviceName);
 
     /// @brief 将缓存的 OpenAL 空间化参数应用到当前后端。
     /// @return 当前后端为 OpenAL 并成功应用时返回 true。
@@ -413,6 +453,12 @@ private:
     Config::AudioPlaybackBackend m_playbackBackend{
         Config::AudioPlaybackBackend::SDL
     };
+
+    /// @brief SDL 后端配置的输出设备名称；为空时使用系统默认设备。
+    std::string m_sdlOutputDeviceName;
+
+    /// @brief OpenAL 后端配置的输出设备名称；为空时使用系统默认设备。
+    std::string m_openALOutputDeviceName;
 
     /// @brief 当前 OpenAL 后端观察指针，不拥有对象。
     ice::ALPlayer* m_openALPlayer{ nullptr };

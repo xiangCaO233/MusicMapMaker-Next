@@ -289,6 +289,9 @@ return {
 	["ui.settings.editor.disable_scroll_accel_while_drawing"] = "绘制物件(Shift)时屏蔽滚动加速",
 	["ui.settings.editor.remove_objects_on_polyline_path"] = "移除折线路径上的物件",
 	["ui.settings.editor.select_pasted_objects"] = "粘贴后选中粘贴的物件",
+	["ui.settings.editor.copy_paste_time_basis"] = "复制粘贴基准",
+	["ui.settings.editor.copy_paste_time_basis.timestamp"] = "时间戳",
+	["ui.settings.editor.copy_paste_time_basis.beat"] = "小节/分拍",
 	["ui.settings.editor.timeline_selection_includes_bpm"] = "时间线多选包含红色 BPM 线",
 	["ui.settings.editor.selection"] = "框选工具行为",
 	["ui.settings.editor.selection.strict"] = "严格 (完全包含)",
@@ -368,6 +371,9 @@ return {
     ["ui.beatmap_manager.remove_confirm"] = "确定要从项目中移除该谱面吗？(文件不会被删除)",
 	["ui.audio_manager.permanent_sfx"] = "常驻音效",
 	["ui.audio_manager.global_settings"] = "全局音频设置",
+	["ui.audio_manager.output_device"] = "输出设备",
+	["ui.audio_manager.output_device_default"] = "默认设备",
+	["ui.audio_manager.output_device_tooltip"] = "选择当前音频后端使用的输出设备。",
 	["ui.audio_manager.global_volume"] = "全局音量",
 	["ui.audio_manager.bgm_gain"] = "主音轨增益",
 	["ui.audio_manager.sfx_gain"] = "效果音轨增益",
@@ -686,6 +692,9 @@ return {
 	-- 时间点表格
 	["ui.timeline.timing_points_table_btn"] = "时间点",
 	["ui.timeline.timing_points_table_btn_tooltip"] = "打开时间点表格 (批量编辑)",
+	["ui.timeline.menu.tooltip"] = "时间线选项",
+	["ui.timeline.menu.professional_mode"] = "切换专业模式",
+	["ui.timeline.menu.open_timing_table"] = "打开时间线表格",
 	["ui.timeline.timing_points_table.title"] = "时间点批量编辑###TimingPointsTable",
 
 	-- 状态栏

@@ -14,7 +14,14 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
 		list(REMOVE_ITEM CMAKE_CONFIGURATION_TYPES "RelWithDbgInfo")
 		list(APPEND CMAKE_CONFIGURATION_TYPES "RelWithDebInfo")
 		list(REMOVE_DUPLICATES CMAKE_CONFIGURATION_TYPES)
-		set(CMAKE_CONFIGURATION_TYPES "${CMAKE_CONFIGURATION_TYPES}" CACHE STRING "Available build configurations" FORCE)
+		set(
+			CMAKE_CONFIGURATION_TYPES
+			"${CMAKE_CONFIGURATION_TYPES}"
+			CACHE
+				STRING
+				"Available build configurations"
+			FORCE
+		)
 		message(WARNING
 			"CMAKE_CONFIGURATION_TYPES contained non-standard RelWithDbgInfo; "
 			"using RelWithDebInfo instead."
@@ -23,16 +30,34 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
 	unset(_MMM_RELWITHDBGINFO_INDEX)
 endif()
 
-project(MusicMapMaker-Next VERSION 0.4.3 LANGUAGES CXX)
+set(APPVER "0.4.4")
+
+if(APPLE)
+	project(MusicMapMaker-Next VERSION ${APPVER} LANGUAGES C CXX OBJC OBJCXX)
+else()
+	project(MusicMapMaker-Next VERSION ${APPVER} LANGUAGES C CXX)
+endif()
+
 
 if(NOT CMAKE_CONFIGURATION_TYPES)
 	set(CMAKE_BUILD_TYPE "${CMAKE_BUILD_TYPE}" CACHE STRING "Build type" FORCE)
-	set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release RelWithDebInfo MinSizeRel)
+	set_property(
+		CACHE CMAKE_BUILD_TYPE
+		PROPERTY
+			STRINGS
+			Debug
+			Release
+			RelWithDebInfo
+			MinSizeRel
+	)
 endif()
 
 if(MSVC)
 	# 设置msvc需要的 VCPKG_ROOT
-	set(VCPKG_ROOT "C:/coding/vcpkg")
+	if(NOT DEFINED ENV{VCPKG_ROOT} OR "$ENV{VCPKG_ROOT}" STREQUAL "")
+		message(FATAL_ERROR "VCPKG_ROOT environment variable is required when building with MSVC.")
+	endif()
+	file(TO_CMAKE_PATH "$ENV{VCPKG_ROOT}" VCPKG_ROOT)
 	# 强制 MSVC 使用静态运行时 (/MT)
 	set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()

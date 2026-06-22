@@ -600,6 +600,18 @@ NLOHMANN_JSON_SERIALIZE_ENUM(TimeFormatPreference,
                                  { TimeFormatPreference::Beat, "Beat" },
                              })
 
+/// @brief 复制粘贴时用于计算相对偏移的时间基准。
+enum class CopyPasteTimeBasis {
+    Timestamp,  ///< 按时间戳秒数保持相对偏移
+    Beat        ///< 按 BPM 分拍位置保持相对偏移
+};
+
+NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
+                             {
+                                 { CopyPasteTimeBasis::Timestamp, "Timestamp" },
+                                 { CopyPasteTimeBasis::Beat, "Beat" },
+                             })
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -643,6 +655,12 @@ struct EditorSettings {
 
     /// @brief 音频播放后端偏好。
     AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
+
+    /// @brief SDL 音频后端的输出设备名称，空字符串表示默认设备。
+    std::string sdlAudioOutputDeviceName;
+
+    /// @brief OpenAL 音频后端的输出设备名称，空字符串表示默认设备。
+    std::string openALAudioOutputDeviceName;
 
     /// @brief OpenAL 后端空间化输出配置。
     OpenALSpatialConfig openALSpatialConfig;
@@ -695,6 +713,9 @@ struct EditorSettings {
     /// @brief Ctrl+S 保存偏好
     SaveFormatPreference saveFormatPreference{ SaveFormatPreference::ForceMMM };
 
+    /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
+    bool autoAddStoreModeExtForMalodyExport{ false };
+
     /// @brief 画布时间戳显示格式偏好
     TimeFormatPreference timeFormatPreference{ TimeFormatPreference::Seconds };
 
@@ -713,6 +734,9 @@ struct EditorSettings {
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
 
+    /// @brief 复制粘贴时按时间戳或分拍位置计算相对偏移。
+    CopyPasteTimeBasis copyPasteTimeBasis{ CopyPasteTimeBasis::Timestamp };
+
     /// @brief 时间线窗口多选是否允许选中 BPM 红线
     bool timelineSelectionIncludesBpm{ false };
 
@@ -730,6 +754,9 @@ struct EditorSettings {
 
     /// @brief 是否显示时间线窗口。
     bool showTimelineWindow{ true };
+
+    /// @brief 时间线窗口是否启用专业分轨显示模式。
+    bool timelineProfessionalMode{ false };
 
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };
@@ -775,6 +802,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "language", c.language },
         { "frameLimit", c.frameLimit },
         { "audioPlaybackBackend", c.audioPlaybackBackend },
+        { "sdlAudioOutputDeviceName", c.sdlAudioOutputDeviceName },
+        { "openALAudioOutputDeviceName", c.openALAudioOutputDeviceName },
         { "openALSpatialConfig", c.openALSpatialConfig },
         { "renderProfileLogging", c.renderProfileLogging },
         { "autoUploadPgoProfiles", c.autoUploadPgoProfiles },
@@ -792,12 +821,15 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "marqueeThickness", c.marqueeThickness },
         { "marqueeRounding", c.marqueeRounding },
         { "saveFormatPreference", c.saveFormatPreference },
+        { "autoAddStoreModeExtForMalodyExport",
+          c.autoAddStoreModeExtForMalodyExport },
         { "timeFormatPreference", c.timeFormatPreference },
         { "lastFilePickerPath", c.lastFilePickerPath },
         { "disableScrollAccelerationWhileDrawing",
           c.disableScrollAccelerationWhileDrawing },
         { "removeObjectsOnPolylinePath", c.removeObjectsOnPolylinePath },
         { "selectPastedObjects", c.selectPastedObjects },
+        { "copyPasteTimeBasis", c.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
         { "softwareCursorConfig", c.softwareCursorConfig },
         { "preferredAsciiFont", c.preferredAsciiFont },
@@ -805,6 +837,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "stopPlaybackOnScroll", c.stopPlaybackOnScroll },
         { "snapFloor", c.snapFloor },
         { "showTimelineWindow", c.showTimelineWindow },
+        { "timelineProfessionalMode", c.timelineProfessionalMode },
         { "showPreviewWindow", c.showPreviewWindow },
         { "showToolLabels", c.showToolLabels },
         { "fixedToolWindow", c.fixedToolWindow },
@@ -840,6 +873,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
                                     : FrameLimitPreference::Refresh2x);
     c.audioPlaybackBackend =
         j.value("audioPlaybackBackend", AudioPlaybackBackend::SDL);
+    c.sdlAudioOutputDeviceName =
+        j.value("sdlAudioOutputDeviceName", std::string());
+    c.openALAudioOutputDeviceName =
+        j.value("openALAudioOutputDeviceName", std::string());
     c.openALSpatialConfig =
         j.value("openALSpatialConfig", OpenALSpatialConfig());
     c.renderProfileLogging         = j.value("renderProfileLogging", false);
@@ -860,6 +897,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);
     c.saveFormatPreference =
         j.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
+    c.autoAddStoreModeExtForMalodyExport =
+        j.value("autoAddStoreModeExtForMalodyExport", false);
     c.timeFormatPreference =
         j.value("timeFormatPreference", TimeFormatPreference::Seconds);
     c.lastFilePickerPath = j.value("lastFilePickerPath", std::string("."));
@@ -868,6 +907,8 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.removeObjectsOnPolylinePath =
         j.value("removeObjectsOnPolylinePath", false);
     c.selectPastedObjects = j.value("selectPastedObjects", false);
+    c.copyPasteTimeBasis =
+        j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     c.timelineSelectionIncludesBpm =
         j.value("timelineSelectionIncludesBpm", false);
     c.softwareCursorConfig =
@@ -875,14 +916,15 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.preferredAsciiFont =
         j.value("preferredAsciiFont", std::string("Default"));
     c.preferredCjkFont = j.value("preferredCjkFont", std::string("Default"));
-    c.stopPlaybackOnScroll = j.value("stopPlaybackOnScroll", false);
-    c.snapFloor            = j.value("snapFloor", false);
-    c.showTimelineWindow   = j.value("showTimelineWindow", true);
-    c.showPreviewWindow    = j.value("showPreviewWindow", true);
-    c.showToolLabels       = j.value("showToolLabels", false);
-    c.fixedToolWindow      = j.value("fixedToolWindow", true);
-    c.showManagerLabels    = j.value("showManagerLabels", true);
-    c.aesthetics           = j.value("aesthetics", UIAestheticsConfig());
+    c.stopPlaybackOnScroll     = j.value("stopPlaybackOnScroll", false);
+    c.snapFloor                = j.value("snapFloor", false);
+    c.showTimelineWindow       = j.value("showTimelineWindow", true);
+    c.timelineProfessionalMode = j.value("timelineProfessionalMode", false);
+    c.showPreviewWindow        = j.value("showPreviewWindow", true);
+    c.showToolLabels           = j.value("showToolLabels", false);
+    c.fixedToolWindow          = j.value("fixedToolWindow", true);
+    c.showManagerLabels        = j.value("showManagerLabels", true);
+    c.aesthetics               = j.value("aesthetics", UIAestheticsConfig());
     c.noteColorPalettes =
         j.value("noteColorPalettes", NoteColorPaletteConfig());
     c.defaultNoteColorPaletteSchemeName =

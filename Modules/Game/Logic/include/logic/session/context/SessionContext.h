@@ -42,7 +42,12 @@ struct MarqueeBox {
 
 /// @brief 剪贴板条目
 struct ClipboardItem {
-    NoteComponent note;  ///< 复制的音符组件数据
+    NoteComponent       note;              ///< 复制的音符组件数据
+    double              startBeat{ 0.0 };  ///< 复制时的起始分拍位置
+    double              endBeat{ 0.0 };    ///< 复制时的结束分拍位置
+    std::vector<double> subStartBeats;     ///< 折线子物件起始分拍位置
+    std::vector<double> subEndBeats;       ///< 折线子物件结束分拍位置
+    bool hasBeatPositions{ false };        ///< 是否已记录可用于按分拍粘贴的位置
 };
 
 /// @brief 提供给渲染系统的拖动中实体列表视图。

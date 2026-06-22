@@ -228,11 +228,11 @@ public:
     /// @return 当前临时项目源文件与缓存路径；非临时项目时返回默认值。
     TemporaryProjectInfo currentTemporaryProjectInfo() const;
 
-    /// @brief 将当前临时项目复制保存到正式目录。
+    /// @brief 将当前临时项目复制保存到正式目录，并原地转为正式项目。
     /// @param destinationPath 用户选择的保存目录。
     /// @return 保存结果。
     SaveTemporaryProjectResult saveTemporaryProjectTo(
-        const std::filesystem::path& destinationPath) const;
+        const std::filesystem::path& destinationPath);
 
 
     /// @brief 关闭当前项目并停止项目目录监听。
