@@ -654,31 +654,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             audio.m_id, audio.m_id, type);
                     });
 
-                static int s_audioLogCounter = 0;
                 if ( !isPermanentEffect ) {
-                    bool hovered = ImGui::IsItemHovered();
-                    bool rclicked =
+                    const bool hovered = ImGui::IsItemHovered();
+                    const bool rclicked =
                         ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-                    if ( (hovered || rclicked) && s_audioLogCounter < 10 ) {
-                        XINFO(
-                            "AudioItem [{}]: hovered={} rclicked={} "
-                            "isPermanent={} pos=({},{}) size=({},{}) "
-                            "mouse=({},{})",
-                            audio.m_id,
-                            hovered,
-                            rclicked,
-                            isPermanentEffect,
-                            r.x,
-                            r.y,
-                            r.width,
-                            r.height,
-                            ImGui::GetMousePos().x,
-                            ImGui::GetMousePos().y);
-                        s_audioLogCounter++;
-                    }
                     if ( hovered && rclicked ) {
-                        XINFO("AudioItem RIGHT-CLICK TRIGGERED: {}",
-                              audio.m_id);
                         m_manageTrackId   = audio.m_id;
                         m_manageTrackType = audio.m_type;
                         m_openManageModal = true;
