@@ -524,10 +524,12 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
     target.settings.showTimelineWindow = source.settings.showTimelineWindow;
-    target.settings.showPreviewWindow  = source.settings.showPreviewWindow;
-    target.settings.showToolLabels     = source.settings.showToolLabels;
-    target.settings.fixedToolWindow    = source.settings.fixedToolWindow;
-    target.settings.showManagerLabels  = source.settings.showManagerLabels;
+    target.settings.timelineProfessionalMode =
+        source.settings.timelineProfessionalMode;
+    target.settings.showPreviewWindow = source.settings.showPreviewWindow;
+    target.settings.showToolLabels    = source.settings.showToolLabels;
+    target.settings.fixedToolWindow   = source.settings.fixedToolWindow;
+    target.settings.showManagerLabels = source.settings.showManagerLabels;
     target.settings.autoUploadPgoProfiles =
         source.settings.autoUploadPgoProfiles;
     target.settings.pgoProfileUploadConsentAsked =
