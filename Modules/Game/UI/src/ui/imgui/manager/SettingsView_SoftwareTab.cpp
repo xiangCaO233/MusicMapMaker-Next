@@ -199,7 +199,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -340,10 +340,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -469,7 +469,11 @@ void SettingsView::drawSoftwareSettings()
         const std::string activeSkinDirectory =
             currentSkinDirectoryName(settings);
         addSettingItem(
-            *sec, rowIndex, "皮肤", maxLabelW, [&](Clay_BoundingBox r, bool) {
+            *sec,
+            rowIndex,
+            "皮肤",
+            maxLabelW,
+            [this, &changed, activeSkinDirectory](Clay_BoundingBox r, bool) {
                 ImGui::SetNextItemWidth(r.width);
                 if ( m_availableSkinDirectories.empty() ) {
                     ImGui::TextDisabled("%s", "未找到可用皮肤");
@@ -506,7 +510,7 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.theme").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         theme    = (int)settings.theme;
+                int         theme    = static_cast<int>(settings.theme);
                 const char* themes[] = {
                     TR_CACHE("ui.settings.software.theme.auto").data(),
                     "DeepDark",
@@ -538,13 +542,23 @@ void SettingsView::drawSoftwareSettings()
                     "ComfortableDarkCyan",
                     "KazamCherry"
                 };
+                const int themeCount = IM_ARRAYSIZE(themes);
+                if ( theme < 0 || theme >= themeCount ) {
+                    theme          = static_cast<int>(Config::UITheme::Auto);
+                    settings.theme = Config::UITheme::Auto;
+                    if ( auto ctx = Graphic::VKContext::get() ) {
+                        ctx->get().applyTheme();
+                    }
+                    changed = true;
+                }
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##ThemeCombo",
-                                  &theme,
-                                  themes,
-                                  IM_ARRAYSIZE(themes)) ) {
-                    settings.theme = (Config::UITheme)theme;
-                    changed        = true;
+                if ( ImGui::Combo(
+                         "##ThemeCombo", &theme, themes, themeCount) ) {
+                    settings.theme = static_cast<Config::UITheme>(theme);
+                    if ( auto ctx = Graphic::VKContext::get() ) {
+                        ctx->get().applyTheme();
+                    }
+                    changed = true;
                 }
             });
 
