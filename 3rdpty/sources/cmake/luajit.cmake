@@ -2,7 +2,7 @@ project(LuaJIT C)
 
 set(LJ_BIN_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin")
 if(NOT EXISTS "${LJ_BIN_OUTPUT_DIR}")
-    file(MAKE_DIRECTORY "${LJ_BIN_OUTPUT_DIR}")
+  file(MAKE_DIRECTORY "${LJ_BIN_OUTPUT_DIR}")
 endif()
 
 # =========================================================================
@@ -21,120 +21,107 @@ set(LJ_BUILD_STAMP "${LJ_BUILD_ROOT}/luajit_build.stamp")
 file(GLOB_RECURSE LJ_SOURCE_INPUTS CONFIGURE_DEPENDS "${LJ_ORIGINAL_DIR}/*")
 list(FILTER LJ_SOURCE_INPUTS EXCLUDE REGEX "/\\.git(/|$)")
 list(APPEND LJ_SOURCE_INPUTS "${CMAKE_CURRENT_LIST_FILE}")
-set(
-    LJ_SYNC_SOURCE_COMMAND
-    ${CMAKE_COMMAND}
-    -E
-    copy_directory_if_different
-    "${LJ_ORIGINAL_DIR}"
-    "${LJ_BUILD_ROOT}"
-)
+set(LJ_SYNC_SOURCE_COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                           "${LJ_ORIGINAL_DIR}" "${LJ_BUILD_ROOT}")
 
 if(NOT EXISTS "${LJ_BUILD_SRC}")
-    file(MAKE_DIRECTORY "${LJ_BUILD_SRC}")
+  file(MAKE_DIRECTORY "${LJ_BUILD_SRC}")
 endif()
 
-# 核心构建逻辑 - 统一为静态库
-# 统一处理 GCC/Clang 族的编译标志 (MinGW & Unix)
+# 核心构建逻辑 - 统一为静态库 统一处理 GCC/Clang 族的编译标志 (MinGW & Unix)
 if(NOT MSVC OR CMAKE_CROSSCOMPILING)
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        # 注意：这里直接写字符串，不要在里面加 \"
-        set(LJ_G_FLAGS "XCFLAGS=-O0 -fPIC" "CCDEBUG=-g")
-    else()
-        # 注意：这里直接写字符串，不要在里面加 \"
-        set(LJ_G_FLAGS "XCFLAGS=-O3 -fPIC")
-    endif()
+  if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    # 注意：这里直接写字符串，不要在里面加 \"
+    set(LJ_G_FLAGS "XCFLAGS=-O0 -fPIC" "CCDEBUG=-g")
+  else()
+    # 注意：这里直接写字符串，不要在里面加 \"
+    set(LJ_G_FLAGS "XCFLAGS=-O3 -fPIC")
+  endif()
 endif()
 
 if(MSVC AND NOT CMAKE_CROSSCOMPILING)
-    # Windows MSVC 静态构建
-    # msvcbuild.bat static 会生成 lua51.lib (静态库)
-    set(LJ_LIB_NAME "lua51.lib")
-    set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  # Windows MSVC 静态构建 msvcbuild.bat static 会生成 lua51.lib (静态库)
+  set(LJ_LIB_NAME "lua51.lib")
+  set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
 
-    set(BUILD_CMD "msvcbuild.bat")
-    if(CMAKE_BUILD_TYPE MATCHES Debug)
-        list(APPEND BUILD_CMD debug)
-    endif()
-    list(APPEND BUILD_CMD static) # 强制静态
+  set(BUILD_CMD "msvcbuild.bat")
+  if(CMAKE_BUILD_TYPE MATCHES Debug)
+    list(APPEND BUILD_CMD debug)
+  endif()
+  list(APPEND BUILD_CMD static) # 强制静态
 
-    add_custom_command(
-  OUTPUT "${LJ_BUILD_STAMP}"
-  BYPRODUCTS "${LJ_OUTPUT_LIB}"
-  COMMAND
-   ${LJ_SYNC_SOURCE_COMMAND}
-   # MSVC 下需要在 src 目录运行 bat
-  COMMAND ${BUILD_CMD}
-  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
-  DEPENDS ${LJ_SOURCE_INPUTS}
-  WORKING_DIRECTORY "${LJ_BUILD_SRC}"
-  COMMENT "Building LuaJIT Statically (MSVC)..."
-  VERBATIM
- )
+  add_custom_command(
+    OUTPUT "${LJ_BUILD_STAMP}"
+    BYPRODUCTS "${LJ_OUTPUT_LIB}"
+    COMMAND ${LJ_SYNC_SOURCE_COMMAND}
+            # MSVC 下需要在 src 目录运行 bat
+    COMMAND ${BUILD_CMD}
+    COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+    DEPENDS ${LJ_SOURCE_INPUTS}
+    WORKING_DIRECTORY "${LJ_BUILD_SRC}"
+    COMMENT "Building LuaJIT Statically (MSVC)..."
+    VERBATIM)
 
 elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
-    # --- Windows MinGW (包含 UCRT64/Clang64) 或 Linux -> Windows 交叉编译 ---
-    set(LJ_LIB_NAME "libluajit.a")
-    if(MSVC)
-        set(LJ_LIB_NAME "lua51.lib") # clang-cl 目标期望这个名字
-    endif()
-    set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  # --- Windows MinGW (包含 UCRT64/Clang64) 或 Linux -> Windows 交叉编译 ---
+  set(LJ_LIB_NAME "libluajit.a")
+  if(MSVC)
+    set(LJ_LIB_NAME "lua51.lib") # clang-cl 目标期望这个名字
+  endif()
+  set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
 
-    set(MAKE_CMD make)
-    if(MINGW)
-        find_program(MAKE_EXE NAMES mingw32-make make)
-        set(MAKE_CMD ${MAKE_EXE})
-    endif()
+  set(MAKE_CMD make)
+  if(MINGW)
+    find_program(MAKE_EXE NAMES mingw32-make make)
+    set(MAKE_CMD ${MAKE_EXE})
+  endif()
 
-    set(CROSS_COMPILE_ARGS "")
-    if(CMAKE_CROSSCOMPILING)
-        set(CROSS_COMPILE_ARGS "HOST_CC=gcc" "TARGET_SYS=Windows")
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            list(APPEND CROSS_COMPILE_ARGS "CROSS=x86_64-w64-mingw32-")
-        else()
-            list(APPEND CROSS_COMPILE_ARGS "CROSS=i686-w64-mingw32-")
-        endif()
+  set(CROSS_COMPILE_ARGS "")
+  if(CMAKE_CROSSCOMPILING)
+    set(CROSS_COMPILE_ARGS "HOST_CC=gcc" "TARGET_SYS=Windows")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      list(APPEND CROSS_COMPILE_ARGS "CROSS=x86_64-w64-mingw32-")
+    else()
+      list(APPEND CROSS_COMPILE_ARGS "CROSS=i686-w64-mingw32-")
     endif()
+  endif()
 
-    add_custom_command(
-  OUTPUT "${LJ_BUILD_STAMP}"
-  BYPRODUCTS "${LJ_OUTPUT_LIB}"
-  COMMAND
-   ${LJ_SYNC_SOURCE_COMMAND}
-  COMMAND ${MAKE_CMD} -j${HOST_CORES} BUILDMODE=static ${LJ_G_FLAGS} ${CROSS_COMPILE_ARGS}
-  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
-  DEPENDS ${LJ_SOURCE_INPUTS}
-  WORKING_DIRECTORY "${LJ_BUILD_SRC}"
-  COMMENT "Building LuaJIT for Windows (Cross/MinGW)..."
-  VERBATIM
- )
+  add_custom_command(
+    OUTPUT "${LJ_BUILD_STAMP}"
+    BYPRODUCTS "${LJ_OUTPUT_LIB}"
+    COMMAND ${LJ_SYNC_SOURCE_COMMAND}
+    COMMAND ${MAKE_CMD} -j${HOST_CORES} BUILDMODE=static ${LJ_G_FLAGS}
+            ${CROSS_COMPILE_ARGS}
+    COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+    DEPENDS ${LJ_SOURCE_INPUTS}
+    WORKING_DIRECTORY "${LJ_BUILD_SRC}"
+    COMMENT "Building LuaJIT for Windows (Cross/MinGW)..."
+    VERBATIM)
 
 else()
-    # --- Linux / macOS ---
-    set(LJ_LIB_NAME "libluajit.a")
-    set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  # --- Linux / macOS ---
+  set(LJ_LIB_NAME "libluajit.a")
+  set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
 
-    set(MAKE_ENV "")
-    if(APPLE)
-        # 强制写死为 11.0，这是一个安全且广泛兼容的版本
-        set(MAKE_ENV "MACOSX_DEPLOYMENT_TARGET=11.0")
-        message(STATUS "Forcing LuaJIT macOS Target to 11.0")
-    endif()
+  set(MAKE_ENV "")
+  if(APPLE)
+    # 强制写死为 11.0，这是一个安全且广泛兼容的版本
+    set(MAKE_ENV "MACOSX_DEPLOYMENT_TARGET=11.0")
+    message(STATUS "Forcing LuaJIT macOS Target to 11.0")
+  endif()
 
-    add_custom_command(
-  OUTPUT "${LJ_BUILD_STAMP}"
-  BYPRODUCTS "${LJ_OUTPUT_LIB}"
-  COMMAND
-   ${LJ_SYNC_SOURCE_COMMAND}
-   # 加上了 ${LJ_G_FLAGS} 包含 -O 选项
-  COMMAND ${CMAKE_COMMAND} -E env ${MAKE_ENV} make -j${HOST_CORES} amalg
-   BUILDMODE=static ${LJ_G_FLAGS}
-  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
-  DEPENDS ${LJ_SOURCE_INPUTS}
-  WORKING_DIRECTORY "${LJ_BUILD_ROOT}"
-  COMMENT "Building LuaJIT (${CMAKE_BUILD_TYPE}) for Unix..."
-  VERBATIM
- )
+  add_custom_command(
+    OUTPUT "${LJ_BUILD_STAMP}"
+    BYPRODUCTS "${LJ_OUTPUT_LIB}"
+    COMMAND ${LJ_SYNC_SOURCE_COMMAND}
+            # 加上了 ${LJ_G_FLAGS} 包含 -O 选项
+    COMMAND ${CMAKE_COMMAND} -E env ${MAKE_ENV} make -j${HOST_CORES} amalg
+            BUILDMODE=static ${LJ_G_FLAGS}
+    COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+    DEPENDS ${LJ_SOURCE_INPUTS}
+    WORKING_DIRECTORY "${LJ_BUILD_ROOT}"
+    COMMENT "Building LuaJIT (${CMAKE_BUILD_TYPE}) for Unix..."
+    VERBATIM)
 endif()
 
 # =========================================================================
@@ -149,22 +136,20 @@ add_library(luajit::luajit ALIAS luajit)
 
 add_dependencies(luajit luajit_build)
 
-set_target_properties(luajit
- PROPERTIES IMPORTED_LOCATION "${LJ_OUTPUT_LIB}"
-)
+set_target_properties(luajit PROPERTIES IMPORTED_LOCATION "${LJ_OUTPUT_LIB}")
 
 # 导出头文件路径
 target_include_directories(luajit INTERFACE "${LJ_BUILD_SRC}")
 
 # 静态链接 LuaJIT 需要链接系统数学库和底层库
 if(UNIX)
-    target_link_libraries(luajit INTERFACE m dl)
-    if(NOT APPLE)
-        target_link_libraries(luajit INTERFACE pthread)
-    endif()
+  target_link_libraries(luajit INTERFACE m dl)
+  if(NOT APPLE)
+    target_link_libraries(luajit INTERFACE pthread)
+  endif()
 endif()
 
 # Windows 下静态链接 LuaJIT 有时需要 winmm (用于高精度时钟)
 if(WIN32)
-    target_link_libraries(luajit INTERFACE winmm)
+  target_link_libraries(luajit INTERFACE winmm)
 endif()

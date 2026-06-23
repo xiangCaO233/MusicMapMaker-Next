@@ -66,6 +66,23 @@ cmake --build build --target clean
 clang-format -i <absolute_file_path>
 ```
 
+- 修改过的项目自维护 CMake 脚本，完成前必须运行：
+
+```bash
+cmake-format -i <absolute_file_path>
+```
+
+- CMake 格式化范围仅包括以下项目自维护脚本：
+  - `CMakeLists.txt`
+  - `cmake/**/*.cmake`
+  - `Modules/**/CMakeLists.txt`
+  - `3rdpty/sources/cmake/*.cmake`
+  - `3rdpty/sources/IonCachyEngine/CMakeLists.txt`
+  - `3rdpty/sources/IonCachyEngine/src/CMakeLists.txt`
+  - `3rdpty/sources/IonCachyEngine/cmake/*.cmake`
+  - `3rdpty/sources/IonCachyEngine/3rdpty/sources/cmake/*.cmake`
+- 除上述路径外，仍然禁止格式化或修改 `3rdpty/` 下的其它第三方源码 CMake 文件。
+
 ## 4. 架构与模块依赖
 
 - **依赖方向**: `UI` 模块可以依赖 `Graphic` 模块，但 `Graphic` 模块严禁直接引用 `UI` 模块的高层结构，例如 `Brush` 或 `DrawCmd`。

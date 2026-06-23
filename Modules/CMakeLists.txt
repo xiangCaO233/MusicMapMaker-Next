@@ -2,7 +2,7 @@
 
 # -fno-rtti: 仅对项目自身 Module 启用 (第三方库 concurrentqueue / fmt 仍依赖 RTTI)
 if(NOT MSVC)
-    add_compile_options("-fno-rtti")
+  add_compile_options("-fno-rtti")
 endif()
 
 add_subdirectory("Log")
