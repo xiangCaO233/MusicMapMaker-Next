@@ -207,6 +207,54 @@ function(prebuilt_runtime_dir out_var package config)
       "缺少 ${package} 的 ${config} 动态运行时目录。期望布局：${_runtime_base_dir}/<config>")
 endfunction()
 
+# 获取指定包在指定配置下的 PDB 符号目录。符号文件不参与链接，缺失时返回空值。
+function(prebuilt_symbol_dir out_var package config)
+  prebuilt_package_root(_package_root "${package}")
+  set(_symbol_base_dir
+      "${_package_root}/symbols/${PROJECT_PREBUILT_ARCH}/${PROJECT_PREBUILT_TOOLCHAIN}/${PROJECT_PREBUILT_COMPILER_TAG}"
+  )
+  if(NOT IS_DIRECTORY "${_symbol_base_dir}" AND PROJECT_PREBUILT_COMPILER_TAG
+                                                STREQUAL "")
+    set(_symbol_base_dir
+        "${_package_root}/symbols/${PROJECT_PREBUILT_ARCH}/${PROJECT_PREBUILT_TOOLCHAIN}"
+    )
+  endif()
+  if(PROJECT_LINKAGE STREQUAL "shared")
+    set(_symbol_base_dir "${_symbol_base_dir}/shared")
+  endif()
+
+  prebuilt_config_dir_candidates(_config_candidates "${config}")
+  foreach(_config_dir_name IN LISTS _config_candidates)
+    set(_symbol_dir "${_symbol_base_dir}/${_config_dir_name}")
+    if(IS_DIRECTORY "${_symbol_dir}")
+      set(${out_var}
+          "${_symbol_dir}"
+          PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+
+  set(${out_var}
+      ""
+      PARENT_SCOPE)
+endfunction()
+
+# 查找指定包在当前配置下已经提供的 PDB 符号文件。
+function(prebuilt_find_symbol_files out_var package config)
+  prebuilt_symbol_dir(_symbol_dir "${package}" "${config}")
+  if(_symbol_dir STREQUAL "")
+    set(${out_var}
+        ""
+        PARENT_SCOPE)
+    return()
+  endif()
+
+  file(GLOB _symbol_files CONFIGURE_DEPENDS "${_symbol_dir}/*.pdb")
+  set(${out_var}
+      ${_symbol_files}
+      PARENT_SCOPE)
+endfunction()
+
 # 在指定包和配置目录中查找库文件。
 function(prebuilt_find_library out_var package config)
   prebuilt_library_dir(_library_dir "${package}" "${config}")
@@ -245,5 +293,19 @@ function(prebuilt_find_library out_var package config)
     set(${out_var}_RUNTIME
         "${_prebuilt_runtime}"
         PARENT_SCOPE)
+  endif()
+
+  if(MSVC)
+    string(TOLOWER "${config}" _prebuilt_config_lower)
+    if(_prebuilt_config_lower STREQUAL "debug" OR _prebuilt_config_lower
+                                                  STREQUAL "relwithdebinfo")
+      prebuilt_find_symbol_files(_prebuilt_symbol_files "${package}"
+                                 "${config}")
+      if(_prebuilt_symbol_files)
+        set(${out_var}_PDBS
+            ${_prebuilt_symbol_files}
+            PARENT_SCOPE)
+      endif()
+    endif()
   endif()
 endfunction()
