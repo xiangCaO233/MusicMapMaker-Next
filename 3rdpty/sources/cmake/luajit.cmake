@@ -16,6 +16,19 @@ cmake_host_system_information(RESULT HOST_CORES QUERY NUMBER_OF_LOGICAL_CORES)
 set(LJ_ORIGINAL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/luajit")
 set(LJ_BUILD_ROOT "${CMAKE_BINARY_DIR}/luajit")
 set(LJ_BUILD_SRC "${LJ_BUILD_ROOT}/src")
+set(LJ_BUILD_STAMP "${LJ_BUILD_ROOT}/luajit_build.stamp")
+
+file(GLOB_RECURSE LJ_SOURCE_INPUTS CONFIGURE_DEPENDS "${LJ_ORIGINAL_DIR}/*")
+list(FILTER LJ_SOURCE_INPUTS EXCLUDE REGEX "/\\.git(/|$)")
+list(APPEND LJ_SOURCE_INPUTS "${CMAKE_CURRENT_LIST_FILE}")
+set(
+    LJ_SYNC_SOURCE_COMMAND
+    ${CMAKE_COMMAND}
+    -E
+    copy_directory_if_different
+    "${LJ_ORIGINAL_DIR}"
+    "${LJ_BUILD_ROOT}"
+)
 
 if(NOT EXISTS "${LJ_BUILD_SRC}")
     file(MAKE_DIRECTORY "${LJ_BUILD_SRC}")
@@ -46,15 +59,14 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
     list(APPEND BUILD_CMD static) # 强制静态
 
     add_custom_command(
-  OUTPUT "${LJ_OUTPUT_LIB}"
+  OUTPUT "${LJ_BUILD_STAMP}"
+  BYPRODUCTS "${LJ_OUTPUT_LIB}"
   COMMAND
-   ${CMAKE_COMMAND}
-   -E
-   copy_directory
-   "${LJ_ORIGINAL_DIR}"
-   "${LJ_BUILD_ROOT}"
+   ${LJ_SYNC_SOURCE_COMMAND}
    # MSVC 下需要在 src 目录运行 bat
   COMMAND ${BUILD_CMD}
+  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+  DEPENDS ${LJ_SOURCE_INPUTS}
   WORKING_DIRECTORY "${LJ_BUILD_SRC}"
   COMMENT "Building LuaJIT Statically (MSVC)..."
   VERBATIM
@@ -85,14 +97,13 @@ elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
     endif()
 
     add_custom_command(
-  OUTPUT "${LJ_OUTPUT_LIB}"
+  OUTPUT "${LJ_BUILD_STAMP}"
+  BYPRODUCTS "${LJ_OUTPUT_LIB}"
   COMMAND
-   ${CMAKE_COMMAND}
-   -E
-   copy_directory
-   "${LJ_ORIGINAL_DIR}"
-   "${LJ_BUILD_ROOT}"
+   ${LJ_SYNC_SOURCE_COMMAND}
   COMMAND ${MAKE_CMD} -j${HOST_CORES} BUILDMODE=static ${LJ_G_FLAGS} ${CROSS_COMPILE_ARGS}
+  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+  DEPENDS ${LJ_SOURCE_INPUTS}
   WORKING_DIRECTORY "${LJ_BUILD_SRC}"
   COMMENT "Building LuaJIT for Windows (Cross/MinGW)..."
   VERBATIM
@@ -111,16 +122,15 @@ else()
     endif()
 
     add_custom_command(
-  OUTPUT "${LJ_OUTPUT_LIB}"
+  OUTPUT "${LJ_BUILD_STAMP}"
+  BYPRODUCTS "${LJ_OUTPUT_LIB}"
   COMMAND
-   ${CMAKE_COMMAND}
-   -E
-   copy_directory
-   "${LJ_ORIGINAL_DIR}"
-   "${LJ_BUILD_ROOT}"
+   ${LJ_SYNC_SOURCE_COMMAND}
    # 加上了 ${LJ_G_FLAGS} 包含 -O 选项
   COMMAND ${CMAKE_COMMAND} -E env ${MAKE_ENV} make -j${HOST_CORES} amalg
    BUILDMODE=static ${LJ_G_FLAGS}
+  COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
+  DEPENDS ${LJ_SOURCE_INPUTS}
   WORKING_DIRECTORY "${LJ_BUILD_ROOT}"
   COMMENT "Building LuaJIT (${CMAKE_BUILD_TYPE}) for Unix..."
   VERBATIM
@@ -131,7 +141,7 @@ endif()
 # 绑定 Target
 # =========================================================================
 
-add_custom_target(luajit_build DEPENDS "${LJ_OUTPUT_LIB}")
+add_custom_target(luajit_build DEPENDS "${LJ_BUILD_STAMP}")
 
 # 定义为静态导入库
 add_library(luajit STATIC IMPORTED GLOBAL)
