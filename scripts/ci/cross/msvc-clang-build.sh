@@ -18,8 +18,9 @@ Options:
   -h, --help             Show this help
 
 Environment overrides:
-  VCPKG_ROOT             Default: /mnt/windows_c/msys64/home/xiang/projects/vcpkg
-  VULKAN_SDK             Default: /mnt/windows_c/VulkanSDK/1.4.341.1
+  WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
+  VCPKG_ROOT             Default: ${WINDOWS_CROSS_ROOT}/vcpkg
+  VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
   CMAKE_GENERATOR        Default: Ninja
 EOF
 }
@@ -54,6 +55,21 @@ requireCommand() {
         printf "error: required command not found: %s\n" "${commandName}" >&2
         exit 1
     fi
+}
+
+requireAnyCommand() {
+    local label="$1"
+    shift
+
+    local commandName
+    for commandName in "$@"; do
+        if command -v "${commandName}" >/dev/null 2>&1; then
+            return
+        fi
+    done
+
+    printf "error: required command not found: %s (tried: %s)\n" "${label}" "$*" >&2
+    exit 1
 }
 
 projectPath() {
@@ -157,12 +173,13 @@ if [[ ! -f "${toolchainFile}" ]]; then
     exit 1
 fi
 
-export VCPKG_ROOT="${VCPKG_ROOT:-/mnt/windows_c/msys64/home/xiang/projects/vcpkg}"
-export VULKAN_SDK="${VULKAN_SDK:-/mnt/windows_c/VulkanSDK/1.4.341.1}"
+export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
+export VCPKG_ROOT="${VCPKG_ROOT:-${WINDOWS_CROSS_ROOT}/vcpkg}"
+export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
 requireCommand cmake
-requireCommand clang-cl
-requireCommand lld-link
+requireAnyCommand clang-cl clang-cl-22 clang-cl-21 clang-cl-20 clang-cl
+requireAnyCommand lld-link lld-link-22 lld-link-21 lld-link-20 lld-link
 
 if [[ ! -d "${VCPKG_ROOT}" ]]; then
     printf "error: VCPKG_ROOT does not exist: %s\n" "${VCPKG_ROOT}" >&2

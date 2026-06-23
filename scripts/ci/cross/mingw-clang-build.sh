@@ -20,7 +20,8 @@ Options:
 
 Environment overrides:
   MINGW_SYSROOT          MinGW sysroot path
-  VULKAN_SDK             Default: /mnt/windows_c/VulkanSDK/1.4.341.1
+  WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
+  VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
   CMAKE_GENERATOR        Default: Ninja
 EOF
 }
@@ -78,7 +79,7 @@ detectMingwSysroot() {
         return
     fi
 
-    printf "/usr/lib/mingw64-toolchain\n"
+    printf "/usr/x86_64-w64-mingw32\n"
 }
 
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -183,7 +184,8 @@ if [[ ! -f "${toolchainFile}" ]]; then
 fi
 
 export MINGW_SYSROOT="${mingwSysroot}"
-export VULKAN_SDK="${VULKAN_SDK:-/mnt/windows_c/VulkanSDK/1.4.341.1}"
+export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
+export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
 requireCommand cmake
 requireCommand clang

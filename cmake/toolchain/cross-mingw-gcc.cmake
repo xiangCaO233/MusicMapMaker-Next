@@ -20,7 +20,7 @@ else()
 endif()
 
 if(MINGW_SYSROOT_DEFAULT STREQUAL "")
-  set(MINGW_SYSROOT_DEFAULT "/usr/lib/mingw64-toolchain")
+  set(MINGW_SYSROOT_DEFAULT "/usr/x86_64-w64-mingw32")
 endif()
 
 set(MINGW_SYSROOT

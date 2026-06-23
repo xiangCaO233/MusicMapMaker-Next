@@ -3,17 +3,82 @@
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
-# 基础路径定义 (基于你的挂载点)
-set(MSVC_BASE
-    "/mnt/windows_c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.52.36328"
-)
-set(WINSDK_BASE "/mnt/windows_c/Program Files (x86)/Windows Kits/10")
-set(WINSDK_VER "10.0.26100.0") # <--- 请根据你 Lib/Include 下的实际文件夹名修改此处!!
+# 基础路径定义。默认面向 Debian CI 的 /mnt/cross/windows 布局，
+# 本地机器可通过环境变量或 CMake cache 覆盖。
+if(DEFINED ENV{WINDOWS_CROSS_ROOT} AND NOT "$ENV{WINDOWS_CROSS_ROOT}" STREQUAL
+                                      "")
+  file(TO_CMAKE_PATH "$ENV{WINDOWS_CROSS_ROOT}" WINDOWS_CROSS_ROOT_DEFAULT)
+else()
+  set(WINDOWS_CROSS_ROOT_DEFAULT "/mnt/cross/windows")
+endif()
+set(WINDOWS_CROSS_ROOT
+    "${WINDOWS_CROSS_ROOT_DEFAULT}"
+    CACHE PATH "Root directory containing mounted Windows toolchains.")
 
-# 指定编译器 (确保你 Linux 系统安装了 clang 和 lld)
-set(CMAKE_C_COMPILER clang-cl)
-set(CMAKE_CXX_COMPILER clang-cl)
-set(CMAKE_LINKER lld-link)
+if(DEFINED ENV{MSVC_BASE} AND NOT "$ENV{MSVC_BASE}" STREQUAL "")
+  file(TO_CMAKE_PATH "$ENV{MSVC_BASE}" MSVC_BASE_DEFAULT)
+else()
+  set(MSVC_BASE_DEFAULT
+      "${WINDOWS_CROSS_ROOT}/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.51.36231"
+  )
+endif()
+set(MSVC_BASE
+    "${MSVC_BASE_DEFAULT}"
+    CACHE PATH "MSVC toolset root directory."
+)
+
+if(DEFINED ENV{WINSDK_BASE} AND NOT "$ENV{WINSDK_BASE}" STREQUAL "")
+  file(TO_CMAKE_PATH "$ENV{WINSDK_BASE}" WINSDK_BASE_DEFAULT)
+else()
+  set(WINSDK_BASE_DEFAULT
+      "${WINDOWS_CROSS_ROOT}/Program Files (x86)/Windows Kits/10")
+endif()
+set(WINSDK_BASE
+    "${WINSDK_BASE_DEFAULT}"
+    CACHE PATH "Windows SDK root directory.")
+
+if(DEFINED ENV{WINSDK_VER} AND NOT "$ENV{WINSDK_VER}" STREQUAL "")
+  set(WINSDK_VER_DEFAULT "$ENV{WINSDK_VER}")
+else()
+  set(WINSDK_VER_DEFAULT "10.0.26100.0")
+endif()
+set(WINSDK_VER
+    "${WINSDK_VER_DEFAULT}"
+    CACHE STRING "Windows SDK version directory.")
+
+# 指定编译器。Debian CI 的系统 clang 可能落后于新版 MSVC STL，
+# 因此优先使用 apt.llvm.org 安装的版本化 LLVM 工具。
+find_program(MMM_CLANG_CL NAMES clang-cl-22 clang-cl-21 clang-cl-20 clang-cl)
+find_program(MMM_LLD_LINK NAMES lld-link-22 lld-link-21 lld-link-20 lld-link)
+find_program(MMM_LLVM_RC NAMES llvm-rc-22 llvm-rc-21 llvm-rc-20 llvm-rc llvm-rc-19)
+find_program(MMM_LLVM_MT NAMES llvm-mt-22 llvm-mt-21 llvm-mt-20 llvm-mt llvm-mt-19)
+if(NOT MMM_CLANG_CL)
+  message(FATAL_ERROR "找不到 clang-cl，请安装 LLVM clang-cl 20 或更新版本。")
+endif()
+if(NOT MMM_LLD_LINK)
+  message(FATAL_ERROR "找不到 lld-link，请安装 LLVM lld 20 或更新版本。")
+endif()
+if(NOT MMM_LLVM_RC)
+  message(FATAL_ERROR "找不到 llvm-rc，请安装 LLVM resource compiler。")
+endif()
+if(NOT MMM_LLVM_MT)
+  message(FATAL_ERROR "找不到 llvm-mt，请安装 LLVM manifest tool。")
+endif()
+set(CMAKE_C_COMPILER
+    "${MMM_CLANG_CL}"
+    CACHE FILEPATH "MSVC-like LLVM C compiler." FORCE)
+set(CMAKE_CXX_COMPILER
+    "${MMM_CLANG_CL}"
+    CACHE FILEPATH "MSVC-like LLVM C++ compiler." FORCE)
+set(CMAKE_LINKER
+    "${MMM_LLD_LINK}"
+    CACHE FILEPATH "MSVC-like LLVM linker." FORCE)
+set(CMAKE_RC_COMPILER
+    "${MMM_LLVM_RC}"
+    CACHE FILEPATH "LLVM resource compiler." FORCE)
+set(CMAKE_MT
+    "${MMM_LLVM_MT}"
+    CACHE FILEPATH "LLVM manifest tool." FORCE)
 
 # 告诉 clang-cl 目标平台
 set(MSVC_TARGET_TRIPLE x86_64-pc-windows-msvc)
@@ -38,8 +103,7 @@ set(ALSOFT_ENABLE_MODULES
 
 # --- 核心：配置头文件搜索路径 (-imsvc 模拟 MSVC 的包含逻辑) ---
 # 额外包含 lowercase 代理目录以解决 Linux 大小写敏感问题
-set(PROXY_INCLUDE
-    "/home/xiang/Documents/coding/c_cpp/MusicMapMaker-Next/include_proxy")
+set(PROXY_INCLUDE "${CMAKE_SOURCE_DIR}/include_proxy")
 
 set(MSVC_INCLUDE
     "-imsvc \"${PROXY_INCLUDE}\""
@@ -56,7 +120,7 @@ set(MSVC_LIB_PATHS
     "/libpath:\"${MSVC_BASE}/atlmfc/lib/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/ucrt/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/um/x64\""
-    "/libpath:\"/home/xiang/Documents/coding/c_cpp/MusicMapMaker-Next/lib_proxy\""
+    "/libpath:\"${CMAKE_SOURCE_DIR}/lib_proxy\""
 )
 
 string(REPLACE ";" " " MSVC_INCLUDE_STR "${MSVC_INCLUDE}")
@@ -90,6 +154,6 @@ set(CMAKE_CXX_LINK_EXECUTABLE
 )
 
 set(VCPKG_ROOT
-    "/mnt/windows_c/msys64/home/xiang/projects/vcpkg"
-    CACHE STRING "" FORCE)
+    "${WINDOWS_CROSS_ROOT}/vcpkg"
+    CACHE PATH "vcpkg root for Windows cross builds." FORCE)
 list(APPEND CMAKE_PREFIX_PATH "${VCPKG_ROOT}/installed/x64-windows-static")
