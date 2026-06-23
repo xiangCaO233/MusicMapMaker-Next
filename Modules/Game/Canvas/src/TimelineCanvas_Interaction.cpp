@@ -1,4 +1,6 @@
 #include "canvas/TimelineCanvas.h"
+
+#include "canvas/MarqueeAutoScroll.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -1334,7 +1336,15 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                        : rectIntersects(selection, targetRect);
         };
 
+        auto refreshMarqueeScreenY = [&]() {
+            m_timingMarqueeStartY = static_cast<float>(
+                canvasYAtTime(size, m_timingMarqueeStartTime));
+            m_timingMarqueeEndY =
+                static_cast<float>(canvasYAtTime(size, m_timingMarqueeEndTime));
+        };
+
         auto refreshMarqueeTargets = [&]() {
+            refreshMarqueeScreenY();
             m_selectedTimingEntities = m_timingMarqueeBaseSelection;
             const auto selectionRect = makeMarqueeRect();
             if ( !selectionRect.valid ) {
@@ -1352,8 +1362,9 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             m_isTimingMarqueeSelecting = true;
             m_timingMarqueeStartX      = localMouseX;
             m_timingMarqueeEndX        = localMouseX;
-            m_timingMarqueeStartY      = localMouseY;
-            m_timingMarqueeEndY        = localMouseY;
+            m_timingMarqueeStartTime   = canvasTimeAtLocalY(size, localMouseY);
+            m_timingMarqueeEndTime     = m_timingMarqueeStartTime;
+            refreshMarqueeScreenY();
             m_timingMarqueeBaseSelection.clear();
             if ( additiveSelection ) {
                 m_timingMarqueeBaseSelection = m_selectedTimingEntities;
@@ -1365,8 +1376,26 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         if ( m_isTimingMarqueeSelecting &&
              ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
-            m_timingMarqueeEndX = localMouseX;
-            m_timingMarqueeEndY = localMouseY;
+            bool autoScrolled = false;
+            if ( !m_currentSnapshot->isPlaying ) {
+                const double autoScrollTargetTime =
+                    marqueeAutoScrollTargetTime(*m_currentSnapshot,
+                                                size.y,
+                                                localMouseY,
+                                                io.DeltaTime,
+                                                io.KeyShift,
+                                                autoScrolled);
+                if ( autoScrolled ) {
+                    const double visualOffset = Config::AppConfig::instance()
+                                                    .getVisualConfig()
+                                                    .getEffectiveVisualOffset();
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(Logic::CmdSeek{
+                            autoScrollTargetTime - visualOffset }));
+                }
+            }
+            m_timingMarqueeEndX    = localMouseX;
+            m_timingMarqueeEndTime = canvasTimeAtLocalY(size, localMouseY);
             refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&

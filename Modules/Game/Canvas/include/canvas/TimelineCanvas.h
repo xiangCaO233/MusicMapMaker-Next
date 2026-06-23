@@ -470,6 +470,12 @@ private:
     /// @brief Timeline 框选终点 Y 坐标。
     float m_timingMarqueeEndY{ 0.0f };
 
+    /// @brief Timeline marquee start display time in seconds.
+    double m_timingMarqueeStartTime{ 0.0 };
+
+    /// @brief Timeline marquee end display time in seconds.
+    double m_timingMarqueeEndTime{ 0.0 };
+
     /// @brief Timeline 框选起点 X 坐标。
     float m_timingMarqueeStartX{ 0.0f };
 
