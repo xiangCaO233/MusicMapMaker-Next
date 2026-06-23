@@ -45,25 +45,29 @@ function(mmm_set_vulkan_sdk_from_env)
 endfunction()
 
 if(CMAKE_CROSSCOMPILING)
-  if(MSVC)
-    message(STATUS "Using CMAKE_CROSSCOMPILING clang-cl msvc like Toolchain")
+  if(WIN32)
+    if(MSVC)
+      message(STATUS "Using CMAKE_CROSSCOMPILING clang-cl msvc like Toolchain")
+    elseif(MINGW)
+      message(STATUS "Using CMAKE_CROSSCOMPILING MinGW Toolchain")
+    endif()
     # =============================================================================
     # 调用系统内置的标准 FindVulkan
     # =============================================================================
     # CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
-    if(MSVC)
-      mmm_set_vulkan_sdk_from_env()
-      if(NOT _MMM_VULKAN_SDK_ROOT_SET)
-        message(
-          FATAL_ERROR
-            "VULKAN_SDK environment variable is required when cross-compiling with "
-            "an MSVC-like toolchain.")
-      endif()
-
-      # 也可以通过设置环境变量让标准模块去找
-      list(PREPEND CMAKE_INCLUDE_PATH "${VULKAN_SDK_ROOT}/Include")
-      list(PREPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
+    mmm_set_vulkan_sdk_from_env()
+    if(NOT _MMM_VULKAN_SDK_ROOT_SET)
+      message(
+        FATAL_ERROR
+          "VULKAN_SDK environment variable is required when cross-compiling "
+          "for Windows.")
     endif()
+
+    # 也可以通过设置环境变量让标准模块去找
+    list(PREPEND CMAKE_INCLUDE_PATH "${VULKAN_SDK_ROOT}/Include")
+    list(PREPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
+    include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
+  else()
     include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
   endif()
 else()

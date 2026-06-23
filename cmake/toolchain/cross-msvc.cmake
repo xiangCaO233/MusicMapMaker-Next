@@ -5,7 +5,7 @@ set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 # 基础路径定义 (基于你的挂载点)
 set(MSVC_BASE
-    "/mnt/windows_c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.51.36014"
+    "/mnt/windows_c/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.52.36328"
 )
 set(WINSDK_BASE "/mnt/windows_c/Program Files (x86)/Windows Kits/10")
 set(WINSDK_VER "10.0.26100.0") # <--- 请根据你 Lib/Include 下的实际文件夹名修改此处!!

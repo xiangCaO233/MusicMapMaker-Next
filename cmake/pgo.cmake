@@ -33,6 +33,14 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
   set(MMM_PGO_IS_LLVM_COMPILER ON)
 endif()
 
+set(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS OFF)
+if(MMM_PGO_IS_LLVM_COMPILER
+   AND CMAKE_CROSSCOMPILING
+   AND ("${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}" STREQUAL "MSVC"
+        OR "${CMAKE_CXX_SIMULATE_ID}" STREQUAL "MSVC"))
+  set(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS ON)
+endif()
+
 option(MMM_PGO_USE "Build using PGO profile data" OFF)
 
 if(MMM_PGO_USE)
@@ -53,10 +61,15 @@ if(MMM_PGO_USE)
       "PGO: MMM_PGO_USE is enabled. Disabling PGO instrumentation (MMM_PGO_INSTRUMENT=OFF)."
   )
 else()
-  # Enable PGO instrumentation by default only for the LLVM profile workflow.
+  # PGO 插桩默认只在 LLVM GNU-like 工具链启用；clang-cl 交叉 MSVC
+  # 链接阶段依赖的 compiler-rt profile 库不稳定，必须显式禁用。
+  set(MMM_PGO_INSTRUMENT_DEFAULT ${MMM_PGO_IS_LLVM_COMPILER})
+  if(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
+    set(MMM_PGO_INSTRUMENT_DEFAULT OFF)
+  endif()
   option(MMM_PGO_INSTRUMENT
          "Build with PGO instrumentation for profile collection"
-         ${MMM_PGO_IS_LLVM_COMPILER})
+         ${MMM_PGO_INSTRUMENT_DEFAULT})
 endif()
 
 if(MMM_PGO_INSTRUMENT AND NOT MMM_PGO_IS_LLVM_COMPILER)
@@ -64,6 +77,16 @@ if(MMM_PGO_INSTRUMENT AND NOT MMM_PGO_IS_LLVM_COMPILER)
     WARNING
       "PGO: disabling instrumentation because ${CMAKE_CXX_COMPILER_ID} does not "
       "support this project's LLVM profile workflow.")
+  set(MMM_PGO_INSTRUMENT
+      OFF
+      CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
+endif()
+
+if(MMM_PGO_INSTRUMENT AND MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
+  message(
+    WARNING
+      "PGO: disabling instrumentation for cross clang-cl/MSVC-like builds "
+      "because lld-link may not find clang_rt.profile.lib.")
   set(MMM_PGO_INSTRUMENT
       OFF
       CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)

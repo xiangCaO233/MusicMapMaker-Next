@@ -5,8 +5,9 @@ if(MSVC)
 
 else()
   if(WIN32)
-    if(MINGW)
-      # 在 Windows 非 MSVC 环境下直接静态链接标准库等运行时依赖。
+    if(MINGW AND PROJECT_LINKAGE STREQUAL "static")
+      # MinGW 静态链接偏好直接静态链接标准库等运行时依赖；shared 偏好
+      # 不能携带 -static，避免把运行库强行并入本体。
       add_link_options(-static)
     endif()
     if(MSVC)
@@ -20,18 +21,23 @@ else()
     # ==============================================================================
 
     # 检查编译器是否是 Clang
-    message(
-      STATUS
-        "Compiler is Clang. Enabling ThinLTO for Release/RelWithDebInfo/MinSizeRel."
-    )
+    message(STATUS "Compiler is Clang.")
 
     if(WIN32)
-      # 为 Clang 开启 PDB 支持 (CodeView 格式)
+      # clang-cl 使用 lld-link，可开启 PDB；MinGW GNU frontend 的链接器不接受
+      # /debug，因此只保留普通 DWARF/CodeView 调试信息。
       add_compile_options("-gcodeview")
-      add_link_options("-fuse-ld=lld")
-      add_link_options("-Wl,/debug")
-      message(
-        STATUS "Windows Clang detected. Enabling PDB generation via lld-link.")
+      if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        add_link_options("-fuse-ld=lld")
+        add_link_options("-Wl,/debug")
+        message(
+          STATUS
+            "Windows clang-cl detected. Enabling PDB generation via lld-link.")
+      elseif(MINGW)
+        message(
+          STATUS
+            "Windows MinGW clang detected. Using GNU-style linker flags.")
+      endif()
     endif()
 
     # --- 全局 Clang 优化 (所有配置) ---
@@ -39,20 +45,30 @@ else()
     add_compile_options("-funique-internal-linkage-names")
     add_compile_options("-ftime-trace")
 
-    # 同时，也为链接器添加 LTO 标志 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加编译选项
-    add_compile_options(
-      "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
+    # 使用 GCC driver 做最终链接时不能启用 LLVM ThinLTO，否则链接器无法消费
+    # clang 生成的 bitcode。
+    if(NOT MMM_DISABLE_CLANG_LTO)
+      # 同时，也为链接器添加 LTO 标志 仅在 Release、RelWithDebInfo、MinSizeRel
+      # 模式下添加编译选项
+      add_compile_options(
+        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
 
-    # 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加链接选项
-    add_link_options(
-      "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
+      # 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加链接选项
+      add_link_options(
+        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
+
+      # --- Release 模式额外优化 ---
+      add_compile_options(
+        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>"
+      )
+      add_compile_options(
+        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Xclang;-fmerge-functions>"
+      )
+    else()
+      message(STATUS "Clang ThinLTO disabled for this toolchain.")
+    endif()
 
     # --- Release 模式额外优化 ---
-    add_compile_options(
-      "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fwhole-program-vtables>")
-    add_compile_options(
-      "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-Xclang;-fmerge-functions>"
-    )
     add_compile_options(
       "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-ffp-contract=fast>")
 
