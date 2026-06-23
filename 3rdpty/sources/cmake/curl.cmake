@@ -74,7 +74,7 @@ endif()
 if(WIN32)
   target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt)
   if(MINGW OR (NOT MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-    target_link_libraries(3rd_curl INTERFACE unistring iconv)
+    target_link_libraries(3rd_curl INTERFACE idn2 unistring iconv)
   endif()
 endif()
 
