@@ -54,9 +54,9 @@ def _download_progress(block_num, block_size, total_size, label=""):
 # =============================================================================
 
 def find_profiles_local(input_dir, max_age_days):
-    """扫描本地目录，返回 .profraw 文件列表 (跳过空文件和过期文件)"""
-    pattern = os.path.join(input_dir, "*.profraw")
-    files = glob.glob(pattern)
+    """递归扫描本地目录，返回 .profraw 文件列表 (跳过空文件和过期文件)"""
+    pattern = os.path.join(input_dir, "**", "*.profraw")
+    files = glob.glob(pattern, recursive=True)
     if not files:
         return [], 0
 
