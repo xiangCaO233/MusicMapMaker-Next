@@ -1261,13 +1261,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             }
 
+            const bool playbackScrolled = currentSnapshot->hasBeatmap &&
+                                          currentSnapshot->isPlaying &&
+                                          currentSnapshot->isSelecting;
             const bool shouldUpdateMarquee =
                 shouldSendContinuousEditCommand(
                     m_lastMarqueeUpdateCommand,
                     { localMousePos.x, localMousePos.y },
                     ImGui::GetIO().KeyCtrl,
                     false) ||
-                autoScrolled;
+                autoScrolled || playbackScrolled;
             if ( shouldUpdateMarquee ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
