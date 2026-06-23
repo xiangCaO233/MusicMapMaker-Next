@@ -133,12 +133,18 @@ endfunction()
 # 将 CMake 配置名映射到预编译目录候选名。
 function(prebuilt_config_dir_candidates out_var config)
   string(TOLOWER "${config}" _config_lower)
-  set(_candidates "${config}" "${_config_lower}")
-  if(config STREQUAL "" OR _config_lower STREQUAL "noconfig")
-    list(APPEND _candidates "Release" "release")
-  elseif(_config_lower STREQUAL "relwithdebinfo" OR _config_lower STREQUAL
-                                                    "minsizerel")
-    list(APPEND _candidates "Release" "release")
+  if(_config_lower STREQUAL "debug")
+    set(_candidates "Debug" "debug")
+  elseif(config STREQUAL "" OR _config_lower STREQUAL "noconfig")
+    set(_candidates "RelWithDebInfo" "relwithdebinfo" "Release" "release")
+  elseif(
+    _config_lower STREQUAL "release"
+    OR _config_lower STREQUAL "relwithdebinfo"
+    OR _config_lower STREQUAL "minsizerel")
+    set(_candidates "RelWithDebInfo" "relwithdebinfo" "Release" "release")
+  else()
+    set(_candidates "${config}" "${_config_lower}" "RelWithDebInfo"
+                    "relwithdebinfo" "Release" "release")
   endif()
   list(REMOVE_DUPLICATES _candidates)
   set(${out_var}
