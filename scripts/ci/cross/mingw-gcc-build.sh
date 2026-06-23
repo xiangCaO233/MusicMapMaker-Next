@@ -14,7 +14,7 @@ Options:
   --jobs <count>          Parallel build jobs. Default: 90% of CPU threads
   --linkage <mode>        PROJECT_LINKAGE value: static or shared. Default: static
   --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32
-  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot
+  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/x86_64-w64-mingw32
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-gcc.cmake
   --configure-only        Configure and generate, then stop
   --fresh                 Remove the build directory before configuring
@@ -80,8 +80,12 @@ detectMingwSysroot() {
     fi
 
     if command -v "${toolPrefix}-gcc" >/dev/null 2>&1; then
-        "${toolPrefix}-gcc" -print-sysroot
-        return
+        local detectedSysroot
+        detectedSysroot="$("${toolPrefix}-gcc" -print-sysroot)"
+        if [[ -n "${detectedSysroot}" ]]; then
+            printf "%s\n" "${detectedSysroot}"
+            return
+        fi
     fi
 
     printf "/usr/x86_64-w64-mingw32\n"

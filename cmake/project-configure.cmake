@@ -84,7 +84,13 @@ else()
     endif()
   else()
     message(STATUS "Compiler is GCC. Disable LTO.")
-    add_compile_options("-ftime-report")
+    if(WIN32 AND CMAKE_CROSSCOMPILING)
+      # Windows 交叉 GCC 的 CI 构建日志需要保持可读，默认不输出每个翻译单元的
+      # GCC 内部耗时表。
+      message(STATUS "GCC time report disabled for Windows cross builds.")
+    else()
+      add_compile_options("-ftime-report")
+    endif()
 
     # 编译器 GNU 的 -O2/-O3 默认启用 strict aliasing，而 Vulkan-Hpp 的句柄类型
     # 和内部类型转换在该模式下可能触发未定义行为，导致渲染数据丢失。

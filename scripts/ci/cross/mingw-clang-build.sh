@@ -12,7 +12,7 @@ Options:
   --build-type <type>    CMake build type. Default: RelWithDebInfo
   --jobs <count>         Parallel build jobs. Default: 90% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
-  --sysroot <path>       MinGW sysroot. Default: x86_64-w64-mingw32-gcc -print-sysroot
+  --sysroot <path>       MinGW sysroot. Default: ${WINDOWS_CROSS_ROOT}/msys64/clang64
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
   --configure-only       Configure and generate, then stop
   --fresh                Remove the build directory before configuring
@@ -58,6 +58,21 @@ requireCommand() {
     fi
 }
 
+requireAnyCommand() {
+    local label="$1"
+    shift
+
+    local commandName
+    for commandName in "$@"; do
+        if command -v "${commandName}" >/dev/null 2>&1; then
+            return
+        fi
+    done
+
+    printf "error: required command not found: %s (tried: %s)\n" "${label}" "$*" >&2
+    exit 1
+}
+
 projectPath() {
     local inputPath="$1"
 
@@ -71,6 +86,13 @@ projectPath() {
 detectMingwSysroot() {
     if [[ -n "${MINGW_SYSROOT:-}" ]]; then
         printf "%s\n" "${MINGW_SYSROOT}"
+        return
+    fi
+
+    local windowsCrossRoot="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
+    local msys2Clang64Sysroot="${windowsCrossRoot}/msys64/clang64"
+    if [[ -d "${msys2Clang64Sysroot}/include" && -d "${msys2Clang64Sysroot}/lib" ]]; then
+        printf "%s\n" "${msys2Clang64Sysroot}"
         return
     fi
 
@@ -188,11 +210,13 @@ export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
 requireCommand cmake
-requireCommand clang
-requireCommand clang++
-requireCommand x86_64-w64-mingw32-gcc
-requireCommand x86_64-w64-mingw32-g++
+requireAnyCommand clang clang-22 clang-21 clang-20 clang
+requireAnyCommand clang++ clang++-22 clang++-21 clang++-20 clang++
 requireCommand x86_64-w64-mingw32-windres
+requireCommand x86_64-w64-mingw32-ar
+requireCommand x86_64-w64-mingw32-ranlib
+requireCommand x86_64-w64-mingw32-strip
+requireCommand x86_64-w64-mingw32-objcopy
 
 if [[ ! -d "${MINGW_SYSROOT}" ]]; then
     printf "error: MINGW_SYSROOT does not exist: %s\n" "${MINGW_SYSROOT}" >&2

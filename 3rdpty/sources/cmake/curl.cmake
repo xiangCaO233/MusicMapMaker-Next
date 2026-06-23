@@ -24,6 +24,9 @@ set(CURL_USE_LIBSSH2
 set(CURL_USE_LIBPSL
     OFF
     CACHE BOOL "" FORCE)
+set(CURL_USE_LIBIDN2
+    OFF
+    CACHE BOOL "" FORCE)
 set(USE_NGHTTP2
     OFF
     CACHE BOOL "" FORCE)
@@ -73,9 +76,6 @@ endif()
 
 if(WIN32)
   target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt)
-  if(MINGW OR (NOT MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
-    target_link_libraries(3rd_curl INTERFACE idn2 unistring iconv)
-  endif()
 endif()
 
 if(APPLE)
