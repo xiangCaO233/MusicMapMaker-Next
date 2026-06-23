@@ -21,6 +21,8 @@ set(LJ_BUILD_STAMP "${LJ_BUILD_ROOT}/luajit_build.stamp")
 file(GLOB_RECURSE LJ_SOURCE_INPUTS CONFIGURE_DEPENDS "${LJ_ORIGINAL_DIR}/*")
 list(FILTER LJ_SOURCE_INPUTS EXCLUDE REGEX "/\\.git(/|$)")
 list(APPEND LJ_SOURCE_INPUTS "${CMAKE_CURRENT_LIST_FILE}")
+list(APPEND LJ_SOURCE_INPUTS
+     "${CMAKE_CURRENT_LIST_DIR}/PatchLuaJITMsvcRuntime.cmake")
 set(LJ_SYNC_SOURCE_COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
                            "${LJ_ORIGINAL_DIR}" "${LJ_BUILD_ROOT}")
 
@@ -43,6 +45,11 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
   # Windows MSVC 静态构建 msvcbuild.bat static 会生成 lua51.lib (静态库)
   set(LJ_LIB_NAME "lua51.lib")
   set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  if(CMAKE_BUILD_TYPE MATCHES Debug)
+    set(LJ_MSVC_RUNTIME_FLAG "/MTd")
+  else()
+    set(LJ_MSVC_RUNTIME_FLAG "/MT")
+  endif()
 
   set(BUILD_CMD "msvcbuild.bat")
   if(CMAKE_BUILD_TYPE MATCHES Debug)
@@ -54,7 +61,11 @@ if(MSVC AND NOT CMAKE_CROSSCOMPILING)
     OUTPUT "${LJ_BUILD_STAMP}"
     BYPRODUCTS "${LJ_OUTPUT_LIB}"
     COMMAND ${LJ_SYNC_SOURCE_COMMAND}
-            # MSVC 下需要在 src 目录运行 bat
+    COMMAND
+      ${CMAKE_COMMAND} -DLUAJIT_MSVCBUILD=${LJ_BUILD_SRC}/msvcbuild.bat
+      -DLUAJIT_STATIC_RUNTIME_FLAG=${LJ_MSVC_RUNTIME_FLAG} -P
+      ${CMAKE_CURRENT_LIST_DIR}/PatchLuaJITMsvcRuntime.cmake
+      # MSVC 下需要在 src 目录运行 bat
     COMMAND ${BUILD_CMD}
     COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
     DEPENDS ${LJ_SOURCE_INPUTS}

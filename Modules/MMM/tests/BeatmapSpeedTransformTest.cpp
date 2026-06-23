@@ -17,7 +17,7 @@ namespace
 /// @param expected 期望值。
 /// @param tolerance 容忍误差。
 /// @return 足够接近时返回 true。
-bool near(double actual, double expected, double tolerance = 1e-6)
+bool isNearlyEqual(double actual, double expected, double tolerance = 1e-6)
 {
     return std::abs(actual - expected) < tolerance;
 }
@@ -184,14 +184,17 @@ bool runFixtureCoverage()
                 "name updated");
     ok &= check(result.beatmap.m_baseMapMetadata.version == "Hard 1.5x",
                 "version updated");
-    ok &= check(near(result.beatmap.m_baseMapMetadata.preference_bpm, 180.0),
-                "metadata bpm scaled");
-    ok &= check(near(result.beatmap.m_baseMapMetadata.map_length, 4000.0),
-                "map length uses content end");
-    ok &= check(near(MMM::BeatmapSpeedTransform::calculateContentEndTime(
-                         result.beatmap),
-                     4000.0),
-                "content end time calculated");
+    ok &= check(
+        isNearlyEqual(result.beatmap.m_baseMapMetadata.preference_bpm, 180.0),
+        "metadata bpm scaled");
+    ok &= check(
+        isNearlyEqual(result.beatmap.m_baseMapMetadata.map_length, 4000.0),
+        "map length uses content end");
+    ok &= check(
+        isNearlyEqual(
+            MMM::BeatmapSpeedTransform::calculateContentEndTime(result.beatmap),
+            4000.0),
+        "content end time calculated");
     ok &= check(result.beatmap.m_baseMapMetadata.video_starttime == 667,
                 "video start time scaled");
     ok &= check(result.beatmap.m_baseMapMetadata.main_audio_path ==
@@ -199,49 +202,57 @@ bool runFixtureCoverage()
                 "audio path updated");
 
     ok &= check(result.beatmap.m_timings.size() == 2, "timing count kept");
-    ok &= check(near(result.beatmap.m_timings[0].m_timestamp, 666.6666666667),
-                "bpm timing timestamp scaled");
-    ok &= check(near(result.beatmap.m_timings[0].m_bpm, 180.0),
+    ok &= check(
+        isNearlyEqual(result.beatmap.m_timings[0].m_timestamp, 666.6666666667),
+        "bpm timing timestamp scaled");
+    ok &= check(isNearlyEqual(result.beatmap.m_timings[0].m_bpm, 180.0),
                 "bpm timing value scaled");
-    ok &= check(near(result.beatmap.m_timings[0].m_beat_length, 333.3333333333),
+    ok &= check(isNearlyEqual(result.beatmap.m_timings[0].m_beat_length,
+                              333.3333333333),
                 "bpm beat length scaled");
-    ok &= check(near(result.beatmap.m_timings[1].m_timestamp, 2000.0),
+    ok &= check(isNearlyEqual(result.beatmap.m_timings[1].m_timestamp, 2000.0),
                 "scroll timing timestamp scaled");
-    ok &= check(near(result.beatmap.m_timings[1].m_timingEffectParameter, 1.5),
-                "scroll multiplier kept");
+    ok &= check(
+        isNearlyEqual(result.beatmap.m_timings[1].m_timingEffectParameter, 1.5),
+        "scroll multiplier kept");
 
     ok &= check(result.beatmap.m_noteData.notes.size() == 1,
                 "standalone note count kept");
-    ok &= check(near(result.beatmap.m_noteData.notes.front().m_timestamp,
-                     1333.3333333333),
-                "note timestamp scaled");
+    ok &=
+        check(isNearlyEqual(result.beatmap.m_noteData.notes.front().m_timestamp,
+                            1333.3333333333),
+              "note timestamp scaled");
     ok &= check(result.beatmap.m_noteData.holds.size() == 2,
                 "hold and sub hold copied");
-    ok &= check(near(result.beatmap.m_noteData.holds.front().m_timestamp,
-                     2666.6666666667),
-                "hold timestamp scaled");
-    ok &= check(near(result.beatmap.m_noteData.holds.front().m_duration, 400.0),
+    ok &=
+        check(isNearlyEqual(result.beatmap.m_noteData.holds.front().m_timestamp,
+                            2666.6666666667),
+              "hold timestamp scaled");
+    ok &= check(isNearlyEqual(
+                    result.beatmap.m_noteData.holds.front().m_duration, 400.0),
                 "hold duration scaled");
     ok &= check(result.beatmap.m_noteData.polylines.size() == 1,
                 "polyline copied");
 
     const auto& polyline = result.beatmap.m_noteData.polylines.front();
     ok &= check(polyline.m_subNotes.size() == 2, "polyline sub notes rebound");
-    ok &= check(near(polyline.m_timestamp, 3333.3333333333),
+    ok &= check(isNearlyEqual(polyline.m_timestamp, 3333.3333333333),
                 "polyline timestamp follows first sub note");
+    ok &= check(isNearlyEqual(polyline.m_subNotes.front().get().m_timestamp,
+                              3333.3333333333),
+                "polyline first sub timestamp scaled");
     ok &= check(
-        near(polyline.m_subNotes.front().get().m_timestamp, 3333.3333333333),
-        "polyline first sub timestamp scaled");
-    ok &= check(near(polyline.m_subNotes.back().get().m_timestamp, 4000.0),
-                "polyline second sub timestamp scaled");
+        isNearlyEqual(polyline.m_subNotes.back().get().m_timestamp, 4000.0),
+        "polyline second sub timestamp scaled");
 
     auto shortSource                         = makeFixture();
     shortSource.m_baseMapMetadata.map_length = 3000.0;
     auto shortResult =
         MMM::BeatmapSpeedTransform::createSpeedVersion(shortSource, options);
     ok &= check(shortResult.success, "short metadata transform succeeds");
-    ok &= check(near(shortResult.beatmap.m_baseMapMetadata.map_length, 4000.0),
-                "map length ignores divided metadata tail");
+    ok &= check(
+        isNearlyEqual(shortResult.beatmap.m_baseMapMetadata.map_length, 4000.0),
+        "map length ignores divided metadata tail");
 
     MMM::BeatmapSpeedTransformOptions invalidOptions;
     invalidOptions.speed = 0.0;
@@ -294,16 +305,18 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
                 "resource timing count kept");
 
     if ( sourceContentEnd > 0.0 ) {
-        ok &= check(near(result.beatmap.m_baseMapMetadata.map_length,
-                         sourceContentEnd / speed,
-                         1e-3),
+        ok &= check(isNearlyEqual(result.beatmap.m_baseMapMetadata.map_length,
+                                  sourceContentEnd / speed,
+                                  1e-3),
                     "resource content end scaled");
     }
     if ( !source.m_allNotes.empty() && !result.beatmap.m_allNotes.empty() ) {
-        ok &= check(near(firstNoteTime(result.beatmap), sourceFirst / speed),
-                    "resource first note time scaled");
-        ok &= check(near(lastNoteTime(result.beatmap), sourceLast / speed),
-                    "resource last note time scaled");
+        ok &= check(
+            isNearlyEqual(firstNoteTime(result.beatmap), sourceFirst / speed),
+            "resource first note time scaled");
+        ok &= check(
+            isNearlyEqual(lastNoteTime(result.beatmap), sourceLast / speed),
+            "resource last note time scaled");
     }
 
     const auto timingCount =
@@ -313,7 +326,8 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
     for ( std::size_t i = 0; i < timingCount; ++i ) {
         const auto& before = source.m_timings[i];
         const auto& after  = result.beatmap.m_timings[i];
-        if ( !near(after.m_timestamp, before.m_timestamp / speed, 1e-3) ) {
+        if ( !isNearlyEqual(
+                 after.m_timestamp, before.m_timestamp / speed, 1e-3) ) {
             XERROR(
                 "[speed-transform] timing timestamp mismatch at {}: {} vs {}",
                 i,
@@ -323,7 +337,7 @@ bool validateResourceBeatmap(const std::filesystem::path& inputPath,
         }
         if ( before.m_timingEffect == MMM::TimingEffect::BPM &&
              before.m_bpm > 0.0 &&
-             !near(after.m_bpm, before.m_bpm * speed, 1e-3) ) {
+             !isNearlyEqual(after.m_bpm, before.m_bpm * speed, 1e-3) ) {
             XERROR("[speed-transform] bpm mismatch at {}: {} vs {}",
                    i,
                    after.m_bpm,

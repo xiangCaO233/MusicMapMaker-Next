@@ -12,3 +12,5 @@
 *.mcz filter=lfs diff=lfs merge=lfs -text
 *.zip filter=lfs diff=lfs merge=lfs -text
 tests/data/** filter=lfs diff=lfs merge=lfs -text
+3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text
+3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text

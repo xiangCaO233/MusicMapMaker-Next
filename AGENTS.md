@@ -75,13 +75,43 @@ cmake-format -i <absolute_file_path>
 - CMake 格式化范围仅包括以下项目自维护脚本：
   - `CMakeLists.txt`
   - `cmake/**/*.cmake`
+  - `3rdpty/cmake/**/*.cmake`
   - `Modules/**/CMakeLists.txt`
   - `3rdpty/sources/cmake/*.cmake`
   - `3rdpty/sources/IonCachyEngine/CMakeLists.txt`
   - `3rdpty/sources/IonCachyEngine/src/CMakeLists.txt`
   - `3rdpty/sources/IonCachyEngine/cmake/*.cmake`
+  - `3rdpty/sources/IonCachyEngine/3rdpty/cmake/**/*.cmake`
   - `3rdpty/sources/IonCachyEngine/3rdpty/sources/cmake/*.cmake`
 - 除上述路径外，仍然禁止格式化或修改 `3rdpty/` 下的其它第三方源码 CMake 文件。
+- 新增或修改项目自维护 CMake 脚本时，注释必须使用中文，并为入口开关、公共 helper 函数、复杂目标分组、预编译库布局和配置映射写清楚维护性说明。
+
+### 3.5 预编译库
+
+- `SOURCES_BUILD` 是第三方依赖来源的唯一开关，默认值必须为 `OFF`：
+  - `SOURCES_BUILD=ON` 时使用 `3rdpty/sources` 源码构建。
+  - `SOURCES_BUILD=OFF` 时只使用预编译库，禁止自动回退到源码构建；缺少预编译包、头文件或库文件时必须 `FATAL_ERROR`。
+- `PROJECT_LINKAGE` 是主项目依赖链接偏好，`ICE_LINKAGE` 是 `IonCachyEngine` 独立项目依赖链接偏好，二者取值只能为 `static` 或 `shared`：
+  - `static` 偏好使用静态依赖库，MSVC 运行库使用 `/MT` 或 `/MTd`。
+  - `shared` 偏好使用动态依赖库，MSVC 运行库使用 `/MD` 或 `/MDd`，GNU/Clang 链接参数不得包含 `-static`、`-static-libstdc++`、`-static-libgcc` 等静态运行库选项。
+  - `IonCachyEngine` 作为主项目子项目时，`ICE_LINKAGE` 默认继承 `PROJECT_LINKAGE`；独立构建时默认 `static`。
+- PGO 只允许作用于本项目业务模块；预编译库二进制以及用于生成预编译库的第三方依赖源码构建均禁止 PGO 插桩。
+- 主项目预编译库目录布局：
+  - 共享头文件：`3rdpty/prebuilts/<package>/include`
+  - 静态库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+- `IonCachyEngine` 内部依赖使用同样布局：
+  - 共享头文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<package>/include`
+  - 静态库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+- Windows x86_64 的参考静态布局为 `libs/x86_64/msvc/2026/<config>`、`libs/x86_64/mingw/clang64/<config>`、`libs/x86_64/mingw/ucrt64/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
+- 预编译库必须区分构建配置，至少提供 `Debug` 与 `Release` 目录；`RelWithDebInfo`、`MinSizeRel` 优先使用同名目录，未提供时使用 `Release`。
+- 新增或调整预编译包时，必须为每个具体库编写独立的 `Findxxx.cmake`，并在该文件内显式创建对应 target；禁止使用一个大一统的 `Find*.cmake` 或通用 `add_header_target` / `add_static_target` helper 代替具体库的查找脚本。
+- 每个 `Findxxx.cmake` 必须导出与源码构建一致的 CMake target 名称，业务模块不得感知依赖来源差异。
+- `IonCachyEngine` 作为独立项目，其内部 `3rdpty/cmake/**/*.cmake` 和 `3rdpty/CMakeLists.txt` 禁止包含 `MMM` 相关文件名、变量名、函数名或注释标识。
+- 所有预编译库相关文件必须由 Git LFS 追踪，路径至少包含主仓 `.gitattributes` 中的 `3rdpty/prebuilts/**`、`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/**`，以及 `IonCachyEngine` 仓库自身 `.gitattributes` 中的 `3rdpty/prebuilts/**`。
 
 ## 4. 架构与模块依赖
 
