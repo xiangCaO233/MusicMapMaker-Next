@@ -3,8 +3,10 @@
 #include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
 #include "imgui.h"
+#include <imgui_internal.h>
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -206,6 +208,56 @@ inline void setShortcutRecordingActive(bool active)
 inline bool isShortcutRecordingActive()
 {
     return shortcutRecordingActiveState();
+}
+
+/// @brief 从 ImGui 窗口标题中提取 ### 后的稳定 ID。
+/// @param windowName ImGui 窗口名称。
+/// @return 稳定 ID；没有 ### 时返回原始名称。
+inline std::string_view stableWindowId(std::string_view windowName)
+{
+    const std::size_t marker = windowName.find("###");
+    if ( marker == std::string_view::npos ) {
+        return windowName;
+    }
+    return windowName.substr(marker + 3U);
+}
+
+/// @brief 判断稳定窗口 ID 是否为主谱面画布。
+/// @param stableId ImGui 窗口稳定 ID。
+/// @return 主谱面画布窗口返回 true。
+inline bool isMainCanvasWindowId(std::string_view stableId)
+{
+    return stableId.starts_with("Canvas_") || stableId == "Basic2DCanvas";
+}
+
+/// @brief 判断当前键盘焦点是否允许触发谱面物件编辑快捷键。
+/// @return 当前没有焦点窗口或焦点在主谱面画布时返回 true。
+inline bool focusedWindowAllowsCanvasEditingShortcuts()
+{
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if ( !context || !context->NavWindow || !context->NavWindow->Name ) {
+        return true;
+    }
+
+    return isMainCanvasWindowId(stableWindowId(context->NavWindow->Name));
+}
+
+/// @brief 判断谱面物件编辑快捷键是否应让位给当前 UI 焦点。
+/// @return 文本输入、弹窗、活跃控件或非主画布窗口聚焦时返回 true。
+/// @warning UI 热路径：每帧快捷键派发前调用；只读取 ImGui 当前输入状态。
+inline bool shouldBlockCanvasEditingShortcuts()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    if ( io.WantCaptureKeyboard || io.WantTextInput ||
+         ImGui::IsAnyItemActive() ) {
+        return true;
+    }
+    if ( ImGui::IsPopupOpen(
+             nullptr,
+             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {
+        return true;
+    }
+    return !focusedWindowAllowsCanvasEditingShortcuts();
 }
 
 /// @brief 录制当前帧刚按下的快捷键。

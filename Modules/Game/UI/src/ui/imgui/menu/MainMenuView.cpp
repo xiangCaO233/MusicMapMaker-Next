@@ -372,12 +372,13 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键处理以防冲突 (如 Ctrl+A
-    // 全选)
-    if ( io.WantTextInput ) return;
+    // 如果 ImGui 正在处理键盘，跳过全局快捷键以避免穿透输入框或弹窗。
+    if ( io.WantCaptureKeyboard || io.WantTextInput ) return;
     if ( ShortcutUtils::isShortcutRecordingActive() ) return;
+    const bool blockCanvasEditingShortcuts =
+        ShortcutUtils::shouldBlockCanvasEditingShortcuts();
 
-    // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
+    // 非 Ctrl 的播放快捷键只允许在没有活跃控件时触发。
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) {
         if ( !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
              ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
@@ -391,12 +392,14 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     }
 
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    if ( ShortcutUtils::isShortcutPressed(
+    if ( !blockCanvasEditingShortcuts &&
+         ShortcutUtils::isShortcutPressed(
              settings.shortcutConfig.mirrorPaste) ) {
         dispatchCommand(Logic::CmdPaste{ true, settings.selectPastedObjects });
         return;
     }
-    if ( ShortcutUtils::isShortcutPressed(settings.shortcutConfig.mirror) ) {
+    if ( !blockCanvasEditingShortcuts &&
+         ShortcutUtils::isShortcutPressed(settings.shortcutConfig.mirror) ) {
         dispatchCommand(Logic::CmdMirrorSelected{});
         return;
     }
@@ -426,31 +429,33 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 requestSaveBeatmap();
             }
         }
-        if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
-            if ( io.KeyShift ) {
-                dispatchCommand(Logic::CmdRedo{});
-            } else {
-                dispatchCommand(Logic::CmdUndo{});
+        if ( !blockCanvasEditingShortcuts ) {
+            if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+                if ( io.KeyShift ) {
+                    dispatchCommand(Logic::CmdRedo{});
+                } else {
+                    dispatchCommand(Logic::CmdUndo{});
+                }
             }
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_Y) ) {
-            dispatchCommand(Logic::CmdRedo{});
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
-            dispatchCommand(Logic::CmdCopy{});
-        }
-        if ( !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-            dispatchCommand(
-                Logic::CmdPaste{ false, settings.selectPastedObjects });
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
-            dispatchCommand(Logic::CmdCut{});
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
-            dispatchCommand(Logic::CmdSelectAll{});
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
-            dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
+            if ( ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+                dispatchCommand(Logic::CmdRedo{});
+            }
+            if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
+                dispatchCommand(Logic::CmdCopy{});
+            }
+            if ( !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+                dispatchCommand(
+                    Logic::CmdPaste{ false, settings.selectPastedObjects });
+            }
+            if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
+                dispatchCommand(Logic::CmdCut{});
+            }
+            if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
+                dispatchCommand(Logic::CmdSelectAll{});
+            }
+            if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
+                dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
+            }
         }
     } else if ( io.KeyAlt ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
