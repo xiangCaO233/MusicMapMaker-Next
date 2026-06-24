@@ -1508,6 +1508,22 @@ bool EditorEngine::isPlaybackPlaying() const
     return false;
 }
 
+/// @brief Check whether the active session is dragging a marquee box.
+/// @warning UI hot path: briefly locks SessionRegistry and reads constant
+/// active-session state without copying shared_ptr ownership.
+bool EditorEngine::isActiveSessionSelectingMarquee() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
+         sessions[idx].session ) {
+        const auto& ctx = sessions[idx].session->getContext();
+        return ctx.currentTool == EditTool::Marquee && ctx.isSelecting;
+    }
+    return false;
+}
+
 /// @brief 设置同主音轨多画布时间同步开关。
 /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)

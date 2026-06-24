@@ -142,14 +142,19 @@ bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
 /// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
 void cancelActiveEditingState(SessionContext& ctx)
 {
+    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
+                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
+
     ctx.isDragging  = false;
     ctx.draggedPart = HoverPart::None;
     ctx.dragCameraId.clear();
-    ctx.isSelecting             = false;
-    ctx.hasMarqueeSelection     = false;
-    ctx.marqueeIsAdditive       = false;
-    ctx.isMarqueeSelectionDirty = false;
-    ctx.marqueeBoxes.clear();
+    if ( !keepMarquee ) {
+        ctx.isSelecting             = false;
+        ctx.hasMarqueeSelection     = false;
+        ctx.marqueeIsAdditive       = false;
+        ctx.isMarqueeSelectionDirty = false;
+        ctx.marqueeBoxes.clear();
+    }
 
     ctx.brushState.isActive = false;
     ctx.brushState.polylineSegments.clear();

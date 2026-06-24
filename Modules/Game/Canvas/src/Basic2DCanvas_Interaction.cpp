@@ -397,9 +397,11 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 /// @param scrolled 输出是否需要执行自动滚动。
 /// @return 自动滚动后的显示时间，单位秒。
 /// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
+/// @param isAccelerated Whether Shift acceleration should be applied.
 double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
                                    float viewportHeight, float mouseY,
-                                   float deltaTime, bool& scrolled)
+                                   float deltaTime, bool isAccelerated,
+                                   bool& scrolled)
 {
     scrolled = false;
     if ( !std::isfinite(mouseY) || !std::isfinite(viewportHeight) ||
@@ -431,9 +433,12 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
         std::max(0.0,
                  static_cast<double>(outsidePixels) /
                      std::max(1.0, static_cast<double>(viewportHeight) * 0.18));
-    const double acceleratedRamp = ramp * ramp;
+    const double     acceleratedRamp                = ramp * ramp;
+    constexpr double SHIFT_AUTO_SCROLL_ACCELERATION = 3.0;
+    const double     acceleration =
+        isAccelerated ? SHIFT_AUTO_SCROLL_ACCELERATION : 1.0;
     const double pixelsPerSecond =
-        (6000.0 + 24000.0 * acceleratedRamp) * sensitivity;
+        (6000.0 + 24000.0 * acceleratedRamp) * sensitivity * acceleration;
     const double scale = std::abs(snapshot.renderScaleY) > 1e-6f
                              ? static_cast<double>(snapshot.renderScaleY)
                              : 1.0;
@@ -1250,6 +1255,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                 targetHeight,
                                                 localMousePos.y,
                                                 ImGui::GetIO().DeltaTime,
+                                                ImGui::GetIO().KeyShift,
                                                 autoScrolled);
                 if ( autoScrolled ) {
                     const double visualOffset = Config::AppConfig::instance()
@@ -1261,13 +1267,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }
             }
 
+            const bool playbackScrolled = currentSnapshot->hasBeatmap &&
+                                          currentSnapshot->isPlaying &&
+                                          currentSnapshot->isSelecting;
             const bool shouldUpdateMarquee =
                 shouldSendContinuousEditCommand(
                     m_lastMarqueeUpdateCommand,
                     { localMousePos.x, localMousePos.y },
                     ImGui::GetIO().KeyCtrl,
                     false) ||
-                autoScrolled;
+                autoScrolled || playbackScrolled;
             if ( shouldUpdateMarquee ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{

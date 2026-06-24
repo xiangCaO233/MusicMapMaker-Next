@@ -1,13 +1,11 @@
 # Modules/Config/CMakeLists.txt
 
-add_library(Config STATIC src/skin/SkinLoader.cpp
-                          src/skin/translation/Translation.cpp
-                          src/fonticon/NerdFontData.cpp
-                          src/AppPaths.cpp
-                          src/AppConfig.cpp)
+add_library(
+  Config STATIC
+  src/skin/SkinLoader.cpp src/skin/translation/Translation.cpp
+  src/fonticon/NerdFontData.cpp src/AppPaths.cpp src/AppConfig.cpp)
 
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
-target_link_libraries(
-  Config
-  PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2 Log)
+target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
+                                    Log)

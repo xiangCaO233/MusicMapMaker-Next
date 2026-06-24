@@ -322,6 +322,12 @@ public:
      */
     bool isPlaybackPlaying() const;
 
+    /// @brief Check whether the active session is dragging a marquee box.
+    /// @warning UI hot path: global shortcut handling calls this while an
+    /// ImGui item is active; it briefly locks SessionRegistry, reads constant
+    /// state, and does not copy shared_ptr ownership.
+    bool isActiveSessionSelectingMarquee() const;
+
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
 

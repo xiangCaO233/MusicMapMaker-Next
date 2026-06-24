@@ -54,9 +54,9 @@ def _download_progress(block_num, block_size, total_size, label=""):
 # =============================================================================
 
 def find_profiles_local(input_dir, max_age_days):
-    """扫描本地目录，返回 .profraw 文件列表 (跳过空文件和过期文件)"""
-    pattern = os.path.join(input_dir, "*.profraw")
-    files = glob.glob(pattern)
+    """递归扫描本地目录，返回 .profraw 文件列表 (跳过空文件和过期文件)"""
+    pattern = os.path.join(input_dir, "**", "*.profraw")
+    files = glob.glob(pattern, recursive=True)
     if not files:
         return [], 0
 
@@ -91,8 +91,47 @@ def find_profiles_local(input_dir, max_age_days):
 #  Source: remote URL
 # =============================================================================
 
-def _scrape_autoindex(url):
-    """从 nginx/apache autoindex 页面抓取所有 .profraw 链接"""
+def _as_directory_url(url):
+    """将 autoindex URL 规范化为目录形式。"""
+    return url if url.endswith("/") else url + "/"
+
+
+def _is_under_root_url(candidate_url, root_url):
+    """判断候选 URL 是否仍位于入口目录树内。"""
+    root = urlparse(_as_directory_url(root_url))
+    candidate = urlparse(candidate_url)
+    if candidate.scheme != root.scheme or candidate.netloc != root.netloc:
+        return False
+
+    root_path = root.path if root.path.endswith("/") else root.path + "/"
+    return candidate.path.startswith(root_path)
+
+
+def _cache_filename_for_profile(url, index):
+    """根据远程路径生成缓存文件名，避免递归下载时同名文件覆盖。"""
+    path = urlparse(url).path.strip("/")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", path)
+    if not safe_name:
+        safe_name = f"profile_{index + 1}.profraw"
+    if len(safe_name) > 180:
+        safe_name = f"{index + 1:05d}_{os.path.basename(path)}"
+    return safe_name
+
+
+def _scrape_autoindex(url, root_url=None, visited=None, seen_profiles=None):
+    """从 nginx/apache autoindex 页面递归抓取所有 .profraw 链接。"""
+    if root_url is None:
+        root_url = _as_directory_url(url)
+    if visited is None:
+        visited = set()
+    if seen_profiles is None:
+        seen_profiles = set()
+
+    url = _as_directory_url(url)
+    if url in visited:
+        return []
+    visited.add(url)
+
     print(f"  Fetching directory listing: {url}")
     try:
         with urlopen(url, timeout=30) as resp:
@@ -103,14 +142,33 @@ def _scrape_autoindex(url):
 
     # 匹配 <a href="..."> 链接 (处理 nginx/apache autoindex 格式)
     links = re.findall(r'href="([^"]+)"', html, re.IGNORECASE)
-    base_url = url if url.endswith("/") else url + "/"
+    base_url = _as_directory_url(url)
 
     profraw_urls = []
+    subdir_urls = []
     for link in links:
-        if link.endswith(".profraw"):
-            full_url = urljoin(base_url, link)
-            profraw_urls.append(full_url)
-            print(f"    Found: {link}")
+        if not link or link.startswith(("#", "?")):
+            continue
+        if link.lower().startswith(("javascript:", "mailto:")):
+            continue
+
+        full_url = urljoin(base_url, link)
+        if not _is_under_root_url(full_url, root_url):
+            continue
+
+        parsed = urlparse(full_url)
+        if parsed.path.lower().endswith(".profraw"):
+            if full_url not in seen_profiles:
+                seen_profiles.add(full_url)
+                profraw_urls.append(full_url)
+                print(f"    Found: {full_url}")
+        elif parsed.path.endswith("/"):
+            subdir_urls.append(full_url)
+
+    for subdir_url in sorted(set(subdir_urls)):
+        profraw_urls.extend(
+            _scrape_autoindex(subdir_url, root_url, visited, seen_profiles)
+        )
 
     return profraw_urls
 
@@ -132,7 +190,7 @@ def download_profiles_from_url(source_url, cache_dir):
         print(f"  Downloaded: {out_path} ({size:,} bytes)")
         return out_path, True  # True = already merged
 
-    # 目录模式: 抓取链接
+    # 目录模式: 递归抓取链接
     profraw_urls = _scrape_autoindex(source_url)
 
     if not profraw_urls:
@@ -142,7 +200,7 @@ def download_profiles_from_url(source_url, cache_dir):
     print(f"  Downloading {len(profraw_urls)} profile(s) ...")
     downloaded = []
     for i, u in enumerate(profraw_urls):
-        fname = os.path.basename(urlparse(u).path)
+        fname = _cache_filename_for_profile(u, i)
         out = os.path.join(cache_dir, fname)
         if os.path.exists(out) and os.path.getsize(out) > 0:
             print(f"  [{i+1}/{len(profraw_urls)}] Cached: {fname}")

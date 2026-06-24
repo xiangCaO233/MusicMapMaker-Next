@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <mutex>
 #include <string_view>
 #include <system_error>
 #include <vector>
@@ -252,7 +253,8 @@ std::string buildSaveTooltipMessage(const SaveTooltipPayload& payload)
     return "导出 " + fileName + " 成功";
 }
 
-/// @brief 订阅逻辑层保存结果事件，将事件转交 UI 帧内处理。
+/// @brief Subscribe to save result events and enqueue UI-thread tooltip
+/// payloads.
 void ensureSaveResultSubscription()
 {
     static bool subscribed = false;
@@ -376,7 +378,17 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     if ( ShortcutUtils::isShortcutRecordingActive() ) return;
 
     // 只有在没有文本输入激活时才处理快捷键，除非是 Ctrl 组合键
-    if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) return;
+    if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) {
+        if ( !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
+             ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
+            auto& engine = Logic::EditorEngine::instance();
+            if ( engine.isActiveSessionSelectingMarquee() ) {
+                const bool playing = engine.isPlaybackPlaying();
+                dispatchCommand(Logic::CmdSetPlayState{ !playing });
+            }
+        }
+        return;
+    }
 
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     if ( ShortcutUtils::isShortcutPressed(

@@ -4,4 +4,5 @@ add_library(Log STATIC src/colorful-log.cpp)
 
 target_link_libraries(Log PUBLIC spdlog::spdlog)
 target_include_directories(Log PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_include_directories(Log PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Config/include)
+target_include_directories(Log
+                           PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Config/include)
