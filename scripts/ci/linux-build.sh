@@ -17,6 +17,8 @@ Options:
   --compiler-tag <tag>        Prebuilt compiler tag. Default: preset value
   --jobs <count>              Parallel build jobs. Default: 90% of CPU threads
   --linkage <mode>            PROJECT_LINKAGE value: static or shared. Default: static
+  --pgo-instrument            Force MMM_PGO_INSTRUMENT=ON.
+  --no-pgo-instrument         Force MMM_PGO_INSTRUMENT=OFF.
   --sources-build             Configure with SOURCES_BUILD=ON.
   --prebuilt-targets          Build only third-party targets used for staging.
   --configure-only            Configure and generate, then stop.
@@ -108,6 +110,7 @@ sourcesBuild="OFF"
 prebuiltTargets=0
 configureOnly=0
 freshBuild=0
+pgoInstrument="auto"
 
 while (( $# > 0 )); do
     case "$1" in
@@ -183,6 +186,14 @@ while (( $# > 0 )); do
             projectLinkage="$2"
             shift 2
             ;;
+        --pgo-instrument)
+            pgoInstrument="ON"
+            shift
+            ;;
+        --no-pgo-instrument)
+            pgoInstrument="OFF"
+            shift
+            ;;
         --sources-build)
             sourcesBuild="ON"
             shift
@@ -237,6 +248,13 @@ if [[ -z "${prebuiltToolchain}" || -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ "${pgoInstrument}" == "auto" ]]; then
+    pgoInstrument="OFF"
+    if [[ "${buildType}" == "RelWithDebInfo" && "${prebuiltToolchain}" == "clang" ]]; then
+        pgoInstrument="ON"
+    fi
+fi
+
 requireCommand cmake
 requireCommand "${ccCompiler}"
 requireCommand "${cxxCompiler}"
@@ -267,7 +285,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DICE_LINKAGE="${projectLinkage}" \
     -DMMM_DISABLE_CLANG_LTO="${disableClangLto}" \
-    -DMMM_PGO_INSTRUMENT=OFF \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
