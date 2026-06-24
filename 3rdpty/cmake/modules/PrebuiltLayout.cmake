@@ -2,10 +2,12 @@ include_guard(GLOBAL)
 
 # 本文件只负责解析预编译包目录和库文件路径，不创建任何具体目标。 每个库的目标 必须在自己的 Findxxx.cmake 中显式声明。
 
-# 初始化主项目预编译库目录选择变量。头文件共享布局为： <root>/<包>/include 静态偏好布局为：
-# <root>/<platform>/<包>/libs/<arch>/<toolchain>/<compiler-tag>/<config> 动态偏好布局为：
-# <root>/<platform>/<包>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>
-# <root>/<platform>/<包>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>
+# 初始化主项目预编译库目录选择变量。头文件集中放在 <root>/headers/<包>/include， 二进制集中放在
+# <root>/binaries/<platform>/<包> 下，便于继续扩展 macOS 等平台。 静态偏好布局为：
+# <root>/binaries/<platform>/<包>/libs/<arch>/<toolchain>/<compiler-tag>/<config>
+# 动态偏好布局为：
+# <root>/binaries/<platform>/<包>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>
+# <root>/binaries/<platform>/<包>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>
 function(prebuilt_init default_root)
   if(NOT DEFINED PROJECT_LINKAGE OR PROJECT_LINKAGE STREQUAL "")
     set(PROJECT_LINKAGE
@@ -107,7 +109,8 @@ function(prebuilt_init default_root)
         CACHE STRING "Prebuilt compiler/runtime directory name.")
   endif()
 
-  set(_platform_root "${PROJECT_PREBUILT_ROOT}/${PROJECT_PREBUILT_PLATFORM}")
+  set(_platform_root
+      "${PROJECT_PREBUILT_ROOT}/binaries/${PROJECT_PREBUILT_PLATFORM}")
   if(NOT IS_DIRECTORY "${_platform_root}")
     message(
       FATAL_ERROR
@@ -118,7 +121,9 @@ endfunction()
 
 # 获取指定包的根目录。
 function(prebuilt_package_root out_var package)
-  set(_root "${PROJECT_PREBUILT_ROOT}/${PROJECT_PREBUILT_PLATFORM}/${package}")
+  set(_root
+      "${PROJECT_PREBUILT_ROOT}/binaries/${PROJECT_PREBUILT_PLATFORM}/${package}"
+  )
   if(NOT IS_DIRECTORY "${_root}")
     message(FATAL_ERROR "缺少预编译包目录：${_root}")
   endif()
@@ -127,9 +132,9 @@ function(prebuilt_package_root out_var package)
       PARENT_SCOPE)
 endfunction()
 
-# 获取指定包的 include 目录。头文件默认跨平台共用，只有二进制按平台区分。
+# 获取指定包的 include 目录。头文件统一收拢到 headers 根目录下，避免和平台二进制目录混放。
 function(prebuilt_include_dir out_var package)
-  set(_include_dir "${PROJECT_PREBUILT_ROOT}/${package}/include")
+  set(_include_dir "${PROJECT_PREBUILT_ROOT}/headers/${package}/include")
   if(NOT IS_DIRECTORY "${_include_dir}")
     message(FATAL_ERROR "缺少预编译头文件目录：${_include_dir}")
   endif()

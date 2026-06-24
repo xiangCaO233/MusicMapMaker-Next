@@ -57,7 +57,7 @@ copyLib() {
         exit 1
     fi
 
-    local outputPath="${prebuiltRoot}/linux/${packageName}/libs/x86_64/${prebuiltToolchain}/${compilerTag}/${buildType}/${outputName}"
+    local outputPath="${prebuiltRoot}/binaries/linux/${packageName}/libs/x86_64/${prebuiltToolchain}/${compilerTag}/${buildType}/${outputName}"
     install -D -m 0644 "${sourcePath}" "${outputPath}"
     printf "staged %s\n" "${outputPath#${projectRoot}/}"
 }

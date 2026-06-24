@@ -97,19 +97,19 @@ cmake-format -i <absolute_file_path>
   - `IonCachyEngine` 作为主项目子项目时，`ICE_LINKAGE` 默认继承 `PROJECT_LINKAGE`；独立构建时默认 `static`。
 - PGO 只允许作用于本项目业务模块；预编译库二进制以及用于生成预编译库的第三方依赖源码构建均禁止 PGO 插桩。
 - 主项目预编译库目录布局：
-  - 共享头文件：`3rdpty/prebuilts/<package>/include`
-  - 静态库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库导入库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 动态运行时文件：`3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 静态库外置符号文件：`3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库外置符号文件：`3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 共享头文件：`3rdpty/prebuilts/headers/<package>/include`
+  - 静态库：`3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/prebuilts/binaries/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 静态库外置符号文件：`3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库外置符号文件：`3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
 - `IonCachyEngine` 内部依赖使用同样布局：
-  - 共享头文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<package>/include`
-  - 静态库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库导入库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 动态运行时文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 静态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 共享头文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/headers/<package>/include`
+  - 静态库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 静态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
 - Windows x86_64 的参考静态布局为 `libs/x86_64/msvc/2026/<config>`、`libs/x86_64/mingw/clang64/<config>`、`libs/x86_64/mingw/ucrt64/<config>`、`libs/x86_64/mingw/gcc14-win32/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
 - Linux x86_64 的参考静态布局为 `libs/x86_64/gcc/gcc14/<config>`、`libs/x86_64/clang/clang19/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
 - 预编译库必须区分构建配置，至少提供 `Debug` 与 `RelWithDebInfo` 目录；`Release`、`RelWithDebInfo`、`MinSizeRel` 等发布型 CMake 配置优先使用 `RelWithDebInfo` 预编译目录，缺失时才回退到 `Release`。

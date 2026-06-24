@@ -33,7 +33,7 @@ copyLib() {
     local outputName="$4"
 
     local sourcePath="${buildDir}/${sourceRelativePath}"
-    local outputPath="${prebuiltRoot}/windows/${packageName}/libs/x86_64/mingw/${compilerTag}/${buildType}/${outputName}"
+    local outputPath="${prebuiltRoot}/binaries/windows/${packageName}/libs/x86_64/mingw/${compilerTag}/${buildType}/${outputName}"
 
     if [[ ! -f "${sourcePath}" ]]; then
         printf "error: source library not found: %s\n" "${sourcePath}" >&2
