@@ -1,6 +1,9 @@
 # 全局关闭 C++20 模块依赖扫描，以加快构建速度
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# 生成第三方预编译库时禁用 Clang ThinLTO，避免把 bitcode / whole-program-vtables 状态写入可复用静态库。
+option(MMM_DISABLE_CLANG_LTO "Disable Clang ThinLTO for this configure." OFF)
+
 if(MSVC)
 
 else()
