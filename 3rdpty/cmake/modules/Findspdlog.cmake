@@ -39,7 +39,9 @@ if(NOT TARGET spdlog::spdlog)
     spdlog::spdlog
     PROPERTIES IMPORTED_CONFIGURATIONS "${_spdlog_imported_configs}"
                IMPORTED_LOCATION "${_spdlog_default_library}")
-  target_compile_definitions(spdlog::spdlog INTERFACE SPDLOG_FMT_EXTERNAL)
+  # 预编译包链接的是 spdlog 编译库，消费者必须关闭 header-only 实现。
+  target_compile_definitions(spdlog::spdlog INTERFACE SPDLOG_COMPILED_LIB
+                                                      SPDLOG_FMT_EXTERNAL)
   target_link_libraries(spdlog::spdlog INTERFACE fmt::fmt)
 endif()
 

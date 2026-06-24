@@ -6,8 +6,7 @@ if(MSVC)
 else()
   if(WIN32)
     if(MINGW AND PROJECT_LINKAGE STREQUAL "static")
-      # MinGW 静态链接偏好直接静态链接标准库等运行时依赖；shared 偏好
-      # 不能携带 -static，避免把运行库强行并入本体。
+      # MinGW 静态链接偏好直接静态链接标准库等运行时依赖；shared 偏好 不能携带 -static，避免把运行库强行并入本体。
       add_link_options(-static)
     endif()
     if(MSVC)
@@ -24,8 +23,8 @@ else()
     message(STATUS "Compiler is Clang.")
 
     if(WIN32)
-      # clang-cl 使用 lld-link，可开启 PDB；MinGW GNU frontend 的链接器不接受
-      # /debug，因此只保留普通 DWARF/CodeView 调试信息。
+      # clang-cl 使用 lld-link，可开启 PDB；MinGW GNU frontend 的链接器不接受 /debug，因此只保留普通
+      # DWARF/CodeView 调试信息。
       add_compile_options("-gcodeview")
       if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         add_link_options("-fuse-ld=lld")
@@ -35,8 +34,7 @@ else()
             "Windows clang-cl detected. Enabling PDB generation via lld-link.")
       elseif(MINGW)
         message(
-          STATUS
-            "Windows MinGW clang detected. Using GNU-style linker flags.")
+          STATUS "Windows MinGW clang detected. Using GNU-style linker flags.")
       endif()
     endif()
 
@@ -45,11 +43,9 @@ else()
     add_compile_options("-funique-internal-linkage-names")
     add_compile_options("-ftime-trace")
 
-    # 使用 GCC driver 做最终链接时不能启用 LLVM ThinLTO，否则链接器无法消费
-    # clang 生成的 bitcode。
+    # 使用 GCC driver 做最终链接时不能启用 LLVM ThinLTO，否则链接器无法消费 clang 生成的 bitcode。
     if(NOT MMM_DISABLE_CLANG_LTO)
-      # 同时，也为链接器添加 LTO 标志 仅在 Release、RelWithDebInfo、MinSizeRel
-      # 模式下添加编译选项
+      # 同时，也为链接器添加 LTO 标志 仅在 Release、RelWithDebInfo、MinSizeRel 模式下添加编译选项
       add_compile_options(
         "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-flto=thin>")
 
@@ -85,8 +81,7 @@ else()
   else()
     message(STATUS "Compiler is GCC. Disable LTO.")
     if(WIN32 AND CMAKE_CROSSCOMPILING)
-      # Windows 交叉 GCC 的 CI 构建日志需要保持可读，默认不输出每个翻译单元的
-      # GCC 内部耗时表。
+      # Windows 交叉 GCC 的 CI 构建日志需要保持可读，默认不输出每个翻译单元的 GCC 内部耗时表。
       message(STATUS "GCC time report disabled for Windows cross builds.")
     else()
       add_compile_options("-ftime-report")
@@ -170,7 +165,11 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # 把静态库 (.a/.lib) 放到 build/lib 下
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-if(APPLE OR MSVC)
+if(APPLE
+   OR MSVC
+   OR (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
+  # MinGW GCC 16 的 gnu++26 与静态 libstdc++ 链接会重复定义 stdexcept 符号。 项目当前规范为
+  # C++20/C++23，Windows GCC 固定到 C++23 以保持静态预编译构建可链接。
   set(CMAKE_CXX_STANDARD 23)
 else()
   set(CMAKE_CXX_STANDARD 26)

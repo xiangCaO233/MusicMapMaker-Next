@@ -35,6 +35,9 @@ if(NOT MSVC OR CMAKE_CROSSCOMPILING)
   if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # 注意：这里直接写字符串，不要在里面加 \"
     set(LJ_G_FLAGS "XCFLAGS=-O0 -fPIC" "CCDEBUG=-g")
+  elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    # LuaJIT 的 Makefile 不理解 CMake 配置名，RelWithDebInfo 需要显式传入 -g。
+    set(LJ_G_FLAGS "XCFLAGS=-O2 -g -fPIC" "CCDEBUG=-g")
   else()
     # 注意：这里直接写字符串，不要在里面加 \"
     set(LJ_G_FLAGS "XCFLAGS=-O3 -fPIC")

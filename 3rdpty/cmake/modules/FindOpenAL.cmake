@@ -40,6 +40,12 @@ if(NOT TARGET OpenAL::OpenAL)
     PROPERTIES IMPORTED_CONFIGURATIONS "${_openal_imported_configs}"
                IMPORTED_LOCATION "${_openal_default_library}")
 
+  if(PROJECT_LINKAGE STREQUAL "static")
+    # OpenAL 头文件默认按 DLL 导入声明符号；静态预编译库必须显式关闭 dllimport，否则 MinGW 会查找 __imp_al*
+    # 导入符号。
+    target_compile_definitions(OpenAL::OpenAL INTERFACE AL_LIBTYPE_STATIC)
+  endif()
+
   if(WIN32)
     target_link_libraries(OpenAL::OpenAL INTERFACE winmm ole32 avrt)
   elseif(APPLE)

@@ -39,6 +39,11 @@ if(NOT TARGET 3rd_curl)
   target_compile_definitions(3rd_curl INTERFACE CURL_STATICLIB)
   if(WIN32)
     target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt iphlpapi)
+    if(MINGW)
+      # MinGW 静态 libcurl 启用了 IDN 支持，链接者需要显式拿到 libidn2 以及它在 MSYS2 工具链中的 iconv /
+      # unistring 依赖。
+      target_link_libraries(3rd_curl INTERFACE idn2 unistring iconv)
+    endif()
   elseif(APPLE)
     target_link_libraries(
       3rd_curl INTERFACE "-framework CoreFoundation"
