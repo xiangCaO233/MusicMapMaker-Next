@@ -40,9 +40,21 @@ if(NOT TARGET 3rd_curl)
   if(WIN32)
     target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt iphlpapi)
     if(MINGW)
-      # MinGW 静态 libcurl 启用了 IDN 支持，链接者需要显式拿到 libidn2 以及它在 MSYS2 工具链中的 iconv /
-      # unistring 依赖。
-      target_link_libraries(3rd_curl INTERFACE idn2 unistring iconv)
+      # MSYS2 预编译 curl 可能启用了 IDN2，需要额外链接 libidn2、libunistring 和 iconv；远端 Debian
+      # GCC14 预编译 curl 使用 Schannel 且未启用 IDN2，因此这里按工具链实际可见库决定是否追加。
+      find_library(_curl_idn2_library NAMES idn2 libidn2)
+      find_library(_curl_unistring_library NAMES unistring libunistring)
+      find_library(_curl_iconv_library NAMES iconv libiconv)
+      if(_curl_idn2_library
+         AND _curl_unistring_library
+         AND _curl_iconv_library)
+        target_link_libraries(
+          3rd_curl
+          INTERFACE "${_curl_idn2_library}" "${_curl_unistring_library}"
+                    "${_curl_iconv_library}")
+      else()
+        message(STATUS "libcurl IDN2 额外依赖不可见，按未启用 IDN2 的预编译 curl 处理。")
+      endif()
     endif()
   elseif(APPLE)
     target_link_libraries(
