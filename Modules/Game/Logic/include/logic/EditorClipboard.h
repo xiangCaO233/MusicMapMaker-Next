@@ -2,6 +2,9 @@
 
 #include "logic/session/context/SessionContext.h"
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::Logic
@@ -68,6 +71,16 @@ public:
     /// @brief 将当前剪切剪贴板标记为已经消费。
     void markCutConsumed();
 
+    /// @brief Consume text that should be published to the system clipboard.
+    /// @return Pending system clipboard text when copy/cut changed the editor
+    /// clipboard.
+    std::optional<std::string> consumePendingSystemText();
+
+    /// @brief Import an MMM clipboard payload from system clipboard text.
+    /// @param text System clipboard text to parse.
+    /// @return True when the text belongs to the MMM clipboard protocol.
+    bool importSystemText(std::string_view text);
+
 private:
     /// @brief 保护剪贴板内容、来源 Session 和剪切状态的互斥量。
     mutable std::mutex m_mutex;
@@ -83,6 +96,13 @@ private:
 
     /// @brief 剪切来源 Session 上下文，仅用于身份比较，不拥有生命周期。
     const SessionContext* m_sourceContext{ nullptr };
+
+    /// @brief Pending text for UI thread publication to the system clipboard.
+    std::optional<std::string> m_pendingSystemText;
+
+    /// @brief Last text exported by this process, used to preserve local cut
+    /// state.
+    std::string m_lastExportedSystemText;
 };
 
 }  // namespace MMM::Logic

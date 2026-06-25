@@ -1265,6 +1265,18 @@ void EditorEngine::markCutClipboardConsumed()
     m_clipboard.markCutConsumed();
 }
 
+/// @brief 消费需要由 UI 线程发布到系统剪贴板的文本载荷。
+std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
+{
+    return m_clipboard.consumePendingSystemText();
+}
+
+/// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+bool EditorEngine::importSystemClipboardText(std::string_view text)
+{
+    return m_clipboard.importSystemText(text);
+}
+
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {

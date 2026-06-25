@@ -1,4 +1,5 @@
 #include "logic/EditorClipboard.h"
+#include "logic/EditorClipboardProtocol.h"
 #include <utility>
 
 namespace MMM::Logic
@@ -12,8 +13,9 @@ void EditorClipboard::set(std::vector<ClipboardItem> items,
     std::lock_guard<std::mutex> lock(m_mutex);
     m_items = std::move(items);
     m_timelineItems.clear();
-    m_sourceContext = sourceContext;
-    m_isCut         = isCut && !m_items.empty();
+    m_sourceContext     = sourceContext;
+    m_isCut             = isCut && !m_items.empty();
+    m_pendingSystemText = EditorClipboardProtocol::serializeNotes(m_items);
 }
 
 /// @brief 更新编辑器级 Timeline 剪贴板内容。
@@ -27,6 +29,8 @@ void EditorClipboard::setTimelines(std::vector<TimelineClipboardItem> items,
     m_timelineItems = std::move(items);
     m_sourceContext = sourceContext;
     m_isCut         = isCut && !m_timelineItems.empty();
+    m_pendingSystemText =
+        EditorClipboardProtocol::serializeTimelines(m_timelineItems);
 }
 
 /// @brief 获取编辑器级剪贴板内容副本。
@@ -72,6 +76,40 @@ void EditorClipboard::markCutConsumed()
     std::lock_guard<std::mutex> lock(m_mutex);
     m_isCut         = false;
     m_sourceContext = nullptr;
+}
+
+/// @brief 消费需要发布到系统剪贴板的文本载荷。
+std::optional<std::string> EditorClipboard::consumePendingSystemText()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if ( !m_pendingSystemText ) {
+        return std::nullopt;
+    }
+
+    std::string text = std::move(*m_pendingSystemText);
+    m_pendingSystemText.reset();
+    m_lastExportedSystemText = text;
+    return text;
+}
+
+/// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+bool EditorClipboard::importSystemText(std::string_view text)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if ( text == m_lastExportedSystemText ) {
+        return true;
+    }
+
+    auto parsed = EditorClipboardProtocol::parse(text);
+    if ( !parsed ) {
+        return false;
+    }
+
+    m_items         = std::move(parsed->notes);
+    m_timelineItems = std::move(parsed->timelines);
+    m_sourceContext = nullptr;
+    m_isCut         = false;
+    return true;
 }
 
 }  // namespace MMM::Logic

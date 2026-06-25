@@ -17,6 +17,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -144,6 +145,16 @@ public:
 
     /// @brief 将当前剪切剪贴板标记为已消费。
     void markCutClipboardConsumed();
+
+    /// @brief Consume text that the UI thread should publish to the system
+    /// clipboard.
+    /// @return Pending system clipboard text when editor copy/cut changed.
+    std::optional<std::string> consumePendingSystemClipboardText();
+
+    /// @brief Import an MMM system clipboard payload into the editor clipboard.
+    /// @param text System clipboard text to parse.
+    /// @return True when the text is an MMM clipboard payload.
+    bool importSystemClipboardText(std::string_view text);
 
     // ========== 多 Session 管理 API ==========
 

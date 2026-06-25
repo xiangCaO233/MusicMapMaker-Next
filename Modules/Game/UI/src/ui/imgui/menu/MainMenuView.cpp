@@ -19,6 +19,7 @@
 #include "network/UpdateChecker.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/manager/NewProjectWizard.h"
@@ -395,6 +396,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     if ( !blockCanvasEditingShortcuts &&
          ShortcutUtils::isShortcutPressed(
              settings.shortcutConfig.mirrorPaste) ) {
+        ClipboardBridge::importEditorClipboardFromSystem();
         dispatchCommand(Logic::CmdPaste{ true, settings.selectPastedObjects });
         return;
     }
@@ -444,6 +446,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
                 dispatchCommand(Logic::CmdCopy{});
             }
             if ( !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+                ClipboardBridge::importEditorClipboardFromSystem();
                 dispatchCommand(
                     Logic::CmdPaste{ false, settings.selectPastedObjects });
             }
@@ -1101,6 +1104,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
+            ClipboardBridge::importEditorClipboardFromSystem();
             dispatchCommand(Logic::CmdPaste{ false,
                                              Config::AppConfig::instance()
                                                  .getEditorSettings()
@@ -1115,6 +1119,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                                   mirrorPasteShortcut.empty()
                                       ? nullptr
                                       : mirrorPasteShortcut.c_str()) ) {
+            ClipboardBridge::importEditorClipboardFromSystem();
             dispatchCommand(Logic::CmdPaste{ true,
                                              Config::AppConfig::instance()
                                                  .getEditorSettings()

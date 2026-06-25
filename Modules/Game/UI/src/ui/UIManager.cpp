@@ -18,6 +18,7 @@
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
 #include "ui/ITextureLoader.h"
+#include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/SideBarUI.h"
@@ -787,6 +788,7 @@ void UIManager::onUpdateUI()
 
     // 派发 ImGui 事件 (每帧仅 1 次)
     DispatchGlobalUIEvents();
+    ClipboardBridge::publishPendingEditorClipboard();
 
     // 并行准备视图数据；这里只允许准备纯数据，实际 ImGui 绘制仍在主线程。
     m_uiPrepareCandidates.clear();

@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
+#include "ui/imgui/ClipboardBridge.h"
 #include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
@@ -1166,6 +1167,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         copySelectedTimingEvents(true);
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_V) && ctrl ) {
+        ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
         pasteTimingClipboard(std::max(0.0, m_currentSnapshot->currentTime));
     }
     if ( ImGui::IsKeyPressed(ImGuiKey_Delete) ||
