@@ -487,6 +487,7 @@ return {
 	["ui.toolbar.snap_floor"] = "Snap Floor (Always snap to the beat line before mouse position)",
 	["ui.toolbar.scroll_timing_mapping"] = "Toggle SCROLLTIMING Visual Mapping",
 	["ui.toolbar.playback_speed"] = "Main Audio Speed",
+	["ui.toolbar.playback_speed_value"] = "Playback Speed: %.2fx",
 	["ui.toolbar.beat_divisor"] = "Beat Divisor Settings",
 	["ui.toolbar.draw_beat_lines"] = "Show/Hide Beat Lines",
 	["ui.toolbar.stop_on_scroll"] = "Stop playback on scroll",

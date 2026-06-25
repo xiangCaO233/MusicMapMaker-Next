@@ -50,17 +50,62 @@ bool isToolbarFocusedOrHovered()
            isToolbarWindow(context->HoveredWindow);
 }
 
+/// @brief 在鼠标附近绘制播放速度临时提示窗口。
+/// @param speedValue 当前播放速度倍率。
+/// @warning UI 热路径：仅在速度提示计时器生效时绘制一个轻量 ImGui 窗口。
+void renderPlaybackSpeedTooltip(float speedValue)
+{
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2         mousePos = ImGui::GetMousePos();
+
+    ImVec2 pivot = ImVec2(0.0f, 0.0f);
+    if ( mousePos.x > viewport->WorkPos.x + viewport->WorkSize.x * 0.7f ) {
+        pivot.x = 1.0f;
+    }
+    if ( mousePos.y > viewport->WorkPos.y + viewport->WorkSize.y * 0.7f ) {
+        pivot.y = 1.0f;
+    }
+
+    const float offsetX = (pivot.x == 0.0f) ? 20.0f : -20.0f;
+    const float offsetY = (pivot.y == 0.0f) ? 20.0f : -20.0f;
+
+    ImGui::SetNextWindowPos(ImVec2(mousePos.x + offsetX, mousePos.y + offsetY),
+                            ImGuiCond_Always,
+                            pivot);
+    ImGui::SetNextWindowBgAlpha(0.7f);
+
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 10.0f));
+    if ( ImGui::Begin("##TimelineSpeedTooltip", nullptr, flags) ) {
+        ImFont* font = Config::SkinManager::instance().getFont("content");
+        if ( font ) ImGui::PushFont(font, font->LegacySize);
+        ImGui::Text(TR("ui.toolbar.playback_speed_value").data(), speedValue);
+        if ( font ) ImGui::PopFont();
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
+
 /// @brief 处理 Timeline 窗格上的修饰键滚轮操作。
 /// @param timelineId Timeline 对应的画布 ID，用于隔离 Alt 滚轮累积量。
 /// @param wheel 当前帧滚轮增量。
 /// @param isCtrlPressed Ctrl 是否按下。
 /// @param isAltPressed Alt 是否按下。
 /// @param isShiftPressed Shift 是否按下。
+/// @param speedTooltipValue 输出速度提示窗口需要显示的速度倍率。
+/// @param speedTooltipTimer 输出速度提示窗口剩余显示时间。
 /// @return 已处理修饰滚轮时返回 true。
 /// @warning UI 热路径：Timeline 悬停滚轮时调用；只读取输入状态并发布轻量命令。
 bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
                                  bool isCtrlPressed, bool isAltPressed,
-                                 bool isShiftPressed)
+                                 bool isShiftPressed, float& speedTooltipValue,
+                                 float& speedTooltipTimer)
 {
     if ( !isCtrlPressed && !isAltPressed ) {
         return false;
@@ -91,6 +136,8 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
         if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
+            speedTooltipValue = static_cast<float>(newSpeed);
+            speedTooltipTimer = 2.0f;
         }
         return true;
     }
@@ -340,8 +387,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             const ImGuiIO& io        = ImGui::GetIO();
             float          wheel     = io.MouseWheel;
             if ( isHovered && std::abs(wheel) > 0.01f ) {
-                if ( !handleTimelineModifierWheel(
-                         m_name, wheel, io.KeyCtrl, io.KeyAlt, io.KeyShift) ) {
+                if ( !handleTimelineModifierWheel(m_name,
+                                                  wheel,
+                                                  io.KeyCtrl,
+                                                  io.KeyAlt,
+                                                  io.KeyShift,
+                                                  m_speedTooltipValue,
+                                                  m_speedTooltipTimer) ) {
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdScroll{ m_name, -wheel, io.KeyShift }));
@@ -695,6 +747,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             renderEventCreationPopup();
             renderTimingPointsTableWindow();
         }
+    }
+
+    if ( m_speedTooltipTimer > 0.0f ) {
+        m_speedTooltipTimer -= ImGui::GetIO().DeltaTime;
+        renderPlaybackSpeedTooltip(m_speedTooltipValue);
     }
 }
 

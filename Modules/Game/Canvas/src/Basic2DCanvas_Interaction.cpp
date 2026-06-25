@@ -665,7 +665,8 @@ void Basic2DCanvasInteraction::update(
         if ( ImGui::Begin("##SpeedTooltip", nullptr, flags) ) {
             ImFont* font = Config::SkinManager::instance().getFont("content");
             if ( font ) ImGui::PushFont(font, font->LegacySize);
-            ImGui::Text("Playback Speed: %.2fx", m_speedTooltipValue);
+            ImGui::Text(TR("ui.toolbar.playback_speed_value").data(),
+                        m_speedTooltipValue);
             if ( font ) ImGui::PopFont();
         }
         ImGui::End();

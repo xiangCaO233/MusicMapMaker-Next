@@ -396,6 +396,10 @@ private:
     bool m_wasFocusedLastFrame{ false };
     /// @brief Timeline Timing 编辑焦点是否仍归属于时间线窗口。
     bool m_hasTimingInteractionFocus{ false };
+    /// @brief 播放速度提示窗口剩余显示时间，单位秒。
+    float m_speedTooltipTimer{ 0.0f };
+    /// @brief 播放速度提示窗口显示的当前速度倍率。
+    float m_speedTooltipValue{ 1.0f };
     /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
     ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
