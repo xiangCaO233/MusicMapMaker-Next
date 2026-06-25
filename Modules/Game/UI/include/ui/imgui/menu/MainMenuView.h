@@ -277,6 +277,10 @@ private:
     /// @return 存在缺失依赖时返回 true。
     bool hasSelectedPackageMissingDependencies() const;
 
+    /// @brief 判断当前 MCZ 候选列表是否包含可写入上架 mode_ext 的谱面。
+    /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+    bool hasPackageStoreModeExtCandidates() const;
+
     /// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
     /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
     bool hasSelectedPackageStoreModeExtCandidates() const;
