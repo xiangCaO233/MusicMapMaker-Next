@@ -15,7 +15,7 @@ Options:
   --build-type <type>         CMake build type. Default: RelWithDebInfo
   --toolchain <name>          Prebuilt toolchain directory. Default: preset value
   --compiler-tag <tag>        Prebuilt compiler tag. Default: preset value
-  --jobs <count>              Parallel build jobs. Default: 90% of CPU threads
+  --jobs <count>              Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>            PROJECT_LINKAGE value: static or shared. Default: static
   --pgo-instrument            Force MMM_PGO_INSTRUMENT=ON.
   --no-pgo-instrument         Force MMM_PGO_INSTRUMENT=OFF.
@@ -46,7 +46,7 @@ detectBuildJobs() {
         maxThreads=1
     fi
 
-    local buildJobs=$(( maxThreads * 9 / 10 ))
+    local buildJobs=$(( maxThreads * 3 / 4 ))
     if (( buildJobs < 1 )); then
         buildJobs=1
     fi
