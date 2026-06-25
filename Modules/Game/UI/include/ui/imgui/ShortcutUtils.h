@@ -248,8 +248,7 @@ inline bool focusedWindowAllowsCanvasEditingShortcuts()
 inline bool shouldBlockCanvasEditingShortcuts()
 {
     const ImGuiIO& io = ImGui::GetIO();
-    if ( io.WantCaptureKeyboard || io.WantTextInput ||
-         ImGui::IsAnyItemActive() ) {
+    if ( io.WantTextInput || ImGui::IsAnyItemActive() ) {
         return true;
     }
     if ( ImGui::IsPopupOpen(

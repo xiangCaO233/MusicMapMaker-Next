@@ -373,8 +373,8 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
 
     ImGuiIO& io = ImGui::GetIO();
 
-    // 如果 ImGui 正在处理键盘，跳过全局快捷键以避免穿透输入框或弹窗。
-    if ( io.WantCaptureKeyboard || io.WantTextInput ) return;
+    // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键以避免穿透输入框。
+    if ( io.WantTextInput ) return;
     if ( ShortcutUtils::isShortcutRecordingActive() ) return;
     const bool blockCanvasEditingShortcuts =
         ShortcutUtils::shouldBlockCanvasEditingShortcuts();
