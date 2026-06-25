@@ -16,6 +16,7 @@ add_library(
   src/logic/session/tool/MarqueeTool.cpp
   src/logic/session/tool/DrawTool.cpp
   src/logic/EditorClipboard.cpp
+  src/logic/EditorClipboardProtocol.cpp
   src/logic/SessionRegistry.cpp
   src/logic/RenderSyncRegistry.cpp
   src/logic/ProjectDirectoryScanner.cpp
@@ -50,3 +51,8 @@ target_link_libraries(
          Config
          Runtime)
 target_include_directories(Logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+mmm_add_test_executable(Logic EditorClipboardProtocolTest
+                        tests/EditorClipboardProtocolTest.cpp)
+target_link_libraries(EditorClipboardProtocolTest PRIVATE Logic Log)
+add_test(NAME EditorClipboardProtocolTest COMMAND EditorClipboardProtocolTest)

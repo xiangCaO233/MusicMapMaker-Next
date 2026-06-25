@@ -35,6 +35,19 @@ endif()
 if(NOT TARGET 3rd_nfd)
   add_library(3rd_nfd INTERFACE)
   target_link_libraries(3rd_nfd INTERFACE nfd::nfd)
+  if(UNIX AND NOT APPLE)
+    # Linux 版 NFD 静态库使用 GTK/GDK 后端；源码构建时这些依赖来自 nfd::nfd，预编译导入目标需要显式恢复。
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(
+      NFD_GTK
+      REQUIRED
+      IMPORTED_TARGET
+      gtk+-3.0
+      gdk-x11-3.0
+      gdk-wayland-3.0
+      wayland-client)
+    target_link_libraries(3rd_nfd INTERFACE PkgConfig::NFD_GTK)
+  endif()
 endif()
 
 set(nfd_FOUND TRUE)

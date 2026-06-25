@@ -42,6 +42,12 @@ if(NOT TARGET freetype::freetype)
                IMPORTED_LOCATION "${_freetype_default_library}")
 endif()
 
+if(UNIX AND NOT APPLE)
+  # Linux 预编译 FreeType 启用了 PNG 支持；静态导入时需要显式恢复 libpng 传递依赖。
+  find_package(PNG REQUIRED)
+  target_link_libraries(freetype::freetype INTERFACE PNG::PNG)
+endif()
+
 if(NOT TARGET 3rd_freetype)
   add_library(3rd_freetype INTERFACE)
   target_link_libraries(3rd_freetype INTERFACE freetype::freetype)

@@ -10,7 +10,7 @@ Copy MinGW GCC source-build static libraries into the prebuilt layout.
 Options:
   --build-dir <path>      Source build directory. Default: build_cross_mingw_gcc_sources
   --build-type <type>     Prebuilt config directory. Default: RelWithDebInfo
-  --compiler-tag <tag>    Prebuilt compiler tag. Default: ucrt64
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: gcc14-win32
   --scope <all|main|ice>  Staging scope. Default: all
   -h, --help              Show this help
 EOF
@@ -33,7 +33,7 @@ copyLib() {
     local outputName="$4"
 
     local sourcePath="${buildDir}/${sourceRelativePath}"
-    local outputPath="${prebuiltRoot}/windows/${packageName}/libs/x86_64/mingw/${compilerTag}/${buildType}/${outputName}"
+    local outputPath="${prebuiltRoot}/binaries/windows/${packageName}/libs/x86_64/mingw/${compilerTag}/${buildType}/${outputName}"
 
     if [[ ! -f "${sourcePath}" ]]; then
         printf "error: source library not found: %s\n" "${sourcePath}" >&2
@@ -65,7 +65,7 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 
 buildDir="build_cross_mingw_gcc_sources"
 buildType="RelWithDebInfo"
-compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-ucrt64}"
+compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-gcc14-win32}"
 stageScope="all"
 
 while (( $# > 0 )); do

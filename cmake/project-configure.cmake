@@ -1,6 +1,9 @@
 # 全局关闭 C++20 模块依赖扫描，以加快构建速度
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+# 生成第三方预编译库时禁用 Clang ThinLTO，避免把 bitcode / whole-program-vtables 状态写入可复用静态库。
+option(MMM_DISABLE_CLANG_LTO "Disable Clang ThinLTO for this configure." OFF)
+
 if(MSVC)
 
 else()
@@ -94,6 +97,14 @@ else()
     # 与 Clang 对齐：分离函数/数据节以支持链接器死代码消除
     add_compile_options("-ffunction-sections")
     add_compile_options("-fdata-sections")
+    if(MINGW)
+      # MinGW COFF 默认 section 数量较小；Debug 下 Vulkan/ImGui 相关翻译单元
+      # 叠加独立函数/数据节后可能超过限制，需要启用 big object。
+      add_compile_options("-Wa,-mbig-obj")
+      # GCC14 win32 静态 libstdc++ 与 Debug 预编译 C++ 静态库会共同实例化少量标准库内联符号；仅 Debug
+      # 放宽重复定义，发布型配置仍保持严格链接。
+      add_link_options("$<$<CONFIG:Debug>:-Wl,--allow-multiple-definition>")
+    endif()
     if(APPLE)
       add_link_options("-Wl,-dead_strip")
     elseif(NOT WIN32)

@@ -97,22 +97,23 @@ cmake-format -i <absolute_file_path>
   - `IonCachyEngine` 作为主项目子项目时，`ICE_LINKAGE` 默认继承 `PROJECT_LINKAGE`；独立构建时默认 `static`。
 - PGO 只允许作用于本项目业务模块；预编译库二进制以及用于生成预编译库的第三方依赖源码构建均禁止 PGO 插桩。
 - 主项目预编译库目录布局：
-  - 共享头文件：`3rdpty/prebuilts/<package>/include`
-  - 静态库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库导入库：`3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 动态运行时文件：`3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 静态库外置符号文件：`3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库外置符号文件：`3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 共享头文件：`3rdpty/prebuilts/headers/<package>/include`
+  - 静态库：`3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/prebuilts/binaries/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 静态库外置符号文件：`3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库外置符号文件：`3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
 - `IonCachyEngine` 内部依赖使用同样布局：
-  - 共享头文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<package>/include`
-  - 静态库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库导入库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 动态运行时文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-  - 静态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
-  - 动态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
-- Windows x86_64 的参考静态布局为 `libs/x86_64/msvc/2026/<config>`、`libs/x86_64/mingw/clang64/<config>`、`libs/x86_64/mingw/ucrt64/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
+  - 共享头文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/headers/<package>/include`
+  - 静态库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库导入库：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/libs/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 动态运行时文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/bin/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+  - 静态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/<config>`
+  - 动态库外置符号文件：`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/binaries/<platform>/<package>/symbols/<arch>/<toolchain>/<compiler-tag>/shared/<config>`
+- Windows x86_64 的参考静态布局为 `libs/x86_64/msvc/2026/<config>`、`libs/x86_64/mingw/clang64/<config>`、`libs/x86_64/mingw/ucrt64/<config>`、`libs/x86_64/mingw/gcc14-win32/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
+- Linux x86_64 的参考静态布局为 `libs/x86_64/gcc/gcc14/<config>`、`libs/x86_64/clang/clang19/<config>`；动态布局在工具链标签后额外包含 `shared/<config>`。
 - 预编译库必须区分构建配置，至少提供 `Debug` 与 `RelWithDebInfo` 目录；`Release`、`RelWithDebInfo`、`MinSizeRel` 等发布型 CMake 配置优先使用 `RelWithDebInfo` 预编译目录，缺失时才回退到 `Release`。
-- `Debug` 与 `RelWithDebInfo` 预编译二进制必须保留调试符号：MSVC 生成的外置 `.pdb` 必须一并放入对应 `symbols` 目录；`mingw/clang64` 静态 `.a` 通常没有旁路 `.pdb`，调试信息应保留在归档内的 COFF CodeView 段或 ThinLTO bitcode 调试元数据中，禁止对这些预编译库执行 `strip`。
+- `Debug` 与 `RelWithDebInfo` 预编译二进制必须保留调试符号：MSVC 生成的外置 `.pdb` 必须一并放入对应 `symbols` 目录；MinGW 静态 `.a` 通常没有旁路 `.pdb`，调试信息应保留在归档内的 COFF CodeView 段中；Linux 静态 `.a` 调试信息应保留在 ELF `.debug*` 段中；禁止对这些预编译库执行 `strip`。
 - 新增或调整预编译包时，必须为每个具体库编写独立的 `Findxxx.cmake`，并在该文件内显式创建对应 target；禁止使用一个大一统的 `Find*.cmake` 或通用 `add_header_target` / `add_static_target` helper 代替具体库的查找脚本。
 - 每个 `Findxxx.cmake` 必须导出与源码构建一致的 CMake target 名称，业务模块不得感知依赖来源差异。
 - `IonCachyEngine` 作为独立项目，其内部 `3rdpty/cmake/**/*.cmake` 和 `3rdpty/CMakeLists.txt` 禁止包含 `MMM` 相关文件名、变量名、函数名或注释标识。
@@ -156,6 +157,7 @@ cmake-format -i <absolute_file_path>
 
 - 新增或修改的类、函数、成员变量必须使用 Doxygen 风格注释，例如 `/// @brief ...`。
 - 代码注释应说明意图和约束，不要写面向用户的对话式注释。
+- 新增或修改的代码注释必须使用中文；API、类型名、宏名、命令、协议标识等专有名词可以保留原文，但说明性文字必须使用中文。
 
 ### 5.4 命名
 

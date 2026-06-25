@@ -1265,6 +1265,18 @@ void EditorEngine::markCutClipboardConsumed()
     m_clipboard.markCutConsumed();
 }
 
+/// @brief 消费需要由 UI 线程发布到系统剪贴板的文本载荷。
+std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
+{
+    return m_clipboard.consumePendingSystemText();
+}
+
+/// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+bool EditorEngine::importSystemClipboardText(std::string_view text)
+{
+    return m_clipboard.importSystemText(text);
+}
+
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {
@@ -1459,7 +1471,7 @@ bool EditorEngine::canHoverScrollCamera(const std::string& cameraId) const
     const auto& sessions = m_sessionRegistry.entriesUnsafe();
     /// @brief 当前活动 Session 索引快照。
     const int32_t activeIndex = m_sessionRegistry.activeIndex();
-    /// @brief hover 目标主画布对应的 Session 索引。
+    /// @brief 悬停目标主画布对应的 Session 索引。
     const int32_t targetIndex =
         findSessionIndexByCameraIdUnsafe(sessions, cameraId);
     return canUseHoverScrollTargetUnsafe(sessions, activeIndex, targetIndex);
@@ -1508,9 +1520,9 @@ bool EditorEngine::isPlaybackPlaying() const
     return false;
 }
 
-/// @brief Check whether the active session is dragging a marquee box.
-/// @warning UI hot path: briefly locks SessionRegistry and reads constant
-/// active-session state without copying shared_ptr ownership.
+/// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
+/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
+/// 的常量状态， 且不复制 shared_ptr 所有权。
 bool EditorEngine::isActiveSessionSelectingMarquee() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());

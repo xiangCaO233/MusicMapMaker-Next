@@ -665,7 +665,8 @@ void Basic2DCanvasInteraction::update(
         if ( ImGui::Begin("##SpeedTooltip", nullptr, flags) ) {
             ImFont* font = Config::SkinManager::instance().getFont("content");
             if ( font ) ImGui::PushFont(font, font->LegacySize);
-            ImGui::Text("Playback Speed: %.2fx", m_speedTooltipValue);
+            ImGui::Text(TR("ui.toolbar.playback_speed_value").data(),
+                        m_speedTooltipValue);
             if ( font ) ImGui::PopFont();
         }
         ImGui::End();
@@ -749,11 +750,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 void Basic2DCanvasInteraction::handleHotkeys(
     const Logic::RenderSnapshot* currentSnapshot)
 {
-    auto& io = ImGui::GetIO();
-
-    // 如果 ImGui 当前处于文本输入状态，跳过画布快捷键处理 (如 Delete 键、1-5
-    // 工具切换键)
-    if ( io.WantTextInput ) return;
+    // 如果键盘焦点不在主画布，跳过画布快捷键处理，避免穿透设置页或时间线窗口。
+    if ( UI::ShortcutUtils::shouldBlockCanvasEditingShortcuts() ) return;
     if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
 
     const auto& settings = Config::AppConfig::instance().getEditorSettings();

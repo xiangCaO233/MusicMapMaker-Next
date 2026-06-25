@@ -14,7 +14,9 @@ endif()
 
 set(DEBUG_FILE "${TARGET_FILE}.dbg")
 get_filename_component(TARGET_DIR "${TARGET_FILE}" DIRECTORY)
+get_filename_component(TARGET_NAME "${TARGET_FILE}" NAME)
 get_filename_component(DEBUG_LINK_NAME "${DEBUG_FILE}" NAME)
+set(DEBUG_LINK_ARG "--add-gnu-debuglink=${DEBUG_LINK_NAME}")
 
 message(STATUS "GCC debug extraction: ${DEBUG_FILE}")
 
@@ -36,9 +38,10 @@ if(NOT _ret EQUAL 0)
     WARNING "GccExtractDebug: strip --strip-debug failed for ${TARGET_FILE}")
 endif()
 
-# 1. 在 exe 中添加对 .dbg 文件的引用
+# 1. 在 exe 中添加对 .dbg 文件的引用。debuglink 参数先拼成普通变量，避免 CMake 把引号并入 --add-gnu-debuglink
+#   参数。
 execute_process(
-  COMMAND "${OBJCOPY}" --add-gnu-debuglink="${DEBUG_LINK_NAME}" "${TARGET_FILE}"
+  COMMAND "${OBJCOPY}" "${DEBUG_LINK_ARG}" "${TARGET_NAME}"
   WORKING_DIRECTORY "${TARGET_DIR}"
   RESULT_VARIABLE _ret)
 if(NOT _ret EQUAL 0)

@@ -2,6 +2,9 @@
 
 #include "logic/session/context/SessionContext.h"
 #include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::Logic
@@ -68,6 +71,15 @@ public:
     /// @brief 将当前剪切剪贴板标记为已经消费。
     void markCutConsumed();
 
+    /// @brief 消费需要发布到系统剪贴板的文本载荷。
+    /// @return 复制或剪切改变编辑器剪贴板后待发布的系统剪贴板文本。
+    std::optional<std::string> consumePendingSystemText();
+
+    /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+    /// @param text 待解析的系统剪贴板文本。
+    /// @return 文本属于 MMM 剪贴板协议时返回 true。
+    bool importSystemText(std::string_view text);
+
 private:
     /// @brief 保护剪贴板内容、来源 Session 和剪切状态的互斥量。
     mutable std::mutex m_mutex;
@@ -83,6 +95,12 @@ private:
 
     /// @brief 剪切来源 Session 上下文，仅用于身份比较，不拥有生命周期。
     const SessionContext* m_sourceContext{ nullptr };
+
+    /// @brief 等待 UI 线程发布到系统剪贴板的文本。
+    std::optional<std::string> m_pendingSystemText;
+
+    /// @brief 本进程上次导出的文本，用于保留本地剪切状态。
+    std::string m_lastExportedSystemText;
 };
 
 }  // namespace MMM::Logic

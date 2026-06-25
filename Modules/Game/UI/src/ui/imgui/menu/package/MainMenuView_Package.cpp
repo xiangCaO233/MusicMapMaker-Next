@@ -823,7 +823,11 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 ImGui::Checkbox(legacyImdLabel,
                                 &m_package.includeLegacyImdBeatmaps);
             }
-            if ( hasSelectedPackageStoreModeExtCandidates() ) {
+            const bool hasAnyStoreModeExtCandidates =
+                hasPackageStoreModeExtCandidates();
+            const bool hasSelectedStoreModeExtCandidates =
+                hasSelectedPackageStoreModeExtCandidates();
+            if ( hasAnyStoreModeExtCandidates ) {
                 constexpr const char* storeModeExtLabel =
                     "自动添加上架皮肤 mode_ext";
                 sameLineIfItemFits(getCheckboxDisplayWidth(storeModeExtLabel));
@@ -831,14 +835,27 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                     Config::AppConfig::instance().getEditorSettings();
                 bool addStoreModeExt =
                     settings.autoAddStoreModeExtForMalodyExport;
+                if ( !hasSelectedStoreModeExtCandidates ) {
+                    ImGui::BeginDisabled();
+                }
                 if ( ImGui::Checkbox(storeModeExtLabel, &addStoreModeExt) ) {
                     settings.autoAddStoreModeExtForMalodyExport =
                         addStoreModeExt;
                     Config::AppConfig::instance().save();
                 }
-                if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s", "打包 MCZ 时会替换所有写出的 .mc 的 mode_ext。");
+                if ( !hasSelectedStoreModeExtCandidates ) {
+                    ImGui::EndDisabled();
+                    if ( ImGui::IsItemHovered(
+                             ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                        ImGui::SetTooltip(
+                            "%s",
+                            "当前未选中含 Flick/折线的谱面，打包时不会写入 "
+                            "mode_ext。");
+                    }
+                } else if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip("%s",
+                                      "打包 MCZ 时会替换所有写出的 .mc 的 "
+                                      "mode_ext。");
                 }
             }
             const bool hasMissingDependencies =
@@ -1408,6 +1425,23 @@ bool MainMenuView::hasSelectedPackageMissingDependencies() const
                                   file.resourceType ==
                                       PackageResourceType::Beatmap &&
                                   !file.missingDependencyRelativePaths.empty();
+                       });
+}
+
+/// @brief 判断当前 MCZ 候选列表是否存在可写入上架 mode_ext 的谱面。
+/// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+/// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
+bool MainMenuView::hasPackageStoreModeExtCandidates() const
+{
+    if ( m_package.selectedFileType != PackageFileType::Mcz ) {
+        return false;
+    }
+    return std::any_of(m_package.candidateFiles.begin(),
+                       m_package.candidateFiles.end(),
+                       [](const PackageCandidateFile& file) {
+                           return file.resourceType ==
+                                      PackageResourceType::Beatmap &&
+                                  file.hasStoreModeExtEligibleElements;
                        });
 }
 

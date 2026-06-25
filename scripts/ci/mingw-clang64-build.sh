@@ -16,7 +16,7 @@ detectCiBuildJobs() {
         maxThreads=1
     fi
 
-    local buildJobs=$(( maxThreads * 9 / 10 ))
+    local buildJobs=$(( maxThreads * 3 / 4 ))
     if (( buildJobs < 1 )); then
         buildJobs=1
     fi

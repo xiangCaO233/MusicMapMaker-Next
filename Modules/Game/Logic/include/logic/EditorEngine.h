@@ -17,6 +17,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -144,6 +145,15 @@ public:
 
     /// @brief 将当前剪切剪贴板标记为已消费。
     void markCutClipboardConsumed();
+
+    /// @brief 消费需要由 UI 线程发布到系统剪贴板的文本载荷。
+    /// @return 编辑器复制或剪切变化后待发布的系统剪贴板文本。
+    std::optional<std::string> consumePendingSystemClipboardText();
+
+    /// @brief 将 MMM 系统剪贴板载荷导入编辑器剪贴板。
+    /// @param text 待解析的系统剪贴板文本。
+    /// @return 文本属于 MMM 剪贴板载荷时返回 true。
+    bool importSystemClipboardText(std::string_view text);
 
     // ========== 多 Session 管理 API ==========
 
@@ -322,10 +332,9 @@ public:
      */
     bool isPlaybackPlaying() const;
 
-    /// @brief Check whether the active session is dragging a marquee box.
-    /// @warning UI hot path: global shortcut handling calls this while an
-    /// ImGui item is active; it briefly locks SessionRegistry, reads constant
-    /// state, and does not copy shared_ptr ownership.
+    /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
+    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
+    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
     bool isActiveSessionSelectingMarquee() const;
 
     /**

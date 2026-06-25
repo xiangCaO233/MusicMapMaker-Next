@@ -10,7 +10,7 @@ Configure and build the Windows MSVC-like clang-cl cross target.
 Options:
   --build-dir <path>     Build directory. Default: build_cross_msvc
   --build-type <type>    CMake build type. Default: RelWithDebInfo
-  --jobs <count>         Parallel build jobs. Default: 90% of CPU threads
+  --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-msvc.cmake
   --configure-only       Configure and generate, then stop
@@ -40,7 +40,7 @@ detectBuildJobs() {
         maxThreads=1
     fi
 
-    local buildJobs=$(( maxThreads * 9 / 10 ))
+    local buildJobs=$(( maxThreads * 3 / 4 ))
     if (( buildJobs < 1 )); then
         buildJobs=1
     fi

@@ -10,7 +10,7 @@ Configure and build the Windows MinGW clang cross target on Linux.
 Options:
   --build-dir <path>     Build directory. Default: build_cross_mingw_clang
   --build-type <type>    CMake build type. Default: RelWithDebInfo
-  --jobs <count>         Parallel build jobs. Default: 90% of CPU threads
+  --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
   --sysroot <path>       MinGW sysroot. Default: ${WINDOWS_CROSS_ROOT}/msys64/clang64
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
@@ -41,7 +41,7 @@ detectBuildJobs() {
         maxThreads=1
     fi
 
-    local buildJobs=$(( maxThreads * 9 / 10 ))
+    local buildJobs=$(( maxThreads * 3 / 4 ))
     if (( buildJobs < 1 )); then
         buildJobs=1
     fi

@@ -491,6 +491,7 @@ return {
 	["ui.toolbar.snap_floor"] = "吸附向下取整 (开启后总是吸附到早于鼠标位置的分拍线)",
 	["ui.toolbar.scroll_timing_mapping"] = "开启/关闭 SCROLLTIMING 视觉映射",
 	["ui.toolbar.playback_speed"] = "主音轨倍速",
+	["ui.toolbar.playback_speed_value"] = "主音轨倍速：%.2fx",
 	["ui.toolbar.beat_divisor"] = "分拍数量设置",
 	["ui.toolbar.draw_beat_lines"] = "显示/隐藏分拍线",
 	["ui.toolbar.stop_on_scroll"] = "播放时滚动则停止播放",

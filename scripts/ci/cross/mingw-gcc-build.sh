@@ -10,8 +10,8 @@ Configure and build the Windows MinGW GCC cross target on Linux.
 Options:
   --build-dir <path>      Build directory. Default: build_cross_mingw_gcc
   --build-type <type>     CMake build type. Default: RelWithDebInfo
-  --compiler-tag <tag>    Prebuilt compiler tag. Default: clang64
-  --jobs <count>          Parallel build jobs. Default: 90% of CPU threads
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: gcc14-win32
+  --jobs <count>          Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>        PROJECT_LINKAGE value: static or shared. Default: static
   --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32
   --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/x86_64-w64-mingw32
@@ -44,7 +44,7 @@ detectBuildJobs() {
         maxThreads=1
     fi
 
-    local buildJobs=$(( maxThreads * 9 / 10 ))
+    local buildJobs=$(( maxThreads * 3 / 4 ))
     if (( buildJobs < 1 )); then
         buildJobs=1
     fi
@@ -97,7 +97,7 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 buildDir="build_cross_mingw_gcc"
 buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
-compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-clang64}"
+compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-gcc14-win32}"
 projectLinkage="static"
 toolPrefix="x86_64-w64-mingw32"
 mingwSysroot=""

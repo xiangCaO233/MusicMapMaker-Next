@@ -74,7 +74,7 @@ else()
   if(WIN32)
     # 定义项目内预编译 Vulkan 的位置
     set(VULKAN_VENDORED_DIR
-        "${CMAKE_SOURCE_DIR}/3rdpty/prebuilts/windows/vulkan")
+        "${CMAKE_SOURCE_DIR}/3rdpty/prebuilts/binaries/windows/vulkan")
 
     message(
       STATUS

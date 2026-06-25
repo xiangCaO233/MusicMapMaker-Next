@@ -10,55 +10,82 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  mmm-windows-ci:
-    runs-on: [self-hosted, win10-x64]
+  mmm-debian-ci:
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
 
     steps:
       - name: ci->Sync Repository
-        shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          function Invoke-Native {
-            param(
-              [Parameter(Mandatory = $true)]
-              [string]$FilePath,
+          set -euo pipefail
+          git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
+          git clean -fd -- scripts/ci .github/workflows
+          git checkout --force -B ci origin/ci
+          git reset --hard origin/ci
+          git submodule update --init --recursive
+          git lfs pull
 
-              [Parameter(ValueFromRemainingArguments = $true)]
-              [string[]]$Arguments
-            )
+      - name: ci->Windows MSVC Clang Cross Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/cross/msvc-clang-build.sh --fresh
 
-            & $FilePath @Arguments
-            if ($LASTEXITCODE -ne 0) {
-              exit $LASTEXITCODE
-            }
+      - name: ci->Windows MinGW GCC Cross Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/cross/mingw-gcc-build.sh --fresh
+
+      - name: ci->Windows MinGW Clang Cross Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/cross/mingw-clang-build.sh --fresh
+
+      - name: ci->Linux GCC 14 Native Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/linux-build.sh --compiler gcc14 --fresh
+
+      - name: ci->Linux Clang 19 Native Build
+        run: |
+          set -euo pipefail
+          bash scripts/ci/linux-build.sh --compiler clang19 --fresh
+
+      - name: ci->Package Release
+        run: |
+          set -euo pipefail
+
+          copy_bin() {
+            local build_dir="$1"
+            local release_name="$2"
+            local source_dir="${build_dir}/bin"
+            local target_dir="release/${release_name}"
+
+            if [[ ! -d "${source_dir}" ]]; then
+              printf "error: build output directory not found: %s\n" "${source_dir}" >&2
+              exit 1
+            fi
+
+            mkdir -p "${target_dir}"
+            cp -a "${source_dir}/." "${target_dir}/"
           }
 
-          Set-Location C:/ci/c_cpp/MusicMapMaker-Next
-          Invoke-Native git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
-          Invoke-Native git clean -fd -- scripts/ci
-          Invoke-Native git checkout --force -B ci origin/ci
-          Invoke-Native git reset --hard origin/ci
-          Invoke-Native git lfs pull
+          rm -rf release
+          mkdir -p release
 
-      - name: ci->MSVC Build
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          Set-Location C:/dev-shells
-          . ./enter-vs2026.ps1
-          Set-Location C:/ci/c_cpp/MusicMapMaker-Next
-          & ./scripts/ci/msvc-build.ps1
+          copy_bin build_cross_msvc windows-msvc-clang
+          copy_bin build_cross_mingw_gcc windows-mingw-gcc
+          copy_bin build_cross_mingw_clang windows-mingw-clang
+          copy_bin build_linux_gcc14 linux-gcc14
+          copy_bin build_linux_clang19 linux-clang19
 
-      - name: ci->MinGW UCRT GCC Build
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & C:\msys64\msys2_shell.cmd -ucrt64 -shell bash -defterm -no-start -here -c "cd /c/ci/c_cpp/MusicMapMaker-Next && bash scripts/ci/mingw-ucrt64-build.sh"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if [[ ! -d assets ]]; then
+            printf "error: assets directory not found\n" >&2
+            exit 1
+          fi
 
-      - name: ci->MinGW Clang Build
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & C:\msys64\msys2_shell.cmd -clang64 -shell bash -defterm -no-start -here -c "cd /c/ci/c_cpp/MusicMapMaker-Next && bash scripts/ci/mingw-clang64-build.sh"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cp -a assets release/assets
+          find release -maxdepth 2 -type f | sort
