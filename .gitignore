@@ -4,6 +4,6 @@ build/
 .cache/
 .vscode/
 .idea/
+release/
 
 .DS_Store
-
