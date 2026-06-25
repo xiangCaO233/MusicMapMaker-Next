@@ -6,9 +6,8 @@
 namespace MMM::UI::ClipboardBridge
 {
 
-/// @brief Publish pending editor clipboard text to the system clipboard.
-/// @warning UI hot path: called once per frame; it only consumes a small
-/// optional string.
+/// @brief 将待发布的编辑器剪贴板文本写入系统剪贴板。
+/// @warning UI 热路径：每帧调用一次；只消费一个小型 optional 字符串。
 inline void publishPendingEditorClipboard()
 {
     auto pendingText =
@@ -20,8 +19,8 @@ inline void publishPendingEditorClipboard()
     ImGui::SetClipboardText(pendingText->c_str());
 }
 
-/// @brief Import an MMM payload from the current system clipboard text.
-/// @warning UI shortcut path: called only before paste commands.
+/// @brief 从当前系统剪贴板文本导入 MMM 载荷。
+/// @warning UI 快捷键路径：只在粘贴命令前调用。
 inline void importEditorClipboardFromSystem()
 {
     const char* text = ImGui::GetClipboardText();

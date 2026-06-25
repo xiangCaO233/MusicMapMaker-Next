@@ -14,31 +14,31 @@ namespace MMM::Logic::EditorClipboardProtocol
 {
 namespace
 {
-/// @brief Payload kind code for note clipboard entries.
+/// @brief 音符剪贴板条目的载荷类型码。
 constexpr std::string_view KIND_NOTES = "N";
 
-/// @brief Payload kind code for timeline clipboard entries.
+/// @brief 时间线剪贴板条目的载荷类型码。
 constexpr std::string_view KIND_TIMELINES = "T";
 
-/// @brief Append one tab separator.
+/// @brief 追加一个制表符分隔符。
 void appendSeparator(std::string& text)
 {
     text.push_back('\t');
 }
 
-/// @brief Append one line break.
+/// @brief 追加一个换行符。
 void appendLineBreak(std::string& text)
 {
     text.push_back('\n');
 }
 
-/// @brief Convert one hex nibble to a printable digit.
+/// @brief 将一个十六进制半字节转换为可打印字符。
 char hexDigit(unsigned int value)
 {
     return static_cast<char>(value < 10U ? ('0' + value) : ('A' + value - 10U));
 }
 
-/// @brief Convert one printable hex digit to a nibble.
+/// @brief 将一个可打印十六进制字符转换为半字节。
 std::optional<unsigned int> hexValue(char ch)
 {
     if ( ch >= '0' && ch <= '9' ) {
@@ -53,7 +53,7 @@ std::optional<unsigned int> hexValue(char ch)
     return std::nullopt;
 }
 
-/// @brief Append a metadata string with tab/newline-safe percent escaping.
+/// @brief 使用百分号转义追加可安全包含制表符和换行的元数据字符串。
 void appendEscapedField(std::string& text, std::string_view value)
 {
     for ( unsigned char ch : value ) {
@@ -67,7 +67,7 @@ void appendEscapedField(std::string& text, std::string_view value)
     }
 }
 
-/// @brief Decode one percent-escaped metadata field.
+/// @brief 解码一个百分号转义的元数据字段。
 std::optional<std::string> decodeEscapedField(std::string_view value)
 {
     std::string result;
@@ -92,7 +92,7 @@ std::optional<std::string> decodeEscapedField(std::string_view value)
     return result;
 }
 
-/// @brief Append one integer field.
+/// @brief 追加一个整数字段。
 void appendIntField(std::string& text, int value)
 {
     std::array<char, 32> buffer{};
@@ -105,13 +105,13 @@ void appendIntField(std::string& text, int value)
     text.append(buffer.data(), ptr);
 }
 
-/// @brief Append one boolean field as 0 or 1.
+/// @brief 以 0 或 1 追加一个布尔字段。
 void appendBoolField(std::string& text, bool value)
 {
     text.push_back(value ? '1' : '0');
 }
 
-/// @brief Append one compact floating point field.
+/// @brief 追加一个紧凑浮点数字段。
 void appendDoubleField(std::string& text, double value)
 {
     if ( !std::isfinite(value) ) {
@@ -132,7 +132,7 @@ void appendDoubleField(std::string& text, double value)
     text.append(buffer.data(), ptr);
 }
 
-/// @brief Parse one integer field.
+/// @brief 解析一个整数字段。
 std::optional<int> parseIntField(std::string_view field)
 {
     int value = 0;
@@ -144,7 +144,7 @@ std::optional<int> parseIntField(std::string_view field)
     return value;
 }
 
-/// @brief Parse one boolean field.
+/// @brief 解析一个布尔字段。
 std::optional<bool> parseBoolField(std::string_view field)
 {
     if ( field == "0" ) return false;
@@ -152,7 +152,7 @@ std::optional<bool> parseBoolField(std::string_view field)
     return std::nullopt;
 }
 
-/// @brief Parse one finite floating point field.
+/// @brief 解析一个有限浮点数字段。
 std::optional<double> parseDoubleField(std::string_view field)
 {
     double value   = 0.0;
@@ -167,7 +167,7 @@ std::optional<double> parseDoubleField(std::string_view field)
     return value;
 }
 
-/// @brief Split one tab-separated protocol line.
+/// @brief 拆分一行以制表符分隔的协议文本。
 std::vector<std::string_view> splitFields(std::string_view line)
 {
     std::vector<std::string_view> fields;
@@ -184,7 +184,7 @@ std::vector<std::string_view> splitFields(std::string_view line)
     return fields;
 }
 
-/// @brief Read and remove one line from a string view.
+/// @brief 从字符串视图读取并移除一行。
 std::optional<std::string_view> popLine(std::string_view& text)
 {
     if ( text.empty() ) {
@@ -206,7 +206,7 @@ std::optional<std::string_view> popLine(std::string_view& text)
     return line;
 }
 
-/// @brief Convert note type to one-character protocol code.
+/// @brief 将音符类型转换为单字符协议码。
 std::string_view noteTypeCode(::MMM::NoteType type)
 {
     switch ( type ) {
@@ -218,7 +218,7 @@ std::string_view noteTypeCode(::MMM::NoteType type)
     return "n";
 }
 
-/// @brief Convert one-character protocol code to note type.
+/// @brief 将单字符协议码转换为音符类型。
 std::optional<::MMM::NoteType> noteTypeFromCode(std::string_view code)
 {
     if ( code == "n" ) return ::MMM::NoteType::NOTE;
@@ -228,7 +228,7 @@ std::optional<::MMM::NoteType> noteTypeFromCode(std::string_view code)
     return std::nullopt;
 }
 
-/// @brief Convert timing effect to one-character protocol code.
+/// @brief 将时间线效果转换为单字符协议码。
 std::string_view timingEffectCode(::MMM::TimingEffect effect)
 {
     switch ( effect ) {
@@ -240,7 +240,7 @@ std::string_view timingEffectCode(::MMM::TimingEffect effect)
     return "s";
 }
 
-/// @brief Convert one-character protocol code to timing effect.
+/// @brief 将单字符协议码转换为时间线效果。
 std::optional<::MMM::TimingEffect> timingEffectFromCode(std::string_view code)
 {
     if ( code == "b" ) return ::MMM::TimingEffect::BPM;
@@ -250,7 +250,7 @@ std::optional<::MMM::TimingEffect> timingEffectFromCode(std::string_view code)
     return std::nullopt;
 }
 
-/// @brief Convert note metadata source to compact protocol code.
+/// @brief 将音符元数据来源转换为紧凑协议码。
 std::string_view noteMetadataSourceCode(::MMM::NoteMetadataType type)
 {
     switch ( type ) {
@@ -262,7 +262,7 @@ std::string_view noteMetadataSourceCode(::MMM::NoteMetadataType type)
     return {};
 }
 
-/// @brief Convert compact protocol code to note metadata source.
+/// @brief 将紧凑协议码转换为音符元数据来源。
 std::optional<::MMM::NoteMetadataType> noteMetadataSourceFromCode(
     std::string_view code)
 {
@@ -273,7 +273,7 @@ std::optional<::MMM::NoteMetadataType> noteMetadataSourceFromCode(
     return std::nullopt;
 }
 
-/// @brief Convert timing metadata source to compact protocol code.
+/// @brief 将时间线元数据来源转换为紧凑协议码。
 std::string_view timingMetadataSourceCode(::MMM::TimingMetadataType type)
 {
     switch ( type ) {
@@ -284,7 +284,7 @@ std::string_view timingMetadataSourceCode(::MMM::TimingMetadataType type)
     return {};
 }
 
-/// @brief Convert compact protocol code to timing metadata source.
+/// @brief 将紧凑协议码转换为时间线元数据来源。
 std::optional<::MMM::TimingMetadataType> timingMetadataSourceFromCode(
     std::string_view code)
 {
@@ -294,7 +294,7 @@ std::optional<::MMM::TimingMetadataType> timingMetadataSourceFromCode(
     return std::nullopt;
 }
 
-/// @brief Append one color override line when the color exists.
+/// @brief 颜色存在时追加一行颜色覆盖。
 void appendColorLine(std::string& text, std::string_view prefix,
                      std::string_view                code,
                      const std::optional<glm::vec4>& color)
@@ -317,7 +317,7 @@ void appendColorLine(std::string& text, std::string_view prefix,
     appendLineBreak(text);
 }
 
-/// @brief Append note color override lines.
+/// @brief 追加音符颜色覆盖行。
 void appendNoteColorLines(std::string& text, std::string_view prefix,
                           const NoteColorOverrides& colors)
 {
@@ -329,7 +329,7 @@ void appendNoteColorLines(std::string& text, std::string_view prefix,
     appendColorLine(text, prefix, "n", colors.node);
 }
 
-/// @brief Parse one color override line.
+/// @brief 解析一行颜色覆盖。
 std::optional<glm::vec4> parseColorLine(
     const std::vector<std::string_view>& fields)
 {
@@ -353,7 +353,7 @@ std::optional<glm::vec4> parseColorLine(
     };
 }
 
-/// @brief Store one parsed color override into the target color set.
+/// @brief 将解析出的颜色覆盖写入目标颜色集合。
 void assignColor(NoteColorOverrides& colors, std::string_view code,
                  const glm::vec4& color)
 {
@@ -372,7 +372,7 @@ void assignColor(NoteColorOverrides& colors, std::string_view code,
     }
 }
 
-/// @brief Append note metadata property lines.
+/// @brief 追加音符元数据属性行。
 void appendNoteMetadataLines(std::string& text, std::string_view prefix,
                              const ::MMM::NoteMetadata& metadata)
 {
@@ -395,7 +395,7 @@ void appendNoteMetadataLines(std::string& text, std::string_view prefix,
     }
 }
 
-/// @brief Append timing metadata property lines.
+/// @brief 追加时间线元数据属性行。
 void appendTimingMetadataLines(std::string& text, std::string_view prefix,
                                const ::MMM::TimingMetadata& metadata)
 {
@@ -418,7 +418,7 @@ void appendTimingMetadataLines(std::string& text, std::string_view prefix,
     }
 }
 
-/// @brief Parse one note metadata property line into a metadata container.
+/// @brief 将一行音符元数据属性解析到元数据容器中。
 void parseNoteMetadataLine(const std::vector<std::string_view>& fields,
                            ::MMM::NoteMetadata&                 metadata)
 {
@@ -435,7 +435,7 @@ void parseNoteMetadataLine(const std::vector<std::string_view>& fields,
     metadata.note_properties[*source][*key] = *value;
 }
 
-/// @brief Parse one timing metadata property line into a metadata container.
+/// @brief 将一行时间线元数据属性解析到元数据容器中。
 void parseTimingMetadataLine(const std::vector<std::string_view>& fields,
                              ::MMM::TimingMetadata&               metadata)
 {
@@ -452,7 +452,7 @@ void parseTimingMetadataLine(const std::vector<std::string_view>& fields,
     metadata.timing_properties[*source][*key] = *value;
 }
 
-/// @brief Append one number list field.
+/// @brief 追加一个数字列表字段。
 void appendNumberListField(std::string& text, const std::vector<double>& values)
 {
     for ( std::size_t index = 0; index < values.size(); ++index ) {
@@ -463,7 +463,7 @@ void appendNumberListField(std::string& text, const std::vector<double>& values)
     }
 }
 
-/// @brief Parse one comma-separated number list field.
+/// @brief 解析一个逗号分隔的数字列表字段。
 std::vector<double> parseNumberListField(std::string_view field)
 {
     std::vector<double> values;
@@ -486,7 +486,7 @@ std::vector<double> parseNumberListField(std::string_view field)
     return values;
 }
 
-/// @brief Append one main note line.
+/// @brief 追加一行主音符数据。
 void appendMainNoteLine(std::string& text, const NoteComponent& note)
 {
     text.append("N");
@@ -507,7 +507,7 @@ void appendMainNoteLine(std::string& text, const NoteComponent& note)
     appendLineBreak(text);
 }
 
-/// @brief Append one sub-note line.
+/// @brief 追加一行子音符数据。
 void appendSubNoteLine(std::string& text, const NoteComponent::SubNote& subNote)
 {
     text.append("S");
@@ -524,7 +524,7 @@ void appendSubNoteLine(std::string& text, const NoteComponent::SubNote& subNote)
     appendLineBreak(text);
 }
 
-/// @brief Append optional beat-position data for one copied note.
+/// @brief 为一个复制音符追加可选拍位数据。
 void appendBeatLine(std::string& text, const ClipboardItem& item)
 {
     if ( !item.hasBeatPositions ) {
@@ -543,7 +543,7 @@ void appendBeatLine(std::string& text, const ClipboardItem& item)
     appendLineBreak(text);
 }
 
-/// @brief Append one copied note and its auxiliary lines.
+/// @brief 追加一个复制音符及其辅助数据行。
 void appendClipboardItem(std::string& text, const ClipboardItem& item)
 {
     appendMainNoteLine(text, item.note);
@@ -558,7 +558,7 @@ void appendClipboardItem(std::string& text, const ClipboardItem& item)
     }
 }
 
-/// @brief Parse one main note line.
+/// @brief 解析一行主音符数据。
 std::optional<NoteComponent> parseMainNoteLine(
     const std::vector<std::string_view>& fields)
 {
@@ -590,7 +590,7 @@ std::optional<NoteComponent> parseMainNoteLine(
     return note;
 }
 
-/// @brief Parse one sub-note line.
+/// @brief 解析一行子音符数据。
 std::optional<NoteComponent::SubNote> parseSubNoteLine(
     const std::vector<std::string_view>& fields)
 {
@@ -616,7 +616,7 @@ std::optional<NoteComponent::SubNote> parseSubNoteLine(
     return subNote;
 }
 
-/// @brief Parse one beat-position line into the current copied note.
+/// @brief 将一行拍位数据解析到当前复制音符中。
 void parseBeatLine(const std::vector<std::string_view>& fields,
                    ClipboardItem&                       item)
 {
@@ -637,7 +637,7 @@ void parseBeatLine(const std::vector<std::string_view>& fields,
     item.hasBeatPositions = true;
 }
 
-/// @brief Append one timeline clipboard entry.
+/// @brief 追加一个时间线剪贴板条目。
 void appendTimelineItem(std::string& text, const TimelineClipboardItem& item)
 {
     text.append("T");
@@ -657,7 +657,7 @@ void appendTimelineItem(std::string& text, const TimelineClipboardItem& item)
     appendTimingMetadataLines(text, "TM", item.timeline.m_metadata);
 }
 
-/// @brief Parse one timeline clipboard entry line.
+/// @brief 解析一行时间线剪贴板条目。
 std::optional<TimelineClipboardItem> parseTimelineItemLine(
     const std::vector<std::string_view>& fields)
 {
@@ -686,7 +686,7 @@ std::optional<TimelineClipboardItem> parseTimelineItemLine(
     return item;
 }
 
-/// @brief Append the compact protocol header.
+/// @brief 追加紧凑协议头。
 void appendHeader(std::string& text, std::string_view kind)
 {
     text.append(MAGIC);
@@ -695,7 +695,7 @@ void appendHeader(std::string& text, std::string_view kind)
     appendLineBreak(text);
 }
 
-/// @brief Parse and validate the compact protocol header.
+/// @brief 解析并验证紧凑协议头。
 std::optional<std::string_view> parseHeader(std::string_view& text)
 {
     auto line = popLine(text);
@@ -713,7 +713,7 @@ std::optional<std::string_view> parseHeader(std::string_view& text)
     return fields[1];
 }
 
-/// @brief Parse note payload lines.
+/// @brief 解析音符载荷行。
 ParsedClipboard parseNotePayload(std::string_view text)
 {
     ParsedClipboard parsed;
@@ -769,7 +769,7 @@ ParsedClipboard parseNotePayload(std::string_view text)
     return parsed;
 }
 
-/// @brief Parse timeline payload lines.
+/// @brief 解析时间线载荷行。
 ParsedClipboard parseTimelinePayload(std::string_view text)
 {
     ParsedClipboard        parsed;

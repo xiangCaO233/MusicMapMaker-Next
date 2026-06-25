@@ -11,14 +11,13 @@ namespace
 using MMM::Logic::ClipboardItem;
 using MMM::Logic::TimelineClipboardItem;
 
-/// @brief Compare finite doubles with a small tolerance.
+/// @brief 使用小容差比较有限浮点数。
 bool near(double lhs, double rhs)
 {
     return std::abs(lhs - rhs) < 1e-9;
 }
 
-/// @brief Compare optional colors exactly enough for protocol round-trip
-/// values.
+/// @brief 以满足协议往返验证的精度比较可选颜色。
 bool sameColor(const std::optional<glm::vec4>& lhs,
                const std::optional<glm::vec4>& rhs)
 {
@@ -32,7 +31,7 @@ bool sameColor(const std::optional<glm::vec4>& lhs,
            near(lhs->b, rhs->b) && near(lhs->a, rhs->a);
 }
 
-/// @brief Read one note metadata value without throwing.
+/// @brief 不抛异常地读取一个音符元数据值。
 std::optional<std::string> noteMetadataValue(const MMM::NoteMetadata& metadata,
                                              MMM::NoteMetadataType    source,
                                              const std::string&       key)
@@ -48,7 +47,7 @@ std::optional<std::string> noteMetadataValue(const MMM::NoteMetadata& metadata,
     return valueIt->second;
 }
 
-/// @brief Read one timing metadata value without throwing.
+/// @brief 不抛异常地读取一个时间线元数据值。
 std::optional<std::string> timingMetadataValue(
     const MMM::TimingMetadata& metadata, MMM::TimingMetadataType source,
     const std::string& key)
@@ -64,7 +63,7 @@ std::optional<std::string> timingMetadataValue(
     return valueIt->second;
 }
 
-/// @brief Verify note clipboard payload serialization and parsing.
+/// @brief 验证音符剪贴板载荷的序列化和解析。
 bool testNoteRoundTrip()
 {
     ClipboardItem item;
@@ -165,7 +164,7 @@ bool testNoteRoundTrip()
     return true;
 }
 
-/// @brief Verify timeline clipboard payload serialization and parsing.
+/// @brief 验证时间线剪贴板载荷的序列化和解析。
 bool testTimelineRoundTrip()
 {
     TimelineClipboardItem item;
@@ -214,7 +213,7 @@ bool testTimelineRoundTrip()
     return true;
 }
 
-/// @brief Verify plain text is ignored by the MMM clipboard parser.
+/// @brief 验证 MMM 剪贴板解析器会忽略普通文本。
 bool testPlainTextIgnored()
 {
     if ( MMM::Logic::EditorClipboardProtocol::parse("plain text") ) {

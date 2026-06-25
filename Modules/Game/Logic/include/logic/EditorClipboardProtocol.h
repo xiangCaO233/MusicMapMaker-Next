@@ -9,33 +9,31 @@
 namespace MMM::Logic::EditorClipboardProtocol
 {
 
-/// @brief System clipboard text header used to identify MMM clipboard payloads.
+/// @brief 系统剪贴板文本头，用于识别 MMM 剪贴板载荷。
 inline constexpr std::string_view MAGIC = "MMM_CLIPBOARD_V2";
 
-/// @brief Parsed editor clipboard payload imported from system clipboard text.
+/// @brief 从系统剪贴板文本解析出的编辑器剪贴板载荷。
 struct ParsedClipboard {
-    /// @brief Note clipboard entries carried by the payload.
+    /// @brief 载荷中的音符剪贴板条目。
     std::vector<ClipboardItem> notes;
 
-    /// @brief Timeline clipboard entries carried by the payload.
+    /// @brief 载荷中的时间线剪贴板条目。
     std::vector<TimelineClipboardItem> timelines;
 };
 
-/// @brief Serialize note clipboard entries into a text payload for the system
-/// clipboard.
-/// @param items Note clipboard entries to serialize.
-/// @return UTF-8 text payload suitable for ImGui/system clipboard APIs.
+/// @brief 将音符剪贴板条目序列化为系统剪贴板文本载荷。
+/// @param items 待序列化的音符剪贴板条目。
+/// @return 适用于 ImGui 和系统剪贴板 API 的 UTF-8 文本载荷。
 std::string serializeNotes(const std::vector<ClipboardItem>& items);
 
-/// @brief Serialize timeline clipboard entries into a text payload for the
-/// system clipboard.
-/// @param items Timeline clipboard entries to serialize.
-/// @return UTF-8 text payload suitable for ImGui/system clipboard APIs.
+/// @brief 将时间线剪贴板条目序列化为系统剪贴板文本载荷。
+/// @param items 待序列化的时间线剪贴板条目。
+/// @return 适用于 ImGui 和系统剪贴板 API 的 UTF-8 文本载荷。
 std::string serializeTimelines(const std::vector<TimelineClipboardItem>& items);
 
-/// @brief Parse system clipboard text as an MMM clipboard payload.
-/// @param text Text currently stored in the system clipboard.
-/// @return Parsed clipboard content when the payload matches this protocol.
+/// @brief 将系统剪贴板文本解析为 MMM 剪贴板载荷。
+/// @param text 当前系统剪贴板中的文本。
+/// @return 文本符合协议时返回解析后的剪贴板内容。
 std::optional<ParsedClipboard> parse(std::string_view text);
 
 }  // namespace MMM::Logic::EditorClipboardProtocol

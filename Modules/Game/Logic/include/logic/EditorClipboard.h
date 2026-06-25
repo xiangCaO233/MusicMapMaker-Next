@@ -71,14 +71,13 @@ public:
     /// @brief 将当前剪切剪贴板标记为已经消费。
     void markCutConsumed();
 
-    /// @brief Consume text that should be published to the system clipboard.
-    /// @return Pending system clipboard text when copy/cut changed the editor
-    /// clipboard.
+    /// @brief 消费需要发布到系统剪贴板的文本载荷。
+    /// @return 复制或剪切改变编辑器剪贴板后待发布的系统剪贴板文本。
     std::optional<std::string> consumePendingSystemText();
 
-    /// @brief Import an MMM clipboard payload from system clipboard text.
-    /// @param text System clipboard text to parse.
-    /// @return True when the text belongs to the MMM clipboard protocol.
+    /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+    /// @param text 待解析的系统剪贴板文本。
+    /// @return 文本属于 MMM 剪贴板协议时返回 true。
     bool importSystemText(std::string_view text);
 
 private:
@@ -97,11 +96,10 @@ private:
     /// @brief 剪切来源 Session 上下文，仅用于身份比较，不拥有生命周期。
     const SessionContext* m_sourceContext{ nullptr };
 
-    /// @brief Pending text for UI thread publication to the system clipboard.
+    /// @brief 等待 UI 线程发布到系统剪贴板的文本。
     std::optional<std::string> m_pendingSystemText;
 
-    /// @brief Last text exported by this process, used to preserve local cut
-    /// state.
+    /// @brief 本进程上次导出的文本，用于保留本地剪切状态。
     std::string m_lastExportedSystemText;
 };
 
