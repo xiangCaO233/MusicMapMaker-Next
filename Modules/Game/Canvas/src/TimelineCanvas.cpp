@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "audio/AudioManager.h"
 #include "canvas/TimeFormatUtils.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -15,12 +16,14 @@
 #include "ui/Icons.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace MMM::Canvas
@@ -45,6 +48,109 @@ bool isToolbarFocusedOrHovered()
     }
     return isToolbarWindow(context->NavWindow) ||
            isToolbarWindow(context->HoveredWindow);
+}
+
+/// @brief 处理 Timeline 窗格上的修饰键滚轮操作。
+/// @param timelineId Timeline 对应的画布 ID，用于隔离 Alt 滚轮累积量。
+/// @param wheel 当前帧滚轮增量。
+/// @param isCtrlPressed Ctrl 是否按下。
+/// @param isAltPressed Alt 是否按下。
+/// @param isShiftPressed Shift 是否按下。
+/// @return 已处理修饰滚轮时返回 true。
+/// @warning UI 热路径：Timeline 悬停滚轮时调用；只读取输入状态并发布轻量命令。
+bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
+                                 bool isCtrlPressed, bool isAltPressed,
+                                 bool isShiftPressed)
+{
+    if ( !isCtrlPressed && !isAltPressed ) {
+        return false;
+    }
+
+    if ( isCtrlPressed && isAltPressed ) {
+        constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
+        double                          currentSpeed =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+
+        std::size_t bestIdx = 0;
+        double      minDiff = std::abs(currentSpeed - presets[0]);
+        for ( std::size_t i = 1; i < presets.size(); ++i ) {
+            const double diff = std::abs(currentSpeed - presets[i]);
+            if ( diff < minDiff ) {
+                minDiff = diff;
+                bestIdx = i;
+            }
+        }
+
+        if ( wheel > 0.01f ) {
+            if ( bestIdx < presets.size() - 1U ) bestIdx++;
+        } else if ( wheel < -0.01f ) {
+            if ( bestIdx > 0U ) bestIdx--;
+        }
+
+        const double newSpeed = presets[bestIdx];
+        if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetPlaybackSpeed{ newSpeed }));
+        }
+        return true;
+    }
+
+    if ( isCtrlPressed ) {
+        auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+        float step      = 0.1f;
+        if ( isShiftPressed ) {
+            step *= editorCfg.settings.scrollSpeedMultiplier;
+        }
+        editorCfg.visual.timelineZoom += wheel * step;
+        editorCfg.visual.timelineZoom =
+            std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
+        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        return true;
+    }
+
+    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    static std::unordered_map<std::string, float> wheelAccumulator;
+    float& acc = wheelAccumulator[timelineId];
+    acc += wheel;
+
+    int steps = 0;
+    if ( acc >= 1.0f ) {
+        steps = static_cast<int>(acc);
+        acc -= static_cast<float>(steps);
+    } else if ( acc <= -1.0f ) {
+        steps = static_cast<int>(acc);
+        acc -= static_cast<float>(steps);
+    }
+
+    if ( steps == 0 ) {
+        return true;
+    }
+
+    if ( isShiftPressed ) {
+        constexpr std::array<int, 8> presets = { 1, 2, 3, 4, 6, 8, 12, 16 };
+        int                          current = editorCfg.settings.beatDivisor;
+        if ( steps > 0 ) {
+            for ( int i = 0; i < steps; ++i ) {
+                auto it =
+                    std::upper_bound(presets.begin(), presets.end(), current);
+                current = it != presets.end() ? *it : presets.back();
+            }
+        } else {
+            for ( int i = 0; i < -steps; ++i ) {
+                auto it =
+                    std::lower_bound(presets.begin(), presets.end(), current);
+                current = it != presets.begin() ? *(--it) : presets.front();
+            }
+        }
+        editorCfg.settings.beatDivisor = current;
+    } else {
+        editorCfg.settings.beatDivisor += steps;
+    }
+
+    editorCfg.settings.beatDivisor =
+        std::clamp(editorCfg.settings.beatDivisor, 1, 64);
+    Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+    return true;
 }
 
 /// @brief Timeline 画布齿轮按钮的类型信息
@@ -230,13 +336,16 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( texID != VK_NULL_HANDLE ) {
             ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
 
-            bool  isHovered = ImGui::IsItemHovered();
-            float wheel     = ImGui::GetIO().MouseWheel;
-            if ( isHovered && std::abs(wheel) > 0.01f &&
-                 !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdScroll{
-                        m_name, -wheel, ImGui::GetIO().KeyShift }));
+            bool           isHovered = ImGui::IsItemHovered();
+            const ImGuiIO& io        = ImGui::GetIO();
+            float          wheel     = io.MouseWheel;
+            if ( isHovered && std::abs(wheel) > 0.01f ) {
+                if ( !handleTimelineModifierWheel(
+                         m_name, wheel, io.KeyCtrl, io.KeyAlt, io.KeyShift) ) {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdScroll{ m_name, -wheel, io.KeyShift }));
+                }
             }
 
             // 3. 处理 Timeline Timing 的工具交互和反馈
