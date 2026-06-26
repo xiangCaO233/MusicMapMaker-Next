@@ -191,9 +191,11 @@ static bool renderScrollingTreeNode(const std::string& id,
     }
 
     // 绘制滚动文本
-    float  arrowWidth         = ImGui::GetTreeNodeToLabelSpacing();
-    float  textAvailableWidth = width - arrowWidth;
-    ImVec2 textStartPos       = { cursorPos.x + arrowWidth, cursorPos.y };
+    float arrowWidth = ImGui::GetTreeNodeToLabelSpacing();
+    // 叶子文件没有可展开箭头，文字从名称列内容起点绘制，避免普通文件名相对表头额外右移。
+    float  treeGutterWidth    = isLeaf ? 0.0f : arrowWidth;
+    float  textAvailableWidth = width - treeGutterWidth;
+    ImVec2 textStartPos       = { cursorPos.x + treeGutterWidth, cursorPos.y };
 
     float offset       = 0.0f;
     float padding      = 8.0f;
