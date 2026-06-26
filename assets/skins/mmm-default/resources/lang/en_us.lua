@@ -453,6 +453,9 @@ return {
 	["title.beatmap_manager"] = "Beatmap Manager",
 	["ui.beatmap_manager.initial_hint"] = "No project opened, no beatmap resources",
 	["ui.beatmap_manager.beatmaps"] = "Beatmaps",
+	["ui.beatmap_manager.column_name"] = "Name",
+	["ui.beatmap_manager.column_type"] = "Type",
+	["ui.beatmap_manager.column_path"] = "Path",
 
 	-- Window control tooltips
 	["ui.window.minimize"] = "Minimize",

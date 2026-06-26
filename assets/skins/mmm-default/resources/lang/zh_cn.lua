@@ -457,6 +457,9 @@ return {
 	["title.beatmap_manager"] = "谱面管理",
 	["ui.beatmap_manager.initial_hint"] = "暂未打开项目, 无谱面资源",
 	["ui.beatmap_manager.beatmaps"] = "谱面列表",
+	["ui.beatmap_manager.column_name"] = "名称",
+	["ui.beatmap_manager.column_type"] = "类型",
+	["ui.beatmap_manager.column_path"] = "路径",
 
 	-- 窗口控制 tooltips
 	["ui.window.minimize"] = "最小化",
