@@ -3,6 +3,38 @@ include("${CMAKE_CURRENT_LIST_DIR}/PrebuiltLayout.cmake")
 prebuilt_init("${CMAKE_CURRENT_LIST_DIR}/../../prebuilts")
 prebuilt_include_dir(_curl_include_dir curl)
 
+# MinGW 静态 curl 的 IDN2 附加依赖必须使用静态 archive；误用 .dll.a 会让全静态目标继续依赖 MSYS DLL。
+function(_curl_find_mingw_static_dependency out_var)
+  get_filename_component(_curl_compiler_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  get_filename_component(_curl_toolchain_root "${_curl_compiler_dir}"
+                         DIRECTORY)
+  set(_curl_saved_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+  find_library(
+    _curl_static_dependency
+    NAMES ${ARGN}
+    PATHS "${_curl_toolchain_root}/lib"
+    NO_DEFAULT_PATH
+    NO_CACHE)
+  set(CMAKE_FIND_LIBRARY_SUFFIXES ${_curl_saved_suffixes})
+
+  if(NOT _curl_static_dependency)
+    message(FATAL_ERROR "缺少 curl 的 MinGW 静态依赖：${ARGN}")
+  endif()
+
+  get_filename_component(_curl_static_dependency_name
+                         "${_curl_static_dependency}" NAME)
+  if(_curl_static_dependency_name MATCHES "\\.dll\\.a$")
+    message(
+      FATAL_ERROR
+        "curl 静态链接禁止使用 DLL import library：${_curl_static_dependency}")
+  endif()
+
+  set(${out_var}
+      "${_curl_static_dependency}"
+      PARENT_SCOPE)
+endfunction()
+
 if(NOT TARGET libcurl_static)
   add_library(libcurl_static UNKNOWN IMPORTED GLOBAL)
   set_target_properties(libcurl_static PROPERTIES INTERFACE_INCLUDE_DIRECTORIES
@@ -41,22 +73,16 @@ if(NOT TARGET 3rd_curl)
   endif()
   if(WIN32)
     target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt iphlpapi)
-    if(MINGW)
-      # MSYS2 预编译 curl 可能启用了 IDN2，需要额外链接 libidn2、libunistring 和 iconv；远端 Debian
-      # GCC14 预编译 curl 使用 Schannel 且未启用 IDN2，因此这里按工具链实际可见库决定是否追加。
-      find_library(_curl_idn2_library NAMES idn2 libidn2)
-      find_library(_curl_unistring_library NAMES unistring libunistring)
-      find_library(_curl_iconv_library NAMES iconv libiconv)
-      if(_curl_idn2_library
-         AND _curl_unistring_library
-         AND _curl_iconv_library)
-        target_link_libraries(
-          3rd_curl
-          INTERFACE "${_curl_idn2_library}" "${_curl_unistring_library}"
-                    "${_curl_iconv_library}")
-      else()
-        message(STATUS "libcurl IDN2 额外依赖不可见，按未启用 IDN2 的预编译 curl 处理。")
-      endif()
+    if(MINGW AND PROJECT_LINKAGE STREQUAL "static")
+      # MSYS2 预编译 curl 可能启用了 IDN2；这里只允许链接静态 archive，避免 exe 引入 libidn2-0.dll 等运行时依赖。
+      _curl_find_mingw_static_dependency(_curl_idn2_library idn2 libidn2)
+      _curl_find_mingw_static_dependency(_curl_unistring_library unistring
+                                         libunistring)
+      _curl_find_mingw_static_dependency(_curl_iconv_library iconv libiconv)
+      target_link_libraries(
+        3rd_curl
+        INTERFACE "${_curl_idn2_library}" "${_curl_unistring_library}"
+                  "${_curl_iconv_library}")
     endif()
   elseif(APPLE)
     target_link_libraries(
