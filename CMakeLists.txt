@@ -132,6 +132,11 @@ function(mmm_set_test_target MODULE_NAME TARGET_NAME)
       ${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER}
                                 "${TEST_RUNTIME_DIR}")
   endforeach()
+
+  # shared 预编译依赖需要复制到测试可执行文件旁边，否则 Windows 动态加载无法从独立测试目录解析 DLL。
+  if(COMMAND prebuilt_copy_runtime_files)
+    prebuilt_copy_runtime_files(${TARGET_NAME})
+  endif()
 endfunction()
 
 function(mmm_add_test_executable MODULE_NAME TARGET_NAME)

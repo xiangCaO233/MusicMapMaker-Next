@@ -370,6 +370,50 @@ function(prebuilt_find_symbol_files out_var package config)
       PARENT_SCOPE)
 endfunction()
 
+# 记录 shared 预编译包的运行时 DLL，供可执行文件构建后统一复制。
+function(prebuilt_record_runtime_file runtime_file)
+  if(NOT PROJECT_LINKAGE STREQUAL "shared" OR NOT WIN32 OR runtime_file
+                                                    STREQUAL "")
+    return()
+  endif()
+
+  get_property(_runtime_files GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES)
+  list(APPEND _runtime_files "${runtime_file}")
+  list(REMOVE_DUPLICATES _runtime_files)
+  set_property(GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES
+                              "${_runtime_files}")
+endfunction()
+
+# 读取当前配置已解析出的 shared 运行时 DLL 清单。
+function(prebuilt_get_runtime_files out_var)
+  get_property(_runtime_files GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES)
+  if(_runtime_files)
+    list(REMOVE_DUPLICATES _runtime_files)
+  endif()
+  set(${out_var}
+      ${_runtime_files}
+      PARENT_SCOPE)
+endfunction()
+
+# 将预编译 DLL 复制到指定可执行目标旁边，保证 bin 目录可直接运行和诊断依赖。
+function(prebuilt_copy_runtime_files target_name)
+  if(NOT PROJECT_LINKAGE STREQUAL "shared" OR NOT WIN32)
+    return()
+  endif()
+
+  prebuilt_get_runtime_files(_runtime_files)
+  if(NOT _runtime_files)
+    return()
+  endif()
+
+  add_custom_command(
+    TARGET ${target_name}
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_runtime_files}
+            "$<TARGET_FILE_DIR:${target_name}>"
+    COMMENT "Copying prebuilt runtime DLLs for ${target_name}")
+endfunction()
+
 # 在指定包和配置目录中查找库文件。
 function(prebuilt_find_library out_var package config)
   # shared 布局必须提供 DLL 运行时文件，缺失时配置阶段直接报错。
@@ -429,6 +473,7 @@ function(prebuilt_find_library out_var package config)
     set(${out_var}_RUNTIME
         "${_prebuilt_runtime}"
         PARENT_SCOPE)
+    prebuilt_record_runtime_file("${_prebuilt_runtime}")
   endif()
 
   if(MSVC)
