@@ -32,6 +32,11 @@ if(NOT TARGET 3rd_implot)
     3rd_implot PROPERTIES IMPORTED_CONFIGURATIONS "${_implot_imported_configs}"
                           IMPORTED_LOCATION "${_implot_default_library}")
   target_link_libraries(3rd_implot INTERFACE 3rd_imgui)
+  if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
+    # shared ImPlot 预编译包需要让使用方按 dllimport 访问 API 符号。
+    target_compile_definitions(3rd_implot
+                               INTERFACE "IMPLOT_API=__declspec(dllimport)")
+  endif()
 endif()
 
 set(implot_FOUND TRUE)

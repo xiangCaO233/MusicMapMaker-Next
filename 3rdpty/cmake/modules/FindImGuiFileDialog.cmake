@@ -16,8 +16,9 @@ if(NOT TARGET ImGuiFileDialog)
   foreach(_imgui_file_dialog_config IN LISTS _imgui_file_dialog_configs)
     string(TOUPPER "${_imgui_file_dialog_config}"
                    _imgui_file_dialog_config_upper)
-    prebuilt_find_library(_imgui_file_dialog_library ImGuiFileDialog
-                          "${_imgui_file_dialog_config}" ImGuiFileDialog)
+    prebuilt_find_library(
+      _imgui_file_dialog_library ImGuiFileDialog
+      "${_imgui_file_dialog_config}" ImGuiFileDialog)
     list(APPEND _imgui_file_dialog_imported_configs
          "${_imgui_file_dialog_config_upper}")
     set_target_properties(

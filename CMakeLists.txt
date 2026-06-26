@@ -151,6 +151,12 @@ find_package(Vulkan REQUIRED)
 
 add_subdirectory("3rdpty")
 
+# PROJECT_LINKAGE 只描述第三方依赖链接偏好；业务模块维持静态库组织，避免未指定类型的 add_library 被 shared 偏好改写。
+set(BUILD_SHARED_LIBS
+    OFF
+    CACHE BOOL "Build project modules as static libraries after third-party setup."
+          FORCE)
+
 # PGO 只作用于本项目业务模块，预编译库和用于生成预编译库的第三方源码都不插桩。
 include("pgo")
 

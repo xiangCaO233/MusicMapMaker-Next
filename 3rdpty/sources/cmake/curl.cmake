@@ -6,8 +6,13 @@ set(BUILD_CURL_EXE
 set(CURL_DISABLE_TESTS
     ON
     CACHE BOOL "" FORCE)
+if(PROJECT_LINKAGE STREQUAL "shared")
+  set(_curl_build_shared ON)
+else()
+  set(_curl_build_shared OFF)
+endif()
 set(BUILD_SHARED_LIBS
-    OFF
+    ${_curl_build_shared}
     CACHE BOOL "" FORCE)
 set(BUILD_EXAMPLES
     OFF
@@ -68,7 +73,9 @@ add_subdirectory(${CURL_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR}/curl_build
 
 add_library(3rd_curl INTERFACE)
 
-if(TARGET libcurl_static)
+if(PROJECT_LINKAGE STREQUAL "shared" AND TARGET libcurl)
+  target_link_libraries(3rd_curl INTERFACE libcurl)
+elseif(TARGET libcurl_static)
   target_link_libraries(3rd_curl INTERFACE libcurl_static)
 else()
   target_link_libraries(3rd_curl INTERFACE libcurl)

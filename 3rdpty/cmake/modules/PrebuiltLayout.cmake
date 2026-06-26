@@ -372,16 +372,23 @@ endfunction()
 
 # 在指定包和配置目录中查找库文件。
 function(prebuilt_find_library out_var package config)
+  # shared 布局必须提供 DLL 运行时文件，缺失时配置阶段直接报错。
+  if(ARGN)
+    set(_prebuilt_library_names ${ARGN})
+  else()
+    message(FATAL_ERROR "prebuilt_find_library 缺少库候选名：${package}")
+  endif()
+
   prebuilt_library_dir(_library_dir "${package}" "${config}")
   find_library(
     _prebuilt_library
-    NAMES ${ARGN}
+    NAMES ${_prebuilt_library_names}
     PATHS "${_library_dir}"
     NO_DEFAULT_PATH NO_CACHE)
   if(NOT _prebuilt_library)
     message(
       FATAL_ERROR
-        "缺少 ${package} 的 ${config} 预编译库。搜索目录：${_library_dir}；候选名：${ARGN}")
+        "缺少 ${package} 的 ${config} 预编译库。搜索目录：${_library_dir}；候选名：${_prebuilt_library_names}")
   endif()
   set(${out_var}
       "${_prebuilt_library}"
@@ -390,7 +397,7 @@ function(prebuilt_find_library out_var package config)
   if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
     prebuilt_runtime_dir(_runtime_dir "${package}" "${config}")
     set(_runtime_names "")
-    foreach(_library_name IN LISTS ARGN)
+    foreach(_library_name IN LISTS _prebuilt_library_names)
       list(APPEND _runtime_names
            "${_library_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
     endforeach()
@@ -399,6 +406,20 @@ function(prebuilt_find_library out_var package config)
       NAMES ${_runtime_names}
       PATHS "${_runtime_dir}"
       NO_DEFAULT_PATH NO_CACHE)
+    if(NOT _prebuilt_runtime)
+      set(_runtime_glob_matches "")
+      foreach(_runtime_name IN LISTS _runtime_names)
+        get_filename_component(_runtime_stem "${_runtime_name}" NAME_WE)
+        file(GLOB _runtime_versioned_matches CONFIGURE_DEPENDS
+             "${_runtime_dir}/${_runtime_stem}-*${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        )
+        list(APPEND _runtime_glob_matches ${_runtime_versioned_matches})
+      endforeach()
+      if(_runtime_glob_matches)
+        list(SORT _runtime_glob_matches)
+        list(GET _runtime_glob_matches 0 _prebuilt_runtime)
+      endif()
+    endif()
     if(NOT _prebuilt_runtime)
       message(
         FATAL_ERROR

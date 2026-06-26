@@ -19,7 +19,23 @@ set(IMGUI_SOURCES
     ${IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 
 # 创建静态库 `imgui-static`
-add_library(imgui-static STATIC ${IMGUI_SOURCES})
+# shared 依赖偏好下保留既有 target 名称，但产物改为 DLL。
+set(IMGUI_LIBRARY_TYPE STATIC)
+if(PROJECT_LINKAGE STREQUAL "shared")
+  set(IMGUI_LIBRARY_TYPE SHARED)
+endif()
+add_library(imgui-static ${IMGUI_LIBRARY_TYPE} ${IMGUI_SOURCES})
+if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
+  set_target_properties(imgui-static PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON
+                                                OUTPUT_NAME imgui)
+  # MSVC 跨 DLL 访问 ImGui 数据符号必须显式区分导出和导入。
+  target_compile_definitions(
+    imgui-static
+    PRIVATE "IMGUI_API=__declspec(dllexport)"
+            "IMGUI_IMPL_API=__declspec(dllexport)"
+    INTERFACE "IMGUI_API=__declspec(dllimport)"
+              "IMGUI_IMPL_API=__declspec(dllimport)")
+endif()
 
 # 设置 Target 属性
 target_include_directories(imgui-static PUBLIC ${IMGUI_SOURCE_DIR}

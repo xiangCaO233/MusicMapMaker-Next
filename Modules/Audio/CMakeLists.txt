@@ -33,7 +33,18 @@ else()
 endif()
 
 if(WIN32)
-  target_link_libraries(Audio PUBLIC samplerate SDL3-static)
+  # Windows 音频加速导出路径直接使用采样率转换和 SDL 头文件；通过包装 target 继承 shared/static 链接偏好。
+  if(TARGET 3rd_libsamplerate)
+    target_link_libraries(Audio PUBLIC 3rd_libsamplerate)
+  else()
+    target_link_libraries(Audio PUBLIC samplerate)
+  endif()
+
+  if(TARGET 3rd_sdl3)
+    target_link_libraries(Audio PUBLIC 3rd_sdl3)
+  elseif(PROJECT_LINKAGE STREQUAL "static" AND TARGET SDL3-static)
+    target_link_libraries(Audio PUBLIC SDL3-static)
+  endif()
 endif()
 
 target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
