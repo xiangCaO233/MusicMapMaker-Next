@@ -121,7 +121,7 @@ jobs:
       - name: ci->Publish Website Release
         run: |
           if [[ -f "${HOME}/.bashrc" ]]; then
-            source "${HOME}/.bashrc"
+            source "${HOME}/.bashrc" || true
           fi
           set -euo pipefail
           bash scripts/ci/publish-website-release.sh \

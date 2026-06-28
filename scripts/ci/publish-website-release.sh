@@ -75,6 +75,30 @@ require_command() {
     command -v "${command_name}" > /dev/null 2>&1 || fail "找不到命令: ${command_name}"
 }
 
+load_interactive_deepseek_key() {
+    if [[ -n "${DEEPSEEK_APIKEY:-${DEEPSEEK_API_KEY:-}}" ]]; then
+        return
+    fi
+    if ! command -v bash > /dev/null 2>&1; then
+        return
+    fi
+
+    local api_key
+    api_key="$(
+        bash -ic '
+            set -a
+            if [[ -f "${HOME}/.bashrc" ]]; then
+                source "${HOME}/.bashrc" >/dev/null 2>&1 || true
+            fi
+            set +a
+            printf "%s" "${DEEPSEEK_APIKEY:-${DEEPSEEK_API_KEY:-}}"
+        ' 2>/dev/null || true
+    )"
+    if [[ -n "${api_key}" ]]; then
+        export DEEPSEEK_APIKEY="${api_key}"
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --source-release)
@@ -192,6 +216,7 @@ generate_changelog() {
     local release_version="$3"
     local api_key
 
+    load_interactive_deepseek_key
     api_key="${DEEPSEEK_APIKEY:-${DEEPSEEK_API_KEY:-}}"
     [[ -n "${api_key}" ]] || fail "未设置 DEEPSEEK_APIKEY 或 DEEPSEEK_API_KEY"
 
