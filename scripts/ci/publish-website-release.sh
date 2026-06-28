@@ -337,6 +337,14 @@ find_file_by_name() {
     fi
 }
 
+clean_website_generated_paths() {
+    if [[ -n "$(git -C "${website_dir}" status --porcelain -- release public)" ]]; then
+        log "清理上次失败发布遗留的生成物"
+        run git -C "${website_dir}" restore --staged --worktree -- release public
+        run git -C "${website_dir}" clean -fd -- release public
+    fi
+}
+
 prepare_website_git() {
     log "同步网站仓库"
     if [[ -z "${website_branch}" ]]; then
@@ -346,7 +354,9 @@ prepare_website_git() {
 
     run git -C "${website_dir}" fetch --prune origin
     run git -C "${website_dir}" checkout "${website_branch}"
+    clean_website_generated_paths
     run git -C "${website_dir}" pull --ff-only origin "${website_branch}"
+    clean_website_generated_paths
 
     if [[ -n "$(git -C "${website_dir}" status --porcelain)" ]]; then
         git -C "${website_dir}" status --short
@@ -453,7 +463,7 @@ main() {
     context_dir="$(mktemp -d)"
     context_file="${context_dir}/branch-details.md"
     generated_changelog_file="${context_dir}/changelog.md"
-    trap 'rm -rf "${context_dir}"' EXIT
+    trap "rm -rf -- '${context_dir}'" EXIT
     write_branch_context "${context_file}" "${release_version}" "${version_update_commit}" "${commit_range}" "${commit_count}"
     generate_changelog "${context_file}" "${generated_changelog_file}" "${release_version}"
 
