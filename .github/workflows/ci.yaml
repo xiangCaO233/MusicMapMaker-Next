@@ -4,6 +4,15 @@ on:
   push:
     branches: [ci]
   workflow_dispatch:
+    inputs:
+      job:
+        description: "手动执行的任务"
+        required: true
+        type: choice
+        default: website-release
+        options:
+          - website-release
+          - ci-build
 
 concurrency:
   group: self-hosted-ci-${{ github.ref }}
@@ -11,6 +20,7 @@ concurrency:
 
 jobs:
   mmm-debian-ci:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ci-build')
     runs-on: [self-hosted, Linux, X64, debian]
 
     defaults:
@@ -89,3 +99,28 @@ jobs:
 
           cp -a assets release/assets
           find release -maxdepth 2 -type f | sort
+
+  mmm-website-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'website-release'
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Sync Repository
+        run: |
+          set -euo pipefail
+          git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
+          git clean -fd -- scripts/ci .github/workflows
+          git checkout --force -B ci origin/ci
+          git reset --hard origin/ci
+
+      - name: ci->Publish Website Release
+        run: |
+          set -euo pipefail
+          bash scripts/ci/publish-website-release.sh \
+            --source-release /home/xiang/MusicMapMaker-Next/release \
+            --website-dir /home/xiang/mmm-website
