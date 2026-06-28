@@ -25,9 +25,10 @@ website_dir="${DEFAULT_WEBSITE_DIR}"
 website_branch="${MMM_WEBSITE_BRANCH:-}"
 deepseek_model="${DEEPSEEK_MODEL:-${DEFAULT_DEEPSEEK_MODEL}}"
 
+# 这里使用前插 PATH，按低优先级到高优先级排列，确保 node24 优先于 node20。
 for npm_bin_dir in \
-    "/home/xiang/actions-runner/externals/node24/bin" \
-    "/home/xiang/actions-runner/externals/node20/bin"; do
+    "/home/xiang/actions-runner/externals/node20/bin" \
+    "/home/xiang/actions-runner/externals/node24/bin"; do
     if [[ ":${PATH}:" != *":${npm_bin_dir}:"* && -x "${npm_bin_dir}/npm" ]]; then
         PATH="${npm_bin_dir}:${PATH}"
     fi
