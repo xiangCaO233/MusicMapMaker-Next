@@ -42,27 +42,27 @@ jobs:
       - name: ci->Windows MSVC Clang Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/msvc-clang-build.sh --fresh
+          bash scripts/ci/cross/msvc-clang-build.sh
 
       - name: ci->Windows MinGW GCC Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/mingw-gcc-build.sh --fresh
+          bash scripts/ci/cross/mingw-gcc-build.sh
 
       - name: ci->Windows MinGW Clang Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/mingw-clang-build.sh --fresh
+          bash scripts/ci/cross/mingw-clang-build.sh
 
       - name: ci->Linux GCC 14 Native Build
         run: |
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler gcc14 --fresh
+          bash scripts/ci/linux-build.sh --compiler gcc14
 
       - name: ci->Linux Clang 19 Native Build
         run: |
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler clang19 --fresh
+          bash scripts/ci/linux-build.sh --compiler clang19
 
       - name: ci->Package Release
         run: |

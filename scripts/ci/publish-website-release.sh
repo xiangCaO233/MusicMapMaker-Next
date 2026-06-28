@@ -101,10 +101,13 @@ require_command python3
 
 read_release_version() {
     local app_version
-    app_version="$(
-        sed -nE 's/^[[:space:]]*set[[:space:]]*\([[:space:]]*APPVER[[:space:]]+"([^"]+)".*/\1/p' \
-            "${source_root}/CMakeLists.txt" | head -n 1
-    )"
+    app_version=""
+    while IFS= read -r line; do
+        if [[ "${line}" =~ ^[[:space:]]*set[[:space:]]*\([[:space:]]*APPVER[[:space:]]+\"([^\"]+)\" ]]; then
+            app_version="${BASH_REMATCH[1]}"
+            break
+        fi
+    done < "${source_root}/CMakeLists.txt"
     [[ -n "${app_version}" ]] || fail "无法从 CMakeLists.txt 读取 APPVER"
 
     if [[ "${app_version}" == v* ]]; then
@@ -120,7 +123,7 @@ find_version_update_commit() {
         return
     fi
 
-    git -C "${source_root}" log --format=%H -G 'APPVER' -- CMakeLists.txt | head -n 1
+    git -C "${source_root}" log --max-count=1 --format=%H -G 'APPVER' -- CMakeLists.txt
 }
 
 commit_range_for_base() {
@@ -316,7 +319,11 @@ find_file_by_name() {
         return
     fi
 
-    find "${fallback_dir}" -type f -name "${file_name}" | sort | head -n 1
+    local matches=()
+    mapfile -t matches < <(find "${fallback_dir}" -type f -name "${file_name}" | sort)
+    if (( ${#matches[@]} > 0 )); then
+        printf '%s\n' "${matches[0]}"
+    fi
 }
 
 prepare_website_git() {
