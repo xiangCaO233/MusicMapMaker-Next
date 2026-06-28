@@ -120,6 +120,9 @@ jobs:
 
       - name: ci->Publish Website Release
         run: |
+          if [[ -f "${HOME}/.bashrc" ]]; then
+            source "${HOME}/.bashrc"
+          fi
           set -euo pipefail
           bash scripts/ci/publish-website-release.sh \
             --source-release /home/xiang/MusicMapMaker-Next/release \

@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+set -o pipefail
+
+loadUserBashrc() {
+    local bashrcPath="${HOME:-}/.bashrc"
+    if [[ -n "${HOME:-}" && -f "${bashrcPath}" ]]; then
+        # shellcheck source=/dev/null
+        source "${bashrcPath}"
+    fi
+}
+
+loadUserBashrc
 set -euo pipefail
 
 readonly DEFAULT_SOURCE_RELEASE_DIR="/home/xiang/MusicMapMaker-Next/release"
