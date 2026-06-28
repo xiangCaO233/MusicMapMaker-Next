@@ -177,6 +177,8 @@ export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 export VCPKG_ROOT="${VCPKG_ROOT:-${WINDOWS_CROSS_ROOT}/vcpkg}"
 export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
+"${scriptDir}/list-msvc-toolchain-layout.sh" --max-entries "${MMM_MSVC_LAYOUT_MAX_ENTRIES:-120}"
+
 requireCommand cmake
 requireAnyCommand clang-cl clang-cl-22 clang-cl-21 clang-cl-20 clang-cl
 requireAnyCommand lld-link lld-link-22 lld-link-21 lld-link-20 lld-link
