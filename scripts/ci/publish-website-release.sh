@@ -339,9 +339,9 @@ find_file_by_name() {
 }
 
 clean_website_generated_paths() {
-    if [[ -n "$(git -C "${website_dir}" status --porcelain -- release public)" ]]; then
+    if [[ -n "$(git -C "${website_dir}" status --porcelain -- release public src/config/app.ts)" ]]; then
         log "清理上次失败发布遗留的生成物"
-        run git -C "${website_dir}" restore --staged --worktree -- release public
+        run git -C "${website_dir}" restore --staged --worktree -- release public src/config/app.ts
         run git -C "${website_dir}" clean -fd -- release public
     fi
 }
@@ -423,7 +423,7 @@ build_and_deploy_website() {
 commit_and_push_website() {
     local release_version="$1"
     log "提交并推送网站仓库变更"
-    run git -C "${website_dir}" add release public
+    run git -C "${website_dir}" add release public src/config/app.ts
 
     if git -C "${website_dir}" diff --cached --quiet; then
         log "网站仓库没有需要提交的变更"
