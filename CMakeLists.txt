@@ -28,7 +28,7 @@ if(DEFINED CMAKE_CONFIGURATION_TYPES)
   unset(_MMM_RELWITHDBGINFO_INDEX)
 endif()
 
-set(APPVER "0.4.7")
+set(APPVER "0.4.9")
 
 if(APPLE)
   project(
