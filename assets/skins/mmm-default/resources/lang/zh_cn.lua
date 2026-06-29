@@ -64,6 +64,7 @@ return {
 	["ui.help.release_date"] = "发布日期",
 	["ui.help.changelog"] = "更新内容",
 	["ui.help.build_type"] = "构建配置",
+	["ui.help.compiler"] = "构建编译器",
 	["ui.help.platform"] = "运行平台",
 	["ui.help.download"] = "立即更新",
 	["ui.help.download_and_install"] = "下载并安装",
