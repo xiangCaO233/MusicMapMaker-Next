@@ -65,6 +65,7 @@ return {
 	["ui.help.release_date"] = "Release Date",
 	["ui.help.changelog"] = "Changelog",
 	["ui.help.build_type"] = "Build Type",
+	["ui.help.compiler"] = "Compiler",
 	["ui.help.platform"] = "Platform",
 	["ui.help.download"] = "Update Now",
 	["ui.help.download_and_install"] = "Download & Install",

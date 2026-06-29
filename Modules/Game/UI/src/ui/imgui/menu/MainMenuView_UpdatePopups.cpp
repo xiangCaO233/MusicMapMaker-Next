@@ -10,9 +10,34 @@
 #include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <string>
 
 namespace MMM::UI
 {
+
+namespace
+{
+
+/// @brief 生成关于窗口显示的构建编译器信息。
+/// @return CMake 配置阶段识别到的 C++ 编译器 ID 与版本号。
+std::string buildCompilerText()
+{
+    std::string       compilerText = MMM_BUILD_COMPILER_ID;
+    const std::string versionText  = MMM_BUILD_COMPILER_VERSION;
+
+    if ( compilerText.empty() ) {
+        compilerText = "Unknown";
+    }
+
+    if ( !versionText.empty() ) {
+        compilerText += " ";
+        compilerText += versionText;
+    }
+
+    return compilerText;
+}
+
+}  // namespace
 
 /// @brief 启动一次非静默更新检查并打开检查中弹窗。
 void MainMenuView::startUpdateCheck()
@@ -151,6 +176,8 @@ void MainMenuView::renderAboutPopup()
                 ImGui::PopStyleColor();
             };
 
+            const std::string compilerText = buildCompilerText();
+
             AddRow(TR("ui.help.current_version").data(), MMM_VERSION_STRING);
 
 #if BUILD_TYPE_DEBUG
@@ -158,6 +185,7 @@ void MainMenuView::renderAboutPopup()
 #else
             AddRow(TR("ui.help.build_type").data(), "Release");
 #endif
+            AddRow(TR("ui.help.compiler").data(), compilerText.c_str());
             AddRow(TR("ui.help.platform").data(), MMM_PLATFORM);
 
             ImGui::EndTable();
