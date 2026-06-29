@@ -111,7 +111,7 @@ require_command python3
 [[ -d "${source_release_dir}" ]] || fail "CI 产物目录不存在: ${source_release_dir}"
 [[ -d "${website_dir}/.git" ]] || fail "网站仓库目录不存在或不是 Git 仓库: ${website_dir}"
 
-read_release_version() {
+read_app_version_from_text() {
     local app_version
     app_version=""
     while IFS= read -r line; do
@@ -119,7 +119,13 @@ read_release_version() {
             app_version="${BASH_REMATCH[1]}"
             break
         fi
-    done < "${source_root}/CMakeLists.txt"
+    done
+    printf '%s\n' "${app_version}"
+}
+
+read_release_version() {
+    local app_version
+    app_version="$(read_app_version_from_text < "${source_root}/CMakeLists.txt")"
     [[ -n "${app_version}" ]] || fail "无法从 CMakeLists.txt 读取 APPVER"
 
     if [[ "${app_version}" == v* ]]; then
@@ -130,27 +136,31 @@ read_release_version() {
 }
 
 find_version_update_commit() {
-    local head_commit
+    local release_version="$1"
+    local normalized_release_version
+    local commit_version
     local version_update_commits
+    local commit_index
 
     if [[ -n "${MMM_VERSION_UPDATE_COMMIT:-}" ]]; then
         git -C "${source_root}" rev-parse --verify "${MMM_VERSION_UPDATE_COMMIT}^{commit}"
         return
     fi
 
-    head_commit="$(git -C "${source_root}" rev-parse HEAD)"
+    normalized_release_version="${release_version#v}"
     mapfile -t version_update_commits < <(git -C "${source_root}" log --format=%H -G 'APPVER' -- CMakeLists.txt)
-    if (( ${#version_update_commits[@]} == 0 )); then
-        return
-    fi
-    if [[ "${version_update_commits[0]}" == "${head_commit}" ]]; then
-        if (( ${#version_update_commits[@]} < 2 )); then
+    for commit_index in "${!version_update_commits[@]}"; do
+        commit_version="$(read_app_version_from_text < <(git -C "${source_root}" show "${version_update_commits[commit_index]}:CMakeLists.txt"))"
+        if [[ "${commit_version#v}" == "${normalized_release_version}" ]]; then
+            if (( commit_index + 1 >= ${#version_update_commits[@]} )); then
+                return
+            fi
+            printf '%s\n' "${version_update_commits[commit_index + 1]}"
             return
         fi
-        printf '%s\n' "${version_update_commits[1]}"
-        return
-    fi
-    printf '%s\n' "${version_update_commits[0]}"
+    done
+
+    printf '%s\n' "${version_update_commits[0]:-}"
 }
 
 commit_range_for_base() {
@@ -467,7 +477,7 @@ main() {
     fi
     website_dir="$(cd -- "${website_dir}" && pwd)"
     release_version="$(read_release_version)"
-    version_update_commit="$(find_version_update_commit)"
+    version_update_commit="$(find_version_update_commit "${release_version}")"
     [[ -n "${version_update_commit}" ]] || fail "无法定位上一次版本更新提交"
     commit_range="$(commit_range_for_base "${version_update_commit}")"
     commit_count="$(git -C "${source_root}" rev-list --count "${commit_range}")"
