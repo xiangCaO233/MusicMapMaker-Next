@@ -4,6 +4,15 @@ on:
   push:
     branches: [ci]
   workflow_dispatch:
+    inputs:
+      job:
+        description: "手动执行的任务"
+        required: true
+        type: choice
+        default: website-release
+        options:
+          - website-release
+          - ci-build
 
 concurrency:
   group: self-hosted-ci-${{ github.ref }}
@@ -11,6 +20,7 @@ concurrency:
 
 jobs:
   mmm-debian-ci:
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.job == 'ci-build')
     runs-on: [self-hosted, Linux, X64, debian]
 
     defaults:
@@ -32,27 +42,27 @@ jobs:
       - name: ci->Windows MSVC Clang Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/msvc-clang-build.sh --fresh
+          bash scripts/ci/cross/msvc-clang-build.sh
 
       - name: ci->Windows MinGW GCC Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/mingw-gcc-build.sh --fresh
+          bash scripts/ci/cross/mingw-gcc-build.sh
 
       - name: ci->Windows MinGW Clang Cross Build
         run: |
           set -euo pipefail
-          bash scripts/ci/cross/mingw-clang-build.sh --fresh
+          bash scripts/ci/cross/mingw-clang-build.sh
 
       - name: ci->Linux GCC 14 Native Build
         run: |
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler gcc14 --fresh
+          bash scripts/ci/linux-build.sh --compiler gcc14
 
       - name: ci->Linux Clang 19 Native Build
         run: |
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler clang19 --fresh
+          bash scripts/ci/linux-build.sh --compiler clang19
 
       - name: ci->Package Release
         run: |
@@ -89,3 +99,31 @@ jobs:
 
           cp -a assets release/assets
           find release -maxdepth 2 -type f | sort
+
+  mmm-website-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'website-release'
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Sync Repository
+        run: |
+          set -euo pipefail
+          git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
+          git clean -fd -- scripts/ci .github/workflows
+          git checkout --force -B ci origin/ci
+          git reset --hard origin/ci
+
+      - name: ci->Publish Website Release
+        run: |
+          if [[ -f "${HOME}/.bashrc" ]]; then
+            source "${HOME}/.bashrc" || true
+          fi
+          set -euo pipefail
+          bash scripts/ci/publish-website-release.sh \
+            --source-release /home/xiang/MusicMapMaker-Next/release \
+            --website-dir /home/xiang/mmm-website
