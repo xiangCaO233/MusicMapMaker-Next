@@ -45,35 +45,65 @@ if(NOT MSVC OR CMAKE_CROSSCOMPILING)
 endif()
 
 if(MSVC AND NOT CMAKE_CROSSCOMPILING)
-  # Windows MSVC 静态构建 msvcbuild.bat static 会生成 lua51.lib (静态库)
+  # Windows MSVC 下不传 static 参数会生成 lua51.dll 与导入库，传 static 才生成静态库。
   set(LJ_LIB_NAME "lua51.lib")
   set(LJ_OUTPUT_LIB "${LJ_BUILD_SRC}/${LJ_LIB_NAME}")
+  set(LJ_OUTPUT_DLL "")
+  set(LJ_OUTPUT_PDB "")
+  # shared 依赖偏好构建 lua51.dll，运行库必须跟随主项目使用 /MD(d)。
+  set(LJ_USE_DLL_CRT OFF)
+  if(PROJECT_LINKAGE STREQUAL "shared"
+     OR CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+    set(LJ_USE_DLL_CRT ON)
+  endif()
+  if(PROJECT_LINKAGE STREQUAL "shared")
+    set(LJ_OUTPUT_DLL "${LJ_BUILD_SRC}/lua51.dll")
+    set(LJ_OUTPUT_PDB "${LJ_BUILD_SRC}/lua51.pdb")
+  endif()
   if(CMAKE_BUILD_TYPE MATCHES Debug)
-    set(LJ_MSVC_RUNTIME_FLAG "/MTd")
+    if(LJ_USE_DLL_CRT)
+      set(LJ_MSVC_RUNTIME_FLAG "/MDd")
+    else()
+      set(LJ_MSVC_RUNTIME_FLAG "/MTd")
+    endif()
   else()
-    set(LJ_MSVC_RUNTIME_FLAG "/MT")
+    if(LJ_USE_DLL_CRT)
+      set(LJ_MSVC_RUNTIME_FLAG "/MD")
+    else()
+      set(LJ_MSVC_RUNTIME_FLAG "/MT")
+    endif()
+  endif()
+  set(LJ_MSVC_COMPILE_FLAGS "${LJ_MSVC_RUNTIME_FLAG}")
+  set(LJ_MSVC_LINK_FLAGS "")
+  if(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    # LuaJIT 的 bat 构建不会继承 CMake RelWithDebInfo 调试参数，这里显式保留 PDB。
+    string(APPEND LJ_MSVC_COMPILE_FLAGS " /Zi")
+    set(LJ_MSVC_LINK_FLAGS "/DEBUG /OPT:REF /OPT:ICF")
   endif()
 
   set(BUILD_CMD "msvcbuild.bat")
   if(CMAKE_BUILD_TYPE MATCHES Debug)
     list(APPEND BUILD_CMD debug)
   endif()
-  list(APPEND BUILD_CMD static) # 强制静态
+  if(NOT PROJECT_LINKAGE STREQUAL "shared")
+    list(APPEND BUILD_CMD static)
+  endif()
 
   add_custom_command(
     OUTPUT "${LJ_BUILD_STAMP}"
-    BYPRODUCTS "${LJ_OUTPUT_LIB}"
+    BYPRODUCTS "${LJ_OUTPUT_LIB}" ${LJ_OUTPUT_DLL} ${LJ_OUTPUT_PDB}
     COMMAND ${LJ_SYNC_SOURCE_COMMAND}
     COMMAND
       ${CMAKE_COMMAND} -DLUAJIT_MSVCBUILD=${LJ_BUILD_SRC}/msvcbuild.bat
-      -DLUAJIT_STATIC_RUNTIME_FLAG=${LJ_MSVC_RUNTIME_FLAG} -P
+      "-DLUAJIT_MSVC_COMPILE_FLAGS=${LJ_MSVC_COMPILE_FLAGS}"
+      "-DLUAJIT_MSVC_LINK_FLAGS=${LJ_MSVC_LINK_FLAGS}" -P
       ${CMAKE_CURRENT_LIST_DIR}/PatchLuaJITMsvcRuntime.cmake
       # MSVC 下需要在 src 目录运行 bat
     COMMAND ${BUILD_CMD}
     COMMAND ${CMAKE_COMMAND} -E touch "${LJ_BUILD_STAMP}"
     DEPENDS ${LJ_SOURCE_INPUTS}
     WORKING_DIRECTORY "${LJ_BUILD_SRC}"
-    COMMENT "Building LuaJIT Statically (MSVC)..."
+    COMMENT "Building LuaJIT (MSVC)..."
     VERBATIM)
 
 elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
@@ -145,12 +175,27 @@ endif()
 add_custom_target(luajit_build DEPENDS "${LJ_BUILD_STAMP}")
 
 # 定义为静态导入库
-add_library(luajit STATIC IMPORTED GLOBAL)
+set(LUAJIT_IMPORTED_TYPE STATIC)
+if(MSVC AND PROJECT_LINKAGE STREQUAL "shared" AND NOT CMAKE_CROSSCOMPILING)
+  set(LUAJIT_IMPORTED_TYPE SHARED)
+endif()
+add_library(luajit ${LUAJIT_IMPORTED_TYPE} IMPORTED GLOBAL)
 add_library(luajit::luajit ALIAS luajit)
 
 add_dependencies(luajit luajit_build)
 
 set_target_properties(luajit PROPERTIES IMPORTED_LOCATION "${LJ_OUTPUT_LIB}")
+if(MSVC AND PROJECT_LINKAGE STREQUAL "shared" AND NOT CMAKE_CROSSCOMPILING)
+  set_target_properties(luajit PROPERTIES IMPORTED_IMPLIB "${LJ_OUTPUT_LIB}"
+                                          IMPORTED_LOCATION "${LJ_OUTPUT_DLL}")
+  add_custom_command(
+    TARGET luajit_build
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${LJ_OUTPUT_DLL}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/lua51.dll"
+    COMMENT "Copying LuaJIT DLL to runtime output directory"
+    VERBATIM)
+endif()
 
 # 导出头文件路径
 target_include_directories(luajit INTERFACE "${LJ_BUILD_SRC}")

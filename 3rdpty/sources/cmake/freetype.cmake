@@ -32,8 +32,14 @@ set(SKIP_INSTALL_LIBRARIES
 
 # 如果是 Windows，构建静态库以避免 DLL 地狱
 if(WIN32)
+  # Windows 下同样跟随 PROJECT_LINKAGE，shared 预编译包必须产出真正的 FreeType DLL。
+  if(PROJECT_LINKAGE STREQUAL "shared")
+    set(_freetype_build_shared ON)
+  else()
+    set(_freetype_build_shared OFF)
+  endif()
   set(BUILD_SHARED_LIBS
-      OFF
+      ${_freetype_build_shared}
       CACHE BOOL "" FORCE)
 endif()
 

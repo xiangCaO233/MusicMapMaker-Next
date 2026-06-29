@@ -13,8 +13,9 @@ if(NOT TARGET nfd::nfd)
   set(_nfd_default_library "")
   foreach(_nfd_config IN LISTS _nfd_configs)
     string(TOUPPER "${_nfd_config}" _nfd_config_upper)
-    prebuilt_find_library(_nfd_library nativefiledialog-extended
-                          "${_nfd_config}" nfd nativefiledialog-extended)
+    prebuilt_find_library(
+      _nfd_library nativefiledialog-extended "${_nfd_config}" nfd
+      nativefiledialog-extended)
     list(APPEND _nfd_imported_configs "${_nfd_config_upper}")
     set_target_properties(
       nfd::nfd PROPERTIES "IMPORTED_LOCATION_${_nfd_config_upper}"

@@ -370,18 +370,69 @@ function(prebuilt_find_symbol_files out_var package config)
       PARENT_SCOPE)
 endfunction()
 
+# 记录 shared 预编译包的运行时 DLL，供可执行文件构建后统一复制。
+function(prebuilt_record_runtime_file runtime_file)
+  if(NOT PROJECT_LINKAGE STREQUAL "shared" OR NOT WIN32 OR runtime_file
+                                                    STREQUAL "")
+    return()
+  endif()
+
+  get_property(_runtime_files GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES)
+  list(APPEND _runtime_files "${runtime_file}")
+  list(REMOVE_DUPLICATES _runtime_files)
+  set_property(GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES
+                              "${_runtime_files}")
+endfunction()
+
+# 读取当前配置已解析出的 shared 运行时 DLL 清单。
+function(prebuilt_get_runtime_files out_var)
+  get_property(_runtime_files GLOBAL PROPERTY PROJECT_PREBUILT_RUNTIME_FILES)
+  if(_runtime_files)
+    list(REMOVE_DUPLICATES _runtime_files)
+  endif()
+  set(${out_var}
+      ${_runtime_files}
+      PARENT_SCOPE)
+endfunction()
+
+# 将预编译 DLL 复制到指定可执行目标旁边，保证 bin 目录可直接运行和诊断依赖。
+function(prebuilt_copy_runtime_files target_name)
+  if(NOT PROJECT_LINKAGE STREQUAL "shared" OR NOT WIN32)
+    return()
+  endif()
+
+  prebuilt_get_runtime_files(_runtime_files)
+  if(NOT _runtime_files)
+    return()
+  endif()
+
+  add_custom_command(
+    TARGET ${target_name}
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${_runtime_files}
+            "$<TARGET_FILE_DIR:${target_name}>"
+    COMMENT "Copying prebuilt runtime DLLs for ${target_name}")
+endfunction()
+
 # 在指定包和配置目录中查找库文件。
 function(prebuilt_find_library out_var package config)
+  # shared 布局必须提供 DLL 运行时文件，缺失时配置阶段直接报错。
+  if(ARGN)
+    set(_prebuilt_library_names ${ARGN})
+  else()
+    message(FATAL_ERROR "prebuilt_find_library 缺少库候选名：${package}")
+  endif()
+
   prebuilt_library_dir(_library_dir "${package}" "${config}")
   find_library(
     _prebuilt_library
-    NAMES ${ARGN}
+    NAMES ${_prebuilt_library_names}
     PATHS "${_library_dir}"
     NO_DEFAULT_PATH NO_CACHE)
   if(NOT _prebuilt_library)
     message(
       FATAL_ERROR
-        "缺少 ${package} 的 ${config} 预编译库。搜索目录：${_library_dir}；候选名：${ARGN}")
+        "缺少 ${package} 的 ${config} 预编译库。搜索目录：${_library_dir}；候选名：${_prebuilt_library_names}")
   endif()
   set(${out_var}
       "${_prebuilt_library}"
@@ -390,7 +441,7 @@ function(prebuilt_find_library out_var package config)
   if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
     prebuilt_runtime_dir(_runtime_dir "${package}" "${config}")
     set(_runtime_names "")
-    foreach(_library_name IN LISTS ARGN)
+    foreach(_library_name IN LISTS _prebuilt_library_names)
       list(APPEND _runtime_names
            "${_library_name}${CMAKE_SHARED_LIBRARY_SUFFIX}")
     endforeach()
@@ -400,6 +451,20 @@ function(prebuilt_find_library out_var package config)
       PATHS "${_runtime_dir}"
       NO_DEFAULT_PATH NO_CACHE)
     if(NOT _prebuilt_runtime)
+      set(_runtime_glob_matches "")
+      foreach(_runtime_name IN LISTS _runtime_names)
+        get_filename_component(_runtime_stem "${_runtime_name}" NAME_WE)
+        file(GLOB _runtime_versioned_matches CONFIGURE_DEPENDS
+             "${_runtime_dir}/${_runtime_stem}-*${CMAKE_SHARED_LIBRARY_SUFFIX}"
+        )
+        list(APPEND _runtime_glob_matches ${_runtime_versioned_matches})
+      endforeach()
+      if(_runtime_glob_matches)
+        list(SORT _runtime_glob_matches)
+        list(GET _runtime_glob_matches 0 _prebuilt_runtime)
+      endif()
+    endif()
+    if(NOT _prebuilt_runtime)
       message(
         FATAL_ERROR
           "缺少 ${package} 的 ${config} 动态运行时文件。搜索目录：${_runtime_dir}；候选名：${_runtime_names}"
@@ -408,6 +473,7 @@ function(prebuilt_find_library out_var package config)
     set(${out_var}_RUNTIME
         "${_prebuilt_runtime}"
         PARENT_SCOPE)
+    prebuilt_record_runtime_file("${_prebuilt_runtime}")
   endif()
 
   if(MSVC)

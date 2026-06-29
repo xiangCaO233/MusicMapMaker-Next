@@ -13,8 +13,13 @@ if(NOT TARGET luajit::luajit)
   set(_luajit_default_library "")
   foreach(_luajit_config IN LISTS _luajit_configs)
     string(TOUPPER "${_luajit_config}" _luajit_config_upper)
-    prebuilt_find_library(_luajit_library luajit "${_luajit_config}" luajit
-                          libluajit lua51)
+    if(PROJECT_LINKAGE STREQUAL "shared")
+      set(_luajit_library_names lua51 luajit libluajit)
+    else()
+      set(_luajit_library_names luajit libluajit lua51)
+    endif()
+    prebuilt_find_library(_luajit_library luajit "${_luajit_config}"
+                          ${_luajit_library_names})
     list(APPEND _luajit_imported_configs "${_luajit_config_upper}")
     set_target_properties(
       luajit::luajit PROPERTIES "IMPORTED_LOCATION_${_luajit_config_upper}"

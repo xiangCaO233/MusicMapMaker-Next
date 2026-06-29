@@ -1,8 +1,10 @@
 # 导入 FFmpeg 预编译组件库，并聚合为源码构建同名目标：3rd_ffmpeg。
 include("${CMAKE_CURRENT_LIST_DIR}/PrebuiltLayout.cmake")
 prebuilt_init("${CMAKE_CURRENT_LIST_DIR}/../../prebuilts")
-find_package(lame REQUIRED)
-find_package(zlib REQUIRED)
+if(PROJECT_LINKAGE STREQUAL "static")
+  find_package(lame REQUIRED)
+  find_package(zlib REQUIRED)
+endif()
 prebuilt_include_dir(_ffmpeg_include_dir ffmpeg)
 
 foreach(_ffmpeg_component avformat avcodec swscale swresample avutil)
@@ -48,9 +50,10 @@ if(NOT TARGET 3rd_ffmpeg)
               FFmpeg::avcodec
               FFmpeg::swscale
               FFmpeg::swresample
-              FFmpeg::avutil
-              3rd_lame
-              3rd_zlib)
+              FFmpeg::avutil)
+  if(PROJECT_LINKAGE STREQUAL "static")
+    target_link_libraries(3rd_ffmpeg INTERFACE 3rd_lame 3rd_zlib)
+  endif()
   if(WIN32)
     target_link_libraries(
       3rd_ffmpeg

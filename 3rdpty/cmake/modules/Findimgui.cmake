@@ -38,6 +38,12 @@ if(NOT TARGET imgui-static)
     imgui-static PROPERTIES IMPORTED_CONFIGURATIONS "${_imgui_imported_configs}"
                             IMPORTED_LOCATION "${_imgui_default_library}")
   target_link_libraries(imgui-static INTERFACE 3rd_glfw Vulkan::Vulkan)
+  if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
+    # shared ImGui 预编译包需要让使用方按 dllimport 访问数据符号。
+    target_compile_definitions(
+      imgui-static INTERFACE "IMGUI_API=__declspec(dllimport)"
+                             "IMGUI_IMPL_API=__declspec(dllimport)")
+  endif()
 endif()
 
 if(NOT TARGET 3rd_imgui)

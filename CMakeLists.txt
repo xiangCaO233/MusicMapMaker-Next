@@ -132,6 +132,11 @@ function(mmm_set_test_target MODULE_NAME TARGET_NAME)
       ${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${CONFIG_NAME_UPPER}
                                 "${TEST_RUNTIME_DIR}")
   endforeach()
+
+  # shared 预编译依赖需要复制到测试可执行文件旁边，否则 Windows 动态加载无法从独立测试目录解析 DLL。
+  if(COMMAND prebuilt_copy_runtime_files)
+    prebuilt_copy_runtime_files(${TARGET_NAME})
+  endif()
 endfunction()
 
 function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
@@ -150,6 +155,12 @@ set(NFD_OVERRIDE_RECENT_WITH_DEFAULT
 find_package(Vulkan REQUIRED)
 
 add_subdirectory("3rdpty")
+
+# PROJECT_LINKAGE 只描述第三方依赖链接偏好；业务模块维持静态库组织，避免未指定类型的 add_library 被 shared 偏好改写。
+set(BUILD_SHARED_LIBS
+    OFF
+    CACHE BOOL "Build project modules as static libraries after third-party setup."
+          FORCE)
 
 # PGO 只作用于本项目业务模块，预编译库和用于生成预编译库的第三方源码都不插桩。
 include("pgo")

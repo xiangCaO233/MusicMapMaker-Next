@@ -13,8 +13,13 @@ if(NOT TARGET SDL3-static)
   set(_sdl_default_library "")
   foreach(_sdl_config IN LISTS _sdl_configs)
     string(TOUPPER "${_sdl_config}" _sdl_config_upper)
-    prebuilt_find_library(_sdl_library sdl "${_sdl_config}" SDL3-static SDL3
-                          libSDL3)
+    if(PROJECT_LINKAGE STREQUAL "shared")
+      set(_sdl_library_names SDL3 libSDL3 SDL3-static)
+    else()
+      set(_sdl_library_names SDL3-static SDL3 libSDL3)
+    endif()
+    prebuilt_find_library(_sdl_library sdl "${_sdl_config}"
+                          ${_sdl_library_names})
     list(APPEND _sdl_imported_configs "${_sdl_config_upper}")
     set_target_properties(
       SDL3-static PROPERTIES "IMPORTED_LOCATION_${_sdl_config_upper}"

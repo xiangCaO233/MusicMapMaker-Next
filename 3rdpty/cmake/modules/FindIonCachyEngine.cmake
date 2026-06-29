@@ -20,14 +20,18 @@ if(NOT TARGET ICE::IonCachyEngine)
   set(_ice_default_library "")
   foreach(_ice_config IN LISTS _ice_configs)
     string(TOUPPER "${_ice_config}" _ice_config_upper)
+    if(PROJECT_LINKAGE STREQUAL "shared")
+      set(_ice_library_names IonCachyEngine libIonCachyEngine
+                             IonCachyEngine-static libIonCachyEngine-static)
+    else()
+      set(_ice_library_names IonCachyEngine-static IonCachyEngine
+                             libIonCachyEngine-static libIonCachyEngine)
+    endif()
     prebuilt_find_library(
       _ice_library
       IonCachyEngine
       "${_ice_config}"
-      IonCachyEngine-static
-      IonCachyEngine
-      libIonCachyEngine-static
-      libIonCachyEngine)
+      ${_ice_library_names})
     list(APPEND _ice_imported_configs "${_ice_config_upper}")
     set_target_properties(
       ICE::IonCachyEngine PROPERTIES "IMPORTED_LOCATION_${_ice_config_upper}"
@@ -48,6 +52,11 @@ if(NOT TARGET ICE::IonCachyEngine)
   target_link_libraries(
     ICE::IonCachyEngine INTERFACE 3rd_sdl3 fmt::fmt spdlog::spdlog
                                   OpenAL::OpenAL 3rd_ffmpeg 3rd_rubberband)
+  if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
+    # shared ICE 预编译包需要让使用方按 dllimport 访问公共数据符号。
+    target_compile_definitions(ICE::IonCachyEngine
+                               INTERFACE ICE_SHARED_LIBRARY)
+  endif()
 endif()
 
 set(IonCachyEngine_FOUND TRUE)

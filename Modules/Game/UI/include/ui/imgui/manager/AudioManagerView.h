@@ -67,17 +67,8 @@ private:
         /// @brief 当前项目音效音轨数量。
         size_t effectTrackCount{ 0 };
 
-        /// @brief 全局设置段落是否展开。
+        /// @brief 当前是否展开全局设置段落。
         bool showGlobalSettings{ true };
-
-        /// @brief 常驻音效段落是否展开。
-        bool showPermanentSFX{ true };
-
-        /// @brief 主音轨段落是否展开。
-        bool showMainTracks{ true };
-
-        /// @brief 项目音效段落是否展开。
-        bool showProjectSFX{ true };
     };
 
     /// @brief 音频管理器布局测量缓存。
@@ -185,10 +176,77 @@ private:
         ImVec2 minContentSize{ 0.0f, 0.0f };
     };
 
+    /// @brief 音频资源表格排序字段。
+    enum class AudioTableSortKey {
+        /// @brief 按音频资源 ID 排序。
+        Id,
+
+        /// @brief 按音频资源类型排序。
+        Type,
+
+        /// @brief 按音频资源路径排序。
+        Path
+    };
+
+    /// @brief 音频资源表格排序方向。
+    enum class SortDirection {
+        /// @brief 升序。
+        Ascending,
+
+        /// @brief 降序。
+        Descending
+    };
+
+    /// @brief 音频资源表格行来源。
+    enum class AudioTableRowKind {
+        /// @brief 皮肤常驻音效。
+        PermanentSfx,
+
+        /// @brief 项目主音轨。
+        MainTrack,
+
+        /// @brief 项目音效音轨。
+        ProjectSfx
+    };
+
+    /// @brief 音频资源表格缓存行。
+    struct AudioTableRow {
+        /// @brief 音频资源 ID。
+        std::string m_id;
+
+        /// @brief 音频资源路径。
+        std::string m_path;
+
+        /// @brief 音频资源类型。
+        AudioTrackType m_type{ AudioTrackType::Effect };
+
+        /// @brief 表格行来源。
+        AudioTableRowKind m_kind{ AudioTableRowKind::ProjectSfx };
+    };
+
+    /// @brief 当前是否展开全局设置段落。
     bool m_showGlobalSettings = true;
-    bool m_showPermanentSFX   = true;
-    bool m_showMainTracks     = true;
-    bool m_showProjectSFX     = true;
+
+    /// @brief 当前音频表格排序字段。
+    AudioTableSortKey m_audioTableSortKey{ AudioTableSortKey::Id };
+
+    /// @brief 当前音频表格排序方向。
+    SortDirection m_audioTableSortDirection{ SortDirection::Ascending };
+
+    /// @brief 音频资源表格行缓存。
+    std::vector<AudioTableRow> m_audioTableRows;
+
+    /// @brief 上次构造音频表格缓存时的皮肤常驻音效数量。
+    size_t m_cachedPermanentSfxCount{ 0 };
+
+    /// @brief 上次构造音频表格缓存时的项目音频数量。
+    size_t m_cachedProjectAudioCount{ 0 };
+
+    /// @brief 上次构造音频表格缓存时的项目指针，仅用于识别项目切换。
+    const void* m_cachedAudioTableProject{ nullptr };
+
+    /// @brief 音频表格排序缓存是否需要重建。
+    bool m_audioTableSortCacheDirty{ true };
 
     /// @brief 当前后端缓存的输出设备列表。
     std::vector<Audio::AudioOutputDevice> m_cachedOutputDevices;

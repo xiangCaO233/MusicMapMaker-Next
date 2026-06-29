@@ -34,7 +34,9 @@ if(NOT TARGET plutovg::plutovg)
     plutovg::plutovg
     PROPERTIES IMPORTED_CONFIGURATIONS "${_plutovg_imported_configs}"
                IMPORTED_LOCATION "${_plutovg_default_library}")
-  target_compile_definitions(plutovg::plutovg INTERFACE PLUTOVG_BUILD_STATIC)
+  if(PROJECT_LINKAGE STREQUAL "static")
+    target_compile_definitions(plutovg::plutovg INTERFACE PLUTOVG_BUILD_STATIC)
+  endif()
 endif()
 
 if(NOT TARGET lunasvg::lunasvg)
@@ -67,8 +69,10 @@ if(NOT TARGET lunasvg::lunasvg)
     lunasvg::lunasvg
     PROPERTIES IMPORTED_CONFIGURATIONS "${_lunasvg_imported_configs}"
                IMPORTED_LOCATION "${_lunasvg_default_library}")
-  target_compile_definitions(lunasvg::lunasvg INTERFACE LUNASVG_BUILD_STATIC
-                                                        PLUTOVG_BUILD_STATIC)
+  if(PROJECT_LINKAGE STREQUAL "static")
+    target_compile_definitions(lunasvg::lunasvg INTERFACE LUNASVG_BUILD_STATIC
+                                                          PLUTOVG_BUILD_STATIC)
+  endif()
   target_link_libraries(lunasvg::lunasvg INTERFACE plutovg::plutovg
                                                    freetype::freetype)
 endif()

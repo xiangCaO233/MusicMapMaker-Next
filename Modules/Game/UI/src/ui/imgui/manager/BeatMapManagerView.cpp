@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
@@ -13,9 +14,100 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <numeric>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 谱面表格列编号。
+enum BeatmapTableColumn : int {
+    /// @brief 名称列。
+    BeatmapTableColumnName = 0,
+
+    /// @brief 类型列。
+    BeatmapTableColumnType = 1,
+
+    /// @brief 文件路径列。
+    BeatmapTableColumnPath = 2
+};
+
+/// @brief 将 ASCII 字符串转换为小写，用于类型归一化和排序。
+/// @param value 输入字符串。
+/// @return 小写后的字符串。
+std::string toLowerAscii(std::string value)
+{
+    std::transform(
+        value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            if ( ch >= 'A' && ch <= 'Z' ) {
+                return static_cast<char>(ch - 'A' + 'a');
+            }
+            return static_cast<char>(ch);
+        });
+    return value;
+}
+
+/// @brief 根据谱面路径推导显示类型。
+/// @param filePath 项目内谱面相对路径。
+/// @return 面向谱面管理器的短类型文本。
+std::string beatmapTypeFromPath(const std::string& filePath)
+{
+    auto extension = toLowerAscii(
+        Config::pathToUtf8(Config::utf8ToPath(filePath).extension()));
+    if ( extension == ".osu" ) {
+        return "osu";
+    }
+    if ( extension == ".mc" ) {
+        return "malody";
+    }
+    if ( extension == ".imd" ) {
+        return "rm";
+    }
+    if ( extension == ".mmm" ) {
+        return "mmm";
+    }
+    if ( extension.size() > 1 && extension.front() == '.' ) {
+        extension.erase(extension.begin());
+    }
+    return extension.empty() ? TR("ui.file_manager.value_unknown").data()
+                             : extension;
+}
+
+/// @brief 绘制可裁剪、超宽自动滚动的表格单元格文本。
+/// @param text 需要绘制的文本。
+/// @param cursorPos 单元格起始屏幕坐标。
+/// @param width 单元格可用宽度。
+/// @param height 行高。
+void renderScrollingTableText(const std::string& text, ImVec2 cursorPos,
+                              float width, float height)
+{
+    const float  textWidth = std::max(0.0f, width);
+    const ImVec2 textSize  = ImGui::CalcTextSize(text.c_str());
+    const float  textH     = ImGui::GetFontSize();
+    const float  offsetY   = (height - textH) * 0.5f;
+
+    float offset = 0.0f;
+    if ( textSize.x > textWidth ) {
+        const float scrollRange = textSize.x - textWidth + 40.0f;
+        const float time        = static_cast<float>(ImGui::GetTime());
+        float       t           = sinf(time * 0.5f - 1.57f) * 0.5f + 0.5f;
+        t                       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+        offset                  = t * scrollRange;
+    }
+
+    const ImVec2 textStartPos = cursorPos;
+    ImGui::PushClipRect(
+        textStartPos,
+        ImVec2(textStartPos.x + textWidth, textStartPos.y + height),
+        true);
+    ImGui::GetWindowDrawList()->AddText(
+        ImVec2(textStartPos.x - offset, textStartPos.y + offsetY),
+        ImGui::GetColorU32(ImGuiCol_Text),
+        text.c_str());
+    ImGui::PopClipRect();
+}
+
+}  // namespace
 
 /// @brief 获取谱面管理器中不可再换行控件所需的最小内容尺寸。
 /// @warning UI 热路径：子视图可见时每帧查询；仅保留轻量文本测量。
@@ -102,41 +194,183 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                   headerBox);
 
     if ( m_showBeatmapList ) {
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(project->m_beatmaps.size()), rowHeight);
-        while ( clipper.Step() ) {
-            for ( int row = clipper.DisplayStart; row < clipper.DisplayEnd;
-                  ++row ) {
-                const auto& beatmap = project->m_beatmaps[row];
-                ImGui::Indent();
-                std::string labelStr =
-                    beatmap.m_name + " - " + beatmap.m_filePath;
-                float availW = ImGui::GetContentRegionAvail().x;
+        const ImGuiTableFlags tableFlags =
+            ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
+            ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
+            ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
+            ImGuiTableFlags_SizingStretchProp;
 
-                Utils::renderScrollingSelectable(
-                    beatmap.m_filePath, labelStr, availW, rowHeight, [&]() {
+        if ( ImGui::BeginTable("BeatmapManagerTable",
+                               3,
+                               tableFlags,
+                               ImGui::GetContentRegionAvail()) ) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn(
+                TR("ui.beatmap_manager.column_name").data(),
+                ImGuiTableColumnFlags_DefaultSort |
+                    ImGuiTableColumnFlags_WidthStretch |
+                    ImGuiTableColumnFlags_PreferSortAscending);
+            ImGui::TableSetupColumn(
+                TR("ui.beatmap_manager.column_type").data(),
+                ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortAscending,
+                std::max(76.0f, 86.0f * ImGui::GetFontSize() / 17.0f));
+            ImGui::TableSetupColumn(
+                TR("ui.beatmap_manager.column_path").data(),
+                ImGuiTableColumnFlags_WidthStretch |
+                    ImGuiTableColumnFlags_PreferSortAscending);
+            ImGui::TableHeadersRow();
+
+            ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
+            if ( sortSpecs && sortSpecs->SpecsCount > 0 &&
+                 sortSpecs->SpecsDirty ) {
+                const ImGuiTableColumnSortSpecs& primarySpec =
+                    sortSpecs->Specs[0];
+                BeatmapSortKey newSortKey = BeatmapSortKey::Name;
+                if ( primarySpec.ColumnIndex == BeatmapTableColumnType ) {
+                    newSortKey = BeatmapSortKey::Type;
+                } else if ( primarySpec.ColumnIndex ==
+                            BeatmapTableColumnPath ) {
+                    newSortKey = BeatmapSortKey::Path;
+                }
+
+                const SortDirection newDirection =
+                    primarySpec.SortDirection == ImGuiSortDirection_Descending
+                        ? SortDirection::Descending
+                        : SortDirection::Ascending;
+                if ( newSortKey != m_beatmapSortKey ||
+                     newDirection != m_beatmapSortDirection ) {
+                    m_beatmapSortKey        = newSortKey;
+                    m_beatmapSortDirection  = newDirection;
+                    m_beatmapSortCacheDirty = true;
+                }
+                sortSpecs->SpecsDirty = false;
+            }
+
+            auto rebuildSortCache = [&]() {
+                const auto& beatmaps = project->m_beatmaps;
+                m_sortedBeatmapIndices.resize(beatmaps.size());
+                std::iota(m_sortedBeatmapIndices.begin(),
+                          m_sortedBeatmapIndices.end(),
+                          size_t{ 0 });
+                std::stable_sort(
+                    m_sortedBeatmapIndices.begin(),
+                    m_sortedBeatmapIndices.end(),
+                    [&](size_t lhsIndex, size_t rhsIndex) {
+                        const auto& lhs           = beatmaps[lhsIndex];
+                        const auto& rhs           = beatmaps[rhsIndex];
+                        int         compareResult = 0;
+                        switch ( m_beatmapSortKey ) {
+                        case BeatmapSortKey::Name:
+                            compareResult =
+                                toLowerAscii(lhs.m_name)
+                                    .compare(toLowerAscii(rhs.m_name));
+                            break;
+                        case BeatmapSortKey::Type:
+                            compareResult = beatmapTypeFromPath(lhs.m_filePath)
+                                                .compare(beatmapTypeFromPath(
+                                                    rhs.m_filePath));
+                            break;
+                        case BeatmapSortKey::Path:
+                            compareResult =
+                                toLowerAscii(lhs.m_filePath)
+                                    .compare(toLowerAscii(rhs.m_filePath));
+                            break;
+                        }
+
+                        if ( compareResult == 0 ) {
+                            compareResult =
+                                toLowerAscii(lhs.m_filePath)
+                                    .compare(toLowerAscii(rhs.m_filePath));
+                        }
+                        if ( m_beatmapSortDirection ==
+                             SortDirection::Descending ) {
+                            compareResult = -compareResult;
+                        }
+                        return compareResult < 0;
+                    });
+                m_cachedBeatmapCount    = beatmaps.size();
+                m_cachedBeatmapProject  = project;
+                m_beatmapSortCacheDirty = false;
+            };
+
+            if ( m_beatmapSortCacheDirty ||
+                 m_cachedBeatmapCount != project->m_beatmaps.size() ||
+                 m_cachedBeatmapProject != project ) {
+                rebuildSortCache();
+            }
+
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(m_sortedBeatmapIndices.size()),
+                          rowHeight);
+            while ( clipper.Step() ) {
+                for ( int row = clipper.DisplayStart; row < clipper.DisplayEnd;
+                      ++row ) {
+                    const size_t beatmapIndex =
+                        m_sortedBeatmapIndices[static_cast<size_t>(row)];
+                    if ( beatmapIndex >= project->m_beatmaps.size() ) {
+                        continue;
+                    }
+
+                    const auto& beatmap = project->m_beatmaps[beatmapIndex];
+                    const auto  typeText =
+                        beatmapTypeFromPath(beatmap.m_filePath);
+
+                    ImGui::TableNextRow(ImGuiTableRowFlags_None, rowHeight);
+                    ImGui::TableNextColumn();
+
+                    const ImVec2 nameCellPos = ImGui::GetCursorScreenPos();
+                    const float  nameCellWidth =
+                        ImGui::GetContentRegionAvail().x;
+                    const std::string rowId =
+                        "##BeatmapRow_" + beatmap.m_filePath;
+                    const bool clicked =
+                        ImGui::Selectable(rowId.c_str(),
+                                          false,
+                                          ImGuiSelectableFlags_SpanAllColumns,
+                                          { 0.0f, rowHeight });
+                    const bool hovered = ImGui::IsItemHovered();
+                    if ( clicked ) {
                         XINFO("Request to load beatmap: {}", beatmap.m_name);
                         auto fullPath = project->m_projectRoot /
                                         Config::utf8ToPath(beatmap.m_filePath);
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
                             MMM::BeatMap::loadFromFile(fullPath));
                         engine.createSession(loadedBeatmap, beatmap.m_name);
-                    });
+                    }
 
-                bool hovered  = ImGui::IsItemHovered();
-                bool rclicked = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-                if ( hovered && rclicked ) {
-                    m_manageBeatmapPath = beatmap.m_filePath;
-                    m_openManageModal   = true;
-                }
+                    if ( hovered &&
+                         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+                        m_manageBeatmapPath = beatmap.m_filePath;
+                        m_openManageModal   = true;
+                    }
+                    if ( hovered ) {
+                        ImGui::SetTooltip("File: %s\nType: %s\nTrack: %s",
+                                          beatmap.m_filePath.c_str(),
+                                          typeText.c_str(),
+                                          beatmap.m_audioTrackId.c_str());
+                    }
 
-                if ( hovered ) {
-                    ImGui::SetTooltip("File: %s\nTrack: %s",
-                                      beatmap.m_filePath.c_str(),
-                                      beatmap.m_audioTrackId.c_str());
+                    const std::string nameText =
+                        std::string(ICON_MMM_FILE) + "  " + beatmap.m_name;
+                    renderScrollingTableText(
+                        nameText, nameCellPos, nameCellWidth, rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(typeText,
+                                             ImGui::GetCursorScreenPos(),
+                                             ImGui::GetContentRegionAvail().x,
+                                             rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(beatmap.m_filePath,
+                                             ImGui::GetCursorScreenPos(),
+                                             ImGui::GetContentRegionAvail().x,
+                                             rowHeight);
                 }
-                ImGui::Unindent();
             }
+            ImGui::EndTable();
         }
     }
 

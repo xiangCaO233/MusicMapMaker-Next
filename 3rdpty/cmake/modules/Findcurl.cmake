@@ -36,26 +36,13 @@ endif()
 if(NOT TARGET 3rd_curl)
   add_library(3rd_curl INTERFACE)
   target_link_libraries(3rd_curl INTERFACE libcurl_static)
-  target_compile_definitions(3rd_curl INTERFACE CURL_STATICLIB)
+  if(PROJECT_LINKAGE STREQUAL "static")
+    target_compile_definitions(3rd_curl INTERFACE CURL_STATICLIB)
+  endif()
   if(WIN32)
+    # 当前预编译 curl 静态包禁用 IDN2/PSL/SSH/HTTP2/压缩后端；
+    # 这里只保留 Windows 系统库，避免把 MSYS2 附加库塞进全静态 exe。
     target_link_libraries(3rd_curl INTERFACE ws2_32 crypt32 bcrypt iphlpapi)
-    if(MINGW)
-      # MSYS2 预编译 curl 可能启用了 IDN2，需要额外链接 libidn2、libunistring 和 iconv；远端 Debian
-      # GCC14 预编译 curl 使用 Schannel 且未启用 IDN2，因此这里按工具链实际可见库决定是否追加。
-      find_library(_curl_idn2_library NAMES idn2 libidn2)
-      find_library(_curl_unistring_library NAMES unistring libunistring)
-      find_library(_curl_iconv_library NAMES iconv libiconv)
-      if(_curl_idn2_library
-         AND _curl_unistring_library
-         AND _curl_iconv_library)
-        target_link_libraries(
-          3rd_curl
-          INTERFACE "${_curl_idn2_library}" "${_curl_unistring_library}"
-                    "${_curl_iconv_library}")
-      else()
-        message(STATUS "libcurl IDN2 额外依赖不可见，按未启用 IDN2 的预编译 curl 处理。")
-      endif()
-    endif()
   elseif(APPLE)
     target_link_libraries(
       3rd_curl INTERFACE "-framework CoreFoundation"

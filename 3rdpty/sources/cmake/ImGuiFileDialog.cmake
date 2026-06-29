@@ -1,4 +1,9 @@
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ImGuiFileDialog SYSTEM)
+# 该库没有稳定导出宏，MSVC shared 预编译包使用自动导出生成 DLL 导入库。
+if(PROJECT_LINKAGE STREQUAL "shared" AND WIN32)
+  set_target_properties(ImGuiFileDialog
+                        PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
 target_link_libraries(ImGuiFileDialog PUBLIC 3rd_imgui)
 
 # 国际化翻译 (由于该库使用宏定义 UI 文本，我们通过编译定义进行注入)

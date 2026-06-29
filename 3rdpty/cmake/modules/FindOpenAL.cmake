@@ -43,7 +43,9 @@ if(NOT TARGET OpenAL::OpenAL)
   if(PROJECT_LINKAGE STREQUAL "static")
     # OpenAL 头文件默认按 DLL 导入声明符号；静态预编译库必须显式关闭 dllimport，否则 MinGW 会查找 __imp_al*
     # 导入符号。
-    target_compile_definitions(OpenAL::OpenAL INTERFACE AL_LIBTYPE_STATIC)
+    target_compile_definitions(OpenAL::OpenAL
+                               INTERFACE AL_LIBTYPE_STATIC
+                                         ICE_OPENALSOFT_STATIC_LINKAGE)
   endif()
 
   if(WIN32)
