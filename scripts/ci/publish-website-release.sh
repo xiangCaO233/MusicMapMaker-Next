@@ -371,6 +371,7 @@ copy_release_to_website() {
     run rm -rf "${website_release_dir}"
     run mkdir -p "${website_release_dir}"
     run cp -a "${source_release_dir}/." "${website_release_dir}/"
+    run find "${website_release_dir}" -type f -name "*.dbg" -delete
     create_assets_zip "${website_release_dir}/assets" "${website_release_dir}/assets.zip"
 }
 
