@@ -340,28 +340,52 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                     ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
                     ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
                     ImGuiTableFlags_SizingStretchProp;
+                const auto& tableStyle = ImGui::GetStyle();
+                const float fontScale  = ImGui::GetFontSize() / 17.0f;
+                const float sizeColumnWidth =
+                    std::max(96.0f, 104.0f * fontScale);
+                const float modifiedColumnPreferredWidth =
+                    std::max(168.0f,
+                             ImGui::CalcTextSize("0000/00/00 00:00").x +
+                                 tableStyle.CellPadding.x * 4.0f +
+                                 ImGui::GetFrameHeight());
+                const float nameColumnMinWidth =
+                    std::max(148.0f,
+                             ImGui::CalcTextSize(
+                                 TR("ui.file_manager.column_name").data())
+                                     .x +
+                                 tableStyle.CellPadding.x * 4.0f +
+                                 ImGui::GetFrameHeight());
+                const float tableReserveWidth =
+                    tableStyle.ScrollbarSize + tableStyle.CellPadding.x * 2.0f;
+                const float nameColumnWidth = std::max(
+                    nameColumnMinWidth,
+                    r.width - sizeColumnWidth - modifiedColumnPreferredWidth -
+                        tableReserveWidth);
 
-                if ( ImGui::BeginTable("FileTreeTable",
+                if ( ImGui::BeginTable("FileTreeTableV2",
                                        3,
                                        tableFlags,
                                        { r.width, r.height }) ) {
                     ImGui::TableSetupScrollFreeze(0, 1);
+                    // 前置数据列使用固定宽度，尾部修改时间列使用 Stretch
+                    // 承接剩余空间，避免首列拖拽后在表格右侧留下死空白。
                     ImGui::TableSetupColumn(
                         TR("ui.file_manager.column_name").data(),
                         ImGuiTableColumnFlags_DefaultSort |
-                            ImGuiTableColumnFlags_WidthStretch |
-                            ImGuiTableColumnFlags_PreferSortAscending);
+                            ImGuiTableColumnFlags_WidthFixed |
+                            ImGuiTableColumnFlags_PreferSortAscending,
+                        nameColumnWidth);
                     ImGui::TableSetupColumn(
                         TR("ui.file_manager.column_size").data(),
                         ImGuiTableColumnFlags_WidthFixed |
                             ImGuiTableColumnFlags_PreferSortAscending,
-                        std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
+                        sizeColumnWidth);
                     ImGui::TableSetupColumn(
                         TR("ui.file_manager.column_modified_time").data(),
-                        ImGuiTableColumnFlags_WidthFixed |
+                        ImGuiTableColumnFlags_WidthStretch |
                             ImGuiTableColumnFlags_PreferSortDescending,
-                        std::max(128.0f,
-                                 148.0f * ImGui::GetFontSize() / 17.0f));
+                        1.0f);
                     ImGui::TableHeadersRow();
                     syncFileTableSortSpecs();
 
