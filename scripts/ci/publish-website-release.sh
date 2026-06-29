@@ -130,12 +130,27 @@ read_release_version() {
 }
 
 find_version_update_commit() {
+    local head_commit
+    local version_update_commits
+
     if [[ -n "${MMM_VERSION_UPDATE_COMMIT:-}" ]]; then
         git -C "${source_root}" rev-parse --verify "${MMM_VERSION_UPDATE_COMMIT}^{commit}"
         return
     fi
 
-    git -C "${source_root}" log --max-count=1 --format=%H -G 'APPVER' -- CMakeLists.txt
+    head_commit="$(git -C "${source_root}" rev-parse HEAD)"
+    mapfile -t version_update_commits < <(git -C "${source_root}" log --format=%H -G 'APPVER' -- CMakeLists.txt)
+    if (( ${#version_update_commits[@]} == 0 )); then
+        return
+    fi
+    if [[ "${version_update_commits[0]}" == "${head_commit}" ]]; then
+        if (( ${#version_update_commits[@]} < 2 )); then
+            return
+        fi
+        printf '%s\n' "${version_update_commits[1]}"
+        return
+    fi
+    printf '%s\n' "${version_update_commits[0]}"
 }
 
 commit_range_for_base() {
