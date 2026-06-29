@@ -15,7 +15,7 @@ set -euo pipefail
 
 readonly DEFAULT_SOURCE_RELEASE_DIR="/home/xiang/MusicMapMaker-Next/release"
 readonly DEFAULT_WEBSITE_DIR="/home/xiang/mmm-website"
-readonly DEFAULT_DEEPSEEK_MODEL="deepseek-v4-pro"
+readonly DEFAULT_DEEPSEEK_MODEL="deepseek-v4-flash"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source_root="$(cd -- "${script_dir}/../.." && pwd)"
@@ -47,7 +47,7 @@ Options:
 
 Environment:
   DEEPSEEK_APIKEY / DEEPSEEK_API_KEY  DeepSeek API key，优先使用 DEEPSEEK_APIKEY。
-  DEEPSEEK_MODEL                     DeepSeek 模型名，默认 deepseek-v4-pro。
+  DEEPSEEK_MODEL                     DeepSeek 模型名，默认 deepseek-v4-flash。
   DEEPSEEK_MAX_TOKENS                changelog 最大输出 token，默认 12000。
   MMM_RELEASE_WINDOWS_DIR            网站公开 Windows 下载优先使用的产物目录，默认 windows-msvc-clang。
   MMM_RELEASE_LINUX_DIR              网站公开 Linux 下载优先使用的产物目录，默认 linux-gcc14。
