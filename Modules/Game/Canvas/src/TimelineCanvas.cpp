@@ -404,7 +404,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImVec2 canvasPos = ImGui::GetItemRectMin();
             ImVec2 mousePos  = ImGui::GetMousePos();
             bool   windowFocused =
-                ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
             const bool timelineMouseClicked =
                 isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
@@ -416,6 +416,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
             if ( windowFocused || timelineMouseClicked ) {
                 m_hasTimingInteractionFocus = true;
+                if ( timelineMouseClicked ) {
+                    ImGui::SetWindowFocus();
+                    m_shouldFocusNextFrame = true;
+                }
             } else if ( outsideMouseClicked && !toolbarFocusedOrHovered ) {
                 m_hasTimingInteractionFocus = false;
             }
