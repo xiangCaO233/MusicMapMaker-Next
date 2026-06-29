@@ -118,6 +118,45 @@ bool ensureExecutablePermission(const std::filesystem::path& path,
 
 }  // namespace
 
+UpdateChecker::~UpdateChecker()
+{
+    cancelAndJoinWorkers();
+}
+
+void UpdateChecker::cancelAndJoinWorkers()
+{
+    m_cancelRequested.store(true, std::memory_order_relaxed);
+
+    if ( m_checkThread.joinable() ) {
+        m_checkThread.join();
+    }
+    if ( m_downloadThread.joinable() ) {
+        m_downloadThread.join();
+    }
+}
+
+bool UpdateChecker::isCancelRequested() const
+{
+    return m_cancelRequested.load(std::memory_order_relaxed);
+}
+
+bool UpdateChecker::waitRetryDelay(std::chrono::milliseconds duration) const
+{
+    constexpr auto step   = std::chrono::milliseconds(50);
+    auto           waited = std::chrono::milliseconds(0);
+    while ( waited < duration ) {
+        if ( isCancelRequested() ) {
+            return false;
+        }
+
+        const auto remaining = duration - waited;
+        const auto sleepTime = remaining < step ? remaining : step;
+        std::this_thread::sleep_for(sleepTime);
+        waited += sleepTime;
+    }
+    return !isCancelRequested();
+}
+
 UpdateInfo UpdateChecker::getInfo() const
 {
     std::lock_guard<std::mutex> lock(m_infoMutex);
@@ -257,10 +296,10 @@ bool UpdateChecker::applyUpdateAndRestart(const std::string& downloadedFilePath,
 #if defined(_WIN32)
     std::filesystem::path dlPath    = Config::utf8ToPath(downloadedFilePath);
     std::filesystem::path exePathFs = Config::utf8ToPath(exePath);
-    std::wstring          cmdLine   = L"\"" + updaterPath.wstring() + L"\" \"" +
+    std::wstring cmdLine = L"\"" + updaterPath.wstring() + L"\" \"" +
                            dlPath.wstring() + L"\" \"" + exePathFs.wstring() +
                            L"\" " + std::to_wstring(pid);
-    STARTUPINFOW        si{ sizeof(si) };
+    STARTUPINFOW si{ sizeof(si) };
     PROCESS_INFORMATION pi{};
     if ( CreateProcessW(nullptr,
                         cmdLine.data(),
@@ -328,17 +367,20 @@ bool UpdateChecker::checkStartupUpdateMarker()
 
 void UpdateChecker::checkAsync()
 {
+    cancelAndJoinWorkers();
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+
     {
         std::lock_guard<std::mutex> lock(m_infoMutex);
         m_info.status         = UpdateStatus::kChecking;
         m_info.currentVersion = MMM_VERSION_STRING;
     }
 
-    std::thread([this]() {
+    m_checkThread = std::thread([this]() {
         int maxRetries = 3;
         int retries    = 0;
 
-        while ( retries < maxRetries ) {
+        while ( retries < maxRetries && !isCancelRequested() ) {
             UpdateInfo result;
             result.status         = UpdateStatus::kChecking;
             result.currentVersion = MMM_VERSION_STRING;
@@ -366,12 +408,29 @@ void UpdateChecker::checkAsync()
             curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
             curl_easy_setopt(
                 curl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
+            curl_easy_setopt(
+                curl,
+                CURLOPT_XFERINFOFUNCTION,
+                +[](void* clientp,
+                    curl_off_t,
+                    curl_off_t,
+                    curl_off_t,
+                    curl_off_t) -> int {
+                    auto* checker = static_cast<UpdateChecker*>(clientp);
+                    return checker && checker->isCancelRequested() ? 1 : 0;
+                });
+            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, this);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
 
             CURLcode res = curl_easy_perform(curl);
 
             long httpCode = 0;
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
             curl_easy_cleanup(curl);
+
+            if ( isCancelRequested() ) {
+                return;
+            }
 
             if ( res != CURLE_OK || httpCode != 200 ) {
                 retries++;
@@ -383,7 +442,9 @@ void UpdateChecker::checkAsync()
                         httpCode,
                         retries,
                         maxRetries);
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    if ( !waitRetryDelay(std::chrono::seconds(1)) ) {
+                        return;
+                    }
                     continue;
                 } else {
                     result.status = UpdateStatus::kError;
@@ -463,11 +524,14 @@ void UpdateChecker::checkAsync()
             }
             return;
         }
-    }).detach();
+    });
 }
 
 void UpdateChecker::downloadAsync()
 {
+    cancelAndJoinWorkers();
+    m_cancelRequested.store(false, std::memory_order_relaxed);
+
     UpdateInfo initialInfo;
     {
         std::lock_guard<std::mutex> lock(m_infoMutex);
@@ -481,8 +545,11 @@ void UpdateChecker::downloadAsync()
         m_info.status = UpdateStatus::kDownloading;
     }
 
-    std::thread([this, initialInfo]() {
+    m_downloadThread = std::thread([this, initialInfo]() {
         auto fail = [this](const std::string& message) {
+            if ( isCancelRequested() ) {
+                return;
+            }
             {
                 std::lock_guard<std::mutex> lock(m_infoMutex);
                 m_info.status       = UpdateStatus::kError;
@@ -536,6 +603,19 @@ void UpdateChecker::downloadAsync()
                 uCurl, CURLOPT_USERAGENT, "MusicMapMaker-UpdateChecker/1.0");
             curl_easy_setopt(uCurl, CURLOPT_CONNECTTIMEOUT, 30L);
             curl_easy_setopt(uCurl, CURLOPT_TIMEOUT, 60L);
+            curl_easy_setopt(
+                uCurl,
+                CURLOPT_XFERINFOFUNCTION,
+                +[](void* clientp,
+                    curl_off_t,
+                    curl_off_t,
+                    curl_off_t,
+                    curl_off_t) -> int {
+                    auto* checker = static_cast<UpdateChecker*>(clientp);
+                    return checker && checker->isCancelRequested() ? 1 : 0;
+                });
+            curl_easy_setopt(uCurl, CURLOPT_XFERINFODATA, this);
+            curl_easy_setopt(uCurl, CURLOPT_NOPROGRESS, 0L);
 
             CURLcode uRes = curl_easy_perform(uCurl);
 
@@ -544,6 +624,9 @@ void UpdateChecker::downloadAsync()
 
             if ( uRes != CURLE_OK ) {
                 std::filesystem::remove(updaterTempPath);
+                if ( isCancelRequested() ) {
+                    return;
+                }
                 fail(fmt::format("Updater download error: {}",
                                  curl_easy_strerror(uRes)));
                 return;
@@ -599,6 +682,9 @@ void UpdateChecker::downloadAsync()
                 curl_off_t /*ultotal*/,
                 curl_off_t /*ulnow*/) -> int {
                 auto* p = static_cast<UpdateChecker*>(clientp);
+                if ( !p || p->isCancelRequested() ) {
+                    return 1;
+                }
                 if ( dltotal > 0 ) {
                     std::lock_guard<std::mutex> lock(p->m_infoMutex);
                     p->m_info.downloadedBytes  = dlnow;
@@ -623,6 +709,9 @@ void UpdateChecker::downloadAsync()
 
         if ( mRes != CURLE_OK ) {
             std::filesystem::remove(mainTempPath);
+            if ( isCancelRequested() ) {
+                return;
+            }
             fail(fmt::format("Download error: {}", curl_easy_strerror(mRes)));
             return;
         }
@@ -636,7 +725,7 @@ void UpdateChecker::downloadAsync()
         }
         XINFO("UpdateChecker: Download complete -> {}",
               Config::pathToUtf8(mainTempPath));
-    }).detach();
+    });
 }
 
 }  // namespace MMM::Network

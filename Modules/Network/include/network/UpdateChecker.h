@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <thread>
 
 namespace MMM::Network
 {
@@ -43,8 +46,10 @@ struct UpdateInfo {
 class UpdateChecker
 {
 public:
-    UpdateChecker()  = default;
-    ~UpdateChecker() = default;
+    UpdateChecker() = default;
+
+    /// @brief 销毁更新检查器，取消并等待后台检查或下载线程退出。
+    ~UpdateChecker();
 
     /// @brief 异步检查更新（非阻塞，在单独线程中执行 HTTP 请求）
     void checkAsync();
@@ -93,6 +98,20 @@ public:
     static bool isNewer(const std::string& remote, const std::string& local);
 
 private:
+    /// @brief 请求后台任务取消并等待线程退出。
+    /// @warning 退出低频路径：析构或重新开始更新任务时调用，可能短暂等待
+    /// libcurl 响应取消回调。
+    void cancelAndJoinWorkers();
+
+    /// @brief 查询后台任务是否已收到取消请求。
+    /// @return 已请求取消时返回 true。
+    [[nodiscard]] bool isCancelRequested() const;
+
+    /// @brief 等待重试间隔，同时响应取消请求。
+    /// @param duration 需要等待的总时长。
+    /// @return 未被取消并完整等待时返回 true。
+    [[nodiscard]] bool waitRetryDelay(std::chrono::milliseconds duration) const;
+
     /// @brief 更新状态互斥锁，保护下载线程与 UI 线程之间的状态快照。
     /// @warning UI 每帧读、下载线程写；仅保护小型状态结构，不得在持锁时执行
     /// 网络、文件系统或进程启动操作。
@@ -101,6 +120,16 @@ private:
     /// @brief 当前更新状态快照。
     /// @warning 只能在持有 m_infoMutex 时读写。
     UpdateInfo m_info;
+
+    /// @brief 后台检查更新线程。
+    std::thread m_checkThread;
+
+    /// @brief 后台下载更新线程。
+    std::thread m_downloadThread;
+
+    /// @brief 后台任务取消标志。
+    /// @warning 后台线程与 UI 线程共享；只表示退出请求，使用 relaxed 即可。
+    std::atomic<bool> m_cancelRequested{ false };
 };
 
 }  // namespace MMM::Network
