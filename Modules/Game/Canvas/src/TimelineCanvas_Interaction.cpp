@@ -8,7 +8,9 @@
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/ClipboardBridge.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <fmt/format.h>
 #include <limits>
@@ -1119,7 +1121,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
     if ( m_isPopupOpen || m_isCreatePopupOpen || overMenuButton ||
-         io.WantTextInput || ImGui::IsAnyItemActive() ) {
+         io.WantTextInput || UI::ShortcutUtils::isShortcutRecordingActive() ) {
         if ( m_isTimingErasing &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
@@ -1128,10 +1130,39 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
 
-    const bool ctrl                        = io.KeyCtrl;
-    const bool shift                       = io.KeyShift;
-    const bool additiveSelection           = ctrl || shift;
-    auto       applyProfessionalCreateType = [&]() {
+    const bool  ctrl              = io.KeyCtrl;
+    const bool  shift             = io.KeyShift;
+    const bool  additiveSelection = ctrl || shift;
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    bool        handledKeyboardCommand = false;
+    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
+                  : Logic::LogicCommand{ Logic::CmdUndo{} }));
+        handledKeyboardCommand = true;
+    }
+    if ( ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdRedo{}));
+        handledKeyboardCommand = true;
+    }
+    const std::array<Logic::EditTool, 5> editableTools{
+        Logic::EditTool::Move,        Logic::EditTool::Marquee,
+        Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
+        Logic::EditTool::ColorEraser,
+    };
+    if ( !handledKeyboardCommand ) {
+        for ( Logic::EditTool tool : editableTools ) {
+            if ( UI::ShortcutUtils::isShortcutPressed(
+                     UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
+                handledKeyboardCommand = true;
+                break;
+            }
+        }
+    }
+    auto applyProfessionalCreateType = [&]() {
         if ( !professionalMode ) {
             return true;
         }
@@ -1148,7 +1179,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         return true;
     };
-    if ( ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
+    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             m_selectedTimingEntities.clear();
@@ -1158,20 +1189,26 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 }
             }
         }
+        handledKeyboardCommand = true;
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_C) && ctrl ) {
+    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_C) && ctrl ) {
         copySelectedTimingEvents(false);
+        handledKeyboardCommand = true;
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_X) && ctrl ) {
+    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_X) && ctrl ) {
         copySelectedTimingEvents(true);
+        handledKeyboardCommand = true;
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_V) && ctrl ) {
+    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_V) && ctrl ) {
         ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
         pasteTimingClipboard(std::max(0.0, m_currentSnapshot->currentTime));
+        handledKeyboardCommand = true;
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-         ImGui::IsKeyPressed(ImGuiKey_Backspace) ) {
+    if ( !handledKeyboardCommand &&
+         (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
+          ImGui::IsKeyPressed(ImGuiKey_Backspace)) ) {
         deleteSelectedTimingEvents();
+        handledKeyboardCommand = true;
     }
 
     if ( m_currentSnapshot->currentTool != Logic::EditTool::Draw ||

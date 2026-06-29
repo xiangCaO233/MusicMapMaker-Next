@@ -969,7 +969,10 @@ void UIManager::DispatchGlobalUIEvents()
     // ==========================================
     // 处理键盘事件 (每帧仅 1 次)
     // ==========================================
-    if ( io.WantCaptureKeyboard ) {
+    const bool hasFocusedWindow = !focusedWindowName.empty();
+    const bool shouldDispatchKeyboard =
+        io.WantCaptureKeyboard || (hasFocusedWindow && !io.WantTextInput);
+    if ( shouldDispatchKeyboard ) {
         // 全局遍历一次枚举 (约 100 次循环，对 CPU 来说仅需几纳秒，完全不拉胯)
         for ( int i = ImGuiKey_NamedKey_BEGIN; i < ImGuiKey_NamedKey_END;
               ++i ) {
