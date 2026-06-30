@@ -14,6 +14,7 @@ set_target_properties(
 # 发布类配置 Release / MinSizeRel / RelWithDebInfo 模式下剥离符号 对于 GCC 编译，需先通过
 # add_gcc_debug_extract 提取调试信息
 add_gcc_debug_extract(MusicMapMaker-Updater)
+add_mingw_clang_pdb(MusicMapMaker-Updater)
 add_strip_command_for_release(MusicMapMaker-Updater)
 
 if(WIN32)
