@@ -337,6 +337,11 @@ public:
     /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
     bool isActiveSessionSelectingMarquee() const;
 
+    /// @brief 判断当前活跃 Session 是否正在拖拽物件。
+    /// @warning UI 热路径：全局快捷键处理会在 ImGui 项激活时调用；会短暂锁定
+    /// SessionRegistry，只读取常量状态，且不复制 shared_ptr 所有权。
+    bool isActiveSessionDraggingNote() const;
+
     /**
      * @brief 获取逻辑线程实时刷新率 (UPS - Updates Per Second)
 

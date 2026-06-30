@@ -196,7 +196,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto it = std::upper_bound(ctx.bpmEvents.begin(),
+    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -888,10 +888,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1536,6 +1536,23 @@ bool EditorEngine::isActiveSessionSelectingMarquee() const
     return false;
 }
 
+/// @brief 判断当前活跃 Session 是否正在拖拽物件。
+/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
+/// 的常量状态，且不复制 shared_ptr 所有权。
+bool EditorEngine::isActiveSessionDraggingNote() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
+         sessions[idx].session ) {
+        const auto& ctx = sessions[idx].session->getContext();
+        return ctx.currentTool == EditTool::Move && ctx.isDragging &&
+               ctx.draggedEntity != entt::null;
+    }
+    return false;
+}
+
 /// @brief 设置同主音轨多画布时间同步开关。
 /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
@@ -1799,10 +1816,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey   = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);

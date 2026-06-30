@@ -144,10 +144,19 @@ void cancelActiveEditingState(SessionContext& ctx)
 {
     const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
+                              ctx.draggedEntity != entt::null &&
+                              ctx.noteRegistry.valid(ctx.draggedEntity) &&
+                              ctx.dragInitialNote.has_value();
 
-    ctx.isDragging  = false;
-    ctx.draggedPart = HoverPart::None;
-    ctx.dragCameraId.clear();
+    if ( keepMoveDrag ) {
+        // 物件拖拽允许在播放开始后继续定位，避免播放键打断尚未提交的移动。
+        ctx.isDragging = true;
+    } else {
+        ctx.isDragging  = false;
+        ctx.draggedPart = HoverPart::None;
+        ctx.dragCameraId.clear();
+    }
     if ( !keepMarquee ) {
         ctx.isSelecting             = false;
         ctx.hasMarqueeSelection     = false;

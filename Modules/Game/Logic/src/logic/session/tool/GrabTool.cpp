@@ -222,8 +222,21 @@ void clearDraggingFlags(SessionContext& ctx, const InitialStateMap& entities)
         }
     }
 }
+
+/// @brief 清除会话级拖拽手势状态。
+/// @param ctx 会话上下文。
+void clearSessionDragState(SessionContext& ctx)
+{
+    ctx.isDragging      = false;
+    ctx.draggedPart     = HoverPart::None;
+    ctx.draggedSubIndex = -1;
+    ctx.dragCameraId.clear();
+}
 }  // namespace
 
+/// @brief 开始物件移动或局部编辑拖拽。
+/// @param ctx 会话上下文。
+/// @param cmd 拖拽开始命令。
 void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 {
     m_isPolylineSubDrag        = false;
@@ -298,6 +311,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         // 兼容旧代码 (保留主拖拽物件的初始备份)
         if ( m_initialStates.count(cmd.entity) ) {
             ctx.dragInitialNote = m_initialStates[cmd.entity].note;
+            ctx.isDragging      = true;
         }
 
         ctx.dragRenderPinnedEntities.reserve(m_initialStates.size());
@@ -329,9 +343,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -538,12 +552,12 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
         if ( auto* trans = ctx.noteRegistry.try_get<TransformComponent>(
                  ctx.draggedEntity) ) {
-            float sTrackW  = (it->second.viewportWidth *
-                              (ctx.lastConfig.visual.trackLayout.right -
-                               ctx.lastConfig.visual.trackLayout.left)) /
-                             static_cast<float>(ctx.trackCount);
-            float lx       = it->second.viewportWidth *
-                             ctx.lastConfig.visual.trackLayout.left;
+            float sTrackW = (it->second.viewportWidth *
+                             (ctx.lastConfig.visual.trackLayout.right -
+                              ctx.lastConfig.visual.trackLayout.left)) /
+                            static_cast<float>(ctx.trackCount);
+            float lx = it->second.viewportWidth *
+                       ctx.lastConfig.visual.trackLayout.left;
             trans->m_pos.x = lx + note->m_trackIndex * sTrackW;
         }
     } else if ( isMultiDrag ) {
@@ -648,13 +662,18 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
 }
 
+/// @brief 结束物件移动或局部编辑拖拽并提交动作。
+/// @param ctx 会话上下文。
+/// @param cmd 拖拽结束命令。
 void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
+    (void)cmd;
     if ( ctx.draggedEntity == entt::null ) return;
 
     if ( m_isPolylineSubDrag && tryPolylineSubDragMerge(ctx) ) {
         m_isPolylineSubDrag        = false;
         m_hasLastAppliedDragTarget = false;
+        clearSessionDragState(ctx);
         ctx.dragRenderPinnedEntities.clear();
         return;
     }
@@ -683,6 +702,7 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 
     SessionUtils::rebuildHitEvents(ctx);
 
+    clearSessionDragState(ctx);
     ctx.draggedEntity          = entt::null;
     ctx.dragInitialNote        = std::nullopt;
     m_hasLastAppliedDragTarget = false;

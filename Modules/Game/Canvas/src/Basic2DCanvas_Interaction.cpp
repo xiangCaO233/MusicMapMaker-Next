@@ -1414,13 +1414,18 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            ImGui::GetIO().KeyShift,
                                            ImGui::GetIO().KeyCtrl }));
             }
-        } else if ( m_leftPressStartedOnEntity && !currentSnapshot->isPlaying &&
+        } else if ( m_leftPressStartedOnEntity &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            if ( shouldSendContinuousEditCommand(
-                     m_lastMoveUpdateCommand,
-                     { localMousePos.x, localMousePos.y },
-                     ImGui::GetIO().KeyCtrl,
-                     false) ) {
+            const bool playbackScrolled =
+                currentSnapshot->hasBeatmap && currentSnapshot->isPlaying;
+            const bool shouldUpdateMove =
+                shouldSendContinuousEditCommand(
+                    m_lastMoveUpdateCommand,
+                    { localMousePos.x, localMousePos.y },
+                    ImGui::GetIO().KeyCtrl,
+                    false) ||
+                playbackScrolled;
+            if ( shouldUpdateMove ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateDrag{ m_cameraId,
                                           localMousePos.x,
