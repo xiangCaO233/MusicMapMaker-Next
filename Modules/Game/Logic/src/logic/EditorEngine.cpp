@@ -1972,7 +1972,7 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     }
 }
 
-/// @brief 设置当前活跃 Session，并在同主音轨会话间保留播放倍率。
+/// @brief 设置当前活跃 Session，并按滚动暂停配置决定是否保留播放态。
 /// @param index 目标 Session 索引。
 /// @warning 低频视图切换路径：可能访问文件系统并重新加载主音轨。
 void EditorEngine::setActiveSessionIndex(int32_t index)
@@ -1981,10 +1981,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
-        // 1. 如果旧会话正在播放，先暂停它
+        // 1. 捕获旧会话播放态，并根据配置决定是否转移到新焦点。
         /// @brief 切换前的活跃 Session 索引快照。
-        int32_t currentActive     = m_sessionRegistry.activeIndex();
-        double  syncedCurrentTime = 0.0;
+        int32_t currentActive              = m_sessionRegistry.activeIndex();
+        double  syncedCurrentTime          = 0.0;
+        bool    shouldKeepPlaybackOnTarget = false;
         double  syncedPlaybackSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
         bool        shouldSyncTargetTime          = false;
@@ -1997,6 +1998,8 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 auto& oldCtx    = oldSession->getContextMutable();
                 oldMainAudioKey = sessions[currentActive].mainAudioSyncKey;
                 if ( oldCtx.isPlaying ) {
+                    shouldKeepPlaybackOnTarget =
+                        !m_editorConfig.settings.stopPlaybackOnScroll;
                     oldCtx.currentTime =
                         Audio::AudioManager::instance().getCurrentTime();
                     oldCtx.animateTime =
@@ -2034,8 +2037,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         // 2. 加载新激活会话的音频资源并同步播放进度
         auto& activeSession = sessions[index].session;
         if ( activeSession ) {
-            // 停止当前所有播放
-            Audio::AudioManager::instance().stop();
+            auto& audio = Audio::AudioManager::instance();
+            if ( !shouldKeepPlaybackOnTarget ) {
+                audio.stop();
+            }
 
             auto& ctx                   = activeSession->getContextMutable();
             ctx.isMainAudioSyncFollower = false;
@@ -2048,6 +2053,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                 auto*                 project = getCurrentProject();
                 std::filesystem::path audioPath =
                     SessionUtils::resolveMainAudioPath(ctx, project);
+                bool targetAudioReady = false;
 
                 if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
                           .empty() &&
@@ -2074,12 +2080,27 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                     }
                     const std::string audioPathUtf8 =
                         Config::pathToUtf8(audioPath);
-                    auto& audio = Audio::AudioManager::instance();
-                    if ( audio.loadBGM(audioPathUtf8, config) ) {
+                    if ( shouldKeepPlaybackOnTarget &&
+                         audio.getLoadedBGMPath() == audioPathUtf8 ) {
                         ctx.loadedMainAudioPath = audioPathUtf8;
                         ctx.mainAudioTotalTime  = audio.getTotalTime();
+                        if ( shouldSyncTargetPlaybackSpeed ) {
+                            audio.setPlaybackSpeed(syncedPlaybackSpeed);
+                        }
+                        targetAudioReady = true;
+                    } else if ( audio.loadBGM(audioPathUtf8, config) ) {
+                        ctx.loadedMainAudioPath = audioPathUtf8;
+                        ctx.mainAudioTotalTime  = audio.getTotalTime();
+                        targetAudioReady        = true;
                     }
                 }
+                if ( shouldKeepPlaybackOnTarget && !targetAudioReady ) {
+                    audio.stop();
+                    shouldKeepPlaybackOnTarget = false;
+                }
+            } else if ( shouldKeepPlaybackOnTarget ) {
+                audio.stop();
+                shouldKeepPlaybackOnTarget = false;
             }
 
             double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
@@ -2096,7 +2117,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
             ctx.animatedTimelineZoomTarget = ctx.animatedTimelineZoom;
             ctx.animatedTimelineZoomAnimationActive = false;
             ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
-            ctx.isPlaying   = false;
+            ctx.isPlaying   = shouldKeepPlaybackOnTarget;
             ctx.isMainAudioSyncFollower = false;
             ctx.lastAudioPos            = 0.0;
             ctx.lastAudioSysTime        = 0.0;
@@ -2111,7 +2132,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 
             // 同步进度到音频管理器。这里必须使用逻辑播放时间，
             // 动画时间包含视觉偏移，会导致切换画布时跳到错误位置。
-            Audio::AudioManager::instance().seek(ctx.currentTime);
+            audio.seek(ctx.currentTime);
+            if ( ctx.isPlaying ) {
+                audio.play();
+            }
 
             /// @brief 当前共享视口尺寸快照，用于刷新切换后的活跃 Session。
             auto sharedViewportSizes =
