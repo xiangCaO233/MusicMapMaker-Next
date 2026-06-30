@@ -144,10 +144,19 @@ void cancelActiveEditingState(SessionContext& ctx)
 {
     const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
+                              ctx.draggedEntity != entt::null &&
+                              ctx.noteRegistry.valid(ctx.draggedEntity) &&
+                              ctx.dragInitialNote.has_value();
 
-    ctx.isDragging  = false;
-    ctx.draggedPart = HoverPart::None;
-    ctx.dragCameraId.clear();
+    if ( keepMoveDrag ) {
+        // 物件拖拽允许在播放开始后继续定位，避免播放键打断尚未提交的移动。
+        ctx.isDragging = true;
+    } else {
+        ctx.isDragging  = false;
+        ctx.draggedPart = HoverPart::None;
+        ctx.dragCameraId.clear();
+    }
     if ( !keepMarquee ) {
         ctx.isSelecting             = false;
         ctx.hasMarqueeSelection     = false;
@@ -275,6 +284,11 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
                                                 audio.getPlaybackSpeed());
 }
 
+/// @brief 处理滚轮滚动时间线命令。
+/// @param cmd 滚轮滚动指令。
+/// @warning
+/// 逻辑输入路径：用户滚轮触发时调用；同主音轨后台跟随画布在暂停开关开启时
+/// 需要一并停止当前主音频，避免活动画布下一轮同步把目标时间复原。
 void PlaybackController::handleCommand(const CmdScroll& cmd)
 {
     float wheel = cmd.wheel;
@@ -284,8 +298,12 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         wheel = -wheel;
     }
 
-    if ( m_ctx.isPlaying && m_ctx.lastConfig.settings.stopPlaybackOnScroll ) {
-        m_ctx.isPlaying = false;
+    const bool shouldStopPlayback =
+        m_ctx.lastConfig.settings.stopPlaybackOnScroll &&
+        (m_ctx.isPlaying || m_ctx.isMainAudioSyncFollower);
+    if ( shouldStopPlayback ) {
+        m_ctx.isPlaying               = false;
+        m_ctx.isMainAudioSyncFollower = false;
         Audio::AudioManager::instance().pause();
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
         // 如果停止了播放，需要同步一下渲染状态 (虽然 seek

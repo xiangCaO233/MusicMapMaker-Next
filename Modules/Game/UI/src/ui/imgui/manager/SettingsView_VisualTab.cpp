@@ -9,7 +9,9 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <array>
 #include <cstdint>
+#include <spdlog/fmt/fmt.h>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -34,7 +36,7 @@ void SettingsView::drawVisualSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -542,30 +544,55 @@ void SettingsView::drawVisualSettings()
             Config::SpectrumDetailLevel::Extreme,
             Config::SpectrumDetailLevel::Experimental
         };
-        const std::array<const char*, 6> detailNames = {
-            TR_CACHE("ui.settings.visual.spectrum_detail.performance").data(),
-            TR_CACHE("ui.settings.visual.spectrum_detail.balanced").data(),
-            TR_CACHE("ui.settings.visual.spectrum_detail.fine").data(),
-            TR_CACHE("ui.settings.visual.spectrum_detail.ultra").data(),
-            TR_CACHE("ui.settings.visual.spectrum_detail.extreme").data(),
-            TR_CACHE("ui.settings.visual.spectrum_detail.experimental").data()
+        const std::array<std::string_view, 6> detailNames = {
+            TR_CACHE("ui.settings.visual.spectrum_detail.performance").view,
+            TR_CACHE("ui.settings.visual.spectrum_detail.balanced").view,
+            TR_CACHE("ui.settings.visual.spectrum_detail.fine").view,
+            TR_CACHE("ui.settings.visual.spectrum_detail.ultra").view,
+            TR_CACHE("ui.settings.visual.spectrum_detail.extreme").view,
+            TR_CACHE("ui.settings.visual.spectrum_detail.experimental").view
         };
         auto bytesToMiB = [](std::uint64_t bytes) {
             return static_cast<double>(bytes) / (1024.0 * 1024.0);
         };
-        auto makeDetailLabel = [&](Config::SpectrumDetailLevel level,
-                                   const char*                 name) {
+        auto makeDetailLabel = [bytesToMiB](Config::SpectrumDetailLevel level,
+                                            std::string_view            name) {
             const auto   profile   = Config::spectrumDetailProfile(level);
             const double stereoMiB = bytesToMiB(
                 Config::estimateSpectrumTextureBytesPerMinute(level, 2, 1));
             const double monoMiB = bytesToMiB(
                 Config::estimateSpectrumTextureBytesPerMinute(level, 1, 4));
-            return TR_FMT("ui.settings.visual.spectrum_detail.option",
-                          name,
-                          profile.segmentsPerSecond,
-                          profile.frequencyBins,
-                          stereoMiB,
-                          monoMiB);
+            const std::string_view segmentsText =
+                TR_CACHE(
+                    "ui.settings.visual.spectrum_detail.segments_per_second")
+                    .view;
+            const std::string_view binsText =
+                TR_CACHE("ui.settings.visual.spectrum_detail.bins").view;
+            const std::string_view memoryPrefixText =
+                TR_CACHE("ui.settings.visual.spectrum_detail.memory_prefix")
+                    .view;
+            const std::string_view minuteText =
+                TR_CACHE("ui.settings.visual.spectrum_detail.minute").view;
+            const std::string_view stereoText =
+                TR_CACHE("ui.settings.visual.spectrum_detail.stereo").view;
+            const std::string_view monoText =
+                TR_CACHE("ui.settings.visual.spectrum_detail.bpm_mono").view;
+            // 不把翻译文本作为 fmt 格式串解析，避免皮肤文案异常导致设置页崩溃。
+            return fmt::format(
+                "{} - {:.0f} {} x {} {}; {} {:.2f} MiB/{} ({}), {:.2f} "
+                "MiB/{} ({})",
+                name,
+                profile.segmentsPerSecond,
+                segmentsText,
+                profile.frequencyBins,
+                binsText,
+                memoryPrefixText,
+                stereoMiB,
+                minuteText,
+                stereoText,
+                monoMiB,
+                minuteText,
+                monoText);
         };
 
         addSettingItem(
@@ -573,7 +600,8 @@ void SettingsView::drawVisualSettings()
             rowIndex,
             TR_CACHE("ui.settings.visual.spectrum_detail").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
+            [&, detailLevels, detailNames, makeDetailLabel](Clay_BoundingBox r,
+                                                            bool) {
                 int currentIndex = 1;
                 for ( size_t i = 0; i < detailLevels.size(); ++i ) {
                     if ( visual.spectrumDetailLevel == detailLevels[i] ) {

@@ -384,7 +384,8 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         if ( !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
              ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
             auto& engine = Logic::EditorEngine::instance();
-            if ( engine.isActiveSessionSelectingMarquee() ) {
+            if ( engine.isActiveSessionSelectingMarquee() ||
+                 engine.isActiveSessionDraggingNote() ) {
                 const bool playing = engine.isPlaybackPlaying();
                 dispatchCommand(Logic::CmdSetPlayState{ !playing });
             }
@@ -909,11 +910,11 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool   canApply = !candidates.empty() &&
-                                    !m_dataSourceReplacePath.empty() &&
-                                    (m_replaceObjectsFromDataSource ||
-                                     m_replaceTimelinesFromDataSource ||
-                                     m_replaceMetadataFromDataSource);
+            const bool canApply = !candidates.empty() &&
+                                  !m_dataSourceReplacePath.empty() &&
+                                  (m_replaceObjectsFromDataSource ||
+                                   m_replaceTimelinesFromDataSource ||
+                                   m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
             if ( ImGui::Button("替换", buttonSize) ) {

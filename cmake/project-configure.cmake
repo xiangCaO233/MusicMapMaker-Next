@@ -26,8 +26,8 @@ else()
     message(STATUS "Compiler is Clang.")
 
     if(WIN32)
-      # clang-cl 使用 lld-link，可开启 PDB；MinGW GNU frontend 的链接器不接受 /debug，因此只保留普通
-      # DWARF/CodeView 调试信息。
+      # clang-cl 使用 lld-link，可开启 PDB；MinGW clang 使用 GNU frontend 调用 lld， PDB
+      # 输出路径需要在具体目标上通过 -Wl,-pdb=... 指定。
       add_compile_options("-gcodeview")
       if(CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
         add_link_options("-fuse-ld=lld")
@@ -166,6 +166,27 @@ macro(add_gcc_debug_extract TARGET_NAME)
         CONFIG="$<CONFIG>" -P "${CMAKE_SOURCE_DIR}/cmake/GccExtractDebug.cmake"
       COMMENT "GCC: extracting debug to .dbg for ${TARGET_NAME}")
     message(STATUS "Added GCC debug extraction for target '${TARGET_NAME}'.")
+  endif()
+endmacro()
+
+# ==============================================================================
+# MinGW clang PDB 生成宏：GNU frontend 不接受 /debug，但 lld 可通过 -pdb 输出 CodeView
+# 调试信息。路径必须跟随具体目标，否则多个 exe/dll 会争用同一个 PDB。
+# ==============================================================================
+macro(add_mingw_clang_pdb TARGET_NAME)
+  if(WIN32
+     AND MINGW
+     AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+     AND NOT MMM_MINGW_CLANG_USE_GCC_LINKER)
+    target_link_options(
+      ${TARGET_NAME}
+      PRIVATE
+      "$<$<CONFIG:Debug,RelWithDebInfo>:-Wl,-pdb=$<TARGET_FILE_DIR:${TARGET_NAME}>/$<TARGET_FILE_BASE_NAME:${TARGET_NAME}>.pdb>"
+    )
+    message(
+      STATUS
+        "Added MinGW clang PDB output for target '${TARGET_NAME}' in Debug/RelWithDebInfo."
+    )
   endif()
 endmacro()
 

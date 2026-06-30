@@ -189,11 +189,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
 
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
-        if ( engine.getActiveCameraId() != m_cameraId &&
-             isModifierWheelOverCurrentWindowContent() ) {
+        bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
+        if ( !isActiveCanvas && isModifierWheelOverCurrentWindowContent() ) {
             if ( myIndex != -1 ) {
                 engine.setActiveSessionIndex(myIndex);
                 m_shouldFocusNextFrame = true;
+                isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
                 XINFO(
                     "Basic2DCanvas: Modifier wheel switched active session to "
                     "index {} (cameraId={})",
@@ -202,7 +203,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             }
         }
 
-        if ( engine.getActiveCameraId() == m_cameraId ) {
+        if ( isActiveCanvas ) {
             m_interaction->update(sourceManager,
                                   m_currentSnapshot,
                                   m_logicalWidth,
@@ -220,6 +221,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                       -ImGui::GetIO().MouseWheel,
                                       ImGui::GetIO().KeyShift }));
             }
+            m_interaction->updateTransientUi();
         }
     }
 

@@ -447,7 +447,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -519,7 +519,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -631,6 +631,126 @@ void Basic2DCanvasInteraction::update(
         handleInteractions(currentSnapshot, targetWidth, targetHeight);
     }
 
+    updateTransientUi();
+}
+
+/// @brief 处理活动主画布上的 Ctrl/Alt 修饰键滚轮。
+bool Basic2DCanvasInteraction::handleModifierWheel(
+    const Logic::RenderSnapshot* currentSnapshot)
+{
+    if ( !currentSnapshot ) {
+        return false;
+    }
+
+    const auto& io    = ImGui::GetIO();
+    const float wheel = io.MouseWheel;
+    if ( std::abs(wheel) <= 0.01f || (!io.KeyCtrl && !io.KeyAlt) ) {
+        return false;
+    }
+
+    const bool isCtrlPressed  = io.KeyCtrl;
+    const bool isAltPressed   = io.KeyAlt;
+    const bool isShiftPressed = io.KeyShift;
+
+    if ( isCtrlPressed && isAltPressed ) {
+        constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
+        double                          currentSpeed =
+            Audio::AudioManager::instance().getPlaybackSpeed();
+
+        size_t bestIdx = 0;
+        double minDiff = std::abs(currentSpeed - presets[0]);
+        for ( size_t i = 1; i < presets.size(); ++i ) {
+            double diff = std::abs(currentSpeed - presets[i]);
+            if ( diff < minDiff ) {
+                minDiff = diff;
+                bestIdx = i;
+            }
+        }
+
+        if ( wheel > 0.01f ) {
+            if ( bestIdx < presets.size() - 1 ) bestIdx++;
+        } else if ( wheel < -0.01f ) {
+            if ( bestIdx > 0 ) bestIdx--;
+        }
+
+        double newSpeed = presets[bestIdx];
+        if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetPlaybackSpeed{ newSpeed }));
+            m_speedTooltipValue = static_cast<float>(newSpeed);
+            m_speedTooltipTimer = 2.0f;
+        }
+        return true;
+    }
+
+    if ( isCtrlPressed ) {
+        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+             currentSnapshot->isSelecting ) {
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
+        } else {
+            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            float step      = 0.1f;
+            if ( isShiftPressed )
+                step *= editorCfg.settings.scrollSpeedMultiplier;
+            editorCfg.visual.timelineZoom += wheel * step;
+            editorCfg.visual.timelineZoom =
+                std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
+            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        }
+        return true;
+    }
+
+    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+
+    static std::unordered_map<std::string, float> wheelAccumulator;
+    float& acc = wheelAccumulator[m_cameraId];
+    acc += wheel;
+
+    int steps = 0;
+    if ( acc >= 1.0f ) {
+        steps = static_cast<int>(acc);
+        acc -= static_cast<float>(steps);
+    } else if ( acc <= -1.0f ) {
+        steps = static_cast<int>(acc);
+        acc -= static_cast<float>(steps);
+    }
+
+    if ( steps != 0 ) {
+        if ( isShiftPressed ) {
+            constexpr std::array<int, 8> presets = { 1, 2, 3, 4, 6, 8, 12, 16 };
+            int current = editorCfg.settings.beatDivisor;
+
+            if ( steps > 0 ) {
+                for ( int i = 0; i < steps; ++i ) {
+                    auto it = std::upper_bound(
+                        presets.begin(), presets.end(), current);
+                    current = it != presets.end() ? *it : presets.back();
+                }
+            } else {
+                for ( int i = 0; i < -steps; ++i ) {
+                    auto it = std::lower_bound(
+                        presets.begin(), presets.end(), current);
+                    current = it != presets.begin() ? *std::prev(it)
+                                                    : presets.front();
+                }
+            }
+            editorCfg.settings.beatDivisor = current;
+        } else {
+            editorCfg.settings.beatDivisor += steps;
+        }
+        editorCfg.settings.beatDivisor =
+            std::clamp(editorCfg.settings.beatDivisor, 1, 64);
+        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+    }
+
+    return true;
+}
+
+/// @brief 推进并绘制交互层的临时 UI。
+/// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
+void Basic2DCanvasInteraction::updateTransientUi()
+{
     if ( m_speedTooltipTimer > 0.0f ) {
         m_speedTooltipTimer -= ImGui::GetIO().DeltaTime;
 
@@ -797,7 +917,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -867,8 +987,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto drawPoint = [currentSnapshot](
+                        const auto& inspect   = currentSnapshot->hoverInspect;
+                        auto        drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
@@ -1294,13 +1414,18 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            ImGui::GetIO().KeyShift,
                                            ImGui::GetIO().KeyCtrl }));
             }
-        } else if ( m_leftPressStartedOnEntity && !currentSnapshot->isPlaying &&
+        } else if ( m_leftPressStartedOnEntity &&
                     currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            if ( shouldSendContinuousEditCommand(
-                     m_lastMoveUpdateCommand,
-                     { localMousePos.x, localMousePos.y },
-                     ImGui::GetIO().KeyCtrl,
-                     false) ) {
+            const bool playbackScrolled =
+                currentSnapshot->hasBeatmap && currentSnapshot->isPlaying;
+            const bool shouldUpdateMove =
+                shouldSendContinuousEditCommand(
+                    m_lastMoveUpdateCommand,
+                    { localMousePos.x, localMousePos.y },
+                    ImGui::GetIO().KeyCtrl,
+                    false) ||
+                playbackScrolled;
+            if ( shouldUpdateMove ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateDrag{ m_cameraId,
                                           localMousePos.x,
@@ -1419,123 +1544,22 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     // --- 交互：鼠标滚轮控制时间跳转与属性修改 ---
-    float wheel = ImGui::GetIO().MouseWheel;
+    const auto& io    = ImGui::GetIO();
+    float       wheel = io.MouseWheel;
     if ( isHovered && std::abs(wheel) > 0.01f ) {
-        bool isCtrlPressed  = ImGui::GetIO().KeyCtrl;
-        bool isAltPressed   = ImGui::GetIO().KeyAlt;
-        bool isShiftPressed = ImGui::GetIO().KeyShift;
-
-        if ( isCtrlPressed && isAltPressed ) {
-            const std::vector<double> presets = { 0.25, 0.50, 0.75, 1.0 };
-            double                    currentSpeed =
-                Audio::AudioManager::instance().getPlaybackSpeed();
-
-            size_t bestIdx = 0;
-            double minDiff = std::abs(currentSpeed - presets[0]);
-            for ( size_t i = 1; i < presets.size(); ++i ) {
-                double diff = std::abs(currentSpeed - presets[i]);
-                if ( diff < minDiff ) {
-                    minDiff = diff;
-                    bestIdx = i;
-                }
-            }
-
-            if ( wheel > 0.01f ) {
-                if ( bestIdx < presets.size() - 1 ) bestIdx++;
-            } else if ( wheel < -0.01f ) {
-                if ( bestIdx > 0 ) bestIdx--;
-            }
-
-            double newSpeed = presets[bestIdx];
-            if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdSetPlaybackSpeed{ newSpeed }));
-                m_speedTooltipValue = static_cast<float>(newSpeed);
-                m_speedTooltipTimer = 2.0f;
-            }
-        } else if ( isCtrlPressed ) {
-            if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
-                 currentSnapshot->isSelecting ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
-            } else {
-                auto editorCfg =
-                    Logic::EditorEngine::instance().getEditorConfig();
-                float adjustedWheel = wheel;
-                float step          = 0.1f;
-                if ( isShiftPressed )
-                    step *= editorCfg.settings.scrollSpeedMultiplier;
-                editorCfg.visual.timelineZoom += adjustedWheel * step;
-                editorCfg.visual.timelineZoom =
-                    std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-                Logic::EditorEngine::instance().setEditorConfig(editorCfg);
-            }
-        } else if ( isAltPressed ) {
-            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
-            float adjustedWheel = wheel;
-
-            static std::unordered_map<std::string, float> wheelAccumulator;
-            float& acc = wheelAccumulator[m_cameraId];
-            acc += adjustedWheel;
-
-            int steps = 0;
-            if ( acc >= 1.0f ) {
-                steps = static_cast<int>(acc);
-                acc -= steps;
-            } else if ( acc <= -1.0f ) {
-                steps = static_cast<int>(acc);
-                acc -= steps;
-            }
-
-            if ( steps != 0 ) {
-                if ( isShiftPressed ) {
-                    const std::vector<int> presets = {
-                        1, 2, 3, 4, 6, 8, 12, 16
-                    };
-                    int current = editorCfg.settings.beatDivisor;
-
-                    if ( steps > 0 ) {
-                        for ( int i = 0; i < steps; ++i ) {
-                            auto it = std::upper_bound(
-                                presets.begin(), presets.end(), current);
-                            if ( it != presets.end() ) {
-                                current = *it;
-                            } else {
-                                current = presets.back();
-                            }
-                        }
-                    } else {
-                        for ( int i = 0; i < -steps; ++i ) {
-                            auto it = std::lower_bound(
-                                presets.begin(), presets.end(), current);
-                            if ( it != presets.begin() ) {
-                                current = *(--it);
-                            } else {
-                                current = presets.front();
-                            }
-                        }
-                    }
-                    editorCfg.settings.beatDivisor = current;
-                } else {
-                    editorCfg.settings.beatDivisor += steps;
-                }
-                editorCfg.settings.beatDivisor =
-                    std::clamp(editorCfg.settings.beatDivisor, 1, 64);
-                Logic::EditorEngine::instance().setEditorConfig(editorCfg);
-            }
-        } else if ( !isCtrlPressed && !isAltPressed ) {
+        if ( !handleModifierWheel(currentSnapshot) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
+                Logic::CmdScroll{ m_cameraId, -wheel, io.KeyShift }));
 
             if ( !currentSnapshot->isPlaying &&
                  currentSnapshot->currentTool == Logic::EditTool::Draw &&
-                 ImGui::IsMouseDown(0) ) {
+                 ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateBrush{ m_cameraId,
                                            localMousePos.x,
                                            localMousePos.y,
-                                           ImGui::GetIO().KeyShift,
-                                           ImGui::GetIO().KeyCtrl }));
+                                           io.KeyShift,
+                                           io.KeyCtrl }));
             }
         }
     }

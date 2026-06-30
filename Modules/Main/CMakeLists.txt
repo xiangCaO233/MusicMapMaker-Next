@@ -18,6 +18,7 @@ else()
   add_executable(MusicMapMaker-Next src/main.cpp)
 endif()
 add_gcc_debug_extract(MusicMapMaker-Next)
+add_mingw_clang_pdb(MusicMapMaker-Next)
 add_strip_command_for_release(MusicMapMaker-Next)
 
 # 构建完成后分析 Clang -ftime-trace 并打印编译耗时 Top 10

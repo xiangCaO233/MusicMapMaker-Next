@@ -2,11 +2,17 @@
 
 #include "config/Utf8Path.h"
 
+#include <spdlog/sinks/sink.h>
+
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <mutex>
 #include <string>
+#include <utility>
 
 #ifdef _WIN32
 #    ifndef WIN32_LEAN_AND_MEAN
@@ -179,9 +185,13 @@ inline bool is_path_sep(char c)
     return c == '/' || c == '\\';
 }
 
-// 结构为 .../Modules/ModuleName/src/...
-std::string_view ColorfulFormatter::extract_module_name(
-    const char* filename) const
+namespace
+{
+
+/// @brief 从源码文件路径中提取模块名，用于日志前缀。
+/// @param filename spdlog 记录的源码文件路径，可以为空。
+/// @return 模块名；无法识别时返回 Main 或 Unknown。
+std::string_view extractModuleNameFromPath(const char* filename)
 {
     if ( !filename ) return "Unknown";
 
@@ -212,6 +222,172 @@ std::string_view ColorfulFormatter::extract_module_name(
 
     // 如果不在 Modules 目录下，回退到提取文件名（不含扩展名）或直接返回 "App"
     return "Main";
+}
+
+/// @brief 将 spdlog 字符串视图转为标准库字符串视图。
+/// @param view spdlog 传入的字符串视图。
+/// @return 指向同一段日志文本的标准库字符串视图。
+std::string_view spdlogStringView(spdlog::string_view_t view)
+{
+    return { view.data(), view.size() };
+}
+
+/// @brief 向文件流写入字符串视图，避免临时字符串分配。
+/// @param stream 日志文件流。
+/// @param text 需要写入的文本。
+void writeView(std::ofstream& stream, std::string_view text)
+{
+    if ( text.empty() ) return;
+    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+}
+
+/// @brief 直接文件日志 sink，不持有 spdlog::pattern_formatter。
+class PlainFileSink final : public spdlog::sinks::sink
+{
+public:
+    /// @brief 打开指定日志文件。
+    /// @param path 日志文件路径。
+    explicit PlainFileSink(const std::filesystem::path& path)
+    {
+        m_stream.open(path, std::ios::out | std::ios::app | std::ios::binary);
+    }
+
+    /// @brief 写入一条文件日志。
+    /// @param msg spdlog 传入的日志消息。
+    void log(const spdlog::details::log_msg& msg) override
+    {
+        if ( !m_stream.is_open() ) return;
+
+        const auto timeSinceEpoch = msg.time.time_since_epoch();
+        const auto sec =
+            std::chrono::duration_cast<std::chrono::seconds>(timeSinceEpoch);
+        const auto millis =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                timeSinceEpoch - sec);
+
+        const std::time_t localTime =
+            std::chrono::system_clock::to_time_t(msg.time);
+        std::tm tmBuf{};
+#ifdef _WIN32
+        localtime_s(&tmBuf, &localTime);
+#else
+        localtime_r(&localTime, &tmBuf);
+#endif
+
+        char timeBuffer[32]{};
+        std::strftime(
+            timeBuffer, sizeof(timeBuffer), "%Y-%m-%d %H:%M:%S", &tmBuf);
+
+        char millisBuffer[8]{};
+        std::snprintf(millisBuffer,
+                      sizeof(millisBuffer),
+                      "%03d",
+                      static_cast<int>(millis.count()));
+
+        const std::string_view levelName =
+            spdlogStringView(spdlog::level::to_string_view(msg.level));
+        const std::string_view moduleName =
+            extractModuleNameFromPath(msg.source.filename);
+        const char* funcName =
+            msg.source.funcname ? msg.source.funcname : "unknown";
+
+        std::lock_guard lock(m_mutex);
+        m_stream << '[' << timeBuffer << '.' << millisBuffer << "] [";
+        writeView(m_stream, levelName);
+        m_stream << '/';
+        writeView(m_stream, moduleName);
+        m_stream << '/' << funcName << "]: ";
+        writeView(m_stream, spdlogStringView(msg.payload));
+
+        if ( msg.level == spdlog::level::debug ||
+             msg.level >= spdlog::level::err ) {
+            m_stream << " ("
+                     << (msg.source.filename ? msg.source.filename : "unknown")
+                     << ':' << msg.source.line << ')';
+        }
+        m_stream << '\n';
+    }
+
+    /// @brief 刷新文件缓冲区。
+    void flush() override
+    {
+        std::lock_guard lock(m_mutex);
+        if ( m_stream.is_open() ) {
+            m_stream.flush();
+        }
+    }
+
+    /// @brief 忽略 spdlog 模式字符串，避免创建 pattern_formatter。
+    /// @param pattern spdlog 传入的模式字符串。
+    void set_pattern(const std::string& pattern) override { (void)pattern; }
+
+    /// @brief 忽略外部 formatter，文件 sink 使用固定格式。
+    /// @param sinkFormatter spdlog 传入的 formatter。
+    void set_formatter(
+        std::unique_ptr<spdlog::formatter> sinkFormatter) override
+    {
+        (void)sinkFormatter;
+    }
+
+private:
+    /// @brief 文件写入互斥锁，匹配 spdlog 多线程 sink 语义。
+    std::mutex m_mutex;
+
+    /// @brief 日志文件输出流，打开失败时该 sink 静默丢弃文件日志。
+    std::ofstream m_stream;
+};
+
+/// @brief 直接终端日志 sink，不持有 spdlog::pattern_formatter。
+class PlainConsoleSink final : public spdlog::sinks::sink
+{
+public:
+    /// @brief 使用项目自定义 formatter 写入控制台。
+    /// @param msg spdlog 传入的日志消息。
+    void log(const spdlog::details::log_msg& msg) override
+    {
+        spdlog::memory_buf_t buffer;
+        m_formatter.format(msg, buffer);
+
+        std::FILE* stream = msg.level >= spdlog::level::err ? stderr : stdout;
+        std::lock_guard lock(m_mutex);
+        std::fwrite(buffer.data(), sizeof(char), buffer.size(), stream);
+    }
+
+    /// @brief 刷新标准输出和标准错误，保持 flush_on 语义。
+    void flush() override
+    {
+        std::lock_guard lock(m_mutex);
+        std::fflush(stdout);
+        std::fflush(stderr);
+    }
+
+    /// @brief 忽略 spdlog 模式字符串，控制台 sink 使用 ColorfulFormatter。
+    /// @param pattern spdlog 传入的模式字符串。
+    void set_pattern(const std::string& pattern) override { (void)pattern; }
+
+    /// @brief 忽略外部 formatter，避免引入 spdlog::pattern_formatter 生命周期。
+    /// @param sinkFormatter spdlog 传入的 formatter。
+    void set_formatter(
+        std::unique_ptr<spdlog::formatter> sinkFormatter) override
+    {
+        (void)sinkFormatter;
+    }
+
+private:
+    /// @brief 控制台写入互斥锁，匹配 spdlog 多线程 sink 语义。
+    std::mutex m_mutex;
+
+    /// @brief 项目自定义日志格式器，避免依赖 spdlog 内置 pattern_formatter。
+    ColorfulFormatter m_formatter;
+};
+
+}  // namespace
+
+// 结构为 .../Modules/ModuleName/src/...
+std::string_view ColorfulFormatter::extract_module_name(
+    const char* filename) const
+{
+    return extractModuleNameFromPath(filename);
 }
 
 void ColorfulFormatter::format(const spdlog::details::log_msg& msg,
@@ -309,17 +485,9 @@ void XLogger::init(const char* name)
     errorLogPath /= "mmm-error-" + timestamp + ".log";
 
     // 创建三个sink（终端、全量文件、错误文件）
-    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
-    auto file_all_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-        MMM::Config::pathToUtf8(allLogPath));
-    auto file_error_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-        MMM::Config::pathToUtf8(errorLogPath));
-
-    // 设置统一的自定义格式
-    auto formatter = std::make_unique<ColorfulFormatter>();
-    console_sink->set_formatter(formatter->clone());
-    file_all_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
-    file_error_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
+    auto console_sink    = std::make_shared<PlainConsoleSink>();
+    auto file_all_sink   = std::make_shared<PlainFileSink>(allLogPath);
+    auto file_error_sink = std::make_shared<PlainFileSink>(errorLogPath);
 
     // 设置sink级别过滤
     console_sink->set_level(spdlog::level::trace);
@@ -347,12 +515,12 @@ void XLogger::init(const char* name)
 
 void XLogger::shutdown()
 {
-    // 销毁 logger
-    spdlog::drop("MMM");
-    // 直接销毁 logger 对象
-    logger.reset();
-    // 销毁所有 logger
+    auto activeLogger = std::move(logger);
+    if ( !activeLogger ) return;
+
+    activeLogger->flush();
     spdlog::shutdown();
+    activeLogger.reset();
 }
 
 void XLogger::enable()
