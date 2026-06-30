@@ -9,6 +9,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <array>
 #include <cstdint>
+#include <spdlog/fmt/fmt.h>
 #include <string>
 
 namespace MMM::UI
@@ -560,12 +561,25 @@ void SettingsView::drawVisualSettings()
                 Config::estimateSpectrumTextureBytesPerMinute(level, 2, 1));
             const double monoMiB = bytesToMiB(
                 Config::estimateSpectrumTextureBytesPerMinute(level, 1, 4));
-            return TR_FMT("ui.settings.visual.spectrum_detail.option",
-                          name,
-                          profile.segmentsPerSecond,
-                          profile.frequencyBins,
-                          stereoMiB,
-                          monoMiB);
+            // 不把翻译文本作为 fmt 格式串解析，避免皮肤文案异常导致设置页崩溃。
+            return fmt::format(
+                "{} - {:.0f} {} x {} {}; {} {:.2f} MiB/{} ({}), {:.2f} "
+                "MiB/{} ({})",
+                name,
+                profile.segmentsPerSecond,
+                TR_CACHE(
+                    "ui.settings.visual.spectrum_detail.segments_per_second")
+                    .data(),
+                profile.frequencyBins,
+                TR_CACHE("ui.settings.visual.spectrum_detail.bins").data(),
+                TR_CACHE("ui.settings.visual.spectrum_detail.memory_prefix")
+                    .data(),
+                stereoMiB,
+                TR_CACHE("ui.settings.visual.spectrum_detail.minute").data(),
+                TR_CACHE("ui.settings.visual.spectrum_detail.stereo").data(),
+                monoMiB,
+                TR_CACHE("ui.settings.visual.spectrum_detail.minute").data(),
+                TR_CACHE("ui.settings.visual.spectrum_detail.bpm_mono").data());
         };
 
         addSettingItem(
