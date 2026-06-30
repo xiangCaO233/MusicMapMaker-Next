@@ -1,16 +1,18 @@
-*.ttf filter=lfs diff=lfs merge=lfs -text
-*.mp3 filter=lfs diff=lfs merge=lfs -text
-*.flac filter=lfs diff=lfs merge=lfs -text
-*.bmp filter=lfs diff=lfs merge=lfs -text
-*.png filter=lfs diff=lfs merge=lfs -text
-*.jpg filter=lfs diff=lfs merge=lfs -text
-*.jpeg filter=lfs diff=lfs merge=lfs -text
-*.otf filter=lfs diff=lfs merge=lfs -text
-*.svg filter=lfs diff=lfs merge=lfs -text
-*.wav filter=lfs diff=lfs merge=lfs -text
-*.ogg filter=lfs diff=lfs merge=lfs -text
-*.mcz filter=lfs diff=lfs merge=lfs -text
-*.zip filter=lfs diff=lfs merge=lfs -text
-tests/data/** filter=lfs diff=lfs merge=lfs -text
-3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text
-3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text
+* text=auto eol=lf
+
+*.ttf filter=lfs diff=lfs merge=lfs -text -eol
+*.mp3 filter=lfs diff=lfs merge=lfs -text -eol
+*.flac filter=lfs diff=lfs merge=lfs -text -eol
+*.bmp filter=lfs diff=lfs merge=lfs -text -eol
+*.png filter=lfs diff=lfs merge=lfs -text -eol
+*.jpg filter=lfs diff=lfs merge=lfs -text -eol
+*.jpeg filter=lfs diff=lfs merge=lfs -text -eol
+*.otf filter=lfs diff=lfs merge=lfs -text -eol
+*.svg filter=lfs diff=lfs merge=lfs -text -eol
+*.wav filter=lfs diff=lfs merge=lfs -text -eol
+*.ogg filter=lfs diff=lfs merge=lfs -text -eol
+*.mcz filter=lfs diff=lfs merge=lfs -text -eol
+*.zip filter=lfs diff=lfs merge=lfs -text -eol
+tests/data/** filter=lfs diff=lfs merge=lfs -text -eol
+3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text -eol
+3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/** filter=lfs diff=lfs merge=lfs -text -eol
