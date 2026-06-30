@@ -1,6 +1,7 @@
 # Modules/CMakeLists.txt
 
-# -fno-rtti: 仅对项目自身 Module 启用 (第三方库 concurrentqueue / fmt 仍依赖 RTTI)
+# -fno-rtti: 默认仅对项目自身 Module 启用；Log 模块会因 spdlog 多态对象单独恢复 RTTI。 第三方库
+# concurrentqueue / fmt 等仍保持自身构建配置。
 if(NOT MSVC)
   add_compile_options("-fno-rtti")
 endif()

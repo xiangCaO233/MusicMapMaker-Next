@@ -1,15 +1,11 @@
 #pragma once
 
 #include <spdlog/common.h>
-#ifdef _WIN32
-#endif
 
 #include <memory>
 #include <spdlog/details/log_msg.h>
 #include <spdlog/fmt/chrono.h>
 #include <spdlog/formatter.h>
-#include <spdlog/sinks/basic_file_sink.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <string_view>
 
