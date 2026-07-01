@@ -144,7 +144,13 @@ elseif(MINGW OR (CMAKE_CROSSCOMPILING AND WIN32))
         "TARGET_AR=${CMAKE_AR} rcus"
         "TARGET_STRIP=${CMAKE_STRIP}")
     else()
-      if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+      if(DEFINED MINGW_TOOLCHAIN_PREFIX AND NOT MINGW_TOOLCHAIN_PREFIX STREQUAL
+                                            "")
+        # GCC MinGW 的 UCRT64 与 win32 线程模型使用不同前缀，LuaJIT 必须继承当前工具链。
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=${MINGW_TOOLCHAIN_PREFIX}-")
+      elseif(CMAKE_C_COMPILER_TARGET)
+        list(APPEND CROSS_COMPILE_ARGS "CROSS=${CMAKE_C_COMPILER_TARGET}-")
+      elseif(CMAKE_SIZEOF_VOID_P EQUAL 8)
         list(APPEND CROSS_COMPILE_ARGS "CROSS=x86_64-w64-mingw32-")
       else()
         list(APPEND CROSS_COMPILE_ARGS "CROSS=i686-w64-mingw32-")

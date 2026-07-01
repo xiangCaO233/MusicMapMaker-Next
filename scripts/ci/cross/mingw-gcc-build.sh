@@ -90,6 +90,12 @@ detectMingwSysroot() {
         fi
     fi
 
+    local prefixedSysroot="/usr/${toolPrefix}"
+    if [[ -d "${prefixedSysroot}" ]]; then
+        printf "%s\n" "${prefixedSysroot}"
+        return
+    fi
+
     printf "/usr/x86_64-w64-mingw32\n"
 }
 
