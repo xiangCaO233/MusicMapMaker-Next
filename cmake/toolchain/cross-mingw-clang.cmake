@@ -1,7 +1,7 @@
 # Linux 到 Windows MinGW clang 交叉工具链。
 #
-# 编译和链接使用 Linux 宿主上的 clang/clang++ + lld，目标端 sysroot 默认使用
-# CI 机器挂载的 MSYS2 clang64，以匹配 mingw/clang64 预编译库的 libc++ ABI。
+# 编译和链接使用 Linux 宿主上的 clang/clang++ + lld，目标端 sysroot 默认使用 CI 机器挂载的 MSYS2
+# clang64，以匹配 mingw/clang64 预编译库的 libc++ ABI。
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
@@ -16,7 +16,7 @@ if(DEFINED ENV{MINGW_SYSROOT} AND NOT "$ENV{MINGW_SYSROOT}" STREQUAL "")
   file(TO_CMAKE_PATH "$ENV{MINGW_SYSROOT}" MINGW_SYSROOT_DEFAULT)
 else()
   if(DEFINED ENV{WINDOWS_CROSS_ROOT} AND NOT "$ENV{WINDOWS_CROSS_ROOT}"
-                                      STREQUAL "")
+                                         STREQUAL "")
     file(TO_CMAKE_PATH "$ENV{WINDOWS_CROSS_ROOT}" WINDOWS_CROSS_ROOT_DEFAULT)
   else()
     set(WINDOWS_CROSS_ROOT_DEFAULT "/mnt/cross/windows")
@@ -31,8 +31,7 @@ else()
     execute_process(
       COMMAND ${MINGW_TOOLCHAIN_PREFIX}-gcc -print-sysroot
       OUTPUT_VARIABLE MINGW_SYSROOT_DEFAULT
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-      ERROR_QUIET)
+      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
   endif()
 endif()
 
@@ -47,11 +46,36 @@ set(CMAKE_SYSROOT "${MINGW_SYSROOT}")
 
 find_program(MMM_MINGW_CLANG_C NAMES clang-22 clang-21 clang-20 clang)
 find_program(MMM_MINGW_CLANG_CXX NAMES clang++-22 clang++-21 clang++-20 clang++)
+find_program(MMM_MINGW_WINDRES NAMES ${MINGW_TOOLCHAIN_PREFIX}-windres)
+find_program(MMM_MINGW_AR NAMES ${MINGW_TOOLCHAIN_PREFIX}-ar)
+find_program(MMM_MINGW_RANLIB NAMES ${MINGW_TOOLCHAIN_PREFIX}-ranlib)
+find_program(MMM_MINGW_STRIP NAMES ${MINGW_TOOLCHAIN_PREFIX}-strip)
+find_program(MMM_MINGW_OBJCOPY NAMES ${MINGW_TOOLCHAIN_PREFIX}-objcopy)
+find_program(MMM_MINGW_NM NAMES llvm-nm-22 llvm-nm-21 llvm-nm-20 llvm-nm
+                                ${MINGW_TOOLCHAIN_PREFIX}-nm)
 if(NOT MMM_MINGW_CLANG_C)
   message(FATAL_ERROR "找不到 clang，请安装 LLVM clang 20 或更新版本。")
 endif()
 if(NOT MMM_MINGW_CLANG_CXX)
   message(FATAL_ERROR "找不到 clang++，请安装 LLVM clang++ 20 或更新版本。")
+endif()
+if(NOT MMM_MINGW_WINDRES)
+  message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-windres。")
+endif()
+if(NOT MMM_MINGW_AR)
+  message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-ar。")
+endif()
+if(NOT MMM_MINGW_RANLIB)
+  message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-ranlib。")
+endif()
+if(NOT MMM_MINGW_STRIP)
+  message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-strip。")
+endif()
+if(NOT MMM_MINGW_OBJCOPY)
+  message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-objcopy。")
+endif()
+if(NOT MMM_MINGW_NM)
+  message(FATAL_ERROR "找不到 llvm-nm 或 ${MINGW_TOOLCHAIN_PREFIX}-nm。")
 endif()
 
 set(CMAKE_C_COMPILER
@@ -63,36 +87,37 @@ set(CMAKE_CXX_COMPILER
 set(CMAKE_C_COMPILER_TARGET "${MINGW_TARGET_TRIPLE}")
 set(CMAKE_CXX_COMPILER_TARGET "${MINGW_TARGET_TRIPLE}")
 
-# MSYS2 clang64 使用 libc++/compiler-rt/libunwind。这里显式固定运行库，
-# 避免 Linux 发行版 clang 默认回退到 libstdc++ 或 GCC runtime。
+# MSYS2 clang64 使用 libc++/compiler-rt/libunwind。这里显式固定运行库， 避免 Linux 发行版 clang
+# 默认回退到 libstdc++ 或 GCC runtime。
 set(MINGW_CLANG_RUNTIME_FLAGS "-rtlib=compiler-rt -unwindlib=libunwind")
 set(MINGW_CLANG_CXX_STDLIB_FLAGS "-stdlib=libc++")
 set(CMAKE_C_FLAGS_INIT "")
 set(CMAKE_CXX_FLAGS_INIT "${MINGW_CLANG_CXX_STDLIB_FLAGS}")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-fuse-ld=lld ${MINGW_CLANG_RUNTIME_FLAGS}")
-set(CMAKE_SHARED_LINKER_FLAGS_INIT
-    "-fuse-ld=lld ${MINGW_CLANG_RUNTIME_FLAGS}")
-set(CMAKE_MODULE_LINKER_FLAGS_INIT
-    "-fuse-ld=lld ${MINGW_CLANG_RUNTIME_FLAGS}")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fuse-ld=lld ${MINGW_CLANG_RUNTIME_FLAGS}")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fuse-ld=lld ${MINGW_CLANG_RUNTIME_FLAGS}")
 
 set(CMAKE_RC_COMPILER
-    ${MINGW_TOOLCHAIN_PREFIX}-windres
+    "${MMM_MINGW_WINDRES}"
     CACHE FILEPATH "Windows resource compiler for MinGW cross builds.")
 set(CMAKE_AR
-    ${MINGW_TOOLCHAIN_PREFIX}-ar
+    "${MMM_MINGW_AR}"
     CACHE FILEPATH "Archive tool for MinGW cross builds.")
 set(CMAKE_RANLIB
-    ${MINGW_TOOLCHAIN_PREFIX}-ranlib
+    "${MMM_MINGW_RANLIB}"
     CACHE FILEPATH "Archive index tool for MinGW cross builds.")
 set(CMAKE_STRIP
-    ${MINGW_TOOLCHAIN_PREFIX}-strip
+    "${MMM_MINGW_STRIP}"
     CACHE FILEPATH "Strip tool for MinGW cross builds.")
 set(CMAKE_OBJCOPY
-    ${MINGW_TOOLCHAIN_PREFIX}-objcopy
+    "${MMM_MINGW_OBJCOPY}"
     CACHE FILEPATH "Objcopy tool for MinGW cross builds.")
+set(CMAKE_NM
+    "${MMM_MINGW_NM}"
+    CACHE FILEPATH "Symbol table tool for MinGW cross builds.")
 
-# 工具程序使用宿主 Linux 环境；库和包同时允许 sysroot 与仓库内显式
-# 预编译库路径，避免 CMake 把 3rdpty/prebuilts 的绝对路径重映射到 sysroot。
+# 工具程序使用宿主 Linux 环境；库和包同时允许 sysroot 与仓库内显式 预编译库路径，避免 CMake 把 3rdpty/prebuilts
+# 的绝对路径重映射到 sysroot。
 set(CMAKE_FIND_ROOT_PATH "${MINGW_SYSROOT}")
 set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
 set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY BOTH)
