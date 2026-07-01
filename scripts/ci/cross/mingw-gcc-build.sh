@@ -10,11 +10,11 @@ Configure and build the Windows MinGW GCC cross target on Linux.
 Options:
   --build-dir <path>      Build directory. Default: build_cross_mingw_gcc
   --build-type <type>     CMake build type. Default: RelWithDebInfo
-  --compiler-tag <tag>    Prebuilt compiler tag. Default: gcc14-win32
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: ucrt64
   --jobs <count>          Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>        PROJECT_LINKAGE value: static or shared. Default: static
-  --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32
-  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/x86_64-w64-mingw32
+  --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32ucrt
+  --sysroot <path>        MinGW sysroot. Default: <prefix>-gcc -print-sysroot, then /usr/<prefix>
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-gcc.cmake
   --sources-build         Configure with SOURCES_BUILD=ON.
   --prebuilt-targets      Build only third-party targets used for staging.
@@ -96,7 +96,7 @@ detectMingwSysroot() {
         return
     fi
 
-    printf "/usr/x86_64-w64-mingw32\n"
+    printf "/usr/x86_64-w64-mingw32ucrt\n"
 }
 
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -105,9 +105,9 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 buildDir="build_cross_mingw_gcc"
 buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
-compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-gcc14-win32}"
+compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-ucrt64}"
 projectLinkage="static"
-toolPrefix="x86_64-w64-mingw32"
+toolPrefix="x86_64-w64-mingw32ucrt"
 mingwSysroot=""
 toolchainFile="cmake/toolchain/cross-mingw-gcc.cmake"
 sourcesBuild="OFF"
@@ -278,6 +278,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DICE_LINKAGE="${projectLinkage}" \
     -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
+    -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \

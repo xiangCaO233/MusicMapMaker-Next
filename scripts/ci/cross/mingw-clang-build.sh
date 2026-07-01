@@ -8,23 +8,27 @@ Usage: scripts/ci/cross/mingw-clang-build.sh [options]
 Configure and build the Windows MinGW clang cross target on Linux.
 
 Options:
-  --build-dir <path>     Build directory. Default: build_cross_mingw_clang
-  --build-type <type>    CMake build type. Default: RelWithDebInfo
-  --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
-  --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
-  --sysroot <path>       MinGW sysroot. Default: ${WINDOWS_CROSS_ROOT}/msys64/clang64
-  --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
-  --sources-build        Configure with SOURCES_BUILD=ON.
-  --prebuilt-targets     Build only third-party targets used for staging.
-  --configure-only       Configure and generate, then stop
-  --fresh                Remove the build directory before configuring
-  -h, --help             Show this help
+  --build-dir <path>      Build directory. Default: build_cross_mingw_clang
+  --build-type <type>     CMake build type. Default: RelWithDebInfo
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: clang64
+  --jobs <count>          Parallel build jobs. Default: 75% of CPU threads
+  --linkage <mode>        PROJECT_LINKAGE value: static or shared. Default: static
+  --prefix <prefix>       MinGW tool prefix. Default: x86_64-w64-mingw32
+  --sysroot <path>        MinGW sysroot. Default: ${WINDOWS_CROSS_ROOT}/msys64/clang64
+  --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
+  --sources-build         Configure with SOURCES_BUILD=ON.
+  --prebuilt-targets      Build only third-party targets used for staging.
+  --configure-only        Configure and generate, then stop
+  --fresh                 Remove the build directory before configuring
+  -h, --help              Show this help
 
 Environment overrides:
-  MINGW_SYSROOT          MinGW sysroot path
-  WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
-  VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
-  CMAKE_GENERATOR        Default: Ninja
+  MINGW_SYSROOT                     MinGW sysroot path
+  MINGW_TOOLCHAIN_PREFIX            Default MinGW tool prefix
+  MINGW_CLANG_PREBUILT_COMPILER_TAG Default prebuilt compiler tag
+  WINDOWS_CROSS_ROOT                Default: /mnt/cross/windows
+  VULKAN_SDK                        Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
+  CMAKE_GENERATOR                   Default: Ninja
 EOF
 }
 
@@ -60,21 +64,6 @@ requireCommand() {
     fi
 }
 
-requireAnyCommand() {
-    local label="$1"
-    shift
-
-    local commandName
-    for commandName in "$@"; do
-        if command -v "${commandName}" >/dev/null 2>&1; then
-            return
-        fi
-    done
-
-    printf "error: required command not found: %s (tried: %s)\n" "${label}" "$*" >&2
-    exit 1
-}
-
 projectPath() {
     local inputPath="$1"
 
@@ -86,6 +75,8 @@ projectPath() {
 }
 
 detectMingwSysroot() {
+    local toolPrefix="$1"
+
     if [[ -n "${MINGW_SYSROOT:-}" ]]; then
         printf "%s\n" "${MINGW_SYSROOT}"
         return
@@ -98,9 +89,19 @@ detectMingwSysroot() {
         return
     fi
 
-    if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
-        x86_64-w64-mingw32-gcc -print-sysroot
+    local prefixedSysroot="/usr/${toolPrefix}"
+    if [[ -d "${prefixedSysroot}" ]]; then
+        printf "%s\n" "${prefixedSysroot}"
         return
+    fi
+
+    if command -v "${toolPrefix}-gcc" >/dev/null 2>&1; then
+        local detectedSysroot
+        detectedSysroot="$("${toolPrefix}-gcc" -print-sysroot)"
+        if [[ -n "${detectedSysroot}" ]]; then
+            printf "%s\n" "${detectedSysroot}"
+            return
+        fi
     fi
 
     printf "/usr/x86_64-w64-mingw32\n"
@@ -112,8 +113,10 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 buildDir="build_cross_mingw_clang"
 buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
+compilerTag="${MINGW_CLANG_PREBUILT_COMPILER_TAG:-clang64}"
 projectLinkage="static"
-mingwSysroot="$(detectMingwSysroot)"
+toolPrefix="${MINGW_TOOLCHAIN_PREFIX:-x86_64-w64-mingw32}"
+mingwSysroot=""
 toolchainFile="cmake/toolchain/cross-mingw-clang.cmake"
 sourcesBuild="OFF"
 prebuiltTargets=0
@@ -138,6 +141,14 @@ while (( $# > 0 )); do
             buildType="$2"
             shift 2
             ;;
+        --compiler-tag)
+            if (( $# < 2 )); then
+                printf "error: --compiler-tag requires a value\n" >&2
+                exit 1
+            fi
+            compilerTag="$2"
+            shift 2
+            ;;
         --jobs)
             if (( $# < 2 )); then
                 printf "error: --jobs requires a value\n" >&2
@@ -152,6 +163,14 @@ while (( $# > 0 )); do
                 exit 1
             fi
             projectLinkage="$2"
+            shift 2
+            ;;
+        --prefix)
+            if (( $# < 2 )); then
+                printf "error: --prefix requires a value\n" >&2
+                exit 1
+            fi
+            toolPrefix="$2"
             shift 2
             ;;
         --sysroot)
@@ -198,6 +217,10 @@ while (( $# > 0 )); do
     esac
 done
 
+if [[ -z "${mingwSysroot}" ]]; then
+    mingwSysroot="$(detectMingwSysroot "${toolPrefix}")"
+fi
+
 if [[ ! "${buildJobs}" =~ ^[0-9]+$ ]] || (( buildJobs < 1 )); then
     printf "error: --jobs must be a positive integer\n" >&2
     exit 1
@@ -205,6 +228,11 @@ fi
 
 if [[ "${projectLinkage}" != "static" && "${projectLinkage}" != "shared" ]]; then
     printf "error: --linkage must be 'static' or 'shared'\n" >&2
+    exit 1
+fi
+
+if [[ -z "${compilerTag}" ]]; then
+    printf "error: --compiler-tag must not be empty\n" >&2
     exit 1
 fi
 
@@ -218,17 +246,19 @@ if [[ ! -f "${toolchainFile}" ]]; then
 fi
 
 export MINGW_SYSROOT="${mingwSysroot}"
+export MINGW_TOOLCHAIN_PREFIX="${toolPrefix}"
+export MINGW_CLANG_PREBUILT_COMPILER_TAG="${compilerTag}"
 export WINDOWS_CROSS_ROOT="${WINDOWS_CROSS_ROOT:-/mnt/cross/windows}"
 export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 
 requireCommand cmake
-requireAnyCommand clang clang-22 clang-21 clang-20 clang
-requireAnyCommand clang++ clang++-22 clang++-21 clang++-20 clang++
-requireCommand x86_64-w64-mingw32-windres
-requireCommand x86_64-w64-mingw32-ar
-requireCommand x86_64-w64-mingw32-ranlib
-requireCommand x86_64-w64-mingw32-strip
-requireCommand x86_64-w64-mingw32-objcopy
+requireCommand clang-22
+requireCommand clang++-22
+requireCommand "${toolPrefix}-windres"
+requireCommand "${toolPrefix}-ar"
+requireCommand "${toolPrefix}-ranlib"
+requireCommand "${toolPrefix}-strip"
+requireCommand "${toolPrefix}-objcopy"
 
 if [[ ! -d "${MINGW_SYSROOT}" ]]; then
     printf "error: MINGW_SYSROOT does not exist: %s\n" "${MINGW_SYSROOT}" >&2
@@ -252,9 +282,12 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
     -DMINGW_SYSROOT="${MINGW_SYSROOT}" \
+    -DMINGW_TOOLCHAIN_PREFIX="${toolPrefix}" \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DICE_LINKAGE="${projectLinkage}" \
+    -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
+    -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \

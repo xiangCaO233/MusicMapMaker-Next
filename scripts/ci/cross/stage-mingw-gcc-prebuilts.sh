@@ -5,12 +5,12 @@ showUsage() {
     cat <<'EOF'
 Usage: scripts/ci/cross/stage-mingw-gcc-prebuilts.sh [options]
 
-Copy MinGW GCC source-build static libraries into the prebuilt layout.
+Copy MinGW source-build static libraries into the prebuilt layout.
 
 Options:
   --build-dir <path>      Source build directory. Default: build_cross_mingw_gcc_sources
   --build-type <type>     Prebuilt config directory. Default: RelWithDebInfo
-  --compiler-tag <tag>    Prebuilt compiler tag. Default: gcc14-win32
+  --compiler-tag <tag>    Prebuilt compiler tag. Default: ucrt64
   --scope <all|main|ice>  Staging scope. Default: all
   -h, --help              Show this help
 EOF
@@ -65,7 +65,7 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 
 buildDir="build_cross_mingw_gcc_sources"
 buildType="RelWithDebInfo"
-compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-gcc14-win32}"
+compilerTag="${MINGW_GCC_PREBUILT_COMPILER_TAG:-ucrt64}"
 stageScope="all"
 
 while (( $# > 0 )); do
