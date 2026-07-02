@@ -199,7 +199,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -340,10 +340,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -620,8 +620,8 @@ void SettingsView::drawSoftwareSettings()
                                     ImVec2(0.0f, style.FramePadding.y));
                 ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
                                     ImVec2(0.5f, 0.5f));
-                const bool browseAsciiClicked =
-                    ImGui::Button("...##BrowseAscii", { browseButtonW, 0 });
+                const bool browseAsciiClicked = ::MMM::UI::FeedbackButton(
+                    "...##BrowseAscii", { browseButtonW, 0 });
                 ImGui::PopStyleVar(2);
                 if ( browseAsciiClicked ) {
                     if ( settings.filePickerStyle ==
@@ -715,8 +715,8 @@ void SettingsView::drawSoftwareSettings()
                                     ImVec2(0.0f, style.FramePadding.y));
                 ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
                                     ImVec2(0.5f, 0.5f));
-                const bool browseCjkClicked =
-                    ImGui::Button("...##BrowseCjk", { browseButtonW, 0 });
+                const bool browseCjkClicked = ::MMM::UI::FeedbackButton(
+                    "...##BrowseCjk", { browseButtonW, 0 });
                 ImGui::PopStyleVar(2);
                 if ( browseCjkClicked ) {
                     if ( settings.filePickerStyle ==

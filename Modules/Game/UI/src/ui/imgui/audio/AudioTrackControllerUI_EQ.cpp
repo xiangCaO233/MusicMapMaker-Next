@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "implot.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <cmath>
 #include <vector>
 
@@ -135,8 +136,8 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         // 动态计算可用高度，预留底部按钮位置
         float footerHeight = ImGui::GetFrameHeightWithSpacing() +
                              ImGui::GetStyle().ItemSpacing.y;
-        float availHeight  = ImGui::GetContentRegionAvail().y;
-        float childHeight  = std::max(220.0f, availHeight - footerHeight);
+        float availHeight = ImGui::GetContentRegionAvail().y;
+        float childHeight = std::max(220.0f, availHeight - footerHeight);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         bool opened = ImGui::BeginChild("EQSliders",
@@ -229,10 +230,10 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         // 按钮水平居中
         const char* resetLabel = TR("ui.audio_manager.reset_eq").data();
         float       btnWidth   = ImGui::CalcTextSize(resetLabel).x +
-                                 ImGui::GetStyle().FramePadding.x * 2.0f;
+                         ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnWidth) *
                              0.5f);
-        if ( ImGui::Button(resetLabel) ) {
+        if ( ::MMM::UI::FeedbackButton(resetLabel) ) {
             for ( size_t i = 0; i < bandCount; ++i ) {
                 audio.setMainTrackEQBandGain(i, 0.0f);
                 audio.setMainTrackEQBandQ(i, 1.414f);

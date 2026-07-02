@@ -240,8 +240,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         ImGui::Separator();
         ImGui::Spacing();
 
-        if ( ImGui::Button(TR("ui.file.save").data(),
-                           ImVec2(120 * dpiScale, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.file.save").data(),
+                                       ImVec2(120 * dpiScale, 0)) ) {
             int32_t myIdx = findSessionIndex();
             if ( myIdx != -1 ) {
                 engine.setActiveSessionIndex(myIdx);
@@ -255,16 +255,16 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.exit.dont_save").data(),
-                           ImVec2(120 * dpiScale, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.exit.dont_save").data(),
+                                       ImVec2(120 * dpiScale, 0)) ) {
             m_closeConfirmed  = true;
             m_isOpen          = false;
             m_showSaveConfirm = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.help.cancel").data(),
-                           ImVec2(120 * dpiScale, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.help.cancel").data(),
+                                       ImVec2(120 * dpiScale, 0)) ) {
             m_isOpen          = true;
             m_showSaveConfirm = false;
             m_closeCancelled  = true;

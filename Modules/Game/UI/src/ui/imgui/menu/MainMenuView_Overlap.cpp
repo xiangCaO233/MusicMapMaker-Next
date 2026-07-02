@@ -7,6 +7,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "ui/Icons.h"
 #include "ui/imgui/menu/MainMenuView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <imgui.h>
@@ -364,12 +365,13 @@ void MainMenuView::renderOverlapCheckWindow()
                                    TR("ui.tools.no_active_beatmap").data());
             } else {
                 if ( !m_hasOverlapScan ) {
-                    if ( ImGui::Button(TR("ui.tools.scan_now").data(),
-                                       ImVec2(-1.0f, 40.0f * dpiScale)) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.tools.scan_now").data(),
+                             ImVec2(-1.0f, 40.0f * dpiScale)) ) {
                         performOverlapScan();
                     }
                 } else {
-                    if ( ImGui::Button(
+                    if ( ::MMM::UI::FeedbackButton(
                              TR("ui.tools.rescan").data(),
                              ImVec2(120.0f * dpiScale, 30.0f * dpiScale)) ) {
                         performOverlapScan();
@@ -477,7 +479,7 @@ void MainMenuView::renderOverlapCheckWindow()
                                     ImGui::PushStyleColor(
                                         ImGuiCol_ButtonHovered,
                                         ImVec4(0.4f, 0.7f, 1.0f, 0.3f));
-                                    if ( ImGui::Button(
+                                    if ( ::MMM::UI::FeedbackButton(
                                              fmt::format(
                                                  "{}##{}", ICON_MMM_SEARCH, i)
                                                  .c_str(),

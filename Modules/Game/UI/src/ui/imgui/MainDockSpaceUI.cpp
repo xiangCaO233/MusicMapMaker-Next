@@ -551,22 +551,24 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Text("%s", TR("ui.audio_import.type_hint").data());
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.audio_track.main").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.main").data(),
+                                           { 120, 0 }) ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Main }));
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.audio_track.effect").data(),
-                               { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.effect").data(),
+                                           { 120, 0 }) ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Effect }));
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), { 80, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           { 80, 0 }) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -594,12 +596,14 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Separator();
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.common.confirm").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.confirm").data(),
+                                           { 120, 0 }) ) {
                 if ( m_onOverwriteConfirm ) m_onOverwriteConfirm();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), { 120, 0 }) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           { 120, 0 }) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -662,8 +666,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::Separator();
             ImGui::Spacing();
 
-            if ( ImGui::Button(TR("ui.file.save").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.file.save").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 engine.pushCommand(Logic::CmdSaveBeatmap{});
                 // 注意：由于保存是异步的，这里直接设置退出可能会导致保存未完成
                 // 但在当前的单线程逻辑模型中，指令会按顺序处理
@@ -674,8 +678,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.exit.dont_save").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.exit.dont_save").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 if ( viewport->PlatformHandle ) {
                     glfwSetWindowShouldClose(
                         (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
@@ -683,8 +687,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(120 * dpiScale, 0)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.help.cancel").data(),
+                                           ImVec2(120 * dpiScale, 0)) ) {
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
@@ -804,8 +808,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             ImGui::Spacing();
 
             ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
-            if ( ImGui::Button("选择保存位置",
-                               ImVec2(140.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("选择保存位置",
+                                           ImVec2(140.0f * dpiScale, 0.0f)) ) {
                 m_temporaryProjectAfterSaveAction =
                     TemporaryProjectAfterSaveAction::None;
                 requestTemporaryProjectSaveFolder();
@@ -813,7 +817,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button("继续只读", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("继续只读",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 ImGui::CloseCurrentPopup();
             }
 
@@ -847,13 +852,15 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
             ImGui::Spacing();
 
             ImGui::BeginDisabled(m_temporaryProjectSaveInProgress);
-            if ( ImGui::Button("保存项目", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("保存项目",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 requestTemporaryProjectSaveFolder();
                 ImGui::CloseCurrentPopup();
             }
             ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button("不保存", ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton("不保存",
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 if ( m_temporaryProjectAfterSaveAction ==
                      TemporaryProjectAfterSaveAction::ExitApp ) {
                     if ( viewport && viewport->PlatformHandle ) {
@@ -871,8 +878,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(120.0f * dpiScale, 0.0f)) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.help.cancel").data(),
+                                           ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 m_temporaryProjectAfterSaveAction =
                     TemporaryProjectAfterSaveAction::None;
                 ImGui::CloseCurrentPopup();

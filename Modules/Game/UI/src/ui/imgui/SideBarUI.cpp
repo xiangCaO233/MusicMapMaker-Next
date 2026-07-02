@@ -191,7 +191,8 @@ void SideBarUI::update(UIManager* sourceManager)
             // 1. 绘制按钮交互背景
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
             std::string btnId = "##tab_btn_" + std::to_string((int)tab);
-            if ( ImGui::Button(btnId.c_str(), { rect.width, rect.height }) ) {
+            if ( ::MMM::UI::FeedbackButton(btnId.c_str(),
+                                           { rect.width, rect.height }) ) {
                 if ( tab == SideBarTab::Settings ) {
                     sourceManager->openSettingsWindow(
                         Event::SettingsTab::Software);

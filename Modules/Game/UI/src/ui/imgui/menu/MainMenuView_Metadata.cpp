@@ -431,7 +431,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool known = std::find_if(knownKeys.begin(),
+            const bool       known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -649,7 +649,7 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
                                   ImVec2(0.0f, 430.0f * dpiScale),
                                   ImGuiInputTextFlags_AllowTabInput);
 
-        if ( ImGui::Button("完成##ApplyOsuMetadataText") ) {
+        if ( ::MMM::UI::FeedbackButton("完成##ApplyOsuMetadataText") ) {
             MetadataPropertyMap parsedProps;
             if ( parseOsuMetadataText(
                      state.textBuffer.data(), parsedProps, state.errorText) ) {
@@ -659,7 +659,7 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
             }
         }
         ImGui::SameLine();
-        if ( ImGui::Button("取消##CancelOsuMetadataText") ) {
+        if ( ::MMM::UI::FeedbackButton("取消##CancelOsuMetadataText") ) {
             state.open = false;
             ImGui::CloseCurrentPopup();
         }
@@ -750,7 +750,8 @@ void renderMetadataJsonButton(const std::string& scopeId,
                               const std::string& key, const std::string& value,
                               const std::string& idPrefix)
 {
-    if ( ImGui::Button(fmt::format("JSON##{}_{}", idPrefix, key).c_str()) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             fmt::format("JSON##{}_{}", idPrefix, key).c_str()) ) {
         openMetadataJsonEditor(scopeId, key, value);
     }
     if ( ImGui::IsItemHovered() ) {
@@ -768,7 +769,8 @@ void renderNewMetadataJsonButton(const std::string& scopeId, const char* key,
         ImGui::BeginDisabled();
     }
 
-    if ( ImGui::Button(fmt::format("JSON##{}", idPrefix).c_str()) && hasKey ) {
+    if ( ::MMM::UI::FeedbackButton(fmt::format("JSON##{}", idPrefix).c_str()) &&
+         hasKey ) {
         openMetadataJsonEditor(
             scopeId,
             key,
@@ -855,7 +857,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                                   ImVec2(0.0f, 220.0f * dpiScale),
                                   ImGuiInputTextFlags_AllowTabInput);
 
-        if ( ImGui::Button("格式化##FormatMetadataJson") ) {
+        if ( ::MMM::UI::FeedbackButton("格式化##FormatMetadataJson") ) {
             parsed = parseJsonNoThrow(state.jsonBuffer.data());
             if ( parsed.is_discarded() ) {
                 state.errorText = "无法格式化：当前内容不是合法 JSON。";
@@ -865,7 +867,8 @@ void renderMetadataJsonEditorPopup(float dpiScale)
             }
         }
         ImGui::SameLine();
-        if ( ImGui::Button("重建为空对象##ResetMetadataJsonObject") ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 "重建为空对象##ResetMetadataJsonObject") ) {
             copyToInputBuffer(state.jsonBuffer, "{}");
             state.errorText.clear();
         }
@@ -902,7 +905,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                     std::string childValue = parsed[childKey].dump();
                     ImGui::TextWrapped("%s", childValue.c_str());
                     ImGui::TableNextColumn();
-                    if ( ImGui::Button(
+                    if ( ::MMM::UI::FeedbackButton(
                              fmt::format("删除##JsonChildDel_{}", childKey)
                                  .c_str()) ) {
                         parsed.erase(childKey);
@@ -932,7 +935,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
                          state.childValueBuffer.data(),
                          state.childValueBuffer.size());
         ImGui::SameLine();
-        if ( ImGui::Button("添加/覆盖##MetadataJsonChildAdd") ) {
+        if ( ::MMM::UI::FeedbackButton("添加/覆盖##MetadataJsonChildAdd") ) {
             std::string childKey = state.childKeyBuffer.data();
             if ( childKey.empty() ) {
                 state.errorText = "子字段键名不能为空。";
@@ -951,7 +954,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         }
 
         ImGui::Separator();
-        if ( ImGui::Button("完成##ApplyMetadataJson") ) {
+        if ( ::MMM::UI::FeedbackButton("完成##ApplyMetadataJson") ) {
             parsed = parseJsonNoThrow(state.jsonBuffer.data());
             if ( parsed.is_discarded() ) {
                 state.errorText = "无法完成：当前内容不是合法 JSON。";
@@ -966,7 +969,7 @@ void renderMetadataJsonEditorPopup(float dpiScale)
             }
         }
         ImGui::SameLine();
-        if ( ImGui::Button("取消##CancelMetadataJson") ) {
+        if ( ::MMM::UI::FeedbackButton("取消##CancelMetadataJson") ) {
             state.open = false;
             ImGui::CloseCurrentPopup();
         }
@@ -1144,7 +1147,8 @@ void MainMenuView::renderMetadataEditorWindow()
                         if ( props.empty() ) {
                             ImGui::BeginDisabled();
                         }
-                        if ( ImGui::Button("文本编辑##open_osu_text_editor") &&
+                        if ( ::MMM::UI::FeedbackButton(
+                                 "文本编辑##open_osu_text_editor") &&
                              !props.empty() ) {
                             openOsuMetadataTextEditor(props, *beatmap);
                         }
@@ -1245,7 +1249,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 const bool isPreviewTimeKey =
                                     key == "General::PreviewTime";
                                 if ( isPreviewTimeKey ) {
-                                    if ( ImGui::Button(
+                                    if ( ::MMM::UI::FeedbackButton(
                                              (std::string(
                                                   "当前##current_osu_") +
                                               key)
@@ -1264,7 +1268,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                     }
                                 }
                                 if ( hasKey ) {
-                                    if ( ImGui::Button(
+                                    if ( ::MMM::UI::FeedbackButton(
                                              (std::string("默认##reset_osu_") +
                                               key)
                                                  .c_str()) ) {
@@ -1326,7 +1330,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 }
 
                                 ImGui::TableNextColumn();
-                                if ( ImGui::Button(
+                                if ( ::MMM::UI::FeedbackButton(
                                          (std::string("删除##del_osu_") + key)
                                              .c_str()) ) {
                                     props.erase(key);
@@ -1356,7 +1360,8 @@ void MainMenuView::renderMetadataEditorWindow()
                             "##new_osu_val", newOsuVal, sizeof(newOsuVal));
 
                         ImGui::SameLine();
-                        if ( ImGui::Button("添加##add_osu_field") ) {
+                        if ( ::MMM::UI::FeedbackButton(
+                                 "添加##add_osu_field") ) {
                             std::string nk = newOsuKey;
                             if ( !nk.empty() ) {
                                 props[nk] = newOsuVal;
@@ -1495,7 +1500,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                                          "map_mld_builtin");
                                 if ( key == "preview" ) {
                                     ImGui::SameLine();
-                                    if ( ImGui::Button(
+                                    if ( ::MMM::UI::FeedbackButton(
                                              "当前##current_mld_preview") ) {
                                         props[key] =
                                             readCurrentJudgelinePreviewMsText();
@@ -1508,7 +1513,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 }
                                 if ( hasKey ) {
                                     ImGui::SameLine();
-                                    if ( ImGui::Button(
+                                    if ( ::MMM::UI::FeedbackButton(
                                              (std::string("清除##clear_mld_") +
                                               key)
                                                  .c_str()) ) {
@@ -1572,7 +1577,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                                          props.at(key),
                                                          "map_mld_custom");
                                 ImGui::SameLine();
-                                if ( ImGui::Button(
+                                if ( ::MMM::UI::FeedbackButton(
                                          (std::string("删除##del_mld_") + key)
                                              .c_str()) ) {
                                     props.erase(key);
@@ -1601,7 +1606,8 @@ void MainMenuView::renderMetadataEditorWindow()
                             "##new_mld_val", newMldVal, sizeof(newMldVal));
 
                         ImGui::SameLine();
-                        if ( ImGui::Button("添加##add_mld_field") ) {
+                        if ( ::MMM::UI::FeedbackButton(
+                                 "添加##add_mld_field") ) {
                             std::string nk = newMldKey;
                             if ( !nk.empty() ) {
                                 props[nk] = newMldVal;
@@ -1941,8 +1947,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2015,7 +2021,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                         }
 
                                         ImGui::TableNextColumn();
-                                        if ( ImGui::Button(
+                                        if ( ::MMM::UI::FeedbackButton(
                                                  fmt::format(
                                                      "{}##clr_osu_{}_{}",
                                                      TR("ui.edit.note_"
@@ -2072,7 +2078,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                     buf.val,
                                     sizeof(buf.val));
                                 ImGui::SameLine();
-                                if ( ImGui::Button(
+                                if ( ::MMM::UI::FeedbackButton(
                                          fmt::format("{}##nma_osu_{}",
                                                      TR("ui.edit.note_metadata."
                                                         "add_btn")
@@ -2116,8 +2122,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2196,7 +2202,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                             fmt::format("note_mld_{}_field",
                                                         groupIdx));
                                         ImGui::SameLine();
-                                        if ( ImGui::Button(
+                                        if ( ::MMM::UI::FeedbackButton(
                                                  fmt::format(
                                                      "{}##clr_mld_{}_{}",
                                                      TR("ui.edit.note_"
@@ -2253,7 +2259,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                     buf.val,
                                     sizeof(buf.val));
                                 ImGui::SameLine();
-                                if ( ImGui::Button(
+                                if ( ::MMM::UI::FeedbackButton(
                                          fmt::format("{}##nma_mld_{}",
                                                      TR("ui.edit.note_metadata."
                                                         "add_btn")
@@ -2298,8 +2304,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2391,7 +2397,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
 
                                     ImGui::TableNextColumn();
                                     if ( hasKey ) {
-                                        if ( ImGui::Button(
+                                        if ( ::MMM::UI::FeedbackButton(
                                                  fmt::format("{}##clr_rm_{}",
                                                              TR("ui.edit."
                                                                 "note_metadata."

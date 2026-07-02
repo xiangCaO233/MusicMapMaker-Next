@@ -422,8 +422,8 @@ void MainMenuView::renderAboutPopup()
         // --- Button ---
         float btnWidth = 140.0f * dpiScale;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-        if ( ImGui::Button(TR("ui.help.ok").data(),
-                           ImVec2(btnWidth, 36.0f * dpiScale)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
+                                       ImVec2(btnWidth, 36.0f * dpiScale)) ) {
             ImGui::CloseCurrentPopup();
         }
 
@@ -463,8 +463,9 @@ void MainMenuView::renderUpdateCheckingPopup()
 
             float btnWidth = 120.0f * dpiScale;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-            if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.help.ok").data(),
+                     ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
@@ -485,8 +486,9 @@ void MainMenuView::renderUpdateCheckingPopup()
 
             float btnWidth = 120.0f * dpiScale;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-            if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.help.ok").data(),
+                     ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -607,16 +609,18 @@ void MainMenuView::renderUpdatePopup()
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - totalWidth) * 0.5f);
 
             if ( !info.downloadUrl.empty() ) {
-                if ( ImGui::Button(TR("ui.help.download_and_install").data(),
-                                   ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
+                if ( ::MMM::UI::FeedbackButton(
+                         TR("ui.help.download_and_install").data(),
+                         ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
                     m_updateRestartError.clear();
                     m_updateChecker->downloadAsync();
                 }
                 ImGui::SameLine();
             }
 
-            if ( ImGui::Button(TR("ui.help.cancel").data(),
-                               ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.help.cancel").data(),
+                     ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
                 m_updatePopupCanceled = true;
             }
@@ -658,8 +662,9 @@ void MainMenuView::renderUpdatePopup()
                 ImGui::CalcTextSize(TR("ui.help.restart_to_update").data()).x +
                     48.0f * dpiScale);
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-            if ( ImGui::Button(TR("ui.help.restart_to_update").data(),
-                               ImVec2(btnWidth, 40.0f * dpiScale)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.help.restart_to_update").data(),
+                     ImVec2(btnWidth, 40.0f * dpiScale)) ) {
                 std::string restartError;
                 m_updateRestartError.clear();
                 if ( !MMM::Network::UpdateChecker::applyUpdateAndRestart(
@@ -694,8 +699,9 @@ void MainMenuView::renderUpdatePopup()
 
             float btnWidth = 120.0f * dpiScale;
             ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-            if ( ImGui::Button(TR("ui.help.ok").data(),
-                               ImVec2(btnWidth, 32.0f * dpiScale)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.help.ok").data(),
+                     ImVec2(btnWidth, 32.0f * dpiScale)) ) {
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -747,8 +753,8 @@ void MainMenuView::renderUpdateSuccessPopup()
 
         float btnWidth = 120.0f * dpiScale;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
-        if ( ImGui::Button(TR("ui.help.ok").data(),
-                           ImVec2(btnWidth, 32.0f * dpiScale)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
+                                       ImVec2(btnWidth, 32.0f * dpiScale)) ) {
             ImGui::CloseCurrentPopup();
         }
 

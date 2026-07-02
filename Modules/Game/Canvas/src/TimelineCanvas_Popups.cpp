@@ -230,7 +230,7 @@ bool drawTimeEditor(const char* id, double& value,
     }
 
     std::string label = formatCanvasTime(value, snapshot) + "##" + id;
-    if ( ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(label.c_str(), ImVec2(-FLT_MIN, 0.0f)) ) {
         ImGui::OpenPopup(id);
     }
     if ( ImGui::IsItemHovered() ) {
@@ -397,8 +397,9 @@ void TimelineCanvas::renderEventEditorPopup()
 
         const float actionButtonWidth =
             calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
-        if ( ImGui::Button(TR("ui.timeline.event_editor.apply").data(),
-                           ImVec2(actionButtonWidth, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.event_editor.apply").data(),
+                 ImVec2(actionButtonWidth, 0)) ) {
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
@@ -410,8 +411,9 @@ void TimelineCanvas::renderEventEditorPopup()
         }
 
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.timeline.event_editor.delete").data(),
-                           ImVec2(actionButtonWidth, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.event_editor.delete").data(),
+                 ImVec2(actionButtonWidth, 0)) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
             ImGui::CloseCurrentPopup();
@@ -419,8 +421,9 @@ void TimelineCanvas::renderEventEditorPopup()
         }
 
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.timeline.event_editor.cancel").data(),
-                           ImVec2(actionButtonWidth, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.event_editor.cancel").data(),
+                 ImVec2(actionButtonWidth, 0)) ) {
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
@@ -562,8 +565,9 @@ void TimelineCanvas::renderEventCreationPopup()
 
         const float actionButtonWidth =
             calcButtonRowWidth(2, std::floor(100.0f * dpiScale));
-        if ( ImGui::Button(TR("ui.timeline.event_creator.create").data(),
-                           ImVec2(actionButtonWidth, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.event_creator.create").data(),
+                 ImVec2(actionButtonWidth, 0)) ) {
             ::MMM::TimingEffect type = getCreateEffect(m_createType);
             double finalValue        = getStoredValue(type, m_createValue);
 
@@ -585,8 +589,9 @@ void TimelineCanvas::renderEventCreationPopup()
         }
 
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.timeline.event_editor.cancel").data(),
-                           ImVec2(actionButtonWidth, 0)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.event_editor.cancel").data(),
+                 ImVec2(actionButtonWidth, 0)) ) {
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }
@@ -671,7 +676,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
         ImGui::SameLine();
-        if ( ImGui::Button("添加 BPM") ) {
+        if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
             constexpr double DEFAULT_BPM_VALUE = 120.0;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
@@ -692,7 +697,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
                         &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
-        if ( ImGui::Button("添加流速 (SV)") ) {
+        if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::SCROLL,
@@ -703,7 +708,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
-        if ( ImGui::Button("添加 Jump") ) {
+        if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::JUMP,
@@ -714,7 +719,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
-        if ( ImGui::Button("添加 HS") ) {
+        if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
                                                ::MMM::TimingEffect::HS,
@@ -738,7 +743,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::InputDouble(
                 "##BulkOffsetInput", &bulkOffsetValue, 0.001, 0.01, "%.3f");
             ImGui::SameLine();
-            if ( ImGui::Button("应用时间偏移") &&
+            if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
                  std::abs(bulkOffsetValue) > 1e-6 ) {
                 for ( const auto& el : elements ) {
                     entt::entity ent    = getElementEntity(el);
@@ -759,7 +764,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::InputDouble(
                 "##BulkScaleInput", &bulkScaleValue, 0.01, 0.1, "%.2f");
             ImGui::SameLine();
-            if ( ImGui::Button("应用流速缩放") &&
+            if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
                  std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
                 for ( const auto& el : elements ) {
                     if ( el.effects & Logic::System::SCROLL_EFFECT_SCROLL ) {
@@ -922,7 +927,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     ImGui::TableSetColumnIndex(4);
                     std::string seekId =
                         fmt::format("跳转##Seek_{}", displayIdx);
-                    if ( ImGui::Button(seekId.c_str()) ) {
+                    if ( ::MMM::UI::FeedbackButton(seekId.c_str()) ) {
                         float visualOffset = Config::AppConfig::instance()
                                                  .getVisualConfig()
                                                  .getEffectiveVisualOffset();
@@ -932,7 +937,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     }
                     ImGui::SameLine();
                     std::string delId = fmt::format("删除##Del_{}", displayIdx);
-                    if ( ImGui::Button(delId.c_str()) ) {
+                    if ( ::MMM::UI::FeedbackButton(delId.c_str()) ) {
                         entt::entity ent = getElementEntity(el);
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(

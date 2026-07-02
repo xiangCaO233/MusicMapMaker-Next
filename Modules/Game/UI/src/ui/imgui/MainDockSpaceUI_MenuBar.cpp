@@ -70,7 +70,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
 
-            bool clicked = ImGui::Button(str_id, ImVec2(btnSize, btnSize));
+            bool clicked =
+                ::MMM::UI::FeedbackButton(str_id, ImVec2(btnSize, btnSize));
 
             if ( tex ) {
                 ImTextureID imTexId  = (ImTextureID)tex->getImTextureID();
@@ -100,7 +101,8 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
             ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
-            bool clicked = ImGui::Button(icon, ImVec2(btnSize, btnSize));
+            bool clicked =
+                ::MMM::UI::FeedbackButton(icon, ImVec2(btnSize, btnSize));
 
             ImGui::PopStyleColor(3);
             Utils::popFixedButtonStyleVars();

@@ -511,7 +511,8 @@ void ToolbarView::update(UIManager* sourceManager)
         applyProjectPalettePreference();
 
         pushBtnStyle(m_showColorPopup);
-        if ( ImGui::Button("##ToolbarNoteColor", ImVec2(btnSize, btnHeight)) ) {
+        if ( ::MMM::UI::FeedbackButton("##ToolbarNoteColor",
+                                       ImVec2(btnSize, btnHeight)) ) {
             m_showColorPopup = !m_showColorPopup;
             if ( m_showColorPopup ) {
                 m_showDivisorPopup = false;
@@ -529,7 +530,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                           : (btnHeight - swatchSize) * 0.5f),
+                                            : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -664,7 +665,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -712,7 +713,8 @@ void ToolbarView::update(UIManager* sourceManager)
                         speedBuf, sizeof(speedBuf), "--##ToolbarPlaybackSpeed");
                 }
 
-                if ( ImGui::Button(speedBuf, ImVec2(btnSize, btnSize)) ) {
+                if ( ::MMM::UI::FeedbackButton(speedBuf,
+                                               ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
                         m_showKeyPopup     = false;
@@ -772,7 +774,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 snprintf(keyBuf, sizeof(keyBuf), "--##ToolbarKeyCount");
             }
 
-            if ( ImGui::Button(keyBuf, ImVec2(btnSize, btnSize)) ) {
+            if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
                 m_showKeyPopup = !m_showKeyPopup;
                 if ( m_showKeyPopup ) {
                     m_showDivisorPopup = false;
@@ -818,7 +820,8 @@ void ToolbarView::update(UIManager* sourceManager)
                      sizeof(divisorBuf),
                      "%d##ToolbarBeatDivisor",
                      currentDivisor);
-            if ( ImGui::Button(divisorBuf, ImVec2(btnSize, btnSize)) ) {
+            if ( ::MMM::UI::FeedbackButton(divisorBuf,
+                                           ImVec2(btnSize, btnSize)) ) {
                 m_showDivisorPopup = !m_showDivisorPopup;
                 if ( m_showDivisorPopup ) {
                     m_showKeyPopup   = false;
@@ -940,9 +943,10 @@ void ToolbarView::update(UIManager* sourceManager)
                          "1/%d##ToolbarDivisorPreset%zu",
                          commonDivisors[i],
                          i);
-                if ( ImGui::Button(buf,
-                                   ImVec2(std::floor(35.0f * dpiScale),
-                                          std::floor(24.0f * dpiScale))) ) {
+                if ( ::MMM::UI::FeedbackButton(
+                         buf,
+                         ImVec2(std::floor(35.0f * dpiScale),
+                                std::floor(24.0f * dpiScale))) ) {
                     auto newConfig                 = editorCfg;
                     newConfig.settings.beatDivisor = commonDivisors[i];
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
@@ -971,11 +975,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1052,8 +1056,8 @@ void ToolbarView::update(UIManager* sourceManager)
                              "%.2gx##ToolbarSpeedPreset%zu",
                              presets[i],
                              i);
-                    if ( ImGui::Button(buf,
-                                       ImVec2(presetButtonW, presetButtonH)) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             buf, ImVec2(presetButtonW, presetButtonH)) ) {
                         applyPopupSpeed(presets[i]);
                     }
                 }
@@ -1149,9 +1153,10 @@ void ToolbarView::update(UIManager* sourceManager)
                              "%dK##ToolbarKeyPreset%zu",
                              commonKeys[i],
                              i);
-                    if ( ImGui::Button(buf,
-                                       ImVec2(std::floor(28.0f * dpiScale),
-                                              std::floor(24.0f * dpiScale))) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             buf,
+                             ImVec2(std::floor(28.0f * dpiScale),
+                                    std::floor(24.0f * dpiScale))) ) {
                         meta.track_count = commonKeys[i];
                         engine.pushCommand(
                             Logic::CmdUpdateBeatmapMetadata{ meta });
@@ -1614,27 +1619,30 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         const float schemeButtonW   = std::floor(78.0f * dpiScale);
         const bool  canManageScheme = canManageActivePaletteScheme();
         ImGui::BeginDisabled(!canManageScheme);
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.save_scheme").data(),
-                           ImVec2(schemeButtonW, schemeButtonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.save_scheme").data(),
+                 ImVec2(schemeButtonW, schemeButtonH)) ) {
             savePaletteScheme(false);
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.new_scheme").data(),
-                           ImVec2(schemeButtonW, schemeButtonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.new_scheme").data(),
+                 ImVec2(schemeButtonW, schemeButtonH)) ) {
             savePaletteScheme(true);
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(!canManageScheme);
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.rename_scheme").data(),
-                           ImVec2(schemeButtonW, schemeButtonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.rename_scheme").data(),
+                 ImVec2(schemeButtonW, schemeButtonH)) ) {
             renamePaletteScheme();
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::BeginDisabled(!canManageScheme);
-        if ( ImGui::Button(TR("ui.common.delete").data(),
-                           ImVec2(schemeButtonW, schemeButtonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.delete").data(),
+                                       ImVec2(schemeButtonW, schemeButtonH)) ) {
             m_pendingDeletePaletteSchemeIndex =
                 static_cast<std::size_t>(m_activePaletteSchemeIndex);
             ImGui::OpenPopup("DeleteNoteColorPaletteConfirm");
@@ -1646,8 +1654,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 "%s",
                 TR("ui.toolbar.note_palette.delete_scheme_confirm").data());
             const float confirmButtonW = std::floor(92.0f * dpiScale);
-            if ( ImGui::Button(TR("ui.common.confirm").data(),
-                               ImVec2(confirmButtonW, schemeButtonH)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.common.confirm").data(),
+                     ImVec2(confirmButtonW, schemeButtonH)) ) {
                 auto pendingIndex = m_pendingDeletePaletteSchemeIndex;
                 ImGui::CloseCurrentPopup();
                 if ( pendingIndex ) {
@@ -1655,8 +1664,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 }
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(),
-                               ImVec2(confirmButtonW, schemeButtonH)) ) {
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.common.cancel").data(),
+                     ImVec2(confirmButtonW, schemeButtonH)) ) {
                 m_pendingDeletePaletteSchemeIndex.reset();
                 ImGui::CloseCurrentPopup();
             }
@@ -1719,7 +1729,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
+        bool hexChanged       = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1784,13 +1794,15 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         }
 
         const float buttonH = std::floor(26.0f * dpiScale);
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.apply_selected").data(),
-                           ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.apply_selected").data(),
+                 ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
             pushPaletteToSelection();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.toolbar.note_palette.clear_custom").data(),
-                           ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.toolbar.note_palette.clear_custom").data(),
+                 ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
             auto slot   = m_activeColorSlot;
             activeColor = toVec4(skinColorForSlot(slot));
             pushColorCommands(slot, std::nullopt, true);
@@ -1809,7 +1821,7 @@ bool ToolbarView::drawIconButton(const char* icon, const char* id,
                                  const char* shortLabel, float width,
                                  float height, bool showLabel) const
 {
-    const bool clicked = ImGui::Button(id, ImVec2(width, height));
+    const bool clicked = ::MMM::UI::FeedbackButton(id, ImVec2(width, height));
 
     Config::SkinManager& skinCfg   = Config::SkinManager::instance();
     ImFont*              iconFont  = skinCfg.getFont("pure_icons");

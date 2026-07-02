@@ -58,7 +58,7 @@ void centerNextItem(float itemWidth)
 bool drawCenteredButton(const char* label, ImVec2 size)
 {
     centerNextItem(size.x);
-    return ImGui::Button(label, size);
+    return ::MMM::UI::FeedbackButton(label, size);
 }
 
 /// @brief 估算 Checkbox 绘制指定标签时需要的宽度。
@@ -776,14 +776,14 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 static_cast<int>(m_package.candidateFiles.size()));
 
             const ImVec2 selectButtonSize(88.0f * dpiScale, 0.0f);
-            if ( ImGui::Button("全选", selectButtonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("全选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
                     file.selected = true;
                 }
                 syncPackageDependencySelection();
             }
             sameLineIfItemFits(selectButtonSize.x);
-            if ( ImGui::Button("全不选", selectButtonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("全不选", selectButtonSize) ) {
                 for ( auto& file : m_package.candidateFiles ) {
                     file.selected = false;
                 }
@@ -973,7 +973,7 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 footerButtonSize.x * 2.0f + style.ItemSpacing.x;
             centerNextItem(footerButtonRowWidth);
             if ( !canPack ) ImGui::BeginDisabled();
-            if ( ImGui::Button("打包到...", footerButtonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("打包到...", footerButtonSize) ) {
                 m_package.pendingRelativePaths =
                     collectSelectedPackageRelativePaths();
                 if ( preparePackageBeatmapMetadataEdits(
@@ -986,8 +986,8 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
             }
             if ( !canPack ) ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(),
-                               footerButtonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           footerButtonSize) ) {
                 closePopup = true;
                 m_package.pendingRelativePaths.clear();
             }
@@ -1207,7 +1207,7 @@ void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
             const float  buttonRowWidth =
                 buttonSize.x * 2.0f + style.ItemSpacing.x;
             centerNextItem(buttonRowWidth);
-            if ( ImGui::Button("继续打包", buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("继续打包", buttonSize) ) {
                 m_package.pendingMetadataOverrides =
                     collectPackageMetadataOverridesFromEdits();
                 m_package.beatmapMetadataEdits.clear();
@@ -1215,7 +1215,8 @@ void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           buttonSize) ) {
                 m_package.pendingRelativePaths.clear();
                 m_package.pendingMetadataOverrides.clear();
                 m_package.beatmapMetadataEdits.clear();

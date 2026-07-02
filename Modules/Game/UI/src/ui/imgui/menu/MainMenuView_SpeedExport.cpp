@@ -608,22 +608,22 @@ void MainMenuView::renderBeatmapSpeedExportPopup(float dpiScale)
     const float       contentWidth = ImGui::GetContentRegionAvail().x;
     const float       buttonW =
         std::floor((contentWidth - style.ItemSpacing.x * 3.0f) / 4.0f);
-    if ( ImGui::Button("0.75x", ImVec2(buttonW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton("0.75x", ImVec2(buttonW, 0.0f)) ) {
         m_speedExportFactor = 0.75f;
         refreshAutoNameIfNeeded();
     }
     ImGui::SameLine();
-    if ( ImGui::Button("1.2x", ImVec2(buttonW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton("1.2x", ImVec2(buttonW, 0.0f)) ) {
         m_speedExportFactor = 1.2f;
         refreshAutoNameIfNeeded();
     }
     ImGui::SameLine();
-    if ( ImGui::Button("1.5x", ImVec2(buttonW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton("1.5x", ImVec2(buttonW, 0.0f)) ) {
         m_speedExportFactor = 1.5f;
         refreshAutoNameIfNeeded();
     }
     ImGui::SameLine();
-    if ( ImGui::Button("2x", ImVec2(buttonW, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton("2x", ImVec2(buttonW, 0.0f)) ) {
         m_speedExportFactor = 2.0f;
         refreshAutoNameIfNeeded();
     }
@@ -674,12 +674,13 @@ void MainMenuView::renderBeatmapSpeedExportPopup(float dpiScale)
         (ImGui::GetContentRegionAvail().x - style.ItemSpacing.x) / 2.0f);
     const ImVec2 actionButtonSize(actionButtonWidth, 0.0f);
     ImGui::BeginDisabled(m_speedExportRunning);
-    if ( ImGui::Button("开始制作", actionButtonSize) ) {
+    if ( ::MMM::UI::FeedbackButton("开始制作", actionButtonSize) ) {
         startBeatmapSpeedExport();
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if ( ImGui::Button("关闭", actionButtonSize) && !m_speedExportRunning ) {
+    if ( ::MMM::UI::FeedbackButton("关闭", actionButtonSize) &&
+         !m_speedExportRunning ) {
         ImGui::CloseCurrentPopup();
     }
 

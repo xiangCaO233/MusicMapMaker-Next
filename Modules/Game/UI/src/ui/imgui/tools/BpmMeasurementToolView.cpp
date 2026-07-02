@@ -888,12 +888,13 @@ void BpmMeasurementToolView::renderControlPanel()
     if ( !hasSelection ) {
         ImGui::BeginDisabled();
     }
-    if ( ImGui::Button(TR("ui.tools.bpm_measure.reload").data(),
-                       ImVec2(-1.0f, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.tools.bpm_measure.reload").data(),
+                                   ImVec2(-1.0f, 0.0f)) ) {
         requestAnalyzeSelectedTrack();
     }
-    if ( ImGui::Button(TR("ui.tools.bpm_measure.auto_button").data(),
-                       ImVec2(-1.0f, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.tools.bpm_measure.auto_button").data(),
+             ImVec2(-1.0f, 0.0f)) ) {
         requestAutoMeasureSelectedTrack();
     }
     if ( !hasSelection ) {
@@ -992,8 +993,9 @@ void BpmMeasurementToolView::renderControlPanel()
         m_zoomSeconds = std::clamp<double>(zoom, 0.1, 120.0);
     }
 
-    if ( ImGui::Button(TR("ui.tools.bpm_measure.center_first").data(),
-                       ImVec2(-1.0f, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.tools.bpm_measure.center_first").data(),
+             ImVec2(-1.0f, 0.0f)) ) {
         m_viewCenter = std::clamp<double>(
             m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
     }
@@ -1070,7 +1072,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
             if ( i == 0 ) {
                 ImGui::BeginDisabled();
             }
-            if ( ImGui::SmallButton(TR("ui.common.delete").data()) ) {
+            if ( ::MMM::UI::FeedbackSmallButton(
+                     TR("ui.common.delete").data()) ) {
                 m_timingSegments.erase(m_timingSegments.begin() +
                                        static_cast<std::ptrdiff_t>(i));
                 changed = true;
@@ -1093,8 +1096,9 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
         resetMetronomeScheduler(m_viewCenter);
     }
 
-    if ( ImGui::Button(TR("ui.tools.bpm_measure.add_segment").data(),
-                       ImVec2(-1.0f, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.tools.bpm_measure.add_segment").data(),
+             ImVec2(-1.0f, 0.0f)) ) {
         const std::size_t sourceIndex = findSegmentIndexForTime(m_viewCenter);
         const double      bpm         = m_timingSegments.empty()
                                             ? m_bpm
@@ -1109,13 +1113,15 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
 
     ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
                     &m_keepNonBpmTimingsOnApply);
-    if ( ImGui::Button(TR("ui.tools.bpm_measure.apply_to_beatmap").data(),
-                       ImVec2(-1.0f, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.tools.bpm_measure.apply_to_beatmap").data(),
+             ImVec2(-1.0f, 0.0f)) ) {
         requestOpenApplyTimingPopup();
     }
     if ( m_measurementExportCallback ) {
-        if ( ImGui::Button(TR("ui.tools.bpm_measure.export_to_wizard").data(),
-                           ImVec2(-1.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.tools.bpm_measure.export_to_wizard").data(),
+                 ImVec2(-1.0f, 0.0f)) ) {
             exportMeasuredTimingsToCallback(true);
         }
     }
@@ -1136,14 +1142,14 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
             "%s", TR("ui.tools.bpm_measure.auto_apply_message").data());
         ImGui::Spacing();
         const float buttonWidth = 120.0f;
-        if ( ImGui::Button(TR("ui.common.apply").data(),
-                           ImVec2(buttonWidth, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.apply").data(),
+                                       ImVec2(buttonWidth, 0.0f)) ) {
             requestOpenApplyTimingPopup();
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(buttonWidth, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                       ImVec2(buttonWidth, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1210,8 +1216,8 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
         if ( options.empty() ) {
             ImGui::BeginDisabled();
         }
-        if ( ImGui::Button(TR("ui.common.apply").data(),
-                           ImVec2(buttonWidth, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.apply").data(),
+                                       ImVec2(buttonWidth, 0.0f)) ) {
             applyMeasuredTimingsToSelectedBeatmap();
             ImGui::CloseCurrentPopup();
         }
@@ -1219,8 +1225,8 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
             ImGui::EndDisabled();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.common.cancel").data(),
-                           ImVec2(buttonWidth, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                       ImVec2(buttonWidth, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -1248,8 +1254,8 @@ void BpmMeasurementToolView::renderPlaybackControls()
 
     const float iconButtonSize = ImGui::GetFrameHeight();
     Utils::pushFixedButtonStyleVars();
-    if ( ImGui::Button(isPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
-                       ImVec2(iconButtonSize, iconButtonSize)) ) {
+    if ( ::MMM::UI::FeedbackButton(isPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
+                                   ImVec2(iconButtonSize, iconButtonSize)) ) {
         if ( isPlaying ) {
             setPlaybackState(false);
         } else if ( loadSelectedTrackForPlayback() ) {
@@ -1274,8 +1280,8 @@ void BpmMeasurementToolView::renderPlaybackControls()
         ImGui::BeginDisabled();
     }
     Utils::pushFixedButtonStyleVars();
-    if ( ImGui::Button(ICON_MMM_STOP,
-                       ImVec2(iconButtonSize, iconButtonSize)) ) {
+    if ( ::MMM::UI::FeedbackButton(ICON_MMM_STOP,
+                                   ImVec2(iconButtonSize, iconButtonSize)) ) {
         setPlaybackState(false);
         seekPlaybackToCanvasTime(0.0);
         audio.stop();
@@ -1349,7 +1355,8 @@ void BpmMeasurementToolView::renderPlaybackControls()
         if ( i > 0 ) {
             ImGui::SameLine();
         }
-        if ( ImGui::Button(presetLabels[i], ImVec2(buttonWidth, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(presetLabels[i],
+                                       ImVec2(buttonWidth, 0.0f)) ) {
             applyPlaybackSpeed(presetSpeeds[i]);
         }
     }

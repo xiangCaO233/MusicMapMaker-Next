@@ -429,9 +429,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                   option.displayName,
-                                                   option.internalName,
-                                                   option.cameraId);
+                                                option.displayName,
+                                                option.internalName,
+                                                option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ImGui::Selectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -446,8 +446,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
             ImGui::EndChild();
         }
 
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -475,12 +476,14 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
             &m_templateOptions.copyObjects);
 
         ImGui::Spacing();
-        if ( ImGui::Button(TR("ui.help.ok").data(), ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
+                                       ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -506,15 +509,16 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup()
                 .c_str());
 
         ImGui::Spacing();
-        if ( ImGui::Button(
+        if ( ::MMM::UI::FeedbackButton(
                  TR("ui.wizard.new_beatmap.duplicate_name.continue").data(),
                  ImVec2(140.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
             submitCreateRequest();
         }
         ImGui::SameLine();
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                           ImVec2(120.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.cancel").data(),
+                 ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
@@ -572,16 +576,18 @@ void NewBeatmapWizard::renderTemplateSourceControls(
                       TR("ui.wizard.new_beatmap.template.not_selected").data());
         ImGui::TextWrapped("%s", selectedText.c_str());
 
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.template.pick").data(),
-                           ImVec2(150.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.template.pick").data(),
+                 ImVec2(150.0f, 0.0f)) ) {
             m_shouldOpenTemplatePicker = true;
         }
         ImGui::SameLine();
         if ( !m_templateBeatmap ) {
             ImGui::BeginDisabled();
         }
-        if ( ImGui::Button(TR("ui.wizard.new_beatmap.template.options").data(),
-                           ImVec2(150.0f, 0.0f)) ) {
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.wizard.new_beatmap.template.options").data(),
+                 ImVec2(150.0f, 0.0f)) ) {
             m_shouldOpenTemplateOptions = true;
         }
         if ( !m_templateBeatmap ) {
@@ -711,8 +717,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
@@ -765,11 +771,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             }
         }
     };
-    if ( ImGui::Button(measureBpmLabel, ImVec2(measureBpmWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(measureBpmLabel,
+                                   ImVec2(measureBpmWidth, 0.0f)) ) {
         openBpmTool(false);
     }
     ImGui::SameLine();
-    if ( ImGui::Button(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
         openBpmTool(true);
     }
     if ( m_selectedAudioTrackId.empty() ) {
@@ -880,8 +887,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
 
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.create").data(),
-                       ImVec2(120, 0)) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.create").data(),
+                                   ImVec2(120, 0)) ) {
         if ( hasInternalNameConflict() ) {
             ImGui::OpenPopup("NewBeatmapDuplicateNameWarning");
         } else {
@@ -901,8 +908,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
 
     ImGui::SameLine(ImGui::GetWindowWidth() - 130);
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                       ImVec2(120, 0)) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.cancel").data(),
+                                   ImVec2(120, 0)) ) {
         close();
     }
 

@@ -156,8 +156,8 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
             Sizing::Fixed(openButtonWidth),
             Sizing::Fixed(metrics.buttonHeight),
             [this, openDirectoryLabel](Clay_BoundingBox r, bool isHovered) {
-                if ( ImGui::Button(openDirectoryLabel,
-                                   { r.width, r.height }) ) {
+                if ( ::MMM::UI::FeedbackButton(openDirectoryLabel,
+                                               { r.width, r.height }) ) {
                     this->openFolderPicker();
                 }
             })

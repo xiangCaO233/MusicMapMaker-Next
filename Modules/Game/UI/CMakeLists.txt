@@ -2,6 +2,7 @@ add_library(
   UI STATIC
   src/ui/UIManager.cpp
   src/ui/brush/Brush.cpp
+  src/ui/utils/UIWidgetUtils.cpp
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
   src/ui/imgui/MainDockSpaceUI_Docking.cpp

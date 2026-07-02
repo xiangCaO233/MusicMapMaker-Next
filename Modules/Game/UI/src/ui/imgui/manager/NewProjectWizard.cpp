@@ -380,8 +380,9 @@ void NewProjectWizard::renderLocationStep()
 
     const float buttonWidth = std::floor(
         160.0f * Config::AppConfig::instance().getWindowContentScale());
-    if ( ImGui::Button(TR("ui.wizard.new_project.select_parent").data(),
-                       ImVec2(buttonWidth, 0.0f)) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.wizard.new_project.select_parent").data(),
+             ImVec2(buttonWidth, 0.0f)) ) {
         requestParentFolderPicker();
     }
 
@@ -442,7 +443,8 @@ void NewProjectWizard::renderFooter()
         std::min(150.0f * dpiScale, (available - spacing * 2.0f) / 3.0f));
     const ImVec2 buttonSize{ std::max(96.0f * dpiScale, buttonWidth), 0.0f };
     ImGui::BeginDisabled(suppressActions || m_currentStep == Step::ProjectInfo);
-    if ( ImGui::Button(TR("ui.wizard.new_project.back").data(), buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_project.back").data(),
+                                   buttonSize) ) {
         if ( m_currentStep == Step::Preferences ) {
             m_currentStep = Step::ProjectInfo;
         } else if ( m_currentStep == Step::Location ) {
@@ -453,8 +455,8 @@ void NewProjectWizard::renderFooter()
 
     ImGui::SameLine();
     ImGui::BeginDisabled(suppressActions);
-    if ( ImGui::Button(TR("ui.wizard.new_beatmap.cancel").data(),
-                       buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.cancel").data(),
+                                   buttonSize) ) {
         close();
     }
     ImGui::EndDisabled();
@@ -462,9 +464,10 @@ void NewProjectWizard::renderFooter()
     ImGui::SameLine();
     ImGui::BeginDisabled(suppressActions || !canAdvance());
     const bool isLastStep = m_currentStep == Step::Location;
-    if ( ImGui::Button(isLastStep ? TR("ui.wizard.new_project.create").data()
-                                  : TR("ui.wizard.new_project.next").data(),
-                       buttonSize) ) {
+    if ( ::MMM::UI::FeedbackButton(
+             isLastStep ? TR("ui.wizard.new_project.create").data()
+                        : TR("ui.wizard.new_project.next").data(),
+             buttonSize) ) {
         if ( m_currentStep == Step::ProjectInfo ) {
             m_currentStep = Step::Preferences;
         } else if ( m_currentStep == Step::Preferences ) {
@@ -539,8 +542,8 @@ void NewProjectWizard::openUnifiedParentFolderPicker(
     fdConfig.path = initialPath.empty() ? std::string(".") : initialPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                 ImGuiFileDialogFlags_HideColumnType |
-                                 ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                     ImGuiFileDialogFlags_HideColumnType |
+                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
     ImGuiFileDialog::Instance()->OpenDialog(
         PARENT_FOLDER_PICKER_ID,
         TR("ui.wizard.new_project.select_parent").data(),

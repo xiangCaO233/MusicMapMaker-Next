@@ -533,9 +533,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGuiCol_Text, Utils::UIThemeUtils::getDangerColor());
                 }
                 Utils::pushFixedButtonStyleVars();
-                if ( ImGui::Button((std::string(icon) + "##Btn" + id).c_str(),
-                                   ImVec2(layoutMetrics.muteButtonSize,
-                                          layoutMetrics.muteButtonSize)) ) {
+                if ( ::MMM::UI::FeedbackButton(
+                         (std::string(icon) + "##Btn" + id).c_str(),
+                         ImVec2(layoutMetrics.muteButtonSize,
+                                layoutMetrics.muteButtonSize)) ) {
                     onMuteChange(!muted);
                 }
                 Utils::popFixedButtonStyleVars();
@@ -1069,7 +1070,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                   ImGui::ColorConvertFloat4ToU32(bgCol),
                                   rounding);
 
-                if ( ImGui::Button(
+                if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ImportAudio", ICON_MMM_PLUS).c_str(),
                          ImVec2(r.width, r.height)) ) {
                     auto& settings = engine.getEditorConfig().settings;
@@ -1244,23 +1245,23 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 Sizing::Fixed(modalButtonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(
+                    if ( ::MMM::UI::FeedbackButton(
                              TR("ui.audio_manager.remove_track").data(),
                              { r.width, r.height }) ) {
                         ImGui::OpenPopup("RemoveTrackConfirm");
                     }
                 });
-            btnRow.addElement(
-                "CancelBtn",
-                Sizing::Fixed(cancelButtonW),
-                Sizing::Fixed(modalButtonH),
-                [=, this](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { r.width, r.height }) ) {
-                        m_manageTrackId = "";
-                    }
-                });
+            btnRow.addElement("CancelBtn",
+                              Sizing::Fixed(cancelButtonW),
+                              Sizing::Fixed(modalButtonH),
+                              [=, this](Clay_BoundingBox r, bool) {
+                                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                                  if ( ::MMM::UI::FeedbackButton(
+                                           TR("ui.common.cancel").data(),
+                                           { r.width, r.height }) ) {
+                                      m_manageTrackId = "";
+                                  }
+                              });
             modalLayout.addLayout(
                 "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(modalButtonH));
 
@@ -1278,16 +1279,18 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::Text("%s",
                                 TR("ui.audio_manager.remove_confirm").data());
                     ImGui::Spacing();
-                    if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.confirm").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(
                             Logic::CmdRemoveAudioResource{ m_manageTrackId });
                         m_manageTrackId = "";
                     }
                     ImGui::SameLine();
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndPopup();

@@ -296,7 +296,8 @@ void AudioSpectrumView::update(UIManager* sourceManager)
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
-                  if ( ImGui::Button(TR("ui.spectrum.sync_effects").data()) ) {
+                  if ( ::MMM::UI::FeedbackButton(
+                           TR("ui.spectrum.sync_effects").data()) ) {
                       startAsyncRecalculate();
                   }
               });

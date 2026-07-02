@@ -410,7 +410,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                       ImGui::ColorConvertFloat4ToU32(bgCol),
                       rounding);
 
-    if ( ImGui::Button(ICON_MMM_PLUS, ImVec2(footerSize.x, btnSize)) ) {
+    if ( ::MMM::UI::FeedbackButton(ICON_MMM_PLUS,
+                                   ImVec2(footerSize.x, btnSize)) ) {
         auto* wizard =
             sourceManager->getView<NewBeatmapWizard>("NewBeatmapWizard");
         if ( wizard ) wizard->open();
@@ -493,24 +494,24 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 Sizing::Fixed(buttonH),
                 [=](Clay_BoundingBox r, bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(
+                    if ( ::MMM::UI::FeedbackButton(
                              TR("ui.beatmap_manager.remove_beatmap").data(),
                              { r.width, r.height }) ) {
                         ImGui::OpenPopup("RemoveBeatmapConfirm");
                     }
                 });
 
-            btnRow.addElement(
-                "CancelBtn",
-                Sizing::Fixed(cancelButtonW),
-                Sizing::Fixed(buttonH),
-                [=, this](Clay_BoundingBox r, bool) {
-                    ImGui::SetCursorScreenPos({ r.x, r.y });
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { r.width, r.height }) ) {
-                        m_manageBeatmapPath = "";
-                    }
-                });
+            btnRow.addElement("CancelBtn",
+                              Sizing::Fixed(cancelButtonW),
+                              Sizing::Fixed(buttonH),
+                              [=, this](Clay_BoundingBox r, bool) {
+                                  ImGui::SetCursorScreenPos({ r.x, r.y });
+                                  if ( ::MMM::UI::FeedbackButton(
+                                           TR("ui.common.cancel").data(),
+                                           { r.width, r.height }) ) {
+                                      m_manageBeatmapPath = "";
+                                  }
+                              });
 
             modalLayout.addLayout(
                 "BtnRowLayout", btnRow, Sizing::Grow(), Sizing::Fixed(buttonH));
@@ -528,15 +529,17 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::Text("%s",
                                 TR("ui.beatmap_manager.remove_confirm").data());
                     ImGui::Spacing();
-                    if ( ImGui::Button(TR("ui.common.confirm").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.confirm").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         engine.pushCommand(
                             Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
                         m_manageBeatmapPath = "";
                     }
                     ImGui::SameLine();
-                    if ( ImGui::Button(TR("ui.common.cancel").data(),
-                                       { 100 * dpiScale, 0 }) ) {
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { 100 * dpiScale, 0 }) ) {
                         ImGui::CloseCurrentPopup();
                     }
                     ImGui::EndPopup();

@@ -205,7 +205,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
-                  if ( ImGui::Button(TR("ui.waveform.reset_zoom").data()) )
+                  if ( ::MMM::UI::FeedbackButton(
+                           TR("ui.waveform.reset_zoom").data()) )
                       m_zoom = 1.0f;
               });
     pushGroup("SyncEffectsBtn",
@@ -213,7 +214,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
               frameH,
               [&](Clay_BoundingBox r, bool) {
                   ImGui::SetCursorScreenPos({ r.x, r.y });
-                  if ( ImGui::Button(TR("ui.waveform.sync_effects").data()) ) {
+                  if ( ::MMM::UI::FeedbackButton(
+                           TR("ui.waveform.sync_effects").data()) ) {
                       fullRecalculate();
                   }
               });

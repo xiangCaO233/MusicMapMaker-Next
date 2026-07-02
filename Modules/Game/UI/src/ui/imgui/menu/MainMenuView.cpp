@@ -601,7 +601,7 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
             ImGui::Spacing();
 
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
-            if ( ImGui::Button("确认覆盖", buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
                 if ( m_currentSaveKeyConversionWarningConfirmed ) {
                     dispatchSaveBeatmap(true);
                     m_currentSaveKeyConversionWarningConfirmed = false;
@@ -612,7 +612,8 @@ void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
                 ImGui::CloseCurrentPopup();
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           buttonSize) ) {
                 m_pendingSaveConflictPath.clear();
                 m_currentSaveKeyConversionWarningConfirmed = false;
                 ImGui::CloseCurrentPopup();
@@ -661,7 +662,8 @@ void MainMenuView::renderProjectOpenFailedPopup(float dpiScale)
             ImGui::Spacing();
 
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
-            if ( ImGui::Button(TR("ui.common.confirm").data(), buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.confirm").data(),
+                                           buttonSize) ) {
                 m_pendingProjectOpenFailedPath.clear();
                 m_pendingProjectOpenFailedMessage.clear();
                 m_pendingProjectOpenFailedIsPackage = false;
@@ -720,13 +722,13 @@ void MainMenuView::renderPgoUploadConsentWindow(float dpiScale)
                                      (availableWidth - buttonRowWidth) * 0.5f);
             }
 
-            if ( ImGui::Button(TR("ui.pgo.consent.accept").data(),
-                               buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.pgo.consent.accept").data(),
+                                           buttonSize) ) {
                 applyConsent(true);
             }
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.pgo.consent.decline").data(),
-                               buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.pgo.consent.decline").data(),
+                                           buttonSize) ) {
                 applyConsent(false);
             }
 
@@ -917,13 +919,14 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
                                    m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
-            if ( ImGui::Button("替换", buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton("替换", buttonSize) ) {
                 submitDataSourceReplaceRequest();
                 closePopup = true;
             }
             if ( !canApply ) ImGui::EndDisabled();
             ImGui::SameLine();
-            if ( ImGui::Button(TR("ui.common.cancel").data(), buttonSize) ) {
+            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                           buttonSize) ) {
                 closePopup = true;
             }
 
