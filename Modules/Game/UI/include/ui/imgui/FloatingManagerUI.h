@@ -150,6 +150,9 @@ private:
     ///@brief 是否显示此浮窗
     bool m_isVisible = false;
 
+    /// @brief 浮动管理器显示/隐藏动画进度，0 为隐藏，1 为完全显示。
+    float m_visibilityAnimAmount{ 0.0f };
+
     /// @brief 显示后是否已经见过满足当前子视图最小尺寸的窗口大小。
     bool m_hasSeenUsableSize{ false };
 
