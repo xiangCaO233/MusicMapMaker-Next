@@ -1,7 +1,7 @@
 # Linux 到 Windows MinGW clang 交叉工具链。
 #
-# 编译和链接使用 Linux 宿主上的 clang-22/clang++-22 + lld，目标端默认使用 MSYS2 CLANG64
-# sysroot。CLANG64 使用 UCRT C runtime 与 libc++，预编译库必须写入 mingw/clang64，避免和 GCC
+# 编译和链接优先使用完整 llvm-mingw UCRT 工具链，也兼容 Linux 宿主上的 clang-22/clang++-22 + MinGW
+# binutils。CLANG64 使用 UCRT C runtime 与 libc++，预编译库必须写入 mingw/clang64， 避免和 GCC
 # UCRT64 的 mingw/ucrt64 布局混用。
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
@@ -13,26 +13,67 @@ set(MINGW_TOOLCHAIN_PREFIX
     "x86_64-w64-mingw32"
     CACHE STRING "Prefix for Linux-hosted MinGW binutils.")
 
+if(DEFINED ENV{LLVM_MINGW_ROOT} AND NOT "$ENV{LLVM_MINGW_ROOT}" STREQUAL "")
+  file(TO_CMAKE_PATH "$ENV{LLVM_MINGW_ROOT}" LLVM_MINGW_ROOT_DEFAULT)
+else()
+  set(LLVM_MINGW_ROOT_DEFAULT "")
+endif()
+set(LLVM_MINGW_ROOT
+    "${LLVM_MINGW_ROOT_DEFAULT}"
+    CACHE PATH "Root directory of a complete llvm-mingw toolchain.")
+
+set(_LLVM_MINGW_PROGRAM_PATHS "")
+if(LLVM_MINGW_ROOT)
+  list(APPEND _LLVM_MINGW_PROGRAM_PATHS "${LLVM_MINGW_ROOT}/bin")
+endif()
+
+function(find_mingw_clang_tool out_var)
+  if(_LLVM_MINGW_PROGRAM_PATHS)
+    find_program(
+      ${out_var}
+      NAMES ${ARGN}
+      PATHS ${_LLVM_MINGW_PROGRAM_PATHS}
+      NO_DEFAULT_PATH)
+  endif()
+  if(NOT ${out_var})
+    find_program(${out_var} NAMES ${ARGN})
+  endif()
+  set(${out_var}
+      "${${out_var}}"
+      PARENT_SCOPE)
+endfunction()
+
 if(DEFINED ENV{MINGW_SYSROOT} AND NOT "$ENV{MINGW_SYSROOT}" STREQUAL "")
   file(TO_CMAKE_PATH "$ENV{MINGW_SYSROOT}" MINGW_SYSROOT_DEFAULT)
 else()
-  if(DEFINED ENV{WINDOWS_CROSS_ROOT} AND NOT "$ENV{WINDOWS_CROSS_ROOT}"
-                                         STREQUAL "")
-    file(TO_CMAKE_PATH "$ENV{WINDOWS_CROSS_ROOT}" WINDOWS_CROSS_ROOT_DEFAULT)
-  else()
-    set(WINDOWS_CROSS_ROOT_DEFAULT "/mnt/cross/windows")
+  set(MINGW_SYSROOT_DEFAULT "")
+  if(LLVM_MINGW_ROOT
+     AND EXISTS "${LLVM_MINGW_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/include"
+     AND EXISTS "${LLVM_MINGW_ROOT}/${MINGW_TOOLCHAIN_PREFIX}/lib")
+    set(MINGW_SYSROOT_DEFAULT "${LLVM_MINGW_ROOT}/${MINGW_TOOLCHAIN_PREFIX}")
+  elseif(LLVM_MINGW_ROOT)
+    set(MINGW_SYSROOT_DEFAULT "${LLVM_MINGW_ROOT}")
   endif()
 
-  set(MSYS2_CLANG64_SYSROOT_DEFAULT
-      "${WINDOWS_CROSS_ROOT_DEFAULT}/msys64/clang64")
-  if(EXISTS "${MSYS2_CLANG64_SYSROOT_DEFAULT}/include"
-     AND EXISTS "${MSYS2_CLANG64_SYSROOT_DEFAULT}/lib")
-    set(MINGW_SYSROOT_DEFAULT "${MSYS2_CLANG64_SYSROOT_DEFAULT}")
-  else()
-    execute_process(
-      COMMAND ${MINGW_TOOLCHAIN_PREFIX}-gcc -print-sysroot
-      OUTPUT_VARIABLE MINGW_SYSROOT_DEFAULT
-      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(MINGW_SYSROOT_DEFAULT STREQUAL "")
+    if(DEFINED ENV{WINDOWS_CROSS_ROOT} AND NOT "$ENV{WINDOWS_CROSS_ROOT}"
+                                           STREQUAL "")
+      file(TO_CMAKE_PATH "$ENV{WINDOWS_CROSS_ROOT}" WINDOWS_CROSS_ROOT_DEFAULT)
+    else()
+      set(WINDOWS_CROSS_ROOT_DEFAULT "/mnt/cross/windows")
+    endif()
+
+    set(MSYS2_CLANG64_SYSROOT_DEFAULT
+        "${WINDOWS_CROSS_ROOT_DEFAULT}/msys64/clang64")
+    if(EXISTS "${MSYS2_CLANG64_SYSROOT_DEFAULT}/include"
+       AND EXISTS "${MSYS2_CLANG64_SYSROOT_DEFAULT}/lib")
+      set(MINGW_SYSROOT_DEFAULT "${MSYS2_CLANG64_SYSROOT_DEFAULT}")
+    else()
+      execute_process(
+        COMMAND ${MINGW_TOOLCHAIN_PREFIX}-gcc -print-sysroot
+        OUTPUT_VARIABLE MINGW_SYSROOT_DEFAULT
+        OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    endif()
   endif()
 endif()
 
@@ -45,20 +86,26 @@ set(MINGW_SYSROOT
     CACHE PATH "Root directory of the MinGW Windows sysroot.")
 set(CMAKE_SYSROOT "${MINGW_SYSROOT}")
 
-find_program(MMM_MINGW_CLANG_C NAMES clang-22)
-find_program(MMM_MINGW_CLANG_CXX NAMES clang++-22)
-find_program(MMM_MINGW_WINDRES NAMES ${MINGW_TOOLCHAIN_PREFIX}-windres)
-find_program(MMM_MINGW_AR NAMES ${MINGW_TOOLCHAIN_PREFIX}-ar)
-find_program(MMM_MINGW_RANLIB NAMES ${MINGW_TOOLCHAIN_PREFIX}-ranlib)
-find_program(MMM_MINGW_STRIP NAMES ${MINGW_TOOLCHAIN_PREFIX}-strip)
-find_program(MMM_MINGW_OBJCOPY NAMES ${MINGW_TOOLCHAIN_PREFIX}-objcopy)
-find_program(MMM_MINGW_NM NAMES llvm-nm-22 llvm-nm-21 llvm-nm-20 llvm-nm
-                                ${MINGW_TOOLCHAIN_PREFIX}-nm)
+find_mingw_clang_tool(MMM_MINGW_CLANG_C ${MINGW_TOOLCHAIN_PREFIX}-clang
+                      clang-22 clang)
+find_mingw_clang_tool(MMM_MINGW_CLANG_CXX ${MINGW_TOOLCHAIN_PREFIX}-clang++
+                      clang++-22 clang++)
+find_mingw_clang_tool(MMM_MINGW_WINDRES ${MINGW_TOOLCHAIN_PREFIX}-windres
+                      llvm-windres)
+find_mingw_clang_tool(MMM_MINGW_AR ${MINGW_TOOLCHAIN_PREFIX}-ar llvm-ar)
+find_mingw_clang_tool(MMM_MINGW_RANLIB ${MINGW_TOOLCHAIN_PREFIX}-ranlib
+                      llvm-ranlib)
+find_mingw_clang_tool(MMM_MINGW_STRIP ${MINGW_TOOLCHAIN_PREFIX}-strip
+                      llvm-strip)
+find_mingw_clang_tool(MMM_MINGW_OBJCOPY ${MINGW_TOOLCHAIN_PREFIX}-objcopy
+                      llvm-objcopy)
+find_mingw_clang_tool(MMM_MINGW_NM ${MINGW_TOOLCHAIN_PREFIX}-nm llvm-nm-22
+                      llvm-nm-21 llvm-nm-20 llvm-nm)
 if(NOT MMM_MINGW_CLANG_C)
-  message(FATAL_ERROR "找不到 clang-22，请安装 LLVM clang 22。")
+  message(FATAL_ERROR "找不到 clang，请安装 LLVM clang 22 或提供 LLVM_MINGW_ROOT。")
 endif()
 if(NOT MMM_MINGW_CLANG_CXX)
-  message(FATAL_ERROR "找不到 clang++-22，请安装 LLVM clang++ 22。")
+  message(FATAL_ERROR "找不到 clang++，请安装 LLVM clang++ 22 或提供 LLVM_MINGW_ROOT。")
 endif()
 if(NOT MMM_MINGW_WINDRES)
   message(FATAL_ERROR "找不到 ${MINGW_TOOLCHAIN_PREFIX}-windres。")
