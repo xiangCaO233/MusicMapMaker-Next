@@ -65,8 +65,8 @@ void MainMenuView::renderHelpMenu(UIManager* sourceManager)
 
         const char* iconPtr = icon ? icon : "  ";
 
-        bool clicked =
-            ImGui::MenuItemEx(label, iconPtr, shortcut, false, enabled);
+        bool clicked = ::MMM::UI::FeedbackMenuItemEx(
+            label, iconPtr, shortcut, false, enabled);
 
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
@@ -77,7 +77,7 @@ void MainMenuView::renderHelpMenu(UIManager* sourceManager)
         ImGui::OpenPopup(TR("ui.help"));
         m_openHelpMenuNextFrame = false;
     }
-    if ( ImGui::BeginMenu(TR("ui.help")) ) {
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.help")) ) {
         if ( m_closeHelpMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeHelpMenuNextFrame = false;
@@ -90,7 +90,7 @@ void MainMenuView::renderHelpMenu(UIManager* sourceManager)
         if ( MenuItemWithFontIcon(ICON_MMM_INFO_CIRCLE, TR("ui.help.about")) ) {
             m_showAboutPopup = true;
         }
-        ImGui::EndMenu();
+        ::MMM::UI::FeedbackEndMenu();
     }
 }
 

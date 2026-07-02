@@ -533,6 +533,24 @@ constexpr ImGuiID BUTTON_HOVER_AMOUNT_KEY_SALT = 0x6D6D4822u;
 /// @brief 按钮最后一次绘制帧存储键的盐值。
 constexpr ImGuiID BUTTON_LAST_FRAME_KEY_SALT = 0x6D6D4823u;
 
+/// @brief 菜单打开状态存储键的盐值。
+constexpr ImGuiID MENU_OPEN_KEY_SALT = 0x6D6D4D21u;
+
+/// @brief 菜单弹窗动画进度存储键的盐值。
+constexpr ImGuiID MENU_POPUP_AMOUNT_KEY_SALT = 0x6D6D4D22u;
+
+/// @brief 菜单弹窗最后一次绘制帧存储键的盐值。
+constexpr ImGuiID MENU_POPUP_LAST_FRAME_KEY_SALT = 0x6D6D4D23u;
+
+/// @brief 菜单弹窗关闭动画状态存储键的盐值。
+constexpr ImGuiID MENU_POPUP_CLOSING_KEY_SALT = 0x6D6D4D24u;
+
+/// @brief 菜单弹窗淡入速度，值越大越快。
+constexpr float MENU_POPUP_FADE_SPEED = 8.0f;
+
+/// @brief 菜单弹窗滑入位移像素。
+constexpr float MENU_POPUP_SLIDE_Y = 8.0f;
+
 /// @brief 计算带盐的 ImGuiStorage 键，避免与控件自身 ID 冲突。
 /// @param id 控件 ID。
 /// @param salt 用途盐值。
@@ -548,6 +566,16 @@ ImGuiID makeButtonStorageKey(ImGuiID id, ImGuiID salt)
 float saturate(float value)
 {
     return std::clamp(value, 0.0f, 1.0f);
+}
+
+/// @brief 计算 ease-out cubic 缓动值。
+/// @param value 线性进度。
+/// @return 缓动后的进度。
+float easeOutCubic(float value)
+{
+    const float t   = saturate(value);
+    const float inv = 1.0f - t;
+    return 1.0f - inv * inv * inv;
 }
 
 /// @brief 按线性权重混合两种 ImGui 颜色。
@@ -566,11 +594,11 @@ ImVec4 lerpColor(const ImVec4& from, const ImVec4& to, float amount)
 
 /// @brief 读取上一帧悬浮状态并推进按钮颜色过渡。
 /// @param id 按钮 ImGui ID。
+/// @param storage 当前控件所属窗口的状态存储。
 /// @return 本帧绘制应使用的悬浮过渡进度。
 /// @warning UI 热路径：每个按钮每帧调用，只访问当前窗口 ImGuiStorage。
-float updateButtonHoverAmount(ImGuiID id)
+float updateButtonHoverAmount(ImGuiID id, ImGuiStorage* storage)
 {
-    ImGuiStorage* storage = ImGui::GetStateStorage();
     if ( !storage ) return 0.0f;
 
     const ImGuiID hoveredKey =
@@ -585,7 +613,9 @@ float updateButtonHoverAmount(ImGuiID id)
     const bool wasDrawnLastFrame = lastFrame == currentFrame - 1;
     const bool wasHovered =
         wasDrawnLastFrame && storage->GetInt(hoveredKey, 0) != 0;
-    const float target = wasHovered ? 1.0f : 0.0f;
+    const ImGuiID openKey = makeButtonStorageKey(id, MENU_OPEN_KEY_SALT);
+    const bool  wasOpen = wasDrawnLastFrame && storage->GetInt(openKey, 0) != 0;
+    const float target  = (wasHovered || wasOpen) ? 1.0f : 0.0f;
     float       amount =
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float step = std::min(
@@ -602,13 +632,24 @@ float updateButtonHoverAmount(ImGuiID id)
     return amount;
 }
 
+/// @brief 读取上一帧悬浮状态并推进按钮颜色过渡。
+/// @param id 按钮 ImGui ID。
+/// @return 本帧绘制应使用的悬浮过渡进度。
+/// @warning UI 热路径：每个按钮每帧调用，只访问当前窗口 ImGuiStorage。
+float updateButtonHoverAmount(ImGuiID id)
+{
+    return updateButtonHoverAmount(id, ImGui::GetStateStorage());
+}
+
 /// @brief 写回按钮当前交互状态并按边沿触发音效。
 /// @param id 按钮 ImGui ID。
 /// @param clicked 按钮本帧是否被激活。
+/// @param storage 当前控件所属窗口的状态存储。
+/// @param isHovered 当前控件是否悬浮。
 /// @warning UI 热路径：只读取上一帧状态并触发已预加载音效池，不执行资源加载。
-void finishButtonFeedback(ImGuiID id, bool clicked)
+void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
+                          bool isHovered)
 {
-    ImGuiStorage* storage = ImGui::GetStateStorage();
     if ( !storage ) return;
 
     const ImGuiID hoveredKey =
@@ -619,7 +660,6 @@ void finishButtonFeedback(ImGuiID id, bool clicked)
     const bool wasHovered =
         storage->GetInt(lastFrameKey, -1) == currentFrame - 1 &&
         storage->GetInt(hoveredKey, 0) != 0;
-    const bool isHovered = ImGui::IsItemHovered();
 
     if ( isHovered && !wasHovered ) {
         Audio::AudioManager::instance().playSoundEffect(
@@ -635,6 +675,33 @@ void finishButtonFeedback(ImGuiID id, bool clicked)
     storage->SetInt(lastFrameKey, currentFrame);
 }
 
+/// @brief 写回菜单当前交互状态并按边沿触发音效。
+/// @param id 菜单 ImGui ID。
+/// @param clicked 菜单入口本帧是否被点击。
+/// @param open 菜单本帧是否打开。
+/// @param storage 菜单入口所属窗口的状态存储。
+/// @param isHovered 菜单入口本帧是否悬浮。
+/// @warning UI 热路径：只读取上一帧状态并触发已预加载音效池，不执行资源加载。
+void finishMenuFeedback(ImGuiID id, bool clicked, bool open,
+                        ImGuiStorage* storage, bool isHovered)
+{
+    finishButtonFeedback(id, clicked, storage, isHovered);
+    if ( !storage ) return;
+
+    const ImGuiID openKey = makeButtonStorageKey(id, MENU_OPEN_KEY_SALT);
+    storage->SetInt(openKey, open ? 1 : 0);
+}
+
+/// @brief 写回按钮当前交互状态并按边沿触发音效。
+/// @param id 按钮 ImGui ID。
+/// @param clicked 按钮本帧是否被激活。
+/// @warning UI 热路径：只读取上一帧状态并触发已预加载音效池，不执行资源加载。
+void finishButtonFeedback(ImGuiID id, bool clicked)
+{
+    finishButtonFeedback(
+        id, clicked, ImGui::GetStateStorage(), ImGui::IsItemHovered());
+}
+
 /// @brief 压入按钮悬浮颜色过渡样式。
 /// @param hoverAmount 当前悬浮过渡进度。
 /// @return 压入的样式颜色数量。
@@ -648,6 +715,83 @@ int pushAnimatedButtonColors(float hoverAmount)
     ImGui::PushStyleColor(ImGuiCol_Button, mixedColor);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, mixedColor);
     return 2;
+}
+
+/// @brief 压入菜单项悬浮颜色过渡样式。
+/// @param hoverAmount 当前悬浮过渡进度。
+/// @return 压入的样式颜色数量。
+/// @warning UI 热路径：只操作 ImGui 样式栈。
+int pushAnimatedMenuColors(float hoverAmount)
+{
+    const ImVec4 baseColor  = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+    const ImVec4 hoverColor = ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+    const ImVec4 mixedColor = lerpColor(baseColor, hoverColor, hoverAmount);
+
+    ImGui::PushStyleColor(ImGuiCol_Header, mixedColor);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, mixedColor);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, mixedColor);
+    return 3;
+}
+
+/// @brief 推进菜单弹窗打开动画。
+/// @param id 菜单入口 ImGui ID。
+/// @param storage 菜单入口所属窗口的状态存储。
+/// @param open 菜单本帧是否打开。
+/// @return 当前弹窗动画进度。
+/// @warning UI 热路径：只访问当前窗口 ImGuiStorage。
+float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
+{
+    if ( !storage ) return open ? 1.0f : 0.0f;
+
+    const ImGuiID amountKey =
+        makeButtonStorageKey(id, MENU_POPUP_AMOUNT_KEY_SALT);
+    const ImGuiID lastFrameKey =
+        makeButtonStorageKey(id, MENU_POPUP_LAST_FRAME_KEY_SALT);
+    const int  currentFrame      = ImGui::GetFrameCount();
+    const int  lastFrame         = storage->GetInt(lastFrameKey, -1);
+    const bool wasDrawnLastFrame = lastFrame == currentFrame - 1;
+    float      amount =
+        wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
+    const float target = open ? 1.0f : 0.0f;
+    const float step   = std::min(
+        1.0f, std::max(0.0f, ImGui::GetIO().DeltaTime) * MENU_POPUP_FADE_SPEED);
+
+    if ( amount < target ) {
+        amount = std::min(target, amount + step);
+    } else {
+        amount = std::max(target, amount - step);
+    }
+
+    storage->SetFloat(amountKey, amount);
+    storage->SetInt(lastFrameKey, currentFrame);
+    return amount;
+}
+
+/// @brief 读取菜单弹窗上一帧动画进度。
+/// @param id 菜单入口 ImGui ID。
+/// @param storage 菜单入口所属窗口的状态存储。
+/// @return 上一帧弹窗动画进度。
+/// @warning UI 热路径：只访问当前窗口 ImGuiStorage。
+float getStoredMenuPopupAmount(ImGuiID id, ImGuiStorage* storage)
+{
+    if ( !storage ) return 0.0f;
+
+    return storage->GetFloat(
+        makeButtonStorageKey(id, MENU_POPUP_AMOUNT_KEY_SALT), 0.0f);
+}
+
+/// @brief 对当前已打开菜单弹窗应用窗口级进入动画。
+/// @param amount 动画线性进度。
+/// @warning UI 热路径：只设置当前 ImGui 窗口位置和 alpha 样式。
+void pushMenuPopupAnimation(float amount)
+{
+    const float  eased = easeOutCubic(amount);
+    const float  alpha = std::max(0.04f, eased);
+    const ImVec2 pos   = ImGui::GetWindowPos();
+    ImGui::SetWindowPos(
+        ImVec2(pos.x, pos.y - MENU_POPUP_SLIDE_Y * (1.0f - eased)),
+        ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
 }
 
 }  // namespace
@@ -682,6 +826,141 @@ bool FeedbackSmallButton(const char* label)
     const bool    clicked          = ImGui::SmallButton(label);
     ImGui::PopStyleColor(pushedColorCount);
     finishButtonFeedback(id, clicked);
+    return clicked;
+}
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单入口。
+/// @param label 菜单显示文本和 ImGui ID。
+/// @param enabled 是否允许打开菜单。
+/// @return 菜单本帧打开时返回 true，语义与 ImGui::BeginMenu 保持一致。
+/// @warning UI 热路径：每帧菜单栏绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginMenu(const char* label, bool enabled)
+{
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    const ImGuiID id      = ImGui::GetID(label);
+    const ImGuiID closingKey =
+        makeButtonStorageKey(id, MENU_POPUP_CLOSING_KEY_SALT);
+    const ImGuiID openKey    = makeButtonStorageKey(id, MENU_OPEN_KEY_SALT);
+    bool          closing    = storage && storage->GetInt(closingKey, 0) != 0;
+    const bool    wasOpen    = storage && storage->GetInt(openKey, 0) != 0;
+    const float   lastAmount = getStoredMenuPopupAmount(id, storage);
+    const bool    popupOpen  = ImGui::IsPopupOpen(label);
+    if ( enabled && wasOpen && !popupOpen && lastAmount > 0.01f ) {
+        closing = true;
+        storage->SetInt(closingKey, 1);
+    }
+    if ( closing && lastAmount <= 0.01f ) {
+        closing = false;
+        if ( storage ) {
+            storage->SetInt(closingKey, 0);
+        }
+    }
+    if ( closing && lastAmount > 0.01f ) {
+        ImGui::OpenPopup(label);
+    }
+
+    const float hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int   pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool  open             = ImGui::BeginMenu(label, enabled);
+    const bool  clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const bool  hovered          = ImGui::IsItemHovered();
+    if ( clicked ) {
+        closing = false;
+        if ( storage ) {
+            storage->SetInt(closingKey, 0);
+        }
+    }
+    ImGui::PopStyleColor(pushedColorCount);
+    finishMenuFeedback(id, clicked, open && !closing, storage, hovered);
+    if ( open ) {
+        const float amount = updateMenuPopupAmount(id, storage, !closing);
+        pushMenuPopupAnimation(amount);
+        if ( closing && amount <= 0.02f ) {
+            if ( storage ) {
+                storage->SetInt(closingKey, 0);
+            }
+            ImGui::CloseCurrentPopup();
+        }
+    } else {
+        updateMenuPopupAmount(id, storage, false);
+    }
+    return open;
+}
+
+/// @brief 结束由 FeedbackBeginMenu 打开的菜单。
+/// @warning UI 热路径：弹出菜单绘制结束时恢复动画样式并调用 ImGui::EndMenu。
+void FeedbackEndMenu()
+{
+    ImGui::PopStyleVar();
+    ImGui::EndMenu();
+}
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut, bool selected,
+                      bool enabled)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool    clicked = ImGui::MenuItem(label, shortcut, selected, enabled);
+    const bool    hovered = ImGui::IsItemHovered();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return clicked;
+}
+
+/// @brief 绘制可直接修改布尔状态的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param pSelected 可选选中状态指针，语义与 ImGui::MenuItem 保持一致。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut, bool* pSelected,
+                      bool enabled)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool clicked = ImGui::MenuItem(label, shortcut, pSelected, enabled);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return clicked;
+}
+
+/// @brief 绘制带图标列的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param icon 图标文本，可为空。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItemEx(const char* label, const char* icon,
+                        const char* shortcut, bool selected, bool enabled)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool    clicked =
+        ImGui::MenuItemEx(label, icon, shortcut, selected, enabled);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }
 

@@ -24,6 +24,53 @@ bool FeedbackButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSmallButton(const char* label);
 
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单入口。
+/// @param label 菜单显示文本和 ImGui ID。
+/// @param enabled 是否允许打开菜单。
+/// @return 菜单本帧打开时返回 true，语义与 ImGui::BeginMenu 保持一致。
+/// @warning UI 热路径：每帧菜单栏绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginMenu(const char* label, bool enabled = true);
+
+/// @brief 结束由 FeedbackBeginMenu 打开的菜单。
+/// @warning UI 热路径：弹出菜单绘制结束时恢复动画样式并调用 ImGui::EndMenu。
+void FeedbackEndMenu();
+
+/// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut = nullptr,
+                      bool selected = false, bool enabled = true);
+
+/// @brief 绘制可直接修改布尔状态的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param pSelected 可选选中状态指针，语义与 ImGui::MenuItem 保持一致。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItem(const char* label, const char* shortcut, bool* pSelected,
+                      bool enabled = true);
+
+/// @brief 绘制带图标列的反馈式 ImGui 菜单项。
+/// @param label 菜单项显示文本和 ImGui ID。
+/// @param icon 图标文本，可为空。
+/// @param shortcut 快捷键显示文本，可为空。
+/// @param selected 当前选中状态。
+/// @param enabled 是否允许点击。
+/// @return 菜单项本帧被激活时返回 true。
+/// @warning UI 热路径：每帧菜单绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
+                        const char* shortcut = nullptr, bool selected = false,
+                        bool enabled = true);
+
 }  // namespace MMM::UI
 
 namespace MMM::UI::Utils

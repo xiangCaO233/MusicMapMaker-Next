@@ -967,8 +967,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
 
         const char* iconPtr = icon ? icon : "  ";
 
-        bool clicked =
-            ImGui::MenuItemEx(label, iconPtr, shortcut, false, enabled);
+        bool clicked = ::MMM::UI::FeedbackMenuItemEx(
+            label, iconPtr, shortcut, false, enabled);
 
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
@@ -983,7 +983,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::OpenPopup(TR("ui.file"));
         m_openFileMenuNextFrame = false;
     }
-    if ( ImGui::BeginMenu(TR("ui.file")) ) {
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.file")) ) {
         if ( m_closeFileMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeFileMenuNextFrame = false;
@@ -1019,11 +1019,12 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             openAudioImportPicker();
         }
 
-        if ( ImGui::BeginMenu(TR("ui.file.open_recent")) ) {
+        if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.file.open_recent")) ) {
             const auto& recent =
                 Config::AppConfig::instance().getEditorConfig().recentProjects;
             if ( recent.empty() ) {
-                ImGui::MenuItem(TR("ui.file.no_recent"), nullptr, false, false);
+                ::MMM::UI::FeedbackMenuItem(
+                    TR("ui.file.no_recent"), nullptr, false, false);
             } else {
                 for ( size_t i = 0; i < recent.size(); ++i ) {
                     const auto&           path = recent[i];
@@ -1034,8 +1035,8 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                     const std::string displayPath = truncateUtf8MiddleToWidth(
                         path, RECENT_PROJECT_PATH_MAX_WIDTH * dpiScale);
                     ImGui::PushID(static_cast<int>(i));
-                    if ( ImGui::MenuItem(displayName.c_str(),
-                                         displayPath.c_str()) ) {
+                    if ( ::MMM::UI::FeedbackMenuItem(displayName.c_str(),
+                                                     displayPath.c_str()) ) {
                         Event::OpenProjectEvent ev;
                         ev.m_projectPath = p;
                         Event::EventBus::instance().publish(ev);
@@ -1046,7 +1047,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                     ImGui::PopID();
                 }
             }
-            ImGui::EndMenu();
+            ::MMM::UI::FeedbackEndMenu();
         }
 
         if ( MenuItemWithFontIcon(ICON_MMM_CLOSE,
@@ -1076,7 +1077,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                  ICON_MMM_PACK, TR("ui.file.pack"), nullptr, hasProject) ) {
             openPackFilePicker();
         }
-        ImGui::EndMenu();
+        ::MMM::UI::FeedbackEndMenu();
     }
 
     // ========== Edit Menu ==========
@@ -1084,7 +1085,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::OpenPopup(TR("ui.edit"));
         m_openEditMenuNextFrame = false;
     }
-    if ( ImGui::BeginMenu(TR("ui.edit")) ) {
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.edit")) ) {
         if ( m_closeEditMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeEditMenuNextFrame = false;
@@ -1178,7 +1179,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
                                   TR("ui.edit.beatmap_settings")) ) {
             sourceManager->openSettingsWindow(Event::SettingsTab::Beatmap);
         }
-        ImGui::EndMenu();
+        ::MMM::UI::FeedbackEndMenu();
     }
 
     // ========== Tools Menu ==========
@@ -1186,7 +1187,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::OpenPopup(TR("ui.tools"));
         m_openToolsMenuNextFrame = false;
     }
-    if ( ImGui::BeginMenu(TR("ui.tools")) ) {
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.tools")) ) {
         if ( m_closeToolsMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeToolsMenuNextFrame = false;
@@ -1259,7 +1260,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
             }
         }
 
-        ImGui::EndMenu();
+        ::MMM::UI::FeedbackEndMenu();
     }
 
     // ========== View Menu ==========
@@ -1267,7 +1268,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGui::OpenPopup(TR("ui.view"));
         m_openViewMenuNextFrame = false;
     }
-    if ( ImGui::BeginMenu(TR("ui.view")) ) {
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.view")) ) {
         if ( m_closeViewMenuNextFrame ) {
             ImGui::CloseCurrentPopup();
             m_closeViewMenuNextFrame = false;
@@ -1277,27 +1278,32 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         auto& editorSettings = appConfig.getEditorSettings();
         bool  viewChanged    = false;
 
-        viewChanged |= ImGui::MenuItem(TR("ui.view.timeline").data(),
-                                       nullptr,
-                                       &editorSettings.showTimelineWindow);
-        viewChanged |= ImGui::MenuItem(TR("ui.view.preview").data(),
-                                       nullptr,
-                                       &editorSettings.showPreviewWindow);
+        viewChanged |=
+            ::MMM::UI::FeedbackMenuItem(TR("ui.view.timeline").data(),
+                                        nullptr,
+                                        &editorSettings.showTimelineWindow);
+        viewChanged |=
+            ::MMM::UI::FeedbackMenuItem(TR("ui.view.preview").data(),
+                                        nullptr,
+                                        &editorSettings.showPreviewWindow);
         ImGui::Separator();
-        viewChanged |= ImGui::MenuItem(TR("ui.view.show_tool_labels").data(),
-                                       nullptr,
-                                       &editorSettings.showToolLabels);
-        viewChanged |= ImGui::MenuItem(TR("ui.view.fixed_tool_window").data(),
-                                       nullptr,
-                                       &editorSettings.fixedToolWindow);
-        viewChanged |= ImGui::MenuItem(TR("ui.view.show_manager_labels").data(),
-                                       nullptr,
-                                       &editorSettings.showManagerLabels);
+        viewChanged |=
+            ::MMM::UI::FeedbackMenuItem(TR("ui.view.show_tool_labels").data(),
+                                        nullptr,
+                                        &editorSettings.showToolLabels);
+        viewChanged |=
+            ::MMM::UI::FeedbackMenuItem(TR("ui.view.fixed_tool_window").data(),
+                                        nullptr,
+                                        &editorSettings.fixedToolWindow);
+        viewChanged |= ::MMM::UI::FeedbackMenuItem(
+            TR("ui.view.show_manager_labels").data(),
+            nullptr,
+            &editorSettings.showManagerLabels);
 
         if ( viewChanged ) {
             appConfig.save();
         }
-        ImGui::EndMenu();
+        ::MMM::UI::FeedbackEndMenu();
     }
 
     // ========== Help Menu ==========

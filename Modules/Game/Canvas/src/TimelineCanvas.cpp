@@ -731,14 +731,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             if ( ImGui::BeginPopup("TimelineOptionsMenu") ) {
                 const bool professionalMode =
                     editorSettings.timelineProfessionalMode;
-                if ( ImGui::MenuItem(
+                if ( ::MMM::UI::FeedbackMenuItem(
                          TR("ui.timeline.menu.professional_mode").data(),
                          nullptr,
                          professionalMode) ) {
                     editorSettings.timelineProfessionalMode = !professionalMode;
                     appConfig.save();
                 }
-                if ( ImGui::MenuItem(
+                if ( ::MMM::UI::FeedbackMenuItem(
                          TR("ui.timeline.menu.open_timing_table").data(),
                          nullptr,
                          m_isTableWindowOpen) ) {

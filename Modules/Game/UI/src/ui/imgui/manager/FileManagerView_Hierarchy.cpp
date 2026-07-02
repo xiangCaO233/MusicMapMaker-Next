@@ -580,14 +580,16 @@ void FileManagerView::renderFileSortContextMenu()
         return;
     }
 
-    if ( ImGui::MenuItem(TR("ui.file_manager.context.refresh").data()) ) {
+    if ( ::MMM::UI::FeedbackMenuItem(
+             TR("ui.file_manager.context.refresh").data()) ) {
         invalidateDirectoryCache();
     }
 
     bool directoriesFirst = m_directoriesFirst;
-    if ( ImGui::MenuItem(TR("ui.file_manager.context.directories_first").data(),
-                         nullptr,
-                         directoriesFirst) ) {
+    if ( ::MMM::UI::FeedbackMenuItem(
+             TR("ui.file_manager.context.directories_first").data(),
+             nullptr,
+             directoriesFirst) ) {
         m_directoriesFirst = !m_directoriesFirst;
         invalidateDirectoryCache();
     }
@@ -605,17 +607,20 @@ void FileManagerView::renderFileEntryContextMenu(
 
     if ( !entry.isDirectory && (isBeatmapExtension(entry.extension) ||
                                 isAudioExtension(entry.extension)) ) {
-        if ( ImGui::MenuItem(TR("ui.file_manager.context.open").data()) ) {
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.file_manager.context.open").data()) ) {
             activateFileEntry(entry, sourceManager);
         }
     }
 
     if ( entry.isDirectory &&
-         ImGui::MenuItem(TR("ui.file_manager.context.refresh").data()) ) {
+         ::MMM::UI::FeedbackMenuItem(
+             TR("ui.file_manager.context.refresh").data()) ) {
         m_directoryCache.erase(directoryCacheKey(entry.path));
     }
 
-    if ( ImGui::MenuItem(TR("ui.file_manager.context.copy_path").data()) ) {
+    if ( ::MMM::UI::FeedbackMenuItem(
+             TR("ui.file_manager.context.copy_path").data()) ) {
         ImGui::SetClipboardText(entry.fullPath.c_str());
     }
 
