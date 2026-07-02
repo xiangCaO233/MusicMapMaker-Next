@@ -10,14 +10,18 @@ Configure and build the Windows MSVC-like clang-cl cross target.
 Options:
   --build-dir <path>     Build directory. Default: build_cross_msvc
   --build-type <type>    CMake build type. Default: RelWithDebInfo
+  --compiler-tag <tag>   Prebuilt compiler tag. Default: 2026
   --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-msvc.cmake
+  --sources-build        Configure with SOURCES_BUILD=ON.
+  --prebuilt-targets     Build only third-party targets used for staging.
   --configure-only       Configure and generate, then stop
   --fresh                Remove the build directory before configuring
   -h, --help             Show this help
 
 Environment overrides:
+  MSVC_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
   WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
   VCPKG_ROOT             Default: ${WINDOWS_CROSS_ROOT}/vcpkg
   VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
@@ -57,21 +61,6 @@ requireCommand() {
     fi
 }
 
-requireAnyCommand() {
-    local label="$1"
-    shift
-
-    local commandName
-    for commandName in "$@"; do
-        if command -v "${commandName}" >/dev/null 2>&1; then
-            return
-        fi
-    done
-
-    printf "error: required command not found: %s (tried: %s)\n" "${label}" "$*" >&2
-    exit 1
-}
-
 projectPath() {
     local inputPath="$1"
 
@@ -88,8 +77,11 @@ projectRoot="$(cd "${scriptDir}/../../.." && pwd)"
 buildDir="build_cross_msvc"
 buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
+compilerTag="${MSVC_PREBUILT_COMPILER_TAG:-2026}"
 projectLinkage="static"
 toolchainFile="cmake/toolchain/cross-msvc.cmake"
+sourcesBuild="OFF"
+prebuiltTargets=0
 configureOnly=0
 freshBuild=0
 
@@ -109,6 +101,14 @@ while (( $# > 0 )); do
                 exit 1
             fi
             buildType="$2"
+            shift 2
+            ;;
+        --compiler-tag)
+            if (( $# < 2 )); then
+                printf "error: --compiler-tag requires a value\n" >&2
+                exit 1
+            fi
+            compilerTag="$2"
             shift 2
             ;;
         --jobs)
@@ -134,6 +134,14 @@ while (( $# > 0 )); do
             fi
             toolchainFile="$2"
             shift 2
+            ;;
+        --sources-build)
+            sourcesBuild="ON"
+            shift
+            ;;
+        --prebuilt-targets)
+            prebuiltTargets=1
+            shift
             ;;
         --configure-only)
             configureOnly=1
@@ -165,6 +173,11 @@ if [[ "${projectLinkage}" != "static" && "${projectLinkage}" != "shared" ]]; the
     exit 1
 fi
 
+if [[ -z "${compilerTag}" ]]; then
+    printf "error: --compiler-tag must not be empty\n" >&2
+    exit 1
+fi
+
 buildDir="$(projectPath "${buildDir}")"
 toolchainFile="$(projectPath "${toolchainFile}")"
 
@@ -180,8 +193,11 @@ export VULKAN_SDK="${VULKAN_SDK:-${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0}"
 "${scriptDir}/list-msvc-toolchain-layout.sh" --max-entries "${MMM_MSVC_LAYOUT_MAX_ENTRIES:-120}"
 
 requireCommand cmake
-requireAnyCommand clang-cl clang-cl-22 clang-cl-21 clang-cl-20 clang-cl
-requireAnyCommand lld-link lld-link-22 lld-link-21 lld-link-20 lld-link
+requireCommand clang-cl-22
+requireCommand lld-link-22
+requireCommand llvm-lib-22
+requireCommand llvm-rc-22
+requireCommand llvm-mt-22
 
 if [[ ! -d "${VCPKG_ROOT}" ]]; then
     printf "error: VCPKG_ROOT does not exist: %s\n" "${VCPKG_ROOT}" >&2
@@ -204,7 +220,16 @@ fi
 cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
+    -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
+    -DICE_LINKAGE="${projectLinkage}" \
+    -DPROJECT_PREBUILT_PLATFORM=windows \
+    -DPROJECT_PREBUILT_TOOLCHAIN=msvc \
+    -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
+    -DICE_PREBUILT_PLATFORM=windows \
+    -DICE_PREBUILT_TOOLCHAIN=msvc \
+    -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
+    -DMMM_DISABLE_CLANG_LTO=ON \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
@@ -214,4 +239,30 @@ if (( configureOnly )); then
     exit 0
 fi
 
-cmake --build "${buildDir}" --parallel "${buildJobs}"
+if (( prebuiltTargets )); then
+    cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
+        zlib_project \
+        lame_project \
+        ffmpeg_project \
+        fftw_project \
+        rubberband_project \
+        samplerate \
+        IonCachyEngine-static \
+        3rd_implot \
+        3rd_miniz \
+        imgui-static \
+        freetype \
+        glfw \
+        ImGuiFileDialog \
+        nfd \
+        lunasvg \
+        plutovg \
+        libcurl_static \
+        fmt \
+        spdlog \
+        OpenAL \
+        SDL3-static \
+        luajit_build
+else
+    cmake --build "${buildDir}" --parallel "${buildJobs}"
+fi
