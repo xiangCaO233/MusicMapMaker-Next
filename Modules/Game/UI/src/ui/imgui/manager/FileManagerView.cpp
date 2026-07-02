@@ -5,6 +5,8 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
+#include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include <algorithm>
@@ -23,11 +25,27 @@ FileManagerView::FileManagerView(const std::string& subViewName)
         [this](const Event::GLFWDropEvent& e) {
             m_pendingDrops.push_back({ e.paths, e.pos });
         });
+    m_saveResultSubId =
+        Event::EventBus::instance().subscribe<Event::BeatmapSaveResultEvent>(
+            [this](const Event::BeatmapSaveResultEvent& e) {
+                if ( e.success ) {
+                    m_pendingDirectoryRefreshes.enqueue(true);
+                }
+            });
+    m_projectSavedSubId =
+        Event::EventBus::instance().subscribe<Event::ProjectSavedEvent>(
+            [this](const Event::ProjectSavedEvent&) {
+                m_pendingDirectoryRefreshes.enqueue(true);
+            });
 }
 
 FileManagerView::~FileManagerView()
 {
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
+    Event::EventBus::instance().unsubscribe<Event::BeatmapSaveResultEvent>(
+        m_saveResultSubId);
+    Event::EventBus::instance().unsubscribe<Event::ProjectSavedEvent>(
+        m_projectSavedSubId);
 }
 
 FileManagerView::EmptyProjectViewMetrics
@@ -104,6 +122,8 @@ ImVec2 FileManagerView::getMinContentSize(float dpiScale) const
 void FileManagerView::onUpdate(LayoutContext& layoutContext,
                                UIManager*     sourceManager)
 {
+    consumePendingDirectoryRefreshes();
+
     // 1. 处理拖拽
     handleDragDrop(sourceManager);
 

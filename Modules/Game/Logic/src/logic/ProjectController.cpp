@@ -1381,7 +1381,17 @@ bool ProjectController::saveProject()
         /// @brief 即将写入的项目描述 JSON 数据。
         nlohmann::json jsonData = *m_currentProject;
         file << std::setw(4) << jsonData << std::endl;
+        file.close();
+        if ( !file ) {
+            XERROR("Failed to flush project file: {}",
+                   Config::pathToUtf8(projectFile));
+            return false;
+        }
+
         XINFO("Project saved successfully.");
+        Event::EventBus::instance().publish(Event::ProjectSavedEvent{
+            .m_projectFilePath = Config::pathToUtf8(projectFile),
+        });
         return true;
     } catch ( const std::exception& e ) {
         XERROR("Failed to save project: {}", e.what());

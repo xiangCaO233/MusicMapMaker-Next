@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <concurrentqueue.h>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -23,8 +24,8 @@ class FileManagerView : public ISubView
 {
 public:
     FileManagerView(const std::string& subViewName);
-    FileManagerView(FileManagerView&&)                 = default;
-    FileManagerView(const FileManagerView&)            = default;
+    FileManagerView(FileManagerView&&)                 = delete;
+    FileManagerView(const FileManagerView&)            = delete;
     FileManagerView& operator=(FileManagerView&&)      = delete;
     FileManagerView& operator=(const FileManagerView&) = delete;
     ~FileManagerView() override;
@@ -182,6 +183,10 @@ private:
     /// @brief 清空目录快照缓存。
     void invalidateDirectoryCache();
 
+    /// @brief 消费跨线程文件系统变更通知并刷新目录缓存。
+    /// @warning UI 热路径：每帧只清空无锁队列；仅在收到保存事件时清空快照缓存。
+    void consumePendingDirectoryRefreshes();
+
     /// @brief 绘制文件树右键排序菜单。
     void renderFileSortContextMenu();
 
@@ -216,6 +221,9 @@ private:
     /// @brief 按目录完整路径缓存的文件树快照。
     std::unordered_map<std::string, DirectorySnapshot> m_directoryCache;
 
+    /// @brief 保存事件跨线程投递的目录刷新请求。
+    moodycamel::ConcurrentQueue<bool> m_pendingDirectoryRefreshes;
+
     // --- 布局池 ---
     std::deque<CLayHBox> m_rows;
 
@@ -224,7 +232,9 @@ private:
         glm::vec2                pos;
     };
     std::vector<PendingDrop> m_pendingDrops;
-    Event::SubscriptionID    m_dropSubId;
+    Event::SubscriptionID    m_dropSubId{ 0 };
+    Event::SubscriptionID    m_saveResultSubId{ 0 };
+    Event::SubscriptionID    m_projectSavedSubId{ 0 };
 };
 
 }  // namespace MMM::UI

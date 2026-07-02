@@ -532,6 +532,19 @@ void FileManagerView::invalidateDirectoryCache()
     m_directoryCache.clear();
 }
 
+void FileManagerView::consumePendingDirectoryRefreshes()
+{
+    bool hasRefreshRequest = false;
+    bool refreshRequest    = false;
+    while ( m_pendingDirectoryRefreshes.try_dequeue(refreshRequest) ) {
+        hasRefreshRequest = true;
+    }
+
+    if ( hasRefreshRequest ) {
+        invalidateDirectoryCache();
+    }
+}
+
 void FileManagerView::syncFileTableSortSpecs()
 {
     ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
