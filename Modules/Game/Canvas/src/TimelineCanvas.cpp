@@ -587,6 +587,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 m_isTimingDrawPreviewing = false;
                 m_isTimingDragging       = false;
                 m_isTimingErasing        = false;
+                m_shouldFocusNextFrame   = false;
                 m_timingEraseTargetEntities.clear();
                 ImGui::OpenPopup("TimelineEventEditor");
             };

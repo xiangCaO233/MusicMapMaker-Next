@@ -346,6 +346,10 @@ void TimelineCanvas::finishKeepSpeedBinding()
 /// 控件绘制和用户提交时的事件发布。
 void TimelineCanvas::renderEventEditorPopup()
 {
+    if ( m_isPopupOpen ) {
+        ImGui::OpenPopup("TimelineEventEditor");
+    }
+
     float dpiScale   = Config::AppConfig::instance().getWindowContentScale();
     float popupWidth = std::floor(380.0f * dpiScale);
 
@@ -430,6 +434,10 @@ void TimelineCanvas::renderEventEditorPopup()
 /// 控件绘制和用户提交时的事件发布。
 void TimelineCanvas::renderEventCreationPopup()
 {
+    if ( m_isCreatePopupOpen ) {
+        ImGui::OpenPopup("TimelineCreateEvent");
+    }
+
     float dpiScale   = Config::AppConfig::instance().getWindowContentScale();
     float popupWidth = std::floor(430.0f * dpiScale);
 
