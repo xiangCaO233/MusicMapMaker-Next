@@ -23,8 +23,8 @@
 /// @brief 完整版本字符串 (如 "v0.2.0" 或 "v0.2.0-alpha.1")
 #define MMM_VERSION_STRING "v@PROJECT_VERSION@@MMM_VERSION_SUFFIX@"
 
-/// @brief CMake 配置阶段识别到的 C++ 编译器 ID
-#define MMM_BUILD_COMPILER_ID "@CMAKE_CXX_COMPILER_ID@"
+/// @brief CMake 配置阶段生成的 C++ 编译器展示 ID
+#define MMM_BUILD_COMPILER_ID "@MMM_BUILD_COMPILER_ID@"
 
 /// @brief CMake 配置阶段识别到的 C++ 编译器版本
 #define MMM_BUILD_COMPILER_VERSION "@CMAKE_CXX_COMPILER_VERSION@"

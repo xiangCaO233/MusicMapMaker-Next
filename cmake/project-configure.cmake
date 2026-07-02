@@ -234,6 +234,15 @@ else()
   set(MMM_PLATFORM "linux")
 endif()
 
+# 编译器展示名默认沿用 CMake ID。 clang-cl 的 CMake ID 仍为 Clang，但它使用 MSVC ABI。
+# 关于窗口需要显式标识，避免和 GNU-like Clang 构建混淆。
+set(MMM_BUILD_COMPILER_ID "${CMAKE_CXX_COMPILER_ID}")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+   AND ("${CMAKE_CXX_COMPILER_FRONTEND_VARIANT}" STREQUAL "MSVC"
+        OR "${CMAKE_CXX_SIMULATE_ID}" STREQUAL "MSVC"))
+  set(MMM_BUILD_COMPILER_ID "Clang-cl(MSVC ABI)")
+endif()
+
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/mmmversion.h.in"
                "${CMAKE_BINARY_DIR}/generated/mmmversion.h" @ONLY)
 
