@@ -1313,6 +1313,10 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                 }
             }
         }
+
+        // 谱面设置和打包流程都读取磁盘谱面文件，基础元数据更新后立即落盘。
+        handleCommand(
+            CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
     }
 }
 

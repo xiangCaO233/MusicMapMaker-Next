@@ -106,6 +106,14 @@ OsuMetadataTextEditorState& osuMetadataTextEditorState()
     return state;
 }
 
+/// @brief 请求逻辑线程保存当前谱面，确保打包读取到最新谱面元数据。
+/// @warning UI 交互路径：只入队保存指令，不在 UI 线程执行文件写入。
+void requestBeatmapMetadataAutoSave()
+{
+    Logic::EditorEngine::instance().pushCommand(
+        Logic::CmdSaveBeatmap{ .allowExternallyModifiedOverwrite = true });
+}
+
 /// @brief 将字符串安全复制进固定 ImGui 输入缓冲区。
 /// @warning UI 每帧/交互路径：只做固定上限内存复制。
 template<size_t N>
@@ -1130,19 +1138,19 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::OSU];
+                        bool osuPropsChanged = false;
                         if ( auto result = takeOsuMetadataTextResult() ) {
                             props = std::move(*result);
                             ensureCompleteOsuMetadata(
                                 props, *beatmap, OSU_FIELDS);
                             syncOsuMetadataToBase(props, *beatmap);
+                            osuPropsChanged = true;
                         }
                         if ( !props.empty() ) {
                             ensureCompleteOsuMetadata(
                                 props, *beatmap, OSU_FIELDS);
                             syncOsuMetadataToBase(props, *beatmap);
                         }
-
-                        bool osuPropsChanged = false;
 
                         if ( props.empty() ) {
                             ImGui::BeginDisabled();
@@ -1368,15 +1376,19 @@ void MainMenuView::renderMetadataEditorWindow()
                                 ensureCompleteOsuMetadata(
                                     props, *beatmap, OSU_FIELDS);
                                 syncOsuMetadataToBase(props, *beatmap);
-                                newOsuKey[0] = '\0';
-                                newOsuVal[0] = '\0';
+                                osuPropsChanged = true;
+                                newOsuKey[0]    = '\0';
+                                newOsuVal[0]    = '\0';
                             }
                         }
 
-                        if ( osuPropsChanged && !props.empty() ) {
-                            ensureCompleteOsuMetadata(
-                                props, *beatmap, OSU_FIELDS);
-                            syncOsuMetadataToBase(props, *beatmap);
+                        if ( osuPropsChanged ) {
+                            if ( !props.empty() ) {
+                                ensureCompleteOsuMetadata(
+                                    props, *beatmap, OSU_FIELDS);
+                                syncOsuMetadataToBase(props, *beatmap);
+                            }
+                            requestBeatmapMetadataAutoSave();
                         }
 
                         ImGui::EndTabItem();
@@ -1404,12 +1416,16 @@ void MainMenuView::renderMetadataEditorWindow()
                         auto& props =
                             beatmap->m_metadata
                                 .map_properties[MapMetadataType::MALODY];
-                        const std::string metadataScopeId = "map_malody";
+                        const std::string metadataScopeId    = "map_malody";
+                        bool              malodyPropsChanged = false;
                         if ( auto result =
                                  takeMetadataJsonEditResult(metadataScopeId) ) {
                             props[result->key] = result->value;
+                            malodyPropsChanged = true;
                         }
-                        syncMalodyFreeFromMode(props);
+                        if ( syncMalodyFreeFromMode(props) ) {
+                            malodyPropsChanged = true;
+                        }
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -1487,8 +1503,11 @@ void MainMenuView::renderMetadataEditorWindow()
                                              .c_str(),
                                          valBuf,
                                          sizeof(valBuf)) ) {
-                                    props[key] = valBuf;
-                                    syncMalodyFreeFromMode(props);
+                                    props[key]         = valBuf;
+                                    malodyPropsChanged = true;
+                                    if ( syncMalodyFreeFromMode(props) ) {
+                                        malodyPropsChanged = true;
+                                    }
                                 }
 
                                 ImGui::TableNextColumn();
@@ -1504,6 +1523,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                              "当前##current_mld_preview") ) {
                                         props[key] =
                                             readCurrentJudgelinePreviewMsText();
+                                        malodyPropsChanged = true;
                                     }
                                     if ( ImGui::IsItemHovered() ) {
                                         ImGui::SetTooltip(
@@ -1518,6 +1538,10 @@ void MainMenuView::renderMetadataEditorWindow()
                                               key)
                                                  .c_str()) ) {
                                         props.erase(key);
+                                        malodyPropsChanged = true;
+                                        if ( syncMalodyFreeFromMode(props) ) {
+                                            malodyPropsChanged = true;
+                                        }
                                     }
                                 }
                             }
@@ -1567,8 +1591,11 @@ void MainMenuView::renderMetadataEditorWindow()
                                              .c_str(),
                                          valBuf,
                                          sizeof(valBuf)) ) {
-                                    props[key] = valBuf;
-                                    syncMalodyFreeFromMode(props);
+                                    props[key]         = valBuf;
+                                    malodyPropsChanged = true;
+                                    if ( syncMalodyFreeFromMode(props) ) {
+                                        malodyPropsChanged = true;
+                                    }
                                 }
 
                                 ImGui::TableNextColumn();
@@ -1581,6 +1608,10 @@ void MainMenuView::renderMetadataEditorWindow()
                                          (std::string("删除##del_mld_") + key)
                                              .c_str()) ) {
                                     props.erase(key);
+                                    malodyPropsChanged = true;
+                                    if ( syncMalodyFreeFromMode(props) ) {
+                                        malodyPropsChanged = true;
+                                    }
                                 }
                             }
 
@@ -1610,11 +1641,18 @@ void MainMenuView::renderMetadataEditorWindow()
                                  "添加##add_mld_field") ) {
                             std::string nk = newMldKey;
                             if ( !nk.empty() ) {
-                                props[nk] = newMldVal;
-                                syncMalodyFreeFromMode(props);
+                                props[nk]          = newMldVal;
+                                malodyPropsChanged = true;
+                                if ( syncMalodyFreeFromMode(props) ) {
+                                    malodyPropsChanged = true;
+                                }
                                 newMldKey[0] = '\0';
                                 newMldVal[0] = '\0';
                             }
+                        }
+
+                        if ( malodyPropsChanged ) {
+                            requestBeatmapMetadataAutoSave();
                         }
 
                         ImGui::EndTabItem();
@@ -1631,6 +1669,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::RM];
+                        bool rmPropsChanged = false;
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -1708,6 +1747,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                          100) ) {
                                     props[key] = std::to_string(
                                         static_cast<int32_t>(valueInput));
+                                    rmPropsChanged = true;
                                 }
                                 if ( hasKey &&
                                      !parseInt32Metadata(props.at(key))
@@ -1720,6 +1760,10 @@ void MainMenuView::renderMetadataEditorWindow()
                             }
 
                             ImGui::EndTable();
+                        }
+
+                        if ( rmPropsChanged ) {
+                            requestBeatmapMetadataAutoSave();
                         }
 
                         ImGui::EndTabItem();
