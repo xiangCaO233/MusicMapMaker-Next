@@ -183,6 +183,7 @@ return {
 	["ui.settings.software.aesthetics.window_gap"] = "窗口/面板间隙",
 	["ui.settings.software.aesthetics.item_spacing"] = "容器内部组件间距",
 	["ui.settings.software.aesthetics.window_padding"] = "全局窗口内边距",
+	["ui.settings.software.aesthetics.animation_transition"] = "UI 动效过渡时间",
 
 	["ui.settings.visual"] = "视觉配置",
 	["ui.settings.visual.short"] = "视觉",

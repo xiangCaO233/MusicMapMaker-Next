@@ -25,9 +25,6 @@ struct DockResizeOverrun {
     float     overrun{ 0.0f };
 };
 
-/// @brief 浮动管理器显隐动画速度，值越大越快。
-constexpr float FLOATING_MANAGER_VISIBILITY_ANIM_SPEED = 9.0f;
-
 /// @brief 浮动管理器隐藏阈值，低于该值时停止绘制关闭动画。
 constexpr float FLOATING_MANAGER_HIDDEN_EPSILON = 0.01f;
 
@@ -76,6 +73,16 @@ float smoothStep(float value)
     return t * t * (3.0f - 2.0f * t);
 }
 
+/// @brief 读取统一 UI 动画过渡速度。
+/// @return 每秒推进的线性动画进度。
+/// @warning UI 热路径：只读取当前内存配置，不执行文件 IO。
+float getUiAnimationTransitionSpeed()
+{
+    return Config::AppConfig::instance()
+        .getEditorSettings()
+        .aesthetics.animationTransitionSpeed();
+}
+
 /// @brief 推进浮动管理器显隐动画进度。
 /// @param amount 当前动画进度。
 /// @param visible 目标是否可见。
@@ -86,7 +93,7 @@ float updateFloatingVisibilityAmount(float amount, bool visible)
     const float target = visible ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
                                 std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                    FLOATING_MANAGER_VISIBILITY_ANIM_SPEED);
+                                    getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         return std::min(target, amount + step);

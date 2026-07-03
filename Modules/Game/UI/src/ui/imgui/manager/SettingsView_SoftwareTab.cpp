@@ -1052,6 +1052,42 @@ void SettingsView::drawSoftwareSettings()
                     tmpPadding = settings.aesthetics.windowPadding;
                 }
             });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.aesthetics.animation_transition")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                static float tmpDuration =
+                    settings.aesthetics.animationTransitionDuration;
+                constexpr float maxDuration = 1.0f;
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::DragFloat("##AnimationTransitionDuration",
+                                      &tmpDuration,
+                                      0.005f,
+                                      Config::UIAestheticsConfig::
+                                          MIN_ANIMATION_TRANSITION_DURATION,
+                                      maxDuration,
+                                      "%.2f s",
+                                      ImGuiSliderFlags_AlwaysClamp) ) {
+                    tmpDuration =
+                        std::clamp(tmpDuration,
+                                   Config::UIAestheticsConfig::
+                                       MIN_ANIMATION_TRANSITION_DURATION,
+                                   maxDuration);
+                    settings.aesthetics.animationTransitionDuration =
+                        tmpDuration;
+                }
+                if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                    settings.aesthetics.animationTransitionDuration =
+                        tmpDuration;
+                    changed = true;
+                } else if ( !ImGui::IsItemActive() ) {
+                    tmpDuration =
+                        settings.aesthetics.animationTransitionDuration;
+                }
+            });
     }
 
     // 3. 界面偏好 (文件选择器、保存格式等)

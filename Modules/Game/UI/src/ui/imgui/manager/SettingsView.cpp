@@ -85,7 +85,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         snapshot.contentFont ? snapshot.contentFont : snapshot.fallbackFont;
     switch ( tab ) {
     case Event::SettingsTab::Software: {
-        const std::array<const char*, 29> labels{
+        const std::array<const char*, 30> labels{
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),
             TR_CACHE("ui.settings.software.auto_upload_pgo_profiles").data(),
@@ -107,6 +107,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.software.aesthetics.window_gap").data(),
             TR_CACHE("ui.settings.software.aesthetics.item_spacing").data(),
             TR_CACHE("ui.settings.software.aesthetics.window_padding").data(),
+            TR_CACHE("ui.settings.software.aesthetics.animation_transition")
+                .data(),
             TR_CACHE("ui.settings.software.picker_style").data(),
             TR_CACHE("ui.settings.software.save_format").data(),
             TR_CACHE("ui.settings.software.time_format").data(),

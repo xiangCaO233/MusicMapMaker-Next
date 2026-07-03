@@ -162,6 +162,7 @@ return {
 	["ui.settings.software.sync_mode.watertank"] = "Water Tank",
 	["ui.settings.software.aesthetics.item_spacing"] = "Internal Item Spacing",
 	["ui.settings.software.aesthetics.window_padding"] = "Global Window Padding",
+	["ui.settings.software.aesthetics.animation_transition"] = "UI Animation Transition",
 	["ui.settings.software.sync_factor"] = "Integral Tracking Factor",
 	["ui.settings.software.sync_buffer"] = "WaterTank Buffer",
 	["ui.settings.software.sync_interval"] = "Sync Interval",

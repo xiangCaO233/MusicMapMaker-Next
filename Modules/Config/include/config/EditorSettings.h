@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -170,6 +171,9 @@ inline void from_json(const nlohmann::json& j, SoftwareCursorConfig& c)
 }
 
 struct UIAestheticsConfig {
+    /// @brief UI 动画过渡时间下限，避免配置为 0 导致速度计算异常。
+    static constexpr float MIN_ANIMATION_TRANSITION_DURATION = 0.02f;
+
     /// @brief 全局窗口圆角半径 (px, 基准值)
     float windowRounding{ 8.0f };
     /// @brief 全局组件圆角半径 (px, 基准值)
@@ -180,6 +184,16 @@ struct UIAestheticsConfig {
     float itemSpacing{ 8.0f };
     /// @brief 全局窗口内边距 (px, 基准值)
     float windowPadding{ 8.0f };
+    /// @brief UI 悬浮、弹窗和面板切换的统一过渡时间，单位秒。
+    float animationTransitionDuration{ 0.12f };
+
+    /// @brief 获取统一 UI 过渡动画速度。
+    /// @return 每秒推进的线性动画进度。
+    float animationTransitionSpeed() const
+    {
+        return 1.0f / std::max(MIN_ANIMATION_TRANSITION_DURATION,
+                               animationTransitionDuration);
+    }
 };
 
 inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
@@ -188,7 +202,9 @@ inline void to_json(nlohmann::json& j, const UIAestheticsConfig& c)
                         { "frameRounding", c.frameRounding },
                         { "windowGap", c.windowGap },
                         { "itemSpacing", c.itemSpacing },
-                        { "windowPadding", c.windowPadding } };
+                        { "windowPadding", c.windowPadding },
+                        { "animationTransitionDuration",
+                          c.animationTransitionDuration } };
 }
 
 inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
@@ -198,6 +214,9 @@ inline void from_json(const nlohmann::json& j, UIAestheticsConfig& c)
     c.windowGap      = j.value("windowGap", 8.0f);
     c.itemSpacing    = j.value("itemSpacing", 8.0f);
     c.windowPadding  = j.value("windowPadding", 8.0f);
+    c.animationTransitionDuration =
+        std::max(UIAestheticsConfig::MIN_ANIMATION_TRANSITION_DURATION,
+                 j.value("animationTransitionDuration", 0.12f));
 }
 
 /// @brief 音符调色盘方案中的颜色槽位数量。

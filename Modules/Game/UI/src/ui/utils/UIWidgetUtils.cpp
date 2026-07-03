@@ -18,9 +18,6 @@ constexpr ImGuiID TOOLTIP_ANIM_AMOUNT_KEY_SALT = 0x6D6D5421u;
 /// @brief Tooltip 最后一次更新帧存储键的盐值。
 constexpr ImGuiID TOOLTIP_LAST_FRAME_KEY_SALT = 0x6D6D5422u;
 
-/// @brief Tooltip 淡入速度，值越大越快。
-constexpr float TOOLTIP_FADE_IN_SPEED = 12.0f;
-
 /// @brief Tooltip 弹出动画的横向位移像素。
 constexpr float TOOLTIP_SLIDE_X = 6.0f;
 
@@ -34,6 +31,16 @@ constexpr float TOOLTIP_SLIDE_Y = 4.0f;
 ImGuiID makeTooltipStorageKey(ImGuiID id, ImGuiID salt)
 {
     return id ^ salt;
+}
+
+/// @brief 读取统一 UI 动画过渡速度。
+/// @return 每秒推进的线性动画进度。
+/// @warning UI 热路径：只读取当前内存配置，不执行文件 IO。
+float getUiAnimationTransitionSpeed()
+{
+    return Config::AppConfig::instance()
+        .getEditorSettings()
+        .aesthetics.animationTransitionSpeed();
 }
 
 /// @brief 计算 ease-out cubic 缓动值。
@@ -74,8 +81,8 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
 
     float amount =
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
-    const float step =
-        std::max(0.0f, ImGui::GetIO().DeltaTime) * TOOLTIP_FADE_IN_SPEED;
+    const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                       getUiAnimationTransitionSpeed();
     amount = std::min(1.0f, amount + step);
 
     storage->SetFloat(amountKey, amount);
@@ -521,9 +528,6 @@ constexpr float BUTTON_HOVER_SFX_VOLUME = 0.22f;
 /// @brief 点击音效的单次触发音量倍率。
 constexpr float BUTTON_CLICK_SFX_VOLUME = 0.36f;
 
-/// @brief 悬浮颜色过渡速度，值越大越快。
-constexpr float BUTTON_HOVER_FADE_SPEED = 10.0f;
-
 /// @brief 按钮悬浮状态存储键的盐值。
 constexpr ImGuiID BUTTON_HOVERED_KEY_SALT = 0x6D6D4821u;
 
@@ -544,9 +548,6 @@ constexpr ImGuiID MENU_POPUP_LAST_FRAME_KEY_SALT = 0x6D6D4D23u;
 
 /// @brief 菜单弹窗关闭动画状态存储键的盐值。
 constexpr ImGuiID MENU_POPUP_CLOSING_KEY_SALT = 0x6D6D4D24u;
-
-/// @brief 菜单弹窗淡入速度，值越大越快。
-constexpr float MENU_POPUP_FADE_SPEED = 8.0f;
 
 /// @brief 菜单弹窗滑入位移像素。
 constexpr float MENU_POPUP_SLIDE_Y = 8.0f;
@@ -618,9 +619,9 @@ float updateButtonHoverAmount(ImGuiID id, ImGuiStorage* storage)
     const float target  = (wasHovered || wasOpen) ? 1.0f : 0.0f;
     float       amount =
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
-    const float step = std::min(
-        1.0f,
-        std::max(0.0f, ImGui::GetIO().DeltaTime) * BUTTON_HOVER_FADE_SPEED);
+    const float step = std::min(1.0f,
+                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                    Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -753,8 +754,9 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
     float      amount =
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
-    const float step   = std::min(
-        1.0f, std::max(0.0f, ImGui::GetIO().DeltaTime) * MENU_POPUP_FADE_SPEED);
+    const float step   = std::min(1.0f,
+                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                    Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
