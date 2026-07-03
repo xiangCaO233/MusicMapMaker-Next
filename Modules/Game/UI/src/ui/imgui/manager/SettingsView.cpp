@@ -119,7 +119,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        const std::array<const char*, 28> labels{
+        const std::array<const char*, 30> labels{
             TR_CACHE("ui.settings.visual.layout_left").data(),
             TR_CACHE("ui.settings.visual.layout_top").data(),
             TR_CACHE("ui.settings.visual.layout_right").data(),
@@ -148,7 +148,9 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.visual.linear_scroll").data(),
             TR_CACHE("ui.settings.visual.snap_threshold").data(),
             TR_CACHE("ui.settings.visual.spectrum_detail").data(),
-            TR_CACHE("ui.settings.visual.visual_offset").data()
+            TR_CACHE("ui.settings.visual.visual_offset").data(),
+            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
+            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data()
         };
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }

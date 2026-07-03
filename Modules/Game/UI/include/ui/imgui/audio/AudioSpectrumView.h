@@ -95,15 +95,32 @@ private:
                          float uv1X, Graphic::VKTexture* texture);
 
     /// @brief 构建指定通道的离屏绘制几何。
+    /// @param textures 当前通道的频谱纹理分块。
+    /// @param plotY 通道绘制区域在离屏表面内的 Y 坐标。
+    /// @param plotW 通道绘制区域宽度。
+    /// @param plotH 通道绘制区域高度。
+    /// @param viewStart 当前全局视觉视野起点，单位为秒。
+    /// @param viewEnd 当前全局视觉视野终点，单位为秒。
+    /// @param spectrumVisualOffset 频谱内容使用的最终视觉偏移，单位为秒。
     void buildChannelGeometry(
         const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
         float plotY, float plotW, float plotH, double viewStart, double viewEnd,
-        float visualOffset);
+        float spectrumVisualOffset);
 
     /// @brief 绘制指定通道的 ImGui 交互覆盖层。
+    /// @param seekId ImGui 隐形交互区域 ID。
+    /// @param groupMin 交互区域左上角。
+    /// @param groupMax 交互区域右下角。
+    /// @param viewStart 当前全局视觉视野起点，单位为秒。
+    /// @param viewEnd 当前全局视觉视野终点，单位为秒。
+    /// @param globalVisualOffset 全局视觉偏移，单位为秒。
+    /// @param totalTime 音频总时长，单位为秒。
+    /// @param visualTime 当前全局视觉时间，单位为秒。
+    /// @param snapshot 当前活动画布同步快照，可以为空。
     void renderChannelInteractionOverlay(const char* seekId, ImVec2 groupMin,
                                          ImVec2 groupMax, double viewStart,
-                                         double viewEnd, float visualOffset,
+                                         double viewEnd,
+                                         float  globalVisualOffset,
                                          double totalTime, double visualTime,
                                          const Logic::RenderSnapshot* snapshot);
 

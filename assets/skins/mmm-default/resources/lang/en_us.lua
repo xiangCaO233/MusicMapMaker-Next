@@ -239,6 +239,8 @@ return {
 	["ui.settings.visual.spectrum_detail.tooltip"] = "Estimate excludes driver alignment, descriptor, and CPU-side cache overhead. The standalone spectrum window uploads R8 intensity textures and renders them through an offscreen Vulkan surface; the BPM tool uses a mixed mono RGBA8 spectrum.",
 	["ui.settings.visual.offset"] = "Visual Offset",
 	["ui.settings.visual.visual_offset"] = "Global Render Offset (s)",
+	["ui.settings.visual.waveform_visual_offset"] = "Waveform Extra Offset (s)",
+	["ui.settings.visual.spectrum_visual_offset"] = "Log Spectrum Extra Offset (s)",
 	["ui.settings.visual.snap_threshold"] = "Snap Threshold (px)",
 
 	["ui.settings.project"] = "Project Config",

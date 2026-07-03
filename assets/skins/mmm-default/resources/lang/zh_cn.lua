@@ -242,6 +242,8 @@ return {
 	["ui.settings.visual.spectrum_detail.tooltip"] = "估算不含驱动对齐、描述符和 CPU 侧缓存。独立频谱窗口上传 R8 强度纹理并通过 Vulkan 离屏表面渲染；BPM 测量工具使用混合单声道 RGBA8 频谱。",
 	["ui.settings.visual.offset"] = "视觉偏移",
 	["ui.settings.visual.visual_offset"] = "全局渲染偏移 (秒)",
+	["ui.settings.visual.waveform_visual_offset"] = "波形图额外偏移 (秒)",
+	["ui.settings.visual.spectrum_visual_offset"] = "信号对数谱图额外偏移 (秒)",
 	["ui.settings.visual.snap_threshold"] = "磁吸阈值 (像素)",
 
 	["ui.settings.project"] = "项目配置",

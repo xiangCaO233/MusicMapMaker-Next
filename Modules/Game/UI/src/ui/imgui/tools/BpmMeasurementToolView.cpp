@@ -1496,8 +1496,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             break;
         }
 
-        // 拍线和频谱都位于音频/谱面时间轴，SFX 也按同一时间轴调度；
-        // visualOffset 只补偿播放指针显示，不能在这里二次叠加。
+        // 节拍器按真实音频/谱面时间轴调度；波形/频谱视觉偏移只影响绘制，
+        // 不能在这里二次叠加。
         if ( beatAudioTime >= 0.0 && beatAudioTime <= totalTime ) {
             int64_t beatMod = m_nextMetronomeBeatIndex % 4;
             if ( beatMod < 0 ) {
@@ -1637,7 +1637,7 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
         ImPlot::SetupAxisLimits(ImAxis_Y1, -1.05, 1.05, ImGuiCond_Always);
 
         if ( !m_waveTimes.empty() ) {
-            updateWaveCanvasTimes(0.0);
+            updateWaveCanvasTimes(waveformCanvasOffset());
             const size_t availableCount = std::min(
                 { m_waveCanvasTimes.size(),
                   m_waveMin.size(),
@@ -1716,8 +1716,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     const double viewEnd = std::min(std::max(canvasDuration, viewStart + 0.001),
                                     clampedCenter + m_zoomSeconds);
     const double viewRange      = std::max(0.001, viewEnd - viewStart);
-    const double audioViewStart = viewStart;
-    const double audioViewEnd   = viewEnd;
+    const double spectrumOffset = spectrumCanvasOffset();
+    const double audioViewStart = viewStart - spectrumOffset;
+    const double audioViewEnd   = viewEnd - spectrumOffset;
     const double pixelStart     = audioViewStart * m_spectrumSegmentsPerSecond;
     const double pixelEnd       = audioViewEnd * m_spectrumSegmentsPerSecond;
     const double pixelWidth     = std::max(1.0, pixelEnd - pixelStart);
@@ -2687,6 +2688,24 @@ double BpmMeasurementToolView::playbackVisualOffset() const
     return Config::AppConfig::instance()
         .getVisualConfig()
         .getEffectiveVisualOffset();
+}
+
+/// @brief 获取 BPM 波形内容使用的最终视觉偏移，单位为秒。
+/// @return 波形采样时间转换为 BPM 画布时间时需要叠加的偏移。
+double BpmMeasurementToolView::waveformCanvasOffset() const
+{
+    return Config::AppConfig::instance()
+        .getVisualConfig()
+        .getWaveformEffectiveVisualOffset();
+}
+
+/// @brief 获取 BPM 频谱内容使用的最终视觉偏移，单位为秒。
+/// @return 频谱采样时间转换为 BPM 画布时间时需要叠加的偏移。
+double BpmMeasurementToolView::spectrumCanvasOffset() const
+{
+    return Config::AppConfig::instance()
+        .getVisualConfig()
+        .getSpectrumEffectiveVisualOffset();
 }
 
 /// @brief 获取当前音频对应的 BPM 工具画布时间轴总长度。

@@ -146,11 +146,12 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         }
     }
 
-    float visualOffset = Config::AppConfig::instance()
-                             .getVisualConfig()
-                             .getEffectiveVisualOffset();
+    const auto& visualConfig = Config::AppConfig::instance().getVisualConfig();
+    float       globalVisualOffset = visualConfig.getEffectiveVisualOffset();
+    float       spectrumVisualOffset =
+        visualConfig.getSpectrumEffectiveVisualOffset();
     double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
+    double visualTime = audioTime + globalVisualOffset;
     double totalTime  = audioManager.getTotalTime();
 
     // 优先使用逻辑层的平滑视觉时间，以支持预览拖拽时的实时滚动
@@ -162,7 +163,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime  = visualTime - visualOffset;
+        audioTime  = visualTime - globalVisualOffset;
 
         // 亚帧平滑补偿 (同步视觉偏移)
         if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
@@ -334,15 +335,20 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     m_vertices.clear();
     m_indices.clear();
     m_spectrumDrawCmds.clear();
-    buildChannelGeometry(
-        m_texturesL, textH, avail.x, plotH, viewStart, viewEnd, visualOffset);
+    buildChannelGeometry(m_texturesL,
+                         textH,
+                         avail.x,
+                         plotH,
+                         viewStart,
+                         viewEnd,
+                         spectrumVisualOffset);
     buildChannelGeometry(m_texturesR,
                          textH + plotH + textH,
                          avail.x,
                          plotH,
                          viewStart,
                          viewEnd,
-                         visualOffset);
+                         spectrumVisualOffset);
 
     vk::DescriptorSet surfaceTexture = getDescriptorSet();
     if ( surfaceTexture != VK_NULL_HANDLE ) {
@@ -372,7 +378,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     leftMax,
                                     viewStart,
                                     viewEnd,
-                                    visualOffset,
+                                    globalVisualOffset,
                                     totalTime,
                                     visualTime,
                                     snapshot);
@@ -381,7 +387,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
                                     rightMax,
                                     viewStart,
                                     viewEnd,
-                                    visualOffset,
+                                    globalVisualOffset,
                                     totalTime,
                                     visualTime,
                                     snapshot);
@@ -420,7 +426,7 @@ void AudioSpectrumView::addSpectrumQuad(float x, float y, float w, float h,
 void AudioSpectrumView::buildChannelGeometry(
     const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
     float plotY, float plotW, float plotH, double viewStart, double viewEnd,
-    float visualOffset)
+    float spectrumVisualOffset)
 {
     if ( textures.empty() || plotW <= 0.0f || plotH <= 0.0f ) return;
 
@@ -428,8 +434,8 @@ void AudioSpectrumView::buildChannelGeometry(
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
     const double fftOffset =
         sampleRate > 0.0 ? (2048.0 / 2.0) / sampleRate : 0.0;
-    const double audioViewStart = viewStart - visualOffset - fftOffset;
-    const double audioViewEnd   = viewEnd - visualOffset - fftOffset;
+    const double audioViewStart = viewStart - spectrumVisualOffset - fftOffset;
+    const double audioViewEnd   = viewEnd - spectrumVisualOffset - fftOffset;
     const double pixelStart     = audioViewStart * m_cacheSegmentsPerSecond;
     const double pixelEnd       = audioViewEnd * m_cacheSegmentsPerSecond;
     const double pixelWidth     = pixelEnd - pixelStart;
@@ -463,8 +469,8 @@ void AudioSpectrumView::buildChannelGeometry(
 
 void AudioSpectrumView::renderChannelInteractionOverlay(
     const char* seekId, ImVec2 groupMin, ImVec2 groupMax, double viewStart,
-    double viewEnd, float visualOffset, double totalTime, double visualTime,
-    const Logic::RenderSnapshot* snapshot)
+    double viewEnd, float globalVisualOffset, double totalTime,
+    double visualTime, const Logic::RenderSnapshot* snapshot)
 {
     const float width  = groupMax.x - groupMin.x;
     const float height = groupMax.y - groupMin.y;
@@ -519,7 +525,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
         const float  relX =
             std::clamp((mousePos.x - groupMin.x) / width, 0.0f, 1.0f);
         const double hoverVisualTime = viewStart + relX * viewRange;
-        const double hoverAudioTime  = hoverVisualTime - visualOffset;
+        const double hoverAudioTime  = hoverVisualTime - globalVisualOffset;
 
         const auto timeText =
             Canvas::formatCanvasTime(hoverVisualTime, snapshot);

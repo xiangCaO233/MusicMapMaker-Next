@@ -36,7 +36,7 @@ void SettingsView::drawVisualSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -657,6 +657,36 @@ void SettingsView::drawVisualSettings()
                                                  "%.3f s") )
                                changed = true;
                        });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.waveform_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::DragFloat("##WaveformVisualOffset",
+                                      &visual.waveformVisualOffset,
+                                      0.001f,
+                                      -0.5f,
+                                      0.5f,
+                                      "%.3f s") )
+                    changed = true;
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.spectrum_visual_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ImGui::DragFloat("##SpectrumVisualOffset",
+                                      &visual.spectrumVisualOffset,
+                                      0.001f,
+                                      -0.5f,
+                                      0.5f,
+                                      "%.3f s") )
+                    changed = true;
+            });
     }
 
     // 统一执行 Clay 布局渲染

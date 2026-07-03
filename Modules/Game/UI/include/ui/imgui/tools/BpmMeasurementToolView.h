@@ -367,6 +367,14 @@ private:
     /// @return 音频时间转换为视觉时间时需要叠加的偏移。
     double playbackVisualOffset() const;
 
+    /// @brief 获取 BPM 波形内容使用的最终视觉偏移，单位为秒。
+    /// @return 波形采样时间转换为 BPM 画布时间时需要叠加的偏移。
+    double waveformCanvasOffset() const;
+
+    /// @brief 获取 BPM 频谱内容使用的最终视觉偏移，单位为秒。
+    /// @return 频谱采样时间转换为 BPM 画布时间时需要叠加的偏移。
+    double spectrumCanvasOffset() const;
+
     /// @brief 获取当前音频对应的 BPM 工具画布时间轴总长度。
     /// @return 画布时间轴上可显示的最大时间。
     double playbackCanvasDuration() const;

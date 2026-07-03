@@ -88,11 +88,12 @@ void AudioWaveformView::update(UIManager* sourceManager)
         return;
     }
 
-    float visualOffset = Config::AppConfig::instance()
-                             .getVisualConfig()
-                             .getEffectiveVisualOffset();
+    const auto& visualConfig = Config::AppConfig::instance().getVisualConfig();
+    float       globalVisualOffset = visualConfig.getEffectiveVisualOffset();
+    float       waveformVisualOffset =
+        visualConfig.getWaveformEffectiveVisualOffset();
     double audioTime  = audioManager.getCurrentTime();
-    double visualTime = audioTime + visualOffset;
+    double visualTime = audioTime + globalVisualOffset;
     double totalTime  = audioManager.getTotalTime();
     double speed      = audioManager.getPlaybackSpeed();
 
@@ -105,7 +106,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
                         ->getReadingSnapshot();
     if ( snapshot ) {
         visualTime = snapshot->currentTime;
-        audioTime  = visualTime - visualOffset;
+        audioTime  = visualTime - globalVisualOffset;
         // 亚帧平滑补偿 (同步视觉偏移)
         if ( !snapshot->isPreviewDragging && snapshot->isPlaying &&
              snapshot->snapshotSysTime > 0.0 ) {
@@ -226,7 +227,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
     syncEQ();
-    updateEnvelopes(visualTime, totalTime, speed, visualOffset);
+    updateEnvelopes(visualTime, totalTime, speed, waveformVisualOffset);
 
     // 计算平分高度
     float totalAvailH = ImGui::GetContentRegionAvail().y;
@@ -323,11 +324,12 @@ void AudioWaveformView::update(UIManager* sourceManager)
             }
 
             double currentHoverVisualTime = viewStart;
-            double currentHoverAudioTime  = viewStart - visualOffset;
+            double currentHoverAudioTime  = viewStart - globalVisualOffset;
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
                 ImPlotPoint mousePlotPos = ImPlot::GetPlotMousePos();
                 currentHoverVisualTime   = mousePlotPos.x;
-                currentHoverAudioTime = currentHoverVisualTime - visualOffset;
+                currentHoverAudioTime =
+                    currentHoverVisualTime - globalVisualOffset;
             }
 
             // 2. 绘制悬停绿色竖线和预览框
@@ -533,7 +535,8 @@ void AudioWaveformView::fullRecalculate()
 }
 
 void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
-                                        double speed, float visualOffset)
+                                        double speed,
+                                        float  waveformVisualOffset)
 {
     if ( m_cachedMinL.empty() ) return;
 
@@ -545,7 +548,7 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
                                    (viewEnd - viewStart);
         m_times[i] = t;
 
-        double audioT = t - visualOffset;
+        double audioT = t - waveformVisualOffset;
 
         if ( audioT < 0 || audioT >= totalTime ) {
             m_viewMinL[i] = m_maxEnvelopeL[i] = m_viewMinR[i] =
