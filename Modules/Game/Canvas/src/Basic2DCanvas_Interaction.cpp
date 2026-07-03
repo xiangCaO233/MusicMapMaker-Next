@@ -1400,13 +1400,19 @@ void Basic2DCanvasInteraction::handleInteractions(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
                         localMousePos.x, localMousePos.y }));
             }
-        } else if ( m_leftPressStartedOnCanvas && !currentSnapshot->isPlaying &&
-                    currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Draw &&
+                    (!currentSnapshot->isPlaying ||
+                     currentSnapshot->brush.isActive) ) {
+            const bool playbackScrolled = currentSnapshot->hasBeatmap &&
+                                          currentSnapshot->isPlaying &&
+                                          currentSnapshot->brush.isActive;
             if ( shouldSendContinuousEditCommand(
                      m_lastBrushUpdateCommand,
                      { localMousePos.x, localMousePos.y },
                      ImGui::GetIO().KeyShift,
-                     ImGui::GetIO().KeyCtrl) ) {
+                     ImGui::GetIO().KeyCtrl) ||
+                 playbackScrolled ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateBrush{ m_cameraId,
                                            localMousePos.x,
@@ -1551,9 +1557,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, io.KeyShift }));
 
-            if ( !currentSnapshot->isPlaying &&
-                 currentSnapshot->currentTool == Logic::EditTool::Draw &&
-                 ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            const bool canUpdateActiveBrush =
+                currentSnapshot->currentTool == Logic::EditTool::Draw &&
+                ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                (!currentSnapshot->isPlaying ||
+                 currentSnapshot->brush.isActive);
+            if ( canUpdateActiveBrush ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
                     Logic::CmdUpdateBrush{ m_cameraId,
                                            localMousePos.x,

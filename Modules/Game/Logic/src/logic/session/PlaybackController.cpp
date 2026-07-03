@@ -148,10 +148,16 @@ void cancelActiveEditingState(SessionContext& ctx)
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
                               ctx.dragInitialNote.has_value();
+    const bool keepBrush =
+        ctx.currentTool == EditTool::Draw && ctx.brushState.isActive;
 
     if ( keepMoveDrag ) {
-        // 物件拖拽允许在播放开始后继续定位，避免播放键打断尚未提交的移动。
+        // 拖拽物件允许在播放开始后继续定位，避免播放键打断尚未提交的手势。
         ctx.isDragging = true;
+    } else if ( keepBrush ) {
+        // 画笔绘制允许在播放开始后继续定位，但不沿用物件拖拽的部位状态。
+        ctx.isDragging  = true;
+        ctx.draggedPart = HoverPart::None;
     } else {
         ctx.isDragging  = false;
         ctx.draggedPart = HoverPart::None;
@@ -165,11 +171,13 @@ void cancelActiveEditingState(SessionContext& ctx)
         ctx.marqueeBoxes.clear();
     }
 
-    ctx.brushState.isActive = false;
-    ctx.brushState.polylineSegments.clear();
-    ctx.brushState.holdStartTime = -1.0;
-    ctx.brushState.duration      = 0.0;
-    ctx.brushState.dtrack        = 0;
+    if ( !keepBrush ) {
+        ctx.brushState.isActive = false;
+        ctx.brushState.polylineSegments.clear();
+        ctx.brushState.holdStartTime = -1.0;
+        ctx.brushState.duration      = 0.0;
+        ctx.brushState.dtrack        = 0;
+    }
 
     ctx.eraserState.isActive    = false;
     ctx.eraserState.isShiftDown = false;

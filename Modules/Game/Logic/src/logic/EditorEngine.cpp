@@ -1553,6 +1553,22 @@ bool EditorEngine::isActiveSessionDraggingNote() const
     return false;
 }
 
+/// @brief 判断当前活跃 Session 是否正在使用画笔绘制。
+/// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
+/// 的常量状态，且不复制 shared_ptr 所有权。
+bool EditorEngine::isActiveSessionDrawingBrush() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = m_sessionRegistry.activeIndex();
+    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
+         sessions[idx].session ) {
+        const auto& ctx = sessions[idx].session->getContext();
+        return ctx.currentTool == EditTool::Draw && ctx.brushState.isActive;
+    }
+    return false;
+}
+
 /// @brief 设置同主音轨多画布时间同步开关。
 /// @warning 逻辑/UI 热路径原子：只写入同步开关状态，使用 relaxed。
 void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)

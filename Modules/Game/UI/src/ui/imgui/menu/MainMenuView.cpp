@@ -379,13 +379,17 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     const bool blockCanvasEditingShortcuts =
         ShortcutUtils::shouldBlockCanvasEditingShortcuts();
 
-    // 非 Ctrl 的播放快捷键只允许在没有活跃控件时触发。
+    // 非 Ctrl 的播放快捷键通常只允许在没有活跃控件时触发；画布拖动类手势
+    // 保留特例，避免定位时被 ImGui active item 拦截。
     if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) {
-        if ( !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
+        if ( !io.KeyAlt && !io.KeySuper &&
              ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
-            auto& engine = Logic::EditorEngine::instance();
-            if ( engine.isActiveSessionSelectingMarquee() ||
-                 engine.isActiveSessionDraggingNote() ) {
+            auto&      engine = Logic::EditorEngine::instance();
+            const bool allowPlaybackToggle =
+                (!io.KeyShift && (engine.isActiveSessionSelectingMarquee() ||
+                                  engine.isActiveSessionDraggingNote())) ||
+                (io.KeyShift && engine.isActiveSessionDrawingBrush());
+            if ( allowPlaybackToggle ) {
                 const bool playing = engine.isPlaybackPlaying();
                 dispatchCommand(Logic::CmdSetPlayState{ !playing });
             }
