@@ -447,7 +447,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -519,7 +519,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -593,18 +593,34 @@ Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 
 /// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
 bool Basic2DCanvasInteraction::shouldSendContinuousEditCommand(
-    LastContinuousEditCommand& last, glm::vec2 pos, bool primaryModifier,
+    LastContinuousEditCommand& last, glm::vec2 pos,
+    const Logic::RenderSnapshot& snapshot, bool primaryModifier,
     bool secondaryModifier)
 {
-    const bool shouldSend =
+    constexpr double visualTimeEpsilon  = 1e-6;
+    constexpr float  renderScaleEpsilon = 1e-5f;
+    const bool       shouldSend =
         !last.valid ||
         std::abs(last.pos.x - pos.x) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
         std::abs(last.pos.y - pos.y) > CONTINUOUS_EDIT_MOUSE_EPSILON ||
+        std::abs(last.visualTime - snapshot.currentTime) > visualTimeEpsilon ||
+        std::abs(last.visibleTimeStart - snapshot.visibleTimeStart) >
+            visualTimeEpsilon ||
+        std::abs(last.visibleTimeEnd - snapshot.visibleTimeEnd) >
+            visualTimeEpsilon ||
+        std::abs(last.renderScaleY - snapshot.renderScaleY) >
+            renderScaleEpsilon ||
+        last.beatDivisor != snapshot.currentBeatDivisor ||
         last.primaryModifier != primaryModifier ||
         last.secondaryModifier != secondaryModifier;
     if ( shouldSend ) {
         last.valid             = true;
         last.pos               = pos;
+        last.visualTime        = snapshot.currentTime;
+        last.visibleTimeStart  = snapshot.visibleTimeStart;
+        last.visibleTimeEnd    = snapshot.visibleTimeEnd;
+        last.renderScaleY      = snapshot.renderScaleY;
+        last.beatDivisor       = snapshot.currentBeatDivisor;
         last.primaryModifier   = primaryModifier;
         last.secondaryModifier = secondaryModifier;
     }
@@ -917,7 +933,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -987,8 +1003,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
@@ -1392,6 +1408,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 shouldSendContinuousEditCommand(
                     m_lastMarqueeUpdateCommand,
                     { localMousePos.x, localMousePos.y },
+                    *currentSnapshot,
                     ImGui::GetIO().KeyCtrl,
                     false) ||
                 autoScrolled || playbackScrolled;
@@ -1410,6 +1427,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( shouldSendContinuousEditCommand(
                      m_lastBrushUpdateCommand,
                      { localMousePos.x, localMousePos.y },
+                     *currentSnapshot,
                      ImGui::GetIO().KeyShift,
                      ImGui::GetIO().KeyCtrl) ||
                  playbackScrolled ) {
@@ -1428,6 +1446,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 shouldSendContinuousEditCommand(
                     m_lastMoveUpdateCommand,
                     { localMousePos.x, localMousePos.y },
+                    *currentSnapshot,
                     ImGui::GetIO().KeyCtrl,
                     false) ||
                 playbackScrolled;
@@ -1526,6 +1545,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( shouldSendContinuousEditCommand(
                      m_lastEraseUpdateCommand,
                      { localMousePos.x, localMousePos.y },
+                     *currentSnapshot,
                      ImGui::GetIO().KeyShift,
                      false) ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(
