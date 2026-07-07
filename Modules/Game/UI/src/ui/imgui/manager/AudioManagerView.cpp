@@ -23,10 +23,14 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
 #include <imgui_internal.h>
 #include <nfd.h>
+#include <system_error>
 #include <utility>
 
 namespace MMM::UI
@@ -42,7 +46,28 @@ enum AudioTableColumn : int {
     AudioTableColumnType = 1,
 
     /// @brief 音频资源路径列。
-    AudioTableColumnPath = 2
+    AudioTableColumnPath = 2,
+
+    /// @brief 音频文件大小列。
+    AudioTableColumnSize = 3,
+
+    /// @brief 修改时间列。
+    AudioTableColumnModifiedTime = 4
+};
+
+/// @brief 文件系统元数据读取结果。
+struct FileMetadata {
+    /// @brief 文件大小字节数；读取失败时保持为 0。
+    std::uintmax_t size{ 0 };
+
+    /// @brief 是否成功读取文件大小。
+    bool hasSize{ false };
+
+    /// @brief 文件最后修改时间；读取失败时不参与精确排序。
+    std::filesystem::file_time_type lastWriteTime{};
+
+    /// @brief 是否成功读取最后修改时间。
+    bool hasLastWriteTime{ false };
 };
 
 /// @brief 使用独立交互音量的音效 key 前缀。
@@ -112,6 +137,169 @@ std::string toLowerAscii(std::string value)
 int compareAsciiText(const std::string& lhs, const std::string& rhs)
 {
     return toLowerAscii(lhs).compare(toLowerAscii(rhs));
+}
+
+/// @brief 读取文件大小和修改时间。
+/// @param filePath 需要查询的绝对文件路径。
+/// @return 文件系统元数据；读取失败的字段保持无效。
+FileMetadata queryFileMetadata(const std::filesystem::path& filePath)
+{
+    FileMetadata metadata;
+
+    std::error_code filesystemError;
+    const auto size = std::filesystem::file_size(filePath, filesystemError);
+    if ( !filesystemError ) {
+        metadata.size    = size;
+        metadata.hasSize = true;
+    }
+
+    filesystemError.clear();
+    const auto modifiedTime =
+        std::filesystem::last_write_time(filePath, filesystemError);
+    if ( !filesystemError ) {
+        metadata.lastWriteTime    = modifiedTime;
+        metadata.hasLastWriteTime = true;
+    }
+    return metadata;
+}
+
+/// @brief 生成文件大小显示文本。
+/// @param size 文件字节数。
+/// @return 适合列表展示的大小文本。
+std::string formatFileSize(std::uintmax_t size)
+{
+    constexpr double kibi = 1024.0;
+    constexpr double mebi = kibi * 1024.0;
+    constexpr double gibi = mebi * 1024.0;
+
+    if ( size < 1024 ) {
+        return TR_FMT("ui.file_manager.size_bytes", size);
+    }
+    const double value = static_cast<double>(size);
+    if ( value < mebi ) {
+        return TR_FMT("ui.file_manager.size_kib", value / kibi);
+    }
+    if ( value < gibi ) {
+        return TR_FMT("ui.file_manager.size_mib", value / mebi);
+    }
+    return TR_FMT("ui.file_manager.size_gib", value / gibi);
+}
+
+/// @brief 将文件系统时间转换为本地时间文本。
+/// @param time 文件系统时间。
+/// @return 本地时间文本，格式为 yyyy/mm/dd HH:MM。
+std::string formatModifiedTime(std::filesystem::file_time_type time)
+{
+    const auto systemTime =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            time - std::filesystem::file_time_type::clock::now() +
+            std::chrono::system_clock::now());
+    const std::time_t timeValue =
+        std::chrono::system_clock::to_time_t(systemTime);
+
+    std::tm localTime{};
+#ifdef _WIN32
+    localtime_s(&localTime, &timeValue);
+#else
+    localtime_r(&timeValue, &localTime);
+#endif
+
+    char buffer[32]{};
+    if ( std::strftime(buffer, sizeof(buffer), "%Y/%m/%d %H:%M", &localTime) ==
+         0 ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return buffer;
+}
+
+/// @brief 生成文件大小列文本。
+/// @param hasSize 是否成功读取大小。
+/// @param size 文件大小字节数。
+/// @return 大小或未知占位。
+std::string formatSizeColumn(bool hasSize, std::uintmax_t size)
+{
+    if ( !hasSize ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return formatFileSize(size);
+}
+
+/// @brief 生成修改时间列文本。
+/// @param hasLastWriteTime 是否成功读取修改时间。
+/// @param lastWriteTime 文件修改时间。
+/// @return 修改时间或未知占位。
+std::string formatModifiedColumn(bool hasLastWriteTime,
+                                 std::filesystem::file_time_type lastWriteTime)
+{
+    if ( !hasLastWriteTime ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return formatModifiedTime(lastWriteTime);
+}
+
+/// @brief 比较两个可选数值。
+/// @tparam T 可比较数值类型。
+/// @param lhs 左值。
+/// @param lhsValid 左值是否有效。
+/// @param rhs 右值。
+/// @param rhsValid 右值是否有效。
+/// @return 小于返回 -1，大于返回 1，相等返回 0。
+template<typename T>
+int compareOptionalValue(const T& lhs, bool lhsValid, const T& rhs,
+                         bool rhsValid)
+{
+    if ( lhsValid != rhsValid ) {
+        return lhsValid ? -1 : 1;
+    }
+    if ( !lhsValid ) {
+        return 0;
+    }
+    if ( lhs < rhs ) return -1;
+    if ( rhs < lhs ) return 1;
+    return 0;
+}
+
+/// @brief 组合排序菜单项显示文本。
+/// @param columnLabel 排序字段显示名。
+/// @param ascending 是否升序。
+/// @return 带方向后缀的菜单文本。
+std::string makeSortMenuLabel(const char* columnLabel, bool ascending)
+{
+    return ascending
+               ? TR_FMT("ui.resource_table.sort_ascending_fmt", columnLabel)
+               : TR_FMT("ui.resource_table.sort_descending_fmt", columnLabel);
+}
+
+/// @brief 查询表格列当前是否有效显示。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 当前帧列有效显示时返回 true。
+bool isTableColumnEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsEnabled;
+}
+
+/// @brief 查询表格列的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 用户设置为显示时返回 true。
+bool isTableColumnUserEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsUserEnabled;
+}
+
+/// @brief 排队设置表格列下一帧的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @param enabled 是否显示。
+void queueTableColumnEnabled(ImGuiTable* table, int column, bool enabled)
+{
+    if ( !table || column < 0 || column >= table->ColumnsCount ) {
+        return;
+    }
+    table->Columns[column].IsUserEnabledNextFrame = enabled;
 }
 
 /// @brief 绘制可裁剪、超宽自动滚动的表格单元格文本。
@@ -335,10 +523,12 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float sliderMinW = sliderValueW + snapshot.framePadding.x * 4.0f +
                              std::floor(48.0f * scale);
 
-    const std::array<const char*, 4> headers{
+    const std::array<const char*, 6> headers{
         TR("ui.audio_manager.column_id").data(),
         TR("ui.audio_manager.column_type").data(),
         TR("ui.audio_manager.column_path").data(),
+        TR("ui.audio_manager.column_size").data(),
+        TR("ui.audio_manager.column_modified_time").data(),
         TR("ui.audio_manager.global_settings").data(),
     };
 
@@ -733,6 +923,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             row.m_kind = isInteractionSfxKey(key)
                              ? AudioTableRowKind::InteractionSfx
                              : AudioTableRowKind::PermanentSfx;
+            const FileMetadata metadata = queryFileMetadata(path);
+            row.m_size                  = metadata.size;
+            row.m_hasSize               = metadata.hasSize;
+            row.m_lastWriteTime         = metadata.lastWriteTime;
+            row.m_hasLastWriteTime      = metadata.hasLastWriteTime;
             m_audioTableRows.push_back(std::move(row));
         }
 
@@ -745,6 +940,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 row.m_kind = audio.m_type == AudioTrackType::Main
                                  ? AudioTableRowKind::MainTrack
                                  : AudioTableRowKind::ProjectSfx;
+                const auto filePath =
+                    project->m_projectRoot / Config::utf8ToPath(audio.m_path);
+                const FileMetadata metadata = queryFileMetadata(filePath);
+                row.m_size                  = metadata.size;
+                row.m_hasSize               = metadata.hasSize;
+                row.m_lastWriteTime         = metadata.lastWriteTime;
+                row.m_hasLastWriteTime      = metadata.hasLastWriteTime;
                 m_audioTableRows.push_back(std::move(row));
             }
         }
@@ -764,6 +966,17 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     break;
                 case AudioTableSortKey::Path:
                     compareResult = compareAsciiText(lhs.m_path, rhs.m_path);
+                    break;
+                case AudioTableSortKey::Size:
+                    compareResult = compareOptionalValue(
+                        lhs.m_size, lhs.m_hasSize, rhs.m_size, rhs.m_hasSize);
+                    break;
+                case AudioTableSortKey::ModifiedTime:
+                    compareResult =
+                        compareOptionalValue(lhs.m_lastWriteTime,
+                                             lhs.m_hasLastWriteTime,
+                                             rhs.m_lastWriteTime,
+                                             rhs.m_hasLastWriteTime);
                     break;
                 }
 
@@ -798,6 +1011,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             newSortKey = AudioTableSortKey::Type;
         } else if ( primarySpec.ColumnIndex == AudioTableColumnPath ) {
             newSortKey = AudioTableSortKey::Path;
+        } else if ( primarySpec.ColumnIndex == AudioTableColumnSize ) {
+            newSortKey = AudioTableSortKey::Size;
+        } else if ( primarySpec.ColumnIndex == AudioTableColumnModifiedTime ) {
+            newSortKey = AudioTableSortKey::ModifiedTime;
         }
 
         const SortDirection newDirection =
@@ -818,6 +1035,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
              m_audioTableSortDirection != SortDirection::Ascending ) {
             m_audioTableSortKey        = AudioTableSortKey::Id;
             m_audioTableSortDirection  = SortDirection::Ascending;
+            m_audioTableSortCacheDirty = true;
+        }
+    };
+
+    auto applyAudioTableSort = [&](AudioTableSortKey sortKey,
+                                   SortDirection     direction) {
+        if ( m_audioTableSortKey != sortKey ||
+             m_audioTableSortDirection != direction ) {
+            m_audioTableSortKey        = sortKey;
+            m_audioTableSortDirection  = direction;
             m_audioTableSortCacheDirty = true;
         }
     };
@@ -844,9 +1071,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     table->ContextPopupColumn < table->ColumnsCount
                 ? table->ContextPopupColumn
                 : -1;
-        if ( contextColumn >= 0 &&
-             (ImGui::TableGetColumnFlags(contextColumn) &
-              ImGuiTableColumnFlags_IsEnabled) != 0 &&
+        if ( contextColumn >= 0 && isTableColumnEnabled(table, contextColumn) &&
              ::MMM::UI::FeedbackMenuItem(
                  TR("ui.audio_manager.table_menu.size_column_fit").data()) ) {
             ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
@@ -855,6 +1080,53 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         if ( ::MMM::UI::FeedbackMenuItem(
                  TR("ui.audio_manager.table_menu.size_all_default").data()) ) {
             ImGui::TableSetColumnWidthAutoAll(table);
+        }
+
+        auto sortMenuItem = [&](AudioTableSortKey sortKey,
+                                SortDirection     direction,
+                                const char*       columnLabel) {
+            const std::string label = makeSortMenuLabel(
+                columnLabel, direction == SortDirection::Ascending);
+            const bool selected = m_audioTableSortKey == sortKey &&
+                                  m_audioTableSortDirection == direction;
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     label.c_str(), nullptr, selected) ) {
+                applyAudioTableSort(sortKey, direction);
+            }
+        };
+        if ( ::MMM::UI::FeedbackBeginMenu(
+                 TR("ui.resource_table.sort").data()) ) {
+            sortMenuItem(AudioTableSortKey::Id,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_id").data());
+            sortMenuItem(AudioTableSortKey::Id,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_id").data());
+            sortMenuItem(AudioTableSortKey::Type,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_type").data());
+            sortMenuItem(AudioTableSortKey::Type,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_type").data());
+            sortMenuItem(AudioTableSortKey::Path,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_path").data());
+            sortMenuItem(AudioTableSortKey::Path,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_path").data());
+            sortMenuItem(AudioTableSortKey::Size,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_size").data());
+            sortMenuItem(AudioTableSortKey::Size,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_size").data());
+            sortMenuItem(AudioTableSortKey::ModifiedTime,
+                         SortDirection::Ascending,
+                         TR("ui.audio_manager.column_modified_time").data());
+            sortMenuItem(AudioTableSortKey::ModifiedTime,
+                         SortDirection::Descending,
+                         TR("ui.audio_manager.column_modified_time").data());
+            ::MMM::UI::FeedbackEndMenu();
         }
 
         if ( ::MMM::UI::FeedbackBeginMenu(
@@ -872,7 +1144,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                      TR("ui.audio_manager.table_menu.show_all_columns")
                          .data()) ) {
                 for ( int column = 0; column < table->ColumnsCount; ++column ) {
-                    ImGui::TableSetColumnEnabled(column, true);
+                    queueTableColumnEnabled(table, column, true);
                 }
             }
             if ( ::MMM::UI::FeedbackMenuItem(
@@ -884,25 +1156,25 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
         ImGui::Separator();
 
-        const std::array<const char*, 3> columnLabels{
+        const std::array<const char*, 5> columnLabels{
             TR("ui.audio_manager.column_id").data(),
             TR("ui.audio_manager.column_type").data(),
-            TR("ui.audio_manager.column_path").data()
+            TR("ui.audio_manager.column_path").data(),
+            TR("ui.audio_manager.column_size").data(),
+            TR("ui.audio_manager.column_modified_time").data()
         };
         int enabledColumnCount = 0;
         for ( int column = 0; column < table->ColumnsCount; ++column ) {
-            if ( (ImGui::TableGetColumnFlags(column) &
-                  ImGuiTableColumnFlags_IsEnabled) != 0 ) {
+            if ( isTableColumnUserEnabled(table, column) ) {
                 enabledColumnCount++;
             }
         }
         for ( int column = 0; column < table->ColumnsCount; ++column ) {
-            const bool enabled   = (ImGui::TableGetColumnFlags(column) &
-                                    ImGuiTableColumnFlags_IsEnabled) != 0;
+            const bool enabled   = isTableColumnUserEnabled(table, column);
             const bool canToggle = !enabled || enabledColumnCount > 1;
             if ( ::MMM::UI::FeedbackMenuItem(
                      columnLabels[column], nullptr, enabled, canToggle) ) {
-                ImGui::TableSetColumnEnabled(column, !enabled);
+                queueTableColumnEnabled(table, column, !enabled);
             }
         }
 
@@ -920,7 +1192,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             ImGuiTableFlags_SizingStretchProp;
 
         if ( ImGui::BeginTable(
-                 "AudioManagerTable", 3, tableFlags, { r.width, r.height }) ) {
+                 "AudioManagerTable", 5, tableFlags, { r.width, r.height }) ) {
             ImGui::TableSetupScrollFreeze(0, 1);
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_id").data(),
@@ -936,6 +1208,21 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 TR("ui.audio_manager.column_path").data(),
                 ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
+            ImGui::TableSetupColumn(
+                TR("ui.audio_manager.column_size").data(),
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortAscending,
+                std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
+            ImGui::TableSetupColumn(
+                TR("ui.audio_manager.column_modified_time").data(),
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortDescending,
+                std::max(168.0f,
+                         ImGui::CalcTextSize("0000/00/00 00:00").x +
+                             ImGui::GetStyle().CellPadding.x * 4.0f +
+                             ImGui::GetFrameHeight()));
             if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
                 table->DisableDefaultContextMenu = true;
             }
@@ -1019,6 +1306,21 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                              ImGui::GetCursorScreenPos(),
                                              ImGui::GetContentRegionAvail().x,
                                              rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(
+                        formatSizeColumn(rowData.m_hasSize, rowData.m_size),
+                        ImGui::GetCursorScreenPos(),
+                        ImGui::GetContentRegionAvail().x,
+                        rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(
+                        formatModifiedColumn(rowData.m_hasLastWriteTime,
+                                             rowData.m_lastWriteTime),
+                        ImGui::GetCursorScreenPos(),
+                        ImGui::GetContentRegionAvail().x,
+                        rowHeight);
                 }
             }
             ImGui::EndTable();

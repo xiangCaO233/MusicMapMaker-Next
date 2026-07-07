@@ -1,3 +1,7 @@
+#ifndef IMGUI_DEFINE_MATH_OPERATORS
+#    define IMGUI_DEFINE_MATH_OPERATORS
+#endif
+
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -14,11 +18,13 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <fmt/format.h>
+#include <imgui_internal.h>
 #include <optional>
 #include <system_error>
 
@@ -31,11 +37,14 @@ enum FileTableColumn : int {
     /// @brief 名称列。
     FileTableColumnName = 0,
 
+    /// @brief 类型列。
+    FileTableColumnType = 1,
+
     /// @brief 大小列。
-    FileTableColumnSize = 1,
+    FileTableColumnSize = 2,
 
     /// @brief 修改时间列。
-    FileTableColumnModifiedTime = 2
+    FileTableColumnModifiedTime = 3
 };
 
 /// @brief 将 ASCII 字符串转换为小写，用于稳定排序。
@@ -138,6 +147,25 @@ std::string formatSizeColumn(const FileManagerView::DirectoryEntryInfo& entry)
         return TR("ui.file_manager.value_unknown").data();
     }
     return formatFileSize(entry.fileSize);
+}
+
+/// @brief 生成类型列显示文本。
+/// @param entry 文件树条目。
+/// @return 目录、扩展名或普通文件类型文本。
+std::string formatTypeColumn(const FileManagerView::DirectoryEntryInfo& entry)
+{
+    if ( entry.isDirectory ) {
+        return TR("ui.file_manager.type_directory").data();
+    }
+    if ( entry.extension.empty() ) {
+        return TR("ui.file_manager.type_file").data();
+    }
+    std::string extension = entry.extension;
+    if ( extension.size() > 1 && extension.front() == '.' ) {
+        extension.erase(extension.begin());
+    }
+    return extension.empty() ? TR("ui.file_manager.type_file").data()
+                             : toLowerAscii(extension);
 }
 
 /// @brief 将文件系统时间转换为本地时间文本。
@@ -283,6 +311,50 @@ bool fileEntryLess(const FileManagerView::DirectoryEntryInfo& lhs,
     }
     return compareResult < 0;
 }
+
+/// @brief 组合排序菜单项显示文本。
+/// @param columnLabel 排序字段显示名。
+/// @param direction 排序方向。
+/// @return 带方向后缀的菜单文本。
+std::string makeSortMenuLabel(const char*                    columnLabel,
+                              FileManagerView::SortDirection direction)
+{
+    return direction == FileManagerView::SortDirection::Ascending
+               ? TR_FMT("ui.resource_table.sort_ascending_fmt", columnLabel)
+               : TR_FMT("ui.resource_table.sort_descending_fmt", columnLabel);
+}
+
+/// @brief 查询表格列当前是否有效显示。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 当前帧列有效显示时返回 true。
+bool isTableColumnEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsEnabled;
+}
+
+/// @brief 查询表格列的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 用户设置为显示时返回 true。
+bool isTableColumnUserEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsUserEnabled;
+}
+
+/// @brief 排队设置表格列下一帧的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @param enabled 是否显示。
+void queueTableColumnEnabled(ImGuiTable* table, int column, bool enabled)
+{
+    if ( !table || column < 0 || column >= table->ColumnsCount ) {
+        return;
+    }
+    table->Columns[column].IsUserEnabledNextFrame = enabled;
+}
 }  // namespace
 
 void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
@@ -344,6 +416,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                 const float fontScale  = ImGui::GetFontSize() / 17.0f;
                 const float sizeColumnWidth =
                     std::max(96.0f, 104.0f * fontScale);
+                const float typeColumnWidth =
+                    std::max(76.0f, 86.0f * fontScale);
                 const float modifiedColumnPreferredWidth =
                     std::max(168.0f,
                              ImGui::CalcTextSize("0000/00/00 00:00").x +
@@ -360,11 +434,11 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                     tableStyle.ScrollbarSize + tableStyle.CellPadding.x * 2.0f;
                 const float nameColumnWidth = std::max(
                     nameColumnMinWidth,
-                    r.width - sizeColumnWidth - modifiedColumnPreferredWidth -
-                        tableReserveWidth);
+                    r.width - typeColumnWidth - sizeColumnWidth -
+                        modifiedColumnPreferredWidth - tableReserveWidth);
 
                 if ( ImGui::BeginTable("FileTreeTableV2",
-                                       3,
+                                       4,
                                        tableFlags,
                                        { r.width, r.height }) ) {
                     ImGui::TableSetupScrollFreeze(0, 1);
@@ -377,6 +451,12 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                             ImGuiTableColumnFlags_PreferSortAscending,
                         nameColumnWidth);
                     ImGui::TableSetupColumn(
+                        TR("ui.file_manager.column_type").data(),
+                        ImGuiTableColumnFlags_DefaultHide |
+                            ImGuiTableColumnFlags_WidthFixed |
+                            ImGuiTableColumnFlags_PreferSortAscending,
+                        typeColumnWidth);
+                    ImGui::TableSetupColumn(
                         TR("ui.file_manager.column_size").data(),
                         ImGuiTableColumnFlags_WidthFixed |
                             ImGuiTableColumnFlags_PreferSortAscending,
@@ -386,6 +466,9 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         ImGuiTableColumnFlags_WidthStretch |
                             ImGuiTableColumnFlags_PreferSortDescending,
                         1.0f);
+                    if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                        table->DisableDefaultContextMenu = true;
+                    }
                     ImGui::TableHeadersRow();
                     syncFileTableSortSpecs();
 
@@ -434,6 +517,11 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
             },
             entry.fullPath);
         renderFileEntryContextMenu(entry, sourceManager);
+
+        if ( ImGui::TableNextColumn() ) {
+            const std::string typeText = formatTypeColumn(entry);
+            ImGui::TextUnformatted(typeText.c_str());
+        }
 
         ImGui::TableNextColumn();
         const std::string sizeText = formatSizeColumn(entry);
@@ -554,7 +642,9 @@ void FileManagerView::syncFileTableSortSpecs()
 
     const ImGuiTableColumnSortSpecs& primarySpec = sortSpecs->Specs[0];
     FileSortKey                      newSortKey  = FileSortKey::Name;
-    if ( primarySpec.ColumnIndex == FileTableColumnSize ) {
+    if ( primarySpec.ColumnIndex == FileTableColumnType ) {
+        newSortKey = FileSortKey::Type;
+    } else if ( primarySpec.ColumnIndex == FileTableColumnSize ) {
         newSortKey = FileSortKey::Size;
     } else if ( primarySpec.ColumnIndex == FileTableColumnModifiedTime ) {
         newSortKey = FileSortKey::ModifiedTime;
@@ -575,9 +665,84 @@ void FileManagerView::syncFileTableSortSpecs()
 
 void FileManagerView::renderFileSortContextMenu()
 {
-    if ( !ImGui::BeginPopupContextWindow("FileTreeTableContextMenu",
-                                         ImGuiPopupFlags_MouseButtonRight) ) {
+    ImGuiTable* table = ImGui::GetCurrentTable();
+    if ( !table ) {
         return;
+    }
+
+    ImGuiStyle&  style = ImGui::GetStyle();
+    const ImVec2 popupPadding(std::max(style.WindowPadding.x, 8.0f),
+                              std::max(style.WindowPadding.y, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                        ImVec2(std::max(style.ItemSpacing.x, 8.0f),
+                               std::max(style.ItemSpacing.y, 4.0f)));
+    const bool popupOpen = ImGui::TableBeginContextMenuPopup(table);
+    if ( !popupOpen ) {
+        ImGui::PopStyleVar(2);
+        return;
+    }
+
+    const int contextColumn =
+        table->ContextPopupColumn >= 0 &&
+                table->ContextPopupColumn < table->ColumnsCount
+            ? table->ContextPopupColumn
+            : -1;
+    if ( contextColumn >= 0 && isTableColumnEnabled(table, contextColumn) &&
+         ::MMM::UI::FeedbackMenuItem(
+             TR("ui.resource_table.size_column_fit").data()) ) {
+        ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
+    }
+
+    if ( ::MMM::UI::FeedbackMenuItem(
+             TR("ui.resource_table.size_all_default").data()) ) {
+        ImGui::TableSetColumnWidthAutoAll(table);
+    }
+
+    auto applySort = [&](FileSortKey sortKey, SortDirection direction) {
+        if ( m_fileSortKey != sortKey || m_fileSortDirection != direction ) {
+            m_fileSortKey       = sortKey;
+            m_fileSortDirection = direction;
+            invalidateDirectoryCache();
+        }
+    };
+    auto sortMenuItem = [&](FileSortKey   sortKey,
+                            SortDirection direction,
+                            const char*   columnLabel) {
+        const std::string label = makeSortMenuLabel(columnLabel, direction);
+        const bool        selected =
+            m_fileSortKey == sortKey && m_fileSortDirection == direction;
+        if ( ::MMM::UI::FeedbackMenuItem(label.c_str(), nullptr, selected) ) {
+            applySort(sortKey, direction);
+        }
+    };
+
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.resource_table.sort").data()) ) {
+        sortMenuItem(FileSortKey::Name,
+                     SortDirection::Ascending,
+                     TR("ui.file_manager.column_name").data());
+        sortMenuItem(FileSortKey::Name,
+                     SortDirection::Descending,
+                     TR("ui.file_manager.column_name").data());
+        sortMenuItem(FileSortKey::Type,
+                     SortDirection::Ascending,
+                     TR("ui.file_manager.column_type").data());
+        sortMenuItem(FileSortKey::Type,
+                     SortDirection::Descending,
+                     TR("ui.file_manager.column_type").data());
+        sortMenuItem(FileSortKey::Size,
+                     SortDirection::Ascending,
+                     TR("ui.file_manager.column_size").data());
+        sortMenuItem(FileSortKey::Size,
+                     SortDirection::Descending,
+                     TR("ui.file_manager.column_size").data());
+        sortMenuItem(FileSortKey::ModifiedTime,
+                     SortDirection::Ascending,
+                     TR("ui.file_manager.column_modified_time").data());
+        sortMenuItem(FileSortKey::ModifiedTime,
+                     SortDirection::Descending,
+                     TR("ui.file_manager.column_modified_time").data());
+        ::MMM::UI::FeedbackEndMenu();
     }
 
     if ( ::MMM::UI::FeedbackMenuItem(
@@ -594,7 +759,54 @@ void FileManagerView::renderFileSortContextMenu()
         invalidateDirectoryCache();
     }
 
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.resource_table.reset").data()) ) {
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.reset_all").data()) ) {
+            ImGui::TableResetSettings(table);
+            applySort(FileSortKey::Name, SortDirection::Ascending);
+        }
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.reset_columns").data()) ) {
+            ImGui::TableSetColumnWidthAutoAll(table);
+        }
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.show_all_columns").data()) ) {
+            for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                queueTableColumnEnabled(table, column, true);
+            }
+        }
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.reset_sort").data()) ) {
+            applySort(FileSortKey::Name, SortDirection::Ascending);
+        }
+        ::MMM::UI::FeedbackEndMenu();
+    }
+
+    ImGui::Separator();
+
+    const std::array<const char*, 4> columnLabels{
+        TR("ui.file_manager.column_name").data(),
+        TR("ui.file_manager.column_type").data(),
+        TR("ui.file_manager.column_size").data(),
+        TR("ui.file_manager.column_modified_time").data()
+    };
+    int enabledColumnCount = 0;
+    for ( int column = 0; column < table->ColumnsCount; ++column ) {
+        if ( isTableColumnUserEnabled(table, column) ) {
+            enabledColumnCount++;
+        }
+    }
+    for ( int column = 0; column < table->ColumnsCount; ++column ) {
+        const bool enabled   = isTableColumnUserEnabled(table, column);
+        const bool canToggle = !enabled || enabledColumnCount > 1;
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 columnLabels[column], nullptr, enabled, canToggle) ) {
+            queueTableColumnEnabled(table, column, !enabled);
+        }
+    }
+
     ImGui::EndPopup();
+    ImGui::PopStyleVar(2);
 }
 
 void FileManagerView::renderFileEntryContextMenu(

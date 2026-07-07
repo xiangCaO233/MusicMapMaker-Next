@@ -6,6 +6,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -185,7 +186,13 @@ private:
         Type,
 
         /// @brief 按音频资源路径排序。
-        Path
+        Path,
+
+        /// @brief 按音频文件大小排序。
+        Size,
+
+        /// @brief 按音频文件最后修改时间排序。
+        ModifiedTime
     };
 
     /// @brief 音频资源表格排序方向。
@@ -225,6 +232,18 @@ private:
 
         /// @brief 表格行来源。
         AudioTableRowKind m_kind{ AudioTableRowKind::ProjectSfx };
+
+        /// @brief 音频文件大小字节数；读取失败时保持为 0。
+        std::uintmax_t m_size{ 0 };
+
+        /// @brief 是否成功读取音频文件大小。
+        bool m_hasSize{ false };
+
+        /// @brief 音频文件最后修改时间；读取失败时不参与精确排序。
+        std::filesystem::file_time_type m_lastWriteTime{};
+
+        /// @brief 是否成功读取最后修改时间。
+        bool m_hasLastWriteTime{ false };
     };
 
     /// @brief 当前是否展开全局设置段落。
