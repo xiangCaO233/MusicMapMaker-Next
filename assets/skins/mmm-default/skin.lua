@@ -95,6 +95,7 @@ local Skin = {
 			-- UI按钮反馈使用专用短音频，通过音效池混入总线，避免重复加载和削波
 			hover = { path = "audio/ui/hover.wav", lead_in_ms = 0.0 },
 			click = { path = "audio/ui/click.wav", lead_in_ms = 0.0 },
+			slider = { path = "audio/ui/slider.wav", lead_in_ms = 0.0 },
 		},
 		metronome = {
 			beat_low = { path = "audio/metronome/beat_low.wav", lead_in_ms = 0.023 },

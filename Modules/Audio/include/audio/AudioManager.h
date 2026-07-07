@@ -373,7 +373,9 @@ public:
     /// @brief 播放指定 key 的音效
     /// @param key 标识符
     /// @param volumeFactor 额外音量倍率 (默认 1.0)
-    void playSoundEffect(const std::string& key, float volumeFactor = 1.0f);
+    /// @param pitchSemitones 本次播放的音高偏移，单位为半音。
+    void playSoundEffect(const std::string& key, float volumeFactor = 1.0f,
+                         double pitchSemitones = 0.0);
 
     /// @brief 获取指定 key 的音效是否正在播放
     bool isSFXPlaying(const std::string& key) const;

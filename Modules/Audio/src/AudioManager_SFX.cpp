@@ -258,15 +258,18 @@ void AudioManager::clearSoundEffects()
 /// @brief 立即播放指定音效。
 /// @param key 音效池标识。
 /// @param volumeFactor 本次播放额外音量倍率。
-void AudioManager::playSoundEffect(const std::string& key, float volumeFactor)
+/// @param pitchSemitones 本次播放的音高偏移，单位为半音。
+void AudioManager::playSoundEffect(const std::string& key, float volumeFactor,
+                                   double pitchSemitones)
 {
     if ( getSFXPoolMute(key) ) return;
 
     auto it = m_sfxPools.find(key);
     if ( it == m_sfxPools.end() ) return;
 
-    it->second->play(getSFXEffectiveGain(key) * it->second->getVolume() *
-                     volumeFactor);
+    it->second->play(
+        getSFXEffectiveGain(key) * it->second->getVolume() * volumeFactor,
+        pitchSemitones);
 }
 
 /// @brief 获取指定音效池是否正在播放。

@@ -1,9 +1,9 @@
 #pragma once
 
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <string>
 #include <vector>
 
@@ -12,6 +12,7 @@ namespace ice
 class AudioTrack;
 class MixBus;
 class SourceNode;
+class TimeStretcher;
 }  // namespace ice
 
 namespace MMM::Audio
@@ -39,6 +40,11 @@ public:
     /// @brief 播放一次音效
     /// @param volume 播放音量
     void play(float volume);
+
+    /// @brief 使用指定音高播放一次音效。
+    /// @param volume 播放音量。
+    /// @param pitchSemitones 音高偏移，单位为半音。
+    void play(float volume, double pitchSemitones);
 
     /// @brief 在指定时间播放音效
     /// @param volume 播放音量
@@ -81,11 +87,26 @@ public:
     double getLatestPlaybackTime() const;
 
 private:
+    /// @brief 单个可复用的音效播放实例。
+    struct SFXPlayInstance {
+        /// @brief 实际读取音频轨道的源节点。
+        std::shared_ptr<ice::SourceNode> source;
+
+        /// @brief 每个实例独立的变调拉伸器。
+        std::shared_ptr<ice::TimeStretcher> pitchStretcher;
+    };
+
+    /// @brief 创建一个接入本地混音器的播放实例。
+    std::shared_ptr<SFXPlayInstance> createInstance();
+
+    /// @brief 从池中取出一个可播放实例，必要时扩容。
+    std::shared_ptr<SFXPlayInstance> acquireInstance();
+
     std::shared_ptr<ice::AudioTrack> m_track;
     std::shared_ptr<ice::MixBus>     m_localMixer;
 
-    std::deque<std::shared_ptr<ice::SourceNode>>  m_readyQueue;
-    std::vector<std::shared_ptr<ice::SourceNode>> m_allNodes;
+    std::deque<std::shared_ptr<SFXPlayInstance>>  m_readyQueue;
+    std::vector<std::shared_ptr<SFXPlayInstance>> m_allInstances;
     std::shared_ptr<ice::SourceNode>              m_latestNode;
     mutable std::mutex                            m_mtx;
 

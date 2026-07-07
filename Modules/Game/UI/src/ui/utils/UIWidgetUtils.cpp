@@ -529,11 +529,26 @@ constexpr const char* BUTTON_HOVER_SFX_KEY = "ui.hover";
 /// @brief UI 按钮激活时播放的皮肤音频 ID。
 constexpr const char* BUTTON_CLICK_SFX_KEY = "ui.click";
 
+/// @brief Slider 拖动变化时播放的皮肤音频 ID。
+constexpr const char* SLIDER_CHANGE_SFX_KEY = "ui.slider";
+
 /// @brief 悬浮音效的单次触发音量倍率。
 constexpr float BUTTON_HOVER_SFX_VOLUME = 0.22f;
 
 /// @brief 点击音效的单次触发音量倍率。
 constexpr float BUTTON_CLICK_SFX_VOLUME = 0.36f;
+
+/// @brief Slider 变化音效的单次触发音量倍率。
+constexpr float SLIDER_CHANGE_SFX_VOLUME = 0.24f;
+
+/// @brief Slider 最低点对应的音高偏移，单位为半音。
+constexpr double SLIDER_MIN_PITCH_SEMITONES = -12.0;
+
+/// @brief Slider 最高点对应的音高偏移，单位为半音。
+constexpr double SLIDER_MAX_PITCH_SEMITONES = 12.0;
+
+/// @brief Slider 拖动音效最小触发间隔，避免每帧堆叠播放。
+constexpr float SLIDER_SFX_MIN_INTERVAL_SECONDS = 0.045f;
 
 /// @brief 按钮悬浮状态存储键的盐值。
 constexpr ImGuiID BUTTON_HOVERED_KEY_SALT = 0x6D6D4821u;
@@ -546,6 +561,9 @@ constexpr ImGuiID BUTTON_LAST_FRAME_KEY_SALT = 0x6D6D4823u;
 
 /// @brief 按钮点击音效最后一次触发帧存储键的盐值。
 constexpr ImGuiID BUTTON_CLICK_FRAME_KEY_SALT = 0x6D6D4824u;
+
+/// @brief Slider 音效最后一次触发时间存储键的盐值。
+constexpr ImGuiID SLIDER_SFX_LAST_TIME_KEY_SALT = 0x6D6D5321u;
 
 /// @brief 菜单打开状态存储键的盐值。
 constexpr ImGuiID MENU_OPEN_KEY_SALT = 0x6D6D4D21u;
@@ -577,6 +595,30 @@ ImGuiID makeButtonStorageKey(ImGuiID id, ImGuiID salt)
 float saturate(float value)
 {
     return std::clamp(value, 0.0f, 1.0f);
+}
+
+/// @brief 根据范围计算 Slider 当前百分比。
+/// @param value 当前值。
+/// @param minValue 最小值。
+/// @param maxValue 最大值。
+/// @return 当前值在范围内的百分比。
+float calcSliderPercent(float value, float minValue, float maxValue)
+{
+    const float range = maxValue - minValue;
+    if ( std::abs(range) <= 0.000001f ) {
+        return 0.5f;
+    }
+    return saturate((value - minValue) / range);
+}
+
+/// @brief 将 Slider 百分比映射到音高半音偏移。
+/// @param percent 当前百分比。
+/// @return 音高偏移，单位为半音。
+double calcSliderPitchSemitones(float percent)
+{
+    const double t = static_cast<double>(saturate(percent));
+    return SLIDER_MIN_PITCH_SEMITONES +
+           (SLIDER_MAX_PITCH_SEMITONES - SLIDER_MIN_PITCH_SEMITONES) * t;
 }
 
 /// @brief 计算 ease-out cubic 缓动值。
@@ -923,6 +965,33 @@ void finishLastItemFeedback(ImGuiID id, bool clicked)
 {
     finishButtonFeedback(
         id, clicked, ImGui::GetStateStorage(), ImGui::IsItemHovered());
+}
+
+/// @brief 在 Slider 值变化时按当前百分比触发变调音效。
+/// @param id Slider 的 ImGui ID。
+/// @param changed 本帧 Slider 值是否变化。
+/// @param percent 当前值在可调范围内的百分比。
+/// @warning UI 热路径：只访问 ImGuiStorage 并触发已预加载 SFX pool。
+void playSliderChangeFeedback(ImGuiID id, bool changed, float percent)
+{
+    if ( !changed ) return;
+
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    if ( !storage ) return;
+
+    const float   currentTime = static_cast<float>(ImGui::GetTime());
+    const ImGuiID timeKey =
+        makeButtonStorageKey(id, SLIDER_SFX_LAST_TIME_KEY_SALT);
+    const float lastTime = storage->GetFloat(timeKey, -1000.0f);
+    if ( currentTime - lastTime < SLIDER_SFX_MIN_INTERVAL_SECONDS ) {
+        return;
+    }
+
+    Audio::AudioManager::instance().playSoundEffect(
+        SLIDER_CHANGE_SFX_KEY,
+        SLIDER_CHANGE_SFX_VOLUME,
+        calcSliderPitchSemitones(percent));
+    storage->SetFloat(timeKey, currentTime);
 }
 
 /// @brief 推进菜单弹窗打开动画。
@@ -1365,8 +1434,10 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
     const bool    changed =
         ImGui::SliderFloat(label, value, minValue, maxValue, format, flags);
-    const bool clicked = isLastItemFeedbackActivated();
+    const bool  clicked = isLastItemFeedbackActivated();
+    const float percent = calcSliderPercent(*value, minValue, maxValue);
     ImGui::PopStyleColor(pushedColorCount);
+    playSliderChangeFeedback(id, changed, percent);
     finishLastItemFeedback(id, clicked);
     return changed;
 }
@@ -1382,8 +1453,12 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
     const bool    changed =
         ImGui::SliderInt(label, value, minValue, maxValue, format, flags);
-    const bool clicked = isLastItemFeedbackActivated();
+    const bool  clicked = isLastItemFeedbackActivated();
+    const float percent = calcSliderPercent(static_cast<float>(*value),
+                                            static_cast<float>(minValue),
+                                            static_cast<float>(maxValue));
     ImGui::PopStyleColor(pushedColorCount);
+    playSliderChangeFeedback(id, changed, percent);
     finishLastItemFeedback(id, clicked);
     return changed;
 }
@@ -1400,8 +1475,10 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
     const bool    changed          = ImGui::VSliderFloat(
         label, size, value, minValue, maxValue, format, flags);
-    const bool clicked = isLastItemFeedbackActivated();
+    const bool  clicked = isLastItemFeedbackActivated();
+    const float percent = calcSliderPercent(*value, minValue, maxValue);
     ImGui::PopStyleColor(pushedColorCount);
+    playSliderChangeFeedback(id, changed, percent);
     finishLastItemFeedback(id, clicked);
     return changed;
 }
