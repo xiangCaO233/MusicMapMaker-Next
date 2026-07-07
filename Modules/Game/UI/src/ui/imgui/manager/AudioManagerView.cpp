@@ -1,3 +1,7 @@
+#ifndef IMGUI_DEFINE_MATH_OPERATORS
+#    define IMGUI_DEFINE_MATH_OPERATORS
+#endif
+
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
@@ -21,6 +25,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <imgui_internal.h>
 #include <nfd.h>
 #include <utility>
 
@@ -808,6 +813,103 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         sortSpecs->SpecsDirty = false;
     };
 
+    auto resetAudioTableSort = [&]() {
+        if ( m_audioTableSortKey != AudioTableSortKey::Id ||
+             m_audioTableSortDirection != SortDirection::Ascending ) {
+            m_audioTableSortKey        = AudioTableSortKey::Id;
+            m_audioTableSortDirection  = SortDirection::Ascending;
+            m_audioTableSortCacheDirty = true;
+        }
+    };
+
+    auto renderAudioTableHeaderContextMenu = [&]() {
+        ImGuiTable* table = ImGui::GetCurrentTable();
+        if ( !table ) return;
+
+        ImGuiStyle&  style = ImGui::GetStyle();
+        const ImVec2 popupPadding(std::max(style.WindowPadding.x, 8.0f),
+                                  std::max(style.WindowPadding.y, 6.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(std::max(style.ItemSpacing.x, 8.0f),
+                                   std::max(style.ItemSpacing.y, 4.0f)));
+        const bool popupOpen = ImGui::TableBeginContextMenuPopup(table);
+        if ( !popupOpen ) {
+            ImGui::PopStyleVar(2);
+            return;
+        }
+
+        const int contextColumn =
+            table->ContextPopupColumn >= 0 &&
+                    table->ContextPopupColumn < table->ColumnsCount
+                ? table->ContextPopupColumn
+                : -1;
+        if ( contextColumn >= 0 &&
+             (ImGui::TableGetColumnFlags(contextColumn) &
+              ImGuiTableColumnFlags_IsEnabled) != 0 &&
+             ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.audio_manager.table_menu.size_column_fit").data()) ) {
+            ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
+        }
+
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.audio_manager.table_menu.size_all_default").data()) ) {
+            ImGui::TableSetColumnWidthAutoAll(table);
+        }
+
+        if ( ::MMM::UI::FeedbackBeginMenu(
+                 TR("ui.audio_manager.table_menu.reset").data()) ) {
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_all").data()) ) {
+                ImGui::TableResetSettings(table);
+                resetAudioTableSort();
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_columns").data()) ) {
+                ImGui::TableSetColumnWidthAutoAll(table);
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.show_all_columns")
+                         .data()) ) {
+                for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                    ImGui::TableSetColumnEnabled(column, true);
+                }
+            }
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     TR("ui.audio_manager.table_menu.reset_sort").data()) ) {
+                resetAudioTableSort();
+            }
+            ::MMM::UI::FeedbackEndMenu();
+        }
+
+        ImGui::Separator();
+
+        const std::array<const char*, 3> columnLabels{
+            TR("ui.audio_manager.column_id").data(),
+            TR("ui.audio_manager.column_type").data(),
+            TR("ui.audio_manager.column_path").data()
+        };
+        int enabledColumnCount = 0;
+        for ( int column = 0; column < table->ColumnsCount; ++column ) {
+            if ( (ImGui::TableGetColumnFlags(column) &
+                  ImGuiTableColumnFlags_IsEnabled) != 0 ) {
+                enabledColumnCount++;
+            }
+        }
+        for ( int column = 0; column < table->ColumnsCount; ++column ) {
+            const bool enabled   = (ImGui::TableGetColumnFlags(column) &
+                                    ImGuiTableColumnFlags_IsEnabled) != 0;
+            const bool canToggle = !enabled || enabledColumnCount > 1;
+            if ( ::MMM::UI::FeedbackMenuItem(
+                     columnLabels[column], nullptr, enabled, canToggle) ) {
+                ImGui::TableSetColumnEnabled(column, !enabled);
+            }
+        }
+
+        ImGui::EndPopup();
+        ImGui::PopStyleVar(2);
+    };
+
     auto renderAudioResourcesTable = [&](Clay_BoundingBox r, bool) {
         ImGui::SetCursorScreenPos({ r.x, r.y });
         const ImGuiTableFlags tableFlags =
@@ -834,8 +936,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 TR("ui.audio_manager.column_path").data(),
                 ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
+            if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                table->DisableDefaultContextMenu = true;
+            }
             ImGui::TableHeadersRow();
             syncAudioTableSortSpecs();
+            renderAudioTableHeaderContextMenu();
 
             const size_t projectAudioCount =
                 project ? project->m_audioResources.size() : 0;

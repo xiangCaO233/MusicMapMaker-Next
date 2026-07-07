@@ -1,3 +1,7 @@
+#ifndef IMGUI_DEFINE_MATH_OPERATORS
+#    define IMGUI_DEFINE_MATH_OPERATORS
+#endif
+
 #include "ui/imgui/manager/BeatMapManagerView.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -14,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <imgui_internal.h>
 #include <numeric>
 
 namespace MMM::UI
@@ -220,6 +225,9 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 TR("ui.beatmap_manager.column_path").data(),
                 ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
+            if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                table->DisableDefaultContextMenu = true;
+            }
             ImGui::TableHeadersRow();
 
             ImGuiTableSortSpecs* sortSpecs = ImGui::TableGetSortSpecs();
@@ -247,6 +255,115 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 }
                 sortSpecs->SpecsDirty = false;
             }
+
+            auto resetBeatmapTableSort = [&]() {
+                if ( m_beatmapSortKey != BeatmapSortKey::Name ||
+                     m_beatmapSortDirection != SortDirection::Ascending ) {
+                    m_beatmapSortKey        = BeatmapSortKey::Name;
+                    m_beatmapSortDirection  = SortDirection::Ascending;
+                    m_beatmapSortCacheDirty = true;
+                }
+            };
+
+            auto renderBeatmapTableHeaderContextMenu = [&]() {
+                ImGuiTable* table = ImGui::GetCurrentTable();
+                if ( !table ) return;
+
+                ImGuiStyle&  style = ImGui::GetStyle();
+                const ImVec2 popupPadding(
+                    std::max(style.WindowPadding.x, 8.0f),
+                    std::max(style.WindowPadding.y, 6.0f));
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_ItemSpacing,
+                    ImVec2(std::max(style.ItemSpacing.x, 8.0f),
+                           std::max(style.ItemSpacing.y, 4.0f)));
+                const bool popupOpen = ImGui::TableBeginContextMenuPopup(table);
+                if ( !popupOpen ) {
+                    ImGui::PopStyleVar(2);
+                    return;
+                }
+
+                const int contextColumn =
+                    table->ContextPopupColumn >= 0 &&
+                            table->ContextPopupColumn < table->ColumnsCount
+                        ? table->ContextPopupColumn
+                        : -1;
+                if ( contextColumn >= 0 &&
+                     (ImGui::TableGetColumnFlags(contextColumn) &
+                      ImGuiTableColumnFlags_IsEnabled) != 0 &&
+                     ::MMM::UI::FeedbackMenuItem(
+                         TR("ui.beatmap_manager.table_menu.size_column_fit")
+                             .data()) ) {
+                    ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
+                }
+
+                if ( ::MMM::UI::FeedbackMenuItem(
+                         TR("ui.beatmap_manager.table_menu.size_all_default")
+                             .data()) ) {
+                    ImGui::TableSetColumnWidthAutoAll(table);
+                }
+
+                if ( ::MMM::UI::FeedbackBeginMenu(
+                         TR("ui.beatmap_manager.table_menu.reset").data()) ) {
+                    if ( ::MMM::UI::FeedbackMenuItem(
+                             TR("ui.beatmap_manager.table_menu.reset_all")
+                                 .data()) ) {
+                        ImGui::TableResetSettings(table);
+                        resetBeatmapTableSort();
+                    }
+                    if ( ::MMM::UI::FeedbackMenuItem(
+                             TR("ui.beatmap_manager.table_menu.reset_columns")
+                                 .data()) ) {
+                        ImGui::TableSetColumnWidthAutoAll(table);
+                    }
+                    if ( ::MMM::UI::FeedbackMenuItem(
+                             TR("ui.beatmap_manager.table_menu.show_all_"
+                                "columns")
+                                 .data()) ) {
+                        for ( int column = 0; column < table->ColumnsCount;
+                              ++column ) {
+                            ImGui::TableSetColumnEnabled(column, true);
+                        }
+                    }
+                    if ( ::MMM::UI::FeedbackMenuItem(
+                             TR("ui.beatmap_manager.table_menu.reset_sort")
+                                 .data()) ) {
+                        resetBeatmapTableSort();
+                    }
+                    ::MMM::UI::FeedbackEndMenu();
+                }
+
+                ImGui::Separator();
+
+                const std::array<const char*, 3> columnLabels{
+                    TR("ui.beatmap_manager.column_name").data(),
+                    TR("ui.beatmap_manager.column_type").data(),
+                    TR("ui.beatmap_manager.column_path").data()
+                };
+                int enabledColumnCount = 0;
+                for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                    if ( (ImGui::TableGetColumnFlags(column) &
+                          ImGuiTableColumnFlags_IsEnabled) != 0 ) {
+                        enabledColumnCount++;
+                    }
+                }
+                for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                    const bool enabled = (ImGui::TableGetColumnFlags(column) &
+                                          ImGuiTableColumnFlags_IsEnabled) != 0;
+                    const bool canToggle = !enabled || enabledColumnCount > 1;
+                    if ( ::MMM::UI::FeedbackMenuItem(columnLabels[column],
+                                                     nullptr,
+                                                     enabled,
+                                                     canToggle) ) {
+                        ImGui::TableSetColumnEnabled(column, !enabled);
+                    }
+                }
+
+                ImGui::EndPopup();
+                ImGui::PopStyleVar(2);
+            };
+            renderBeatmapTableHeaderContextMenu();
 
             auto rebuildSortCache = [&]() {
                 const auto& beatmaps = project->m_beatmaps;
