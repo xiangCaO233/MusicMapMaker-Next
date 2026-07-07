@@ -140,6 +140,7 @@ void FileManagerView::onUpdate(LayoutContext& layoutContext,
         renderEmptyProjectView(layoutContext);
     } else {
         renderActiveProjectView(layoutContext, sourceManager);
+        renderFileOperationPopups(layoutContext.m_dpiScale);
     }
 
     if ( fileManagerFont ) ImGui::PopFont();

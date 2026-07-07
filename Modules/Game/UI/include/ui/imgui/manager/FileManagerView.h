@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include <array>
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <deque>
@@ -119,6 +120,18 @@ public:
     };
 
 private:
+    /// @brief 文件管理器剪贴板操作模式。
+    enum class FileClipboardMode {
+        /// @brief 当前没有可粘贴项目。
+        None,
+
+        /// @brief 复制源文件或目录。
+        Copy,
+
+        /// @brief 移动源文件或目录。
+        Cut
+    };
+
     /// @brief Runtime metrics for the empty-project placeholder layout.
     struct EmptyProjectViewMetrics {
         /// @brief Outer padding around the placeholder content.
@@ -190,6 +203,14 @@ private:
     /// @brief 绘制文件树右键排序菜单。
     void renderFileSortContextMenu();
 
+    /// @brief 绘制文件树空白区域右键菜单。
+    /// @param sourceManager 打开新建谱面向导所需的 UI 管理器。
+    void renderFileBackgroundContextMenu(UIManager* sourceManager);
+
+    /// @brief 绘制文件操作弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderFileOperationPopups(float dpiScale);
+
     /// @brief 根据 ImGui 表格排序状态同步文件树排序设置。
     void syncFileTableSortSpecs();
 
@@ -198,6 +219,48 @@ private:
     /// @param sourceManager 触发文件打开后需要切换子视图的 UI 管理器。
     void renderFileEntryContextMenu(const DirectoryEntryInfo& entry,
                                     UIManager*                sourceManager);
+
+    /// @brief 打开新建谱面向导。
+    /// @param sourceManager 当前 UI 管理器。
+    void openNewBeatmapWizard(UIManager* sourceManager);
+
+    /// @brief 请求重命名指定文件或目录。
+    /// @param path 需要重命名的路径。
+    void requestRename(const std::filesystem::path& path);
+
+    /// @brief 请求在指定目录中新建文件夹。
+    /// @param directory 新文件夹所在目录。
+    void requestNewFolder(const std::filesystem::path& directory);
+
+    /// @brief 请求删除指定文件或目录。
+    /// @param path 需要删除的路径。
+    void requestDelete(const std::filesystem::path& path);
+
+    /// @brief 将指定文件或目录写入内部剪贴板。
+    /// @param path 剪贴板来源路径。
+    /// @param cut 是否为剪切模式。
+    void setFileClipboard(const std::filesystem::path& path, bool cut);
+
+    /// @brief 判断当前文件剪贴板是否可粘贴。
+    /// @return 源路径仍然存在时返回 true。
+    bool hasPasteableFileClipboard() const;
+
+    /// @brief 将内部文件剪贴板粘贴到目标目录。
+    /// @param targetDirectory 目标目录。
+    void pasteFileClipboardInto(const std::filesystem::path& targetDirectory);
+
+    /// @brief 执行当前待确认的重命名操作。
+    void confirmRename();
+
+    /// @brief 执行当前待确认的新建文件夹操作。
+    void confirmNewFolder();
+
+    /// @brief 执行当前待确认的删除操作。
+    void confirmDelete();
+
+    /// @brief 将文本安全写入文件操作输入框。
+    /// @param value 输入文本。
+    void setFileOperationInput(const std::string& value);
 
     /// @brief 执行文件树条目的默认打开动作。
     /// @param entry 当前条目快照。
@@ -217,6 +280,39 @@ private:
 
     /// @brief 文件树是否始终将目录排在普通文件前。
     bool m_directoriesFirst{ true };
+
+    /// @brief 文件操作输入框缓冲区。
+    std::array<char, 256> m_fileOperationInput{};
+
+    /// @brief 最近一次文件操作失败信息。
+    std::string m_fileOperationError;
+
+    /// @brief 重命名目标路径。
+    std::filesystem::path m_pendingRenamePath;
+
+    /// @brief 新建文件夹目标目录。
+    std::filesystem::path m_pendingNewFolderDirectory;
+
+    /// @brief 删除目标路径。
+    std::filesystem::path m_pendingDeletePath;
+
+    /// @brief 下一帧是否打开重命名弹窗。
+    bool m_shouldOpenRenamePopup{ false };
+
+    /// @brief 下一帧是否打开新建文件夹弹窗。
+    bool m_shouldOpenNewFolderPopup{ false };
+
+    /// @brief 下一帧是否打开删除确认弹窗。
+    bool m_shouldOpenDeletePopup{ false };
+
+    /// @brief 弹窗打开后是否需要聚焦文件名输入框。
+    bool m_shouldFocusFileOperationInput{ false };
+
+    /// @brief 内部文件剪贴板来源路径。
+    std::filesystem::path m_fileClipboardPath;
+
+    /// @brief 内部文件剪贴板模式。
+    FileClipboardMode m_fileClipboardMode{ FileClipboardMode::None };
 
     /// @brief 按目录完整路径缓存的文件树快照。
     std::unordered_map<std::string, DirectorySnapshot> m_directoryCache;
