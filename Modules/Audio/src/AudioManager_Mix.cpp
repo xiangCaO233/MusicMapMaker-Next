@@ -103,13 +103,7 @@ void AudioManager::setGlobalVolume(float volume)
         m_bgmSource->setvolume(finalVol);
     }
 
-    // 重新应用全局音量到所有音效池
-    for ( auto& [key, pool] : m_sfxPools ) {
-        float sfxFinalVol = (m_globalMuted || m_sfxGainMuted)
-                                ? 0.0f
-                                : m_globalVolume * m_sfxGain;
-        pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
-    }
+    refreshSFXEffectiveVolumes();
 }
 
 /// @brief 设置全局静音状态并刷新所有轨道有效音量。
@@ -198,6 +192,15 @@ float AudioManager::getSFXPoolLevelR(const std::string& key) const
 float AudioManager::getGlobalVolume() const
 {
     return m_globalVolume;
+}
+
+/// @brief 刷新所有音效池当前播放节点的有效音量。
+void AudioManager::refreshSFXEffectiveVolumes()
+{
+    for ( auto& [key, pool] : m_sfxPools ) {
+        pool->updateEffectiveVolume(getSFXEffectiveGain(key),
+                                    getSFXPoolMute(key));
+    }
 }
 
 /// @brief 设置主混音器左声道静音。
@@ -305,7 +308,7 @@ void AudioManager::setSFXGain(float gain)
     settings.sfxGain = m_sfxGain;
     Config::AppConfig::instance().save();
 
-    setGlobalVolume(m_globalVolume);  // 重新应用 SFX 部分
+    refreshSFXEffectiveVolumes();
 }
 
 /// @brief 获取 SFX 全局增益。
@@ -325,7 +328,7 @@ void AudioManager::setSFXGainMute(bool muted)
     settings.sfxGainMuted = m_sfxGainMuted;
     Config::AppConfig::instance().save();
 
-    setGlobalVolume(m_globalVolume);
+    refreshSFXEffectiveVolumes();
 }
 
 /// @brief 获取 SFX 增益是否静音。
@@ -333,6 +336,46 @@ void AudioManager::setSFXGainMute(bool muted)
 bool AudioManager::isSFXGainMuted() const
 {
     return m_sfxGainMuted;
+}
+
+/// @brief 设置交互音效全局增益、保存配置并刷新音效音量。
+/// @param gain 目标增益。
+void AudioManager::setInteractionSFXGain(float gain)
+{
+    m_interactionSfxGain = std::clamp(gain, 0.0f, 1.0f);
+
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.interactionSfxGain = m_interactionSfxGain;
+    Config::AppConfig::instance().save();
+
+    refreshSFXEffectiveVolumes();
+}
+
+/// @brief 获取交互音效全局增益。
+/// @return 当前交互音效增益。
+float AudioManager::getInteractionSFXGain() const
+{
+    return m_interactionSfxGain;
+}
+
+/// @brief 设置交互音效增益静音状态并刷新音效音量。
+/// @param muted 是否静音。
+void AudioManager::setInteractionSFXGainMute(bool muted)
+{
+    m_interactionSfxGainMuted = muted;
+
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    settings.interactionSfxGainMuted = m_interactionSfxGainMuted;
+    Config::AppConfig::instance().save();
+
+    refreshSFXEffectiveVolumes();
+}
+
+/// @brief 获取交互音效增益是否静音。
+/// @return 静音时返回 true。
+bool AudioManager::isInteractionSFXGainMuted() const
+{
+    return m_interactionSfxGainMuted;
 }
 
 }  // namespace MMM::Audio

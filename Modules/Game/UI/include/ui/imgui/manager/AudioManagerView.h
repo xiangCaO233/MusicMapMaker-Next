@@ -199,6 +199,9 @@ private:
 
     /// @brief 音频资源表格行来源。
     enum class AudioTableRowKind {
+        /// @brief 皮肤界面交互音效。
+        InteractionSfx,
+
         /// @brief 皮肤常驻音效。
         PermanentSfx,
 

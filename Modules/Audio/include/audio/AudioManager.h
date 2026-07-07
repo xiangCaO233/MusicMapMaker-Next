@@ -193,6 +193,11 @@ public:
     /// @brief 设置 SFX 增益静音
     void setSFXGainMute(bool muted);
 
+    /// @brief 获取交互音效增益静音状态
+    bool isInteractionSFXGainMuted() const;
+    /// @brief 设置交互音效增益静音
+    void setInteractionSFXGainMute(bool muted);
+
     /// @brief 获取主音轨 (BGM) 的实时电平 (L)
     float getMainTrackLevelL() const;
     /// @brief 获取主音轨 (BGM) 的实时电平 (R)
@@ -266,6 +271,11 @@ public:
     void setSFXGain(float gain);
     /// @brief 获取 SFX 全局增益
     float getSFXGain() const;
+
+    /// @brief 设置交互音效全局增益 (0.0 ~ 1.0)
+    void setInteractionSFXGain(float gain);
+    /// @brief 获取交互音效全局增益
+    float getInteractionSFXGain() const;
 
     // --- EQ 相关接口 ---
 
@@ -413,6 +423,14 @@ private:
     /// @brief 析构音频管理器。
     ~AudioManager();
 
+    /// @brief 根据音效类型获取当前有效基础音量。
+    /// @param key 音效池标识。
+    /// @return 已包含全局音量和对应总线增益的基础音量。
+    float getSFXEffectiveGain(const std::string& key) const;
+
+    /// @brief 刷新所有音效池当前播放节点的有效音量。
+    void refreshSFXEffectiveVolumes();
+
     /// @brief 创建并启动指定播放后端。
     /// @param backend 目标播放后端。
     /// @param allowDefaultDeviceFallback 指定设备打开失败时是否回退到默认设备。
@@ -524,6 +542,12 @@ private:
 
     /// @brief 当前 SFX 增益是否静音。
     bool m_sfxGainMuted{ false };
+
+    /// @brief 当前交互音效全局增益。
+    float m_interactionSfxGain{ 1.0f };
+
+    /// @brief 当前交互音效增益是否静音。
+    bool m_interactionSfxGainMuted{ false };
 
     /// @brief 当前请求的播放倍率。
     double m_speed{ 1.0 };

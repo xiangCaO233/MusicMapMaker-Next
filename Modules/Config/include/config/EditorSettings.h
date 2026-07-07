@@ -720,6 +720,12 @@ struct EditorSettings {
     /// @brief SFX 全局静音
     bool sfxGainMuted{ false };
 
+    /// @brief 交互音效全局音量 (0.0 ~ 1.0)
+    float interactionSfxGain{ 1.0f };
+
+    /// @brief 交互音效全局静音
+    bool interactionSfxGainMuted{ false };
+
     /// @brief 框选模式
     SelectionMode selectionMode{ SelectionMode::Intersection };
 
@@ -836,6 +842,8 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "bgmGainMuted", c.bgmGainMuted },
         { "sfxGain", c.sfxGain },
         { "sfxGainMuted", c.sfxGainMuted },
+        { "interactionSfxGain", c.interactionSfxGain },
+        { "interactionSfxGainMuted", c.interactionSfxGainMuted },
         { "selectionMode", c.selectionMode },
         { "marqueeThickness", c.marqueeThickness },
         { "marqueeRounding", c.marqueeRounding },
@@ -902,15 +910,17 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
     c.autoUploadPgoProfiles        = j.value("autoUploadPgoProfiles", false);
     c.pgoProfileUploadConsentAsked = j.value(
         "pgoProfileUploadConsentAsked", j.contains("autoUploadPgoProfiles"));
-    c.fontSizeMultiplier    = j.value("fontSizeMultiplier", 1.15f);
-    c.uiScaleMultiplier     = j.value("uiScaleMultiplier", 1.0f);
-    c.scrollSpeedMultiplier = j.value("scrollSpeedMultiplier", 4.0f);
-    c.globalVolume          = j.value("globalVolume", 0.25f);
-    c.globalMuted           = j.value("globalMuted", false);
-    c.bgmGain               = j.value("bgmGain", 1.0f);
-    c.bgmGainMuted          = j.value("bgmGainMuted", false);
-    c.sfxGain               = j.value("sfxGain", 1.0f);
-    c.sfxGainMuted          = j.value("sfxGainMuted", false);
+    c.fontSizeMultiplier      = j.value("fontSizeMultiplier", 1.15f);
+    c.uiScaleMultiplier       = j.value("uiScaleMultiplier", 1.0f);
+    c.scrollSpeedMultiplier   = j.value("scrollSpeedMultiplier", 4.0f);
+    c.globalVolume            = j.value("globalVolume", 0.25f);
+    c.globalMuted             = j.value("globalMuted", false);
+    c.bgmGain                 = j.value("bgmGain", 1.0f);
+    c.bgmGainMuted            = j.value("bgmGainMuted", false);
+    c.sfxGain                 = j.value("sfxGain", 1.0f);
+    c.sfxGainMuted            = j.value("sfxGainMuted", false);
+    c.interactionSfxGain      = j.value("interactionSfxGain", 1.0f);
+    c.interactionSfxGainMuted = j.value("interactionSfxGainMuted", false);
     c.selectionMode    = j.value("selectionMode", SelectionMode::Intersection);
     c.marqueeThickness = j.value("marqueeThickness", 2.0f);
     c.marqueeRounding  = j.value("marqueeRounding", 0.0f);

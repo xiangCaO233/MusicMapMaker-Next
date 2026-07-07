@@ -40,6 +40,17 @@ enum AudioTableColumn : int {
     AudioTableColumnPath = 2
 };
 
+/// @brief 使用独立交互音量的音效 key 前缀。
+constexpr const char* INTERACTION_SFX_KEY_PREFIX = "ui.";
+
+/// @brief 判断皮肤音效是否属于界面交互音效。
+/// @param key 音效 ID。
+/// @return 属于交互音效时返回 true。
+bool isInteractionSfxKey(const std::string& key)
+{
+    return key.rfind(INTERACTION_SFX_KEY_PREFIX, 0) == 0;
+}
+
 /// @brief 按音频管理器实际字体计算不可折行文本宽度。
 float measureAudioManagerText(const char* text)
 {
@@ -296,11 +307,12 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
                        : (snapshot.contentFont ? snapshot.contentFont
                                                : snapshot.fallbackFont);
 
-    const std::array<const char*, 4> controlLabels{
+    const std::array<const char*, 5> controlLabels{
         TR("ui.audio_manager.output_device").data(),
         TR("ui.audio_manager.global_volume").data(),
         TR("ui.audio_manager.bgm_gain").data(),
-        TR("ui.audio_manager.sfx_gain").data()
+        TR("ui.audio_manager.sfx_gain").data(),
+        TR("ui.audio_manager.interaction_sfx_volume").data()
     };
 
     float labelWidth = 0.0f;
@@ -358,7 +370,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
 
     float footerH = cache.footerHeaderHeight;
     if ( input.showGlobalSettings ) {
-        footerH += 4.0f * controlRowH + 4.0f * footerSpacing;
+        footerH += 5.0f * controlRowH + 5.0f * footerSpacing;
     }
     footerH += importButtonH + importButtonGap;
     cache.globalControlsHeight = footerH - (importButtonH + importButtonGap);
@@ -679,6 +691,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto audioTableTypeLabel = [](AudioTableRowKind kind) -> std::string {
         switch ( kind ) {
+        case AudioTableRowKind::InteractionSfx:
+            return TR("ui.audio_manager.type_interaction_sfx").data();
         case AudioTableRowKind::PermanentSfx:
             return TR("ui.audio_manager.type_permanent_sfx").data();
         case AudioTableRowKind::MainTrack:
@@ -691,11 +705,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto audioTableTypeSortRank = [](AudioTableRowKind kind) {
         switch ( kind ) {
-        case AudioTableRowKind::PermanentSfx: return 0;
-        case AudioTableRowKind::MainTrack: return 1;
-        case AudioTableRowKind::ProjectSfx: return 2;
+        case AudioTableRowKind::InteractionSfx: return 0;
+        case AudioTableRowKind::PermanentSfx: return 1;
+        case AudioTableRowKind::MainTrack: return 2;
+        case AudioTableRowKind::ProjectSfx: return 3;
         }
-        return 3;
+        return 4;
     };
 
     auto rebuildAudioTableRows = [&]() {
@@ -710,7 +725,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             row.m_id   = key;
             row.m_path = Config::pathToUtf8(path);
             row.m_type = AudioTrackType::Effect;
-            row.m_kind = AudioTableRowKind::PermanentSfx;
+            row.m_kind = isInteractionSfxKey(key)
+                             ? AudioTableRowKind::InteractionSfx
+                             : AudioTableRowKind::PermanentSfx;
             m_audioTableRows.push_back(std::move(row));
         }
 
@@ -865,7 +882,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
 
                     if ( hovered &&
-                         rowData.m_kind != AudioTableRowKind::PermanentSfx &&
+                         (rowData.m_kind == AudioTableRowKind::MainTrack ||
+                          rowData.m_kind == AudioTableRowKind::ProjectSfx) &&
                          ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
                         m_manageTrackId   = rowData.m_id;
                         m_manageTrackType = rowData.m_type;
@@ -983,6 +1001,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             "%.2f",
             [&](float v) { audioManager.setSFXGain(v); },
             [&](bool m) { audioManager.setSFXGainMute(m); });
+
+        addControlRow(
+            footerVBox,
+            "InteractionSFXGain",
+            TR("ui.audio_manager.interaction_sfx_volume").data(),
+            maxLabelW,
+            audioManager.getInteractionSFXGain(),
+            audioManager.isInteractionSFXGainMuted(),
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            TR("ui.audio_manager.interaction_sfx_volume").data(),
+            "%.2f",
+            [&](float v) { audioManager.setInteractionSFXGain(v); },
+            [&](bool m) { audioManager.setInteractionSFXGainMute(m); });
     }
 
     // --- 执行分段渲染 ---
