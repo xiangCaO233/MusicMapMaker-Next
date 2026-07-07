@@ -907,11 +907,14 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::EndChild();
 
             ImGui::Spacing();
-            ImGui::Checkbox("物件数据源", &m_replaceObjectsFromDataSource);
+            ::MMM::UI::FeedbackCheckbox("物件数据源",
+                                        &m_replaceObjectsFromDataSource);
             ImGui::SameLine();
-            ImGui::Checkbox("时间线源", &m_replaceTimelinesFromDataSource);
+            ::MMM::UI::FeedbackCheckbox("时间线源",
+                                        &m_replaceTimelinesFromDataSource);
             ImGui::SameLine();
-            ImGui::Checkbox("元数据源", &m_replaceMetadataFromDataSource);
+            ::MMM::UI::FeedbackCheckbox("元数据源",
+                                        &m_replaceMetadataFromDataSource);
 
             ImGui::Spacing();
             ImGui::Separator();

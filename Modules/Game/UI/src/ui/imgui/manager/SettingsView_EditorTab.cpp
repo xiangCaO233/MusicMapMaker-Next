@@ -106,16 +106,16 @@ void SettingsView::drawEditorSettings()
                        TR_CACHE("ui.settings.editor.reverse_scroll").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox("##ReverseScroll",
-                                                      &settings.reverseScroll);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##ReverseScroll", &settings.reverseScroll);
                        });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.editor.scroll_snap").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox("##ScrollSnap",
-                                                      &settings.scrollSnap);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##ScrollSnap", &settings.scrollSnap);
                        });
         addSettingItem(
             *sec,
@@ -124,7 +124,7 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DisableAccel",
                     &settings.disableScrollAccelerationWhileDrawing);
             });
@@ -135,9 +135,9 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |=
-                    ImGui::Checkbox("##RemoveObjectsOnPolylinePath",
-                                    &settings.removeObjectsOnPolylinePath);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##RemoveObjectsOnPolylinePath",
+                    &settings.removeObjectsOnPolylinePath);
             });
         addSettingItem(
             *sec,
@@ -145,8 +145,8 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox("##SelectPastedObjects",
-                                           &settings.selectPastedObjects);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##SelectPastedObjects", &settings.selectPastedObjects);
             });
         addRadioSetting(
             *sec,
@@ -243,9 +243,9 @@ void SettingsView::drawEditorSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |=
-                    ImGui::Checkbox("##TimelineSelectionIncludesBpm",
-                                    &settings.timelineSelectionIncludesBpm);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##TimelineSelectionIncludesBpm",
+                    &settings.timelineSelectionIncludesBpm);
             });
         addSettingItem(
             *sec,
@@ -313,7 +313,7 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##FlickScale",
                     &settings.sfxConfig.enableFlickWidthVolumeScaling);
             });
@@ -338,7 +338,7 @@ void SettingsView::drawEditorSettings()
             TR_CACHE("ui.settings.editor.sfx_sync_speed").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                bool syncSpeedChanged = ImGui::Checkbox(
+                bool syncSpeedChanged = ::MMM::UI::FeedbackCheckbox(
                     "##SyncSpeed", &settings.sfxConfig.hitSfxSyncSpeed);
                 if ( syncSpeedChanged ) {
                     changed = true;

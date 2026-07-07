@@ -804,8 +804,9 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                     m_package.saveConvertedBeatmapsToProject = false;
                     ImGui::BeginDisabled();
                 }
-                ImGui::Checkbox(saveConvertedLabel.c_str(),
-                                &m_package.saveConvertedBeatmapsToProject);
+                ::MMM::UI::FeedbackCheckbox(
+                    saveConvertedLabel.c_str(),
+                    &m_package.saveConvertedBeatmapsToProject);
                 if ( !canSaveConvertedBeatmaps ) {
                     ImGui::EndDisabled();
                     if ( ImGui::IsItemHovered(
@@ -820,8 +821,8 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 constexpr const char* legacyImdLabel =
                     "同时打包兼容旧皮肤的 .imd";
                 sameLineIfItemFits(getCheckboxDisplayWidth(legacyImdLabel));
-                ImGui::Checkbox(legacyImdLabel,
-                                &m_package.includeLegacyImdBeatmaps);
+                ::MMM::UI::FeedbackCheckbox(
+                    legacyImdLabel, &m_package.includeLegacyImdBeatmaps);
             }
             const bool hasAnyStoreModeExtCandidates =
                 hasPackageStoreModeExtCandidates();
@@ -838,7 +839,8 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                 if ( !hasSelectedStoreModeExtCandidates ) {
                     ImGui::BeginDisabled();
                 }
-                if ( ImGui::Checkbox(storeModeExtLabel, &addStoreModeExt) ) {
+                if ( ::MMM::UI::FeedbackCheckbox(storeModeExtLabel,
+                                                 &addStoreModeExt) ) {
                     settings.autoAddStoreModeExtForMalodyExport =
                         addStoreModeExt;
                     Config::AppConfig::instance().save();
@@ -918,8 +920,8 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
                                     PackageResourceType::Beatmap;
                             bool selected = file.selected;
                             if ( dependencyLocked ) ImGui::BeginDisabled();
-                            if ( ImGui::Checkbox("##PackageFileSelected",
-                                                 &selected) ) {
+                            if ( ::MMM::UI::FeedbackCheckbox(
+                                     "##PackageFileSelected", &selected) ) {
                                 setPackageCandidateSelected(index, selected);
                             }
                             if ( dependencyLocked ) ImGui::EndDisabled();
@@ -1150,7 +1152,7 @@ void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
                       ++index ) {
                     auto& edit = m_package.beatmapMetadataEdits[index];
                     ImGui::PushID(static_cast<int>(index));
-                    if ( ImGui::CollapsingHeader(
+                    if ( ::MMM::UI::FeedbackCollapsingHeader(
                              edit.relativePath.c_str(),
                              ImGuiTreeNodeFlags_DefaultOpen) ) {
                         if ( ImGui::BeginTable(

@@ -465,13 +465,13 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
             TR("ui.wizard.new_beatmap.template.options_title").data());
         ImGui::Separator();
 
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_metadata").data(),
             &m_templateOptions.copyMetadata);
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_timelines").data(),
             &m_templateOptions.copyTimelines);
-        ImGui::Checkbox(
+        ::MMM::UI::FeedbackCheckbox(
             TR("ui.wizard.new_beatmap.template.copy_objects").data(),
             &m_templateOptions.copyObjects);
 
@@ -546,8 +546,9 @@ void NewBeatmapWizard::renderTemplateSourceControls(
 
     ImGui::SeparatorText(TR("ui.wizard.new_beatmap.creation_source").data());
 
-    if ( ImGui::RadioButton(TR("ui.wizard.new_beatmap.source.blank").data(),
-                            m_createMode == CreateMode::Blank) ) {
+    if ( ::MMM::UI::FeedbackRadioButton(
+             TR("ui.wizard.new_beatmap.source.blank").data(),
+             m_createMode == CreateMode::Blank) ) {
         m_createMode = CreateMode::Blank;
     }
     ImGui::SameLine();
@@ -555,8 +556,9 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     if ( templateOptions.empty() ) {
         ImGui::BeginDisabled();
     }
-    if ( ImGui::RadioButton(TR("ui.wizard.new_beatmap.source.template").data(),
-                            m_createMode == CreateMode::OpenTemplate) ) {
+    if ( ::MMM::UI::FeedbackRadioButton(
+             TR("ui.wizard.new_beatmap.source.template").data(),
+             m_createMode == CreateMode::OpenTemplate) ) {
         m_createMode                    = CreateMode::OpenTemplate;
         m_shouldOpenTemplatePicker      = true;
         m_templateOptions.copyTimelines = true;

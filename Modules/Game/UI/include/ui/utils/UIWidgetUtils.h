@@ -71,6 +71,39 @@ bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
                         const char* shortcut = nullptr, bool selected = false,
                         bool enabled = true);
 
+/// @brief 绘制带统一反馈的 ImGui CollapsingHeader。
+/// @param label Header 显示文本和 ImGui ID。
+/// @param flags Header 标志。
+/// @return Header 本帧展开时返回 true。
+/// @warning UI 热路径：每帧 Header 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Checkbox。
+/// @param label Checkbox 显示文本和 ImGui ID。
+/// @param value 当前布尔值指针。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧勾选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCheckbox(const char* label, bool* value);
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param active 当前是否选中。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, bool active);
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param value 当前整型值指针。
+/// @param buttonValue 本按钮代表的值。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, int* value, int buttonValue);
+
 /// @brief 绘制带统一反馈的 ImGui Selectable。
 /// @param label Selectable 显示文本和 ImGui ID。
 /// @param selected 当前选中状态。

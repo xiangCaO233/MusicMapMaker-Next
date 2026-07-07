@@ -217,9 +217,9 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
             maxLabelW,
             [&](Clay_BoundingBox, bool) {
-                changed |=
-                    ImGui::Checkbox("##BeatLineBeforeFirstTiming",
-                                    &visual.drawBeatLinesBeforeFirstTiming);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##BeatLineBeforeFirstTiming",
+                    &visual.drawBeatLinesBeforeFirstTiming);
             });
     }
 
@@ -466,8 +466,8 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.preview_draw_beat_lines").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox("##DrawBeatLines",
-                                           &visual.previewConfig.drawBeatLines);
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##DrawBeatLines", &visual.previewConfig.drawBeatLines);
             });
         addSettingItem(
             *sec,
@@ -475,7 +475,7 @@ void SettingsView::drawVisualSettings()
             TR_CACHE("ui.settings.visual.preview_draw_timing_lines").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                changed |= ImGui::Checkbox(
+                changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
             });
         addSettingItem(
@@ -521,7 +521,7 @@ void SettingsView::drawVisualSettings()
                        TR_CACHE("ui.settings.visual.linear_scroll").data(),
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
-                           changed |= ImGui::Checkbox(
+                           changed |= ::MMM::UI::FeedbackCheckbox(
                                "##LinearScroll",
                                &visual.enableLinearScrollMapping);
                        });

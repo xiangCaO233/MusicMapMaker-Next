@@ -481,14 +481,15 @@ void TimelineCanvas::renderEventCreationPopup()
         std::string posCurrentLabel =
             TR("ui.timeline.event_creator.pos_current").data();
 
-        if ( ImGui::RadioButton(posClickLabel.c_str(), &m_createPosType, 0) ) {
+        if ( ::MMM::UI::FeedbackRadioButton(
+                 posClickLabel.c_str(), &m_createPosType, 0) ) {
             m_createTimeManual =
                 m_isTimeSnapped ? m_createTimeSnapped : m_createTimeRaw;
         }
 
         wrapToNextLineIfNoSpace(getRadioButtonWidth(posCurrentLabel.c_str()));
 
-        if ( ImGui::RadioButton(
+        if ( ::MMM::UI::FeedbackRadioButton(
                  posCurrentLabel.c_str(), &m_createPosType, 1) ) {
             m_createTimeManual = m_currentSnapshot->currentTime;
         }
@@ -505,28 +506,28 @@ void TimelineCanvas::renderEventCreationPopup()
                                           .timelineProfessionalMode;
         if ( !professionalMode ) {
             ImGui::TextUnformatted(TR("ui.timeline.event_creator.type").data());
-            if ( ImGui::RadioButton("BPM", &m_createType, 0) ) {
+            if ( ::MMM::UI::FeedbackRadioButton("BPM", &m_createType, 0) ) {
                 m_createValue =
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
 
             wrapToNextLineIfNoSpace(getRadioButtonWidth("Scroll"));
 
-            if ( ImGui::RadioButton("Scroll", &m_createType, 1) ) {
+            if ( ::MMM::UI::FeedbackRadioButton("Scroll", &m_createType, 1) ) {
                 m_createValue =
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
 
             wrapToNextLineIfNoSpace(getRadioButtonWidth("Jump"));
 
-            if ( ImGui::RadioButton("Jump", &m_createType, 2) ) {
+            if ( ::MMM::UI::FeedbackRadioButton("Jump", &m_createType, 2) ) {
                 m_createValue =
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
 
             wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
 
-            if ( ImGui::RadioButton("HS", &m_createType, 3) ) {
+            if ( ::MMM::UI::FeedbackRadioButton("HS", &m_createType, 3) ) {
                 m_createValue =
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
@@ -540,8 +541,9 @@ void TimelineCanvas::renderEventCreationPopup()
             drawFullWidthInputDouble(
                 "##BPMValue", m_createValue, 0.1, 1.0, "%.2f");
             ImGui::Spacing();
-            ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
-                            &m_keepSpeedOnBpmChange);
+            ::MMM::UI::FeedbackCheckbox(
+                TR("ui.timeline.event_creator.keep_speed").data(),
+                &m_keepSpeedOnBpmChange);
         } else if ( createEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble(
@@ -698,8 +700,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
         }
         ImGui::SameLine();
-        ImGui::Checkbox(TR("ui.timeline.event_creator.keep_speed").data(),
-                        &m_keepSpeedOnBpmChange);
+        ::MMM::UI::FeedbackCheckbox(
+            TR("ui.timeline.event_creator.keep_speed").data(),
+            &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(

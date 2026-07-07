@@ -326,8 +326,9 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 ImGui::SetCursorScreenPos(
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
-                if ( ImGui::Checkbox("##AutoUploadPgoProfiles",
-                                     &settings.autoUploadPgoProfiles) ) {
+                if ( ::MMM::UI::FeedbackCheckbox(
+                         "##AutoUploadPgoProfiles",
+                         &settings.autoUploadPgoProfiles) ) {
                     settings.pgoProfileUploadConsentAsked = true;
                     changed                               = true;
                 }
@@ -375,7 +376,7 @@ void SettingsView::drawSoftwareSettings()
                     ImGui::SetCursorScreenPos(
                         { r.x,
                           r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
-                    if ( ImGui::Checkbox(
+                    if ( ::MMM::UI::FeedbackCheckbox(
                              "##OpenALSpatial",
                              &settings.openALSpatialConfig.enabled) ) {
                         Audio::AudioManager::instance().setOpenALSpatialConfig(
@@ -932,7 +933,7 @@ void SettingsView::drawSoftwareSettings()
                 TR_CACHE("ui.settings.software.cursor_bpm_sync").data(),
                 maxLabelW,
                 [&](Clay_BoundingBox r, bool) {
-                    changed |= ImGui::Checkbox(
+                    changed |= ::MMM::UI::FeedbackCheckbox(
                         "##BpmSync",
                         &settings.softwareCursorConfig.enableBpmSyncSmokeLife);
                 });

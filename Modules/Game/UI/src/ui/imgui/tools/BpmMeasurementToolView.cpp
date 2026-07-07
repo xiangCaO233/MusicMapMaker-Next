@@ -1115,8 +1115,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
         resetMetronomeScheduler(m_viewCenter);
     }
 
-    ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
-                    &m_keepNonBpmTimingsOnApply);
+    ::MMM::UI::FeedbackCheckbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
+                                &m_keepNonBpmTimingsOnApply);
     if ( ::MMM::UI::FeedbackButton(
              TR("ui.tools.bpm_measure.apply_to_beatmap").data(),
              ImVec2(-1.0f, 0.0f)) ) {
@@ -1212,8 +1212,9 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
                 }
                 ::MMM::UI::FeedbackEndCombo();
             }
-            ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
-                            &m_keepNonBpmTimingsOnApply);
+            ::MMM::UI::FeedbackCheckbox(
+                TR("ui.tools.bpm_measure.keep_scroll").data(),
+                &m_keepNonBpmTimingsOnApply);
         }
 
         ImGui::Spacing();

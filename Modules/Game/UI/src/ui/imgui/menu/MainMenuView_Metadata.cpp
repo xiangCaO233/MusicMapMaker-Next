@@ -1971,7 +1971,7 @@ void MainMenuView::renderNoteMetadataEditorWindow()
 
                     ImGui::PushID(groupIdx);
 
-                    bool headerOpen = ImGui::CollapsingHeader(
+                    bool headerOpen = ::MMM::UI::FeedbackCollapsingHeader(
                         headerStr.c_str(),
                         groups.size() == 1 ? ImGuiTreeNodeFlags_DefaultOpen
                                            : ImGuiTreeNodeFlags_None);

@@ -629,11 +629,13 @@ void MainMenuView::renderBeatmapSpeedExportPopup(float dpiScale)
     }
 
     ImGui::TextUnformatted("音频音高");
-    if ( ImGui::RadioButton("保留原音高", m_speedExportPreservePitch) ) {
+    if ( ::MMM::UI::FeedbackRadioButton("保留原音高",
+                                        m_speedExportPreservePitch) ) {
         m_speedExportPreservePitch = true;
     }
     ImGui::SameLine();
-    if ( ImGui::RadioButton("随倍速变调", !m_speedExportPreservePitch) ) {
+    if ( ::MMM::UI::FeedbackRadioButton("随倍速变调",
+                                        !m_speedExportPreservePitch) ) {
         m_speedExportPreservePitch = false;
     }
 

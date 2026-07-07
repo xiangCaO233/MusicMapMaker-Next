@@ -177,7 +177,7 @@ bool renderCollapsingHeader(const char* label, bool* p_state,
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
 
-    const bool open = ImGui::CollapsingHeader(
+    const bool open = ::MMM::UI::FeedbackCollapsingHeader(
         label, flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
     *p_state = open;
 
@@ -209,7 +209,7 @@ bool renderScrollingCollapsingHeader(const std::string& id,
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
 
     const std::string hiddenLabel = "##" + id;
-    const bool        open        = ImGui::CollapsingHeader(
+    const bool        open        = ::MMM::UI::FeedbackCollapsingHeader(
         hiddenLabel.c_str(),
         flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
     *p_state = open;
@@ -755,6 +755,115 @@ int pushAnimatedMenuColors(float hoverAmount)
     return 3;
 }
 
+/// @brief 压入透明 Header 颜色，避免 ImGui 默认方角高亮遮住自绘圆角背景。
+/// @return 压入的样式颜色数量。
+/// @warning UI 热路径：只操作 ImGui 样式栈。
+int pushTransparentHeaderColors()
+{
+    const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
+    ImGui::PushStyleColor(ImGuiCol_Header, transparent);
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, transparent);
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, transparent);
+    return 3;
+}
+
+/// @brief 圆角高亮背景绘制通道。
+struct RoundedHighlightLayer {
+    /// @brief 目标窗口 DrawList。
+    ImDrawList* drawList{ nullptr };
+
+    /// @brief 局部通道拆分器，避免和 ImGui 内部表格通道冲突。
+    ImDrawListSplitter splitter;
+};
+
+/// @brief 开启圆角高亮的背景/前景绘制通道。
+/// @param layer 输出通道状态。
+/// @warning UI 热路径：只拆分当前窗口 DrawList 通道。
+void beginRoundedHighlightLayer(RoundedHighlightLayer* layer)
+{
+    if ( !layer ) {
+        return;
+    }
+
+    layer->drawList = ImGui::GetWindowDrawList();
+    layer->splitter.Split(layer->drawList, 2);
+    layer->splitter.SetCurrentChannel(layer->drawList, 1);
+}
+
+/// @brief 按当前样式生成圆角高亮颜色。
+/// @param hoverAmount 悬浮过渡进度。
+/// @param selected 当前是否为选中态。
+/// @param hovered 当前是否为悬浮态。
+/// @param active 当前是否为按下或打开态。
+/// @return 应绘制的颜色，透明表示不绘制。
+/// @warning UI 热路径：只读取 ImGui 样式颜色并做常量计算。
+ImVec4 calcRoundedHighlightColor(float hoverAmount, bool selected, bool hovered,
+                                 bool active)
+{
+    if ( !selected && !hovered && !active && hoverAmount <= 0.001f ) {
+        return ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    const ImVec4 baseColor   = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+    const ImVec4 hoverColor  = ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered);
+    const ImVec4 activeColor = ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive);
+    const float  amount =
+        (hovered || active) ? std::max(hoverAmount, 0.001f) : hoverAmount;
+    ImVec4 color = active ? lerpColor(baseColor, activeColor, amount)
+                          : lerpColor(baseColor, hoverColor, amount);
+
+    if ( !selected && !hovered && !active ) {
+        color.w *= easeOutCubic(amount);
+    }
+    return color;
+}
+
+/// @brief 结束圆角高亮绘制通道，并在内容下方绘制圆角背景。
+/// @param layer beginRoundedHighlightLayer 输出的通道状态。
+/// @param rect 高亮矩形。
+/// @param color 高亮颜色。
+/// @warning UI 热路径：只向当前窗口 DrawList 添加一个圆角矩形。
+void endRoundedHighlightLayer(RoundedHighlightLayer* layer, const ImRect& rect,
+                              const ImVec4& color)
+{
+    if ( !layer || !layer->drawList ) {
+        return;
+    }
+
+    layer->splitter.SetCurrentChannel(layer->drawList, 0);
+    if ( color.w > 0.001f ) {
+        layer->drawList->AddRectFilled(
+            rect.Min,
+            rect.Max,
+            ImGui::GetColorU32(color),
+            std::max(0.0f, ImGui::GetStyle().FrameRounding));
+    }
+    layer->splitter.Merge(layer->drawList);
+}
+
+/// @brief 判断 Selectable 是否需要使用表格整行背景。
+/// @param flags Selectable 标志。
+/// @return 位于表格内且需要跨列时返回 true。
+/// @warning UI 热路径：只读取当前 ImGui 表格指针。
+bool shouldUseTableRowHighlight(ImGuiSelectableFlags flags)
+{
+    return (flags & ImGuiSelectableFlags_SpanAllColumns) != 0 && GImGui &&
+           GImGui->CurrentTable != nullptr;
+}
+
+/// @brief 写入表格整行高亮背景。
+/// @param color 背景颜色。
+/// @warning UI 热路径：只调用 ImGui 表格行背景 API。
+void setTableRowHighlight(const ImVec4& color)
+{
+    if ( color.w <= 0.001f || !GImGui || !GImGui->CurrentTable ) {
+        return;
+    }
+
+    ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                           ImGui::GetColorU32(color));
+}
+
 /// @brief 压入滑块、拖拽输入等框式控件的悬浮颜色过渡样式。
 /// @param hoverAmount 当前悬浮过渡进度。
 /// @param includeGrab 是否同时处理滑块抓手颜色。
@@ -1010,6 +1119,89 @@ void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
 
 }  // namespace
 
+/// @brief 绘制带统一反馈的 ImGui CollapsingHeader。
+/// @param label Header 显示文本和 ImGui ID。
+/// @param flags Header 标志。
+/// @return Header 本帧展开时返回 true。
+/// @warning UI 热路径：每帧 Header 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCollapsingHeader(const char* label, ImGuiTreeNodeFlags flags)
+{
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   open             = ImGui::CollapsingHeader(label, flags);
+    const bool   hovered          = ImGui::IsItemHovered();
+    const bool   active           = ImGui::IsItemActive();
+    const bool   clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, open, hovered, active));
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return open;
+}
+
+/// @brief 绘制带统一反馈的 ImGui Checkbox。
+/// @param label Checkbox 显示文本和 ImGui ID。
+/// @param value 当前布尔值指针。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧勾选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCheckbox(const char* label, bool* value)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool changed          = ImGui::Checkbox(label, value);
+    const bool clicked          = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param active 当前是否选中。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, bool active)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool clicked          = ImGui::RadioButton(label, active);
+    const bool feedbackClicked  = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, feedbackClicked);
+    return clicked;
+}
+
+/// @brief 绘制带统一反馈的 ImGui RadioButton。
+/// @param label RadioButton 显示文本和 ImGui ID。
+/// @param value 当前整型值指针。
+/// @param buttonValue 本按钮代表的值。
+/// @return 本帧值变化时返回 true。
+/// @warning UI 热路径：每帧单选控件绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackRadioButton(const char* label, int* value, int buttonValue)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool changed          = ImGui::RadioButton(label, value, buttonValue);
+    const bool clicked          = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
 /// @brief 绘制带统一反馈的 ImGui Selectable。
 /// @param label Selectable 显示文本和 ImGui ID。
 /// @param selected 当前选中状态。
@@ -1021,13 +1213,27 @@ void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
 bool FeedbackSelectable(const char* label, bool selected,
                         ImGuiSelectableFlags flags, const ImVec2& size)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool    clicked = ImGui::Selectable(label, selected, flags, size);
-    const bool    hovered = ImGui::IsItemHovered();
+    ImGuiStorage* storage              = ImGui::GetStateStorage();
+    const ImGuiID id                   = ImGui::GetID(label);
+    const float   hoverAmount          = updateButtonHoverAmount(id, storage);
+    const bool    useTableRowHighlight = shouldUseTableRowHighlight(flags);
+    RoundedHighlightLayer highlightLayer;
+    if ( !useTableRowHighlight ) {
+        beginRoundedHighlightLayer(&highlightLayer);
+    }
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   clicked = ImGui::Selectable(label, selected, flags, size);
+    const bool   hovered = ImGui::IsItemHovered();
+    const bool   active  = ImGui::IsItemActive();
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     ImGui::PopStyleColor(pushedColorCount);
+    const ImVec4 highlightColor =
+        calcRoundedHighlightColor(hoverAmount, selected, hovered, active);
+    if ( useTableRowHighlight ) {
+        setTableRowHighlight(highlightColor);
+    } else {
+        endRoundedHighlightLayer(&highlightLayer, itemRect, highlightColor);
+    }
     finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }
@@ -1043,13 +1249,28 @@ bool FeedbackSelectable(const char* label, bool selected,
 bool FeedbackSelectable(const char* label, bool* pSelected,
                         ImGuiSelectableFlags flags, const ImVec2& size)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool    clicked = ImGui::Selectable(label, pSelected, flags, size);
-    const bool    hovered = ImGui::IsItemHovered();
+    ImGuiStorage* storage              = ImGui::GetStateStorage();
+    const ImGuiID id                   = ImGui::GetID(label);
+    const float   hoverAmount          = updateButtonHoverAmount(id, storage);
+    const bool    useTableRowHighlight = shouldUseTableRowHighlight(flags);
+    RoundedHighlightLayer highlightLayer;
+    if ( !useTableRowHighlight ) {
+        beginRoundedHighlightLayer(&highlightLayer);
+    }
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   clicked  = ImGui::Selectable(label, pSelected, flags, size);
+    const bool   hovered  = ImGui::IsItemHovered();
+    const bool   active   = ImGui::IsItemActive();
+    const bool   selected = pSelected && *pSelected;
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     ImGui::PopStyleColor(pushedColorCount);
+    const ImVec4 highlightColor =
+        calcRoundedHighlightColor(hoverAmount, selected, hovered, active);
+    if ( useTableRowHighlight ) {
+        setTableRowHighlight(highlightColor);
+    } else {
+        endRoundedHighlightLayer(&highlightLayer, itemRect, highlightColor);
+    }
     finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }
@@ -1390,11 +1611,15 @@ bool FeedbackBeginMenu(const char* label, bool enabled)
         ImGui::OpenPopup(label);
     }
 
-    const float hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int   pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool  open             = ImGui::BeginMenu(label, enabled);
-    const bool  clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-    const bool  hovered          = ImGui::IsItemHovered();
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   open             = ImGui::BeginMenu(label, enabled);
+    const bool   clicked          = ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    const bool   hovered          = ImGui::IsItemHovered();
+    const bool   active           = ImGui::IsItemActive() || open;
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     if ( clicked ) {
         closing = false;
         if ( storage ) {
@@ -1402,6 +1627,10 @@ bool FeedbackBeginMenu(const char* label, bool enabled)
         }
     }
     ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, false, hovered, active));
     finishMenuFeedback(id, clicked, open && !closing, storage, hovered);
     if ( open ) {
         const float amount = updateMenuPopupAmount(id, storage, !closing);
@@ -1437,13 +1666,21 @@ void FeedbackEndMenu()
 bool FeedbackMenuItem(const char* label, const char* shortcut, bool selected,
                       bool enabled)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool    clicked = ImGui::MenuItem(label, shortcut, selected, enabled);
-    const bool    hovered = ImGui::IsItemHovered();
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   clicked = ImGui::MenuItem(label, shortcut, selected, enabled);
+    const bool   hovered = ImGui::IsItemHovered();
+    const bool   active  = ImGui::IsItemActive();
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, selected, hovered, active));
     finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }
@@ -1459,13 +1696,22 @@ bool FeedbackMenuItem(const char* label, const char* shortcut, bool selected,
 bool FeedbackMenuItem(const char* label, const char* shortcut, bool* pSelected,
                       bool enabled)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool clicked = ImGui::MenuItem(label, shortcut, pSelected, enabled);
-    const bool hovered = ImGui::IsItemHovered();
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int    pushedColorCount = pushTransparentHeaderColors();
+    const bool   clicked = ImGui::MenuItem(label, shortcut, pSelected, enabled);
+    const bool   hovered = ImGui::IsItemHovered();
+    const bool   active  = ImGui::IsItemActive();
+    const bool   selected = pSelected && *pSelected;
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, selected, hovered, active));
     finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }
@@ -1482,14 +1728,22 @@ bool FeedbackMenuItem(const char* label, const char* shortcut, bool* pSelected,
 bool FeedbackMenuItemEx(const char* label, const char* icon,
                         const char* shortcut, bool selected, bool enabled)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
-    const bool    clicked =
+    ImGuiStorage*         storage     = ImGui::GetStateStorage();
+    const ImGuiID         id          = ImGui::GetID(label);
+    const float           hoverAmount = updateButtonHoverAmount(id, storage);
+    RoundedHighlightLayer highlightLayer;
+    beginRoundedHighlightLayer(&highlightLayer);
+    const int  pushedColorCount = pushTransparentHeaderColors();
+    const bool clicked =
         ImGui::MenuItemEx(label, icon, shortcut, selected, enabled);
-    const bool hovered = ImGui::IsItemHovered();
+    const bool   hovered = ImGui::IsItemHovered();
+    const bool   active  = ImGui::IsItemActive();
+    const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     ImGui::PopStyleColor(pushedColorCount);
+    endRoundedHighlightLayer(
+        &highlightLayer,
+        itemRect,
+        calcRoundedHighlightColor(hoverAmount, selected, hovered, active));
     finishButtonFeedback(id, clicked, storage, hovered);
     return clicked;
 }

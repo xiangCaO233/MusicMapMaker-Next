@@ -1719,12 +1719,13 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.color_mode").data());
         ImGui::SameLine();
-        if ( ImGui::RadioButton("RGB##NotePaletteMode",
-                                !m_colorPickerUseHsv) ) {
+        if ( ::MMM::UI::FeedbackRadioButton("RGB##NotePaletteMode",
+                                            !m_colorPickerUseHsv) ) {
             m_colorPickerUseHsv = false;
         }
         ImGui::SameLine();
-        if ( ImGui::RadioButton("HSV##NotePaletteMode", m_colorPickerUseHsv) ) {
+        if ( ::MMM::UI::FeedbackRadioButton("HSV##NotePaletteMode",
+                                            m_colorPickerUseHsv) ) {
             m_colorPickerUseHsv = true;
         }
 
