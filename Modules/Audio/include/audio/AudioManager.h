@@ -334,7 +334,8 @@ public:
     /// @brief 获取特定 SFX 池的时长
     double getSFXDuration(const std::string& key) const;
 
-    /// @brief 实时更新 SFX 路由策略 (决定音效是否跟随主音轨拉伸器)
+    /// @brief 实时更新打击音效路由策略。
+    /// @param syncSpeed 是否让 hiteffect.* 音效跟随主音轨拉伸器。
     void updateSFXSyncSpeedRouting(bool syncSpeed);
 
     /// @brief 获取特定 SFX 池最近一次播放进度

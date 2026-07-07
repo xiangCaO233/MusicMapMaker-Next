@@ -13,6 +13,20 @@
 
 namespace MMM::Audio
 {
+namespace
+{
+/// @brief 需要跟随主音轨变速器的打击音效 key 前缀。
+constexpr const char* HIT_SOUND_EFFECT_KEY_PREFIX = "hiteffect.";
+
+/// @brief 判断音效是否属于谱面打击音效。
+/// @param key 音效池标识。
+/// @return 属于打击音效时返回 true。
+bool isHitSoundEffectKey(const std::string& key)
+{
+    return key.rfind(HIT_SOUND_EFFECT_KEY_PREFIX, 0) == 0;
+}
+}  // namespace
+
 /// @brief 设置指定音效池音量并按需保存为常驻配置。
 /// @param key 音效池标识。
 /// @param volume 目标音量。
@@ -62,8 +76,8 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
     }
 }
 
-/// @brief 根据同步变速配置切换音效池路由。
-/// @param syncSpeed 是否让音效跟随主音轨变速器。
+/// @brief 根据同步变速配置切换打击音效池路由。
+/// @param syncSpeed 是否让 hiteffect.* 音效跟随主音轨变速器。
 void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
 {
     if ( !m_mainMixer || !m_preStretcherMixer ) return;
@@ -72,11 +86,11 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
         auto mixer = pool->getMixer();
         if ( !mixer ) continue;
 
-        if ( syncSpeed ) {
-            m_mainMixer->remove_source(mixer);
+        m_mainMixer->remove_source(mixer);
+        m_preStretcherMixer->remove_source(mixer);
+        if ( syncSpeed && isHitSoundEffectKey(key) ) {
             m_preStretcherMixer->add_source(mixer);
         } else {
-            m_preStretcherMixer->remove_source(mixer);
             m_mainMixer->add_source(mixer);
         }
     }
@@ -166,8 +180,8 @@ bool AudioManager::preloadSoundEffect(const std::string& key,
         (m_globalMuted || m_sfxGainMuted) ? 0.0f : m_globalVolume * m_sfxGain;
     pool->updateEffectiveVolume(sfxFinalVol, getSFXPoolMute(key));
 
-    // 根据配置决定连接到哪个 Mixer
-    if ( sfxCfg.hitSfxSyncSpeed ) {
+    // 根据配置决定连接到哪个 Mixer，只有打击音效需要跟随主音轨变速。
+    if ( sfxCfg.hitSfxSyncSpeed && isHitSoundEffectKey(key) ) {
         m_preStretcherMixer->add_source(pool->getMixer());
     } else {
         m_mainMixer->add_source(pool->getMixer());
