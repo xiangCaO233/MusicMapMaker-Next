@@ -439,7 +439,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool       known = std::find_if(knownKeys.begin(),
+            const bool known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -1024,9 +1024,12 @@ void MainMenuView::renderMetadataEditorWindow()
     ImFont* titleFont = skinMgr.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
+    const bool wasOpenBeforeBegin = m_showMetadataEditorWindow;
     bool opened = ImGui::Begin("谱面额外元数据编辑###MetadataEditorWindow",
                                &m_showMetadataEditorWindow,
                                ImGuiWindowFlags_None);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                     &m_showMetadataEditorWindow);
 
     if ( titleFont ) ImGui::PopFont();
 
@@ -1138,7 +1141,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::OSU];
-                        bool osuPropsChanged = false;
+                        bool  osuPropsChanged = false;
                         if ( auto result = takeOsuMetadataTextResult() ) {
                             props = std::move(*result);
                             ensureCompleteOsuMetadata(
@@ -1669,7 +1672,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::RM];
-                        bool rmPropsChanged = false;
+                        bool  rmPropsChanged = false;
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -1830,9 +1833,12 @@ void MainMenuView::renderNoteMetadataEditorWindow()
     std::string windowTitle =
         std::string(TR("ui.edit.note_metadata.title").data()) +
         "###NoteMetadataEditorWindow";
-    bool opened = ImGui::Begin(windowTitle.c_str(),
-                               &m_showNoteMetadataEditorWindow,
-                               ImGuiWindowFlags_None);
+    const bool wasOpenBeforeBegin = m_showNoteMetadataEditorWindow;
+    bool       opened = ImGui::Begin(windowTitle.c_str(),
+                                     &m_showNoteMetadataEditorWindow,
+                                     ImGuiWindowFlags_None);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                     &m_showNoteMetadataEditorWindow);
 
     if ( titleFont ) ImGui::PopFont();
 
@@ -1991,8 +1997,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2166,8 +2172,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2348,8 +2354,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |

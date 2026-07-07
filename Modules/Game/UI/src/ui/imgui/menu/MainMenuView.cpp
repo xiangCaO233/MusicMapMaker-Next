@@ -897,7 +897,8 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
                             candidate.relativePath == m_dataSourceReplacePath;
                         std::string label = candidate.displayName + " - " +
                                             candidate.relativePath;
-                        if ( ImGui::Selectable(label.c_str(), selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(label.c_str(),
+                                                           selected) ) {
                             m_dataSourceReplacePath = candidate.relativePath;
                         }
                     }
@@ -916,11 +917,11 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool canApply = !candidates.empty() &&
-                                  !m_dataSourceReplacePath.empty() &&
-                                  (m_replaceObjectsFromDataSource ||
-                                   m_replaceTimelinesFromDataSource ||
-                                   m_replaceMetadataFromDataSource);
+            const bool   canApply = !candidates.empty() &&
+                                    !m_dataSourceReplacePath.empty() &&
+                                    (m_replaceObjectsFromDataSource ||
+                                     m_replaceTimelinesFromDataSource ||
+                                     m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
             if ( ::MMM::UI::FeedbackButton("替换", buttonSize) ) {

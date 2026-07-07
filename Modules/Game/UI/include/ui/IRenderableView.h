@@ -72,7 +72,9 @@ public:
             ImFont* titleFont = skinMgr.getFont("title");
             if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
+            const bool wasOpenBeforeBegin = p_open != nullptr && *p_open;
             ImGui::Begin(window_title, p_open);
+            FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, p_open);
 
             // Begin 后立即弹出，确保后续内容使用默认字体
             if ( titleFont ) ImGui::PopFont();

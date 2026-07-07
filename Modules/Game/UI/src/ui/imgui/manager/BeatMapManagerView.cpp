@@ -325,11 +325,11 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGui::GetContentRegionAvail().x;
                     const std::string rowId =
                         "##BeatmapRow_" + beatmap.m_filePath;
-                    const bool clicked =
-                        ImGui::Selectable(rowId.c_str(),
-                                          false,
-                                          ImGuiSelectableFlags_SpanAllColumns,
-                                          { 0.0f, rowHeight });
+                    const bool clicked = ::MMM::UI::FeedbackSelectable(
+                        rowId.c_str(),
+                        false,
+                        ImGuiSelectableFlags_SpanAllColumns,
+                        { 0.0f, rowHeight });
                     const bool hovered = ImGui::IsItemHovered();
                     if ( clicked ) {
                         XINFO("Request to load beatmap: {}", beatmap.m_name);

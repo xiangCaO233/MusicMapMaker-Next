@@ -343,8 +343,11 @@ void MainMenuView::renderOverlapCheckWindow()
     std::string windowTitle =
         std::string(TR("ui.tools.overlap_check_title").data()) +
         "###OverlapCheckWindow";
-    bool opened = ImGui::Begin(
+    const bool wasOpenBeforeBegin = m_showOverlapCheckWindow;
+    bool       opened             = ImGui::Begin(
         windowTitle.c_str(), &m_showOverlapCheckWindow, ImGuiWindowFlags_None);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                     &m_showOverlapCheckWindow);
 
     if ( titleFont ) ImGui::PopFont();
 

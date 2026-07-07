@@ -7,6 +7,7 @@
 #include "ui/layout/CLayDefs.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 namespace MMM::UI::Utils
@@ -83,7 +84,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount = std::min(1.0f, amount + step);
+    amount           = std::min(1.0f, amount + step);
 
     storage->SetFloat(amountKey, amount);
     storage->SetInt(lastFrameKey, currentFrame);
@@ -147,7 +148,7 @@ ScrollingSelectableResult renderScrollingSelectableCore(
 {
     const ImVec2      cursorPos    = ImGui::GetCursorScreenPos();
     const std::string selectableId = "##selectable_" + id;
-    const bool        clicked      = ImGui::Selectable(
+    const bool        clicked      = ::MMM::UI::FeedbackSelectable(
         selectableId.c_str(), false, 0, ImVec2(width, height));
 
     if ( !tooltip.empty() && ImGui::IsItemHovered() ) {
@@ -376,8 +377,12 @@ bool CenteredModalPopupScope::begin(const char* name, bool* pOpen,
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
 
+    const bool wasOpenBeforeBegin = pOpen != nullptr && *pOpen;
     pushTitleFont();
     const bool opened = ImGui::BeginPopupModal(name, pOpen, flags);
+    if ( opened ) {
+        ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, pOpen);
+    }
     popTitleFontIfNeeded();
     return opened;
 }
@@ -401,8 +406,10 @@ bool CenteredModalPopupScope::beginWindow(const char* name, bool* pOpen,
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
 
+    const bool wasOpenBeforeBegin = pOpen != nullptr && *pOpen;
     pushTitleFont();
     const bool opened = ImGui::Begin(name, pOpen, flags);
+    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, pOpen);
     popTitleFontIfNeeded();
     return opened;
 }
@@ -537,6 +544,9 @@ constexpr ImGuiID BUTTON_HOVER_AMOUNT_KEY_SALT = 0x6D6D4822u;
 /// @brief 按钮最后一次绘制帧存储键的盐值。
 constexpr ImGuiID BUTTON_LAST_FRAME_KEY_SALT = 0x6D6D4823u;
 
+/// @brief 按钮点击音效最后一次触发帧存储键的盐值。
+constexpr ImGuiID BUTTON_CLICK_FRAME_KEY_SALT = 0x6D6D4824u;
+
 /// @brief 菜单打开状态存储键的盐值。
 constexpr ImGuiID MENU_OPEN_KEY_SALT = 0x6D6D4D21u;
 
@@ -609,8 +619,11 @@ float updateButtonHoverAmount(ImGuiID id, ImGuiStorage* storage)
     const ImGuiID lastFrameKey =
         makeButtonStorageKey(id, BUTTON_LAST_FRAME_KEY_SALT);
 
-    const int  currentFrame      = ImGui::GetFrameCount();
-    const int  lastFrame         = storage->GetInt(lastFrameKey, -1);
+    const int currentFrame = ImGui::GetFrameCount();
+    const int lastFrame    = storage->GetInt(lastFrameKey, -1);
+    if ( lastFrame == currentFrame ) {
+        return storage->GetFloat(amountKey, 0.0f);
+    }
     const bool wasDrawnLastFrame = lastFrame == currentFrame - 1;
     const bool wasHovered =
         wasDrawnLastFrame && storage->GetInt(hoveredKey, 0) != 0;
@@ -657,22 +670,30 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
         makeButtonStorageKey(id, BUTTON_HOVERED_KEY_SALT);
     const ImGuiID lastFrameKey =
         makeButtonStorageKey(id, BUTTON_LAST_FRAME_KEY_SALT);
-    const int  currentFrame = ImGui::GetFrameCount();
-    const bool wasHovered =
-        storage->GetInt(lastFrameKey, -1) == currentFrame - 1 &&
-        storage->GetInt(hoveredKey, 0) != 0;
+    const int  currentFrame           = ImGui::GetFrameCount();
+    const int  lastFrame              = storage->GetInt(lastFrameKey, -1);
+    const bool wasDrawnLastFrame      = lastFrame == currentFrame - 1;
+    const bool wasUpdatedCurrentFrame = lastFrame == currentFrame;
+    const bool storedHovered          = storage->GetInt(hoveredKey, 0) != 0;
+    const bool wasHovered             = wasDrawnLastFrame && storedHovered;
+    const bool hoveredThisFrame =
+        isHovered || (wasUpdatedCurrentFrame && storedHovered);
 
-    if ( isHovered && !wasHovered ) {
+    if ( isHovered && !wasHovered &&
+         !(wasUpdatedCurrentFrame && storedHovered) ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_HOVER_SFX_KEY, BUTTON_HOVER_SFX_VOLUME);
     }
 
-    if ( clicked ) {
+    const ImGuiID clickFrameKey =
+        makeButtonStorageKey(id, BUTTON_CLICK_FRAME_KEY_SALT);
+    if ( clicked && storage->GetInt(clickFrameKey, -1) != currentFrame ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_CLICK_SFX_KEY, BUTTON_CLICK_SFX_VOLUME);
+        storage->SetInt(clickFrameKey, currentFrame);
     }
 
-    storage->SetInt(hoveredKey, isHovered ? 1 : 0);
+    storage->SetInt(hoveredKey, hoveredThisFrame ? 1 : 0);
     storage->SetInt(lastFrameKey, currentFrame);
 }
 
@@ -734,6 +755,67 @@ int pushAnimatedMenuColors(float hoverAmount)
     return 3;
 }
 
+/// @brief 压入滑块、拖拽输入等框式控件的悬浮颜色过渡样式。
+/// @param hoverAmount 当前悬浮过渡进度。
+/// @param includeGrab 是否同时处理滑块抓手颜色。
+/// @return 压入的样式颜色数量。
+/// @warning UI 热路径：只操作 ImGui 样式栈。
+int pushAnimatedFrameColors(float hoverAmount, bool includeGrab)
+{
+    const ImVec4 frameBase  = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    const ImVec4 frameHover = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered);
+    const ImVec4 frameActive = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgActive);
+    const ImVec4 frameMixed  = lerpColor(frameBase, frameHover, hoverAmount);
+    const ImVec4 activeMixed = lerpColor(frameBase, frameActive, hoverAmount);
+
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, frameMixed);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, frameMixed);
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, activeMixed);
+    int pushedCount = 3;
+
+    if ( includeGrab ) {
+        const ImVec4 grabBase = ImGui::GetStyleColorVec4(ImGuiCol_SliderGrab);
+        const ImVec4 grabActive =
+            ImGui::GetStyleColorVec4(ImGuiCol_SliderGrabActive);
+        const ImVec4 grabMixed = lerpColor(grabBase, grabActive, hoverAmount);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrab, grabMixed);
+        ImGui::PushStyleColor(ImGuiCol_SliderGrabActive, grabMixed);
+        pushedCount += 2;
+    }
+
+    return pushedCount;
+}
+
+/// @brief 压入 Combo 控件的悬浮颜色过渡样式。
+/// @param hoverAmount 当前悬浮过渡进度。
+/// @return 压入的样式颜色数量。
+/// @warning UI 热路径：只操作 ImGui 样式栈。
+int pushAnimatedComboColors(float hoverAmount)
+{
+    int pushedCount = pushAnimatedFrameColors(hoverAmount, false);
+    pushedCount += pushAnimatedButtonColors(hoverAmount);
+    return pushedCount;
+}
+
+/// @brief 判断上一条 Item 是否应触发点击音效。
+/// @return 鼠标点击或控件激活时返回 true。
+/// @warning UI 热路径：只读取 ImGui 上一条 Item 状态。
+bool isLastItemFeedbackActivated()
+{
+    return ImGui::IsItemClicked(ImGuiMouseButton_Left) ||
+           ImGui::IsItemActivated();
+}
+
+/// @brief 写回上一条 Item 的统一反馈状态。
+/// @param id 独立反馈状态 ID。
+/// @param clicked 上一条 Item 本帧是否激活。
+/// @warning UI 热路径：只读取上一条 Item 状态并触发已预加载音效池。
+void finishLastItemFeedback(ImGuiID id, bool clicked)
+{
+    finishButtonFeedback(
+        id, clicked, ImGui::GetStateStorage(), ImGui::IsItemHovered());
+}
+
 /// @brief 推进菜单弹窗打开动画。
 /// @param id 菜单入口 ImGui ID。
 /// @param storage 菜单入口所属窗口的状态存储。
@@ -755,8 +837,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                    Utils::getUiAnimationTransitionSpeed());
+                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                      Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -796,7 +878,453 @@ void pushMenuPopupAnimation(float amount)
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * alpha);
 }
 
+/// @brief 读取指定窗口的 ImGui 状态存储。
+/// @param window 目标 ImGui 窗口。
+/// @return 窗口状态存储，窗口无效时返回当前窗口状态存储。
+/// @warning UI 热路径：只返回已存在的 ImGuiStorage 指针。
+ImGuiStorage* getWindowStorage(ImGuiWindow* window)
+{
+    return window ? &window->StateStorage : ImGui::GetStateStorage();
+}
+
+/// @brief 计算当前窗口浮动标题栏关闭按钮 ID。
+/// @param window 当前 ImGui 窗口。
+/// @return 关闭按钮 ID，无法计算时返回 0。
+/// @warning UI 热路径：只读取当前 ImGuiWindow 状态。
+ImGuiID getFloatingWindowCloseButtonId(ImGuiWindow* window)
+{
+    if ( !window || !window->HasCloseButton ) {
+        return 0;
+    }
+    return window->GetID("#CLOSE");
+}
+
+/// @brief 计算 dock 标签自身关闭按钮 ID。
+/// @param window 当前 ImGui 窗口。
+/// @return dock 标签关闭按钮 ID，无法计算时返回 0。
+/// @warning UI 热路径：只读取当前 ImGuiWindow 状态并复用 ImGui 内部哈希。
+ImGuiID getDockTabCloseButtonId(ImGuiWindow* window)
+{
+    if ( !window || !window->HasCloseButton || !window->DockIsActive ||
+         !window->DockNode || !window->DockNode->TabBar ) {
+        return 0;
+    }
+    return ImHashStr("#CLOSE", 0, window->ID);
+}
+
+/// @brief 计算 dock 节点标题栏关闭按钮 ID。
+/// @param node 当前窗口所属 DockNode。
+/// @return dock 节点关闭按钮 ID，无法计算时返回 0。
+/// @warning UI 热路径：只读取 DockNode 和 HostWindow 状态。
+ImGuiID getDockNodeCloseButtonId(ImGuiDockNode* node)
+{
+    if ( !node || !node->HasCloseButton ) {
+        return 0;
+    }
+    return ImHashStr("#CLOSE", 0, node->ID);
+}
+
+/// @brief 计算 dock 节点标题栏菜单按钮 ID。
+/// @param node 当前窗口所属 DockNode。
+/// @return dock 节点菜单按钮 ID，无法计算时返回 0。
+/// @warning UI 热路径：只读取 DockNode 状态并复用 ImGui 内部哈希。
+ImGuiID getDockNodeMenuButtonId(ImGuiDockNode* node)
+{
+    if ( !node || !node->HasWindowMenuButton ) {
+        return 0;
+    }
+    return ImGui::DockNodeGetWindowMenuButtonId(node);
+}
+
+/// @brief 处理一个原生按钮候选的反馈。
+/// @param id 按钮 ImGui ID。
+/// @param storage 反馈状态存储。
+/// @param hovered 当前帧是否悬浮。
+/// @param clicked 当前帧是否触发关闭。
+/// @warning UI 热路径：只更新反馈状态并触发已预加载音效池。
+void applyCloseButtonFeedback(ImGuiID id, ImGuiStorage* storage, bool hovered,
+                              bool clicked)
+{
+    if ( id == 0 || !storage ) {
+        return;
+    }
+
+    updateButtonHoverAmount(id, storage);
+    finishButtonFeedback(id, clicked, storage, hovered);
+}
+
+/// @brief 判断一个原生按钮本帧是否按下。
+/// @param id 原生按钮 ID。
+/// @return 鼠标按下发生在该按钮上时返回 true。
+/// @warning UI 热路径：只读取 ImGui 当前交互 ID 和鼠标状态。
+bool isNativeButtonClicked(ImGuiID id)
+{
+    const ImGuiContext& g = *GImGui;
+    return g.HoveredId == id && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+}
+
+/// @brief 处理一个 dock 节点原生按钮候选的反馈。
+/// @param id 原生按钮 ID。
+/// @param storage 反馈状态存储。
+/// @warning UI 热路径：只更新反馈状态并触发已预加载音效池。
+void applyDockNodeNativeButtonFeedback(ImGuiID id, ImGuiStorage* storage)
+{
+    if ( id == 0 || !storage ) {
+        return;
+    }
+
+    const ImGuiContext& g       = *GImGui;
+    const bool          hovered = g.HoveredId == id || g.ActiveId == id;
+    const bool          clicked = isNativeButtonClicked(id);
+    applyCloseButtonFeedback(id, storage, hovered, clicked);
+}
+
+/// @brief 递归处理 dock 树内的节点按钮反馈。
+/// @param node 当前 DockNode。
+/// @warning UI 热路径：只沿当前 dock 树递归，节点数量与可见停靠窗口数量同阶。
+void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
+{
+    if ( !node ) {
+        return;
+    }
+
+    feedbackDockNodeControlsRecursive(node->ChildNodes[0]);
+    feedbackDockNodeControlsRecursive(node->ChildNodes[1]);
+
+    if ( !node->HostWindow ) {
+        return;
+    }
+
+    ImGuiStorage* storage = getWindowStorage(node->HostWindow);
+
+    const ImGuiID menuButtonId = getDockNodeMenuButtonId(node);
+    if ( menuButtonId != 0 ) {
+        applyDockNodeNativeButtonFeedback(menuButtonId, storage);
+    }
+
+    const ImGuiID closeButtonId = getDockNodeCloseButtonId(node);
+    if ( closeButtonId != 0 ) {
+        applyDockNodeNativeButtonFeedback(closeButtonId, storage);
+    }
+}
+
 }  // namespace
+
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param selected 当前选中状态。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool selected,
+                        ImGuiSelectableFlags flags, const ImVec2& size)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool    clicked = ImGui::Selectable(label, selected, flags, size);
+    const bool    hovered = ImGui::IsItemHovered();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return clicked;
+}
+
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param pSelected 可选选中状态指针。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool* pSelected,
+                        ImGuiSelectableFlags flags, const ImVec2& size)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedMenuColors(hoverAmount);
+    const bool    clicked = ImGui::Selectable(label, pSelected, flags, size);
+    const bool    hovered = ImGui::IsItemHovered();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return clicked;
+}
+
+/// @brief 绘制带统一反馈的 ImGui BeginCombo。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param previewValue 当前预览文本。
+/// @param flags Combo 标志。
+/// @return 弹出列表打开时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginCombo(const char* label, const char* previewValue,
+                        ImGuiComboFlags flags)
+{
+    ImGuiStorage* storage          = ImGui::GetStateStorage();
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount = pushAnimatedComboColors(hoverAmount);
+    const bool    open    = ImGui::BeginCombo(label, previewValue, flags);
+    const bool    clicked = isLastItemFeedbackActivated();
+    const bool    hovered = ImGui::IsItemHovered() || open;
+    ImGui::PopStyleColor(pushedColorCount);
+    finishButtonFeedback(id, clicked, storage, hovered);
+    return open;
+}
+
+/// @brief 结束由 FeedbackBeginCombo 打开的 Combo。
+/// @warning UI 热路径：弹出列表绘制结束时调用 ImGui::EndCombo。
+void FeedbackEndCombo()
+{
+    ImGui::EndCombo();
+}
+
+/// @brief 绘制带统一反馈的 ImGui Combo 数组辅助控件。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param currentItem 当前选中索引。
+/// @param items 选项文本数组。
+/// @param itemsCount 选项数量。
+/// @param popupMaxHeightInItems 弹出列表最大显示项数。
+/// @return 选中项变化时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCombo(const char* label, int* currentItem,
+                   const char* const items[], int itemsCount,
+                   int popupMaxHeightInItems)
+{
+    if ( !currentItem || !items || itemsCount <= 0 ) {
+        return false;
+    }
+
+    const int   previewIndex = std::clamp(*currentItem, 0, itemsCount - 1);
+    const char* previewValue = items[previewIndex] ? items[previewIndex] : "";
+    bool        changed      = false;
+
+    if ( popupMaxHeightInItems > 0 ) {
+        const float maxHeight = ImGui::GetTextLineHeightWithSpacing() *
+                                    static_cast<float>(popupMaxHeightInItems) +
+                                ImGui::GetStyle().WindowPadding.y * 2.0f;
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f),
+                                            ImVec2(FLT_MAX, maxHeight));
+    }
+
+    if ( FeedbackBeginCombo(label, previewValue) ) {
+        for ( int i = 0; i < itemsCount; ++i ) {
+            const bool  selected  = i == *currentItem;
+            const char* itemLabel = items[i] ? items[i] : "";
+            ImGui::PushID(i);
+            if ( FeedbackSelectable(itemLabel, selected) ) {
+                *currentItem = i;
+                changed      = true;
+            }
+            if ( selected ) {
+                ImGui::SetItemDefaultFocus();
+            }
+            ImGui::PopID();
+        }
+        FeedbackEndCombo();
+    }
+
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderFloat(const char* label, float* value, float minValue,
+                         float maxValue, const char* format,
+                         ImGuiSliderFlags flags)
+{
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id);
+    const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
+    const bool    changed =
+        ImGui::SliderFloat(label, value, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui Int 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderInt(const char* label, int* value, int minValue,
+                       int maxValue, const char* format, ImGuiSliderFlags flags)
+{
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id);
+    const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
+    const bool    changed =
+        ImGui::SliderInt(label, value, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
+                          float minValue, float maxValue, const char* format,
+                          ImGuiSliderFlags flags)
+{
+    const ImGuiID id               = ImGui::GetID(label);
+    const float   hoverAmount      = updateButtonHoverAmount(id);
+    const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
+    const bool    changed          = ImGui::VSliderFloat(
+        label, size, value, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragFloat(const char* label, float* value, float speed,
+                       float minValue, float maxValue, const char* format,
+                       ImGuiSliderFlags flags)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool changed          = ImGui::DragFloat(
+        label, value, speed, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragInt2(const char* label, int values[2], float speed,
+                      int minValue, int maxValue, const char* format,
+                      ImGuiSliderFlags flags)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool changed          = ImGui::DragInt2(
+        label, values, speed, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 绘制带统一反馈的 ImGui 标量拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
+                        float speed, const void* minValue, const void* maxValue,
+                        const char* format, ImGuiSliderFlags flags)
+{
+    const ImGuiID id            = ImGui::GetID(label);
+    const float   hoverAmount   = updateButtonHoverAmount(id);
+    const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
+    const bool changed          = ImGui::DragScalar(
+        label, dataType, value, speed, minValue, maxValue, format, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    ImGui::PopStyleColor(pushedColorCount);
+    finishLastItemFeedback(id, clicked);
+    return changed;
+}
+
+/// @brief 给上一条 ImGui Item 补充统一交互音效。
+/// @param id 独立反馈状态 ID。
+/// @param clicked 上一条 Item 本帧是否被激活。
+/// @warning UI 热路径：用于自绘 hit zone，只做 ImGui 状态读写和已预加载
+/// SFX pool 的即时触发。
+void FeedbackLastItem(ImGuiID id, bool clicked)
+{
+    finishLastItemFeedback(id, clicked);
+}
+
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一反馈。
+/// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
+/// @param pOpen 传给 ImGui::Begin 的打开状态指针。
+/// @warning UI 热路径：每帧窗口 Begin 后调用，只读取 ImGui 内部交互状态，
+/// 并触发已预加载 SFX pool。
+void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen)
+{
+    if ( !pOpen || !wasOpenBeforeBegin ) {
+        return;
+    }
+
+    ImGuiWindow* window = ImGui::GetCurrentWindowRead();
+    if ( !window || !window->HasCloseButton ) {
+        return;
+    }
+
+    ImGuiContext& g              = *GImGui;
+    const bool    closeRequested = !*pOpen;
+    bool          clickHandled   = false;
+
+    ImGuiDockNode* dockNode = window->DockNode;
+    if ( dockNode ) {
+        const ImGuiID nodeCloseId = getDockNodeCloseButtonId(dockNode);
+        if ( nodeCloseId != 0 ) {
+            const bool hovered =
+                g.HoveredId == nodeCloseId || g.ActiveId == nodeCloseId;
+            const bool clicked = closeRequested && dockNode->WantCloseAll;
+            applyCloseButtonFeedback(nodeCloseId,
+                                     getWindowStorage(dockNode->HostWindow),
+                                     hovered,
+                                     clicked);
+            clickHandled = clickHandled || clicked;
+        }
+
+        const ImGuiID tabCloseId = getDockTabCloseButtonId(window);
+        if ( tabCloseId != 0 ) {
+            const bool hovered =
+                g.HoveredId == tabCloseId || g.ActiveId == tabCloseId;
+            const bool clicked =
+                closeRequested && (dockNode->WantCloseTabId == window->TabId ||
+                                   window->DockTabWantClose);
+            applyCloseButtonFeedback(
+                tabCloseId, getWindowStorage(window), hovered, clicked);
+            clickHandled = clickHandled || clicked;
+        }
+    } else {
+        const ImGuiID closeId = getFloatingWindowCloseButtonId(window);
+        if ( closeId != 0 ) {
+            const bool hovered =
+                g.HoveredId == closeId || g.ActiveId == closeId;
+            const bool clicked = closeRequested;
+            applyCloseButtonFeedback(
+                closeId, getWindowStorage(window), hovered, clicked);
+            clickHandled = clickHandled || clicked;
+        }
+    }
+
+    if ( closeRequested && !clickHandled ) {
+        const ImGuiID fallbackId =
+            window->ID ^ static_cast<ImGuiID>(BUTTON_CLICK_FRAME_KEY_SALT);
+        finishButtonFeedback(fallbackId, true, getWindowStorage(window), false);
+    }
+}
+
+/// @brief 给指定 DockSpace 下的原生节点按钮补充统一反馈。
+/// @param dockspaceId 目标 DockSpace 节点 ID。
+/// @warning UI 热路径：每帧 DockSpace 绘制后调用，只遍历当前 dock 树节点，
+/// 并触发已预加载 SFX pool。
+void FeedbackDockNodeControls(ImGuiID dockspaceId)
+{
+    if ( dockspaceId == 0 ) {
+        return;
+    }
+
+    feedbackDockNodeControlsRecursive(ImGui::DockBuilderGetNode(dockspaceId));
+}
 
 /// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 按钮。
 /// @param label 按钮显示文本和 ImGui ID。

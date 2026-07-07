@@ -668,7 +668,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     std::string windowTitle =
         std::string(TR("ui.timeline.timing_points_table.title").data()) +
         "###TimingPointsTableWindow";
-    if ( ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen) ) {
+    const bool wasOpenBeforeBegin = m_isTableWindowOpen;
+    const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isTableWindowOpen);
+    ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
+                                                &m_isTableWindowOpen);
+    if ( opened ) {
         auto elements = collectTimelineElements();
         refreshKeepSpeedBinding(elements);
 

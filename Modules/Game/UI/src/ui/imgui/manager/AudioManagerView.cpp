@@ -291,10 +291,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font             = snapshot.fileManagerFont
-                                   ? snapshot.fileManagerFont
-                                   : (snapshot.contentFont ? snapshot.contentFont
-                                                           : snapshot.fallbackFont);
+    ImFont* font = snapshot.fileManagerFont
+                       ? snapshot.fileManagerFont
+                       : (snapshot.contentFont ? snapshot.contentFont
+                                               : snapshot.fallbackFont);
 
     const std::array<const char*, 4> controlLabels{
         TR("ui.audio_manager.output_device").data(),
@@ -336,7 +336,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float        listHeight = 0.0f;
@@ -564,11 +564,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     { r.x, r.y + (r.height - frameH) * 0.5f });
                 ImGui::SetNextItemWidth(r.width);
                 float val = volume;
-                if ( ImGui::SliderFloat((std::string("##Slider") + id).c_str(),
-                                        &val,
-                                        minVal,
-                                        maxVal,
-                                        format) ) {
+                if ( ::MMM::UI::FeedbackSliderFloat(
+                         (std::string("##Slider") + id).c_str(),
+                         &val,
+                         minVal,
+                         maxVal,
+                         format) ) {
                     onVolumeChange(val);
                 }
                 if ( ImGui::IsItemHovered() ) {
@@ -637,14 +638,15 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::SetCursorScreenPos(
                     { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo((std::string("##Combo") + id).c_str(),
-                                       previewName.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo(
+                         (std::string("##Combo") + id).c_str(),
+                         previewName.c_str()) ) {
                     for ( const auto& device : m_cachedOutputDevices ) {
                         const std::string optionLabel =
                             device.isDefault ? defaultDeviceLabel : device.name;
                         const bool selected = currentDeviceName == device.name;
-                        if ( ImGui::Selectable(optionLabel.c_str(),
-                                               selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(optionLabel.c_str(),
+                                                           selected) ) {
                             if ( audioManager.setOutputDeviceName(
                                      device.name) ) {
                                 m_outputDevicesDirty = true;
@@ -654,7 +656,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( ImGui::IsItemHovered() ) {
                     ImGui::SetTooltip(
@@ -847,11 +849,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                                           rowData.m_id,
                                                           rowData.m_path,
                                                           row);
-                    const bool        clicked =
-                        ImGui::Selectable(rowId.c_str(),
-                                          false,
-                                          ImGuiSelectableFlags_SpanAllColumns,
-                                          { 0.0f, rowHeight });
+                    const bool        clicked = ::MMM::UI::FeedbackSelectable(
+                        rowId.c_str(),
+                        false,
+                        ImGuiSelectableFlags_SpanAllColumns,
+                        { 0.0f, rowHeight });
                     const bool hovered = ImGui::IsItemHovered();
                     if ( clicked ) {
                         const auto controllerType =
@@ -1208,7 +1210,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
                     const char* typeNames[] = { "Main", "Effect" };
                     ImGui::SetNextItemWidth(r.width);
-                    if ( ImGui::Combo(
+                    if ( ::MMM::UI::FeedbackCombo(
                              "##TrackType", &currentType, typeNames, 2) ) {
                         m_manageTrackType =
                             (currentType == 0 ? AudioTrackType::Main

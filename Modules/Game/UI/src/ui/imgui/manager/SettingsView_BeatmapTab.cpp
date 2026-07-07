@@ -11,6 +11,7 @@
 #include "mmm/project/Project.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <filesystem>
 
 namespace MMM::UI
@@ -356,19 +357,20 @@ void SettingsView::drawBeatmapSettings()
                            });
         }
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.beatmap.bg_offset").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           int offsets[2] = { meta.bgxoffset, meta.bgyoffset };
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::DragInt2("##BgOffset", offsets) ) {
-                               meta.bgxoffset = offsets[0];
-                               meta.bgyoffset = offsets[1];
-                               changed        = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.beatmap.bg_offset").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                int offsets[2] = { meta.bgxoffset, meta.bgyoffset };
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackDragInt2("##BgOffset", offsets) ) {
+                    meta.bgxoffset = offsets[0];
+                    meta.bgyoffset = offsets[1];
+                    changed        = true;
+                }
+            });
 
         if ( isImd ) {
             ImGui::EndDisabled();
@@ -390,7 +392,7 @@ void SettingsView::drawBeatmapSettings()
                 }
                 float bpm = (float)meta.preference_bpm;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::DragFloat(
+                if ( ::MMM::UI::FeedbackDragFloat(
                          "##BPM", &bpm, 0.1f, -1.0f, 1000.0f, "%.2f") ) {
                     meta.preference_bpm = (double)bpm;
                     changed             = true;
@@ -454,7 +456,8 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##AudioCombo", audioPreview.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##AudioCombo",
+                                                   audioPreview.c_str()) ) {
                     if ( audioPushed ) {
                         ImGui::PopStyleColor();
                         audioPushed = false;
@@ -464,7 +467,7 @@ void SettingsView::drawBeatmapSettings()
                             if ( res.m_type != MMM::AudioTrackType::Main )
                                 continue;
                             bool isSelected = (currentAudioPath == res.m_path);
-                            if ( ImGui::Selectable(
+                            if ( ::MMM::UI::FeedbackSelectable(
                                      (res.m_id + "##" + res.m_path).c_str(),
                                      isSelected) ) {
                                 meta.main_audio_path =
@@ -475,7 +478,7 @@ void SettingsView::drawBeatmapSettings()
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( audioPushed ) ImGui::PopStyleColor();
             });
@@ -502,7 +505,8 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##CoverCombo", coverPreview.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##CoverCombo",
+                                                   coverPreview.c_str()) ) {
                     if ( coverPushed ) {
                         ImGui::PopStyleColor();
                         coverPushed = false;
@@ -534,7 +538,7 @@ void SettingsView::drawBeatmapSettings()
 
                         for ( const auto& imgPath : images ) {
                             bool isSelected = (currentCoverPath == imgPath);
-                            if ( ImGui::Selectable(
+                            if ( ::MMM::UI::FeedbackSelectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
                                 meta.cover_path = Config::utf8ToPath(imgPath);
@@ -543,7 +547,7 @@ void SettingsView::drawBeatmapSettings()
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( coverPushed ) ImGui::PopStyleColor();
             });
@@ -570,7 +574,8 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::BeginCombo("##BgCombo", bgPreview.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##BgCombo",
+                                                   bgPreview.c_str()) ) {
                     if ( bgPushed ) {
                         ImGui::PopStyleColor();
                         bgPushed = false;
@@ -603,7 +608,7 @@ void SettingsView::drawBeatmapSettings()
 
                         for ( const auto& imgPath : images ) {
                             bool isSelected = (currentBgPath == imgPath);
-                            if ( ImGui::Selectable(
+                            if ( ::MMM::UI::FeedbackSelectable(
                                      (imgPath + "##" + imgPath).c_str(),
                                      isSelected) ) {
                                 auto chosenPath = Config::utf8ToPath(imgPath);
@@ -627,7 +632,7 @@ void SettingsView::drawBeatmapSettings()
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( bgPushed ) ImGui::PopStyleColor();
             });

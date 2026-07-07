@@ -199,7 +199,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -282,10 +282,10 @@ void SettingsView::drawSoftwareSettings()
                 const char* langIDs[] = { "zh_cn", "en_us" };
                 int currentLang       = (settings.language == "en_us") ? 1 : 0;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##LangCombo",
-                                  &currentLang,
-                                  langs,
-                                  IM_ARRAYSIZE(langs)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##LangCombo",
+                                              &currentLang,
+                                              langs,
+                                              IM_ARRAYSIZE(langs)) ) {
                     settings.language = langIDs[currentLang];
                     Config::SkinManager::instance().getTranslator().switchLang(
                         settings.language);
@@ -309,10 +309,10 @@ void SettingsView::drawSoftwareSettings()
                     TR_CACHE("ui.settings.software.framelimit.unlimited").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##FrameLimitCombo",
-                                  &limit,
-                                  limits,
-                                  IM_ARRAYSIZE(limits)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##FrameLimitCombo",
+                                              &limit,
+                                              limits,
+                                              IM_ARRAYSIZE(limits)) ) {
                     settings.frameLimit = (Config::FrameLimitPreference)limit;
                     changed             = true;
                 }
@@ -340,19 +340,19 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##AudioBackendCombo",
-                                  &backend,
-                                  backends,
-                                  IM_ARRAYSIZE(backends)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##AudioBackendCombo",
+                                              &backend,
+                                              backends,
+                                              IM_ARRAYSIZE(backends)) ) {
                     auto target = backend == 1
                                       ? Config::AudioPlaybackBackend::OpenAL
                                       : Config::AudioPlaybackBackend::SDL;
@@ -399,7 +399,7 @@ void SettingsView::drawSoftwareSettings()
                         [&, id, value, minValue, maxValue, format](
                             Clay_BoundingBox r, bool) {
                             ImGui::SetNextItemWidth(r.width);
-                            ImGui::SliderFloat(
+                            ::MMM::UI::FeedbackSliderFloat(
                                 id, value, minValue, maxValue, format);
                             if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                                 Audio::AudioManager::instance()
@@ -480,14 +480,14 @@ void SettingsView::drawSoftwareSettings()
                     return;
                 }
 
-                if ( ImGui::BeginCombo("##SkinCombo",
-                                       activeSkinDirectory.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo(
+                         "##SkinCombo", activeSkinDirectory.c_str()) ) {
                     for ( const auto& directoryName :
                           m_availableSkinDirectories ) {
                         const bool selected =
                             directoryName == activeSkinDirectory;
-                        if ( ImGui::Selectable(directoryName.c_str(),
-                                               selected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(
+                                 directoryName.c_str(), selected) ) {
                             if ( directoryName != activeSkinDirectory &&
                                  applySkinSelection(
                                      directoryName,
@@ -499,7 +499,7 @@ void SettingsView::drawSoftwareSettings()
                             ImGui::SetItemDefaultFocus();
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
             });
 
@@ -552,7 +552,7 @@ void SettingsView::drawSoftwareSettings()
                     changed = true;
                 }
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo(
+                if ( ::MMM::UI::FeedbackCombo(
                          "##ThemeCombo", &theme, themes, themeCount) ) {
                     settings.theme = static_cast<Config::UITheme>(theme);
                     if ( auto ctx = Graphic::VKContext::get() ) {
@@ -585,11 +585,12 @@ void SettingsView::drawSoftwareSettings()
                 const float       comboW        = std::max(
                     1.0f, r.width - browseButtonW - style.ItemSpacing.x);
                 ImGui::SetNextItemWidth(comboW);
-                if ( ImGui::BeginCombo("##AsciiFontCombo", label.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##AsciiFontCombo",
+                                                   label.c_str()) ) {
                     // 1. 默认选项
                     {
                         bool isSelected = (currentAscii == "Default");
-                        if ( ImGui::Selectable(
+                        if ( ::MMM::UI::FeedbackSelectable(
                                  TR_CACHE("ui.settings.software.font.default")
                                      .data(),
                                  isSelected) ) {
@@ -606,14 +607,15 @@ void SettingsView::drawSoftwareSettings()
                         bool        isSelected = (currentAscii == name);
                         std::string lbl =
                             name + "##" + Config::pathToUtf8(path);
-                        if ( ImGui::Selectable(lbl.c_str(), isSelected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(lbl.c_str(),
+                                                           isSelected) ) {
                             settings.preferredAsciiFont = name;
                             if ( auto ctx = Graphic::VKContext::get() )
                                 ctx->get().requestFontRebuild();
                             changed = true;
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
@@ -680,11 +682,12 @@ void SettingsView::drawSoftwareSettings()
                 const float       comboW        = std::max(
                     1.0f, r.width - browseButtonW - style.ItemSpacing.x);
                 ImGui::SetNextItemWidth(comboW);
-                if ( ImGui::BeginCombo("##CjkFontCombo", label.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##CjkFontCombo",
+                                                   label.c_str()) ) {
                     // 1. 默认选项
                     {
                         bool isSelected = (currentCjk == "Default");
-                        if ( ImGui::Selectable(
+                        if ( ::MMM::UI::FeedbackSelectable(
                                  TR_CACHE("ui.settings.software.font.default")
                                      .data(),
                                  isSelected) ) {
@@ -701,14 +704,15 @@ void SettingsView::drawSoftwareSettings()
                         bool        isSelected = (currentCjk == name);
                         std::string lbl =
                             name + "##" + Config::pathToUtf8(path);
-                        if ( ImGui::Selectable(lbl.c_str(), isSelected) ) {
+                        if ( ::MMM::UI::FeedbackSelectable(lbl.c_str(),
+                                                           isSelected) ) {
                             settings.preferredCjkFont = name;
                             if ( auto ctx = Graphic::VKContext::get() )
                                 ctx->get().requestFontRebuild();
                             changed = true;
                         }
                     }
-                    ImGui::EndCombo();
+                    ::MMM::UI::FeedbackEndCombo();
                 }
                 ImGui::SameLine();
                 ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
@@ -762,7 +766,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpUIScale = settings.uiScaleMultiplier;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##UIScale", &tmpUIScale, 0.5f, 2.0f, "%.2f");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.uiScaleMultiplier = tmpUIScale;
@@ -787,7 +791,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpFontScale = settings.fontSizeMultiplier;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##FontScale", &tmpFontScale, 0.5f, 2.0f, "%.2f");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.fontSizeMultiplier = tmpFontScale;
@@ -876,7 +880,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##CursorSize",
                                    &settings.softwareCursorConfig.cursorSize,
                                    4.0f,
@@ -889,7 +893,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##TrailSize",
                                    &settings.softwareCursorConfig.trailSize,
                                    4.0f,
@@ -902,7 +906,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##TrailLife",
                                    &settings.softwareCursorConfig.trailLifeTime,
                                    0.05f,
@@ -915,7 +919,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##SmokeSize",
                                    &settings.softwareCursorConfig.smokeSize,
                                    4.0f,
@@ -941,7 +945,7 @@ void SettingsView::drawSoftwareSettings()
                     if ( settings.softwareCursorConfig.enableBpmSyncSmokeLife )
                         ImGui::BeginDisabled();
                     ImGui::SetNextItemWidth(r.width);
-                    changed |= ImGui::SliderFloat(
+                    changed |= ::MMM::UI::FeedbackSliderFloat(
                         "##SmokeLife",
                         &settings.softwareCursorConfig.smokeLifeTime,
                         0.05f,
@@ -966,7 +970,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpRounding = settings.aesthetics.windowRounding;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##WinRounding", &tmpRounding, 0.0f, 32.0f, "%.1f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowRounding = tmpRounding;
@@ -985,7 +989,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpFrame = settings.aesthetics.frameRounding;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##FrameRounding", &tmpFrame, 0.0f, 32.0f, "%.1f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.frameRounding = tmpFrame;
@@ -1006,7 +1010,8 @@ void SettingsView::drawSoftwareSettings()
                 ImGui::SetNextWindowSizeConstraints(ImVec2(r.width, -1),
                                                     ImVec2(r.width, -1));
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat("##WinGap", &tmpGap, 0.0f, 32.0f, "%.1f px");
+                ::MMM::UI::FeedbackSliderFloat(
+                    "##WinGap", &tmpGap, 0.0f, 32.0f, "%.1f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowGap = tmpGap;
                     changed                       = true;
@@ -1022,7 +1027,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpSpacing = settings.aesthetics.itemSpacing;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##ItemSpacing", &tmpSpacing, 0.0f, 32.0f, "%.1f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.itemSpacing = tmpSpacing;
@@ -1041,7 +1046,7 @@ void SettingsView::drawSoftwareSettings()
             [&](Clay_BoundingBox r, bool) {
                 static float tmpPadding = settings.aesthetics.windowPadding;
                 ImGui::SetNextItemWidth(r.width);
-                ImGui::SliderFloat(
+                ::MMM::UI::FeedbackSliderFloat(
                     "##WinPadding", &tmpPadding, 0.0f, 32.0f, "%.1f px");
                 if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                     settings.aesthetics.windowPadding = tmpPadding;
@@ -1063,14 +1068,15 @@ void SettingsView::drawSoftwareSettings()
                     settings.aesthetics.animationTransitionDuration;
                 constexpr float maxDuration = 1.0f;
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::DragFloat("##AnimationTransitionDuration",
-                                      &tmpDuration,
-                                      0.005f,
-                                      Config::UIAestheticsConfig::
-                                          MIN_ANIMATION_TRANSITION_DURATION,
-                                      maxDuration,
-                                      "%.2f s",
-                                      ImGuiSliderFlags_AlwaysClamp) ) {
+                if ( ::MMM::UI::FeedbackDragFloat(
+                         "##AnimationTransitionDuration",
+                         &tmpDuration,
+                         0.005f,
+                         Config::UIAestheticsConfig::
+                             MIN_ANIMATION_TRANSITION_DURATION,
+                         maxDuration,
+                         "%.2f s",
+                         ImGuiSliderFlags_AlwaysClamp) ) {
                     tmpDuration =
                         std::clamp(tmpDuration,
                                    Config::UIAestheticsConfig::
@@ -1139,10 +1145,10 @@ void SettingsView::drawSoftwareSettings()
                     TR_CACHE("ui.settings.software.time_format.beat").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##TimeFormat",
-                                  &timeFormat,
-                                  timeFormats,
-                                  IM_ARRAYSIZE(timeFormats)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##TimeFormat",
+                                              &timeFormat,
+                                              timeFormats,
+                                              IM_ARRAYSIZE(timeFormats)) ) {
                     settings.timeFormatPreference =
                         (Config::TimeFormatPreference)timeFormat;
                     changed = true;
@@ -1150,19 +1156,20 @@ void SettingsView::drawSoftwareSettings()
             });
 
         // 最近项目上限
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.software.recent_limit").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           ImGui::SetNextItemWidth(r.width);
-                           if ( ImGui::SliderInt("##RecentLimit",
-                                                 &settings.recentProjectsLimit,
-                                                 1,
-                                                 50) ) {
-                               changed = true;
-                           }
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.recent_limit").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                if ( ::MMM::UI::FeedbackSliderInt("##RecentLimit",
+                                                  &settings.recentProjectsLimit,
+                                                  1,
+                                                  50) ) {
+                    changed = true;
+                }
+            });
 
         // 同步设置
         addSettingItem(
@@ -1178,10 +1185,10 @@ void SettingsView::drawSoftwareSettings()
                     TR_CACHE("ui.settings.software.sync_mode.watertank").data()
                 };
                 ImGui::SetNextItemWidth(r.width);
-                if ( ImGui::Combo("##SyncMode",
-                                  &syncMode,
-                                  syncModes,
-                                  IM_ARRAYSIZE(syncModes)) ) {
+                if ( ::MMM::UI::FeedbackCombo("##SyncMode",
+                                              &syncMode,
+                                              syncModes,
+                                              IM_ARRAYSIZE(syncModes)) ) {
                     settings.syncConfig.mode = (Config::SyncMode)syncMode;
                     changed                  = true;
                 }
@@ -1194,7 +1201,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##IntegralFactor",
                                    &settings.syncConfig.integralFactor,
                                    0.0f,
@@ -1207,7 +1214,7 @@ void SettingsView::drawSoftwareSettings()
                            maxLabelW,
                            [&](Clay_BoundingBox r, bool) {
                                ImGui::SetNextItemWidth(r.width);
-                               changed |= ImGui::SliderFloat(
+                               changed |= ::MMM::UI::FeedbackSliderFloat(
                                    "##WaterTankBuffer",
                                    &settings.syncConfig.waterTankBuffer,
                                    0.0f,
@@ -1221,7 +1228,7 @@ void SettingsView::drawSoftwareSettings()
                        maxLabelW,
                        [&](Clay_BoundingBox r, bool) {
                            ImGui::SetNextItemWidth(r.width);
-                           changed |= ImGui::DragScalar(
+                           changed |= ::MMM::UI::FeedbackDragScalar(
                                "##SyncInterval",
                                ImGuiDataType_Double,
                                &settings.syncConfig.syncInterval,

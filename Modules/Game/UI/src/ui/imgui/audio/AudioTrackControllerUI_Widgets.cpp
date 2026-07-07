@@ -315,7 +315,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
     const float contentWidth =
         cache.labelWidth + widgetWidth + rowDecorations + contentPadding * 2.0f;
     const size_t rowCount = trackType == TrackType::Main ? 8U : 2U;
-    float        contentH = 2.0f * scale + contentPadding * 2.0f +
+    float contentH = 2.0f * scale + contentPadding * 2.0f +
                      rowCount * rowHeight +
                      (rowCount > 0 ? (rowCount - 1) * contentSpacing : 0.0f);
 
@@ -327,7 +327,7 @@ AudioTrackControllerUI::buildLayoutMetrics(const UiFrameSnapshot& snapshot,
         measureTrackControllerText(trackName.c_str(), font, snapshot.fontSize) +
         snapshot.frameHeight * 2.0f;
     const float minWidth  = std::ceil(std::max(contentWidth, titleWidth) +
-                                     snapshot.windowPadding * 2.0f);
+                                      snapshot.windowPadding * 2.0f);
     const float minHeight = std::ceil(contentH + snapshot.windowPadding * 2.0f +
                                       snapshot.frameHeightWithSpacing);
     cache.minWindowSize   = ImVec2(minWidth, minHeight);
@@ -543,7 +543,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             float sliderWidth = r.width - btnWidth - rowSpacing - lrWidth;
             sliderWidth       = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
-            if ( ImGui::SliderFloat("##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##Volume", &volume, 0.0f, 1.0f, "%.2f") ) {
                 changed = true;
                 if ( muted && volume > 0.0f ) {
                     muted = false;
@@ -553,7 +554,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             if ( m_type == TrackType::Main ) {
                 auto         channelMode = audio.getMainMixerChannelMode();
                 const ImVec4 copyModeColor{ 0.45f, 1.0f, 0.48f, 1.0f };
-                auto         drawChannelButton = [&](const char*             id,
+                auto drawChannelButton = [&](const char*             id,
                                              Audio::MixerChannelMode mode,
                                              const char*             tooltip,
                                              const ImVec4& activeColor) {
@@ -758,7 +759,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         labelWidth,
         [&speed, &changed](Clay_BoundingBox r, bool) {
             ImGui::SetNextItemWidth(r.width);
-            if ( ImGui::SliderFloat(
+            if ( ::MMM::UI::FeedbackSliderFloat(
                      "##SpeedSlider", &speed, 0.25f, 2.0f, "%.4fx") ) {
                 changed = true;
             }
@@ -769,31 +770,31 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
             }
         });
 
-    addSettingItem(parent,
-                   rowIndex,
-                   TR_CACHE("ui.audio_manager.stretch_quality").data(),
-                   labelWidth,
-                   [&changed, &audio](Clay_BoundingBox r, bool) {
-                       const char* qualityNames[] = {
-                           TR("ui.audio_manager.quality_fast").data(),
-                           TR("ui.audio_manager.quality_balanced").data(),
-                           TR("ui.audio_manager.quality_finer").data(),
-                           TR("ui.audio_manager.quality_best").data()
-                       };
+    addSettingItem(
+        parent,
+        rowIndex,
+        TR_CACHE("ui.audio_manager.stretch_quality").data(),
+        labelWidth,
+        [&changed, &audio](Clay_BoundingBox r, bool) {
+            const char* qualityNames[] = {
+                TR("ui.audio_manager.quality_fast").data(),
+                TR("ui.audio_manager.quality_balanced").data(),
+                TR("ui.audio_manager.quality_finer").data(),
+                TR("ui.audio_manager.quality_best").data()
+            };
 
-                       int currentQuality =
-                           static_cast<int>(audio.getPlaybackQuality());
-                       ImGui::SetNextItemWidth(r.width);
-                       if ( ImGui::Combo("##StretchQuality",
-                                         &currentQuality,
-                                         qualityNames,
-                                         IM_ARRAYSIZE(qualityNames)) ) {
-                           audio.setPlaybackQuality(
-                               static_cast<Audio::AudioManager::StretchQuality>(
-                                   currentQuality));
-                           changed = true;
-                       }
-                   });
+            int currentQuality = static_cast<int>(audio.getPlaybackQuality());
+            ImGui::SetNextItemWidth(r.width);
+            if ( ::MMM::UI::FeedbackCombo("##StretchQuality",
+                                          &currentQuality,
+                                          qualityNames,
+                                          IM_ARRAYSIZE(qualityNames)) ) {
+                audio.setPlaybackQuality(
+                    static_cast<Audio::AudioManager::StretchQuality>(
+                        currentQuality));
+                changed = true;
+            }
+        });
 
     // 动态计算音高预设按钮自动折行的高度与宽度
     std::string pitchN24 = TR("ui.audio_manager.pitch_n24").data();
@@ -876,7 +877,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         labelWidth,
         [&pitch, &changed](Clay_BoundingBox r, bool) {
             ImGui::SetNextItemWidth(r.width);
-            if ( ImGui::SliderFloat(
+            if ( ::MMM::UI::FeedbackSliderFloat(
                      "##PitchSlider", &pitch, -24.0f, 24.0f, "%.1f st") ) {
                 changed = true;
             }

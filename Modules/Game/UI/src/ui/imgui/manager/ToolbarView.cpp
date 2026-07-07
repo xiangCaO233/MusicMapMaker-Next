@@ -530,7 +530,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -665,7 +665,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -921,7 +921,8 @@ void ToolbarView::update(UIManager* sourceManager)
             ImGui::Separator();
 
             ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
-            if ( ImGui::SliderInt("##DivisorSlider", &currentDivisor, 1, 64) ) {
+            if ( ::MMM::UI::FeedbackSliderInt(
+                     "##DivisorSlider", &currentDivisor, 1, 64) ) {
                 auto newConfig                 = editorCfg;
                 newConfig.settings.beatDivisor = currentDivisor;
                 Logic::EditorEngine::instance().setEditorConfig(newConfig);
@@ -975,11 +976,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1031,12 +1032,13 @@ void ToolbarView::update(UIManager* sourceManager)
                 ImGui::Separator();
 
                 ImGui::SetNextItemWidth(std::floor(140.0f * dpiScale));
-                if ( ImGui::SliderFloat("##PlaybackSpeedSlider",
-                                        &currentSpeed,
-                                        0.25f,
-                                        2.0f,
-                                        "%.2fx",
-                                        ImGuiSliderFlags_AlwaysClamp) ) {
+                if ( ::MMM::UI::FeedbackSliderFloat(
+                         "##PlaybackSpeedSlider",
+                         &currentSpeed,
+                         0.25f,
+                         2.0f,
+                         "%.2fx",
+                         ImGuiSliderFlags_AlwaysClamp) ) {
                     applyPopupSpeed(static_cast<double>(currentSpeed));
                 }
 
@@ -1137,7 +1139,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 ImGui::Separator();
 
                 ImGui::SetNextItemWidth(std::floor(120.0f * dpiScale));
-                if ( ImGui::SliderInt(
+                if ( ::MMM::UI::FeedbackSliderInt(
                          "##TracksSlider", &currentTracks, 1, 32) ) {
                     meta.track_count = currentTracks;
                     engine.pushCommand(Logic::CmdUpdateBeatmapMetadata{ meta });
@@ -1568,21 +1570,21 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.scheme").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        if ( ImGui::BeginCombo("##NoteColorPaletteScheme",
-                               previewName.c_str()) ) {
+        if ( ::MMM::UI::FeedbackBeginCombo("##NoteColorPaletteScheme",
+                                           previewName.c_str()) ) {
             const bool inheritSelected =
                 m_activePaletteSelection ==
                 NotePaletteSelectionKind::InheritSoftwareDefault;
-            if ( ImGui::Selectable(inheritedPaletteSchemeName().c_str(),
-                                   inheritSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(
+                     inheritedPaletteSchemeName().c_str(), inheritSelected) ) {
                 loadSoftwareDefaultPalette();
             }
             if ( inheritSelected ) ImGui::SetItemDefaultFocus();
 
             const bool skinSelected = m_activePaletteSelection ==
                                       NotePaletteSelectionKind::SkinDefault;
-            if ( ImGui::Selectable(defaultPaletteSchemeName().c_str(),
-                                   skinSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(
+                     defaultPaletteSchemeName().c_str(), skinSelected) ) {
                 loadSkinDefaultPalette();
             }
             if ( skinSelected ) ImGui::SetItemDefaultFocus();
@@ -1595,14 +1597,14 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                     m_activePaletteSelection ==
                         NotePaletteSelectionKind::Custom &&
                     m_activePaletteSchemeIndex == static_cast<int>(i);
-                if ( ImGui::Selectable(paletteConfig.schemes[i].name.c_str(),
-                                       selected) ) {
+                if ( ::MMM::UI::FeedbackSelectable(
+                         paletteConfig.schemes[i].name.c_str(), selected) ) {
                     loadPaletteScheme(i);
                     Config::AppConfig::instance().save();
                 }
                 if ( selected ) ImGui::SetItemDefaultFocus();
             }
-            ImGui::EndCombo();
+            ::MMM::UI::FeedbackEndCombo();
         }
 
         ImGui::TextUnformatted(
@@ -1696,7 +1698,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 m_activeColorSlot = slot;
             }
             ImGui::SameLine();
-            if ( ImGui::Selectable(
+            if ( ::MMM::UI::FeedbackSelectable(
                      TR(colorSlotLabelKey(slot)).data(),
                      active,
                      0,
@@ -1729,7 +1731,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);

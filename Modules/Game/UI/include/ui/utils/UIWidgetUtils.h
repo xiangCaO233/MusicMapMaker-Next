@@ -71,6 +71,122 @@ bool FeedbackMenuItemEx(const char* label, const char* icon = nullptr,
                         const char* shortcut = nullptr, bool selected = false,
                         bool enabled = true);
 
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param selected 当前选中状态。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool selected = false,
+                        ImGuiSelectableFlags flags = 0,
+                        const ImVec2&        size  = ImVec2(0, 0));
+
+/// @brief 绘制带统一反馈的 ImGui Selectable。
+/// @param label Selectable 显示文本和 ImGui ID。
+/// @param pSelected 可选选中状态指针。
+/// @param flags Selectable 标志。
+/// @param size Selectable 尺寸。
+/// @return 本帧被激活时返回 true。
+/// @warning UI 热路径：每帧列表绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSelectable(const char* label, bool* pSelected,
+                        ImGuiSelectableFlags flags = 0,
+                        const ImVec2&        size  = ImVec2(0, 0));
+
+/// @brief 绘制带统一反馈的 ImGui BeginCombo。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param previewValue 当前预览文本。
+/// @param flags Combo 标志。
+/// @return 弹出列表打开时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackBeginCombo(const char* label, const char* previewValue,
+                        ImGuiComboFlags flags = 0);
+
+/// @brief 结束由 FeedbackBeginCombo 打开的 Combo。
+/// @warning UI 热路径：弹出列表绘制结束时调用 ImGui::EndCombo。
+void FeedbackEndCombo();
+
+/// @brief 绘制带统一反馈的 ImGui Combo 数组辅助控件。
+/// @param label Combo 显示文本和 ImGui ID。
+/// @param currentItem 当前选中索引。
+/// @param items 选项文本数组。
+/// @param itemsCount 选项数量。
+/// @param popupMaxHeightInItems 弹出列表最大显示项数。
+/// @return 选中项变化时返回 true。
+/// @warning UI 热路径：每帧 Combo 绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackCombo(const char* label, int* currentItem,
+                   const char* const items[], int itemsCount,
+                   int popupMaxHeightInItems = -1);
+
+/// @brief 绘制带统一反馈的 ImGui Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderFloat(const char* label, float* value, float minValue,
+                         float maxValue, const char* format = "%.3f",
+                         ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Int 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackSliderInt(const char* label, int* value, int minValue,
+                       int maxValue, const char* format = "%d",
+                       ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
+/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
+                          float minValue, float maxValue,
+                          const char*      format = "%.3f",
+                          ImGuiSliderFlags flags  = 0);
+
+/// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragFloat(const char* label, float* value, float speed = 1.0f,
+                       float minValue = 0.0f, float maxValue = 0.0f,
+                       const char* format = "%.3f", ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragInt2(const char* label, int values[2], float speed = 1.0f,
+                      int minValue = 0, int maxValue = 0,
+                      const char* format = "%d", ImGuiSliderFlags flags = 0);
+
+/// @brief 绘制带统一反馈的 ImGui 标量拖拽输入。
+/// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
+/// 样式栈操作和已预加载 SFX pool 的即时触发。
+bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
+                        float speed = 1.0f, const void* minValue = nullptr,
+                        const void*      maxValue = nullptr,
+                        const char*      format   = nullptr,
+                        ImGuiSliderFlags flags    = 0);
+
+/// @brief 给上一条 ImGui Item 补充统一交互音效。
+/// @param id 独立反馈状态 ID。
+/// @param clicked 上一条 Item 本帧是否被激活。
+/// @warning UI 热路径：用于自绘 hit zone，只做 ImGui 状态读写和已预加载
+/// SFX pool 的即时触发。
+void FeedbackLastItem(ImGuiID id, bool clicked);
+
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一反馈。
+/// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
+/// @param pOpen 传给 ImGui::Begin 的打开状态指针。
+/// @warning UI 热路径：每帧窗口 Begin 后调用，只读取 ImGui 内部交互状态，
+/// 并触发已预加载 SFX pool。
+void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen);
+
+/// @brief 给指定 DockSpace 下的原生节点按钮补充统一反馈。
+/// @param dockspaceId 目标 DockSpace 节点 ID。
+/// @warning UI 热路径：每帧 DockSpace 绘制后调用，只遍历当前 dock 树节点，
+/// 并触发已预加载 SFX pool。
+void FeedbackDockNodeControls(ImGuiID dockspaceId);
+
 }  // namespace MMM::UI
 
 namespace MMM::UI::Utils

@@ -429,11 +429,11 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                option.displayName,
-                                                option.internalName,
-                                                option.cameraId);
+                                                   option.displayName,
+                                                   option.internalName,
+                                                   option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
-                if ( ImGui::Selectable(label.c_str(), selected) ) {
+                if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
                     selectTemplate(option);
                     m_shouldOpenTemplateOptions = true;
                     ImGui::CloseCurrentPopup();
@@ -663,12 +663,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
     float bpm = (float)m_bpm;
-    if ( ImGui::DragFloat(TR("ui.settings.beatmap.bpm").data(),
-                          &bpm,
-                          0.1f,
-                          0.0f,
-                          1000.0f,
-                          "%.2f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.settings.beatmap.bpm").data(),
+                                      &bpm,
+                                      0.1f,
+                                      0.0f,
+                                      1000.0f,
+                                      "%.2f") ) {
         m_bpm = std::clamp<double>(bpm, 1.0, 999.0);
         if ( m_measuredTimings.size() == 1 ) {
             auto& timing          = m_measuredTimings.front();
@@ -717,21 +717,22 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
-                               ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
                      autoBpmWidth - ImGui::GetStyle().ItemSpacing.x * 2.0f);
 
     ImGui::SetNextItemWidth(comboWidth);
-    if ( ImGui::BeginCombo("##NewBeatmapAudioSelect", audioPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapAudioSelect",
+                                       audioPreview.c_str()) ) {
         for ( const auto& res : project->m_audioResources ) {
             if ( res.m_type != MMM::AudioTrackType::Main ) continue;
 
             bool        isSelected = (m_selectedAudioTrackId == res.m_id);
             std::string label      = res.m_id + "##" + res.m_path;
-            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(label.c_str(), isSelected) ) {
                 m_selectedAudioTrackId = res.m_id;
                 onAudioSelected(Config::utf8ToPath(res.m_path));
             }
@@ -739,7 +740,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             ImGui::SameLine();
             ImGui::TextDisabled("(%s)", res.m_path.c_str());
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
     ImGui::SameLine();
     if ( m_selectedAudioTrackId.empty() ) {
@@ -790,8 +791,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             : Config::pathToUtf8(m_selectedCoverImgPath);
 
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewBeatmapCoverImageSelect",
-                           coverImgPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapCoverImageSelect",
+                                       coverImgPreview.c_str()) ) {
         // 扫描项目中的图片文件
         std::vector<std::string> resources;
         try {
@@ -815,12 +816,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverImgPath == resPath);
-            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
                 m_selectedCoverImgPath = resPath;
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     // 背景选择
@@ -830,8 +831,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             : Config::pathToUtf8(m_selectedCoverPath);
 
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewBeatmapBackgroundSelect",
-                           coverPreview.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapBackgroundSelect",
+                                       coverPreview.c_str()) ) {
         // 扫描项目中的图片/视频文件
         std::vector<std::string> resources;
         try {
@@ -855,7 +856,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverPath == resPath);
-            if ( ImGui::Selectable(resPath.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(resPath.c_str(), isSelected) ) {
                 m_selectedCoverPath = resPath;
 
                 // 如果背景是图片且封面为空，则自动沿用同一张图片。
@@ -871,7 +872,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     ImGui::Spacing();

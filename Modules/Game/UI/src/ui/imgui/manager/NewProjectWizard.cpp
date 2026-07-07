@@ -317,9 +317,10 @@ void NewProjectWizard::renderPreferencesStep()
 
     ImGui::TextUnformatted(TR("ui.settings.project.note_palette").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewProjectNotePalette", previewName.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewProjectNotePalette",
+                                       previewName.c_str()) ) {
         const bool inheritSelected = m_noteColorPaletteSchemeName.empty();
-        if ( ImGui::Selectable(
+        if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.settings.project.note_palette.inherit").data(),
                  inheritSelected) ) {
             m_noteColorPaletteSchemeName.clear();
@@ -329,7 +330,7 @@ void NewProjectWizard::renderPreferencesStep()
         const bool skinSelected =
             m_noteColorPaletteSchemeName ==
             Config::NOTE_COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-        if ( ImGui::Selectable(
+        if ( ::MMM::UI::FeedbackSelectable(
                  TR("ui.toolbar.note_palette.skin_default_scheme").data(),
                  skinSelected) ) {
             m_noteColorPaletteSchemeName =
@@ -339,18 +340,19 @@ void NewProjectWizard::renderPreferencesStep()
 
         for ( const auto& scheme : paletteConfig.schemes ) {
             const bool selected = m_noteColorPaletteSchemeName == scheme.name;
-            if ( ImGui::Selectable(scheme.name.c_str(), selected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                               selected) ) {
                 m_noteColorPaletteSchemeName = scheme.name;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     ImGui::TextUnformatted(TR("ui.wizard.new_project.initial_sidebar").data());
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if ( ImGui::BeginCombo("##NewProjectInitialSidebar",
-                           sidebarTabLabel(m_initialSideBarTab)) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##NewProjectInitialSidebar",
+                                       sidebarTabLabel(m_initialSideBarTab)) ) {
         const SideBarTab tabs[] = { SideBarTab::FileExplorer,
                                     SideBarTab::BeatMapExplorer,
                                     SideBarTab::AudioExplorer,
@@ -358,12 +360,13 @@ void NewProjectWizard::renderPreferencesStep()
                                     SideBarTab::None };
         for ( SideBarTab tab : tabs ) {
             const bool selected = m_initialSideBarTab == tab;
-            if ( ImGui::Selectable(sidebarTabLabel(tab), selected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(sidebarTabLabel(tab),
+                                               selected) ) {
                 m_initialSideBarTab = tab;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 }
 
@@ -542,8 +545,8 @@ void NewProjectWizard::openUnifiedParentFolderPicker(
     fdConfig.path = initialPath.empty() ? std::string(".") : initialPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                     ImGuiFileDialogFlags_HideColumnType |
-                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                 ImGuiFileDialogFlags_HideColumnType |
+                                 ImGuiFileDialogFlags_ReadOnlyFileNameField;
     ImGuiFileDialog::Instance()->OpenDialog(
         PARENT_FOLDER_PICKER_ID,
         TR("ui.wizard.new_project.select_parent").data(),

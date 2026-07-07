@@ -6,6 +6,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 
 namespace MMM::UI
@@ -91,6 +92,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+    FeedbackDockNodeControls(dockspace_id);
 
     if ( titleFont ) ImGui::PopFont();
 
@@ -144,10 +146,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                 0.12f);
             ImGuiID dock_id_tool = 0;
             dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
-                                                       ImGuiDir_Right,
-                                                       toolNodeRatio,
-                                                       nullptr,
-                                                       &dock_id_work);
+                                                               ImGuiDir_Right,
+                                                               toolNodeRatio,
+                                                               nullptr,
+                                                               &dock_id_work);
             ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
             MainDockSpaceUI::setToolDockId(dock_id_tool);
         } else {

@@ -33,7 +33,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
     int         presetIdx = static_cast<int>(m_currentPreset);
     ImGui::SetCursorPosX((contentWidth - comboWidth) * 0.5f);
     ImGui::SetNextItemWidth(comboWidth);
-    if ( ImGui::Combo(
+    if ( ::MMM::UI::FeedbackCombo(
              "##EQPreset", &presetIdx, presets, IM_ARRAYSIZE(presets)) ) {
         m_currentPreset = static_cast<Audio::EQPreset>(presetIdx);
         audio.createMainTrackEQ(m_currentPreset);
@@ -136,8 +136,8 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         // 动态计算可用高度，预留底部按钮位置
         float footerHeight = ImGui::GetFrameHeightWithSpacing() +
                              ImGui::GetStyle().ItemSpacing.y;
-        float availHeight = ImGui::GetContentRegionAvail().y;
-        float childHeight = std::max(220.0f, availHeight - footerHeight);
+        float availHeight  = ImGui::GetContentRegionAvail().y;
+        float childHeight  = std::max(220.0f, availHeight - footerHeight);
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         bool opened = ImGui::BeginChild("EQSliders",
@@ -186,12 +186,13 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 2. 增益滑块 (固定宽度，也要在列内居中)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                      (colWidth - sliderWidth) * 0.5f);
-                if ( ImGui::VSliderFloat("##Gain",
-                                         ImVec2(sliderWidth, gainSliderH),
-                                         &gain,
-                                         -24.0f,
-                                         24.0f,
-                                         "") ) {
+                if ( ::MMM::UI::FeedbackVSliderFloat(
+                         "##Gain",
+                         ImVec2(sliderWidth, gainSliderH),
+                         &gain,
+                         -24.0f,
+                         24.0f,
+                         "") ) {
                     audio.setMainTrackEQBandGain(i, gain);
                     changed = true;
                 }
@@ -205,12 +206,13 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
                 // 3. Q 值滑块
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
                                      (colWidth - sliderWidth) * 0.5f);
-                if ( ImGui::VSliderFloat("##Q",
-                                         ImVec2(sliderWidth, qSliderH),
-                                         &q,
-                                         0.1f,
-                                         10.0f,
-                                         "") ) {
+                if ( ::MMM::UI::FeedbackVSliderFloat(
+                         "##Q",
+                         ImVec2(sliderWidth, qSliderH),
+                         &q,
+                         0.1f,
+                         10.0f,
+                         "") ) {
                     audio.setMainTrackEQBandQ(i, q);
                     changed = true;
                 }
@@ -230,7 +232,7 @@ void AudioTrackControllerUI::renderEQSection(bool& changed)
         // 按钮水平居中
         const char* resetLabel = TR("ui.audio_manager.reset_eq").data();
         float       btnWidth   = ImGui::CalcTextSize(resetLabel).x +
-                         ImGui::GetStyle().FramePadding.x * 2.0f;
+                                 ImGui::GetStyle().FramePadding.x * 2.0f;
         ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - btnWidth) *
                              0.5f);
         if ( ::MMM::UI::FeedbackButton(resetLabel) ) {

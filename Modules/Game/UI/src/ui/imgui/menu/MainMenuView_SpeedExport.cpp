@@ -595,11 +595,11 @@ void MainMenuView::renderBeatmapSpeedExportPopup(float dpiScale)
 
     ImGui::TextUnformatted("倍速");
     ImGui::SetNextItemWidth(-1.0f);
-    if ( ImGui::SliderFloat("##SpeedExportFactor",
-                            &m_speedExportFactor,
-                            0.25f,
-                            4.0f,
-                            "%.3fx") ) {
+    if ( ::MMM::UI::FeedbackSliderFloat("##SpeedExportFactor",
+                                        &m_speedExportFactor,
+                                        0.25f,
+                                        4.0f,
+                                        "%.3fx") ) {
         m_speedExportFactor = std::clamp(m_speedExportFactor, 0.25f, 4.0f);
         refreshAutoNameIfNeeded();
     }
@@ -645,21 +645,23 @@ void MainMenuView::renderBeatmapSpeedExportPopup(float dpiScale)
     }
     ImGui::TextUnformatted("音频格式");
     ImGui::SetNextItemWidth(-1.0f);
-    if ( ImGui::BeginCombo("##SpeedExportAudioFormat",
-                           formatOptions[static_cast<std::size_t>(
-                                             m_speedExportAudioFormatIndex)]
-                               .label) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo(
+             "##SpeedExportAudioFormat",
+             formatOptions[static_cast<std::size_t>(
+                               m_speedExportAudioFormatIndex)]
+                 .label) ) {
         for ( std::size_t index = 0; index < formatOptions.size(); ++index ) {
             const bool selected =
                 m_speedExportAudioFormatIndex == static_cast<int>(index);
-            if ( ImGui::Selectable(formatOptions[index].label, selected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(formatOptions[index].label,
+                                               selected) ) {
                 m_speedExportAudioFormatIndex = static_cast<int>(index);
             }
             if ( selected ) {
                 ImGui::SetItemDefaultFocus();
             }
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
     ImGui::EndDisabled();
 

@@ -294,9 +294,9 @@ PlaybackTimelineState readPlaybackTimelineState()
     state.visualOffset = Config::AppConfig::instance()
                              .getVisualConfig()
                              .getEffectiveVisualOffset();
-    state.audioTime  = audioManager.getCurrentTime();
-    state.visualTime = state.audioTime + state.visualOffset;
-    state.totalTime  = audioManager.getTotalTime();
+    state.audioTime    = audioManager.getCurrentTime();
+    state.visualTime   = state.audioTime + state.visualOffset;
+    state.totalTime    = audioManager.getTotalTime();
     state.isPlaying =
         audioManager.getStatus() == Audio::PlaybackStatus::Playing;
 
@@ -861,12 +861,12 @@ void BpmMeasurementToolView::renderControlPanel()
     }
 
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.audio").data());
-    if ( ImGui::BeginCombo("##BpmMeasureAudioTrack",
-                           m_selectedAudioLabel.c_str()) ) {
+    if ( ::MMM::UI::FeedbackBeginCombo("##BpmMeasureAudioTrack",
+                                       m_selectedAudioLabel.c_str()) ) {
         for ( const auto& resource : project->m_audioResources ) {
             const bool  isSelected = resource.m_id == m_selectedAudioTrackId;
             std::string label      = makeAudioResourceLabel(resource);
-            if ( ImGui::Selectable(label.c_str(), isSelected) ) {
+            if ( ::MMM::UI::FeedbackSelectable(label.c_str(), isSelected) ) {
                 m_selectedAudioTrackId = resource.m_id;
                 m_selectedAudioLabel   = label;
                 m_playbackSpeed        = std::clamp<double>(
@@ -877,7 +877,7 @@ void BpmMeasurementToolView::renderControlPanel()
                 ImGui::SetItemDefaultFocus();
             }
         }
-        ImGui::EndCombo();
+        ::MMM::UI::FeedbackEndCombo();
     }
 
     if ( project->m_audioResources.empty() ) {
@@ -907,12 +907,12 @@ void BpmMeasurementToolView::renderControlPanel()
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.params").data());
 
     float bpm = static_cast<float>(m_bpm);
-    if ( ImGui::DragFloat(TR("ui.tools.bpm_measure.bpm").data(),
-                          &bpm,
-                          0.01f,
-                          1.0f,
-                          999.0f,
-                          "%.3f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.tools.bpm_measure.bpm").data(),
+                                      &bpm,
+                                      0.01f,
+                                      1.0f,
+                                      999.0f,
+                                      "%.3f") ) {
         m_bpm               = std::clamp<double>(bpm, 1.0, 999.0);
         m_beatLengthSeconds = 60.0 / m_bpm;
         m_firstBeatTime     = clampFirstBeatTime(
@@ -922,12 +922,13 @@ void BpmMeasurementToolView::renderControlPanel()
 
     constexpr double minBeatLength = 60.0 / 999.0;
     float            beatLength    = static_cast<float>(m_beatLengthSeconds);
-    if ( ImGui::DragFloat(TR("ui.tools.bpm_measure.beat_length").data(),
-                          &beatLength,
-                          0.0001f,
-                          static_cast<float>(minBeatLength),
-                          60.0f,
-                          "%.6f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(
+             TR("ui.tools.bpm_measure.beat_length").data(),
+             &beatLength,
+             0.0001f,
+             static_cast<float>(minBeatLength),
+             60.0f,
+             "%.6f") ) {
         m_beatLengthSeconds =
             std::clamp<double>(beatLength, minBeatLength, 60.0);
         m_bpm           = 60.0 / m_beatLengthSeconds;
@@ -938,7 +939,7 @@ void BpmMeasurementToolView::renderControlPanel()
 
     const double minFirstBeat = firstBeatMinSeconds(m_beatLengthSeconds);
     float        firstBeat    = static_cast<float>(m_firstBeatTime);
-    if ( ImGui::DragFloat(
+    if ( ::MMM::UI::FeedbackDragFloat(
              TR("ui.tools.bpm_measure.first_beat").data(),
              &firstBeat,
              0.001f,
@@ -951,20 +952,22 @@ void BpmMeasurementToolView::renderControlPanel()
     }
 
     float markerWidth = static_cast<float>(m_markerWidthMs);
-    if ( ImGui::DragFloat(TR("ui.tools.bpm_measure.marker_width").data(),
-                          &markerWidth,
-                          0.1f,
-                          4.0f,
-                          1000.0f,
-                          "%.1f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(
+             TR("ui.tools.bpm_measure.marker_width").data(),
+             &markerWidth,
+             0.1f,
+             4.0f,
+             1000.0f,
+             "%.1f") ) {
         m_markerWidthMs = std::clamp<double>(markerWidth, 4.0, 1000.0);
     }
 
     int beatDivisor = m_beatDivisor;
-    if ( ImGui::SliderInt(TR("ui.tools.bpm_measure.beat_divisor").data(),
-                          &beatDivisor,
-                          1,
-                          64) ) {
+    if ( ::MMM::UI::FeedbackSliderInt(
+             TR("ui.tools.bpm_measure.beat_divisor").data(),
+             &beatDivisor,
+             1,
+             64) ) {
         m_beatDivisor = std::clamp(beatDivisor, 1, 64);
     }
 
@@ -972,7 +975,7 @@ void BpmMeasurementToolView::renderControlPanel()
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.view").data());
 
     float center = static_cast<float>(m_viewCenter);
-    if ( ImGui::DragFloat(
+    if ( ::MMM::UI::FeedbackDragFloat(
              TR("ui.tools.bpm_measure.center").data(),
              &center,
              0.01f,
@@ -984,12 +987,12 @@ void BpmMeasurementToolView::renderControlPanel()
     }
 
     float zoom = static_cast<float>(m_zoomSeconds);
-    if ( ImGui::DragFloat(TR("ui.tools.bpm_measure.zoom").data(),
-                          &zoom,
-                          0.05f,
-                          0.1f,
-                          120.0f,
-                          "%.2f") ) {
+    if ( ::MMM::UI::FeedbackDragFloat(TR("ui.tools.bpm_measure.zoom").data(),
+                                      &zoom,
+                                      0.05f,
+                                      0.1f,
+                                      120.0f,
+                                      "%.2f") ) {
         m_zoomSeconds = std::clamp<double>(zoom, 0.1, 120.0);
     }
 
@@ -1041,14 +1044,15 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
             ImGui::SameLine();
             ImGui::SetNextItemWidth(78.0f);
             float time = static_cast<float>(segment.timestampSeconds);
-            if ( ImGui::DragFloat("##SegmentTime",
-                                  &time,
-                                  0.001f,
-                                  static_cast<float>(firstBeatMinSeconds(
-                                      60.0 / std::max(1.0, segment.bpm))),
-                                  static_cast<float>(std::max(
-                                      0.001, playbackCanvasDuration())),
-                                  "%.3fs") ) {
+            if ( ::MMM::UI::FeedbackDragFloat(
+                     "##SegmentTime",
+                     &time,
+                     0.001f,
+                     static_cast<float>(firstBeatMinSeconds(
+                         60.0 / std::max(1.0, segment.bpm))),
+                     static_cast<float>(
+                         std::max(0.001, playbackCanvasDuration())),
+                     "%.3fs") ) {
                 segment.timestampSeconds = time;
                 changed                  = true;
             }
@@ -1059,7 +1063,7 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
             ImGui::SameLine();
             ImGui::SetNextItemWidth(76.0f);
             float bpm = static_cast<float>(segment.bpm);
-            if ( ImGui::DragFloat(
+            if ( ::MMM::UI::FeedbackDragFloat(
                      "##SegmentBpm", &bpm, 0.01f, 1.0f, 999.0f, "%.3f") ) {
                 segment.bpm = bpm;
                 changed     = true;
@@ -1193,19 +1197,20 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
 
             ImGui::Text("%s", TR("ui.tools.bpm_measure.apply_target").data());
             ImGui::SetNextItemWidth(360.0f);
-            if ( ImGui::BeginCombo("##BpmApplyTarget", preview.c_str()) ) {
+            if ( ::MMM::UI::FeedbackBeginCombo("##BpmApplyTarget",
+                                               preview.c_str()) ) {
                 for ( const auto& option : options ) {
                     const bool selected =
                         option.sessionIndex == m_applyTargetSessionIndex;
-                    if ( ImGui::Selectable(option.displayName.c_str(),
-                                           selected) ) {
+                    if ( ::MMM::UI::FeedbackSelectable(
+                             option.displayName.c_str(), selected) ) {
                         m_applyTargetSessionIndex = option.sessionIndex;
                     }
                     if ( selected ) {
                         ImGui::SetItemDefaultFocus();
                     }
                 }
-                ImGui::EndCombo();
+                ::MMM::UI::FeedbackEndCombo();
             }
             ImGui::Checkbox(TR("ui.tools.bpm_measure.keep_scroll").data(),
                             &m_keepNonBpmTimingsOnApply);
@@ -1312,11 +1317,12 @@ void BpmMeasurementToolView::renderPlaybackControls()
     }
     ImGui::Text("%s", TR("ui.tools.bpm_measure.position").data());
     ImGui::SetNextItemWidth(-1.0f);
-    if ( ImGui::SliderFloat("##BpmMeasurePlaybackPosition",
-                            &position,
-                            0.0f,
-                            static_cast<float>(std::max(0.001, totalTime)),
-                            "%.3fs") ) {
+    if ( ::MMM::UI::FeedbackSliderFloat(
+             "##BpmMeasurePlaybackPosition",
+             &position,
+             0.0f,
+             static_cast<float>(std::max(0.001, totalTime)),
+             "%.3fs") ) {
         const double seekTime =
             std::clamp<double>(position, 0.0, std::max(0.0, totalTime));
         seekPlaybackToCanvasTime(seekTime);
@@ -1364,7 +1370,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
     float speed = static_cast<float>(m_playbackSpeed);
     ImGui::Text("%s", TR("ui.audio_manager.speed_value").data());
     ImGui::SetNextItemWidth(-1.0f);
-    if ( ImGui::SliderFloat(
+    if ( ::MMM::UI::FeedbackSliderFloat(
              "##BpmMeasurePlaybackSpeed", &speed, 0.25f, 2.0f, "%.4fx") ) {
         applyPlaybackSpeed(speed);
     }
@@ -1465,8 +1471,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         resetMetronomeScheduler(audioTime);
     }
@@ -1529,7 +1535,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                const std::filesystem::path& fallback) {
+                                       const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             return it->second;
@@ -1742,9 +1748,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -2820,9 +2826,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration      = sampleRate > 0.0
-                          ? static_cast<double>(track->num_frames()) / sampleRate
-                          : 0.0;
+    m_duration = sampleRate > 0.0
+                     ? static_cast<double>(track->num_frames()) / sampleRate
+                     : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
@@ -2847,7 +2853,7 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
-    m_analysisFuture                = appThreadPool->enqueue([this,
+    m_analysisFuture = appThreadPool->enqueue([this,
                                                stopToken,
                                                track    = std::move(track),
                                                duration = m_duration,
@@ -3182,7 +3188,7 @@ void BpmMeasurementToolView::analyzeTrack(
             for ( int i = binStart; i <= binEnd; ++i ) {
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude = std::max(maxMagnitude, magSq);
+                maxMagnitude       = std::max(maxMagnitude, magSq);
             }
             const double db =
                 maxMagnitude > 1e-9
