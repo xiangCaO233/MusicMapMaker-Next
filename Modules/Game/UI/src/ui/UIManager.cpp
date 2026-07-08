@@ -55,6 +55,20 @@ constexpr const char* SETTINGS_VIEW_NAME = "SettingsWindow";
 /// @brief 主窗口标题栏宿主 ImGui 窗口名。
 constexpr std::string_view TOP_MENU_BAR_HOST_NAME = "TopMenuBarHost";
 
+/// @brief 判断主窗口当前是否允许播放 UI 交互音效。
+/// @param window 主原生窗口观察指针。
+/// @return 未最小化或没有绑定窗口时返回 true。
+/// @warning UI 热路径：每帧查询一次 GLFW 窗口标志，只读取平台窗口状态。
+bool isInteractionFeedbackAllowed(Graphic::NativeWindow* window)
+{
+    if ( !window || !window->getWindowHandle() ) {
+        return true;
+    }
+
+    return glfwGetWindowAttrib(window->getWindowHandle(), GLFW_ICONIFIED) !=
+           GLFW_TRUE;
+}
+
 /// @brief 判断两个拖拽矩形是否相交。
 /// @param lhs 第一个矩形。
 /// @param rhs 第二个矩形。
@@ -763,6 +777,7 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 void UIManager::onUpdateUI()
 {
     Logic::EditorEngine::instance().publishRenderFps(ImGui::GetIO().Framerate);
+    SetInteractionFeedbackEnabled(isInteractionFeedbackAllowed(m_nativeWindow));
     ProcessGlobalMouseFeedback();
 
     syncProjectWorkspaceState();

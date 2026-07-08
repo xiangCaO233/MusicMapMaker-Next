@@ -562,6 +562,9 @@ constexpr double SLIDER_MAX_PITCH_SEMITONES = 12.0;
 /// @brief Slider 拖动音效最小触发间隔，避免每帧堆叠播放。
 constexpr float SLIDER_SFX_MIN_INTERVAL_SECONDS = 0.045f;
 
+/// @brief 统一 UI 交互音效是否允许播放。
+bool interactionFeedbackEnabled = true;
+
 /// @brief 按钮悬浮状态存储键的盐值。
 constexpr ImGuiID BUTTON_HOVERED_KEY_SALT = 0x6D6D4821u;
 
@@ -599,6 +602,14 @@ constexpr float MENU_POPUP_SLIDE_Y = 8.0f;
 ImGuiID makeButtonStorageKey(ImGuiID id, ImGuiID salt)
 {
     return id ^ salt;
+}
+
+/// @brief 查询统一 UI 交互音效当前是否允许播放。
+/// @return 当前帧允许播放时返回 true。
+/// @warning UI 热路径：只读取内存标志，不执行资源操作。
+bool isInteractionFeedbackEnabled()
+{
+    return interactionFeedbackEnabled;
 }
 
 /// @brief 将数值限制到 0 到 1。
@@ -732,8 +743,9 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
     const bool wasHovered             = wasDrawnLastFrame && storedHovered;
     const bool hoveredThisFrame =
         isHovered || (wasUpdatedCurrentFrame && storedHovered);
+    const bool feedbackEnabled = isInteractionFeedbackEnabled();
 
-    if ( isHovered && !wasHovered &&
+    if ( feedbackEnabled && isHovered && !wasHovered &&
          !(wasUpdatedCurrentFrame && storedHovered) ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_HOVER_SFX_KEY, BUTTON_HOVER_SFX_VOLUME);
@@ -744,7 +756,7 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
     const bool mouseEdgeTriggered =
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
         ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-    if ( clicked && !mouseEdgeTriggered &&
+    if ( feedbackEnabled && clicked && !mouseEdgeTriggered &&
          storage->GetInt(clickFrameKey, -1) != currentFrame ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_CLICK_SFX_KEY, BUTTON_CLICK_SFX_VOLUME);
@@ -990,7 +1002,7 @@ void finishLastItemFeedback(ImGuiID id, bool clicked)
 /// @warning UI 热路径：只访问 ImGuiStorage 并触发已预加载 SFX pool。
 void playSliderChangeFeedback(ImGuiID id, bool changed, float percent)
 {
-    if ( !changed ) return;
+    if ( !changed || !isInteractionFeedbackEnabled() ) return;
 
     ImGuiStorage* storage = ImGui::GetStateStorage();
     if ( !storage ) return;
@@ -1204,11 +1216,23 @@ void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
 
 }  // namespace
 
+/// @brief 设置统一 UI 交互音效是否允许播放。
+/// @param enabled 是否允许 hover、点击、鼠标边沿和滑块反馈音效。
+/// @warning UI 热路径：每帧写入一次，只更新内存标志，不执行资源操作。
+void SetInteractionFeedbackEnabled(bool enabled)
+{
+    interactionFeedbackEnabled = enabled;
+}
+
 /// @brief 处理全局鼠标按下与松开音效。
 /// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
 /// SFX pool，禁止执行资源加载。
 void ProcessGlobalMouseFeedback()
 {
+    if ( !isInteractionFeedbackEnabled() ) {
+        return;
+    }
+
     if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
         Audio::AudioManager::instance().playSoundEffect(MOUSE_DOWN_SFX_KEY,
                                                         MOUSE_DOWN_SFX_VOLUME);

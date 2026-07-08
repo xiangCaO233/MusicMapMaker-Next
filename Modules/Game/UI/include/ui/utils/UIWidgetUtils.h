@@ -212,6 +212,11 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
                         const char*      format   = nullptr,
                         ImGuiSliderFlags flags    = 0);
 
+/// @brief 设置统一 UI 交互音效是否允许播放。
+/// @param enabled 是否允许 hover、点击、鼠标边沿和滑块反馈音效。
+/// @warning UI 热路径：每帧写入一次，只更新内存标志，不执行资源操作。
+void SetInteractionFeedbackEnabled(bool enabled);
+
 /// @brief 处理全局鼠标按下与松开音效。
 /// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
 /// SFX pool，禁止执行资源加载。
