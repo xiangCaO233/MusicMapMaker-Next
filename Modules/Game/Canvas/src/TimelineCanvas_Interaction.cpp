@@ -782,11 +782,28 @@ TimelineCanvas::TimingSelectionRect TimelineCanvas::timingTargetScreenRect(
         rect.valid  = rect.right > rect.left && rect.bottom > rect.top;
         return rect;
     };
+    auto mergeRect = [](TimingSelectionRect lhs, TimingSelectionRect rhs) {
+        if ( !lhs.valid ) return rhs;
+        if ( !rhs.valid ) return lhs;
+        return TimingSelectionRect{
+            std::min(lhs.left, rhs.left),
+            std::min(lhs.top, rhs.top),
+            std::max(lhs.right, rhs.right),
+            std::max(lhs.bottom, rhs.bottom),
+            true,
+        };
+    };
 
-    const bool professionalMode = Config::AppConfig::instance()
-                                      .getEditorSettings()
-                                      .timelineProfessionalMode;
-    if ( professionalMode && m_currentSnapshot && target.hasMarkerGeometry &&
+    const float centerX = timingTargetCenterX(target, canvasPos, size);
+    const float centerY = canvasPos.y + target.y;
+    const float halfSize =
+        std::max(TIMING_MARKER_SIZE, TIMING_PICK_RADIUS) * 0.5f;
+    const auto fallbackRect = makeRect(centerX - halfSize,
+                                       centerY - halfSize,
+                                       centerX + halfSize,
+                                       centerY + halfSize);
+
+    if ( m_currentSnapshot && target.hasMarkerGeometry &&
          target.markerVertexCount > 0U ) {
         const uint32_t startVertex = target.markerVertexOffset;
         const uint32_t endVertex =
@@ -810,19 +827,12 @@ TimelineCanvas::TimingSelectionRect TimelineCanvas::timingTargetScreenRect(
                                  canvasPos.x + maxX,
                                  canvasPos.y + maxY);
             if ( rect.valid ) {
-                return rect;
+                return mergeRect(rect, fallbackRect);
             }
         }
     }
 
-    const float centerX = timingTargetCenterX(target, canvasPos, size);
-    const float centerY = canvasPos.y + target.y;
-    const float halfSize =
-        std::max(TIMING_MARKER_SIZE, TIMING_PICK_RADIUS) * 0.5f;
-    return makeRect(centerX - halfSize,
-                    centerY - halfSize,
-                    centerX + halfSize,
-                    centerY + halfSize);
+    return fallbackRect;
 }
 
 /// @brief 拾取鼠标附近的 Timing 目标。
@@ -845,9 +855,6 @@ TimelineCanvas::pickTimingTarget(const ImVec2& canvasPos, const ImVec2& size,
     float        bestScore = std::numeric_limits<float>::max();
     std::optional<TimelineHitTarget> bestTarget;
     for ( const auto& target : collectVisibleTimingTargets() ) {
-        if ( !isTimingTargetSelectable(target) ) {
-            continue;
-        }
         const auto rect = timingTargetScreenRect(target, canvasPos, size);
         if ( !rect.valid || mousePos.x < rect.left || mousePos.x > rect.right ||
              mousePos.y < rect.top || mousePos.y > rect.bottom ) {
@@ -888,9 +895,7 @@ void TimelineCanvas::pruneInvalidTimingSelection()
 {
     std::unordered_set<entt::entity> snapshotEntities;
     for ( const auto& target : collectVisibleTimingTargets() ) {
-        if ( isTimingTargetSelectable(target) ) {
-            snapshotEntities.insert(target.entity);
-        }
+        snapshotEntities.insert(target.entity);
     }
 
     std::erase_if(m_selectedTimingEntities, [&](entt::entity entity) {
@@ -920,7 +925,7 @@ void TimelineCanvas::updateTimingEraseTarget(
     const std::optional<TimelineHitTarget>& hoveredTarget)
 {
     m_timingEraseTargetEntities.clear();
-    if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
+    if ( hoveredTarget && hoveredTarget->entity != entt::null ) {
         m_timingEraseTargetEntities.insert(hoveredTarget->entity);
     }
 }
@@ -969,9 +974,8 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
 
     std::vector<TimelineHitTarget> selectedTargets;
     for ( const auto& target : collectVisibleTimingTargets() ) {
-        if ( isTimingTargetSelectable(target) &&
-             m_selectedTimingEntities.find(target.entity) !=
-                 m_selectedTimingEntities.end() ) {
+        if ( m_selectedTimingEntities.find(target.entity) !=
+             m_selectedTimingEntities.end() ) {
             selectedTargets.push_back(target);
         }
     }
@@ -1292,9 +1296,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 m_timingDragPreviewDelta = 0.0;
                 m_timingDragEntries.clear();
                 for ( const auto& target : collectVisibleTimingTargets() ) {
-                    if ( isTimingTargetSelectable(target) &&
-                         m_selectedTimingEntities.find(target.entity) !=
-                             m_selectedTimingEntities.end() ) {
+                    if ( m_selectedTimingEntities.find(target.entity) !=
+                         m_selectedTimingEntities.end() ) {
                         m_timingDragEntries.push_back(
                             { target.entity, target.time, target.value });
                     }

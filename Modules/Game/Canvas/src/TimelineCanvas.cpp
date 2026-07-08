@@ -270,6 +270,7 @@ uint64_t timelineMarkerKey(uint32_t indexOffset, uint32_t indexCount)
     return (static_cast<uint64_t>(indexOffset) << 32U) |
            static_cast<uint64_t>(indexCount);
 }
+
 }  // namespace
 
 TimelineCanvas::TimelineCanvas(
@@ -342,10 +343,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                                  0.0f,
                                                  total,
                                                  "") ) {
-                float visualOffset = Config::AppConfig::instance()
-                                         .getVisualConfig()
-                                         .getEffectiveVisualOffset();
-                double targetTime = static_cast<double>(time);
+                float  visualOffset = Config::AppConfig::instance()
+                                          .getVisualConfig()
+                                          .getEffectiveVisualOffset();
+                double targetTime   = static_cast<double>(time);
                 if ( ImGui::GetIO().KeyShift ) {
                     targetTime = std::clamp(snapTimeToBeatLine(targetTime),
                                             0.0,
@@ -384,9 +385,21 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( texID != VK_NULL_HANDLE ) {
             ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
 
-            bool           isHovered = ImGui::IsItemHovered();
-            const ImGuiIO& io        = ImGui::GetIO();
-            float          wheel     = io.MouseWheel;
+            ImVec2 canvasPos = ImGui::GetItemRectMin();
+            ImVec2 mousePos  = ImGui::GetMousePos();
+            bool   isHovered =
+                ImGui::IsItemHovered(
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                    ImGuiHoveredFlags_AllowWhenOverlapped) ||
+                (ImGui::IsWindowHovered(
+                     ImGuiHoveredFlags_RootAndChildWindows |
+                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                 mousePos.x >= canvasPos.x &&
+                 mousePos.x <= canvasPos.x + size.x &&
+                 mousePos.y >= canvasPos.y &&
+                 mousePos.y <= canvasPos.y + size.y);
+            const ImGuiIO& io    = ImGui::GetIO();
+            float          wheel = io.MouseWheel;
             if ( isHovered && std::abs(wheel) > 0.01f ) {
                 if ( !handleTimelineModifierWheel(m_name,
                                                   wheel,
@@ -402,9 +415,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
 
             // 3. 处理 Timeline Timing 的工具交互和反馈
-            ImVec2 canvasPos = ImGui::GetItemRectMin();
-            ImVec2 mousePos  = ImGui::GetMousePos();
-            bool   windowFocused =
+            bool windowFocused =
                 ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
             const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
             const bool timelineMouseClicked =
@@ -498,8 +509,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Logic::TimelineInteractiveElement& el) {
-                    bool isNearTime = hoveredSnapped &&
-                                      std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime  = hoveredSnapped &&
+                                       std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     return isNearTime || isNearPixel;
                 };
@@ -599,6 +610,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 !m_isTimingDrawPreviewing && !m_isPopupOpen &&
                 !m_isCreatePopupOpen;
             std::optional<InlineGearHit> inlineGearHit;
+            bool                         inlineGearEditorOpened = false;
             if ( showInlineTimingEditors ) {
                 for ( const auto& el : m_currentSnapshot->timelineElements ) {
                     if ( !isNearInlineGearTime(el) ) continue;
@@ -632,15 +644,17 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     if ( inlineGearHit ) break;
                 }
             }
-            if ( inlineGearHit &&
+            const bool inlineGearCanOpenEditor =
+                Logic::EditorEngine::instance().getCurrentTool() ==
+                Logic::EditTool::Draw;
+            if ( inlineGearCanOpenEditor && inlineGearHit &&
                  ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
                 openInlineGearEditor(*inlineGearHit);
+                inlineGearEditorOpened = true;
             }
 
-            handleTimingCanvasInteraction(canvasPos,
-                                          size,
-                                          isHovered && !inlineGearHit,
-                                          hasTimingInteractionFocus);
+            handleTimingCanvasInteraction(
+                canvasPos, size, isHovered, hasTimingInteractionFocus);
             refreshTimelineInteractionDecoration(size);
             if ( editorSettings.timelineProfessionalMode ) {
                 renderProfessionalTimelineOverlay(canvasPos, size);
@@ -679,13 +693,15 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             buttonId.c_str(), ImVec2(iconSize, iconSize));
                         ::MMM::UI::FeedbackLastItem(
                             ImGui::GetID(buttonId.c_str()), gearClicked);
-                        if ( gearClicked ) {
+                        if ( inlineGearCanOpenEditor && gearClicked &&
+                             !inlineGearEditorOpened ) {
                             openInlineGearEditor(
                                 InlineGearHit{ entity,
                                                el.time,
                                                el.*(gear.value),
                                                gear.editType,
                                                gear.label });
+                            inlineGearEditorOpened = true;
                         }
 
                         const ImVec2 buttonMin = ImGui::GetItemRectMin();
@@ -1037,7 +1053,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     const bool professionalMode = Config::AppConfig::instance()
                                       .getEditorSettings()
                                       .timelineProfessionalMode;
-    float paddingX = 30.0f;
+    float      paddingX         = 30.0f;
 
     /// @brief Timeline marker 的绘制矩形参数。
     struct MarkerDrawRect {
@@ -1058,7 +1074,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);
             noteX                     = laneWidth * static_cast<float>(lane) +
-                    (laneWidth - noteW) * 0.5f;
+                                        (laneWidth - noteW) * 0.5f;
         }
 
         float noteH = noteW * 0.36f;
@@ -1082,9 +1098,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             cmd.vertexOffset    = 0;
             cmd.customTextureId = static_cast<uint32_t>(Logic::TextureID::Note);
             cmd.scissor         = vk::Rect2D{
-                        { 0, 0 },
-                        { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
-                          static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
+                { 0, 0 },
+                { static_cast<uint32_t>(std::max(1.0f, std::ceil(size.x))),
+                  static_cast<uint32_t>(std::max(1.0f, std::ceil(size.y))) }
             };
             m_currentSnapshot->glowCmds.push_back(cmd);
             hasDecoration = true;
@@ -1147,9 +1163,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
     for ( const auto& target : collectVisibleTimingTargets() ) {
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered = target.entity == m_hoveredTimingEntity;
-        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
-                             m_timingEraseTargetEntities.end();
+        const bool hovered  = target.entity == m_hoveredTimingEntity;
+        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
+                              m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;
