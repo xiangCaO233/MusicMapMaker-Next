@@ -1,3 +1,7 @@
+#ifndef IMGUI_DEFINE_MATH_OPERATORS
+#    define IMGUI_DEFINE_MATH_OPERATORS
+#endif
+
 #include "canvas/TimeFormatUtils.h"
 #include "canvas/TimelineCanvas.h"
 #include "config/AppConfig.h"
@@ -10,7 +14,9 @@
 #include "logic/session/context/SessionContext.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <imgui_internal.h>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -22,6 +28,121 @@ namespace
 {
 /// @brief 新建 Timing 行的高亮持续时间（秒）
 constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
+
+/// @brief 查询表格列当前是否有效显示。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 当前帧列有效显示时返回 true。
+bool isTableColumnEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsEnabled;
+}
+
+/// @brief 查询表格列的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @return 用户设置为显示时返回 true。
+bool isTableColumnUserEnabled(const ImGuiTable* table, int column)
+{
+    return table && column >= 0 && column < table->ColumnsCount &&
+           table->Columns[column].IsUserEnabled;
+}
+
+/// @brief 排队设置表格列下一帧的用户显隐状态。
+/// @param table ImGui 表格指针。
+/// @param column 列索引。
+/// @param enabled 是否显示。
+void queueTableColumnEnabled(ImGuiTable* table, int column, bool enabled)
+{
+    if ( !table || column < 0 || column >= table->ColumnsCount ) {
+        return;
+    }
+    table->Columns[column].IsUserEnabledNextFrame = enabled;
+}
+
+/// @brief 绘制 Timing 表头右键菜单。
+/// @warning UI 热路径：表格绘制时每帧调用，只处理 ImGui
+/// 当前表格状态与菜单样式。
+void renderTimingTableHeaderContextMenu()
+{
+    ImGuiTable* table = ImGui::GetCurrentTable();
+    if ( !table ) {
+        return;
+    }
+
+    ImGuiStyle&  style = ImGui::GetStyle();
+    const ImVec2 popupPadding(std::max(style.WindowPadding.x, 8.0f),
+                              std::max(style.WindowPadding.y, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupPadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                        ImVec2(std::max(style.ItemSpacing.x, 8.0f),
+                               std::max(style.ItemSpacing.y, 4.0f)));
+    const bool popupOpen = ImGui::TableBeginContextMenuPopup(table);
+    if ( !popupOpen ) {
+        ImGui::PopStyleVar(2);
+        return;
+    }
+
+    const int contextColumn =
+        table->ContextPopupColumn >= 0 &&
+                table->ContextPopupColumn < table->ColumnsCount
+            ? table->ContextPopupColumn
+            : -1;
+    if ( contextColumn >= 0 && isTableColumnEnabled(table, contextColumn) &&
+         ::MMM::UI::FeedbackMenuItem(
+             TR("ui.resource_table.size_column_fit").data()) ) {
+        ImGui::TableSetColumnWidthAutoSingle(table, contextColumn);
+    }
+
+    if ( ::MMM::UI::FeedbackMenuItem(
+             TR("ui.resource_table.size_all_default").data()) ) {
+        ImGui::TableSetColumnWidthAutoAll(table);
+    }
+
+    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.resource_table.reset").data()) ) {
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.reset_all").data()) ) {
+            ImGui::TableResetSettings(table);
+        }
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.reset_columns").data()) ) {
+            ImGui::TableSetColumnWidthAutoAll(table);
+        }
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 TR("ui.resource_table.show_all_columns").data()) ) {
+            for ( int column = 0; column < table->ColumnsCount; ++column ) {
+                queueTableColumnEnabled(table, column, true);
+            }
+        }
+        ::MMM::UI::FeedbackEndMenu();
+    }
+
+    ImGui::Separator();
+
+    const std::array<const char*, 5> columnLabels{
+        "序号", "时间戳 (秒)", "类型", "数值", "操作"
+    };
+    int enabledColumnCount = 0;
+    for ( int column = 0; column < table->ColumnsCount; ++column ) {
+        if ( isTableColumnUserEnabled(table, column) ) {
+            enabledColumnCount++;
+        }
+    }
+    for ( int column = 0; column < table->ColumnsCount &&
+                          column < static_cast<int>(columnLabels.size());
+          ++column ) {
+        const bool enabled   = isTableColumnUserEnabled(table, column);
+        const bool canToggle = !enabled || enabledColumnCount > 1;
+        if ( ::MMM::UI::FeedbackMenuItem(
+                 columnLabels[column], nullptr, enabled, canToggle) ) {
+            queueTableColumnEnabled(table, column, !enabled);
+        }
+    }
+
+    ImGui::EndPopup();
+    ImGui::PopStyleVar(2);
+}
 
 /// @brief 从交互元素中提取主 Timing 类型
 ::MMM::TimingEffect getElementEffect(
@@ -818,7 +939,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::TableSetupColumn("数值", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableSetupColumn(
                 "操作", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+            if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                table->DisableDefaultContextMenu = true;
+            }
             ImGui::TableHeadersRow();
+            renderTimingTableHeaderContextMenu();
 
             ImGuiListClipper clipper;
             clipper.Begin(static_cast<int>(elements.size()));
