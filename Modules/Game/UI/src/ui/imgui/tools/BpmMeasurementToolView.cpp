@@ -80,17 +80,28 @@ constexpr float BPM_MEASURE_WINDOW_TOP_SAFE_MARGIN = 56.0f;
 /// @brief 节拍器音效提前调度窗口，单位为秒。
 constexpr double BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS = 0.2;
 
-/// @brief 已越过拍点但仍允许立即补响的时间窗口，单位为秒。
-constexpr double BPM_METRONOME_PAST_TRIGGER_WINDOW = 0.05;
-
 /// @brief 单帧最多触发的节拍器音效数量，避免跳转后爆发播放。
 constexpr int BPM_METRONOME_MAX_TRIGGERED_PER_FRAME = 8;
+
+/// @brief BPM 工具全局时间滚动条最小高度，单位为像素。
+constexpr float BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT = 24.0f;
 
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
 {
     static std::mutex mutex;
     return mutex;
+}
+
+/// @brief 计算节拍器允许补响的时间窗口。
+/// @param beatLengthSeconds 当前拍长，单位为秒。
+/// @return 已越过拍点但仍允许立即补响的时间窗口，单位为秒。
+double metronomePastTriggerWindow(double beatLengthSeconds)
+{
+    if ( !std::isfinite(beatLengthSeconds) || beatLengthSeconds <= 0.0 ) {
+        return 0.05;
+    }
+    return std::clamp(beatLengthSeconds * 0.25, 0.035, 0.12);
 }
 
 /// @brief 生成音频资源在下拉框中的显示文本。
@@ -294,9 +305,9 @@ PlaybackTimelineState readPlaybackTimelineState()
     state.visualOffset = Config::AppConfig::instance()
                              .getVisualConfig()
                              .getEffectiveVisualOffset();
-    state.audioTime  = audioManager.getCurrentTime();
-    state.visualTime = state.audioTime + state.visualOffset;
-    state.totalTime  = audioManager.getTotalTime();
+    state.audioTime    = audioManager.getCurrentTime();
+    state.visualTime   = state.audioTime + state.visualOffset;
+    state.totalTime    = audioManager.getTotalTime();
     state.isPlaying =
         audioManager.getStatus() == Audio::PlaybackStatus::Playing;
 
@@ -1388,16 +1399,128 @@ void BpmMeasurementToolView::renderAnalysisPanel()
     followPlaybackIfNeeded();
 
     ImGui::Text("%s", TR("ui.tools.bpm_measure.waveform").data());
-    const float textH      = ImGui::GetTextLineHeightWithSpacing();
-    const float spacingY   = ImGui::GetStyle().ItemSpacing.y;
-    const float waveHeight = std::max(120.0f, (avail.y - textH * 2.0f) * 0.42f);
-    const float specHeight =
-        std::max(160.0f, avail.y - waveHeight - textH * 2.0f - spacingY * 2.0f);
+    const float textH    = ImGui::GetTextLineHeightWithSpacing();
+    const float spacingY = ImGui::GetStyle().ItemSpacing.y;
+    const float overviewHeight =
+        std::max(BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT, ImGui::GetFrameHeight());
+    const float contentHeight = std::max(
+        0.0f, avail.y - textH * 2.0f - overviewHeight - spacingY * 3.0f);
+    const float waveHeight = std::max(120.0f, contentHeight * 0.42f);
+    const float specHeight = std::max(160.0f, contentHeight - waveHeight);
 
     renderWaveformPlot(ImVec2(avail.x, waveHeight));
 
+    ImGui::Spacing();
+    renderOverviewTimelineScrollbar(ImVec2(avail.x, overviewHeight));
+    ImGui::Spacing();
+
     ImGui::Text("%s", TR("ui.tools.bpm_measure.spectrum").data());
     renderSpectrumImage(ImVec2(avail.x, specHeight));
+}
+
+/// @brief 绘制波形和频谱之间的全局时间滚动条。
+/// @param size 绘制区域尺寸。
+/// @warning UI 热路径：每帧执行；只做当前视野范围换算和鼠标拖动处理。
+void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
+{
+    const float  width  = std::max(1.0f, size.x);
+    const float  height = std::max(BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT, size.y);
+    const double canvasDuration = playbackCanvasDuration();
+
+    ImGui::InvisibleButton("##BpmMeasureOverviewTimeline",
+                           ImVec2(width, height));
+    const ImVec2 rectMin  = ImGui::GetItemRectMin();
+    const ImVec2 rectMax  = ImGui::GetItemRectMax();
+    ImDrawList*  drawList = ImGui::GetWindowDrawList();
+
+    const ImU32 bgColor     = ImGui::GetColorU32(ImGuiCol_FrameBg);
+    const ImU32 borderColor = ImGui::GetColorU32(ImGuiCol_Border);
+    const ImU32 fillColor   = ImGui::GetColorU32(ImGuiCol_SliderGrab, 0.68f);
+    const ImU32 fillBorderColor = ImGui::GetColorU32(ImGuiCol_SliderGrabActive);
+    const ImU32 cursorColor     = IM_COL32(255, 60, 60, 230);
+    drawList->AddRectFilled(rectMin, rectMax, bgColor, 4.0f);
+    drawList->AddRect(rectMin, rectMax, borderColor, 4.0f, 0, 1.0f);
+
+    if ( canvasDuration <= 0.0 ) {
+        m_isOverviewTimelineDragging = false;
+        return;
+    }
+
+    const double clampedCenter =
+        std::clamp<double>(m_viewCenter, 0.0, canvasDuration);
+    const double viewStart = std::max(0.0, clampedCenter - m_zoomSeconds);
+    const double viewEnd =
+        std::min(canvasDuration, clampedCenter + m_zoomSeconds);
+    auto timeToX = [&](double time) {
+        return rectMin.x +
+               static_cast<float>(std::clamp(time / canvasDuration, 0.0, 1.0) *
+                                  static_cast<double>(rectMax.x - rectMin.x));
+    };
+    auto xToTime = [&](float x) {
+        const double ratio = std::clamp<double>(
+            (x - rectMin.x) / std::max(1.0f, rectMax.x - rectMin.x), 0.0, 1.0);
+        return ratio * canvasDuration;
+    };
+
+    const float viewX1 = timeToX(viewStart);
+    const float viewX2 = timeToX(viewEnd);
+    drawList->AddRectFilled(
+        ImVec2(viewX1, rectMin.y + 3.0f),
+        ImVec2(std::max(viewX1 + 3.0f, viewX2), rectMax.y - 3.0f),
+        fillColor,
+        4.0f);
+    drawList->AddRect(ImVec2(viewX1, rectMin.y + 3.0f),
+                      ImVec2(std::max(viewX1 + 3.0f, viewX2), rectMax.y - 3.0f),
+                      fillBorderColor,
+                      4.0f,
+                      0,
+                      1.5f);
+
+    for ( const auto& segment : m_timingSegments ) {
+        if ( segment.timestampSeconds < 0.0 ||
+             segment.timestampSeconds > canvasDuration ) {
+            continue;
+        }
+        const float markerX = timeToX(segment.timestampSeconds);
+        drawList->AddLine(ImVec2(markerX, rectMin.y + 2.0f),
+                          ImVec2(markerX, rectMax.y - 2.0f),
+                          IM_COL32(255, 70, 70, 190),
+                          1.5f);
+    }
+
+    if ( isSelectedTrackLoadedForPlayback() ) {
+        const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+        if ( playbackState.visualTime >= 0.0 &&
+             playbackState.visualTime <= canvasDuration ) {
+            const float cursorX = timeToX(playbackState.visualTime);
+            drawList->AddLine(ImVec2(cursorX, rectMin.y),
+                              ImVec2(cursorX, rectMax.y),
+                              cursorColor,
+                              2.0f);
+        }
+    }
+
+    const bool active = ImGui::IsItemActive();
+    if ( active && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        m_isOverviewTimelineDragging = true;
+        m_isTimelinePanning          = false;
+        m_viewCenter                 = std::clamp<double>(
+            xToTime(ImGui::GetIO().MousePos.x), 0.0, canvasDuration);
+    } else if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        m_isOverviewTimelineDragging = false;
+    }
+
+    if ( ImGui::IsItemHovered() || m_isOverviewTimelineDragging ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+        const double hoverTime = std::clamp<double>(
+            xToTime(ImGui::GetIO().MousePos.x), 0.0, canvasDuration);
+        const std::string tooltip =
+            fmt::format("{} - {} / {}",
+                        Canvas::formatCanvasTime(viewStart),
+                        Canvas::formatCanvasTime(viewEnd),
+                        Canvas::formatCanvasTime(hoverTime));
+        ImGui::SetTooltip("%s", tooltip.c_str());
+    }
 }
 
 /// @brief 播放时让分析视图自动跟随播放指针。
@@ -1405,8 +1528,9 @@ void BpmMeasurementToolView::renderAnalysisPanel()
 /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
 void BpmMeasurementToolView::followPlaybackIfNeeded()
 {
-    if ( m_isTimelinePanning || m_isPlaybackCursorDragging ||
-         m_isBeatMarkerDragging || !isSelectedTrackLoadedForPlayback() ) {
+    if ( m_isTimelinePanning || m_isOverviewTimelineDragging ||
+         m_isPlaybackCursorDragging || m_isBeatMarkerDragging ||
+         !isSelectedTrackLoadedForPlayback() ) {
         return;
     }
 
@@ -1445,22 +1569,20 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         }
     }
 
-    const PlaybackTimelineState playbackState = readPlaybackTimelineState();
-    if ( !playbackState.isPlaying ) {
+    if ( audio.getStatus() != Audio::PlaybackStatus::Playing ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
 
     const double canvasDuration = playbackCanvasDuration();
     const double totalTime =
-        std::max(canvasDuration, std::max(m_duration, playbackState.totalTime));
+        std::max(canvasDuration, std::max(m_duration, audio.getTotalTime()));
     if ( canvasDuration <= 0.0 || totalTime <= 0.0 ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
 
-    const double audioTime =
-        std::clamp(playbackState.audioTime, 0.0, totalTime);
+    const double audioTime = std::clamp(audio.getCurrentTime(), 0.0, totalTime);
     const std::size_t activeSegmentIndex = findSegmentIndexForTime(audioTime);
     const double      activeFirstBeatTime =
         m_timingSegments[activeSegmentIndex].timestampSeconds;
@@ -1472,8 +1594,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         resetMetronomeScheduler(audioTime);
     }
@@ -1482,6 +1604,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         totalTime, audioTime + BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS);
 
     int          scheduledCount{ 0 };
+    const double pastTriggerWindow =
+        metronomePastTriggerWindow(m_metronomeScheduledBeatLength);
     const double scheduledSegmentEnd =
         m_metronomeScheduledSegmentIndex + 1 < m_timingSegments.size()
             ? m_timingSegments[m_metronomeScheduledSegmentIndex + 1]
@@ -1492,7 +1616,7 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             m_metronomeScheduledFirstBeatTime +
             static_cast<double>(m_nextMetronomeBeatIndex) *
                 m_metronomeScheduledBeatLength;
-        if ( beatAudioTime < audioTime - BPM_METRONOME_PAST_TRIGGER_WINDOW ) {
+        if ( beatAudioTime < audioTime - pastTriggerWindow ) {
             ++m_nextMetronomeBeatIndex;
             continue;
         }
@@ -1512,8 +1636,12 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             }
             const char* key =
                 beatMod == 0 ? BPM_METRONOME_HIGH_KEY : BPM_METRONOME_LOW_KEY;
-            audio.playSoundEffectScheduled(
-                key, beatAudioTime, BPM_METRONOME_VOLUME_FACTOR);
+            if ( beatAudioTime <= audioTime + 1e-4 ) {
+                audio.playSoundEffect(key, BPM_METRONOME_VOLUME_FACTOR);
+            } else {
+                audio.playSoundEffectScheduled(
+                    key, beatAudioTime, BPM_METRONOME_VOLUME_FACTOR);
+            }
         }
 
         ++m_nextMetronomeBeatIndex;
@@ -1536,7 +1664,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                const std::filesystem::path& fallback) {
+                                       const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             return it->second;
@@ -1593,8 +1721,9 @@ void BpmMeasurementToolView::resetMetronomeScheduler(double audioTime)
 
     const double firstBeatTime =
         m_timingSegments[segmentIndex].timestampSeconds;
-    m_nextMetronomeBeatIndex = static_cast<int64_t>(
-        std::ceil((audioTime - firstBeatTime) / beatLength - 1e-6));
+    const double pastTriggerWindow    = metronomePastTriggerWindow(beatLength);
+    m_nextMetronomeBeatIndex          = static_cast<int64_t>(std::ceil(
+        (audioTime - firstBeatTime - pastTriggerWindow) / beatLength - 1e-6));
     m_lastMetronomeAudioTime          = audioTime;
     m_metronomeScheduledFirstBeatTime = firstBeatTime;
     m_metronomeScheduledBeatLength    = beatLength;
@@ -1749,9 +1878,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -2827,9 +2956,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration      = sampleRate > 0.0
-                          ? static_cast<double>(track->num_frames()) / sampleRate
-                          : 0.0;
+    m_duration = sampleRate > 0.0
+                     ? static_cast<double>(track->num_frames()) / sampleRate
+                     : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
@@ -2854,7 +2983,7 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
-    m_analysisFuture                = appThreadPool->enqueue([this,
+    m_analysisFuture = appThreadPool->enqueue([this,
                                                stopToken,
                                                track    = std::move(track),
                                                duration = m_duration,
@@ -3189,7 +3318,7 @@ void BpmMeasurementToolView::analyzeTrack(
             for ( int i = binStart; i <= binEnd; ++i ) {
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude = std::max(maxMagnitude, magSq);
+                maxMagnitude       = std::max(maxMagnitude, magSq);
             }
             const double db =
                 maxMagnitude > 1e-9

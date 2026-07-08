@@ -192,6 +192,12 @@ private:
     /// @brief 绘制左侧波形和频谱面板。
     void renderAnalysisPanel();
 
+    /// @brief 绘制波形和频谱之间的全局时间滚动条。
+    /// @param size 绘制区域尺寸。
+    /// @warning UI 热路径约束如下。
+    /// 热路径：每帧执行；只处理当前视野范围和鼠标拖动，不访问文件系统。
+    void renderOverviewTimelineScrollbar(const ImVec2& size);
+
     /// @brief 播放时让分析视图自动跟随播放指针。
     /// @warning UI 热路径约束如下。
     /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
@@ -521,6 +527,9 @@ private:
 
     /// @brief 当前是否正在拖动分析视图时间轴。
     bool m_isTimelinePanning{ false };
+
+    /// @brief 当前是否正在拖动 BPM 工具全局时间滚动条。
+    bool m_isOverviewTimelineDragging{ false };
 
     /// @brief 当前是否正在拖动播放指针手柄。
     bool m_isPlaybackCursorDragging{ false };
