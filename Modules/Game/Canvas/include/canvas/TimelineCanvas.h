@@ -70,9 +70,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -403,7 +403,11 @@ private:
     /// @brief 当前时间线窗口最近一次更新时所在的 ImGui Dock 节点。
     ImGuiID m_lastDockId{ 0 };
     /// @brief 时间点批量编辑窗口绑定的谱面快照键。
-    std::string  m_tableBeatmapKey;
+    std::string m_tableBeatmapKey;
+    /// @brief 下一帧表格是否需要滚动到当前判定线时间附近。
+    bool m_tableScrollToCurrentTimePending{ false };
+    /// @brief 表格待滚动定位的目标时间，单位秒。
+    double       m_tableScrollTargetTime{ 0.0 };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

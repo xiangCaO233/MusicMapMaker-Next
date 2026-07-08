@@ -266,6 +266,54 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
     return elements;
 }
 
+/// @brief 读取当前活跃谱面的动画时间。
+/// @param fallbackTime 活跃会话不可用时使用的兜底时间。
+/// @return 当前活跃谱面的动画时间，单位秒。
+double getActiveSessionTimelineTime(double fallbackTime)
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) {
+        return fallbackTime;
+    }
+
+    const double timelineTime = session->getContext().animateTime;
+    return std::isfinite(timelineTime) ? timelineTime : fallbackTime;
+}
+
+/// @brief 查找最靠近目标时间的 Timing 行索引。
+/// @param elements 已按时间排序的 Timing 元素列表。
+/// @param targetTime 目标判定线时间，单位秒。
+/// @return 命中的行索引；无可用行时返回 -1。
+int findNearestTimelineElementIndex(
+    const std::vector<Logic::TimelineInteractiveElement>& elements,
+    double                                                targetTime)
+{
+    if ( elements.empty() || !std::isfinite(targetTime) ) {
+        return -1;
+    }
+
+    auto next =
+        std::lower_bound(elements.begin(),
+                         elements.end(),
+                         targetTime,
+                         [](const Logic::TimelineInteractiveElement& element,
+                            double time) { return element.time < time; });
+    if ( next == elements.begin() ) {
+        return 0;
+    }
+    if ( next == elements.end() ) {
+        return static_cast<int>(elements.size() - 1U);
+    }
+
+    const auto prev      = std::prev(next);
+    const auto prevDelta = std::abs(prev->time - targetTime);
+    const auto nextDelta = std::abs(next->time - targetTime);
+    return static_cast<int>((prevDelta <= nextDelta ? prev : next) -
+                            elements.begin());
+}
+
 /// @brief 将存储值转换成编辑器显示值
 /// @warning UI 热路径：表格绘制时逐行调用，只做常量时间数值归一化。
 double getDisplayValue(::MMM::TimingEffect, double rawValue,
@@ -736,6 +784,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     auto closeTableWindow = [this]() {
         m_isTableWindowOpen = false;
         m_tableBeatmapKey.clear();
+        m_tableScrollToCurrentTimePending = false;
         finishKeepSpeedBinding();
     };
 
@@ -798,6 +847,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     if ( opened ) {
         auto elements = collectTimelineElements();
         refreshKeepSpeedBinding(elements);
+        const double tableCurrentTime =
+            getActiveSessionTimelineTime(m_currentSnapshot->currentTime);
 
         // 顶层工具栏
         ImGui::AlignTextToFramePadding();
@@ -806,18 +857,17 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
             constexpr double DEFAULT_BPM_VALUE = 120.0;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
+                Logic::CmdCreateTimelineEvent{ tableCurrentTime,
                                                ::MMM::TimingEffect::BPM,
                                                DEFAULT_BPM_VALUE }));
-            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            m_lastCreatedTimingTime   = tableCurrentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::BPM;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
             if ( m_keepSpeedOnBpmChange ) {
-                createKeepSpeedScrollEvent(m_currentSnapshot->currentTime,
-                                           DEFAULT_BPM_VALUE);
-                beginKeepSpeedBinding(m_currentSnapshot->currentTime);
+                createKeepSpeedScrollEvent(tableCurrentTime, DEFAULT_BPM_VALUE);
+                beginKeepSpeedBinding(tableCurrentTime);
             }
         }
         ImGui::SameLine();
@@ -826,36 +876,44 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
-                                               ::MMM::TimingEffect::SCROLL,
-                                               1.0 }));
-            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    tableCurrentTime, ::MMM::TimingEffect::SCROLL, 1.0 }));
+            m_lastCreatedTimingTime   = tableCurrentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
-                                               ::MMM::TimingEffect::JUMP,
-                                               1000.0 }));
-            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    tableCurrentTime, ::MMM::TimingEffect::JUMP, 1000.0 }));
+            m_lastCreatedTimingTime   = tableCurrentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::JUMP;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ m_currentSnapshot->currentTime,
-                                               ::MMM::TimingEffect::HS,
-                                               1.0 }));
-            m_lastCreatedTimingTime   = m_currentSnapshot->currentTime;
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    tableCurrentTime, ::MMM::TimingEffect::HS, 1.0 }));
+            m_lastCreatedTimingTime   = tableCurrentTime;
             m_lastCreatedTimingEffect = ::MMM::TimingEffect::HS;
             m_lastCreatedTimingHighlightUntil =
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        }
+        ImGui::SameLine();
+        if ( elements.empty() ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ::MMM::UI::FeedbackButton("定位判定线") ) {
+            m_tableScrollToCurrentTimePending = true;
+            m_tableScrollTargetTime           = tableCurrentTime;
+        }
+        if ( elements.empty() ) {
+            ImGui::EndDisabled();
         }
 
         ImGui::Separator();
@@ -922,6 +980,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::Spacing();
 
         // 渲染表格
+        const float tableScrollbarSize =
+            std::max(ImGui::GetStyle().ScrollbarSize,
+                     std::floor(14.0f * std::max(dpiScale, 1.0f)));
+        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tableScrollbarSize);
         if ( ImGui::BeginTable(
                  "TimingPointsTableMain",
                  5,
@@ -945,8 +1007,20 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::TableHeadersRow();
             renderTimingTableHeaderContextMenu();
 
+            const int scrollTargetIndex =
+                m_tableScrollToCurrentTimePending
+                    ? findNearestTimelineElementIndex(elements,
+                                                      m_tableScrollTargetTime)
+                    : -1;
+            if ( m_tableScrollToCurrentTimePending && scrollTargetIndex < 0 ) {
+                m_tableScrollToCurrentTimePending = false;
+            }
+
             ImGuiListClipper clipper;
             clipper.Begin(static_cast<int>(elements.size()));
+            if ( scrollTargetIndex >= 0 ) {
+                clipper.IncludeItemByIndex(scrollTargetIndex);
+            }
             while ( clipper.Step() ) {
                 for ( int idx = clipper.DisplayStart; idx < clipper.DisplayEnd;
                       ++idx ) {
@@ -963,6 +1037,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         (std::abs(el.time - m_lastCreatedTimingTime) <= 1e-6);
 
                     ImGui::TableNextRow();
+                    if ( m_tableScrollToCurrentTimePending &&
+                         idx == scrollTargetIndex ) {
+                        ImGui::SetScrollHereY(0.5f);
+                        m_tableScrollToCurrentTimePending = false;
+                    }
                     if ( isKeepSpeedBindingRow ) {
                         ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
                                                IM_COL32(180, 225, 255, 115));
@@ -1079,6 +1158,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             ImGui::EndTable();
         }
+        ImGui::PopStyleVar();
     }
     ImGui::End();
 
