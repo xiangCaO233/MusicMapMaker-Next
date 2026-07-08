@@ -332,7 +332,7 @@ static void forEachNoteVisibilitySampleTime(const NoteComponent& note,
     }
 
     const auto& segments = cache->getSegments();
-    auto it = std::lower_bound(segments.begin(),
+    auto        it       = std::lower_bound(segments.begin(),
                                segments.end(),
                                minTime,
                                [](const ScrollSegment& segment, double value) {
@@ -358,7 +358,7 @@ static double calculateInterpolationPaddingAbsY(const ScrollCache* cache,
     }
 
     const double endTime = currentTime + interpolationSeconds;
-    auto it = std::upper_bound(segments.begin(),
+    auto         it      = std::upper_bound(segments.begin(),
                                segments.end(),
                                currentTime,
                                [](double value, const ScrollSegment& seg) {
@@ -711,7 +711,7 @@ void NoteRenderSystem::generateNoteHitboxes(
     float leftX, float topY, float bottomY, float singleTrackW,
     float renderScaleY, const Config::EditorConfig& config)
 {
-    // Pass 1: Body (Lower Priority)
+    // 第一遍：连接体，优先级较低。
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
@@ -798,7 +798,7 @@ void NoteRenderSystem::generateNoteHitboxes(
         }
     }
 
-    // Pass 2: Head/End/Arrow (Higher Priority)
+    // 第二遍：头部、尾部和箭头，优先级较高。
     for ( auto entity : noteEntities ) {
         const auto& transform = registry.get<const TransformComponent>(entity);
         const auto& note      = registry.get<const NoteComponent>(entity);
@@ -958,7 +958,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                             ctx.cache->getAbsY(note.m_timestamp),
                             note.m_timestamp)) *
                         renderScaleY;
-        float trackX  = leftX + note.m_trackIndex * singleTrackW;
+        float trackX = leftX + note.m_trackIndex * singleTrackW;
 
         // 应用自定义颜色与 Alpha。
         glm::vec4 curColorNote =
@@ -1085,7 +1085,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
 
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
     glowBatcher.setScissor(leftX, topY, rightX - leftX, bottomY - topY);
-    /// @brief glowEntities
+    /// @brief 发光实体继承可见实体时间升序。
     /// 继承可见实体时间升序，反向绘制即可获得原先的后到前覆盖顺序。
     for ( auto it = glowEntities.rbegin(); it != glowEntities.rend(); ++it ) {
         /// @brief 当前反向遍历到的发光音符实体。
@@ -1098,11 +1098,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float     visualH  = static_cast<float>(ctx.cache->getDisplayDelta(
-                                 note.m_timestamp + note.m_duration,
-                                 ctx.cache->getAbsY(note.m_timestamp),
-                                 note.m_timestamp)) *
-                             renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
         float     trackX   = leftX + note.m_trackIndex * singleTrackW;
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);
         int       glowIdx  = ic.hoveredSubIndex;
@@ -1448,9 +1448,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackNotes[i]->track * singleTrackW +
-                               (singleTrackW - ctx.noteW) * 0.5f;
-                    float y  = std::min(y0, y1) - ctx.noteH * 0.5f;
-                    float h  = std::abs(y0 - y1) + ctx.noteH;
+                              (singleTrackW - ctx.noteW) * 0.5f;
+                    float y = std::min(y0, y1) - ctx.noteH * 0.5f;
+                    float h = std::abs(y0 - y1) + ctx.noteH;
                     appendMask(x, y, ctx.noteW, h, uniqueCount);
                 }
             }
@@ -1489,9 +1489,9 @@ void NoteRenderSystem::renderOverlapMasks(
                     float y0 = timeToY(minTime);
                     float y1 = timeToY(maxTime);
                     float x  = leftX + trackPoints[i].track * singleTrackW +
-                               (singleTrackW - w) * 0.5f;
-                    float y  = std::min(y0, y1) - h0 * 0.5f;
-                    float h  = std::abs(y0 - y1) + h0;
+                              (singleTrackW - w) * 0.5f;
+                    float y = std::min(y0, y1) - h0 * 0.5f;
+                    float h = std::abs(y0 - y1) + h0;
                     appendMask(x, y, w, h, static_cast<int>(owners.size()));
                 }
             }
@@ -1530,7 +1530,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(openStart);
             float y1 = timeToY(openEnd);
             float x  = leftX + track * singleTrackW +
-                       (singleTrackW - verticalBodySize.x) * 0.5f;
+                      (singleTrackW - verticalBodySize.x) * 0.5f;
             appendMask(x,
                        std::min(y0, y1),
                        verticalBodySize.x,
@@ -1599,7 +1599,7 @@ void NoteRenderSystem::renderOverlapMasks(
             float y0 = timeToY(a.startTime);
             float y1 = timeToY(b.startTime);
             float x  = leftX + static_cast<float>(overlapMin) * singleTrackW +
-                       singleTrackW * 0.5f;
+                      singleTrackW * 0.5f;
             float w =
                 static_cast<float>(overlapMax - overlapMin) * singleTrackW;
             float y = std::min(y0, y1) - horizontalBodySize.y * 0.5f;
@@ -1919,7 +1919,7 @@ void NoteRenderSystem::renderBrushPreview(
                                          previewNode,
                                          previewArrow);
     } else {
-        // Fallback debug drawing
+        // 兜底调试绘制。
         float x = trackX + (singleTrackW - ctx.noteW) * 0.5f;
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(x,

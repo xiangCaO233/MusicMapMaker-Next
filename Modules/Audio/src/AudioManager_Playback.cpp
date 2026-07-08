@@ -109,7 +109,7 @@ double AudioManager::getActualPlaybackSpeed() const
 /// @param semitones 半音偏移量。
 void AudioManager::setPlaybackPitch(double semitones)
 {
-    // range check -24.0 to 24.0 is inside TimeStretcher
+    // -24.0 到 24.0 的范围检查由 TimeStretcher 内部负责。
     if ( m_stretcher ) {
         m_stretcher->set_pitch_semitones(semitones);
     }

@@ -128,7 +128,7 @@ public:
     /// @return 是否加载成功
     bool loadBGM(const std::string& filePath, const AudioTrackConfig& config);
 
-    /// @brief Unload the current BGM track and detach it from the mixer graph.
+    /// @brief 卸载当前 BGM 轨道，并从混音图中断开。
     void unloadBGM();
 
     /// @brief 开始/恢复播放

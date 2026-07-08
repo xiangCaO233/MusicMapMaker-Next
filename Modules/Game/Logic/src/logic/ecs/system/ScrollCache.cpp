@@ -86,8 +86,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
 
-    // 1. 完整版 osu! 逻辑：计算 Most Common BPM 作为基准，并获取
-    // SliderMultiplier
+    // 1. 完整版 osu! 逻辑：计算最常见 BPM 作为基准，并获取 SliderMultiplier。
     double refBPM           = 120.0;
     double sliderMultiplier = 1.0;
     if ( beatmap ) {
@@ -125,12 +124,12 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     double currentBPM = refBPM;
 
-    // osu! MultiplierControlPoint:
-    //   Multiplier = Velocity × ScrollSpeed × BaseBeatLength / BeatLength
-    //            = 1.0  × scrollMult  × (60000/refBPM) / (60000/bpm)
-    //            = scrollMult × bpm / refBPM
-    //   speed     = Multiplier × scrollLength / timeRange
-    //            = scrollMult × bpm/refBPM × BASE_SPEED × timelineZoom
+    // osu! MultiplierControlPoint 换算：
+    //   倍率 = Velocity × ScrollSpeed × BaseBeatLength / BeatLength。
+    //   推导 = 1.0 × scrollMult × (60000 / refBPM) / (60000 / bpm)。
+    //   推导 = scrollMult × bpm / refBPM。
+    //   速度 = 倍率 × scrollLength / timeRange。
+    //   推导 = scrollMult × bpm / refBPM × BASE_SPEED × timelineZoom。
     auto calcSpeed = [&](double bpm, double sm) {
         if ( isLinearMapping ) {
             return BASE_SPEED * timelineZoom;

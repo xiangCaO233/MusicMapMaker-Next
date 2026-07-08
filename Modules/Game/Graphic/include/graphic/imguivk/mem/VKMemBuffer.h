@@ -81,7 +81,7 @@ public:
                           vk::CommandPool cmdPool, vk::Queue queue,
                           const void* data, size_t size, size_t offset = 0);
 
-    // --- Getters ---
+    // --- 访问器 ---
     inline vk::Buffer getBuffer() const { return m_vkBuffer; }
     inline size_t     getSize() const { return m_bufSize; }
     inline void*      getMappedData() const { return m_mappedData; }

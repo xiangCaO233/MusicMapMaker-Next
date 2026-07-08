@@ -12,12 +12,12 @@ namespace MMM::Graphic
 {
 namespace
 {
-/// @brief Cocoa content view 上保存 macOS frame adapter 的关联键。
+/// @brief Cocoa 内容视图上保存 macOS 窗口框架适配器的关联键。
 char MACOS_WINDOW_ADAPTER_ASSOCIATION_KEY;
 
-/// @brief 从 Cocoa content view 读取 macOS frame adapter。
-/// @param view Cocoa content view。
-/// @return 关联的 adapter；未关联时返回 nullptr。
+/// @brief 从 Cocoa 内容视图读取 macOS 窗口框架适配器。
+/// @param view Cocoa 内容视图。
+/// @return 关联的适配器；未关联时返回 nullptr。
 MacOSWindowAdapter* adapterForContentView(NSView* view)
 {
     if ( !view ) {
@@ -31,9 +31,9 @@ MacOSWindowAdapter* adapterForContentView(NSView* view)
                         : nullptr;
 }
 
-/// @brief Cocoa content view 的 mouseDownCanMoveWindow 实现。
-/// @param self Cocoa content view。
-/// @param selector Objective-C selector。
+/// @brief Cocoa 内容视图的 mouseDownCanMoveWindow 实现。
+/// @param self Cocoa 内容视图。
+/// @param selector Objective-C 选择器。
 /// @return 当前鼠标按下命中拖动区域时返回 YES。
 BOOL contentViewMouseDownCanMoveWindow(id self, SEL selector)
 {

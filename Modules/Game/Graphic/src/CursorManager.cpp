@@ -10,15 +10,6 @@ CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                              vk::CommandPool commandPool, vk::Queue queue)
 {
     reloadSkinTextures(phyDevice, logicalDevice, commandPool, queue);
-
-    /// @brief 拖尾存活时间(秒)
-    // float m_trailLifeTime = 0.3f;
-    /// @bried 光标头纹理的大小
-    // float m_cursorSize = 48.0f;
-    /// @brief 拖尾纹理的基础大小
-    // float m_trailSize = 32.0f;
-    /// @brief 鼠标移动多远才生成一个新的拖尾点(防止密集堆叠)
-    // float m_emitDistance = 2.0f;
 }
 
 CursorManager::~CursorManager() {}

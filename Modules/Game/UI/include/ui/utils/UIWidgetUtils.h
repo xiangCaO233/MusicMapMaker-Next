@@ -24,6 +24,18 @@ bool FeedbackButton(const char* label, const ImVec2& size = ImVec2(0, 0));
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSmallButton(const char* label);
 
+/// @brief 绘制带统一音效反馈的 ImGui 颜色按钮。
+/// @param descId 颜色按钮描述文本和 ImGui ID。
+/// @param color 按钮显示颜色。
+/// @param flags 颜色按钮标志。
+/// @param size 按钮尺寸，语义与 ImGui::ColorButton 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧颜色按钮绘制路径调用，只做 ImGui 状态读写
+/// 和已预加载 SFX pool 的即时触发。
+bool FeedbackColorButton(const char* descId, const ImVec4& color,
+                         ImGuiColorEditFlags flags = 0,
+                         const ImVec2&       size  = ImVec2(0, 0));
+
 /// @brief 绘制带统一音效反馈和悬浮色过渡的 ImGui 菜单入口。
 /// @param label 菜单显示文本和 ImGui ID。
 /// @param enabled 是否允许打开菜单。
@@ -283,7 +295,7 @@ bool renderCollapsingHeader(const char* label, bool* p_state,
                             Clay_BoundingBox r, ImGuiTreeNodeFlags flags = 0);
 
 /// @brief 在 Clay 布局块中渲染带水平自动滚动文本的 CollapsingHeader。
-/// @param id ImGui ID。
+/// @param id ImGui 内部标识。
 /// @param text 显示文本。
 /// @param p_state 展开状态。
 /// @param r Clay 布局边界。

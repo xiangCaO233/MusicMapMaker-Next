@@ -41,7 +41,7 @@ void markNotePruneDirty(SessionContext& ctx)
 }
 }  // namespace
 
-// --- TimelineAction Implementation ---
+// --- TimelineAction 实现 ---
 
 void TimelineAction::execute(SessionContext& ctx)
 {
@@ -128,7 +128,7 @@ std::string TimelineAction::getName() const
     return typeStr;
 }
 
-// --- BatchTimelineAction Implementation ---
+// --- BatchTimelineAction 实现 ---
 
 void BatchTimelineAction::execute(SessionContext& ctx)
 {
@@ -191,7 +191,7 @@ std::string BatchTimelineAction::getName() const
                        TR("ui.status.info.entries"));
 }
 
-// --- NoteAction Implementation ---
+// --- NoteAction 实现 ---
 
 void NoteAction::execute(SessionContext& ctx)
 {
@@ -291,7 +291,7 @@ std::string NoteAction::getName() const
     return typeStr;
 }
 
-// --- BatchNoteAction Implementation ---
+// --- BatchNoteAction 实现 ---
 
 void BatchNoteAction::execute(SessionContext& ctx)
 {

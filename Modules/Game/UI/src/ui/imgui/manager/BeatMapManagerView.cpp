@@ -837,21 +837,22 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     bool showBMModal = !m_manageBeatmapPath.empty();
     if ( showBMModal ) {
         std::string windowTitle =
-            fmt::format("{} {}",
+            fmt::format("{} {}###BeatmapManageWindow",
                         TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
         if ( m_openManageModal ) {
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
-        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
-                                           &showBMModal,
-                                           ImGuiWindowFlags_NoCollapse,
-                                           { 420 * dpiScale, 0.0f }) ) {
-            if ( !showBMModal ) {
-                m_manageBeatmapPath = "";
-            }
-
+        const bool                     manageWindowOpened =
+            manageWindowScope.beginWindow(windowTitle.c_str(),
+                                          &showBMModal,
+                                          ImGuiWindowFlags_NoCollapse,
+                                          { 420 * dpiScale, 0.0f });
+        if ( !showBMModal ) {
+            m_manageBeatmapPath = "";
+        }
+        if ( manageWindowOpened ) {
             // --- 使用 Clay 重构对话框内容 ---
             CLayVBox    modalLayout;
             const auto& modalStyle     = ImGui::GetStyle();
@@ -955,9 +956,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::EndPopup();
                 }
             }
-
-            ImGui::End();
         }
+        ImGui::End();
     }
 
     if ( fileManagerFont ) ImGui::PopFont();

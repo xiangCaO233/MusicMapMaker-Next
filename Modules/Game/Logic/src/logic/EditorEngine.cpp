@@ -21,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <ice/thread/ThreadPool.hpp>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -927,14 +928,25 @@ void EditorEngine::openProject(
 {
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
-    if ( !creationOptions && std::filesystem::exists(projectPath) &&
-         std::filesystem::is_regular_file(projectPath) ) {
+    std::error_code       openPathError;
+    if ( !creationOptions &&
+         std::filesystem::exists(projectPath, openPathError) &&
+         !openPathError &&
+         std::filesystem::is_regular_file(projectPath, openPathError) &&
+         !openPathError ) {
         actualProjectPath = projectPath.parent_path();
     }
 
+    openPathError.clear();
+    const bool projectDirectoryExists =
+        std::filesystem::exists(actualProjectPath, openPathError) &&
+        !openPathError;
+    openPathError.clear();
+    const bool isProjectDirectory =
+        std::filesystem::is_directory(actualProjectPath, openPathError) &&
+        !openPathError;
     if ( !creationOptions &&
-         (!std::filesystem::exists(actualProjectPath) ||
-          !std::filesystem::is_directory(actualProjectPath)) ) {
+         (!projectDirectoryExists || !isProjectDirectory) ) {
         const std::string message =
             "路径不存在或不是文件夹：" + Config::pathToUtf8(actualProjectPath);
         XERROR(
@@ -1023,14 +1035,13 @@ void EditorEngine::finishOpenProject(
     if ( !openResult.m_targetBeatmapPath.empty() ) {
         XINFO("Auto loading beatmap: {}",
               Config::pathToUtf8(openResult.m_targetBeatmapPath));
-        try {
-            auto map = std::make_shared<BeatMap>(
-                BeatMap::loadFromFile(openResult.m_targetBeatmapPath));
+        auto loadedMap = BeatMap::loadFromFile(openResult.m_targetBeatmapPath);
+        if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
+            XERROR("Failed to auto load beatmap {}",
+                   Config::pathToUtf8(openResult.m_targetBeatmapPath));
+        } else {
+            auto map = std::make_shared<BeatMap>(std::move(loadedMap));
             createSession(map, map->m_baseMapMetadata.name);
-        } catch ( const std::exception& e ) {
-            XERROR("Failed to auto load beatmap {}: {}",
-                   Config::pathToUtf8(openResult.m_targetBeatmapPath),
-                   e.what());
         }
     } else {
         restoreProjectWorkspace(openResult.m_targetBeatmapPath);
@@ -2088,9 +2099,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
                     SessionUtils::resolveMainAudioPath(ctx, project);
                 bool targetAudioReady = false;
 
+                std::error_code audioPathError;
                 if ( !ctx.currentBeatmap->m_baseMapMetadata.main_audio_path
                           .empty() &&
-                     std::filesystem::exists(audioPath) ) {
+                     std::filesystem::exists(audioPath, audioPathError) &&
+                     !audioPathError ) {
                     AudioTrackConfig config;
                     if ( project ) {
                         for ( const auto& res : project->m_audioResources ) {

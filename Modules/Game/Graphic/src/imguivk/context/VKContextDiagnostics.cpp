@@ -80,8 +80,8 @@ std::string queueFlagsText(VkQueueFlags flags)
 }
 
 /// @brief 将 Vulkan present mode 格式化为短文本。
-/// @param mode Vulkan present mode。
-/// @return present mode 文本。
+/// @param mode Vulkan 呈现模式。
+/// @return 呈现模式文本。
 const char* presentModeName(VkPresentModeKHR mode)
 {
     switch ( mode ) {

@@ -21,11 +21,11 @@ inline void forEachCodepoint(std::string_view utf8Text, auto callback)
         unsigned char c         = static_cast<unsigned char>(*ptr);
 
         if ( c < 0x80 ) {
-            // ASCII (1 byte)
+            // ASCII，1 字节。
             codepoint = c;
             ptr++;
         } else if ( (c & 0xE0) == 0xC0 ) {
-            // 2 bytes
+            // 2 字节。
             if ( ptr + 1 >= end ) break;  // 安全检查
             codepoint = ((c & 0x1F) << 6) | (ptr[1] & 0x3F);
             ptr += 2;

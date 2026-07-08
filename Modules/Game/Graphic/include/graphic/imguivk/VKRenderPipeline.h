@@ -53,21 +53,27 @@ public:
         return m_graphicsPipelineLayout;
     }
 
+    /// @brief 当前管线和管线布局是否都已成功创建。
+    bool isValid() const
+    {
+        return m_graphicsPipeline && m_graphicsPipelineLayout;
+    }
+
 private:
     /// @brief 逻辑设备引用
     vk::Device& m_logicalDevice;
 
     /// @brief Vulkan 图形管线句柄
-    vk::Pipeline m_graphicsPipeline;
+    vk::Pipeline m_graphicsPipeline{ nullptr };
 
     /// @brief Vulkan Descriptor Sets布局句柄 (描述 Uniform等资源布局)
-    vk::DescriptorSetLayout m_descriptorSetLayout;
+    vk::DescriptorSetLayout m_descriptorSetLayout{ nullptr };
 
     /// @brief 是否拥有该布局 (是否需要在析构时销毁)
     bool m_ownDescriptorSetLayout{ true };
 
     /// @brief Vulkan 管线布局句柄 (描述 Push Constants 和 Descriptor Sets)
-    vk::PipelineLayout m_graphicsPipelineLayout;
+    vk::PipelineLayout m_graphicsPipelineLayout{ nullptr };
     friend class VKOffScreenRenderer;
 };
 

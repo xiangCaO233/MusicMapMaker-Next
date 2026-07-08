@@ -271,7 +271,7 @@ int main(int argc, char* argv[])
 
     // 检查 Vulkan 环境
     if ( !gameLoop.g_vkContext ) {
-        // 这里会打印 VKContext::get() 的 catch 块里填入的 e.what()
+        // 这里会打印 VKContext::get() 返回的初始化失败原因。
         XERROR("Start Failed, graphic enc initialize failed with:\n {}",
                gameLoop.g_vkContext.error());
         return 1;

@@ -397,7 +397,7 @@ double snapshotTimeAtAbsY(const Logic::RenderSnapshot& snapshot, double absY)
 /// @param scrolled 输出是否需要执行自动滚动。
 /// @return 自动滚动后的显示时间，单位秒。
 /// @warning UI 热路径：框选拖动时每帧调用；只做数值换算并读取快照。
-/// @param isAccelerated Whether Shift acceleration should be applied.
+/// @param isAccelerated 是否应用 Shift 加速。
 double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
                                    float viewportHeight, float mouseY,
                                    float deltaTime, bool isAccelerated,
@@ -447,7 +447,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled = std::isfinite(targetTime) &&
+    scrolled                = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -519,7 +519,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -634,6 +634,7 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
     m_lastBrushUpdateCommand.valid   = false;
     m_lastMoveUpdateCommand.valid    = false;
     m_lastEraseUpdateCommand.valid   = false;
+    m_rightEraseActive               = false;
 }
 
 void Basic2DCanvasInteraction::update(
@@ -864,13 +865,15 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                      ext == ".mmm" ) {
                     XINFO("Auto-loading beatmap from drop: {}",
                           Config::pathToUtf8(p.filename()));
-                    try {
+                    auto loadedMap = MMM::BeatMap::loadFromFile(p);
+                    if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
+                        XERROR("Failed to load dropped beatmap: {}",
+                               Config::pathToUtf8(p));
+                    } else {
                         auto loadedBeatmap = std::make_shared<MMM::BeatMap>(
-                            MMM::BeatMap::loadFromFile(p));
+                            std::move(loadedMap));
                         Logic::EditorEngine::instance().createSession(
                             loadedBeatmap, Config::pathToUtf8(p.filename()));
-                    } catch ( const std::exception& e ) {
-                        XERROR("Failed to load dropped beatmap: {}", e.what());
                     }
                 }
             }
@@ -922,7 +925,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
 /// @param currentSnapshot 当前渲染快照。
 /// @param targetWidth 画布宽度。
 /// @param targetHeight 画布高度。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：每帧执行并可能推送逻辑命令；禁止加入文件系统访问、完整排序或阻塞操作。
 void Basic2DCanvasInteraction::handleInteractions(
     const Logic::RenderSnapshot* currentSnapshot, float targetWidth,
@@ -933,7 +936,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -1003,8 +1006,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto drawPoint = [currentSnapshot](
+                        const auto& inspect   = currentSnapshot->hoverInspect;
+                        auto        drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {
@@ -1533,15 +1536,20 @@ void Basic2DCanvasInteraction::handleInteractions(
         resetContinuousEditCommands();
     }
 
+    const bool ctrlRightRemoveMarquee =
+        isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl;
+
     // --- 右键交互：画笔工具下为擦除 ---
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
         if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
-             isHovered ) {
+             isHovered && !ctrlRightRemoveMarquee ) {
             m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = true;
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
         }
-        if ( !currentSnapshot->isPlaying && ImGui::IsMouseDragging(1) ) {
+        if ( m_rightEraseActive && !currentSnapshot->isPlaying &&
+             ImGui::IsMouseDragging(1) ) {
             if ( shouldSendContinuousEditCommand(
                      m_lastEraseUpdateCommand,
                      { localMousePos.x, localMousePos.y },
@@ -1555,15 +1563,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                                            ImGui::GetIO().KeyShift }));
             }
         }
-        if ( ImGui::IsMouseReleased(1) ) {
+        if ( m_rightEraseActive && ImGui::IsMouseReleased(1) ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_lastEraseUpdateCommand.valid = false;
+            m_rightEraseActive             = false;
         }
     }
 
     // --- Ctrl+右键：移除框选框（全局可用） ---
-    if ( isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl ) {
+    if ( ctrlRightRemoveMarquee ) {
         Event::EventBus::instance().publish(
             Event::LogicCommandEvent(Logic::CmdRemoveMarqueeAt{
                 m_cameraId, localMousePos.x, localMousePos.y }));

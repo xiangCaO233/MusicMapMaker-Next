@@ -5,12 +5,7 @@
 namespace MMM::Graphic
 {
 
-// 默认用fifo(必定支持-等于垂直同步)
-// 下面这两个几乎必然造成撕裂
-// 松弛fifo模式
-// swapchainInfo.presentMode = vk::PresentModeKHR::eFifoRelaxed;
-// 立即模式 -无限制 (撕裂高手l)
-// swapchainInfo.presentMode = vk::PresentModeKHR::eImmediate;
+// 默认使用 FIFO，等价于垂直同步且 Vulkan 必定支持。
 /// @brief 主窗口呈现模式默认垂直同步 - 更改后需重建交换链
 vk::PresentModeKHR VKSwapchain::s_globalPresentMode{
     vk::PresentModeKHR::eFifo
@@ -192,8 +187,7 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
 
 /**
  * @brief 获取交换链创建信息
- * @return const vk::SwapchainCreateInfoKHR&
- * 包含图像格式、尺寸、呈现模式等信息
+ * @return 包含图像格式、尺寸、呈现模式等字段的交换链创建信息引用
  */
 const vk::SwapchainCreateInfoKHR& VKSwapchain::info() const
 {

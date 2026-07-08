@@ -247,7 +247,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     ImGuiViewport*       viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    // --- 0. IGFD Translations (Currently skipped due to library encapsulation) ---
+    // --- 0. IGFD 翻译，当前因库封装暂跳过 ---
 
     if ( auto* nativeWindow =
              sourceManager ? sourceManager->getNativeWindow() : nullptr ) {
@@ -326,7 +326,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 4. 全局弹出式对话框 ---
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
-        // --- Project Folder Picker ---
+        // --- 项目目录选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
@@ -359,7 +359,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Temporary Project Save Folder Picker ---
+        // --- 临时项目保存目录选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
@@ -393,7 +393,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Save As File Picker ---
+        // --- 另存为文件选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker") ) {
@@ -425,7 +425,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Pack File Picker ---
+        // --- 打包文件选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
@@ -462,7 +462,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Audio Import Picker ---
+        // --- 音频导入选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker") ) {
@@ -490,7 +490,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Ascii Font Picker ---
+        // --- ASCII 字体选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
@@ -514,7 +514,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
         }
 
-        // --- Cjk Font Picker ---
+        // --- CJK 字体选择器 ---
         {
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {

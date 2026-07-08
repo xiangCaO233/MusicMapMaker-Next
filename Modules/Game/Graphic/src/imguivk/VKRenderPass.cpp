@@ -88,22 +88,6 @@ VKRenderPass::VKRenderPass(vk::Device& logicalDevice, VKSwapchain& swapchain,
 
     renderPassCreateInfo.setDependencies(dependencies);
 
-    // vulkan 存在一个隐含的 initsubpass,
-    // 还是需要手动指定这个initsubpass和创建的subpass的依赖关系
-    // vk::SubpassDependency subpassDependency;
-    // subpassDependency
-    //     // 先执行 VK_SUBPASS_EXTERNAL subpass
-    //     .setSrcSubpass(VK_SUBPASS_EXTERNAL)
-    //     // 后执行 指定上面设置的setSubpasses 的[索引]
-    //     .setDstSubpass(0)
-    //     // 对subpass的访问权限设置 - 给setDstSubpass的subpass写权限
-    //     .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-    //     // 设置指定subpass执行完后的使用场景 - 输出颜色附件
-    //     .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
-    //     .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-
-    // renderPassCreateInfo.setDependencies(subpassDependency);
-
     // 2:创建renderpass
     auto result         = logicalDevice.createRenderPass(renderPassCreateInfo);
     m_graphicRenderPass = result.value;

@@ -19,14 +19,13 @@ namespace
 constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
     L"MMMRestoreMaximizedAfterMinimize";
 
-/// @brief Private message used to apply maximized restore after Win32 finishes
-/// its own minimized-to-restored transition.
+/// @brief Win32 完成最小化到恢复态切换后用于应用最大化恢复的私有消息。
 constexpr UINT APPLY_MAXIMIZED_RESTORE_MESSAGE = WM_APP + 0x0312;
 
-/// @brief Private message used to clear the short-lived Alt+Tab restore guard.
+/// @brief 用于清理短生命周期 Alt+Tab 恢复保护的私有消息。
 constexpr UINT CLEAR_RESTORE_IGNORE_MESSAGE = WM_APP + 0x0313;
 
-/// @brief Win32 WINDOWPLACEMENT flag that asks minimized restore to maximize.
+/// @brief 要求 Win32 最小化恢复时回到最大化状态的 WINDOWPLACEMENT 标志。
 constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
 
 /// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。

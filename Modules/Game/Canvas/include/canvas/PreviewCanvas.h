@@ -161,7 +161,7 @@ private:
     ///@brief 图集 UV 缓存
     std::unordered_map<uint32_t, glm::vec4> m_atlasUVs;
 
-    // --- Vulkan devices ---
+    // --- Vulkan 设备 ---
     vk::PhysicalDevice m_physicalDevice{ nullptr };
     vk::Device         m_logicalDevice{ nullptr };
     vk::CommandPool    m_cmdPool{ nullptr };

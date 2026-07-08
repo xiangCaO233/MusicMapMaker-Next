@@ -5,6 +5,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <cstring>
 #include <mutex>
 
 namespace MMM::Graphic
@@ -37,19 +38,25 @@ VKTexture::VKTexture(const std::filesystem::path& filePath,
 
     if ( !pixels ) {
         XCRITICAL("Failed to load texture file: {}", utf8Path);
-        throw std::runtime_error("failed to load texture image!");
+        m_device = nullptr;
+        return;
     }
 
     // 调用共通逻辑
-    initFromPixels(pixels,
-                   static_cast<uint32_t>(texWidth),
-                   static_cast<uint32_t>(texHeight),
-                   physicalDevice,
-                   commandPool,
-                   queue,
-                   VKTexturePixelFormat::Rgba8);
+    const bool initialized = initFromPixels(pixels,
+                                            static_cast<uint32_t>(texWidth),
+                                            static_cast<uint32_t>(texHeight),
+                                            physicalDevice,
+                                            commandPool,
+                                            queue,
+                                            VKTexturePixelFormat::Rgba8);
 
     stbi_image_free(pixels);
+    if ( !initialized ) {
+        releaseResources();
+        XERROR("Failed to create texture resources for file: {}", utf8Path);
+        return;
+    }
     XDEBUG("Texture loaded from file: {}", utf8Path);
 }
 
@@ -61,8 +68,19 @@ VKTexture::VKTexture(const unsigned char* pixels, uint32_t width,
     : m_device(device)
 {
     // 直接调用共通逻辑
-    initFromPixels(
-        pixels, width, height, physicalDevice, commandPool, queue, pixelFormat);
+    if ( !initFromPixels(pixels,
+                         width,
+                         height,
+                         physicalDevice,
+                         commandPool,
+                         queue,
+                         pixelFormat) ) {
+        releaseResources();
+        XERROR("Failed to create texture from memory buffer [{}x{}]",
+               width,
+               height);
+        return;
+    }
     XDEBUG("Texture created from memory buffer [{}x{}]", width, height);
 }
 
@@ -77,6 +95,7 @@ VKTexture::VKTexture(VKTexture&& other) noexcept
     , m_nativePool(other.m_nativePool)
     , m_width(other.m_width)
     , m_height(other.m_height)
+    , m_valid(other.m_valid)
 {
     other.m_device        = nullptr;
     other.m_image         = nullptr;
@@ -85,6 +104,7 @@ VKTexture::VKTexture(VKTexture&& other) noexcept
     other.m_sampler       = nullptr;
     other.m_descriptorSet = nullptr;
     other.m_nativePool    = nullptr;
+    other.m_valid         = false;
 }
 
 VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
@@ -101,6 +121,7 @@ VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
         m_nativePool    = other.m_nativePool;
         m_width         = other.m_width;
         m_height        = other.m_height;
+        m_valid         = other.m_valid;
 
         other.m_device        = nullptr;
         other.m_image         = nullptr;
@@ -109,6 +130,7 @@ VKTexture& VKTexture::operator=(VKTexture&& other) noexcept
         other.m_sampler       = nullptr;
         other.m_descriptorSet = nullptr;
         other.m_nativePool    = nullptr;
+        other.m_valid         = false;
     }
     return *this;
 }
@@ -141,10 +163,10 @@ void VKTexture::releaseResources()
         }
     }
 
-    m_device.destroySampler(m_sampler);
-    m_device.destroyImageView(m_imageView);
-    m_device.destroyImage(m_image);
-    m_device.freeMemory(m_memory);
+    if ( m_sampler ) m_device.destroySampler(m_sampler);
+    if ( m_imageView ) m_device.destroyImageView(m_imageView);
+    if ( m_image ) m_device.destroyImage(m_image);
+    if ( m_memory ) m_device.freeMemory(m_memory);
     m_sampler   = nullptr;
     m_imageView = nullptr;
     m_image     = nullptr;
@@ -152,14 +174,20 @@ void VKTexture::releaseResources()
     m_device    = nullptr;
     m_width     = 0;
     m_height    = 0;
+    m_valid     = false;
 }
 
 // 【共通核心逻辑实现】
-void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
+bool VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
                                uint32_t height, vk::PhysicalDevice& physDevice,
                                vk::CommandPool pool, vk::Queue queue,
                                VKTexturePixelFormat pixelFormat)
 {
+    if ( !pixels || width == 0 || height == 0 ) {
+        XERROR("Invalid texture pixel input [{}x{}]", width, height);
+        return false;
+    }
+
     m_width  = width;
     m_height = height;
 
@@ -178,12 +206,16 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
 
     vk::MemoryRequirements memReqs =
         m_device.getBufferMemoryRequirements(stagingBuffer);
-    vk::MemoryAllocateInfo allocInfo(
-        memReqs.size,
+    auto stagingMemoryType =
         findMemoryType(physDevice,
                        memReqs.memoryTypeBits,
                        vk::MemoryPropertyFlagBits::eHostVisible |
-                           vk::MemoryPropertyFlagBits::eHostCoherent));
+                           vk::MemoryPropertyFlagBits::eHostCoherent);
+    if ( !stagingMemoryType ) {
+        m_device.destroyBuffer(stagingBuffer);
+        return false;
+    }
+    vk::MemoryAllocateInfo allocInfo(memReqs.size, *stagingMemoryType);
 
     vk::DeviceMemory stagingMemory = m_device.allocateMemory(allocInfo).value;
     (void)m_device.bindBufferMemory(stagingBuffer, stagingMemory, 0);
@@ -208,24 +240,39 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
     m_image = m_device.createImage(imageInfo).value;
     memReqs = m_device.getImageMemoryRequirements(m_image);
 
-    vk::MemoryAllocateInfo imgAllocInfo(
-        memReqs.size,
+    auto imageMemoryType =
         findMemoryType(physDevice,
                        memReqs.memoryTypeBits,
-                       vk::MemoryPropertyFlagBits::eDeviceLocal));
+                       vk::MemoryPropertyFlagBits::eDeviceLocal);
+    if ( !imageMemoryType ) {
+        m_device.destroyBuffer(stagingBuffer);
+        m_device.freeMemory(stagingMemory);
+        m_device.destroyImage(m_image);
+        m_image = nullptr;
+        return false;
+    }
+    vk::MemoryAllocateInfo imgAllocInfo(memReqs.size, *imageMemoryType);
     m_memory = m_device.allocateMemory(imgAllocInfo).value;
     (void)m_device.bindImageMemory(m_image, m_memory, 0);
 
     // 3. 数据拷贝 (Undefined -> Dst -> ShaderRead)
-    transitionImageLayout(pool,
-                          queue,
-                          vk::ImageLayout::eUndefined,
-                          vk::ImageLayout::eTransferDstOptimal);
+    if ( !transitionImageLayout(pool,
+                                queue,
+                                vk::ImageLayout::eUndefined,
+                                vk::ImageLayout::eTransferDstOptimal) ) {
+        m_device.destroyBuffer(stagingBuffer);
+        m_device.freeMemory(stagingMemory);
+        return false;
+    }
     copyBufferToImage(pool, queue, stagingBuffer, m_width, m_height);
-    transitionImageLayout(pool,
-                          queue,
-                          vk::ImageLayout::eTransferDstOptimal,
-                          vk::ImageLayout::eShaderReadOnlyOptimal);
+    if ( !transitionImageLayout(pool,
+                                queue,
+                                vk::ImageLayout::eTransferDstOptimal,
+                                vk::ImageLayout::eShaderReadOnlyOptimal) ) {
+        m_device.destroyBuffer(stagingBuffer);
+        m_device.freeMemory(stagingMemory);
+        return false;
+    }
 
     // 清理临时资源
     m_device.destroyBuffer(stagingBuffer);
@@ -272,10 +319,15 @@ void VKTexture::initFromPixels(const unsigned char* pixels, uint32_t width,
                                       vk::BorderColor::eIntOpaqueBlack,
                                       VK_FALSE);
     m_sampler = m_device.createSampler(samplerInfo).value;
+    m_valid   = static_cast<bool>(m_image) && static_cast<bool>(m_imageView) &&
+              static_cast<bool>(m_sampler);
+    return m_valid;
 }
 
 ImTextureID VKTexture::getImTextureID()
 {
+    if ( !isValid() ) return 0;
+
     {
         std::shared_lock descriptorLock(m_descriptorMutex);
         if ( m_descriptorSet ) {
@@ -308,6 +360,8 @@ vk::DescriptorSet VKTexture::getDescriptorSet() const
 vk::DescriptorSet VKTexture::getNativeDescriptorSet(
     vk::DescriptorPool pool, vk::DescriptorSetLayout layout)
 {
+    if ( !isValid() ) return nullptr;
+
     VkDescriptorSetLayout lHandle = (VkDescriptorSetLayout)layout;
 
     {
@@ -353,9 +407,9 @@ vk::DescriptorSet VKTexture::getNativeDescriptorSet(
     return newSet;
 }
 
-uint32_t VKTexture::findMemoryType(vk::PhysicalDevice&     physDevice,
-                                   uint32_t                typeFilter,
-                                   vk::MemoryPropertyFlags properties)
+std::optional<uint32_t> VKTexture::findMemoryType(
+    vk::PhysicalDevice& physDevice, uint32_t typeFilter,
+    vk::MemoryPropertyFlags properties)
 {
     vk::PhysicalDeviceMemoryProperties memProperties =
         physDevice.getMemoryProperties();
@@ -366,10 +420,11 @@ uint32_t VKTexture::findMemoryType(vk::PhysicalDevice&     physDevice,
             return i;
         }
     }
-    throw std::runtime_error("failed to find suitable memory type!");
+    XERROR("Failed to find suitable Vulkan memory type");
+    return std::nullopt;
 }
 
-void VKTexture::transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
+bool VKTexture::transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
                                       vk::ImageLayout oldLayout,
                                       vk::ImageLayout newLayout)
 {
@@ -404,7 +459,11 @@ void VKTexture::transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
         sourceStage      = vk::PipelineStageFlagBits::eTransfer;
         destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
     } else {
-        throw std::invalid_argument("unsupported layout transition!");
+        XERROR("Unsupported texture layout transition: {} -> {}",
+               vk::to_string(oldLayout),
+               vk::to_string(newLayout));
+        m_device.freeCommandBuffers(pool, cmd);
+        return false;
     }
 
     cmd.pipelineBarrier(
@@ -415,6 +474,7 @@ void VKTexture::transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
     (void)queue.submit(submitInfo, nullptr);
     (void)queue.waitIdle();
     m_device.freeCommandBuffers(pool, cmd);
+    return true;
 }
 
 void VKTexture::copyBufferToImage(vk::CommandPool pool, vk::Queue queue,

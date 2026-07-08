@@ -284,8 +284,8 @@ inline void from_json(const nlohmann::json& j, VisualConfig& c)
     c.previewConfig     = j.value("previewConfig", PreviewAreaConfig());
     c.trackBoxLineWidth = j.value("trackBoxLineWidth", 1.5f);
     c.judgeline_pos     = j.value("judgeline_pos", 0.85f);
-    c.noteScaleX        = j.value("noteScaleX", 1.0f);
-    c.noteScaleY        = j.value("noteScaleY", 1.0f);
+    c.noteScaleX        = j.value("noteScaleX", VisualConfig{}.noteScaleX);
+    c.noteScaleY        = j.value("noteScaleY", VisualConfig{}.noteScaleY);
     c.noteFillMode      = j.value("noteFillMode", BackgroundFillMode::Stretch);
     c.visualOffset      = j.value("visualOffset", 0.0f);
     c.waveformVisualOffset      = j.value("waveformVisualOffset", 0.0f);

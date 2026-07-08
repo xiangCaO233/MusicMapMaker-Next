@@ -12,7 +12,7 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
-// MinGW commctrl.h depends on base Win32 types from windows.h.
+// MinGW commctrl.h 依赖 windows.h 中的基础 Win32 类型。
 #    include <commctrl.h>
 #else
 #    include <csignal>
@@ -406,7 +406,12 @@ void StartupProgressDialog::writeProgress(int percent, const std::string& text)
 #else
     if ( !m_pipe ) return;
 
-    if ( std::fprintf(m_pipe, "# %s\n%d\n", safeText.c_str(), percent) < 0 ) {
+    const std::string percentText = std::to_string(percent);
+    if ( std::fputs("# ", m_pipe) == EOF ||
+         std::fputs(safeText.c_str(), m_pipe) == EOF ||
+         std::fputc('\n', m_pipe) == EOF ||
+         std::fputs(percentText.c_str(), m_pipe) == EOF ||
+         std::fputc('\n', m_pipe) == EOF ) {
         pclose(m_pipe);
         m_pipe = nullptr;
         return;

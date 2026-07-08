@@ -1,4 +1,3 @@
-// event/ui/UISubViewToggleEvent.h
 #pragma once
 #include "event/ui/UIEvent.h"
 

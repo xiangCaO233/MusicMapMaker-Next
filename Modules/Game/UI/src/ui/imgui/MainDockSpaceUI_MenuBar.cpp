@@ -159,9 +159,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         if ( menuFont ) ImGui::PopFont();
 
         // 5. 拖拽区域 (Springs)
-        // Area 1: MenusEnd -> TitleX
-        // Area 2: TitleX -> TitleEnd (标题文字本身)
-        // Area 3: TitleEnd -> ButtonsStartX (包含 FPS 信息)
+        // 区域 1：菜单尾部 -> 标题起点。
+        // 区域 2：标题起点 -> 标题尾部（标题文字本身）。
+        // 区域 3：标题尾部 -> 按钮起点（包含 FPS 信息）。
 
         std::vector<Event::DragArea> currentAreas;
         currentAreas.push_back(

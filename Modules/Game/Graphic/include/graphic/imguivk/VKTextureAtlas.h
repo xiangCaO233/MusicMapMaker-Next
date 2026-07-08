@@ -43,7 +43,7 @@ public:
 
     /**
      * @brief 获取指定 ID 纹理在图集中的 UV 矩形
-     * @return glm::vec4 (u, v, width_ratio, height_ratio)
+     * @return UV 坐标和宽高比例，格式为 (u, v, width_ratio, height_ratio)
      */
     glm::vec4 getUV(uint32_t id) const;
 

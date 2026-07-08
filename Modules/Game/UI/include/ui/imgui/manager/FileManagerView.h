@@ -132,36 +132,36 @@ private:
         Cut
     };
 
-    /// @brief Runtime metrics for the empty-project placeholder layout.
+    /// @brief 空项目占位布局的运行时尺寸缓存。
     struct EmptyProjectViewMetrics {
-        /// @brief Outer padding around the placeholder content.
+        /// @brief 占位内容外侧留白。
         float padding{ 0.0f };
 
-        /// @brief Vertical gap between placeholder rows.
+        /// @brief 占位行之间的纵向间距。
         float gap{ 0.0f };
 
-        /// @brief Height reserved for the initial hint row.
+        /// @brief 初始提示行保留高度。
         float hintRowHeight{ 0.0f };
 
-        /// @brief Height reserved for the open-directory button row.
+        /// @brief 打开目录按钮行保留高度。
         float buttonRowHeight{ 0.0f };
 
-        /// @brief Height reserved for the recent-project section title.
+        /// @brief 最近项目区标题保留高度。
         float recentTitleHeight{ 0.0f };
 
-        /// @brief Height reserved for each recent-project item.
+        /// @brief 每个最近项目条目保留高度。
         float recentItemHeight{ 0.0f };
 
-        /// @brief Top padding before the recent-project list.
+        /// @brief 最近项目列表前的顶部留白。
         float recentTopPadding{ 0.0f };
 
-        /// @brief Height used by the actual open-directory button.
+        /// @brief 实际打开目录按钮高度。
         float buttonHeight{ 0.0f };
     };
 
-    /// @brief Calculate font-aware placeholder layout metrics.
-    /// @param dpiScale Current window content scale.
-    /// @return Metrics sized for the current ImGui font and DPI scale.
+    /// @brief 计算感知字体尺寸的占位布局指标。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @return 适配当前 ImGui 字体和 DPI 缩放的尺寸指标。
     [[nodiscard]] EmptyProjectViewMetrics getEmptyProjectViewMetrics(
         float dpiScale) const;
 

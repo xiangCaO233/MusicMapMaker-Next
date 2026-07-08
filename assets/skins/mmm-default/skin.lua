@@ -121,6 +121,7 @@ local Skin = {
 	fonts = {
 		ascii = f_ascii_reg,
 		cjk = f_cjk_reg,
+		icons = f_ascii_reg,
 	},
 
 	-- 可选 ASCII 字体列表

@@ -2,7 +2,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <cmath>
 #include <filesystem>
-#include <iostream>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -11,10 +10,10 @@ namespace fs = std::filesystem;
  * @brief 谱面导入导出一致性测试工具
  *
  * 流程:
- * 1. Load <input> -> map1
- * 2. Save map1 -> <output>
- * 3. Load <output> -> map2
- * 4. Compare map1 and map2
+ * 1. 读取 <input> 为 map1
+ * 2. 将 map1 写出到 <output>
+ * 3. 读取 <output> 为 map2
+ * 4. 对比 map1 与 map2
  */
 
 bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
@@ -81,8 +80,7 @@ bool compareBeatMaps(const MMM::BeatMap& m1, const MMM::BeatMap& m2)
 int main(int argc, char* argv[])
 {
     if ( argc < 3 ) {
-        std::cerr << "Usage: MapConsistencyTest <input_file> <output_file>"
-                  << std::endl;
+        XERROR("Usage: MapConsistencyTest <input_file> <output_file>");
         return 1;
     }
 

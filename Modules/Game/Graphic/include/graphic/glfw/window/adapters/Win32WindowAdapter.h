@@ -92,9 +92,8 @@ private:
     /// @param hWnd Win32 窗口句柄。
     void restoreMaximizedAfterMinimize(HWND hWnd);
 
-    /// @brief Apply the queued maximized restore after Win32 has finished its
-    /// normal restore message.
-    /// @param hWnd Win32 window handle.
+    /// @brief 在 Win32 完成普通恢复消息后，应用排队的最大化恢复。
+    /// @param hWnd Win32 窗口句柄。
     void applyQueuedMaximizedRestore(HWND hWnd);
 
     /**
@@ -134,15 +133,13 @@ private:
     /// @brief 当前是否正在通过 ShowWindow 应用最大化恢复，避免同步消息递归。
     bool m_applyingMaximizedRestore{ false };
 
-    /// @brief Whether a deferred maximized restore message is already queued.
+    /// @brief 是否已经排队延迟最大化恢复消息。
     bool m_maximizedRestorePosted{ false };
 
-    /// @brief Whether the next SC_RESTORE should be ignored after Alt+Tab
-    /// restores a minimized maximized window.
+    /// @brief Alt+Tab 恢复最小化的最大化窗口后，是否忽略下一次 SC_RESTORE。
     bool m_ignoreNextRestoreSysCommand{ false };
 
-    /// @brief Whether a message is queued to clear the temporary SC_RESTORE
-    /// ignore flag.
+    /// @brief 是否已经排队清理临时 SC_RESTORE 忽略标记的消息。
     bool m_restoreIgnoreClearPosted{ false };
 };
 

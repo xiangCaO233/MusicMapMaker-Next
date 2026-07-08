@@ -255,7 +255,7 @@ SnapResult getSnapResult(
         if ( nearestStepTime > nextBpmTime ) nearestStepTime = nextBpmTime;
 
         double snapAbsY = cache->getAbsY(nearestStepTime);
-        float snapY = judgmentLineY -
+        float  snapY    = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
 
         if ( config.settings.scrollSnap ||
@@ -263,7 +263,7 @@ SnapResult getSnapResult(
             result.isSnapped   = true;
             result.snappedTime = nearestStepTime;
 
-            // Calculate fraction
+            // 计算当前分拍位置。
             int64_t stepInt = static_cast<int64_t>(
                 std::round((nearestStepTime - bpmTime) / stepDuration));
             int beatIndex = stepInt % beatDivisor;
@@ -289,7 +289,7 @@ SnapResult getSnapResult(
 void syncHitIndex(SessionContext& ctx)
 {
     ensureHitEvents(ctx);
-    auto it = std::lower_bound(ctx.hitEvents.begin(),
+    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });

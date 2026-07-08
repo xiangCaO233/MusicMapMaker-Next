@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <system_error>
 #include <utility>
 
 namespace MMM::Canvas
@@ -65,7 +66,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -248,8 +249,12 @@ std::vector<std::string> PreviewCanvas::getShaderSources(
     if ( auto it = canvas_config.canvas_shader_modules.find(shader_name);
          it != canvas_config.canvas_shader_modules.end() ) {
 
-        auto path = it->second;
-        if ( !std::filesystem::exists(path) ) return {};
+        auto            path = it->second;
+        std::error_code shaderPathError;
+        if ( !std::filesystem::exists(path, shaderPathError) ||
+             shaderPathError ) {
+            return {};
+        }
 
         std::string vs = Graphic::VKShader::readFile(
             Config::pathToUtf8(path / "VertexShader.spv"));
@@ -258,7 +263,9 @@ std::vector<std::string> PreviewCanvas::getShaderSources(
 
         std::vector<std::string> result;
         auto                     gsPath = path / "GeometryShader.spv";
-        if ( std::filesystem::exists(gsPath) ) {
+        std::error_code          geometryShaderPathError;
+        if ( std::filesystem::exists(gsPath, geometryShaderPathError) &&
+             !geometryShaderPathError ) {
             result = { vs,
                        Graphic::VKShader::readFile(Config::pathToUtf8(gsPath)),
                        fs };

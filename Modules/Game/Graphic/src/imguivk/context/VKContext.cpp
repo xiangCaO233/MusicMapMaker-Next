@@ -14,6 +14,7 @@
 #include "log/colorful-log.h"
 
 #include <fmt/format.h>
+#include <utility>
 
 namespace MMM::Graphic
 {
@@ -59,18 +60,22 @@ struct DeviceSelection final {
  *
  * 如果实例尚未创建，将尝试进行初始化。
  *
- * @return std::expected<std::reference_wrapper<VKContext>, std::string>
- *         成功返回上下文引用，失败返回错误信息字符串
+ * @return 成功时返回上下文引用，失败时返回错误信息字符串
  */
 std::expected<std::reference_wrapper<VKContext>, std::string> VKContext::get()
 {
-    try {
-        // 尝试初始化VK上下文
-        static VKContext vkContext;
-        return vkContext;
-    } catch ( const std::runtime_error& e ) {
-        // 初始化失败返回what错误
-        return std::unexpected<std::string>(e.what());
+    // 尝试初始化 VK 上下文。
+    static VKContext vkContext;
+    if ( vkContext.hasInitializationError() ) {
+        return std::unexpected<std::string>(vkContext.m_initializationError);
+    }
+    return vkContext;
+}
+
+void VKContext::failInitialization(std::string message)
+{
+    if ( m_initializationError.empty() ) {
+        m_initializationError = std::move(message);
     }
 }
 
@@ -78,13 +83,16 @@ VKContext::VKContext()
 {
     // 初始化GLFW
     initGLFW();
+    if ( hasInitializationError() ) return;
     // 注册GLFW的VK扩展
     registerGLFWExtensions();
+    if ( hasInitializationError() ) return;
 
     // Debug模式启用VK调试工具
     if ( is_debug() ) {
         enableVKDebugExt();
         enableVKValidateLayer();
+        if ( hasInitializationError() ) return;
     }
 
     // 初始化vk应用程序信息
@@ -101,7 +109,8 @@ VKContext::VKContext()
                                          vk::to_string(instanceResult.result)));
         logStartupDiagnostics("vkCreateInstance failed.");
         releaseGLFW();
-        throw std::runtime_error("Fatal: Failed to create Vulkan instance.");
+        failInitialization("Fatal: Failed to create Vulkan instance.");
+        return;
     }
     m_vkInstance = instanceResult.value;
     addStartupDiagnostic("Vulkan instance created successfully.");
@@ -126,8 +135,9 @@ VKContext::VKContext()
             logStartupDiagnostics("vkCreateDebugUtilsMessengerEXT failed.");
             release();
             releaseGLFW();
-            throw std::runtime_error(
+            failInitialization(
                 "Fatal: Failed to create Vulkan debug messenger.");
+            return;
         }
         m_vkDebugMessenger = debugMessengerResult.value;
         addStartupDiagnostic("Vulkan debug messenger created successfully.");
@@ -296,8 +306,9 @@ void VKContext::imguiAutoSelect()
                         vk::to_string(devicesResult.result),
                         devicesResult.value.size()));
         logStartupDiagnostics("No usable Vulkan physical device.");
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: No usable Vulkan physical device was found.");
+        return;
     }
 
     DeviceSelection fallbackSelection{};
@@ -360,9 +371,10 @@ void VKContext::imguiAutoSelect()
     if ( !selected.isValid() ) {
         logStartupDiagnostics(
             "No Vulkan physical device has graphics and present queues.");
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: No Vulkan physical device has graphics and present "
             "queues.");
+        return;
     }
 
     m_vkPhysicalDevice   = selected.device;
@@ -389,8 +401,11 @@ void VKContext::imguiAutoSelect()
  * @param w 窗口宽度
  * @param h 窗口高度
  */
-void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
+bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 {
+    if ( hasInitializationError() ) {
+        return false;
+    }
     m_nativeWindow_ptr = native_window_ptr;
     addStartupDiagnostic(
         fmt::format("Initializing Vulkan window resources: {}x{}", w, h));
@@ -398,9 +413,10 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
     if ( !native_window_ptr || !native_window_ptr->getWindowHandle() ) {
         addStartupDiagnostic("Native window handle is null.");
         logStartupDiagnostics("Native window handle is null.");
-        throw std::runtime_error(
+        failInitialization(
             "Failed to initialize Vulkan window resources: "
             "native window is null.");
+        return false;
     }
 
     // 初始化vk表面句柄
@@ -414,7 +430,8 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
                         vk::to_string(static_cast<vk::Result>(surfaceResult))));
         collectLastGLFWErrorDiagnostic("glfwCreateWindowSurface failed.");
         logStartupDiagnostics("glfwCreateWindowSurface failed.");
-        throw std::runtime_error("Failed to create window surface!");
+        failInitialization("Failed to create window surface!");
+        return false;
     }
 
     // 转换为 vk::SurfaceKHR
@@ -425,6 +442,9 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 使用imgui自动选择物理设备和队列族
     imguiAutoSelect();
+    if ( hasInitializationError() ) {
+        return false;
+    }
     collectSelectedSurfaceDiagnostics(w, h);
 
     // 在创建交换链之前，根据配置预设全局呈现模式，避免启动后再次重建
@@ -433,6 +453,9 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
 
     // 初始化逻辑设备
     initLogicDevice();
+    if ( hasInitializationError() ) {
+        return false;
+    }
 
     // 创建交换链
     m_swapchain = std::make_unique<VKSwapchain>(m_vkPhysicalDevice,
@@ -465,6 +488,7 @@ void VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h)
     // 初始化 ImGui
     imguiVulkanInit(native_window_ptr->getWindowHandle());
     applyTheme();
+    return true;
 }
 
 /**
@@ -616,7 +640,7 @@ void VKContext::drawCenterNotification()
         ImDrawList* drawList = ImGui::GetWindowDrawList();
         ImVec2      minPos   = ImGui::GetWindowPos();
         ImVec2      maxPos   = ImVec2(minPos.x + ImGui::GetWindowWidth(),
-                                      minPos.y + ImGui::GetWindowHeight());
+                               minPos.y + ImGui::GetWindowHeight());
 
         // 绘制毛玻璃/半透明背板 (深色磨砂)
         ImU32 bgColor = ImGui::ColorConvertFloat4ToU32(

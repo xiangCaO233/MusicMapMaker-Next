@@ -110,7 +110,8 @@ void SideBarUI::update(UIManager* sourceManager)
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
 
-    float sidebarBaseW = std::stof(skinCfg.getLayoutConfig("side_bar.width"));
+    float sidebarBaseW = parseSidebarLayoutFloat(
+        skinCfg.getLayoutConfig("side_bar.width"), 32.0f);
     float sidebarWidth = GetSidebarWidth(dpiScale);
     float btnSize      = std::floor(sidebarBaseW * dpiScale);
     bool  showManagerLabels =

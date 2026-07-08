@@ -15,7 +15,7 @@
 namespace MMM
 {
 
-// Trim from start (in-place)
+// 原地移除字符串前导空白。
 static inline void ltrim(std::string& s)
 {
     s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
@@ -23,7 +23,7 @@ static inline void ltrim(std::string& s)
             }));
 }
 
-// Trim from end (in-place)
+// 原地移除字符串尾随空白。
 static inline void rtrim(std::string& s)
 {
     s.erase(std::find_if(s.rbegin(),
@@ -33,7 +33,7 @@ static inline void rtrim(std::string& s)
             s.end());
 }
 
-// Trim from both ends (in-place)
+// 原地移除字符串两端空白。
 static inline void trim(std::string& s)
 {
     ltrim(s);
@@ -66,7 +66,8 @@ public:
     // 格式化行
     void parse_line(const std::string& line)
     {
-        if ( line[0] == '[' && line.back() == ']' ) {
+        if ( line.empty() ) return;
+        if ( line.front() == '[' && line.back() == ']' ) {
             current_chapter = line.substr(1, line.size() - 2);
         } else {
             //[Events]	谱面显示设定，故事板事件	逗号分隔的列表
@@ -75,8 +76,7 @@ public:
 
             if ( current_chapter == "Events" ) {
                 auto start_5_string = line.substr(0, 5);
-                auto start_1_char   = line.at(0);
-                // XINFO(start_5_string);
+                auto start_1_char   = line.front();
                 // 并非一定五个参数
                 if ( start_5_string == "Video" ) {
                     map_properties[current_chapter]["background video"] = line;
@@ -86,25 +86,9 @@ public:
                                    std::to_string(current_breaks_index++)] =
                                       line;
                 } else if ( start_1_char == '0' ) {
-                    // general bg
+                    // 通用背景事件。
                     map_properties[current_chapter]["background"] = line;
                 }
-                // int commas = std::count(line.begin(), line.end(), ',');
-                // byd被wiki骗了，不能用逗号数区分事件类型
-                // switch (commas) {
-                //   case 4: {
-                //     map_properties[current_chapter]["background"] = line;
-                //     break;
-                //   }
-                //   case 2: {
-                //     map_properties[current_chapter]
-                //                   [std::to_string(current_breaks_index++)] =
-                //                   line;
-                //     break;
-                //   }
-                //   default:
-                //     map_properties[current_chapter]["unknown"] = line;
-                // }
             } else if ( current_chapter == "TimingPoints" ) {
                 map_properties[current_chapter]
                               [std::to_string(current_timing_index++)] = line;
@@ -122,8 +106,6 @@ public:
                     // 去掉尾随空格
                     value.erase(value.find_last_not_of(" \t\n\r\f\v") + 1);
 
-                    // XWARN("key:" + key);
-                    // XWARN("value:" + value);
                     map_properties[current_chapter][key] = value;
                 }
             }
@@ -204,29 +186,17 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
             // 直接结束
             read_buffer[0] == ';' ||
             // 注释
-            (read_buffer[0] == '/' && read_buffer[1] == '/') )
+            (read_buffer.size() >= 2 && read_buffer[0] == '/' &&
+             read_buffer[1] == '/') )
             continue;
         osureader.parse_line(read_buffer);
     }
 
-    // XINFO("parse result:");
-    // for (const auto& [chapter, properties_map] :
-    // osureader.map_properties) {
-    //   if (chapter == "HitObjects" || chapter == "TimingPoints") {
-    //     continue;
-    //   }
-    //   XINFO("-----------chapter:" + chapter + "---------------");
-    //   for (const auto& [key, value] : properties_map) {
-    //     XINFO("key:" + key + "-->value:" + value);
-    //   }
-    // }
-
-    // 读取osu谱面文件内容
-    // general
+    // 读取 osu 谱面的 General 段。
     // 主音频文件相对路径
     auto main_audio_rpath =
         osureader.get_value("General", "AudioFilename", std::string(""));
-    // trim路径空格
+    // 去掉路径两端空白。
     trim(main_audio_rpath);
     osumeta_props["General::AudioFilename"] = main_audio_rpath;
 
@@ -271,8 +241,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     osumeta_props["General::SamplesMatchPlaybackRate"] = osureader.get_value(
         "General", "SamplesMatchPlaybackRate", std::string("false"));
 
-    // editor
-    // Bookmarks	逗号分隔的 Integer（整型）数组
+    // 读取 osu 谱面的 Editor 段。
+    // Bookmarks 是逗号分隔的 Integer（整型）数组。
     // 书签（蓝线）的位置（毫秒）
     osumeta_props["Editor::Bookmarks"] =
         osureader.get_value("Editor", "Bookmarks", std::string(""));
@@ -285,7 +255,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     osumeta_props["Editor::TimelineZoom"] =
         osureader.get_value("Editor", "TimelineZoom", std::string("0.0"));
 
-    // metadata
+    // 读取 osu 谱面的 Metadata 段。
     osumeta_props["Metadata::Title"] =
         osureader.get_value("Metadata", "Title", std::string(""));
     basemeta.title = osumeta_props["Metadata::Title"];
@@ -310,7 +280,6 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         osureader.get_value("Metadata", "Version", std::string("[mmm]"));
     basemeta.version = osumeta_props["Metadata::Version"];
 
-    // XWARN("载入osu谱面Version:" + Version);
     osumeta_props["Metadata::Source"] =
         osureader.get_value("Metadata", "Source", std::string(""));
     // ***Tags	空格分隔的 String（字符串）数组	易于搜索的标签
@@ -321,15 +290,15 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     osumeta_props["Metadata::BeatmapSetID"] =
         osureader.get_value("Metadata", "BeatmapSetID", std::string("-1"));
 
-    // difficulty
+    // 读取 osu 谱面的 Difficulty 段。
     osumeta_props["Difficulty::HPDrainRate"] =
         osureader.get_value("Difficulty", "HPDrainRate", std::string("5.0"));
     auto raw_circle_size =
         osureader.get_value("Difficulty", "CircleSize", std::string("4.0"));
     trim(raw_circle_size);
     osumeta_props["Difficulty::CircleSize"] = raw_circle_size;
-    basemeta.track_count =
-        static_cast<int32_t>(std::round(std::stod(raw_circle_size)));
+    basemeta.track_count                    = static_cast<int32_t>(
+        std::round(MMM::Internal::safeStod(raw_circle_size, 4.0)));
 
     osumeta_props["Difficulty::OverallDifficulty"] = osureader.get_value(
         "Difficulty", "OverallDifficulty", std::string("8.0"));
@@ -344,10 +313,9 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     basemeta.name =
         fmt::format("[o!m] [{}k] {}", raw_circle_size, basemeta.version);
 
-    // colour--- 不写
+    // Colour 段暂不写入项目元数据。
 
-    // event
-    // bg
+    // 读取 Events 段中的背景配置。
     auto background_des = osureader.get_value(
         "Events", "background", std::string("0,0,\"bg.png\",0,0"));
     osumeta_props["Events::background"] = background_des;
@@ -357,7 +325,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     while ( std::getline(biss, token, ',') ) {
         background_paras.emplace_back(token);
     }
-    if ( background_paras.at(0) == "0" ) {
+    if ( MMM::Internal::safeAt(background_paras, 0) == "0" ) {
         // 是图片
         basemeta.cover_type = CoverType::IMAGE;
     } else {
@@ -365,8 +333,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         basemeta.cover_type = CoverType::VIDEO;
     }
     basemeta.video_starttime =
-        static_cast<int32_t>(std::stod(background_paras.at(1)));
-    auto cover_path = background_paras.at(2);
+        MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 1));
+    auto cover_path = MMM::Internal::safeAt(background_paras, 2, "\"bg.png\"");
     trim(cover_path);
     // 去引号
     if ( cover_path.starts_with('\"') ) {
@@ -387,7 +355,7 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         basemeta.bgyoffset = 0;
     }
 
-    // breaks
+    // 读取 Events 段中的休息段。
     auto& break_events = osumeta_props["Events::breaks"];
     for ( int i = 0; i < osureader.current_breaks_index; i++ ) {
         auto breaks_des = osureader.get_value(
@@ -412,8 +380,8 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
         }
 
         // 创建物件
-        if ( static_cast<int32_t>(MMM::Internal::safeStod(note_paras.at(3))) ==
-             128 ) {
+        if ( static_cast<int32_t>(MMM::Internal::safeStod(
+                 MMM::Internal::safeAt(note_paras, 3))) == 128 ) {
             Hold hold;
             hold.from_osu_description(note_paras, basemeta.track_count);
             // 更新谱面时长

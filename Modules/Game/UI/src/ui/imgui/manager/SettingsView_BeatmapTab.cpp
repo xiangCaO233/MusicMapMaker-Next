@@ -12,7 +12,13 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <initializer_list>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -124,6 +130,52 @@ void SettingsView::drawBeatmapSettings()
         return Config::pathToUtf8(path);
     };
 
+    auto collectProjectResources =
+        [&](std::initializer_list<std::string_view> allowedExtensions) {
+            std::vector<std::string> resources;
+            if ( !project ) return resources;
+
+            std::error_code                               filesystemError;
+            std::filesystem::recursive_directory_iterator it(
+                project->m_projectRoot,
+                std::filesystem::directory_options::skip_permission_denied,
+                filesystemError);
+            std::filesystem::recursive_directory_iterator end;
+            if ( filesystemError ) return resources;
+
+            for ( ; it != end; it.increment(filesystemError) ) {
+                if ( filesystemError ) {
+                    filesystemError.clear();
+                    continue;
+                }
+                if ( !it->is_regular_file(filesystemError) ||
+                     filesystemError ) {
+                    filesystemError.clear();
+                    continue;
+                }
+
+                auto ext = Config::pathToUtf8(it->path().extension());
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) {
+                    return static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(c)));
+                });
+                const bool accepted = std::any_of(
+                    allowedExtensions.begin(),
+                    allowedExtensions.end(),
+                    [&](std::string_view allowed) { return ext == allowed; });
+                if ( !accepted ) continue;
+
+                auto relativePath = std::filesystem::relative(
+                    it->path(), project->m_projectRoot, filesystemError);
+                if ( filesystemError ) {
+                    filesystemError.clear();
+                    continue;
+                }
+                resources.push_back(Config::pathToUtf8(relativePath));
+            }
+            return resources;
+        };
+
     bool isImd = false;
     if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
         auto ext =
@@ -146,7 +198,7 @@ void SettingsView::drawBeatmapSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -494,9 +546,12 @@ void SettingsView::drawBeatmapSettings()
                     displayProjectPath(meta.cover_path);
                 std::string coverPreview = currentCoverPath;
 
-                bool coverExists =
-                    project && std::filesystem::exists(
-                                   resolveProjectPath(meta.cover_path));
+                std::error_code coverExistsError;
+                bool            coverExists =
+                    project &&
+                    std::filesystem::exists(resolveProjectPath(meta.cover_path),
+                                            coverExistsError) &&
+                    !coverExistsError;
                 bool coverPushed = false;
                 if ( !coverExists && !currentCoverPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -512,29 +567,9 @@ void SettingsView::drawBeatmapSettings()
                         coverPushed = false;
                     }
                     if ( project ) {
-                        std::vector<std::string> images;
-                        try {
-                            for ( const auto& entry :
-                                  std::filesystem::recursive_directory_iterator(
-                                      project->m_projectRoot) ) {
-                                if ( entry.is_regular_file() ) {
-                                    auto ext = Config::pathToUtf8(
-                                        entry.path().extension());
-                                    std::transform(ext.begin(),
-                                                   ext.end(),
-                                                   ext.begin(),
-                                                   ::tolower);
-                                    if ( ext == ".png" || ext == ".jpg" ||
-                                         ext == ".jpeg" || ext == ".bmp" ) {
-                                        images.push_back(Config::pathToUtf8(
-                                            std::filesystem::relative(
-                                                entry.path(),
-                                                project->m_projectRoot)));
-                                    }
-                                }
-                            }
-                        } catch ( ... ) {
-                        }
+                        std::vector<std::string> images =
+                            collectProjectResources(
+                                { ".png", ".jpg", ".jpeg", ".bmp" });
 
                         for ( const auto& imgPath : images ) {
                             bool isSelected = (currentCoverPath == imgPath);
@@ -563,9 +598,12 @@ void SettingsView::drawBeatmapSettings()
                     displayProjectPath(meta.main_cover_path);
                 std::string bgPreview = currentBgPath;
 
-                bool bgExists =
-                    project && std::filesystem::exists(
-                                   resolveProjectPath(meta.main_cover_path));
+                std::error_code bgExistsError;
+                bool            bgExists = project &&
+                                std::filesystem::exists(
+                                    resolveProjectPath(meta.main_cover_path),
+                                    bgExistsError) &&
+                                !bgExistsError;
                 bool bgPushed = false;
                 if ( !bgExists && !currentBgPath.empty() ) {
                     ImGui::PushStyleColor(
@@ -581,30 +619,13 @@ void SettingsView::drawBeatmapSettings()
                         bgPushed = false;
                     }
                     if ( project ) {
-                        std::vector<std::string> images;
-                        try {
-                            for ( const auto& entry :
-                                  std::filesystem::recursive_directory_iterator(
-                                      project->m_projectRoot) ) {
-                                if ( entry.is_regular_file() ) {
-                                    auto ext = Config::pathToUtf8(
-                                        entry.path().extension());
-                                    std::transform(ext.begin(),
-                                                   ext.end(),
-                                                   ext.begin(),
-                                                   ::tolower);
-                                    if ( ext == ".png" || ext == ".jpg" ||
-                                         ext == ".jpeg" || ext == ".bmp" ||
-                                         ext == ".mp4" || ext == ".avi" ) {
-                                        images.push_back(Config::pathToUtf8(
-                                            std::filesystem::relative(
-                                                entry.path(),
-                                                project->m_projectRoot)));
-                                    }
-                                }
-                            }
-                        } catch ( ... ) {
-                        }
+                        std::vector<std::string> images =
+                            collectProjectResources({ ".png",
+                                                      ".jpg",
+                                                      ".jpeg",
+                                                      ".bmp",
+                                                      ".mp4",
+                                                      ".avi" });
 
                         for ( const auto& imgPath : images ) {
                             bool isSelected = (currentBgPath == imgPath);

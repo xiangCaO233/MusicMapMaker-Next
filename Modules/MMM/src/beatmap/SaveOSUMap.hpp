@@ -176,8 +176,8 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
 
     ofs << "[TimingPoints]\n";
     for ( auto& timing_const : beatMap.m_timings ) {
-        Timing timing =
-            timing_const;  // create a mutable copy to call to_osu_description()
+        // 创建可变副本以调用 to_osu_description()。
+        Timing timing = timing_const;
 
         if ( timing.m_timingEffect == TimingEffect::JUMP ||
              timing.m_timingEffect == TimingEffect::HS ) {

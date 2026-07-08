@@ -3,6 +3,7 @@
 #include "imgui_impl_vulkan.h"
 #include <filesystem>
 #include <imgui.h>
+#include <optional>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -68,18 +69,22 @@ public:
 
     uint32_t width() const { return m_width; }
     uint32_t height() const { return m_height; }
+    /// @brief 判断纹理是否成功创建了 Vulkan 资源。
+    /// @return 纹理图像、视图和采样器均可用时返回 true。
+    bool isValid() const { return m_valid; }
 
 private:
     /// @brief 从内存像素初始化 Vulkan 纹理资源。
-    void initFromPixels(const unsigned char* pixels, uint32_t width,
+    bool initFromPixels(const unsigned char* pixels, uint32_t width,
                         uint32_t height, vk::PhysicalDevice& physDevice,
                         vk::CommandPool pool, vk::Queue queue,
                         VKTexturePixelFormat pixelFormat);
 
-    uint32_t findMemoryType(vk::PhysicalDevice& physDevice, uint32_t typeFilter,
-                            vk::MemoryPropertyFlags properties);
+    std::optional<uint32_t> findMemoryType(vk::PhysicalDevice&     physDevice,
+                                           uint32_t                typeFilter,
+                                           vk::MemoryPropertyFlags properties);
 
-    void transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
+    bool transitionImageLayout(vk::CommandPool pool, vk::Queue queue,
                                vk::ImageLayout oldLayout,
                                vk::ImageLayout newLayout);
 
@@ -108,6 +113,7 @@ private:
 
     uint32_t m_width{ 0 };
     uint32_t m_height{ 0 };
+    bool     m_valid{ false };
 };
 
 }  // namespace MMM::Graphic

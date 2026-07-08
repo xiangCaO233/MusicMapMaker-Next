@@ -136,7 +136,7 @@ void MainMenuView::renderAboutPopup()
 
     if ( popupOpen ) {
 
-        // --- Logo & Title ---
+        // --- 标志和标题 ---
         ImFont* titleFont = Config::SkinManager::instance().getFont("menu");
         if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
@@ -153,7 +153,7 @@ void MainMenuView::renderAboutPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Info Table ---
+        // --- 信息表格 ---
         if ( ImGui::BeginTable("AboutTable",
                                2,
                                ImGuiTableFlags_SizingFixedFit |
@@ -195,7 +195,7 @@ void MainMenuView::renderAboutPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Special Thanks ---
+        // --- 特别鸣谢 ---
         /// @brief 特别鸣谢标题文本。
         const char* thanksTitle = TR("ui.help.special_thanks").data();
         /// @brief 特别鸣谢用户名称文本。
@@ -258,8 +258,7 @@ void MainMenuView::renderAboutPopup()
         /// 凌云归故里用户主页地址，点击姓名链接时交给系统默认浏览器打开。
         constexpr const char* lingyunProfileUrl =
             "https://space.bilibili.com/311780529";
-        /// @brief x1u1u0233
-        /// 用户主页地址，点击姓名链接时交给系统默认浏览器打开。
+        /// @brief 修罗用户主页地址，点击姓名链接时交给系统默认浏览器打开。
         constexpr const char* xiuluoProfileUrl =
             "https://space.bilibili.com/106515370";
         /// @brief 鸣谢名单中姓名之间使用的本地化分隔符。
@@ -407,7 +406,7 @@ void MainMenuView::renderAboutPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
-        // --- Copyright ---
+        // --- 版权信息 ---
         ImGui::PushStyleColor(ImGuiCol_Text,
                               ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         const char* copyright =
@@ -419,7 +418,7 @@ void MainMenuView::renderAboutPopup()
 
         ImGui::Spacing();
 
-        // --- Button ---
+        // --- 操作按钮 ---
         float btnWidth = 140.0f * dpiScale;
         ImGui::SetCursorPosX((ImGui::GetWindowWidth() - btnWidth) * 0.5f);
         if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
@@ -521,7 +520,7 @@ void MainMenuView::renderUpdatePopup()
         info = m_updateChecker->getInfo();
 
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
-            // --- Info Table ---
+            // --- 信息表格 ---
             if ( ImGui::BeginTable("UpdateInfoTable",
                                    2,
                                    ImGuiTableFlags_SizingFixedFit |
@@ -579,7 +578,7 @@ void MainMenuView::renderUpdatePopup()
                 ImGui::EndTable();
             }
 
-            // --- Changelog ---
+            // --- 更新日志 ---
             if ( !info.changelog.empty() ) {
                 ImGui::Spacing();
                 ImGui::Separator();
@@ -600,7 +599,7 @@ void MainMenuView::renderUpdatePopup()
             ImGui::Separator();
             ImGui::Spacing();
 
-            // --- Buttons ---
+            // --- 操作按钮 ---
             float buttonWidth  = 140.0f * dpiScale;
             float totalButtons = info.downloadUrl.empty() ? 1.0f : 2.0f;
             float spacing      = ImGui::GetStyle().ItemSpacing.x;
@@ -729,7 +728,7 @@ void MainMenuView::renderUpdateSuccessPopup()
         ImGui::TextColored(
             greenColor, "%s", TR("ui.help.update_success_msg").data());
 
-        // --- Info Table ---
+        // --- 信息表格 ---
         if ( ImGui::BeginTable("SuccessInfoTable",
                                2,
                                ImGuiTableFlags_SizingFixedFit |

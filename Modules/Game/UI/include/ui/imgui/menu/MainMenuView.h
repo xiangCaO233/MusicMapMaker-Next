@@ -190,13 +190,13 @@ private:
                                bool addStoreModeExtForMalodyExport = false);
 
     /// @brief 请求保存当前谱面，必要时先展示格式兼容性警告。
-    /// @param allowExternallyModifiedOverwrite
-    /// 是否允许覆盖外部修改过的当前文件。
+    /// @param allowExternallyModifiedOverwrite 外部修改覆盖标志。
+    /// 为 true 时允许覆盖外部修改过的当前文件。
     void requestSaveBeatmap(bool allowExternallyModifiedOverwrite = false);
 
     /// @brief 直接分发当前谱面保存命令。
-    /// @param allowExternallyModifiedOverwrite
-    /// 是否允许覆盖外部修改过的当前文件。
+    /// @param allowExternallyModifiedOverwrite 外部修改覆盖标志。
+    /// 为 true 时允许覆盖外部修改过的当前文件。
     void dispatchSaveBeatmap(bool allowExternallyModifiedOverwrite);
 
     /// @brief 收集当前谱面导出到指定格式时需要提醒用户的兼容性问题。

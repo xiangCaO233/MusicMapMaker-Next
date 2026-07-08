@@ -199,7 +199,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -227,9 +227,8 @@ void SettingsView::drawSoftwareSettings()
                                         bgCol.z + 0.1f,
                                         bgCol.w + 0.15f });
 
-                // Clamp TreeNodeEx to Clay bounding box: push zero
-                // WindowPadding to eliminate outer_extend, and
-                // temporarily set WorkRect.Max.x to match Clay width.
+                // 将 TreeNodeEx 约束到 Clay 边界：临时将 WindowPadding 设为 0
+                // 以消除外扩，并把 WorkRect.Max.x 调整到 Clay 宽度。
                 ImGuiWindow* win         = ImGui::GetCurrentWindow();
                 float        savedWRMaxX = win->WorkRect.Max.x;
                 win->WorkRect.Max.x      = r.x + r.width;
@@ -341,10 +340,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()

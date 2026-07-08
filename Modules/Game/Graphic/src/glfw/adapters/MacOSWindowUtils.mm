@@ -28,7 +28,7 @@ NSScreen* resolveWindowScreen(NSWindow* nativeWindow)
 
 /// @brief macOS 内容视图 first mouse 响应实现。
 /// @param self Objective-C 接收对象。
-/// @param selector Objective-C selector。
+/// @param selector Objective-C 选择器。
 /// @param event 鼠标事件。
 /// @return 始终允许非活跃窗口首击进入内容视图。
 BOOL acceptFirstMouse(id self, SEL selector, NSEvent* event)

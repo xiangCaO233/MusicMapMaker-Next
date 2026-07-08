@@ -495,10 +495,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font = snapshot.fileManagerFont
-                       ? snapshot.fileManagerFont
-                       : (snapshot.contentFont ? snapshot.contentFont
-                                               : snapshot.fallbackFont);
+    ImFont* font             = snapshot.fileManagerFont
+                                   ? snapshot.fileManagerFont
+                                   : (snapshot.contentFont ? snapshot.contentFont
+                                                           : snapshot.fallbackFont);
 
     const std::array<const char*, 5> controlLabels{
         TR("ui.audio_manager.output_device").data(),
@@ -543,7 +543,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float       minWidth =
+    float minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float        listHeight = 0.0f;
@@ -917,12 +917,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
         for ( const auto& [key, path] : skinData.audioPaths ) {
             AudioTableRow row;
-            row.m_id   = key;
-            row.m_path = Config::pathToUtf8(path);
-            row.m_type = AudioTrackType::Effect;
-            row.m_kind = isInteractionSfxKey(key)
-                             ? AudioTableRowKind::InteractionSfx
-                             : AudioTableRowKind::PermanentSfx;
+            row.m_id                    = key;
+            row.m_path                  = Config::pathToUtf8(path);
+            row.m_type                  = AudioTrackType::Effect;
+            row.m_kind                  = isInteractionSfxKey(key)
+                                              ? AudioTableRowKind::InteractionSfx
+                                              : AudioTableRowKind::PermanentSfx;
             const FileMetadata metadata = queryFileMetadata(path);
             row.m_size                  = metadata.size;
             row.m_hasSize               = metadata.hasSize;
@@ -1567,21 +1567,22 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     bool showManageModal = !m_manageTrackId.empty();
     if ( showManageModal ) {
         std::string windowTitle =
-            fmt::format("{} {}",
+            fmt::format("{} {}###AudioTrackManageWindow",
                         TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
         if ( m_openManageModal ) {
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
-        if ( manageWindowScope.beginWindow(windowTitle.c_str(),
-                                           &showManageModal,
-                                           ImGuiWindowFlags_NoCollapse,
-                                           { 420 * dpiScale, 0.0f }) ) {
-            if ( !showManageModal ) {
-                m_manageTrackId = "";
-            }
-
+        const bool                     manageWindowOpened =
+            manageWindowScope.beginWindow(windowTitle.c_str(),
+                                          &showManageModal,
+                                          ImGuiWindowFlags_NoCollapse,
+                                          { 420 * dpiScale, 0.0f });
+        if ( !showManageModal ) {
+            m_manageTrackId = "";
+        }
+        if ( manageWindowOpened ) {
             // --- 使用 Clay 重构对话框内容 ---
             CLayVBox    modalLayout;
             const auto& modalStyle = ImGui::GetStyle();
@@ -1740,9 +1741,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::EndPopup();
                 }
             }
-
-            ImGui::End();
         }
+        ImGui::End();
     }
 
     if ( fileManagerFont ) ImGui::PopFont();

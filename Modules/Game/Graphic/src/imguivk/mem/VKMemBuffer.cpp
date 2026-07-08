@@ -28,7 +28,6 @@ VKMemBuffer::VKMemBuffer(const vk::PhysicalDevice& vkPhysicalDevice,
         // 无共享
         .setSharingMode(vk::SharingMode::eExclusive)
         // 若共享需要传入命令队列索引列表
-        // .setQueueFamilyIndices(indices)
         ;
 
     // 2.创建缓冲区

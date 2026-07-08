@@ -70,9 +70,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void reloadTextures(vk::PhysicalDevice& physicalDevice,
-                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                        vk::Queue& queue) override;
+    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
+                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                               vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -415,10 +415,10 @@ private:
     double m_createTimeSnapped{ 0.0 };
     double m_createTimeManual{ 0.0 };
     double m_createValue{ 120.0 };
-    int    m_createType{ 0 };     ///< @brief 0: BPM, 1: Scroll, 2: Jump, 3: HS
-    int    m_createPosType{ 0 };  // 0: Click, 1: Current
-    bool   m_isTimeSnapped{ false };
-    bool   m_keepSpeedOnBpmChange{ false };
+    int  m_createType{ 0 };  ///< @brief 0 为 BPM，1 为滚动，2 为跳转，3 为 HS。
+    int  m_createPosType{ 0 };  // 0: Click, 1: Current
+    bool m_isTimeSnapped{ false };
+    bool m_keepSpeedOnBpmChange{ false };
 
     /// @brief 最近一次新建 Timing 的目标时间（秒），用于表格高亮定位
     double m_lastCreatedTimingTime{ -1.0 };
@@ -474,10 +474,10 @@ private:
     /// @brief Timeline 框选终点 Y 坐标。
     float m_timingMarqueeEndY{ 0.0f };
 
-    /// @brief Timeline marquee start display time in seconds.
+    /// @brief Timeline 框选起点显示时间，单位秒。
     double m_timingMarqueeStartTime{ 0.0 };
 
-    /// @brief Timeline marquee end display time in seconds.
+    /// @brief Timeline 框选终点显示时间，单位秒。
     double m_timingMarqueeEndTime{ 0.0 };
 
     /// @brief Timeline 框选起点 X 坐标。

@@ -42,7 +42,8 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
     // 长条结束时间
     // 结束时间和音效组参数粘一起了
     std::string        token;
-    std::istringstream noteiss(description.at(5));
+    const std::string  sampleGroup = MMM::Internal::safeAt(description, 5);
+    std::istringstream noteiss(sampleGroup);
 
     // 最后一组的第一个参数就是结束时间
     std::vector<std::string> last_paras;
@@ -50,11 +51,11 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
         last_paras.push_back(token);
     }
 
-    osunote_prop["samplegroup"] = description.at(5);
+    osunote_prop["samplegroup"] = sampleGroup;
 
-    m_duration =
-        static_cast<int32_t>(MMM::Internal::safeStod(last_paras.at(0))) -
-        m_timestamp;
+    m_duration = static_cast<int32_t>(MMM::Internal::safeStod(
+                     MMM::Internal::safeAt(last_paras, 0))) -
+                 m_timestamp;
 }
 
 /// @brief 转换为osu描述

@@ -254,8 +254,7 @@ std::string buildSaveTooltipMessage(const SaveTooltipPayload& payload)
     return "导出 " + fileName + " 成功";
 }
 
-/// @brief Subscribe to save result events and enqueue UI-thread tooltip
-/// payloads.
+/// @brief 订阅保存结果事件，并将 Tooltip 负载排队到 UI 线程。
 void ensureSaveResultSubscription()
 {
     static bool subscribed = false;
@@ -920,11 +919,11 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool   canApply = !candidates.empty() &&
-                                    !m_dataSourceReplacePath.empty() &&
-                                    (m_replaceObjectsFromDataSource ||
-                                     m_replaceTimelinesFromDataSource ||
-                                     m_replaceMetadataFromDataSource);
+            const bool canApply = !candidates.empty() &&
+                                  !m_dataSourceReplacePath.empty() &&
+                                  (m_replaceObjectsFromDataSource ||
+                                   m_replaceTimelinesFromDataSource ||
+                                   m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
             if ( ::MMM::UI::FeedbackButton("替换", buttonSize) ) {
@@ -986,7 +985,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     ImFont* menuFont = skinCfg.getFont("menu");
     if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
 
-    // ========== File Menu ==========
+    // ========== 文件菜单 ==========
     if ( m_openFileMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.file"));
         m_openFileMenuNextFrame = false;
@@ -1088,7 +1087,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ::MMM::UI::FeedbackEndMenu();
     }
 
-    // ========== Edit Menu ==========
+    // ========== 编辑菜单 ==========
     if ( m_openEditMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.edit"));
         m_openEditMenuNextFrame = false;
@@ -1190,7 +1189,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ::MMM::UI::FeedbackEndMenu();
     }
 
-    // ========== Tools Menu ==========
+    // ========== 工具菜单 ==========
     if ( m_openToolsMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.tools"));
         m_openToolsMenuNextFrame = false;
@@ -1271,7 +1270,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ::MMM::UI::FeedbackEndMenu();
     }
 
-    // ========== View Menu ==========
+    // ========== 视图菜单 ==========
     if ( m_openViewMenuNextFrame ) {
         ImGui::OpenPopup(TR("ui.view"));
         m_openViewMenuNextFrame = false;
@@ -1314,10 +1313,10 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ::MMM::UI::FeedbackEndMenu();
     }
 
-    // ========== Help Menu ==========
+    // ========== 帮助菜单 ==========
     renderHelpMenu(sourceManager);
 
-    // ========== Popups ==========
+    // ========== 弹窗 ==========
     renderAboutPopup();
     renderUpdateCheckingPopup();
     renderUpdatePopup();

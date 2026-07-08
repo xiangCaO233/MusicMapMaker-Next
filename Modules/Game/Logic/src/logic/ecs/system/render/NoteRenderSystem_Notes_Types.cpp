@@ -76,7 +76,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                             holdEndTime, currentAbsY, note.m_timestamp)) *
                             renderScaleY;
 
-    // 1. Body
+    // 1. 连接体。
     if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldBody ) {
         batcher.setTexture(TextureID::HoldBodyVertical);
         float sy = judgmentLineY -
@@ -94,7 +94,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
                              bodyColor);
     }
 
-    // 2. Head
+    // 2. 头部。
     if ( glowPart == HoverPart::None || glowPart == HoverPart::Head ) {
         batcher.setTexture(TextureID::Note);
         batcher.pushFilledQuad(
@@ -107,7 +107,7 @@ void NoteRenderSystem::renderHold(Batcher&                           batcher,
             headColor);
     }
 
-    // 3. End
+    // 3. 尾部。
     if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd ) {
         batcher.setTexture(TextureID::HoldEnd);
         batcher.pushFilledQuad(
@@ -132,25 +132,25 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
     glm::vec2 headSize = getDrawSize(snapshot, TextureID::Note, w, h);
     float     headX    = x;
 
-    // 1. BodyH
+    // 1. 横向连接体。
     if ( note.m_dtrack != 0 &&
          (glowPart == HoverPart::None || glowPart == HoverPart::HoldBody) ) {
         auto itBodyH = snapshot->uvMap.find(
             static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
         if ( itBodyH != snapshot->uvMap.end() ) {
-            float drawH = h * (itBodyH->second.w /
+            float drawH      = h * (itBodyH->second.w /
                                snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
-            float drawW = std::abs(note.m_dtrack) * singleTrackW;
+            float drawW      = std::abs(note.m_dtrack) * singleTrackW;
             float startTrack = std::min(0.0f, (float)note.m_dtrack);
             float bodyX      = x + (w - singleTrackW) * 0.5f +
-                               startTrack * singleTrackW + singleTrackW * 0.5f;
+                          startTrack * singleTrackW + singleTrackW * 0.5f;
 
             batcher.setTexture(TextureID::HoldBodyHorizontal);
             batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
         }
     }
 
-    // 2. Head
+    // 2. 头部。
     if ( glowPart == HoverPart::None || glowPart == HoverPart::Head ) {
         batcher.setTexture(TextureID::Note);
         batcher.pushFilledQuad(
@@ -163,15 +163,15 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
             headColor);
     }
 
-    // 3. Arrow
+    // 3. 箭头。
     if ( note.m_dtrack != 0 &&
          (glowPart == HoverPart::None || glowPart == HoverPart::FlickArrow) ) {
         TextureID arrowId   = (note.m_dtrack < 0) ? TextureID::FlickArrowLeft
                                                   : TextureID::FlickArrowRight;
         glm::vec2 arrowSize = getDrawSize(snapshot, arrowId, w, h);
         float     arrowX    = x + (w - singleTrackW) * 0.5f +
-                              note.m_dtrack * singleTrackW +
-                              (singleTrackW - arrowSize.x) * 0.5f;
+                       note.m_dtrack * singleTrackW +
+                       (singleTrackW - arrowSize.x) * 0.5f;
         batcher.setTexture(arrowId);
         batcher.pushFilledQuad(arrowX,
                                y + arrowSize.y * 0.5f,

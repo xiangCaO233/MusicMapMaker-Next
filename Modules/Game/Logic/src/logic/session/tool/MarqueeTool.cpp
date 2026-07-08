@@ -227,9 +227,8 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                         .isSelected = false;
                 }
             } else {
-                ctx.marqueeIsAdditive =
-                    false;  // Reset additive to false to ensure a clean rebuild
-                            // of selection
+                // 重置追加模式，确保后续选择集合完整重建。
+                ctx.marqueeIsAdditive = false;
                 auto view = ctx.noteRegistry.view<InteractionComponent>();
                 for ( auto entity : view ) {
                     ctx.noteRegistry.get<InteractionComponent>(entity)

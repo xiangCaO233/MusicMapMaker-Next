@@ -25,10 +25,10 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
 {
     json root;
 
-    // 1. Metadata
+    // 1. 元数据。
     auto& metadata = root["metadata"];
 
-    // Base metadata
+    // 基础元数据。
     auto& base             = metadata["base"];
     base["name"]           = beatMap.m_baseMapMetadata.name;
     base["title"]          = beatMap.m_baseMapMetadata.title;
@@ -47,7 +47,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["bpm"]         = beatMap.m_baseMapMetadata.preference_bpm;
     base["duration"]    = beatMap.m_baseMapMetadata.map_length;
 
-    // Extra metadata
+    // 来源格式附加元数据。
     auto& extra = metadata["extra"];
     extra       = json::array();
     for ( const auto& [type, props] : beatMap.m_metadata.map_properties ) {
@@ -70,7 +70,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         extra.push_back(sourceObj);
     }
 
-    // 2. Timing
+    // 2. Timing 事件。
     auto& timingArr = root["timing"];
     timingArr       = json::array();
     for ( const auto& timing : beatMap.m_timings ) {
@@ -104,11 +104,11 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         timingArr.push_back(t);
     }
 
-    // 3. Note
+    // 3. 音符。
     auto& noteArr = root["note"];
     noteArr       = json::array();
 
-    // Helper to serialize a note
+    // 将单个音符序列化为 JSON。
     auto serializeNote = [&](const Note& note) {
         json n;
         n["timestamp"] = note.m_timestamp;
@@ -261,8 +261,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         return n;
     };
 
-    // We only want to save top-level notes.
-    // Sub-notes of Polylines are already serialized inside the Polyline.
+    // 只保存顶层音符；Polyline 子音符已在父 Polyline 中序列化。
     std::set<const Note*> subNotesSet;
     for ( const auto& poly : beatMap.m_noteData.polylines ) {
         for ( const auto& subNoteRef : poly.m_subNotes ) {
@@ -287,7 +286,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         serializedNotes.push_back(serializeNote(poly));
     }
 
-    // Sort by timestamp
+    // 按时间戳排序，保证写出稳定。
     std::sort(serializedNotes.begin(),
               serializedNotes.end(),
               [](const json& a, const json& b) {

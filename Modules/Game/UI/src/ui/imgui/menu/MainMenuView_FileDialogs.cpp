@@ -139,7 +139,7 @@ void centerNextItem(float itemWidth)
 /// @param label 按钮文本和 ImGui ID。
 /// @param size 按钮尺寸。
 /// @return 按钮被点击时返回 true。
-/// @warning UI 绘制路径：只调整游标并调用 ImGui::Button。
+/// @warning UI 绘制路径：只调整游标并调用统一反馈按钮。
 bool drawCenteredButton(const char* label, ImVec2 size)
 {
     centerNextItem(size.x);
@@ -315,11 +315,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title    = !meta.title_unicode.empty()
-                           ? meta.title_unicode
-                           : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount = meta.track_count;
-            version  = meta.version.empty() ? "default" : meta.version;
+            title            = !meta.title_unicode.empty()
+                                   ? meta.title_unicode
+                                   : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount         = meta.track_count;
+            version          = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -531,9 +531,9 @@ void MainMenuView::requestSaveBeatmapAs(std::string path)
     m_pendingCompatibilityWarningIsCurrentSave  = false;
     m_pendingCompatibilityWarningAllowOverwrite = false;
     m_pendingExportShowStoreModeExtOption       = showStoreModeExtOption;
-    m_pendingExportAddStoreModeExt   = Config::AppConfig::instance()
-                                           .getEditorSettings()
-                                           .autoAddStoreModeExtForMalodyExport;
+    m_pendingExportAddStoreModeExt              = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .autoAddStoreModeExtForMalodyExport;
     m_showExportCompatibilityWarning = true;
 }
 
@@ -758,8 +758,8 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                     ImGuiFileDialogFlags_HideColumnType |
-                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                         ImGuiFileDialogFlags_HideColumnType |
+                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),

@@ -1,7 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
-#include "config/fonticon/NerdFontData.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/ClearColorUpdateEvent.h"
@@ -11,9 +10,12 @@
 #include "implot.h"
 #include "log/colorful-log.h"
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <system_error>
 
 namespace MMM::Graphic
 {
@@ -30,6 +32,33 @@ static float getPureIconVisualScale()
                : 1.0f;
 }
 
+/// @brief 无异常解析字体布局浮点配置。
+/// @param value 配置字符串。
+/// @param fallback 解析失败时的默认值。
+/// @return 解析成功的有限浮点数或默认值。
+static float parseFontLayoutFloat(std::string_view value, float fallback)
+{
+    if ( value.empty() ) return fallback;
+
+    float      parsed = fallback;
+    const auto result =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+         std::isfinite(parsed) && parsed > 0.0f ) {
+        return parsed;
+    }
+    return fallback;
+}
+
+/// @brief 无异常判断文件系统路径是否存在。
+/// @param path 待检查路径。
+/// @return 路径存在且检查过程无错误时返回 true。
+static bool pathExistsNoError(const std::filesystem::path& path)
+{
+    std::error_code filesystemError;
+    return std::filesystem::exists(path, filesystemError) && !filesystemError;
+}
+
 static void check_vk_result(VkResult err)
 {
     if ( err == VK_SUCCESS ) return;
@@ -43,7 +72,7 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
 {
     float native_scale = Config::AppConfig::instance().getNativeContentScale();
     float ui_scale     = Config::AppConfig::instance().getUIScale();
-    // Setup Dear ImGui context
+    // 设置 Dear ImGui 上下文。
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImPlot::CreateContext();
@@ -63,37 +92,27 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     static const std::string imguiIniPath =
         Config::pathToUtf8(Config::AppPaths::imguiIniFilePath());
     io.IniFilename = imguiIniPath.c_str();
-    // Enable Keyboard Controls
+    // 启用键盘导航。
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // Enable Gamepad Controls
+    // 启用手柄导航。
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    // Enable Docking
+    // 启用 Docking。
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    // 禁用保存
-    // io.ConfigFlags |= ImGuiConfigFlags_NoKeyboard;
-
-    // Enable Multi-Viewport / Platform Windows.
+    // 启用 Multi-Viewport 平台窗口。
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     io.ConfigViewportsNoAutoMerge        = false;
     io.ConfigViewportsNoTaskBarIcon      = true;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    // Setup Dear ImGui style
-    // ImGui::StyleColorsDark();
-    // ImGui::StyleColorsLight();
-
-    // Setup scaling
-    // style.ScaleAllSizes(ui_scale); // We don't scale style sizes globally
-    // here yet
+    // 设置缩放；暂不全局缩放样式尺寸。
     style.FontScaleDpi = 1.0f;
 
-    io.ConfigDpiScaleFonts     = false;  // Handled manually below
+    io.ConfigDpiScaleFonts     = false;  // 下方手动处理字体缩放。
     io.ConfigDpiScaleViewports = true;
 
-    // When viewports are enabled we tweak WindowRounding/WindowBg so platform
-    // windows can look identical to regular ones.
+    // 启用 Viewport 时同步窗口圆角和背景，使平台窗口外观与普通窗口一致。
 
-    // Setup Platform/Renderer backends
+    // 设置平台和渲染后端。
     ImGui_ImplGlfw_InitForVulkan(window_handle, true);
 
     ImGui_ImplVulkan_InitInfo init_info = {};
@@ -116,32 +135,8 @@ void VKContext::imguiVulkanInit(GLFWwindow* window_handle)
     // 执行初始化imgui-vulkan
     ImGui_ImplVulkan_Init(&init_info);
 
-    // Load Fonts
-    // - If fonts are not explicitly loaded, Dear ImGui will call
-    // AddFontDefault() to select an embedded font: either
-    // AddFontDefaultVector() or AddFontDefaultBitmap().
-    //   This selection is based on (style.FontSizeBase * style.FontScaleMain *
-    //   style.FontScaleDpi) reaching a small threshold.
-    // - You can load multiple fonts and use ImGui::PushFont()/PopFont() to
-    // select them.
-    // - If a file cannot be loaded, AddFont functions will return a nullptr.
-    // Please handle those errors in your code (e.g. use an assertion, display
-    // an error and quit).
-    // - Read 'docs/FONTS.md' for more instructions and details.
-    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use
-    // FreeType for higher quality font rendering.
-    // - Remember that in C/C++ if you want to include a backslash \ in a string
-    // literal you need to write a double backslash \\ !
-    // style.FontSizeBase = 20.0f;
-    // io.Fonts->AddFontDefaultVector();
-    // io.Fonts->AddFontDefaultBitmap();
-    // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf");
-    // io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf");
-    // ImFont* font =
-    // io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf");
-    // IM_ASSERT(font != nullptr);
+    // 字体加载说明：项目显式加载字体；若加载失败，AddFont 系列接口会返回
+    // nullptr，调用方必须处理失败路径。路径字面量中的反斜杠需要写成 \\。
 
     // 重新设置关键窗口回调，确保在 ImGui 初始化后仍然有效
     glfwSetWindowIconifyCallback(window_handle,
@@ -192,6 +187,7 @@ void VKContext::setupFonts()
         auto& settings      = Config::AppConfig::instance().getEditorSettings();
         auto  asciiFontPath = skinMgr.getFontPath("ascii");
         auto  cjkFontPath   = skinMgr.getFontPath("cjk");
+        auto  iconFontPath  = skinMgr.getFontPath("icons");
 
         // 尝试加载偏好 ASCII 字体
         if ( !settings.preferredAsciiFont.empty() &&
@@ -203,7 +199,7 @@ void VKContext::setupFonts()
                 });
             if ( it != asciiFonts.end() ) {
                 asciiFontPath = it->second;
-            } else if ( std::filesystem::exists(
+            } else if ( pathExistsNoError(
                             Config::utf8ToPath(settings.preferredAsciiFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 asciiFontPath = settings.preferredAsciiFont;
@@ -220,7 +216,7 @@ void VKContext::setupFonts()
                 });
             if ( it != cjkFonts.end() ) {
                 cjkFontPath = it->second;
-            } else if ( std::filesystem::exists(
+            } else if ( pathExistsNoError(
                             Config::utf8ToPath(settings.preferredCjkFont)) ) {
                 // 如果是绝对路径，说明是外部/系统字体
                 cjkFontPath = settings.preferredCjkFont;
@@ -228,15 +224,14 @@ void VKContext::setupFonts()
         }
 
         ImFontConfig config;
-        // ImGui 1.92 dynamic atlas may rasterize glyphs lazily while rendering.
-        // STB's oversample prefilter asserts on some CJK/OpenType glyph edges
-        // in debug builds, so keep oversampling disabled for runtime-loaded
-        // fonts.
+        // ImGui 1.92 dynamic atlas 可能在渲染时延迟烘焙字形；STB 的
+        // oversample 预滤波在部分 CJK/OpenType 字形边缘会触发断言，因此运行时
+        // 加载字体禁用 oversampling。
         config.OversampleH = 1;
         config.OversampleV = 1;
         config.PixelSnapH  = true;
 
-        // Load at physical pixel size for sharpness
+        // 按物理像素尺寸加载，保持显示清晰。
         float atlasSize = std::max(1.0f, size * native_scale);
 
         // 1. 加载基础 ASCII 字体，字形由 ImGui 1.92 动态烘焙。
@@ -256,22 +251,21 @@ void VKContext::setupFonts()
                 atlasSize,
                 &mergeConfig);
 
-            // 3. 合并嵌入的 NerdFont 图标
+            // 3. 从皮肤资源合并图标字体，避免把字体二进制展开为 C++ 源码。
             ImFontConfig iconConfig;
-            iconConfig.MergeMode            = true;
-            iconConfig.PixelSnapH           = true;
-            iconConfig.FontDataOwnedByAtlas = false;  // 数据在静态区，不要释放
-            iconConfig.OversampleH          = 1;
-            iconConfig.OversampleV          = 1;
+            iconConfig.MergeMode   = true;
+            iconConfig.PixelSnapH  = true;
+            iconConfig.OversampleH = 1;
+            iconConfig.OversampleV = 1;
 
             // 向上稍微偏移 (-0.05x)，并设置缩放为 0.9x
             // 缩小尺寸后，图标会靠近基准线（显得偏下），因此需要负向偏移来使其在按钮/行内视觉居中
             iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
-            io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
-                                           Config::g_nerdfont_data_size,
-                                           atlasSize * 0.9f,
-                                           &iconConfig);
+            io.Fonts->AddFontFromFileTTF(
+                Config::pathToUtf8(iconFontPath).c_str(),
+                atlasSize * 0.9f,
+                &iconConfig);
 
             // 固定当前 atlas 生命周期的字体缩放，避免运行时切换动态烘焙尺寸。
             font->Scale = m_fontAtlasBaseScale;
@@ -284,7 +278,7 @@ void VKContext::setupFonts()
     // 从皮肤配置中读取各个场景的字体大小
     auto getFontSize = [&](const std::string& key, float defaultSize) {
         std::string val = skinMgr.getLayoutConfig("fontsize." + key);
-        return val.empty() ? defaultSize : std::stof(val);
+        return parseFontLayoutFloat(val, defaultSize);
     };
 
     // 加载各个场景的字体
@@ -300,21 +294,19 @@ void VKContext::setupFonts()
     // (不合并，专门用于侧边栏、工具栏等不需要随文字缩放的地方)
     {
         ImFontConfig iconConfig;
-        iconConfig.PixelSnapH           = true;
-        iconConfig.FontDataOwnedByAtlas = false;
-        iconConfig.OversampleH          = 1;
-        iconConfig.OversampleV          = 1;
+        iconConfig.PixelSnapH  = true;
+        iconConfig.OversampleH = 1;
+        iconConfig.OversampleV = 1;
 
         // 独立图标字体保持较小的基础尺寸，避免方形按钮内裁切。
         float size               = 16.0f;
         float atlasSize          = std::max(1.0f, size * native_scale);
         iconConfig.GlyphOffset.y = -(size * 0.05f) * native_scale;
 
-        ImFont* iconFont =
-            io.Fonts->AddFontFromMemoryTTF((void*)Config::g_nerdfont_data,
-                                           Config::g_nerdfont_data_size,
-                                           atlasSize * 0.9f,
-                                           &iconConfig);
+        ImFont* iconFont = io.Fonts->AddFontFromFileTTF(
+            Config::pathToUtf8(skinMgr.getFontPath("icons")).c_str(),
+            atlasSize * 0.9f,
+            &iconConfig);
         if ( iconFont ) {
             iconFont->Scale = m_fontAtlasBaseScale * getPureIconVisualScale();
         }
@@ -373,8 +365,6 @@ void VKContext::checkAndRebuildFonts()
         rebuildFonts();
     }
 }
-
-// --- Added applyTheme definition earlier
 
 void VKContext::applyTheme()
 {
@@ -510,7 +500,7 @@ void VKContext::applyTheme()
  */
 void VKContext::setDeepDarkStyle()
 {
-    // AdobeInspired style by nexacopic from ImThemes
+    // AdobeInspired 样式，来源为 ImThemes 的 nexacopic 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -644,7 +634,7 @@ void VKContext::setDeepDarkStyle()
 
 void VKContext::setDarkStyle()
 {
-    // Dark style by dougbinks from ImThemes
+    // Dark 样式，来源为 ImThemes 的 dougbinks 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -780,7 +770,7 @@ void VKContext::setDarkStyle()
 
 void VKContext::setLightStyle()
 {
-    // Light style by dougbinks from ImThemes
+    // Light 样式，来源为 ImThemes 的 dougbinks 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -914,7 +904,7 @@ void VKContext::setLightStyle()
 
 void VKContext::setClassicStyle()
 {
-    // Classic style by ocornut from ImThemes
+    // Classic 样式，来源为 ImThemes 的 ocornut 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1042,7 +1032,7 @@ void VKContext::setClassicStyle()
 
 void VKContext::setMicrosoftStyle()
 {
-    // Microsoft style by usernameiwantedwasalreadytaken from ImThemes
+    // Microsoft 样式，来源为 ImThemes 的 usernameiwantedwasalreadytaken 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1175,7 +1165,7 @@ void VKContext::setMicrosoftStyle()
 
 void VKContext::setDarculaStyle()
 {
-    // Darcula style by ice1000 from ImThemes
+    // Darcula 样式，来源为 ImThemes 的 ice1000 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1311,7 +1301,7 @@ void VKContext::setDarculaStyle()
 
 void VKContext::setPhotoshopStyle()
 {
-    // Photoshop style by Derydoca from ImThemes
+    // Photoshop 样式，来源为 ImThemes 的 Derydoca 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1441,7 +1431,7 @@ void VKContext::setPhotoshopStyle()
 
 void VKContext::setUnrealStyle()
 {
-    // Unreal style by dev0-1 from ImThemes
+    // Unreal 样式，来源为 ImThemes 的 dev0-1 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1575,7 +1565,7 @@ void VKContext::setUnrealStyle()
 
 void VKContext::setGoldStyle()
 {
-    // Gold style by CookiePLMonster from ImThemes
+    // Gold 样式，来源为 ImThemes 的 CookiePLMonster 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1712,7 +1702,7 @@ void VKContext::setGoldStyle()
 
 void VKContext::setRoundedVisualStudioStyle()
 {
-    // Rounded Visual Studio style by RedNicStone from ImThemes
+    // Rounded Visual Studio 样式，来源为 ImThemes 的 RedNicStone 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1848,7 +1838,7 @@ void VKContext::setRoundedVisualStudioStyle()
 
 void VKContext::setSonicRidersStyle()
 {
-    // Sonic Riders style by Sewer56 from ImThemes
+    // Sonic Riders 样式，来源为 ImThemes 的 Sewer56 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -1982,7 +1972,7 @@ void VKContext::setSonicRidersStyle()
 
 void VKContext::setDarkRudaStyle()
 {
-    // Dark Ruda style by Raikiri from ImThemes
+    // Dark Ruda 样式，来源为 ImThemes 的 Raikiri 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2120,7 +2110,7 @@ void VKContext::setDarkRudaStyle()
 
 void VKContext::setSoftCherryStyle()
 {
-    // Soft Cherry style by Patitotective from ImThemes
+    // Soft Cherry 样式，来源为 ImThemes 的 Patitotective 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2259,7 +2249,7 @@ void VKContext::setSoftCherryStyle()
 
 void VKContext::setEnemymouseStyle()
 {
-    // Enemymouse style by enemymouse from ImThemes
+    // Enemymouse 样式，来源为 ImThemes 的 enemymouse 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2374,7 +2364,7 @@ void VKContext::setEnemymouseStyle()
 
 void VKContext::setDiscordDarkStyle()
 {
-    // Discord (Dark) style by BttrDrgn from ImThemes
+    // Discord (Dark) 样式，来源为 ImThemes 的 BttrDrgn 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2511,7 +2501,7 @@ void VKContext::setDiscordDarkStyle()
 
 void VKContext::setComfyStyle()
 {
-    // Comfy style by Giuseppe from ImThemes
+    // Comfy 样式，来源为 ImThemes 的 Giuseppe 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2645,7 +2635,7 @@ void VKContext::setComfyStyle()
 
 void VKContext::setPurpleComfyStyle()
 {
-    // Purple Comfy style by RegularLunar from ImThemes
+    // Purple Comfy 样式，来源为 ImThemes 的 RegularLunar 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2779,7 +2769,7 @@ void VKContext::setPurpleComfyStyle()
 
 void VKContext::setFutureDarkStyle()
 {
-    // Future Dark style by rewrking from ImThemes
+    // Future Dark 样式，来源为 ImThemes 的 rewrking 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -2922,7 +2912,7 @@ void VKContext::setFutureDarkStyle()
 
 void VKContext::setCleanDarkStyle()
 {
-    // Clean Dark/Red style by ImBritish from ImThemes
+    // Clean Dark/Red 样式，来源为 ImThemes 的 ImBritish 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3052,7 +3042,7 @@ void VKContext::setCleanDarkStyle()
 
 void VKContext::setMoonlightStyle()
 {
-    // Moonlight style by Madam-Herta from ImThemes
+    // Moonlight 样式，来源为 ImThemes 的 Madam-Herta 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3310,7 +3300,7 @@ void VKContext::setCeciliaStyle()
 
 void VKContext::setComfortableLightStyle()
 {
-    // Comfortable Light Orange style by SouthCraftX from ImThemes
+    // Comfortable Light Orange 样式，来源为 ImThemes 的 SouthCraftX 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3452,7 +3442,7 @@ void VKContext::setComfortableLightStyle()
 
 void VKContext::setHazyDarkStyle()
 {
-    // Hazy Dark style by kaitabuchi314 from ImThemes
+    // Hazy Dark 样式，来源为 ImThemes 的 kaitabuchi314 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3588,7 +3578,7 @@ void VKContext::setHazyDarkStyle()
 
 void VKContext::setEverforestStyle()
 {
-    // Everforest style by DestroyerDarkNess from ImThemes
+    // Everforest 样式，来源为 ImThemes 的 DestroyerDarkNess 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3729,7 +3719,7 @@ void VKContext::setEverforestStyle()
 
 void VKContext::setWindarkStyle()
 {
-    // Windark style by DestroyerDarkNess from ImThemes
+    // Windark 样式，来源为 ImThemes 的 DestroyerDarkNess 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3866,7 +3856,7 @@ void VKContext::setWindarkStyle()
 
 void VKContext::setRestStyle()
 {
-    // Rest style by AaronBeardless from ImThemes
+    // Rest 样式，来源为 ImThemes 的 AaronBeardless 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -3989,7 +3979,7 @@ void VKContext::setRestStyle()
 
 void VKContext::setComfortableDarkCyanStyle()
 {
-    // Comfortable Dark Cyan style by SouthCraftX from ImThemes
+    // Comfortable Dark Cyan 样式，来源为 ImThemes 的 SouthCraftX 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;
@@ -4131,7 +4121,7 @@ void VKContext::setComfortableDarkCyanStyle()
 
 void VKContext::setKazamCherryStyle()
 {
-    // Kazam's Cherry style by coyoteclan from ImThemes
+    // Kazam's Cherry 样式，来源为 ImThemes 的 coyoteclan 配色。
     ImGuiStyle& style = ImGui::GetStyle();
 
     style.Alpha                            = 1.0f;

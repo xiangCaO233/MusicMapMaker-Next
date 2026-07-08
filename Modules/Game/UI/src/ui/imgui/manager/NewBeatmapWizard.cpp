@@ -16,11 +16,14 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fmt/format.h>
+#include <initializer_list>
 #include <mutex>
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -54,6 +57,55 @@ bool resourcePathMatches(const std::filesystem::path& lhs,
     if ( lhsUtf8 == rhsUtf8 ) return true;
     return Config::pathToUtf8(lhs.filename()) ==
            Config::pathToUtf8(rhs.filename());
+}
+
+/// @brief 扫描项目资源，跳过无权限目录和异常文件状态。
+/// @param projectRoot 项目根目录。
+/// @param allowedExtensions 允许的扩展名，必须为小写。
+/// @return 项目根相对路径列表。
+std::vector<std::string> collectProjectResources(
+    const std::filesystem::path&            projectRoot,
+    std::initializer_list<std::string_view> allowedExtensions)
+{
+    std::vector<std::string>                      resources;
+    std::error_code                               filesystemError;
+    std::filesystem::recursive_directory_iterator it(
+        projectRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        filesystemError);
+    std::filesystem::recursive_directory_iterator end;
+    if ( filesystemError ) return resources;
+
+    for ( ; it != end; it.increment(filesystemError) ) {
+        if ( filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+        if ( !it->is_regular_file(filesystemError) || filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+
+        auto ext = Config::pathToUtf8(it->path().extension());
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(c)));
+        });
+        const bool accepted = std::any_of(
+            allowedExtensions.begin(),
+            allowedExtensions.end(),
+            [&](std::string_view allowed) { return ext == allowed; });
+        if ( !accepted ) continue;
+
+        auto rel =
+            std::filesystem::relative(it->path(), projectRoot, filesystemError);
+        if ( filesystemError ) {
+            filesystemError.clear();
+            continue;
+        }
+        resources.push_back(Config::pathToUtf8(rel));
+    }
+    return resources;
 }
 
 /// @brief 判断相对路径是否位于项目根内。
@@ -429,9 +481,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                   option.displayName,
-                                                   option.internalName,
-                                                   option.cameraId);
+                                                option.displayName,
+                                                option.internalName,
+                                                option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -719,8 +771,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
-                                  ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
@@ -796,25 +848,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapCoverImageSelect",
                                        coverImgPreview.c_str()) ) {
         // 扫描项目中的图片文件
-        std::vector<std::string> resources;
-        try {
-            for ( const auto& entry :
-                  std::filesystem::recursive_directory_iterator(
-                      project->m_projectRoot) ) {
-                if ( entry.is_regular_file() ) {
-                    auto ext = Config::pathToUtf8(entry.path().extension());
-                    std::transform(
-                        ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                         ext == ".bmp" ) {
-                        auto rel = std::filesystem::relative(
-                            entry.path(), project->m_projectRoot);
-                        resources.push_back(Config::pathToUtf8(rel));
-                    }
-                }
-            }
-        } catch ( ... ) {
-        }
+        std::vector<std::string> resources = collectProjectResources(
+            project->m_projectRoot, { ".png", ".jpg", ".jpeg", ".bmp" });
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverImgPath == resPath);
@@ -836,25 +871,9 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapBackgroundSelect",
                                        coverPreview.c_str()) ) {
         // 扫描项目中的图片/视频文件
-        std::vector<std::string> resources;
-        try {
-            for ( const auto& entry :
-                  std::filesystem::recursive_directory_iterator(
-                      project->m_projectRoot) ) {
-                if ( entry.is_regular_file() ) {
-                    auto ext = Config::pathToUtf8(entry.path().extension());
-                    std::transform(
-                        ext.begin(), ext.end(), ext.begin(), ::tolower);
-                    if ( ext == ".png" || ext == ".jpg" || ext == ".jpeg" ||
-                         ext == ".bmp" || ext == ".mp4" || ext == ".avi" ) {
-                        auto rel = std::filesystem::relative(
-                            entry.path(), project->m_projectRoot);
-                        resources.push_back(Config::pathToUtf8(rel));
-                    }
-                }
-            }
-        } catch ( ... ) {
-        }
+        std::vector<std::string> resources = collectProjectResources(
+            project->m_projectRoot,
+            { ".png", ".jpg", ".jpeg", ".bmp", ".mp4", ".avi" });
 
         for ( const auto& resPath : resources ) {
             bool isSelected = (m_selectedCoverPath == resPath);

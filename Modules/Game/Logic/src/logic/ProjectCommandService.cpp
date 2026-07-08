@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <exception>
 #include <system_error>
 #include <utility>
 
@@ -295,11 +294,13 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
         project.m_projectRoot / Config::utf8ToPath(safeFilename + ".mmm");
 
     /// @brief 文件名冲突时递增追加的数字后缀。
-    int suffix = 1;
-    while ( std::filesystem::exists(mapPath) ) {
+    int             suffix = 1;
+    std::error_code mapPathError;
+    while ( std::filesystem::exists(mapPath, mapPathError) && !mapPathError ) {
         mapPath = project.m_projectRoot /
                   Config::utf8ToPath(safeFilename + "_" +
                                      std::to_string(suffix++) + ".mmm");
+        mapPathError.clear();
     }
 
     meta.map_path = makeProjectRelativePath(project, mapPath);
@@ -322,11 +323,10 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
         cmd.initialTimings,
         cmd.templateBeatmap && cmd.templateOptions.copyTimelines);
 
-    try {
-        newBeatmap->saveToFile(mapPath);
+    if ( newBeatmap->saveToFile(mapPath) ) {
         XINFO("Beatmap saved to: {}", Config::pathToUtf8(mapPath));
-    } catch ( const std::exception& e ) {
-        XERROR("Failed to save new beatmap: {}", e.what());
+    } else {
+        XERROR("Failed to save new beatmap: {}", Config::pathToUtf8(mapPath));
         return result;
     }
 
@@ -502,8 +502,13 @@ ProjectCommandService::syncProjectWithFile(
     }
 
     /// @brief 谱面文件相对于项目根目录的 UTF-8 路径。
-    std::string relMapPath =
-        Config::pathToUtf8(std::filesystem::relative(absMapPath, absRoot));
+    std::error_code relativeError;
+    auto            relativeMapPath =
+        std::filesystem::relative(absMapPath, absRoot, relativeError);
+    if ( relativeError || relativeMapPath.empty() ) {
+        return result;
+    }
+    std::string relMapPath = Config::pathToUtf8(relativeMapPath);
     if ( removeExcludedPath(project.m_excludedBeatmapPaths, relMapPath) ) {
         result.m_changed = true;
     }
@@ -511,40 +516,44 @@ ProjectCommandService::syncProjectWithFile(
     for ( const auto& entry : project.m_beatmaps ) {
         /// @brief 已登记谱面入口的绝对路径。
         auto entryPath = absRoot / Config::utf8ToPath(entry.m_filePath);
-        if ( std::filesystem::exists(entryPath) &&
-             std::filesystem::equivalent(entryPath, absMapPath) ) {
+        std::error_code equivalentError;
+        const bool      alreadyTracked =
+            std::filesystem::exists(entryPath, equivalentError) &&
+            !equivalentError &&
+            std::filesystem::equivalent(
+                entryPath, absMapPath, equivalentError) &&
+            !equivalentError;
+        if ( alreadyTracked ) {
             return result;
         }
     }
 
-    try {
-        /// @brief 临时加载的新谱面，用于读取显示名和主音轨。
-        auto map = BeatMap::loadFromFile(absMapPath);
-        normalizeBeatmapMetadataPathsForProject(map, project);
-
-        /// @brief 新发现谱面在项目列表中的入口。
-        Project::BeatmapEntry entry;
-        entry.m_name = map.m_baseMapMetadata.version;
-        if ( entry.m_name.empty() ) {
-            entry.m_name = Config::pathToUtf8(absMapPath.filename());
-        }
-
-        entry.m_filePath = relMapPath;
-
-        if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
-            entry.m_audioTrackId = Config::pathToUtf8(
-                map.m_baseMapMetadata.main_audio_path.filename());
-        }
-
-        project.m_beatmaps.push_back(entry);
-        result.m_changed = true;
-        XINFO("EditorEngine: Discovered new beatmap for project: {}",
-              entry.m_name);
-    } catch ( const std::exception& e ) {
-        XWARN("EditorEngine: Failed to sync new beatmap {}: {}",
-              Config::pathToUtf8(absMapPath),
-              e.what());
+    /// @brief 临时加载的新谱面，用于读取显示名和主音轨。
+    auto map = BeatMap::loadFromFile(absMapPath);
+    if ( map.m_baseMapMetadata.map_path.empty() ) {
+        XWARN("EditorEngine: Failed to sync new beatmap {}",
+              Config::pathToUtf8(absMapPath));
+        return result;
     }
+    normalizeBeatmapMetadataPathsForProject(map, project);
+
+    /// @brief 新发现谱面在项目列表中的入口。
+    Project::BeatmapEntry entry;
+    entry.m_name = map.m_baseMapMetadata.version;
+    if ( entry.m_name.empty() ) {
+        entry.m_name = Config::pathToUtf8(absMapPath.filename());
+    }
+
+    entry.m_filePath = relMapPath;
+
+    if ( !map.m_baseMapMetadata.main_audio_path.empty() ) {
+        entry.m_audioTrackId = Config::pathToUtf8(
+            map.m_baseMapMetadata.main_audio_path.filename());
+    }
+
+    project.m_beatmaps.push_back(entry);
+    result.m_changed = true;
+    XINFO("EditorEngine: Discovered new beatmap for project: {}", entry.m_name);
 
     return result;
 }
@@ -588,9 +597,9 @@ ProjectCommandService::updateBeatmapFilePath(
         }
 
         entry.m_filePath = relNew;
-        try {
-            /// @brief 临时加载的新谱面，用于刷新项目入口元数据。
-            auto map = BeatMap::loadFromFile(absNew);
+        /// @brief 临时加载的新谱面，用于刷新项目入口元数据。
+        auto map = BeatMap::loadFromFile(absNew);
+        if ( !map.m_baseMapMetadata.map_path.empty() ) {
             normalizeBeatmapMetadataPathsForProject(map, project);
             entry.m_name = map.m_baseMapMetadata.version;
             if ( entry.m_name.empty() ) {
@@ -600,7 +609,6 @@ ProjectCommandService::updateBeatmapFilePath(
                 entry.m_audioTrackId = Config::pathToUtf8(
                     map.m_baseMapMetadata.main_audio_path.filename());
             }
-        } catch ( ... ) {
         }
 
         return ProjectMutationResult{ true };
@@ -635,7 +643,9 @@ ProjectCommandService::updateAudioResource(
             /// @brief 音频资源在项目目录中的绝对路径。
             auto absPath = resolveProjectPath(
                 project, Config::utf8ToPath(resource.m_path));
-            if ( std::filesystem::exists(absPath) ) {
+            std::error_code resourcePathError;
+            if ( std::filesystem::exists(absPath, resourcePathError) &&
+                 !resourcePathError ) {
                 /// @brief 更新后音效的预加载请求。
                 AudioPreloadRequest preloadRequest;
                 preloadRequest.m_resource     = resource;

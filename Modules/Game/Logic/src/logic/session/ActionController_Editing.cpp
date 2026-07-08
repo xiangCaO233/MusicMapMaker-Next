@@ -886,7 +886,7 @@ private:
     double m_afterPreferenceBpm{ 120.0 };
 };
 
-// --- Editing Handlers ---
+// --- 编辑命令处理 ---
 
 void ActionController::handleCommand(const CmdUndo& cmd)
 {
@@ -979,7 +979,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Delete Selected");
+                                                        "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -1032,7 +1032,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Mirror Selected");
+                                                        "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -1187,7 +1187,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -1320,7 +1320,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                        : ClipboardBeatTimeline{};
+                                : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -1359,7 +1359,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 }
 
-// --- Timeline Handlers ---
+// --- 时间线命令处理 ---
 
 void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
 {
@@ -1541,14 +1541,14 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 {
     if ( !m_ctx.currentBeatmap ) return;
 
-    // Helper function to extract common beat divisors from the skin
+    // 从皮肤配置中读取常用分拍。
     auto getCommonDivisorsFromSkin = []() -> std::vector<int> {
         return MMM::Config::SkinManager::instance().getCommonDivisors();
     };
 
     std::vector<int> commonDivisors = getCommonDivisorsFromSkin();
 
-    // Gather BPM/Timing events
+    // 收集 BPM/Timing 事件。
     auto tlView = m_ctx.timelineRegistry.view<const TimelineComponent>();
     std::vector<const TimelineComponent*> bpmEvents;
     for ( auto entity : tlView ) {
@@ -1574,7 +1574,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         double bestSnappedTime  = rawTime;
         double minWeightedError = std::numeric_limits<double>::max();
 
-        // Find the timing event containing rawTime
+        // 查找包含 rawTime 的 Timing 事件。
         const TimelineComponent* currentBPM = nullptr;
         double                   bpmTime    = 0.0;
         double                   bpmVal     = 120.0;
@@ -1707,7 +1707,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
 
     std::unordered_map<entt::entity, NoteComponent> newNotes = originalNotes;
 
-    // Align non-polyline notes and child subnotes
+    // 对齐非折线音符和子音符。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type != ::MMM::NoteType::POLYLINE ) {
             bool shouldAlign = false;
@@ -1730,7 +1730,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         }
     }
 
-    // Sync subnotes within parent polylines
+    // 同步父折线中的子音符顺序。
     for ( auto& [entity, newNote] : newNotes ) {
         if ( newNote.m_type == ::MMM::NoteType::POLYLINE ) {
             struct ChildInfo {
@@ -1782,7 +1782,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
         }
     }
 
-    // Generate BatchNoteAction entries
+    // 生成 BatchNoteAction 条目。
     for ( auto entity : toAlign ) {
         entries.push_back({ entity, originalNotes[entity], newNotes[entity] });
     }
@@ -1790,7 +1790,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                          "Align Selected");
+                                                        "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

@@ -104,11 +104,12 @@ inline BeatMap loadRMMap(std::filesystem::path path)
                 : second_pos;
 
         if ( end_of_num != std::string::npos && end_of_num > first_pos + 1 ) {
-            try {
-                std::string track_str =
-                    fnamestr.substr(first_pos + 1, end_of_num - first_pos - 1);
-                basemeta.track_count = MMM::Internal::safeStoi(track_str);
-            } catch ( ... ) {
+            std::string track_str =
+                fnamestr.substr(first_pos + 1, end_of_num - first_pos - 1);
+            const int parsedTrackCount = MMM::Internal::safeStoi(track_str, -1);
+            if ( parsedTrackCount > 0 ) {
+                basemeta.track_count = parsedTrackCount;
+            } else {
                 XWARN("读取文件名轨道数失败: {}", fnamestr);
             }
         }

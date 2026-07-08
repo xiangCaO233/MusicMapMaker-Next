@@ -159,10 +159,8 @@ public:
 
     /**
      * @brief 创建新的画布 Session
-     * @param beatmap
-     * 要加载的谱面（可为 nullptr 表示空白占位）
-     * @param displayName
-     * 显示名称
+     * @param beatmap 要加载的谱面（可为 nullptr 表示空白占位）
+     * @param displayName 显示名称
      * @param isLogoPlaceholder 是否为初始 Logo 画布
      * @param preferredCameraId 工作区恢复时希望复用的稳定画布 ID。
      * @param restoreDockFromWorkspace 是否让 UI 使用项目 ini 中的原停靠状态。
@@ -384,7 +382,7 @@ public:
 
     /// @brief 获取逻辑线程发布的软件光标 BPM 同步烟雾寿命。
     /// @return 当前 BPM 对应的一拍时长；无有效谱面或 BPM 时返回 -1。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径/原子：主渲染循环每帧读取；只承载逻辑线程发布的显示状态， 使用
     /// relaxed，避免渲染线程访问 Session 锁和谱面数据。
     float getCursorSmokeLifeOverride() const

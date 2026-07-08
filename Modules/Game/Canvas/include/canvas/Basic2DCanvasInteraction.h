@@ -147,6 +147,8 @@ private:
     float m_canvasPanAnchorMouseY{ 0.0f };
     /// @brief 当前配色笔刷/橡皮拖动手势中已经处理过的实体。
     std::unordered_set<entt::entity> m_colorStrokeEntities;
+    /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。
+    bool m_rightEraseActive{ false };
     /// @brief 上一次发送的框选拖动更新。
     LastContinuousEditCommand m_lastMarqueeUpdateCommand;
     /// @brief 上一次发送的绘制笔刷拖动更新。

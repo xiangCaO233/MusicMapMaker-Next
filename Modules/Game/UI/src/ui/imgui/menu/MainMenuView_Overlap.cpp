@@ -443,7 +443,7 @@ void MainMenuView::renderOverlapCheckWindow()
                                     const auto& r = m_overlapResults[i];
                                     ImGui::TableNextRow();
 
-                                    // 1. Type
+                                    // 1. 类型。
                                     ImGui::TableNextColumn();
                                     if ( r.is_definite ) {
                                         ImGui::TextColored(
@@ -457,17 +457,17 @@ void MainMenuView::renderOverlapCheckWindow()
                                             TR("ui.tools.suspected").data());
                                     }
 
-                                    // 2. Time
+                                    // 2. 时间。
                                     ImGui::TableNextColumn();
                                     const auto timeText =
                                         Canvas::formatCanvasTime(r.timestamp);
                                     ImGui::TextUnformatted(timeText.c_str());
 
-                                    // 3. Track
+                                    // 3. 轨道。
                                     ImGui::TableNextColumn();
                                     ImGui::Text("%d", r.track + 1);
 
-                                    // 4. Detail
+                                    // 4. 详情。
                                     ImGui::TableNextColumn();
                                     std::string detailStr =
                                         TR_FMT("ui.tools.overlap_detail",
@@ -475,7 +475,7 @@ void MainMenuView::renderOverlapCheckWindow()
                                                r.note2_desc);
                                     ImGui::TextUnformatted(detailStr.c_str());
 
-                                    // 5. Jump Action
+                                    // 5. 跳转操作。
                                     ImGui::TableNextColumn();
                                     ImGui::PushStyleColor(ImGuiCol_Button,
                                                           ImVec4(0, 0, 0, 0));

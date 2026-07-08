@@ -83,7 +83,7 @@ bool containsOutputDeviceName(const std::vector<AudioOutputDevice>& devices,
     });
 }
 
-/// @brief Log OpenAL playback devices visible to the backend.
+/// @brief 记录后端可见的 OpenAL 播放设备。
 void logOpenALDeviceDiagnostics()
 {
     const auto devices = ice::ALPlayer::list_devices();

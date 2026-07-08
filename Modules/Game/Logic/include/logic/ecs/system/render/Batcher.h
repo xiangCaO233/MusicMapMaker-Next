@@ -294,9 +294,9 @@ struct Batcher {
         }
         r = std::min({ r, std::abs(w) * 0.5f, std::abs(h) * 0.5f });
 
-        // Center cross
+        // 中央十字区域。
         pushQuad(x + r, y, w - 2 * r, h, color);
-        // Left & Right bars
+        // 左右侧边条。
         pushQuad(x, y - r, r, h - 2 * r, color);
         pushQuad(x + w - r, y - r, r, h - 2 * r, color);
 
@@ -364,13 +364,13 @@ struct Batcher {
         }
         r = std::min({ r, std::abs(w) * 0.5f, std::abs(h) * 0.5f });
 
-        // 4 Straight edges
+        // 4 条直边。
         pushQuad(x + r, y, w - 2 * r, t, color);
         pushQuad(x + r, y - h + t, w - 2 * r, t, color);
         pushQuad(x, y - r, t, h - 2 * r, color);
         pushQuad(x + w - t, y - r, t, h - 2 * r, color);
 
-        // 4 Rounded corners (Arc strokes)
+        // 4 个圆角弧线。
         auto pushArc = [&](float cx, float cy, float startAng, float endAng) {
             const int segments = 6;
             for ( int i = 0; i < segments; ++i ) {

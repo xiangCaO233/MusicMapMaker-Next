@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 
 using namespace MMM::Network;
 
@@ -150,14 +151,14 @@ static int testIsFinished()
         // 通过构造 UpdateInfo 并 getInfo 拷贝来间接验证 isFinished 逻辑
         // isFinished 依赖 m_info.status，我们在独立 UpdateChecker
         // 上验证初始状态 其余状态的验证通过对 isFinished
-        // 逻辑的理解进行等价验证： isFinished = status in {kUpToDate,
-        // kUpdateFound, kDownloaded, kError}
+        // 逻辑的理解进行等价验证：isFinished 等价于 status 属于
+        // 完成态集合 {kUpToDate, kUpdateFound, kDownloaded, kError}。
         bool isTransient = (tc.status == UpdateStatus::kChecking ||
                             tc.status == UpdateStatus::kDownloading);
         bool isDone      = (tc.status == UpdateStatus::kUpToDate ||
-                            tc.status == UpdateStatus::kUpdateFound ||
-                            tc.status == UpdateStatus::kDownloaded ||
-                            tc.status == UpdateStatus::kError);
+                       tc.status == UpdateStatus::kUpdateFound ||
+                       tc.status == UpdateStatus::kDownloaded ||
+                       tc.status == UpdateStatus::kError);
 
         // 检查枚举值分类一致性
         if ( isTransient != isDone && tc.expectFinished == isDone ) {
@@ -323,8 +324,10 @@ static int testUpdateSuccessMarker()
         marker << "test";
     }
 
-    // 直接检查标记文件是否存在
-    bool exists = std::filesystem::exists(markerPath);
+    // 直接检查标记文件是否存在。
+    std::error_code markerPathError;
+    bool exists = std::filesystem::exists(markerPath, markerPathError) &&
+                  !markerPathError;
     if ( exists ) {
         pass++;
     } else {
@@ -333,8 +336,11 @@ static int testUpdateSuccessMarker()
     }
 
     // 模拟读取并删除
-    std::filesystem::remove(markerPath);
-    bool gone = !std::filesystem::exists(markerPath);
+    std::error_code removeError;
+    std::filesystem::remove(markerPath, removeError);
+    markerPathError.clear();
+    bool gone = !std::filesystem::exists(markerPath, markerPathError) &&
+                !markerPathError;
     if ( gone ) {
         pass++;
     } else {

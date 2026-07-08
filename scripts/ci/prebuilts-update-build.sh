@@ -18,7 +18,8 @@ Options:
   --configs <list>             Space/comma separated CMake configs. Default: Debug RelWithDebInfo
   --build-root <path>          Root for generated build directories. Default: build_prebuilts_update
   --jobs <count>               Parallel build jobs passed to child build scripts.
-  --linkage <static|shared>    PROJECT_LINKAGE/ICE_LINKAGE value. Default: static
+  --linkage <static>           PROJECT_LINKAGE/ICE_LINKAGE value. Default: static.
+                               Shared staging is not implemented in this script yet.
   --llvm-mingw-root <path>     Complete llvm-mingw UCRT toolchain root for clang64.
   --configure-only             Run only the configure-only phase.
   --reuse-build-dirs           Do not remove build directories during the configure-only phase.
@@ -546,8 +547,8 @@ if [[ ! "${buildJobs}" =~ ^[0-9]+$ ]] || (( buildJobs < 1 )); then
     exit 1
 fi
 
-if [[ "${projectLinkage}" != "static" && "${projectLinkage}" != "shared" ]]; then
-    printf "error: --linkage must be 'static' or 'shared'\n" >&2
+if [[ "${projectLinkage}" != "static" ]]; then
+    printf "error: --linkage currently supports only 'static'; shared staging needs separate bin/libs/symbols layout support\n" >&2
     exit 1
 fi
 

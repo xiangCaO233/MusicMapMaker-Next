@@ -44,12 +44,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     json        fileData;
     std::string fileContent((std::istreambuf_iterator<char>(fs)),
                             std::istreambuf_iterator<char>());
-    try {
-        fileData = json::parse(fileContent, nullptr, true, true);
-    } catch ( ... ) {
-        // Fallback to non-throwing parser if UTF-8 is invalid
-        fileData = json::parse(fileContent, nullptr, false, true);
-    }
+    fileData = json::parse(fileContent, nullptr, false, true);
 
     if ( fileData.is_discarded() ) {
         XERROR("解析 malody 谱面 JSON 失败，可能存在严重的编码错误: {}",
@@ -131,23 +126,23 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 2. 收集原始时间事件
     struct RawEvent {
-        /// @brief Malody beat position.
+        /// @brief Malody 拍号位置。
         double beat;
-        /// @brief BPM value for timing events.
+        /// @brief Timing 事件使用的 BPM 值。
         double bpm = -1.0;
-        /// @brief Effect value for non-BPM events.
+        /// @brief 非 BPM 事件使用的效果参数。
         double value = 0.0;
-        /// @brief Original JSON object for round-trip metadata.
+        /// @brief 用于往返保存的原始 JSON 对象。
         json raw;
-        /// @brief Internal timing effect type.
+        /// @brief 内部 Timing 效果类型。
         TimingEffect effect{ TimingEffect::BPM };
-        /// @brief Whether this event comes from the Malody time section.
+        /// @brief 是否来自 Malody 的 time 段。
         bool isBpm = false;
     };
     struct BpmEvent {
-        /// @brief Malody beat position.
+        /// @brief Malody 拍号位置。
         double beat;
-        /// @brief BPM value active from this beat.
+        /// @brief 从该拍号开始生效的 BPM 值。
         double bpm;
     };
     std::vector<RawEvent> rawEvents;
@@ -406,7 +401,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     // 4. 处理时间线点 (Timing Points)
     double currentBpm = getInitialBpm();
 
-    /// @brief Count Malody effect events moved to beat 0 for runtime use.
+    /// @brief 统计被钳制到第 0 拍供运行时使用的 Malody 特效事件数量。
     std::size_t clampedNegativeEffectCount = 0;
 
     for ( auto& ev : rawEvents ) {
@@ -552,7 +547,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                             (uint32_t)std::max(0, basemeta.track_count - 1));
 
                         if ( stepTime > runningTime + 1e-7 ) {
-                            // Hold segment
+                            // 长按段。
                             Hold& h  = beatMap.m_noteData.holds.emplace_back();
                             h.m_type = NoteType::HOLD;
                             h.m_timestamp = runningTime;
@@ -577,7 +572,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                                 poly.m_subFlicks.push_back(f);
                             }
                         } else if ( stepTrack != runningTrack ) {
-                            // Instant Flick (仅在轨道发生变化时创建)
+                            // 瞬时 Flick，仅在轨道发生变化时创建。
                             Flick& f = beatMap.m_noteData.flicks.emplace_back();
                             f.m_type = NoteType::FLICK;
                             f.m_timestamp = runningTime;
@@ -679,9 +674,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                            basemeta.title,
-                                            basemeta.track_count,
-                                            basemeta.version);
+                                basemeta.title,
+                                basemeta.track_count,
+                                basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用

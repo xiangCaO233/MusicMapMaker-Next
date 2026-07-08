@@ -45,8 +45,7 @@ public:
      *
      * 如果实例尚未创建，将尝试进行初始化。
      *
-     * @return std::expected<std::reference_wrapper<VKContext>, std::string>
-     *         成功返回上下文引用，失败返回错误信息字符串
+     * @return 成功时返回上下文引用，失败时返回错误信息字符串
      */
     static std::expected<std::reference_wrapper<VKContext>, std::string> get();
 
@@ -66,7 +65,7 @@ public:
      * @param w 窗口宽度
      * @param h 窗口高度
      */
-    void initVKWindowRess(NativeWindow* native_window_ptr, int width,
+    bool initVKWindowRess(NativeWindow* native_window_ptr, int width,
                           int height);
 
     /**
@@ -160,10 +159,24 @@ private:
     /// @brief 资源是否已释放
     bool m_isReleased{ false };
 
+    /// @brief 初始化失败原因；为空表示基础上下文初始化成功。
+    std::string m_initializationError;
+
     /// @brief 临时中央通知文本
     std::string m_notificationMessage;
     /// @brief 临时中央通知过期系统时间戳
     double m_notificationExpireTime{ 0.0 };
+
+    /// @brief 记录初始化失败原因。
+    /// @param message 失败原因。
+    void failInitialization(std::string message);
+
+    /// @brief 判断初始化是否已经失败。
+    /// @return 已记录失败原因时返回 true。
+    bool hasInitializationError() const
+    {
+        return !m_initializationError.empty();
+    }
 
 private:
     /// @brief 字体重建请求标志

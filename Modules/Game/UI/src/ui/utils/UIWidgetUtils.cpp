@@ -84,7 +84,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount           = std::min(1.0f, amount + step);
+    amount = std::min(1.0f, amount + step);
 
     storage->SetFloat(amountKey, amount);
     storage->SetInt(lastFrameKey, currentFrame);
@@ -188,7 +188,7 @@ bool renderCollapsingHeader(const char* label, bool* p_state,
 }
 
 /// @brief 在 Clay 布局块中渲染带水平自动滚动文本的 CollapsingHeader。
-/// @param id ImGui ID。
+/// @param id ImGui 内部标识。
 /// @param text 显示文本。
 /// @param p_state 展开状态。
 /// @param r Clay 布局边界。
@@ -1015,8 +1015,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                      Utils::getUiAnimationTransitionSpeed());
+                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                    Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -1654,6 +1654,23 @@ bool FeedbackSmallButton(const char* label)
     const bool    clicked          = ImGui::SmallButton(label);
     ImGui::PopStyleColor(pushedColorCount);
     finishButtonFeedback(id, clicked);
+    return clicked;
+}
+
+/// @brief 绘制带统一音效反馈的 ImGui 颜色按钮。
+/// @param descId 颜色按钮描述文本和 ImGui ID。
+/// @param color 按钮显示颜色。
+/// @param flags 颜色按钮标志。
+/// @param size 按钮尺寸，语义与 ImGui::ColorButton 保持一致。
+/// @return 按钮本帧被激活时返回 true。
+/// @warning UI 热路径：每帧颜色按钮绘制路径调用，只做 ImGui 状态读写
+/// 和已预加载 SFX pool 的即时触发。
+bool FeedbackColorButton(const char* descId, const ImVec4& color,
+                         ImGuiColorEditFlags flags, const ImVec2& size)
+{
+    const ImGuiID id      = ImGui::GetID(descId);
+    const bool    clicked = ImGui::ColorButton(descId, color, flags, size);
+    finishLastItemFeedback(id, isLastItemFeedbackActivated());
     return clicked;
 }
 

@@ -64,7 +64,7 @@ public:
 
     /// @brief 更新并绘制 BPM 测量工具 UI。
     /// @param sourceManager 当前 UI 管理器。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：每帧执行；不得在此处扫描文件系统、重新解码整段音频或创建 FFT
     /// 计划。
     void update(UIManager* sourceManager) override;
@@ -185,7 +185,7 @@ private:
     void renderApplyTimingPopup();
 
     /// @brief 绘制试听播放、暂停、进度和倍速控制。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：每帧执行；只读取播放状态和处理用户输入，文件检查仅在按钮触发后发生。
     void renderPlaybackControls();
 
@@ -193,12 +193,12 @@ private:
     void renderAnalysisPanel();
 
     /// @brief 播放时让分析视图自动跟随播放指针。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
     void followPlaybackIfNeeded();
 
     /// @brief 更新 BPM 工具节拍器音效触发。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：每帧执行；只读取播放同步快照并播放已预加载音效，不访问文件系统。
     void updateMetronomePlayback();
 
@@ -212,7 +212,7 @@ private:
 
     /// @brief 更新波形绘制用的画布时间缓存。
     /// @param canvasOffset 画布时间相对音频采样时间的偏移，单位为秒。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图每帧查询；仅在画布偏移或波形缓存变化时重建时间数组。
     void updateWaveCanvasTimes(double canvasOffset);
 
@@ -240,7 +240,7 @@ private:
     /// @param rectMax 绘制区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；按当前视野增量绘制分拍线，不得加入音频解码或文件访问。
     void drawBeatSubdivisionLines(ImDrawList& drawList, const ImVec2& rectMin,
                                   const ImVec2& rectMax, double viewStart,
@@ -252,7 +252,7 @@ private:
     /// @param rectMax 绘制区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只读取当前播放路径、播放时间并绘制播放指针。
     void drawPlaybackCursor(ImDrawList& drawList, const ImVec2& rectMin,
                             const ImVec2& rectMax, double viewStart,
@@ -264,7 +264,7 @@ private:
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
     void handleBeatMarkerDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                               double viewStart, double viewEnd, int ownerId);
@@ -275,7 +275,7 @@ private:
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
@@ -286,7 +286,7 @@ private:
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算。
     void handleTimelineNavigation(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd);
@@ -355,7 +355,7 @@ private:
 
     /// @brief 判断播放图当前加载的是否为选中音轨。
     /// @return 当前加载音轨与选中音轨路径一致时返回 true。
-    /// @warning UI
+    /// @warning UI 热路径约束如下。
     /// 热路径：每帧读取播放路径；不得在此加入文件存在性检查或音频加载。
     bool isSelectedTrackLoadedForPlayback() const;
 

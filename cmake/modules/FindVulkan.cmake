@@ -116,10 +116,6 @@ else()
         )
       endif()
     else()
-      # =============================================================================
-      # 调用系统内置的标准 FindVulkan
-      # =============================================================================
-      # CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
       if(MSVC)
         mmm_set_vulkan_sdk_from_env()
         if(_MMM_VULKAN_SDK_ROOT_SET)
@@ -127,8 +123,12 @@ else()
           list(PREPEND CMAKE_LIBRARY_PATH "${VULKAN_SDK_ROOT}/Lib")
         endif()
       endif()
-      include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
     endif()
+    # =============================================================================
+    # 调用系统内置的标准 FindVulkan
+    # =============================================================================
+    # CMAKE_ROOT 是 CMake 安装路径，这就相当于调用了 #include <FindVulkan.cmake>
+    include("${CMAKE_ROOT}/Modules/FindVulkan.cmake")
   else()
     # =============================================================================
     # 调用系统内置的标准 FindVulkan

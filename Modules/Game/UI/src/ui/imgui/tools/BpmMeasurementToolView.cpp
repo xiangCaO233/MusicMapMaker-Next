@@ -283,7 +283,7 @@ BeatLineStyle getBeatLineStyle(int denominator)
 
 /// @brief 按音频控制器的方式读取逻辑层同步后的播放时间。
 /// @return 已应用视觉偏移和亚帧补偿的播放时间。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径/共享指针：每帧读取同步缓冲区快照；getSyncBuffer 返回 shared_ptr
 /// 用于保证画布关闭时快照生命周期，与 AudioWaveformView/AudioSpectrumView
 /// 保持一致。
@@ -294,9 +294,9 @@ PlaybackTimelineState readPlaybackTimelineState()
     state.visualOffset = Config::AppConfig::instance()
                              .getVisualConfig()
                              .getEffectiveVisualOffset();
-    state.audioTime    = audioManager.getCurrentTime();
-    state.visualTime   = state.audioTime + state.visualOffset;
-    state.totalTime    = audioManager.getTotalTime();
+    state.audioTime  = audioManager.getCurrentTime();
+    state.visualTime = state.audioTime + state.visualOffset;
+    state.totalTime  = audioManager.getTotalTime();
     state.isPlaying =
         audioManager.getStatus() == Audio::PlaybackStatus::Playing;
 
@@ -1240,7 +1240,7 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
 }
 
 /// @brief 绘制试听播放、暂停、进度和倍速控制。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：每帧执行；只读取播放状态和处理用户输入，文件检查仅在按钮触发后发生。
 void BpmMeasurementToolView::renderPlaybackControls()
 {
@@ -1401,7 +1401,7 @@ void BpmMeasurementToolView::renderAnalysisPanel()
 }
 
 /// @brief 播放时让分析视图自动跟随播放指针。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：每帧执行；只读取播放同步快照并更新视图中心，不能访问文件系统。
 void BpmMeasurementToolView::followPlaybackIfNeeded()
 {
@@ -1425,7 +1425,7 @@ void BpmMeasurementToolView::followPlaybackIfNeeded()
 }
 
 /// @brief 更新 BPM 工具节拍器音效触发。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：每帧执行；只读取播放同步快照并播放已预加载音效，不访问文件系统。
 void BpmMeasurementToolView::updateMetronomePlayback()
 {
@@ -1472,8 +1472,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         resetMetronomeScheduler(audioTime);
     }
@@ -1536,7 +1536,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                       const std::filesystem::path& fallback) {
+                                const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             return it->second;
@@ -1604,7 +1604,7 @@ void BpmMeasurementToolView::resetMetronomeScheduler(double audioTime)
 
 /// @brief 更新波形绘制用的画布时间缓存。
 /// @param canvasOffset 画布时间相对音频采样时间的偏移，单位为秒。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：波形图每帧查询；仅在画布偏移或波形缓存变化时重建时间数组。
 void BpmMeasurementToolView::updateWaveCanvasTimes(double canvasOffset)
 {
@@ -1749,9 +1749,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -1962,7 +1962,7 @@ void BpmMeasurementToolView::drawBeatMarkers(ImDrawList&   drawList,
 /// @param rectMax 绘制区域右下角。
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；按当前视野增量绘制分拍线，不得加入音频解码或文件访问。
 void BpmMeasurementToolView::drawBeatSubdivisionLines(ImDrawList&   drawList,
                                                       const ImVec2& rectMin,
@@ -2059,7 +2059,7 @@ void BpmMeasurementToolView::drawBeatSubdivisionLines(ImDrawList&   drawList,
 /// @param rectMax 绘制区域右下角。
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；只读取当前播放路径、播放时间并绘制播放指针。
 void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
                                                 const ImVec2& rectMin,
@@ -2120,7 +2120,7 @@ void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
 /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
 void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
                                                   const ImVec2& rectMax,
@@ -2418,7 +2418,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(const ImVec2& rectMin,
 /// @param viewStart 当前视图起始时间，单位为秒。
 /// @param viewEnd 当前视图结束时间，单位为秒。
 /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
 void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
                                                       const ImVec2& rectMax,
@@ -2827,9 +2827,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration = sampleRate > 0.0
-                     ? static_cast<double>(track->num_frames()) / sampleRate
-                     : 0.0;
+    m_duration      = sampleRate > 0.0
+                          ? static_cast<double>(track->num_frames()) / sampleRate
+                          : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
@@ -2854,7 +2854,7 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
-    m_analysisFuture = appThreadPool->enqueue([this,
+    m_analysisFuture                = appThreadPool->enqueue([this,
                                                stopToken,
                                                track    = std::move(track),
                                                duration = m_duration,
@@ -3189,7 +3189,7 @@ void BpmMeasurementToolView::analyzeTrack(
             for ( int i = binStart; i <= binEnd; ++i ) {
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude       = std::max(maxMagnitude, magSq);
+                maxMagnitude = std::max(maxMagnitude, magSq);
             }
             const double db =
                 maxMagnitude > 1e-9

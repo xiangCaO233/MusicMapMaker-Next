@@ -48,8 +48,7 @@ public:
 
     /**
      * @brief 获取交换链创建信息
-     * @return const vk::SwapchainCreateInfoKHR&
-     * 包含图像格式、尺寸、呈现模式等信息
+     * @return 包含图像格式、尺寸、呈现模式等字段的交换链创建信息引用
      */
     const vk::SwapchainCreateInfoKHR& info() const;
 

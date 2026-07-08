@@ -439,7 +439,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool known = std::find_if(knownKeys.begin(),
+            const bool       known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -1057,9 +1057,9 @@ void MainMenuView::renderMetadataEditorWindow()
                 ImGui::Spacing();
 
                 if ( ImGui::BeginTabBar("MetadataTypeTabBar") ) {
-                    // ==================== OSU TAB ====================
+                    // ==================== OSU 页签 ====================
                     if ( ImGui::BeginTabItem("osu! (OSU) 格式元数据") ) {
-                        // Predefined OSU fields
+                        // 预定义 OSU 字段。
                         static const MetadataFieldList OSU_FIELDS = {
                             { "file_format_version",
                               "osu! 文件格式版本 - 例如 v14" },
@@ -1141,7 +1141,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::OSU];
-                        bool  osuPropsChanged = false;
+                        bool osuPropsChanged = false;
                         if ( auto result = takeOsuMetadataTextResult() ) {
                             props = std::move(*result);
                             ensureCompleteOsuMetadata(
@@ -1203,7 +1203,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 130.0f * dpiScale);
                             ImGui::TableHeadersRow();
 
-                            // 1. Render predefined fields
+                            // 1. 渲染预定义字段。
                             for ( const auto& [key, desc] : OSU_FIELDS ) {
                                 ImGui::TableNextRow();
                                 ImGui::TableNextColumn();
@@ -1292,7 +1292,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 }
                             }
 
-                            // 2. Render other custom fields
+                            // 2. 渲染其他自定义字段。
                             std::vector<std::string> customKeys;
                             for ( const auto& [k, v] : props ) {
                                 bool isPredefined = false;
@@ -1352,7 +1352,7 @@ void MainMenuView::renderMetadataEditorWindow()
                             ImGui::EndTable();
                         }
 
-                        // Add new field form
+                        // 新增字段表单。
                         ImGui::Separator();
                         ImGui::AlignTextToFramePadding();
                         ImGui::Text("新增自定义键名:");
@@ -1397,7 +1397,7 @@ void MainMenuView::renderMetadataEditorWindow()
                         ImGui::EndTabItem();
                     }
 
-                    // ==================== MALODY TAB ====================
+                    // ==================== MALODY 页签 ====================
                     if ( ImGui::BeginTabItem("Malody (MALODY) 格式元数据") ) {
                         static const std::vector<
                             std::pair<std::string, std::string>>
@@ -1457,7 +1457,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 190.0f * dpiScale);
                             ImGui::TableHeadersRow();
 
-                            // 1. Render predefined fields
+                            // 1. 渲染预定义字段。
                             for ( const auto& [key, desc] : MALODY_FIELDS ) {
                                 ImGui::TableNextRow();
                                 ImGui::TableNextColumn();
@@ -1549,7 +1549,7 @@ void MainMenuView::renderMetadataEditorWindow()
                                 }
                             }
 
-                            // 2. Render other custom fields
+                            // 2. 渲染其他自定义字段。
                             std::vector<std::string> customKeys;
                             for ( const auto& [k, v] : props ) {
                                 bool isPredefined = false;
@@ -1621,7 +1621,7 @@ void MainMenuView::renderMetadataEditorWindow()
                             ImGui::EndTable();
                         }
 
-                        // Add new field form
+                        // 新增字段表单。
                         ImGui::Separator();
                         ImGui::AlignTextToFramePadding();
                         ImGui::Text("新增自定义键名:");
@@ -1661,7 +1661,7 @@ void MainMenuView::renderMetadataEditorWindow()
                         ImGui::EndTabItem();
                     }
 
-                    // ==================== RM TAB ====================
+                    // ==================== RM 页签 ====================
                     if ( ImGui::BeginTabItem("RM (RM) 格式元数据") ) {
                         static const std::vector<
                             std::pair<std::string, std::string>>
@@ -1672,7 +1672,7 @@ void MainMenuView::renderMetadataEditorWindow()
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::RM];
-                        bool  rmPropsChanged = false;
+                        bool rmPropsChanged = false;
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
@@ -1834,9 +1834,9 @@ void MainMenuView::renderNoteMetadataEditorWindow()
         std::string(TR("ui.edit.note_metadata.title").data()) +
         "###NoteMetadataEditorWindow";
     const bool wasOpenBeforeBegin = m_showNoteMetadataEditorWindow;
-    bool       opened = ImGui::Begin(windowTitle.c_str(),
-                                     &m_showNoteMetadataEditorWindow,
-                                     ImGuiWindowFlags_None);
+    bool       opened             = ImGui::Begin(windowTitle.c_str(),
+                               &m_showNoteMetadataEditorWindow,
+                               ImGuiWindowFlags_None);
     FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
                                      &m_showNoteMetadataEditorWindow);
 
@@ -1997,8 +1997,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2172,8 +2172,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2354,8 +2354,8 @@ void MainMenuView::renderNoteMetadataEditorWindow()
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                        ? it->second
-                                        : emptyMap;
+                                            ? it->second
+                                            : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |

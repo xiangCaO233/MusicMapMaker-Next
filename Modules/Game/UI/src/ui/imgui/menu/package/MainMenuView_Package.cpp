@@ -54,7 +54,7 @@ void centerNextItem(float itemWidth)
 /// @param label 按钮文本和 ImGui ID。
 /// @param size 按钮尺寸。
 /// @return 按钮被点击时返回 true。
-/// @warning UI 绘制路径：只调整游标并调用 ImGui::Button。
+/// @warning UI 绘制路径：只调整游标并调用统一反馈按钮。
 bool drawCenteredButton(const char* label, ImVec2 size)
 {
     centerNextItem(size.x);
@@ -743,7 +743,7 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
 
 /// @brief 渲染打包文件复选列表窗口。
 /// @param dpiScale 当前窗口内容缩放。
-/// @warning UI
+/// @warning UI 热路径约束如下。
 /// 热路径：打包选择弹窗可见时每帧执行；只读取候选缓存，不访问文件系统。
 void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
 {

@@ -30,14 +30,14 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace
 {
-/// @brief Resolve a stored metadata path through the current project if
-/// present.
+/// @brief 在存在当前项目时，将元数据路径解析为项目内路径。
 std::filesystem::path resolveCurrentProjectPath(
     const std::filesystem::path& path)
 {
@@ -52,8 +52,7 @@ std::filesystem::path resolveCurrentProjectPath(
     return path.lexically_normal();
 }
 
-/// @brief Store a filesystem path as a project-relative metadata path when
-/// possible.
+/// @brief 尽量将文件系统路径保存为当前项目相对元数据路径。
 std::filesystem::path makeCurrentProjectRelativePath(
     const std::filesystem::path& path)
 {
@@ -74,7 +73,7 @@ std::filesystem::path makeCurrentProjectRelativePath(
     return path.filename();
 }
 
-/// @brief Normalize long-lived beatmap metadata paths for project storage.
+/// @brief 将长期保存的谱面元数据路径规范化为项目存储路径。
 void normalizeCurrentProjectMetadataPaths(MMM::BaseMapMeta& meta)
 {
     auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
@@ -1233,7 +1232,9 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
             auto* project = EditorEngine::instance().getCurrentProject();
             std::filesystem::path audioPath =
                 SessionUtils::resolveMainAudioPath(*m_ctx, project);
-            if ( std::filesystem::exists(audioPath) ) {
+            std::error_code audioPathError;
+            if ( std::filesystem::exists(audioPath, audioPathError) &&
+                 !audioPathError ) {
                 // 查找对应的 AudioResource 配置
                 AudioTrackConfig config;
                 if ( project ) {
@@ -1275,7 +1276,9 @@ void BeatmapSession::handleCommand(const CmdUpdateBeatmapMetadata& cmd)
                              .parent_path() /
                          updatedMeta.main_cover_path;
             }
-            if ( std::filesystem::exists(bgPath) ) {
+            std::error_code backgroundPathError;
+            if ( std::filesystem::exists(bgPath, backgroundPathError) &&
+                 !backgroundPathError ) {
                 int w = 0, h = 0, comp = 0;
                 if ( stbi_info(
                          Config::pathToUtf8(bgPath).c_str(), &w, &h, &comp) ) {

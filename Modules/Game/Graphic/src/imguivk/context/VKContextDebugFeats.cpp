@@ -20,12 +20,7 @@ void VKContext::enableVKDebugExt()
             // 接收错误
             vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
             // 接收警告
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning
-            // 接收信息
-            // | vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo
-            // 接收详细调试信息（非常吵，建议开发时开启）
-            // | vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose
-            )
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
         // 设置消息类型
         .setMessageType(
             // 常规类型
@@ -85,9 +80,9 @@ void VKContext::enableVKValidateLayer()
         UI::showFatalError("MusicMapMaker - Vulkan SDK Missing", msg);
 
         releaseGLFW();
-        // !此处可能退出
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: Not all requested validation layers are available!");
+        return;
     } else {
         XDEBUG("Validation layers enabled.");
     }

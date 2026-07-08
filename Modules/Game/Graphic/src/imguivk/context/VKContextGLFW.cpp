@@ -17,8 +17,8 @@ void VKContext::initGLFW()
     if ( !glfwInit() ) {
         collectLastGLFWErrorDiagnostic("glfwInit failed.");
         logStartupDiagnostics("glfwInit failed.");
-        // !此处可能退出
-        throw std::runtime_error("GLFW init failed");
+        failInitialization("GLFW init failed");
+        return;
     };
     XDEBUG("GLFW initialized successfully.");
     collectGLFWDiagnostics();
@@ -33,9 +33,8 @@ void VKContext::initGLFW()
         logStartupDiagnostics("GLFW reports that Vulkan is not supported.");
         // 释放GLFW
         releaseGLFW();
-        // !此处可能退出
-        throw std::runtime_error(
-            "Fatal: GLFW reports that Vulkan is not supported!");
+        failInitialization("Fatal: GLFW reports that Vulkan is not supported!");
+        return;
     }
     XDEBUG("GLFW Vulkan is supported.");
 }
@@ -60,10 +59,10 @@ void VKContext::registerGLFWExtensions()
         logStartupDiagnostics(
             "glfwGetRequiredInstanceExtensions returned null.");
         releaseGLFW();
-        // !此处可能退出
-        throw std::runtime_error(
+        failInitialization(
             "Fatal: Failed to get required GLFW "
             "extensions for window surface creation.");
+        return;
     }
 
     XDEBUG("Required GLFW extensions:");
@@ -89,8 +88,7 @@ void VKContext::registerGLFWExtensions()
     XDEBUG("  - {}", VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 #endif  // __APPLE__
 
-    // 启用vk的debug工具扩展
-    // requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    // debug 工具扩展由验证层配置流程统一处理。
 }
 
 /**

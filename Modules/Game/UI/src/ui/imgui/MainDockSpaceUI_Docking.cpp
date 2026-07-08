@@ -8,11 +8,33 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <string_view>
+#include <system_error>
 
 namespace MMM::UI
 {
 namespace
 {
+/// @brief 无异常解析停靠布局比例配置。
+/// @param value 配置字符串。
+/// @param fallback 解析失败时的默认值。
+/// @return 解析成功的有限浮点数或默认值。
+float parseDockLayoutFloat(std::string_view value, float fallback)
+{
+    if ( value.empty() ) return fallback;
+
+    float      parsed = fallback;
+    const auto result =
+        std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if ( result.ec == std::errc{} && result.ptr != value.data() &&
+         std::isfinite(parsed) ) {
+        return parsed;
+    }
+    return fallback;
+}
+
 /// @brief 将当前活动的所有主画布窗口停靠到指定中心节点。
 /// @param dockId 目标中心 Dock 节点 ID。
 /// @warning 低频 UI 路径：仅在 DockBuilder
@@ -127,8 +149,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
         ImGuiID dock_id_left;
         ImGuiID dock_id_right;
-        float   sidebarRatio = std::stof(
-            skinCfg.getLayoutConfig("floating_windows.window1.initial_ratio"));
+        float   sidebarRatio = parseDockLayoutFloat(
+            skinCfg.getLayoutConfig("floating_windows.window1.initial_ratio"),
+            0.22f);
+        sidebarRatio = std::clamp(sidebarRatio, 0.05f, 0.95f);
         auto dir =
             skinCfg.getLayoutConfig("floating_windows.window1.initial_side");
         ImGuiDir sidebarDir = (dir == "right") ? ImGuiDir_Right : ImGuiDir_Left;
@@ -146,10 +170,10 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                 0.12f);
             ImGuiID dock_id_tool = 0;
             dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
-                                                               ImGuiDir_Right,
-                                                               toolNodeRatio,
-                                                               nullptr,
-                                                               &dock_id_work);
+                                                       ImGuiDir_Right,
+                                                       toolNodeRatio,
+                                                       nullptr,
+                                                       &dock_id_work);
             ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
             MainDockSpaceUI::setToolDockId(dock_id_tool);
         } else {

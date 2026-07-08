@@ -130,15 +130,6 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
         "TimelineWindow",
         std::make_unique<Canvas::TimelineCanvas>(
             "Timeline", 60, 200, engine.getSyncBuffer("Timeline")));
-    // m_uiManager.registerView(
-    //     "ImguiTestWindowUI",
-    //     std::make_unique<Graphic::UI::ImguiTestWindowUI>("ImguiTestWindowUI"));
-    // m_uiManager.registerView(
-    //     "CLayoutTestUI",
-    //     std::make_unique<Graphic::UI::CLayoutTestUI>("CLayoutTestUI"));
-    // m_uiManager.registerView(
-    //     "DebugWindowUI",
-    //     std::make_unique<UI::DebugWindowUI>("DebugWindowUI"));
 }
 
 GameLoop::~GameLoop() {}
@@ -170,7 +161,10 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
         auto& context = g_vkContext->get();
         int   fbWidth, fbHeight;
         window.getFramebufferSize(fbWidth, fbHeight);
-        context.initVKWindowRess(&window, fbWidth, fbHeight);
+        if ( !context.initVKWindowRess(&window, fbWidth, fbHeight) ) {
+            XERROR("Failed to initialize Vulkan window resources.");
+            return EXIT_WINDOW_EXEPTION;
+        }
 
         // 初始化音频引擎
         Audio::AudioManager::instance().init();
@@ -199,7 +193,9 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
             LPWSTR* argvW = CommandLineToArgvW(GetCommandLineW(), &argcW);
             if ( argcW > 1 ) {
                 std::filesystem::path inputPath(argvW[1]);
-                if ( std::filesystem::exists(inputPath) ) {
+                std::error_code       inputExistsError;
+                if ( std::filesystem::exists(inputPath, inputExistsError) &&
+                     !inputExistsError ) {
                     Event::OpenProjectEvent openEv;
                     openEv.m_projectPath = inputPath;
                     Event::EventBus::instance().publish(openEv);
@@ -210,7 +206,9 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
             LocalFree(argvW);
 #else
             std::filesystem::path inputPath(argv[1]);
-            if ( std::filesystem::exists(inputPath) ) {
+            std::error_code       inputExistsError;
+            if ( std::filesystem::exists(inputPath, inputExistsError) &&
+                 !inputExistsError ) {
                 Event::OpenProjectEvent openEv;
                 openEv.m_projectPath = inputPath;
                 Event::EventBus::instance().publish(openEv);
@@ -219,27 +217,6 @@ int GameLoop::start(Graphic::NativeWindow& window, int argc, char* argv[],
             }
 #endif
         }
-
-        // [MVP架构测试] 在主线程创建 Model (BeatMap)，通过指令推送给 ViewModel
-        // (ECS)
-        // 测试载入谱面
-        // auto map = std::make_shared<BeatMap>(
-        //     BeatMap::loadFromFile("/home/xiang/Documents/MusicMapRepo/rm/"
-        //                           "xiuluo/Redemptione/Redemptione_4k_hd.imd"));
-
-        // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
-        //     "/home/xiang/Documents/MusicMapRepo/osu/Designant - "
-        //     "Designant/Designant - Designant. (Benson_) [Designant].osu"));
-
-        // auto map = std::make_shared<BeatMap>(BeatMap::loadFromFile(
-        //     "/home/xiang/Documents/MusicMapRepo/osu/493316 Camellia - I Can "
-        //     "Fly In "
-        //     "The Universe/Camellia - I Can Fly In The Universe (Evening) "
-        //     "[Schizophrenia].osu"));
-
-        // 发送给逻辑引擎
-        // Logic::EditorEngine::instance().pushCommand(
-        //     Logic::CmdLoadBeatmap{ map });
 
         auto   nextRenderDeadline = FrameLimitClock::now();
         double lastRenderTargetDt = 0.0;

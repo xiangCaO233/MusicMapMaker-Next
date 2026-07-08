@@ -530,7 +530,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                           : (btnHeight - swatchSize) * 0.5f),
+                                            : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -665,7 +665,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY = ImGui::GetCursorPosY() +
+        float bottomStartY   = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -976,11 +976,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1689,12 +1689,13 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             auto slot   = static_cast<Logic::NoteColorSlot>(i);
             bool active = slot == m_activeColorSlot;
             ImGui::PushID(static_cast<int>(i));
-            if ( ImGui::ColorButton("##SlotColor",
-                                    toImVec4(m_paletteColors[i]),
-                                    ImGuiColorEditFlags_NoTooltip |
-                                        ImGuiColorEditFlags_NoPicker |
-                                        ImGuiColorEditFlags_AlphaPreviewHalf,
-                                    ImVec2(swatchSize, swatchSize)) ) {
+            if ( ::MMM::UI::FeedbackColorButton(
+                     "##SlotColor",
+                     toImVec4(m_paletteColors[i]),
+                     ImGuiColorEditFlags_NoTooltip |
+                         ImGuiColorEditFlags_NoPicker |
+                         ImGuiColorEditFlags_AlphaPreviewHalf,
+                     ImVec2(swatchSize, swatchSize)) ) {
                 m_activeColorSlot = slot;
             }
             ImGui::SameLine();
@@ -1732,7 +1733,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
+        bool hexChanged       = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);
@@ -1779,12 +1780,13 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             auto slot         = static_cast<Logic::NoteColorSlot>(i);
             auto defaultColor = toVec4(skinColorForSlot(slot));
             ImGui::PushID(static_cast<int>(i + 100));
-            if ( ImGui::ColorButton("##SkinDefaultColor",
-                                    toImVec4(defaultColor),
-                                    ImGuiColorEditFlags_NoTooltip |
-                                        ImGuiColorEditFlags_NoPicker |
-                                        ImGuiColorEditFlags_AlphaPreviewHalf,
-                                    ImVec2(swatchSize, swatchSize)) ) {
+            if ( ::MMM::UI::FeedbackColorButton(
+                     "##SkinDefaultColor",
+                     toImVec4(defaultColor),
+                     ImGuiColorEditFlags_NoTooltip |
+                         ImGuiColorEditFlags_NoPicker |
+                         ImGuiColorEditFlags_AlphaPreviewHalf,
+                     ImVec2(swatchSize, swatchSize)) ) {
                 m_activeColorSlot  = slot;
                 m_paletteColors[i] = defaultColor;
                 pushPaletteToBrush();
