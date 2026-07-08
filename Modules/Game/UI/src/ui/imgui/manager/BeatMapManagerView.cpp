@@ -38,14 +38,17 @@ enum BeatmapTableColumn : int {
     /// @brief 类型列。
     BeatmapTableColumnType = 1,
 
+    /// @brief 谱面版本列。
+    BeatmapTableColumnVersion = 2,
+
     /// @brief 文件路径列。
-    BeatmapTableColumnPath = 2,
+    BeatmapTableColumnPath = 3,
 
     /// @brief 文件大小列。
-    BeatmapTableColumnSize = 3,
+    BeatmapTableColumnSize = 4,
 
     /// @brief 修改时间列。
-    BeatmapTableColumnModifiedTime = 4
+    BeatmapTableColumnModifiedTime = 5
 };
 
 /// @brief 将 ASCII 字符串转换为小写，用于类型归一化和排序。
@@ -184,6 +187,18 @@ std::string formatModifiedColumn(
         return TR("ui.file_manager.value_unknown").data();
     }
     return formatModifiedTime(metadata.lastWriteTime);
+}
+
+/// @brief 生成谱面 Version 列文本。
+/// @param metadata 谱面元数据缓存。
+/// @return Version 字段文本或未知占位。
+std::string formatVersionColumn(
+    const BeatMapManagerView::FileMetadata& metadata)
+{
+    if ( !metadata.hasVersion ) {
+        return TR("ui.file_manager.value_unknown").data();
+    }
+    return metadata.version;
 }
 
 /// @brief 比较两个可选数值。
@@ -379,8 +394,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
 
-        if ( ImGui::BeginTable("BeatmapManagerTable",
-                               5,
+        if ( ImGui::BeginTable("BeatmapManagerTableV2",
+                               6,
                                tableFlags,
                                ImGui::GetContentRegionAvail()) ) {
             ImGui::TableSetupScrollFreeze(0, 1);
@@ -395,8 +410,14 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(76.0f, 86.0f * ImGui::GetFontSize() / 17.0f));
             ImGui::TableSetupColumn(
+                TR("ui.beatmap_manager.column_version").data(),
+                ImGuiTableColumnFlags_WidthFixed |
+                    ImGuiTableColumnFlags_PreferSortAscending,
+                std::max(96.0f, 120.0f * ImGui::GetFontSize() / 17.0f));
+            ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_path").data(),
-                ImGuiTableColumnFlags_WidthStretch |
+                ImGuiTableColumnFlags_DefaultHide |
+                    ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_size").data(),
@@ -426,6 +447,9 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 BeatmapSortKey newSortKey = BeatmapSortKey::Name;
                 if ( primarySpec.ColumnIndex == BeatmapTableColumnType ) {
                     newSortKey = BeatmapSortKey::Type;
+                } else if ( primarySpec.ColumnIndex ==
+                            BeatmapTableColumnVersion ) {
+                    newSortKey = BeatmapSortKey::Version;
                 } else if ( primarySpec.ColumnIndex ==
                             BeatmapTableColumnPath ) {
                     newSortKey = BeatmapSortKey::Path;
@@ -533,6 +557,14 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     sortMenuItem(BeatmapSortKey::Type,
                                  SortDirection::Descending,
                                  TR("ui.beatmap_manager.column_type").data());
+                    sortMenuItem(
+                        BeatmapSortKey::Version,
+                        SortDirection::Ascending,
+                        TR("ui.beatmap_manager.column_version").data());
+                    sortMenuItem(
+                        BeatmapSortKey::Version,
+                        SortDirection::Descending,
+                        TR("ui.beatmap_manager.column_version").data());
                     sortMenuItem(BeatmapSortKey::Path,
                                  SortDirection::Ascending,
                                  TR("ui.beatmap_manager.column_path").data());
@@ -588,9 +620,10 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
                 ImGui::Separator();
 
-                const std::array<const char*, 5> columnLabels{
+                const std::array<const char*, 6> columnLabels{
                     TR("ui.beatmap_manager.column_name").data(),
                     TR("ui.beatmap_manager.column_type").data(),
+                    TR("ui.beatmap_manager.column_version").data(),
                     TR("ui.beatmap_manager.column_path").data(),
                     TR("ui.beatmap_manager.column_size").data(),
                     TR("ui.beatmap_manager.column_modified_time").data()
@@ -631,6 +664,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         Config::utf8ToPath(beatmaps[index].m_filePath);
                     m_beatmapFileMetadata[index] =
                         queryBeatmapFileMetadata(filePath);
+                    auto beatmap = MMM::BeatMap::loadFromFile(filePath);
+                    if ( !beatmap.m_baseMapMetadata.map_path.empty() ) {
+                        m_beatmapFileMetadata[index].version =
+                            beatmap.m_baseMapMetadata.version;
+                        m_beatmapFileMetadata[index].hasVersion = true;
+                    }
                 }
                 std::stable_sort(
                     m_sortedBeatmapIndices.begin(),
@@ -649,6 +688,15 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                             compareResult = beatmapTypeFromPath(lhs.m_filePath)
                                                 .compare(beatmapTypeFromPath(
                                                     rhs.m_filePath));
+                            break;
+                        case BeatmapSortKey::Version:
+                            compareResult = compareOptionalValue(
+                                toLowerAscii(
+                                    m_beatmapFileMetadata[lhsIndex].version),
+                                m_beatmapFileMetadata[lhsIndex].hasVersion,
+                                toLowerAscii(
+                                    m_beatmapFileMetadata[rhsIndex].version),
+                                m_beatmapFileMetadata[rhsIndex].hasVersion);
                             break;
                         case BeatmapSortKey::Path:
                             compareResult =
@@ -757,6 +805,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
                     ImGui::TableNextColumn();
                     renderScrollingTableText(typeText,
+                                             ImGui::GetCursorScreenPos(),
+                                             ImGui::GetContentRegionAvail().x,
+                                             rowHeight);
+
+                    ImGui::TableNextColumn();
+                    renderScrollingTableText(formatVersionColumn(metadata),
                                              ImGui::GetCursorScreenPos(),
                                              ImGui::GetContentRegionAvail().x,
                                              rowHeight);

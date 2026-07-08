@@ -524,6 +524,7 @@ return {
 	["ui.beatmap_manager.beatmaps"] = "Beatmaps",
 	["ui.beatmap_manager.column_name"] = "Name",
 	["ui.beatmap_manager.column_type"] = "Type",
+	["ui.beatmap_manager.column_version"] = "Version",
 	["ui.beatmap_manager.column_path"] = "Path",
 	["ui.beatmap_manager.column_size"] = "Size",
 	["ui.beatmap_manager.column_modified_time"] = "Modified Time",

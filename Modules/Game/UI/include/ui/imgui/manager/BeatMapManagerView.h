@@ -49,6 +49,12 @@ public:
 
         /// @brief 是否成功读取最后修改时间。
         bool hasLastWriteTime{ false };
+
+        /// @brief 谱面元数据 Version 字段；读取失败时为空。
+        std::string version;
+
+        /// @brief 是否成功读取谱面元数据 Version 字段。
+        bool hasVersion{ false };
     };
 
 private:
@@ -59,6 +65,9 @@ private:
 
         /// @brief 按谱面文件类型排序。
         Type,
+
+        /// @brief 按谱面元数据 Version 字段排序。
+        Version,
 
         /// @brief 按谱面相对路径排序。
         Path,

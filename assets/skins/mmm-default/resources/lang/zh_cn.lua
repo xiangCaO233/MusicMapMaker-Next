@@ -528,6 +528,7 @@ return {
 	["ui.beatmap_manager.beatmaps"] = "谱面列表",
 	["ui.beatmap_manager.column_name"] = "名称",
 	["ui.beatmap_manager.column_type"] = "类型",
+	["ui.beatmap_manager.column_version"] = "版本",
 	["ui.beatmap_manager.column_path"] = "路径",
 	["ui.beatmap_manager.column_size"] = "大小",
 	["ui.beatmap_manager.column_modified_time"] = "修改时间",
