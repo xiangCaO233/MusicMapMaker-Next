@@ -18,6 +18,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -447,7 +448,7 @@ double marqueeAutoScrollTargetTime(const Logic::RenderSnapshot& snapshot,
     const double targetAbsY =
         currentAbsY + direction * pixelsPerSecond * dt / scale;
     const double targetTime = snapshotTimeAtAbsY(snapshot, targetAbsY);
-    scrolled                = std::isfinite(targetTime) &&
+    scrolled = std::isfinite(targetTime) &&
                std::abs(targetTime - snapshot.currentTime) > 1e-6;
     return scrolled ? targetTime : snapshot.currentTime;
 }
@@ -519,7 +520,7 @@ double canvasPanTargetTime(const Logic::RenderSnapshot& snapshot,
                               : 1.0;
     const double judgmentLineY = static_cast<double>(viewportHeight) *
                                  static_cast<double>(visual.judgeline_pos);
-    const double anchorAbsY = snapshotAbsYAtTime(snapshot, anchorTime);
+    const double anchorAbsY    = snapshotAbsYAtTime(snapshot, anchorTime);
     const double targetCurrentAbsY =
         anchorAbsY - (judgmentLineY - effectiveMouseY) / scale;
     const double rawTargetTime =
@@ -651,7 +652,7 @@ void Basic2DCanvasInteraction::update(
     updateTransientUi();
 }
 
-/// @brief 处理活动主画布上的 Ctrl/Alt 修饰键滚轮。
+/// @brief 处理活动主画布上的 Ctrl/Command/Alt 修饰键滚轮。
 bool Basic2DCanvasInteraction::handleModifierWheel(
     const Logic::RenderSnapshot* currentSnapshot)
 {
@@ -659,17 +660,17 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         return false;
     }
 
-    const auto& io    = ImGui::GetIO();
-    const float wheel = io.MouseWheel;
-    if ( std::abs(wheel) <= 0.01f || (!io.KeyCtrl && !io.KeyAlt) ) {
+    const auto& io               = ImGui::GetIO();
+    const float wheel            = io.MouseWheel;
+    const bool  isCommandPressed = io.KeyCtrl || io.KeySuper;
+    if ( std::abs(wheel) <= 0.01f || (!isCommandPressed && !io.KeyAlt) ) {
         return false;
     }
 
-    const bool isCtrlPressed  = io.KeyCtrl;
     const bool isAltPressed   = io.KeyAlt;
     const bool isShiftPressed = io.KeyShift;
 
-    if ( isCtrlPressed && isAltPressed ) {
+    if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
         double                          currentSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
@@ -696,11 +697,12 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             m_speedTooltipValue = static_cast<float>(newSpeed);
             m_speedTooltipTimer = 2.0f;
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
         }
         return true;
     }
 
-    if ( isCtrlPressed ) {
+    if ( isCommandPressed ) {
         if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
              currentSnapshot->isSelecting ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
@@ -710,15 +712,20 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
             float step      = 0.1f;
             if ( isShiftPressed )
                 step *= editorCfg.settings.scrollSpeedMultiplier;
-            editorCfg.visual.timelineZoom += wheel * step;
-            editorCfg.visual.timelineZoom =
-                std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            const float currentZoom = editorCfg.visual.timelineZoom;
+            const float newZoom =
+                std::clamp(currentZoom + wheel * step, 0.1f, 10.0f);
+            if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
+                editorCfg.visual.timelineZoom = newZoom;
+                Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
 
-    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    auto      editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    const int originalDivisor = editorCfg.settings.beatDivisor;
 
     static std::unordered_map<std::string, float> wheelAccumulator;
     float& acc = wheelAccumulator[m_cameraId];
@@ -758,7 +765,10 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         }
         editorCfg.settings.beatDivisor =
             std::clamp(editorCfg.settings.beatDivisor, 1, 64);
-        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        if ( editorCfg.settings.beatDivisor != originalDivisor ) {
+            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
+        }
     }
 
     return true;
@@ -936,7 +946,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -1006,8 +1016,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                 const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
                 if ( showHoverOverlay ) {
                     if ( currentSnapshot->hoverInspect.show ) {
-                        const auto& inspect   = currentSnapshot->hoverInspect;
-                        auto        drawPoint = [currentSnapshot](
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto drawPoint = [currentSnapshot](
                                              const char* labelKey,
                                              const Logic::HoverBeatPoint& point,
                                              bool showTrack) {

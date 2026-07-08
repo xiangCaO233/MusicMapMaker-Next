@@ -96,7 +96,7 @@ void renderPlaybackSpeedTooltip(float speedValue)
 /// @brief 处理 Timeline 窗格上的修饰键滚轮操作。
 /// @param timelineId Timeline 对应的画布 ID，用于隔离 Alt 滚轮累积量。
 /// @param wheel 当前帧滚轮增量。
-/// @param isCtrlPressed Ctrl 是否按下。
+/// @param isCommandPressed Ctrl 或 Command 是否按下。
 /// @param isAltPressed Alt 是否按下。
 /// @param isShiftPressed Shift 是否按下。
 /// @param speedTooltipValue 输出速度提示窗口需要显示的速度倍率。
@@ -104,15 +104,15 @@ void renderPlaybackSpeedTooltip(float speedValue)
 /// @return 已处理修饰滚轮时返回 true。
 /// @warning UI 热路径：Timeline 悬停滚轮时调用；只读取输入状态并发布轻量命令。
 bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
-                                 bool isCtrlPressed, bool isAltPressed,
+                                 bool isCommandPressed, bool isAltPressed,
                                  bool isShiftPressed, float& speedTooltipValue,
                                  float& speedTooltipTimer)
 {
-    if ( !isCtrlPressed && !isAltPressed ) {
+    if ( !isCommandPressed && !isAltPressed ) {
         return false;
     }
 
-    if ( isCtrlPressed && isAltPressed ) {
+    if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
         double                          currentSpeed =
             Audio::AudioManager::instance().getPlaybackSpeed();
@@ -139,24 +139,30 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             speedTooltipValue = static_cast<float>(newSpeed);
             speedTooltipTimer = 2.0f;
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
         }
         return true;
     }
 
-    if ( isCtrlPressed ) {
+    if ( isCommandPressed ) {
         auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
         float step      = 0.1f;
         if ( isShiftPressed ) {
             step *= editorCfg.settings.scrollSpeedMultiplier;
         }
-        editorCfg.visual.timelineZoom += wheel * step;
-        editorCfg.visual.timelineZoom =
-            std::clamp(editorCfg.visual.timelineZoom, 0.1f, 10.0f);
-        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        const float currentZoom = editorCfg.visual.timelineZoom;
+        const float newZoom =
+            std::clamp(currentZoom + wheel * step, 0.1f, 10.0f);
+        if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
+            editorCfg.visual.timelineZoom = newZoom;
+            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
+        }
         return true;
     }
 
-    auto editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    auto      editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    const int originalDivisor = editorCfg.settings.beatDivisor;
     static std::unordered_map<std::string, float> wheelAccumulator;
     float& acc = wheelAccumulator[timelineId];
     acc += wheel;
@@ -197,7 +203,10 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
 
     editorCfg.settings.beatDivisor =
         std::clamp(editorCfg.settings.beatDivisor, 1, 64);
-    Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+    if ( editorCfg.settings.beatDivisor != originalDivisor ) {
+        Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+        ::MMM::UI::PlayInteractionMouseUpFeedback();
+    }
     return true;
 }
 
@@ -403,7 +412,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             if ( isHovered && std::abs(wheel) > 0.01f ) {
                 if ( !handleTimelineModifierWheel(m_name,
                                                   wheel,
-                                                  io.KeyCtrl,
+                                                  io.KeyCtrl || io.KeySuper,
                                                   io.KeyAlt,
                                                   io.KeyShift,
                                                   m_speedTooltipValue,

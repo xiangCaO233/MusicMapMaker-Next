@@ -748,6 +748,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         double newSpeed = presets[bestIdx];
                         if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
                             applyPlaybackSpeed(newSpeed);
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
                         }
                     }
                     drawTooltip(TR("ui.toolbar.playback_speed").data());
@@ -794,6 +795,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         meta.track_count = newTracks;
                         engine.pushCommand(
                             Logic::CmdUpdateBeatmapMetadata{ meta });
+                        ::MMM::UI::PlayInteractionMouseUpFeedback();
                     }
                 }
                 drawTooltip(TR("ui.settings.beatmap.tracks").data());
@@ -841,6 +843,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         auto newConfig                 = editorCfg;
                         newConfig.settings.beatDivisor = newDivisor;
                         engine.setEditorConfig(newConfig);
+                        ::MMM::UI::PlayInteractionMouseUpFeedback();
                     }
                 }
 

@@ -66,7 +66,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
     } else if ( m_lastMouseCommand.valid ) {
@@ -148,7 +148,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         // --- 交互：滚轮调整预览区倍率 ---
         float wheel = ImGui::GetIO().MouseWheel;
         if ( std::abs(wheel) > 0.01f && !ImGui::GetIO().KeyCtrl &&
-             !ImGui::GetIO().KeyAlt ) {
+             !ImGui::GetIO().KeySuper && !ImGui::GetIO().KeyAlt ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             float step      = 0.5f;
             if ( ImGui::GetIO().KeyShift ) step *= 2.0f;

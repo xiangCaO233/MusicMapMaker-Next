@@ -1239,9 +1239,20 @@ void ProcessGlobalMouseFeedback()
     }
 
     if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
-        Audio::AudioManager::instance().playSoundEffect(MOUSE_UP_SFX_KEY,
-                                                        MOUSE_UP_SFX_VOLUME);
+        PlayInteractionMouseUpFeedback();
     }
+}
+
+/// @brief 播放统一的鼠标松开反馈音效。
+/// @warning UI 热路径：只触发已预加载 SFX pool，不执行资源加载。
+void PlayInteractionMouseUpFeedback()
+{
+    if ( !isInteractionFeedbackEnabled() ) {
+        return;
+    }
+
+    Audio::AudioManager::instance().playSoundEffect(MOUSE_UP_SFX_KEY,
+                                                    MOUSE_UP_SFX_VOLUME);
 }
 
 /// @brief 绘制带统一反馈的 ImGui CollapsingHeader。

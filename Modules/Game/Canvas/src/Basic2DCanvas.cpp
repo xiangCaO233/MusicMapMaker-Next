@@ -43,12 +43,13 @@ bool isMouseHoveringCurrentWindowContent()
 }
 
 /// @brief 判断当前主画布内容区是否正在接收带修饰键的滚轮操作。
-/// @return Ctrl、Alt 或 Ctrl+Alt 滚轮发生在当前窗口内容区时返回 true。
+/// @return Ctrl、Command、Alt 或组合修饰滚轮发生在当前窗口内容区时返回 true。
 /// @warning UI 热路径：主画布每帧更新时调用；只读取 ImGui 输入状态和窗口几何。
 bool isModifierWheelOverCurrentWindowContent()
 {
     const auto& io = ImGui::GetIO();
-    return std::abs(io.MouseWheel) > 0.01f && (io.KeyCtrl || io.KeyAlt) &&
+    return std::abs(io.MouseWheel) > 0.01f &&
+           (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
            isMouseHoveringCurrentWindowContent();
 }
 
@@ -213,7 +214,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             const bool isHoverWheelScroll =
                 isMouseHoveringCurrentWindowContent() &&
                 std::abs(ImGui::GetIO().MouseWheel) > 0.01f &&
-                !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyAlt;
+                !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeySuper &&
+                !ImGui::GetIO().KeyAlt;
             if ( isHoverWheelScroll &&
                  engine.canHoverScrollCamera(m_cameraId) ) {
                 Event::EventBus::instance().publish(Event::LogicCommandEvent(

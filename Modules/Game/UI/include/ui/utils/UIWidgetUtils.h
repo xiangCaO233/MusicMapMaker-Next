@@ -222,6 +222,10 @@ void SetInteractionFeedbackEnabled(bool enabled);
 /// SFX pool，禁止执行资源加载。
 void ProcessGlobalMouseFeedback();
 
+/// @brief 播放统一的鼠标松开反馈音效。
+/// @warning UI 热路径：只触发已预加载 SFX pool，不执行资源加载。
+void PlayInteractionMouseUpFeedback();
+
 /// @brief 给上一条 ImGui Item 补充统一交互音效。
 /// @param id 独立反馈状态 ID。
 /// @param clicked 上一条 Item 本帧是否被激活。
