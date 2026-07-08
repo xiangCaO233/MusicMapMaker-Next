@@ -604,11 +604,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::OpenPopup("TimelineEventEditor");
             };
 
+            const bool inlineGearCanOpenEditor =
+                Logic::EditorEngine::instance().getCurrentTool() ==
+                Logic::EditTool::Draw;
             const bool showInlineTimingEditors =
-                isHovered && !overMenuButton && m_currentSnapshot->hasBeatmap &&
-                !m_isTimingDragging && !m_isTimingErasing &&
-                !m_isTimingDrawPreviewing && !m_isPopupOpen &&
-                !m_isCreatePopupOpen;
+                inlineGearCanOpenEditor && isHovered && !overMenuButton &&
+                m_currentSnapshot->hasBeatmap && !m_isTimingDragging &&
+                !m_isTimingErasing && !m_isTimingDrawPreviewing &&
+                !m_isPopupOpen && !m_isCreatePopupOpen;
             std::optional<InlineGearHit> inlineGearHit;
             bool                         inlineGearEditorOpened = false;
             if ( showInlineTimingEditors ) {
@@ -644,9 +647,6 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     if ( inlineGearHit ) break;
                 }
             }
-            const bool inlineGearCanOpenEditor =
-                Logic::EditorEngine::instance().getCurrentTool() ==
-                Logic::EditTool::Draw;
             if ( inlineGearCanOpenEditor && inlineGearHit &&
                  ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
                 openInlineGearEditor(*inlineGearHit);
