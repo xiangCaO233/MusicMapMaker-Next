@@ -101,7 +101,7 @@ private:
     /// @param plotH 通道绘制区域高度。
     /// @param viewStart 当前全局视觉视野起点，单位为秒。
     /// @param viewEnd 当前全局视觉视野终点，单位为秒。
-    /// @param spectrumVisualOffset 频谱内容使用的最终视觉偏移，单位为秒。
+    /// @param spectrumVisualOffset 频谱采样内容使用的专用偏移，单位为秒。
     void buildChannelGeometry(
         const std::vector<std::unique_ptr<Graphic::VKTexture>>& textures,
         float plotY, float plotW, float plotH, double viewStart, double viewEnd,

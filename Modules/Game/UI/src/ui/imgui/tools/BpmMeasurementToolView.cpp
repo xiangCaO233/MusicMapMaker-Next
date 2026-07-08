@@ -2826,8 +2826,8 @@ double BpmMeasurementToolView::playbackVisualOffset() const
         .getEffectiveVisualOffset();
 }
 
-/// @brief 获取 BPM 波形内容使用的最终视觉偏移，单位为秒。
-/// @return 波形采样时间转换为 BPM 画布时间时需要叠加的偏移。
+/// @brief 获取 BPM 波形采样内容使用的专用偏移，单位为秒。
+/// @return 波形采样时间转换为 BPM 画布时间时需要叠加的专用偏移。
 double BpmMeasurementToolView::waveformCanvasOffset() const
 {
     return Config::AppConfig::instance()
@@ -2835,8 +2835,8 @@ double BpmMeasurementToolView::waveformCanvasOffset() const
         .getWaveformEffectiveVisualOffset();
 }
 
-/// @brief 获取 BPM 频谱内容使用的最终视觉偏移，单位为秒。
-/// @return 频谱采样时间转换为 BPM 画布时间时需要叠加的偏移。
+/// @brief 获取 BPM 频谱采样内容使用的专用偏移，单位为秒。
+/// @return 频谱采样时间转换为 BPM 画布时间时需要叠加的专用偏移。
 double BpmMeasurementToolView::spectrumCanvasOffset() const
 {
     return Config::AppConfig::instance()

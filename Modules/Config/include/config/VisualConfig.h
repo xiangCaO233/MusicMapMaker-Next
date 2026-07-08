@@ -206,9 +206,9 @@ struct VisualConfig {
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移
     float visualOffset{ 0.0f };
-    /// @brief 波形图专用视觉偏移，仅影响波形采样内容的显示位置
+    /// @brief 波形图专用采样偏移，仅影响波形采样内容的显示位置
     float waveformVisualOffset{ 0.0f };
-    /// @brief 频谱图专用视觉偏移，仅影响频谱采样内容的显示位置
+    /// @brief 频谱图专用采样偏移，仅影响频谱采样内容的显示位置
     float spectrumVisualOffset{ 0.0f };
     /// @brief 固定的硬件/多平台视觉偏置 (只读，加算到任何使用 visualOffset
     /// 的地方)
@@ -218,15 +218,15 @@ struct VisualConfig {
     {
         return visualOffset + staticVisualOffset;
     }
-    /// @brief 获取波形图叠加专用偏移后的最终视觉偏移量
+    /// @brief 获取波形图采样内容专用偏移量
     float getWaveformEffectiveVisualOffset() const
     {
-        return getEffectiveVisualOffset() + waveformVisualOffset;
+        return waveformVisualOffset;
     }
-    /// @brief 获取频谱图叠加专用偏移后的最终视觉偏移量
+    /// @brief 获取频谱图采样内容专用偏移量
     float getSpectrumEffectiveVisualOffset() const
     {
-        return getEffectiveVisualOffset() + spectrumVisualOffset;
+        return spectrumVisualOffset;
     }
     /// @brief 时间轴缩放
     float timelineZoom{ 1.0f };

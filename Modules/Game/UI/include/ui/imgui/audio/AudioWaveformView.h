@@ -26,7 +26,7 @@ private:
     /// @param visualTime 当前全局视觉时间，单位为秒。
     /// @param duration 音频总时长，单位为秒。
     /// @param speed 播放速度，预留给后续采样策略。
-    /// @param waveformVisualOffset 波形内容使用的最终视觉偏移，单位为秒。
+    /// @param waveformVisualOffset 波形采样内容使用的专用偏移，单位为秒。
     void updateEnvelopes(double visualTime, double duration, double speed,
                          float waveformVisualOffset);
     void syncEQ();
