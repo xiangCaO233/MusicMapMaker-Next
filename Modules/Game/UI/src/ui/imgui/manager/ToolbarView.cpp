@@ -530,7 +530,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const ImVec2 swatchMin  = {
                 minPos.x + (btnSize - swatchSize) * 0.5f,
                 minPos.y + (showToolLabels ? std::floor(5.0f * dpiScale)
-                                            : (btnHeight - swatchSize) * 0.5f),
+                                           : (btnHeight - swatchSize) * 0.5f),
             };
             const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                        swatchMin.y + swatchSize };
@@ -665,7 +665,7 @@ void ToolbarView::update(UIManager* sourceManager)
             });
 
         float bottomButtonsH = btnSize * 3.0f + itemSpacing * 2.0f;
-        float bottomStartY   = ImGui::GetCursorPosY() +
+        float bottomStartY = ImGui::GetCursorPosY() +
                              ImGui::GetContentRegionAvail().y - bottomButtonsH;
         if ( bottomStartY > ImGui::GetCursorPosY() ) {
             ImGui::SetCursorPosY(bottomStartY);
@@ -936,6 +936,24 @@ void ToolbarView::update(UIManager* sourceManager)
             // 可以加一些常用的快速设置按钮
             const auto& commonDivisors =
                 Config::SkinManager::instance().getCommonDivisors();
+            float presetTextWidth = 0.0f;
+            for ( const int divisor : commonDivisors ) {
+                char previewBuf[32];
+                snprintf(previewBuf, sizeof(previewBuf), "1/%d", divisor);
+                presetTextWidth = std::max(presetTextWidth,
+                                           ImGui::CalcTextSize(previewBuf).x);
+            }
+            const ImGuiStyle& popupStyle = ImGui::GetStyle();
+            const float compactPaddingX = std::min(popupStyle.FramePadding.x,
+                                                   std::floor(4.0f * dpiScale));
+            const float presetButtonWidth =
+                std::ceil(std::max(std::floor(40.0f * dpiScale),
+                                   presetTextWidth + compactPaddingX * 2.0f +
+                                       std::floor(2.0f * dpiScale)));
+            const float presetButtonHeight = std::floor(24.0f * dpiScale);
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_FramePadding,
+                ImVec2(compactPaddingX, popupStyle.FramePadding.y));
             for ( size_t i = 0; i < commonDivisors.size(); ++i ) {
                 if ( i > 0 && i % 4 != 0 ) ImGui::SameLine();
                 char buf[64];
@@ -945,14 +963,13 @@ void ToolbarView::update(UIManager* sourceManager)
                          commonDivisors[i],
                          i);
                 if ( ::MMM::UI::FeedbackButton(
-                         buf,
-                         ImVec2(std::floor(35.0f * dpiScale),
-                                std::floor(24.0f * dpiScale))) ) {
+                         buf, ImVec2(presetButtonWidth, presetButtonHeight)) ) {
                     auto newConfig                 = editorCfg;
                     newConfig.settings.beatDivisor = commonDivisors[i];
                     Logic::EditorEngine::instance().setEditorConfig(newConfig);
                 }
             }
+            ImGui::PopStyleVar();
 
             // 实时获取并记录当前帧计算出的真实尺寸，供下一帧定位计算参考，防止视口越界截断
             ImVec2 sz     = ImGui::GetWindowSize();
@@ -976,11 +993,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
         float targetY = m_lastSpeedBtnY;
 
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -1733,7 +1750,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged       = ImGui::InputText("##NoteColorHex",
+        bool hexChanged = ImGui::InputText("##NoteColorHex",
                                            m_colorHexBuffer.data(),
                                            m_colorHexBuffer.size(),
                                            ImGuiInputTextFlags_CharsNoBlank);

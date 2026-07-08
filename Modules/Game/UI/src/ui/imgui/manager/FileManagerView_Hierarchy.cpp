@@ -645,10 +645,26 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         ImGui::TableNextRow(ImGuiTableRowFlags_None, itemH);
 
         ImGui::TableNextColumn();
+        const ImGuiStyle& style       = ImGui::GetStyle();
+        const ImVec2      nameCellPos = ImGui::GetCursorScreenPos();
+        const float       rowMinY     = nameCellPos.y - style.CellPadding.y;
+        const float       rowMaxY     = rowMinY + itemH;
+        const float       mouseY      = ImGui::GetMousePos().y;
+        const bool        rowHovered  = ImGui::TableGetHoveredColumn() >= 0 &&
+                                        mouseY >= rowMinY && mouseY < rowMaxY;
+        if ( rowHovered ) {
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                                   ImGui::GetColorU32(ImGuiCol_HeaderHovered));
+        }
+
         const std::string displayName =
             fmt::format("{}  {}", fileEntryIcon(entry), entry.filename);
-        const float nameColumnWidth = ImGui::GetContentRegionAvail().x;
-        const bool  open            = Utils::renderScrollingTreeNode(
+        const float  nameColumnWidth = ImGui::GetContentRegionAvail().x;
+        const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
+        ImGui::PushStyleColor(ImGuiCol_Header, transparent);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, transparent);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, transparent);
+        const bool open = Utils::renderScrollingTreeNode(
             entry.fullPath,
             displayName,
             nameColumnWidth,
@@ -657,8 +673,12 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
             [this, &entry, sourceManager]() {
                 activateFileEntry(entry, sourceManager);
             },
-            entry.fullPath);
+            "");
+        ImGui::PopStyleColor(3);
         renderFileEntryContextMenu(entry, sourceManager);
+        if ( rowHovered ) {
+            Utils::renderTooltip(entry.fullPath.c_str());
+        }
 
         if ( ImGui::TableNextColumn() ) {
             const std::string typeText = formatTypeColumn(entry);
