@@ -212,6 +212,11 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
                         const char*      format   = nullptr,
                         ImGuiSliderFlags flags    = 0);
 
+/// @brief 处理全局鼠标按下与松开音效。
+/// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
+/// SFX pool，禁止执行资源加载。
+void ProcessGlobalMouseFeedback();
+
 /// @brief 给上一条 ImGui Item 补充统一交互音效。
 /// @param id 独立反馈状态 ID。
 /// @param clicked 上一条 Item 本帧是否被激活。

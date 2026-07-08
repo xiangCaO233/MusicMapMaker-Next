@@ -34,6 +34,9 @@ private:
     float m_smokeExpansion = 1.5f;   // 烟雾随时间扩张的倍率
     float m_smokeOpacity   = 0.25f;  // 烟雾的基础不透明度（烟雾通常很淡）
 
+    /// @brief 光标按压缩放动画进度，0 表示原始大小，1 表示按下大小。
+    float m_pressAmount{ 0.0f };
+
     std::unique_ptr<VKTexture> m_texCursor;
     std::unique_ptr<VKTexture> m_texTrail;
     std::unique_ptr<VKTexture> m_texSmoke;  // 新增烟雾纹理
@@ -54,6 +57,10 @@ public:
                             vk::Device&         logicalDevice,
                             vk::CommandPool commandPool, vk::Queue queue);
 
+    /// @brief 更新并绘制软件光标、拖尾与烟雾效果。
+    /// @param smokeLifeOverride 烟雾存活时间覆盖值，小于等于 0 时使用配置值。
+    /// @warning UI 热路径：每帧调用；只更新光标粒子缓存、按压动画状态并提交
+    /// 固定类型 ImGui 绘制命令。
     void UpdateAndDraw(float smokeLifeOverride = -1.0f);
 };
 

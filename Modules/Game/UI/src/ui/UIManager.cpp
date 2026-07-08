@@ -27,6 +27,7 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
@@ -762,6 +763,7 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 void UIManager::onUpdateUI()
 {
     Logic::EditorEngine::instance().publishRenderFps(ImGui::GetIO().Framerate);
+    ProcessGlobalMouseFeedback();
 
     syncProjectWorkspaceState();
 

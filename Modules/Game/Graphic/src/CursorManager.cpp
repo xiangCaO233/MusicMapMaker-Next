@@ -3,8 +3,47 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui_internal.h"
 
+#include <algorithm>
+
 namespace MMM::Graphic
 {
+namespace
+{
+/// @brief 鼠标按下时软件光标整体缩小倍率。
+constexpr float CURSOR_PRESSED_SCALE = 0.92f;
+
+/// @brief 光标点击动画相对全局 UI 过渡速度的倍率。
+constexpr float CURSOR_CLICK_TRANSITION_SPEED_MULTIPLIER = 10.0f;
+
+/// @brief 计算 ease-out cubic 缓动值。
+/// @param value 线性进度。
+/// @return 缓动后的进度。
+float easeOutCubic(float value)
+{
+    const float t   = std::clamp(value, 0.0f, 1.0f);
+    const float inv = 1.0f - t;
+    return 1.0f - inv * inv * inv;
+}
+
+/// @brief 向目标值推进光标按压动画进度。
+/// @param current 当前进度。
+/// @param target 目标进度。
+/// @param deltaTime 本帧间隔时间。
+/// @param speed 每秒推进速度。
+/// @return 推进后的进度。
+/// @warning UI 热路径：每帧只进行常量时间浮点计算。
+float approachPressAmount(float current, float target, float deltaTime,
+                          float speed)
+{
+    const float step = std::max(0.0f, deltaTime) * std::max(0.0f, speed);
+    if ( current < target ) {
+        return std::min(target, current + step);
+    }
+    return std::max(target, current - step);
+}
+
+}  // namespace
+
 CursorManager::CursorManager(vk::PhysicalDevice& phyDevice,
                              vk::Device&         logicalDevice,
                              vk::CommandPool commandPool, vk::Queue queue)
@@ -64,15 +103,25 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
     ImVec2   mousePos  = io.MousePos;
     float    deltaTime = io.DeltaTime;
 
-    auto& config    = Config::AppConfig::instance();
-    float dpiScale  = config.getWindowContentScale();
-    auto& cursorCfg = config.getEditorSettings().softwareCursorConfig;
+    auto&       config    = Config::AppConfig::instance();
+    float       dpiScale  = config.getWindowContentScale();
+    auto&       cursorCfg = config.getEditorSettings().softwareCursorConfig;
+    const float pressTarget =
+        ImGui::IsMouseDown(ImGuiMouseButton_Left) ? 1.0f : 0.0f;
+    m_pressAmount = approachPressAmount(
+        m_pressAmount,
+        pressTarget,
+        deltaTime,
+        config.getEditorSettings().aesthetics.animationTransitionSpeed() *
+            CURSOR_CLICK_TRANSITION_SPEED_MULTIPLIER);
+    const float pressScale =
+        1.0f - (1.0f - CURSOR_PRESSED_SCALE) * easeOutCubic(m_pressAmount);
 
     // 同步配置参数
-    float cursorSize    = cursorCfg.cursorSize * dpiScale;
-    float trailSize     = cursorCfg.trailSize * dpiScale;
+    float cursorSize    = cursorCfg.cursorSize * dpiScale * pressScale;
+    float trailSize     = cursorCfg.trailSize * dpiScale * pressScale;
     float trailLifeTime = cursorCfg.trailLifeTime;
-    float smokeSize     = cursorCfg.smokeSize * dpiScale;
+    float smokeSize     = cursorCfg.smokeSize * dpiScale * pressScale;
     float smokeLifeTime = (smokeLifeOverride > 0.0f) ? smokeLifeOverride
                                                      : cursorCfg.smokeLifeTime;
 

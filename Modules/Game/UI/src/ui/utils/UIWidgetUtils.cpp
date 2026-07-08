@@ -529,6 +529,12 @@ constexpr const char* BUTTON_HOVER_SFX_KEY = "ui.hover";
 /// @brief UI 按钮激活时播放的皮肤音频 ID。
 constexpr const char* BUTTON_CLICK_SFX_KEY = "ui.click";
 
+/// @brief 鼠标按下时播放的皮肤音频 ID。
+constexpr const char* MOUSE_DOWN_SFX_KEY = "ui.click_down";
+
+/// @brief 鼠标松开时播放的皮肤音频 ID。
+constexpr const char* MOUSE_UP_SFX_KEY = "ui.click_up";
+
 /// @brief Slider 拖动变化时播放的皮肤音频 ID。
 constexpr const char* SLIDER_CHANGE_SFX_KEY = "ui.slider";
 
@@ -537,6 +543,12 @@ constexpr float BUTTON_HOVER_SFX_VOLUME = 0.22f;
 
 /// @brief 点击音效的单次触发音量倍率。
 constexpr float BUTTON_CLICK_SFX_VOLUME = 0.36f;
+
+/// @brief 鼠标按下音效的单次触发音量倍率。
+constexpr float MOUSE_DOWN_SFX_VOLUME = 0.36f;
+
+/// @brief 鼠标松开音效的单次触发音量倍率。
+constexpr float MOUSE_UP_SFX_VOLUME = 0.34f;
 
 /// @brief Slider 变化音效的单次触发音量倍率。
 constexpr float SLIDER_CHANGE_SFX_VOLUME = 0.24f;
@@ -729,7 +741,11 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
 
     const ImGuiID clickFrameKey =
         makeButtonStorageKey(id, BUTTON_CLICK_FRAME_KEY_SALT);
-    if ( clicked && storage->GetInt(clickFrameKey, -1) != currentFrame ) {
+    const bool mouseEdgeTriggered =
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+    if ( clicked && !mouseEdgeTriggered &&
+         storage->GetInt(clickFrameKey, -1) != currentFrame ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_CLICK_SFX_KEY, BUTTON_CLICK_SFX_VOLUME);
         storage->SetInt(clickFrameKey, currentFrame);
@@ -1187,6 +1203,22 @@ void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
 }
 
 }  // namespace
+
+/// @brief 处理全局鼠标按下与松开音效。
+/// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
+/// SFX pool，禁止执行资源加载。
+void ProcessGlobalMouseFeedback()
+{
+    if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        Audio::AudioManager::instance().playSoundEffect(MOUSE_DOWN_SFX_KEY,
+                                                        MOUSE_DOWN_SFX_VOLUME);
+    }
+
+    if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+        Audio::AudioManager::instance().playSoundEffect(MOUSE_UP_SFX_KEY,
+                                                        MOUSE_UP_SFX_VOLUME);
+    }
+}
 
 /// @brief 绘制带统一反馈的 ImGui CollapsingHeader。
 /// @param label Header 显示文本和 ImGui ID。
