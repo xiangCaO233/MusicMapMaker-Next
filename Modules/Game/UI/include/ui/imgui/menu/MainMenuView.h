@@ -48,6 +48,13 @@ public:
     /// @param sourceManager 当前 UI 管理器。
     void renderMenus(UIManager* sourceManager);
 
+    /// @brief 渲染由主菜单触发但必须位于菜单栏窗口外的弹窗和辅助窗口。
+    /// @param sourceManager 当前 UI 管理器，用于消费菜单延迟动作。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径：每帧执行；只允许消费已置位菜单动作并渲染可见弹窗，
+    /// 文件选择器等阻塞操作只能来自用户明确点击。
+    void renderDeferredPopups(UIManager* sourceManager, float dpiScale);
+
     /// @brief 渲染重叠检测结果窗口。
     void renderOverlapCheckWindow();
 
@@ -205,6 +212,12 @@ private:
     std::vector<std::string> collectExportCompatibilityWarnings(
         const std::string& path) const;
 
+    /// @brief 在菜单栏窗口外消费菜单点击产生的延迟动作。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：每帧检查布尔标志；除用户触发的低频向导或文件选择器外
+    /// 禁止加入阻塞操作。
+    void processPendingMenuActions(UIManager* sourceManager);
+
     /// @brief 渲染导出兼容性警告弹窗。
     /// @param dpiScale 当前窗口内容缩放。
     void renderExportCompatibilityWarningPopup(float dpiScale);
@@ -346,6 +359,12 @@ private:
     bool m_closeViewMenuNextFrame = false;
     /// @brief 下一帧是否关闭帮助菜单。
     bool m_closeHelpMenuNextFrame = false;
+    /// @brief 是否延迟打开新建项目向导。
+    bool m_pendingOpenNewProjectWizard = false;
+    /// @brief 是否延迟打开另存为流程。
+    bool m_pendingSaveAsRequest = false;
+    /// @brief 是否延迟打开打包流程。
+    bool m_pendingPackRequest = false;
 
     /// @brief 是否显示重叠检测窗口。
     bool m_showOverlapCheckWindow = false;

@@ -84,7 +84,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount = std::min(1.0f, amount + step);
+    amount           = std::min(1.0f, amount + step);
 
     storage->SetFloat(amountKey, amount);
     storage->SetInt(lastFrameKey, currentFrame);
@@ -151,8 +151,8 @@ ScrollingSelectableResult renderScrollingSelectableCore(
     const bool        clicked      = ::MMM::UI::FeedbackSelectable(
         selectableId.c_str(), false, 0, ImVec2(width, height));
 
-    if ( !tooltip.empty() && ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip("%s", tooltip.c_str());
+    if ( !tooltip.empty() ) {
+        renderTooltip(tooltip.c_str());
     }
 
     drawScrollingText(text, cursorPos, width - 8.0f, height);
@@ -270,7 +270,7 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
     ImGui::PopStyleVar();
 
     if ( !tooltip.empty() && isHovered ) {
-        ImGui::SetTooltip("%s", tooltip.c_str());
+        renderTooltip(tooltip.c_str());
     }
 
     const float  arrowWidth         = ImGui::GetTreeNodeToLabelSpacing();
@@ -1031,8 +1031,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                    Utils::getUiAnimationTransitionSpeed());
+                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                      Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);

@@ -605,6 +605,11 @@ void NewProjectWizard::submitCreateRequest()
     close();
 }
 
+/// @brief 更新并渲染新建项目向导窗口。
+/// @param sourceManager 当前 UI 管理器，保留用于接口一致性。
+/// @warning UI
+/// 热路径：每帧仅在向导打开时渲染；除用户点击浏览目录触发文件选择器外
+/// 禁止加入阻塞操作。
 void NewProjectWizard::update(UIManager* sourceManager)
 {
     (void)sourceManager;
@@ -616,20 +621,23 @@ void NewProjectWizard::update(UIManager* sourceManager)
         Config::AppConfig::instance().getWindowContentScale();
     const std::string windowTitle =
         std::string(TR("ui.wizard.new_project.title").data()) +
-        "###NewProjectWizardPopup";
+        "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(windowTitle.c_str());
+        ImGui::SetNextWindowFocus();
         m_shouldOpen = false;
     }
 
     Utils::CenteredModalPopupScope modalScope(dpiScale);
-    constexpr ImGuiWindowFlags     WINDOW_FLAGS =
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize;
-    if ( modalScope.begin(windowTitle.c_str(),
-                          &m_isOpen,
-                          WINDOW_FLAGS,
-                          ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
-                          false) ) {
+    constexpr ImGuiWindowFlags     WINDOW_FLAGS = ImGuiWindowFlags_NoCollapse |
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoDocking;
+    const bool                     windowVisible =
+        modalScope.beginWindow(windowTitle.c_str(),
+                               &m_isOpen,
+                               WINDOW_FLAGS,
+                               ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
+                               false);
+    if ( windowVisible ) {
         renderStepHeader();
 
         const float footerReserve = ImGui::GetFrameHeightWithSpacing() +
@@ -649,8 +657,8 @@ void NewProjectWizard::update(UIManager* sourceManager)
         ImGui::EndChild();
 
         renderFooter();
-        ImGui::EndPopup();
     }
+    ImGui::End();
 
     processPendingParentFolderPicker();
     renderParentFolderPicker(dpiScale);

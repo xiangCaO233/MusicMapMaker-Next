@@ -495,10 +495,10 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     cache.muteButtonSize     = muteButtonSize;
     cache.importButtonHeight = importButtonH;
     cache.importButtonGap    = importButtonGap;
-    ImFont* font             = snapshot.fileManagerFont
-                                   ? snapshot.fileManagerFont
-                                   : (snapshot.contentFont ? snapshot.contentFont
-                                                           : snapshot.fallbackFont);
+    ImFont* font = snapshot.fileManagerFont
+                       ? snapshot.fileManagerFont
+                       : (snapshot.contentFont ? snapshot.contentFont
+                                               : snapshot.fallbackFont);
 
     const std::array<const char*, 5> controlLabels{
         TR("ui.audio_manager.output_device").data(),
@@ -543,7 +543,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     float        listHeight = 0.0f;
@@ -628,7 +628,11 @@ ImVec2 AudioManagerView::getMinContentSize(float dpiScale) const
     return getLayoutMetrics(dpiScale).minContentSize;
 }
 
-// 内部绘制逻辑 (Clay/ImGui)
+/// @brief 使用 Clay 与 ImGui 渲染音频管理器主界面。
+/// @param layoutContext 当前布局上下文。
+/// @param sourceManager 当前 UI 管理器，用于打开音轨控制器。
+/// @warning UI 热路径：每帧执行；只允许读取已缓存表格数据和响应用户交互，
+/// 资源扫描必须通过脏标记触发。
 void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                 UIManager*     sourceManager)
 {
@@ -751,11 +755,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::PopStyleColor();
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s (%s)",
-                                      tooltip,
-                                      muted
-                                          ? TR("ui.audio_manager.unmute").data()
+                    const std::string tooltipText =
+                        fmt::format("{} ({})",
+                                    tooltip,
+                                    muted ? TR("ui.audio_manager.unmute").data()
                                           : TR("ui.audio_manager.mute").data());
+                    Utils::renderTooltip(tooltipText.c_str());
                 }
             });
 
@@ -780,7 +785,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     onVolumeChange(val);
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip("%s", tooltip);
+                    Utils::renderTooltip(tooltip);
                 }
             });
 
@@ -866,8 +871,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ::MMM::UI::FeedbackEndCombo();
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s",
+                    Utils::renderTooltip(
                         TR("ui.audio_manager.output_device_tooltip").data());
                 }
             });
@@ -917,12 +921,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
         for ( const auto& [key, path] : skinData.audioPaths ) {
             AudioTableRow row;
-            row.m_id                    = key;
-            row.m_path                  = Config::pathToUtf8(path);
-            row.m_type                  = AudioTrackType::Effect;
-            row.m_kind                  = isInteractionSfxKey(key)
-                                              ? AudioTableRowKind::InteractionSfx
-                                              : AudioTableRowKind::PermanentSfx;
+            row.m_id   = key;
+            row.m_path = Config::pathToUtf8(path);
+            row.m_type = AudioTrackType::Effect;
+            row.m_kind = isInteractionSfxKey(key)
+                             ? AudioTableRowKind::InteractionSfx
+                             : AudioTableRowKind::PermanentSfx;
             const FileMetadata metadata = queryFileMetadata(path);
             row.m_size                  = metadata.size;
             row.m_hasSize               = metadata.hasSize;
@@ -1283,11 +1287,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         m_openManageModal = true;
                     }
                     if ( hovered ) {
-                        ImGui::SetTooltip(
-                            "%s\n%s: %s",
+                        const std::string tooltipText = fmt::format(
+                            "{}\n{}: {}",
                             rowData.m_path.c_str(),
                             TR("ui.audio_manager.column_type").data(),
                             typeText.c_str());
+                        Utils::renderTooltip(tooltipText.c_str());
                     }
 
                     const std::string idText =
@@ -1553,8 +1558,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 Utils::popFixedButtonStyleVars();
                 ImGui::PopStyleColor(4);
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.audio_manager.import_audio").data());
+                    Utils::renderTooltip(
+                        TR("ui.audio_manager.import_audio").data());
                 }
             });
 

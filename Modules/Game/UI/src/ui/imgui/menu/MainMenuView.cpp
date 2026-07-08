@@ -1,4 +1,3 @@
-#define IMGUI_DEFINE_MATH_OPERATORS
 #include "ui/imgui/menu/MainMenuView.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -29,7 +28,6 @@
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <imgui.h>
-#include <imgui_internal.h>
 #include <mutex>
 #include <string_view>
 #include <system_error>
@@ -413,9 +411,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
     if ( io.KeyCtrl ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
             if ( io.KeyShift ) {
-                auto* wizard = sourceManager->getView<NewProjectWizard>(
-                    "NewProjectWizard");
-                if ( wizard ) wizard->open();
+                m_pendingOpenNewProjectWizard = true;
             } else if ( hasProject ) {
                 auto* wizard = sourceManager->getView<NewBeatmapWizard>(
                     "NewBeatmapWizard");
@@ -430,7 +426,7 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_S) ) {
             if ( io.KeyShift ) {
-                openExportFilePicker("");
+                m_pendingSaveAsRequest = true;
             } else {
                 requestSaveBeatmap();
             }
@@ -509,9 +505,10 @@ void MainMenuView::handleHotkeys(UIManager* sourceManager)
 }
 
 /// @brief 更新主菜单计时器、弹窗和启动检查状态。
-/// @param sourceManager 当前 UI 管理器，用于处理快捷键和菜单窗口。
+/// @param sourceManager 当前 UI 管理器，保留用于接口一致性。
 void MainMenuView::update(UIManager* sourceManager)
 {
+    (void)sourceManager;
     consumeBeatmapSpeedExportQueues();
 
     SaveTooltipPayload payload;
@@ -570,6 +567,34 @@ void MainMenuView::update(UIManager* sourceManager)
     }
 
     renderSaveTooltip();
+}
+
+/// @brief 在菜单栏窗口外消费菜单点击产生的延迟动作。
+/// @param sourceManager 当前 UI 管理器。
+/// @warning UI 热路径：每帧检查布尔标志；除用户触发的低频向导或文件选择器外
+/// 禁止加入阻塞操作。
+void MainMenuView::processPendingMenuActions(UIManager* sourceManager)
+{
+    if ( m_pendingOpenNewProjectWizard ) {
+        if ( sourceManager ) {
+            auto* wizard =
+                sourceManager->getView<NewProjectWizard>("NewProjectWizard");
+            if ( wizard ) {
+                wizard->open();
+                m_pendingOpenNewProjectWizard = false;
+            }
+        }
+    }
+
+    if ( m_pendingSaveAsRequest ) {
+        m_pendingSaveAsRequest = false;
+        openExportFilePicker("");
+    }
+
+    if ( m_pendingPackRequest ) {
+        m_pendingPackRequest = false;
+        openPackFilePicker();
+    }
 }
 
 /// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
@@ -919,11 +944,11 @@ void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
             ImGui::Separator();
             ImGui::Spacing();
 
-            const bool canApply = !candidates.empty() &&
-                                  !m_dataSourceReplacePath.empty() &&
-                                  (m_replaceObjectsFromDataSource ||
-                                   m_replaceTimelinesFromDataSource ||
-                                   m_replaceMetadataFromDataSource);
+            const bool   canApply = !candidates.empty() &&
+                                    !m_dataSourceReplacePath.empty() &&
+                                    (m_replaceObjectsFromDataSource ||
+                                     m_replaceTimelinesFromDataSource ||
+                                     m_replaceMetadataFromDataSource);
             const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
             if ( !canApply ) ImGui::BeginDisabled();
             if ( ::MMM::UI::FeedbackButton("替换", buttonSize) ) {
@@ -1002,9 +1027,7 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
 
         if ( MenuItemWithFontIcon(
                  ICON_MMM_BOOK, TR("ui.file.new_pro"), "Ctrl+Shift+N") ) {
-            auto* wizard =
-                sourceManager->getView<NewProjectWizard>("NewProjectWizard");
-            if ( wizard ) wizard->open();
+            m_pendingOpenNewProjectWizard = true;
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_FILE, TR("ui.file.new_map"), "Ctrl+N", hasProject) ) {
@@ -1077,12 +1100,12 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         }
         if ( MenuItemWithFontIcon(
                  ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
-            openExportFilePicker("");
+            m_pendingSaveAsRequest = true;
         }
 
         if ( MenuItemWithFontIcon(
                  ICON_MMM_PACK, TR("ui.file.pack"), nullptr, hasProject) ) {
-            openPackFilePicker();
+            m_pendingPackRequest = true;
         }
         ::MMM::UI::FeedbackEndMenu();
     }
@@ -1316,7 +1339,24 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     // ========== 帮助菜单 ==========
     renderHelpMenu(sourceManager);
 
-    // ========== 弹窗 ==========
+    if ( menuFont ) ImGui::PopFont();
+    ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
+}
+
+/// @brief 渲染由主菜单触发但必须位于菜单栏窗口外的弹窗和辅助窗口。
+/// @param sourceManager 当前 UI 管理器，用于消费菜单延迟动作。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 热路径：每帧执行；只允许消费已置位菜单动作并渲染可见弹窗，
+/// 文件选择器等阻塞操作只能来自用户明确点击。
+void MainMenuView::renderDeferredPopups(UIManager* sourceManager,
+                                        float      dpiScale)
+{
+    processPendingMenuActions(sourceManager);
+
+    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
+    ImFont*              menuFont = skinCfg.getFont("menu");
+    if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
+
     renderAboutPopup();
     renderUpdateCheckingPopup();
     renderUpdatePopup();
@@ -1336,7 +1376,6 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
     renderBeatmapSpeedExportPopup(dpiScale);
 
     if ( menuFont ) ImGui::PopFont();
-    ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
 }
 
 /// @brief 渲染底部提示文本占位区域。

@@ -315,11 +315,11 @@ std::string MainMenuView::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title            = !meta.title_unicode.empty()
-                                   ? meta.title_unicode
-                                   : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount         = meta.track_count;
-            version          = meta.version.empty() ? "default" : meta.version;
+            title    = !meta.title_unicode.empty()
+                           ? meta.title_unicode
+                           : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount = meta.track_count;
+            version  = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
@@ -531,9 +531,9 @@ void MainMenuView::requestSaveBeatmapAs(std::string path)
     m_pendingCompatibilityWarningIsCurrentSave  = false;
     m_pendingCompatibilityWarningAllowOverwrite = false;
     m_pendingExportShowStoreModeExtOption       = showStoreModeExtOption;
-    m_pendingExportAddStoreModeExt              = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .autoAddStoreModeExtForMalodyExport;
+    m_pendingExportAddStoreModeExt   = Config::AppConfig::instance()
+                                           .getEditorSettings()
+                                           .autoAddStoreModeExtForMalodyExport;
     m_showExportCompatibilityWarning = true;
 }
 
@@ -650,21 +650,21 @@ void MainMenuView::renderExportCompatibilityWarningPopup(float dpiScale)
 /// @param dpiScale 当前窗口内容缩放。
 void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
 {
-    constexpr const char* popupId = "选择导出格式###ExportFormatPickerModal";
-    if ( m_showExportFormatPicker ) {
-        ImGui::OpenPopup(popupId);
-        m_showExportFormatPicker = false;
+    constexpr const char* popupId = "选择导出格式###ExportFormatPickerWindow";
+    if ( !m_showExportFormatPicker ) {
+        return;
     }
 
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
-
     std::string selectedExtension;
+    bool        closeWindow = false;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        if ( popupStyle.begin(popupId,
-                              nullptr,
-                              ImGuiWindowFlags_None,
-                              ImVec2(360.0f * dpiScale, 0.0f)) ) {
+        bool                           isOpen = true;
+        if ( popupStyle.beginWindow(
+                 popupId,
+                 &isOpen,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
+                 ImVec2(360.0f * dpiScale, 0.0f)) ) {
             ImGui::TextUnformatted("选择另存为格式：");
             ImGui::Spacing();
             ImGui::Separator();
@@ -690,16 +690,23 @@ void MainMenuView::renderExportFormatPickerPopup(float dpiScale)
             ImGui::Spacing();
             if ( drawCenteredButton(TR("ui.common.cancel").data(),
                                     ImVec2(120.0f * dpiScale, 0.0f)) ) {
-                ImGui::CloseCurrentPopup();
+                closeWindow = true;
             }
 
             if ( !selectedExtension.empty() ) {
-                ImGui::CloseCurrentPopup();
+                closeWindow = true;
             }
-            ImGui::EndPopup();
+        }
+        ImGui::End();
+
+        if ( !isOpen ) {
+            closeWindow = true;
         }
     }
 
+    if ( closeWindow ) {
+        m_showExportFormatPicker = false;
+    }
     if ( !selectedExtension.empty() ) {
         openExportFilePicker(selectedExtension);
     }
@@ -758,8 +765,8 @@ void MainMenuView::openAudioImportPicker()
         fdConfig.countSelectionMax = 1;
         fdConfig.fileName          = "";
         fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                         ImGuiFileDialogFlags_HideColumnType |
-                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                     ImGuiFileDialogFlags_HideColumnType |
+                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
         ImGuiFileDialog::Instance()->OpenDialog(
             "AudioImportPicker",
             TR("ui.audio_manager.import_audio").data(),

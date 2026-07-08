@@ -672,22 +672,22 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
 /// @param dpiScale 当前窗口内容缩放。
 void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
 {
-    constexpr const char* popupId = "选择打包格式###PackageFormatPickerModal";
-    if ( m_package.showFormatPicker ) {
-        ImGui::OpenPopup(popupId);
-        m_package.showFormatPicker = false;
+    constexpr const char* popupId = "选择打包格式###PackageFormatPickerWindow";
+    if ( !m_package.showFormatPicker ) {
+        return;
     }
 
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
-
     bool            hasSelection = false;
+    bool            closeWindow  = false;
     PackageFileType selectedType = m_package.selectedFileType;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        if ( popupStyle.begin(popupId,
-                              nullptr,
-                              ImGuiWindowFlags_None,
-                              ImVec2(380.0f * dpiScale, 0.0f)) ) {
+        bool                           isOpen = true;
+        if ( popupStyle.beginWindow(
+                 popupId,
+                 &isOpen,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
+                 ImVec2(380.0f * dpiScale, 0.0f)) ) {
             ImGui::TextUnformatted("选择目标打包格式：");
             ImGui::Spacing();
             ImGui::Separator();
@@ -718,16 +718,23 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
             ImGui::Spacing();
             if ( drawCenteredButton(TR("ui.common.cancel").data(),
                                     ImVec2(120.0f * dpiScale, 0.0f)) ) {
-                ImGui::CloseCurrentPopup();
+                closeWindow = true;
             }
 
             if ( hasSelection ) {
-                ImGui::CloseCurrentPopup();
+                closeWindow = true;
             }
-            ImGui::EndPopup();
+        }
+        ImGui::End();
+
+        if ( !isOpen ) {
+            closeWindow = true;
         }
     }
 
+    if ( closeWindow ) {
+        m_package.showFormatPicker = false;
+    }
     if ( hasSelection ) {
         m_package.selectedFileType = selectedType;
         if ( !shouldShowConvertedBeatmapSaveOption(selectedType) ) {

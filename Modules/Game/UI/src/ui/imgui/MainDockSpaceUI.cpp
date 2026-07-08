@@ -236,6 +236,10 @@ NativeFrameHit resolveNativeFrameHit(const ImGuiViewport& viewport,
 }
 }  // namespace
 
+/// @brief 更新主 DockSpace、顶部菜单、全局文件对话框和应用级模态弹窗。
+/// @param sourceManager 当前 UI 管理器。
+/// @warning UI 热路径：每帧执行；除用户明确触发的文件选择器和窗口关闭确认外，
+/// 禁止加入文件系统扫描、阻塞等待或完整数据重建。
 void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     ensureTemporaryProjectSubscriptions();
@@ -693,6 +697,23 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             }
             ImGui::EndPopup();
         }
+    }
+
+    // --- 7. 主菜单延迟弹窗宿主 ---
+    {
+        constexpr ImGuiWindowFlags popupHostFlags =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground |
+            ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoBringToFrontOnFocus;
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(1.0f, 1.0f), ImGuiCond_Always);
+        if ( ImGui::Begin("MainMenuPopupHost", nullptr, popupHostFlags) ) {
+            m_mainMenuview.renderDeferredPopups(sourceManager, dpiScale);
+        }
+        ImGui::End();
     }
 }
 
