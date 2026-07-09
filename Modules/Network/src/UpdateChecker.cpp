@@ -60,6 +60,25 @@ size_t fileWriteCallback(void* contents, size_t size, size_t nmemb, void* userp)
     return fwrite(contents, size, nmemb, static_cast<FILE*>(userp));
 }
 
+/// @brief 以二进制写入模式打开更新临时文件。
+/// @param path 需要创建或覆盖的文件路径。
+/// @return 打开成功时返回文件句柄，失败时返回空指针。
+FILE* openBinaryWriteFile(const std::filesystem::path& path)
+{
+#if defined(_WIN32) && defined(_MSC_VER) && !defined(__MINGW32__) && \
+    !defined(__MINGW64__)
+    FILE* file = nullptr;
+    if ( _wfopen_s(&file, path.wstring().c_str(), L"wb") != 0 ) {
+        return nullptr;
+    }
+    return file;
+#elif defined(_WIN32)
+    return _wfopen(path.wstring().c_str(), L"wb");
+#else
+    return fopen(path.c_str(), "wb");
+#endif
+}
+
 /// @brief 写入更新启动失败原因。
 void writeRestartError(std::string* errorMessage, const std::string& message)
 {
@@ -648,11 +667,7 @@ void UpdateChecker::downloadAsync()
                 "MusicMapMaker_updater";
 #endif
 
-#ifdef _WIN32
-            FILE* uFile = _wfopen(updaterTempPath.wstring().c_str(), L"wb");
-#else
-            FILE* uFile = fopen(updaterTempPath.c_str(), "wb");
-#endif
+            FILE* uFile = openBinaryWriteFile(updaterTempPath);
             if ( !uFile ) {
                 fail("Failed to create updater temp file");
                 return;
@@ -726,11 +741,7 @@ void UpdateChecker::downloadAsync()
         std::filesystem::path mainTempPath =
             std::filesystem::temp_directory_path() / "MusicMapMaker_update";
 
-#ifdef _WIN32
-        FILE* mFile = _wfopen(mainTempPath.wstring().c_str(), L"wb");
-#else
-        FILE* mFile = fopen(mainTempPath.c_str(), "wb");
-#endif
+        FILE* mFile = openBinaryWriteFile(mainTempPath);
         if ( !mFile ) {
             fail("Failed to create main temp file");
             return;
