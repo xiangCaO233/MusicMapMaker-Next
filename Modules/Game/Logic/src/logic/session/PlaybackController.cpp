@@ -15,6 +15,21 @@ namespace MMM::Logic
 {
 namespace
 {
+/// @brief 画布滚轮定位时播放的 Hover 交互音效 ID。
+constexpr const char* CANVAS_SCROLL_HOVER_SFX_KEY = "ui.hover";
+
+/// @brief 画布滚轮定位 Hover 音效的单次触发音量倍率。
+constexpr float CANVAS_SCROLL_HOVER_SFX_VOLUME = 0.22f;
+
+/// @brief 播放画布滚轮定位反馈音效。
+/// @warning 逻辑输入路径：仅在滚轮定位命令被消费时触发，使用已预加载的
+/// SFX pool，不执行资源加载。
+void playCanvasScrollHoverFeedback()
+{
+    Audio::AudioManager::instance().playSoundEffect(
+        CANVAS_SCROLL_HOVER_SFX_KEY, CANVAS_SCROLL_HOVER_SFX_VOLUME);
+}
+
 /// @brief 判断项目音频资源是否匹配谱面主音频路径。
 /// @param resource 待匹配的项目音频资源。
 /// @param mainAudioPath 谱面元数据中保存的主音频路径。
@@ -142,8 +157,8 @@ bool ensureCurrentBeatmapBgmLoaded(SessionContext& ctx)
 /// @warning 低频播放切换路径：仅在开始播放前执行，只清理常量级状态容器。
 void cancelActiveEditingState(SessionContext& ctx)
 {
-    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
-                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
+                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
     const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
@@ -409,6 +424,7 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     m_ctx.playStartVisualTime = m_ctx.currentTime;
     m_ctx.syncClock.reset(m_ctx.currentTime);
     Audio::AudioManager::instance().seek(m_ctx.currentTime);
+    playCanvasScrollHoverFeedback();
     SessionUtils::syncHitIndex(m_ctx);
     m_ctx.hitFXSystem.clearActiveEffects();
 }
