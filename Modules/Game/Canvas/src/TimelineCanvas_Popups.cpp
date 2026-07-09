@@ -50,6 +50,12 @@ constexpr std::array<float, TIMING_TABLE_COLUMN_COUNT>
     TIMING_TABLE_COLUMN_MIN_WIDTHS{ 44.0f, 150.0f, 110.0f, 130.0f,
                                     80.0f, 130.0f, 130.0f };
 
+/// @brief 时间线表格局部滚动条宽度。
+constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
+
+/// @brief 时间线表格局部滚动条拖拽块最小尺寸。
+constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
+
 /// @brief 时间线表格拍位换算使用的 BPM 锚点。
 struct TimingTableBeatPoint {
     /// @brief BPM 时间点，单位秒。
@@ -1473,10 +1479,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::Spacing();
 
         // 渲染表格
-        const float tableScrollbarSize =
-            std::max(ImGui::GetStyle().ScrollbarSize,
-                     std::floor(14.0f * std::max(dpiScale, 1.0f)));
+        const float tableScrollbarSize = std::max(
+            ImGui::GetStyle().ScrollbarSize,
+            std::floor(TIMING_TABLE_SCROLLBAR_SIZE * std::max(dpiScale, 1.0f)));
+        const float tableScrollbarGrabMinSize =
+            std::max(ImGui::GetStyle().GrabMinSize,
+                     std::floor(TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE *
+                                std::max(dpiScale, 1.0f)));
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tableScrollbarSize);
+        ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize,
+                            tableScrollbarGrabMinSize);
         if ( ImGui::BeginTable(
                  "TimingPointsTableMainV3",
                  7,
@@ -1714,7 +1726,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             ImGui::EndTable();
         }
-        ImGui::PopStyleVar();
+        ImGui::PopStyleVar(2);
     }
     ImGui::End();
 
