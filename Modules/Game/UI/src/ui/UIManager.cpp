@@ -548,15 +548,6 @@ void UIManager::captureProjectWorkspaceViews(ProjectWorkspaceState& workspace)
         workspace.m_timingPointsTableOpen = timeline->isTimingPointsTableOpen();
     }
 
-    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
-        workspace.m_overlapCheckOpen =
-            mainDock->m_mainMenuview.isOverlapCheckWindowOpen();
-        workspace.m_metadataEditorOpen =
-            mainDock->m_mainMenuview.isMetadataEditorWindowOpen();
-        workspace.m_noteMetadataEditorOpen =
-            mainDock->m_mainMenuview.isNoteMetadataEditorWindowOpen();
-    }
-
     if ( auto* sideBarManager = getView<FloatingManagerUI>("SideBarManager") ) {
         SideBarTab activeTab = SideBarTab::None;
         if ( sideBarManager->isVisible() ) {
@@ -643,15 +634,6 @@ void UIManager::restoreProjectWorkspaceViews(
 
     if ( auto* timeline = getView<Canvas::TimelineCanvas>("TimelineWindow") ) {
         timeline->setTimingPointsTableOpen(workspace.m_timingPointsTableOpen);
-    }
-
-    if ( auto* mainDock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
-        mainDock->m_mainMenuview.setOverlapCheckWindowOpen(
-            workspace.m_overlapCheckOpen);
-        mainDock->m_mainMenuview.setMetadataEditorWindowOpen(
-            workspace.m_metadataEditorOpen);
-        mainDock->m_mainMenuview.setNoteMetadataEditorWindowOpen(
-            workspace.m_noteMetadataEditorOpen);
     }
 }
 

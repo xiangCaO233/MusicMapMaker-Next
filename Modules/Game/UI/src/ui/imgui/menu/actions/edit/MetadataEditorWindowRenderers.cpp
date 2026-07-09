@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "MetadataEditorWindowRenderers.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -8,7 +9,6 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/core.h>
 #include <imgui.h>
@@ -992,9 +992,9 @@ void renderMetadataJsonEditorPopup(float dpiScale)
 }  // namespace
 
 /// @brief 渲染谱面元数据编辑窗口。
-void MainMenuView::renderMetadataEditorWindow()
+void renderMetadataEditorWindow(bool& showWindow)
 {
-    if ( !m_showMetadataEditorWindow ) return;
+    if ( !showWindow ) return;
 
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -1024,12 +1024,11 @@ void MainMenuView::renderMetadataEditorWindow()
     ImFont* titleFont = skinMgr.getFont("title");
     if ( titleFont ) ImGui::PushFont(titleFont, titleFont->LegacySize);
 
-    const bool wasOpenBeforeBegin = m_showMetadataEditorWindow;
+    const bool wasOpenBeforeBegin = showWindow;
     bool opened = ImGui::Begin("谱面额外元数据编辑###MetadataEditorWindow",
-                               &m_showMetadataEditorWindow,
+                               &showWindow,
                                ImGuiWindowFlags_None);
-    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
-                                     &m_showMetadataEditorWindow);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &showWindow);
 
     if ( titleFont ) ImGui::PopFont();
 
@@ -1787,9 +1786,9 @@ void MainMenuView::renderMetadataEditorWindow()
 }
 
 /// @brief 渲染选中音符元数据编辑窗口。
-void MainMenuView::renderNoteMetadataEditorWindow()
+void renderNoteMetadataEditorWindow(bool& showWindow)
 {
-    if ( !m_showNoteMetadataEditorWindow ) return;
+    if ( !showWindow ) return;
 
     struct InputBuffer {
         char key[128] = "";
@@ -1797,10 +1796,10 @@ void MainMenuView::renderNoteMetadataEditorWindow()
     };
     static std::unordered_map<std::string, InputBuffer> inputBuffers;
     static bool                                         lastShowState = false;
-    if ( m_showNoteMetadataEditorWindow && !lastShowState ) {
+    if ( showWindow && !lastShowState ) {
         inputBuffers.clear();
     }
-    lastShowState = m_showNoteMetadataEditorWindow;
+    lastShowState = showWindow;
 
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -1833,12 +1832,10 @@ void MainMenuView::renderNoteMetadataEditorWindow()
     std::string windowTitle =
         std::string(TR("ui.edit.note_metadata.title").data()) +
         "###NoteMetadataEditorWindow";
-    const bool wasOpenBeforeBegin = m_showNoteMetadataEditorWindow;
-    bool       opened             = ImGui::Begin(windowTitle.c_str(),
-                               &m_showNoteMetadataEditorWindow,
-                               ImGuiWindowFlags_None);
-    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
-                                     &m_showNoteMetadataEditorWindow);
+    const bool wasOpenBeforeBegin = showWindow;
+    bool       opened =
+        ImGui::Begin(windowTitle.c_str(), &showWindow, ImGuiWindowFlags_None);
+    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &showWindow);
 
     if ( titleFont ) ImGui::PopFont();
 

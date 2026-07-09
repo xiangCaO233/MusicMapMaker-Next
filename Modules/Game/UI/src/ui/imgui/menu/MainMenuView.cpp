@@ -1,37 +1,16 @@
 #include "ui/imgui/menu/MainMenuView.h"
-#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
-#include "event/logic/BeatmapSaveConflictEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"
-#include "event/logic/LogicCommandEvent.h"
-#include "event/project/ProjectEvents.h"
-#include "event/ui/UISettingsTabEvent.h"
-#include "event/ui/menu/OpenProjectEvent.h"
-#include "logic/EditorEngine.h"
-#include "logic/ecs/components/InteractionComponent.h"
-#include "logic/session/context/SessionContext.h"
-#include "mmm/beatmap/BeatMap.h"
-#include "mmm/project/Project.h"
-#include "network/UpdateChecker.h"
-#include "ui/Icons.h"
-#include "ui/UIManager.h"
-#include "ui/imgui/ClipboardBridge.h"
+#include "mmm/project/PackageFileTypes.h"
 #include "ui/imgui/ShortcutUtils.h"
-#include "ui/imgui/manager/NewBeatmapWizard.h"
-#include "ui/imgui/manager/NewProjectWizard.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <algorithm>
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <imgui.h>
-#include <mutex>
-#include <string_view>
-#include <system_error>
-#include <vector>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -47,183 +26,10 @@ struct SaveTooltipPayload {
     bool isExport{ false };
 };
 
-/// @brief 跨线程传递给 UI 帧内消费的保存冲突确认载荷。
-struct SaveConflictPayload {
-    /// @brief 存在覆盖风险的目标路径，使用 UTF-8 字符串。
-    std::string path;
-};
-
-/// @brief 跨线程传递给 UI 帧内消费的项目打开失败载荷。
-struct ProjectOpenFailedPayload {
-    /// @brief 尝试打开的路径，使用 UTF-8 字符串。
-    std::string path;
-
-    /// @brief 失败原因。
-    std::string errorMessage;
-
-    /// @brief 是否是打开谱面包失败。
-    bool isPackage{ false };
-};
-
-/// @brief 最近项目子菜单中项目名的最大显示宽度。
-constexpr float RECENT_PROJECT_NAME_MAX_WIDTH = 260.0f;
-
-/// @brief 最近项目子菜单中路径列的最大显示宽度。
-constexpr float RECENT_PROJECT_PATH_MAX_WIDTH = 420.0f;
-
-/// @brief 菜单中用于截断文本的省略号。
-constexpr std::string_view MENU_TEXT_ELLIPSIS = "...";
-
-/// @brief 计算 UTF-8 文本在当前 ImGui 字体中的宽度。
-/// @param text UTF-8 文本视图。
-/// @return 当前字体下的像素宽度。
-/// @warning UI 热路径低频分支：仅在菜单展开时执行；禁止用于每帧大批量列表。
-float calcUtf8TextWidth(std::string_view text)
-{
-    return ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
-}
-
-/// @brief 判断字节是否为 UTF-8 续字节。
-/// @param byte 输入字节。
-/// @return 续字节返回 true。
-bool isUtf8ContinuationByte(unsigned char byte)
-{
-    return (byte & 0xC0U) == 0x80U;
-}
-
-/// @brief 收集 UTF-8 文本的字符边界。
-/// @param text UTF-8 文本视图。
-/// @return 包含 0 和末尾位置的边界表。
-/// @warning UI 热路径低频分支：仅用于菜单文本截断；输入异常时按单字节推进。
-std::vector<size_t> collectUtf8Boundaries(std::string_view text)
-{
-    std::vector<size_t> boundaries;
-    boundaries.reserve(text.size() + 1);
-    boundaries.push_back(0);
-
-    size_t i = 0;
-    while ( i < text.size() ) {
-        const unsigned char byte = static_cast<unsigned char>(text[i]);
-        size_t              step = 1;
-        if ( (byte & 0x80U) == 0U ) {
-            step = 1;
-        } else if ( (byte & 0xE0U) == 0xC0U ) {
-            step = 2;
-        } else if ( (byte & 0xF0U) == 0xE0U ) {
-            step = 3;
-        } else if ( (byte & 0xF8U) == 0xF0U ) {
-            step = 4;
-        }
-
-        if ( i + step > text.size() ) {
-            step = 1;
-        } else {
-            for ( size_t j = 1; j < step; ++j ) {
-                if ( !isUtf8ContinuationByte(
-                         static_cast<unsigned char>(text[i + j])) ) {
-                    step = 1;
-                    break;
-                }
-            }
-        }
-
-        i += step;
-        boundaries.push_back(i);
-    }
-    return boundaries;
-}
-
-/// @brief 从尾部截断 UTF-8 文本以适配给定宽度。
-/// @param text UTF-8 文本视图。
-/// @param maxWidth 最大显示宽度。
-/// @return 截断后的显示文本。
-/// @warning UI 热路径低频分支：仅在最近项目菜单展开时执行。
-std::string truncateUtf8TailToWidth(std::string_view text, float maxWidth)
-{
-    if ( maxWidth <= 0.0f ) {
-        return {};
-    }
-    if ( calcUtf8TextWidth(text) <= maxWidth ) {
-        return std::string(text);
-    }
-    if ( calcUtf8TextWidth(MENU_TEXT_ELLIPSIS) > maxWidth ) {
-        return std::string(MENU_TEXT_ELLIPSIS);
-    }
-
-    const auto boundaries = collectUtf8Boundaries(text);
-    size_t     lo         = 0;
-    size_t     hi         = boundaries.size() - 1;
-    while ( lo < hi ) {
-        const size_t mid = (lo + hi + 1) / 2;
-        std::string  candidate(text.substr(0, boundaries[mid]));
-        candidate += MENU_TEXT_ELLIPSIS;
-        if ( calcUtf8TextWidth(candidate) <= maxWidth ) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-
-    std::string result(text.substr(0, boundaries[lo]));
-    result += MENU_TEXT_ELLIPSIS;
-    return result;
-}
-
-/// @brief 从中间截断 UTF-8 文本以保留路径开头和结尾。
-/// @param text UTF-8 文本视图。
-/// @param maxWidth 最大显示宽度。
-/// @return 截断后的显示文本。
-/// @warning UI 热路径低频分支：仅在最近项目菜单展开时执行。
-std::string truncateUtf8MiddleToWidth(std::string_view text, float maxWidth)
-{
-    if ( maxWidth <= 0.0f ) {
-        return {};
-    }
-    if ( calcUtf8TextWidth(text) <= maxWidth ) {
-        return std::string(text);
-    }
-    if ( calcUtf8TextWidth(MENU_TEXT_ELLIPSIS) > maxWidth ) {
-        return std::string(MENU_TEXT_ELLIPSIS);
-    }
-
-    const auto   boundaries = collectUtf8Boundaries(text);
-    const size_t charCount  = boundaries.empty() ? 0 : boundaries.size() - 1;
-    for ( size_t keep = charCount; keep > 0; --keep ) {
-        const size_t prefixCount = (keep + 1) / 2;
-        const size_t suffixCount = keep / 2;
-        if ( prefixCount + suffixCount >= charCount ) {
-            continue;
-        }
-
-        std::string candidate(text.substr(0, boundaries[prefixCount]));
-        candidate += MENU_TEXT_ELLIPSIS;
-        candidate += text.substr(boundaries[charCount - suffixCount]);
-        if ( calcUtf8TextWidth(candidate) <= maxWidth ) {
-            return candidate;
-        }
-    }
-    return std::string(MENU_TEXT_ELLIPSIS);
-}
-
 /// @brief 获取保存结果提示队列。
 moodycamel::ConcurrentQueue<SaveTooltipPayload>& getSaveTooltipQueue()
 {
     static moodycamel::ConcurrentQueue<SaveTooltipPayload> queue;
-    return queue;
-}
-
-/// @brief 获取保存冲突确认队列。
-moodycamel::ConcurrentQueue<SaveConflictPayload>& getSaveConflictQueue()
-{
-    static moodycamel::ConcurrentQueue<SaveConflictPayload> queue;
-    return queue;
-}
-
-/// @brief 获取项目打开失败提示队列。
-moodycamel::ConcurrentQueue<ProjectOpenFailedPayload>&
-getProjectOpenFailedQueue()
-{
-    static moodycamel::ConcurrentQueue<ProjectOpenFailedPayload> queue;
     return queue;
 }
 
@@ -269,438 +75,154 @@ void ensureSaveResultSubscription()
     subscribed = true;
 }
 
-/// @brief 订阅逻辑层保存冲突事件，将事件转交 UI 帧内处理。
-void ensureSaveConflictSubscription()
-{
-    static bool subscribed = false;
-    if ( subscribed ) return;
-
-    Event::EventBus::instance().subscribe<Event::BeatmapSaveConflictEvent>(
-        [](const Event::BeatmapSaveConflictEvent& event) {
-            getSaveConflictQueue().enqueue(SaveConflictPayload{
-                .path = event.path,
-            });
-        });
-    subscribed = true;
-}
-
-/// @brief 订阅项目打开失败事件，将事件转交 UI 帧内处理。
-void ensureProjectOpenFailedSubscription()
-{
-    static bool subscribed = false;
-    if ( subscribed ) return;
-
-    Event::EventBus::instance().subscribe<Event::ProjectOpenFailedEvent>(
-        [](const Event::ProjectOpenFailedEvent& event) {
-            getProjectOpenFailedQueue().enqueue(ProjectOpenFailedPayload{
-                .path         = event.m_projectPath,
-                .errorMessage = event.m_errorMessage,
-                .isPackage    = event.m_isPackage,
-            });
-        });
-    subscribed = true;
-}
-
-/// @brief 将项目谱面路径规范化为候选比较键。
-/// @param projectRoot 当前项目根目录。
-/// @param path 谱面路径，可为项目相对路径或绝对路径。
-/// @return 规范化后的 UTF-8 路径键。
-std::string makeDataSourceBeatmapPathKey(
-    const std::filesystem::path& projectRoot, const std::filesystem::path& path)
-{
-    if ( path.empty() ) return {};
-
-    std::filesystem::path fullPath =
-        path.is_absolute() ? path : (projectRoot / path);
-    std::error_code filesystemError;
-    auto            canonicalPath = std::filesystem::weakly_canonical(
-        fullPath.lexically_normal(), filesystemError);
-    if ( !filesystemError ) {
-        fullPath = canonicalPath;
-    }
-    return Config::pathToUtf8Generic(fullPath.lexically_normal());
-}
 }  // namespace
 
-/// @brief 构造主菜单视图并初始化菜单状态、弹窗状态和更新检查器。
-MainMenuView::MainMenuView()
-    : m_openFileMenuNextFrame(false)
-    , m_openEditMenuNextFrame(false)
-    , m_openToolsMenuNextFrame(false)
-    , m_openViewMenuNextFrame(false)
-    , m_openHelpMenuNextFrame(false)
-    , m_closeFileMenuNextFrame(false)
-    , m_closeEditMenuNextFrame(false)
-    , m_closeToolsMenuNextFrame(false)
-    , m_closeViewMenuNextFrame(false)
-    , m_closeHelpMenuNextFrame(false)
-    , m_showOverlapCheckWindow(false)
-    , m_showMetadataEditorWindow(false)
-    , m_showNoteMetadataEditorWindow(false)
-    , m_hasOverlapScan(false)
-    , m_showAboutPopup(false)
-    , m_showUpdatePopup(false)
-    , m_showCheckingPopup(false)
-    , m_updatePopupCanceled(false)
-    , m_showBeatmapSpeedExportPopup(false)
-    , m_speedExportRunning(false)
-    , m_updateChecker(std::make_unique<MMM::Network::UpdateChecker>())
+/// @brief 构造主菜单视图并初始化菜单注册表和通用反馈订阅。
+MainMenuView::MainMenuView() : m_registeredMenus(createDefaultMainMenus())
 {
     ensureSaveResultSubscription();
-    ensureSaveConflictSubscription();
-    ensureProjectOpenFailedSubscription();
 }
 
 /// @brief 销毁主菜单视图。
 MainMenuView::~MainMenuView() {}
 
-/// @brief 将逻辑命令发布到事件总线。
-/// @param cmd 需要分发给逻辑层的命令。
-void MainMenuView::dispatchCommand(const MMM::Logic::LogicCommand& cmd)
+/// @brief 显示状态栏临时消息。
+/// @param message 状态消息文本。
+/// @param durationSeconds 显示时长，单位秒。
+void MainMenuView::showStatusMessage(std::string message, float durationSeconds)
 {
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(cmd));
+    m_statusMessage      = std::move(message);
+    m_statusMessageTimer = durationSeconds;
+}
+
+/// @brief 请求下一帧打开指定一级菜单。
+/// @param id 一级菜单标识。
+void MainMenuView::requestMenuOpen(MainMenuId id)
+{
+    const std::size_t index = mainMenuIdIndex(id);
+    if ( index >= m_openMenuNextFrame.size() ) return;
+    m_openMenuNextFrame[index] = true;
+}
+
+/// @brief 请求下一帧关闭指定一级菜单。
+/// @param id 一级菜单标识。
+void MainMenuView::requestMenuClose(MainMenuId id)
+{
+    const std::size_t index = mainMenuIdIndex(id);
+    if ( index >= m_closeMenuNextFrame.size() ) return;
+    m_closeMenuNextFrame[index] = true;
+}
+
+/// @brief 消费指定一级菜单的打开请求。
+/// @param id 一级菜单标识。
+/// @return 本帧存在打开请求时返回 true。
+bool MainMenuView::consumeMenuOpenRequest(MainMenuId id)
+{
+    const std::size_t index = mainMenuIdIndex(id);
+    if ( index >= m_openMenuNextFrame.size() ) return false;
+
+    const bool requested       = m_openMenuNextFrame[index];
+    m_openMenuNextFrame[index] = false;
+    return requested;
+}
+
+/// @brief 消费指定一级菜单的关闭请求。
+/// @param id 一级菜单标识。
+/// @return 本帧存在关闭请求时返回 true。
+bool MainMenuView::consumeMenuCloseRequest(MainMenuId id)
+{
+    const std::size_t index = mainMenuIdIndex(id);
+    if ( index >= m_closeMenuNextFrame.size() ) return false;
+
+    const bool requested        = m_closeMenuNextFrame[index];
+    m_closeMenuNextFrame[index] = false;
+    return requested;
 }
 
 /// @brief 处理主菜单相关的全局快捷键。
 /// @param sourceManager 当前 UI 管理器，用于打开向导或访问视图。
 void MainMenuView::handleHotkeys(UIManager* sourceManager)
 {
-    auto* project    = Logic::EditorEngine::instance().getCurrentProject();
-    bool  hasProject = (project != nullptr);
-
     ImGuiIO& io = ImGui::GetIO();
 
     // 如果 ImGui 当前处于文本输入状态，跳过全局快捷键以避免穿透输入框。
     if ( io.WantTextInput ) return;
     if ( ShortcutUtils::isShortcutRecordingActive() ) return;
-    const bool blockCanvasEditingShortcuts =
-        ShortcutUtils::shouldBlockCanvasEditingShortcuts();
 
-    // 非 Ctrl 的播放快捷键通常只允许在没有活跃控件时触发；画布拖动类手势
-    // 保留特例，避免定位时被 ImGui active item 拦截。
-    if ( ImGui::IsAnyItemActive() && !io.KeyCtrl ) {
-        if ( !io.KeyAlt && !io.KeySuper &&
-             ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
-            auto&      engine = Logic::EditorEngine::instance();
-            const bool allowPlaybackToggle =
-                (!io.KeyShift && (engine.isActiveSessionSelectingMarquee() ||
-                                  engine.isActiveSessionDraggingNote())) ||
-                (io.KeyShift && engine.isActiveSessionDrawingBrush());
-            if ( allowPlaybackToggle ) {
-                const bool playing = engine.isPlaybackPlaying();
-                dispatchCommand(Logic::CmdSetPlayState{ !playing });
-            }
-        }
-        return;
+    MainMenuContext context{
+        .view          = *this,
+        .sourceManager = sourceManager,
+        .dpiScale      = Config::AppConfig::instance().getWindowContentScale(),
+    };
+    for ( auto& menu : m_registeredMenus ) {
+        if ( menu && menu->handleShortcut(context) ) return;
     }
 
-    const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    if ( !blockCanvasEditingShortcuts &&
-         ShortcutUtils::isShortcutPressed(
-             settings.shortcutConfig.mirrorPaste) ) {
-        ClipboardBridge::importEditorClipboardFromSystem();
-        dispatchCommand(Logic::CmdPaste{ true, settings.selectPastedObjects });
-        return;
-    }
-    if ( !blockCanvasEditingShortcuts &&
-         ShortcutUtils::isShortcutPressed(settings.shortcutConfig.mirror) ) {
-        dispatchCommand(Logic::CmdMirrorSelected{});
-        return;
-    }
-
-    if ( io.KeyCtrl ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_N) ) {
-            if ( io.KeyShift ) {
-                m_pendingOpenNewProjectWizard = true;
-            } else if ( hasProject ) {
-                auto* wizard = sourceManager->getView<NewBeatmapWizard>(
-                    "NewBeatmapWizard");
-                if ( wizard ) wizard->open();
-            }
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_I, false) ) {
-            openAudioImportPicker();
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_O) ) {
-            openFolderPicker();
-        }
-        if ( ImGui::IsKeyPressed(ImGuiKey_S) ) {
-            if ( io.KeyShift ) {
-                m_pendingSaveAsRequest = true;
-            } else {
-                requestSaveBeatmap();
-            }
-        }
-        if ( !blockCanvasEditingShortcuts ) {
-            if ( ImGui::IsKeyPressed(ImGuiKey_Z) ) {
-                if ( io.KeyShift ) {
-                    dispatchCommand(Logic::CmdRedo{});
-                } else {
-                    dispatchCommand(Logic::CmdUndo{});
-                }
-            }
-            if ( ImGui::IsKeyPressed(ImGuiKey_Y) ) {
-                dispatchCommand(Logic::CmdRedo{});
-            }
-            if ( ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
-                dispatchCommand(Logic::CmdCopy{});
-            }
-            if ( !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-                ClipboardBridge::importEditorClipboardFromSystem();
-                dispatchCommand(
-                    Logic::CmdPaste{ false, settings.selectPastedObjects });
-            }
-            if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
-                dispatchCommand(Logic::CmdCut{});
-            }
-            if ( ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
-                dispatchCommand(Logic::CmdSelectAll{});
-            }
-            if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
-                dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
-            }
-        }
-    } else if ( io.KeyAlt ) {
+    if ( io.KeyAlt ) {
         if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.file")) ) {
-                m_closeFileMenuNextFrame = true;
+                requestMenuClose(MainMenuId::File);
             } else {
-                m_openFileMenuNextFrame = true;
+                requestMenuOpen(MainMenuId::File);
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_E, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.edit")) ) {
-                m_closeEditMenuNextFrame = true;
+                requestMenuClose(MainMenuId::Edit);
             } else {
-                m_openEditMenuNextFrame = true;
+                requestMenuOpen(MainMenuId::Edit);
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_T, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.tools")) ) {
-                m_closeToolsMenuNextFrame = true;
+                requestMenuClose(MainMenuId::Tools);
             } else {
-                m_openToolsMenuNextFrame = true;
+                requestMenuOpen(MainMenuId::Tools);
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.view")) ) {
-                m_closeViewMenuNextFrame = true;
+                requestMenuClose(MainMenuId::View);
             } else {
-                m_openViewMenuNextFrame = true;
+                requestMenuOpen(MainMenuId::View);
             }
         }
         if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
             if ( ImGui::IsPopupOpen(TR("ui.help")) ) {
-                m_closeHelpMenuNextFrame = true;
+                requestMenuClose(MainMenuId::Help);
             } else {
-                m_openHelpMenuNextFrame = true;
+                requestMenuOpen(MainMenuId::Help);
             }
-        }
-    } else if ( !io.KeySuper && !io.KeyShift ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
-            bool playing = Logic::EditorEngine::instance().isPlaybackPlaying();
-            dispatchCommand(Logic::CmdSetPlayState{ !playing });
         }
     }
 }
 
 /// @brief 更新主菜单计时器、弹窗和启动检查状态。
-/// @param sourceManager 当前 UI 管理器，保留用于接口一致性。
+/// @param sourceManager 当前 UI 管理器。
 void MainMenuView::update(UIManager* sourceManager)
 {
-    (void)sourceManager;
-    consumeBeatmapSpeedExportQueues();
+    MainMenuContext context{
+        .view          = *this,
+        .sourceManager = sourceManager,
+        .dpiScale      = Config::AppConfig::instance().getWindowContentScale(),
+    };
+    for ( auto& menu : m_registeredMenus ) {
+        if ( menu ) {
+            menu->update(context);
+        }
+    }
 
     SaveTooltipPayload payload;
     while ( getSaveTooltipQueue().try_dequeue(payload) ) {
         m_saveTooltipMessage = buildSaveTooltipMessage(payload);
         m_saveTooltipSuccess = payload.success;
         m_saveTooltipTimer   = payload.success ? 2.0f : 3.0f;
-        if ( !payload.isExport ) {
-            m_currentSaveKeyConversionWarningConfirmed = false;
-        }
-    }
-
-    SaveConflictPayload conflictPayload;
-    while ( getSaveConflictQueue().try_dequeue(conflictPayload) ) {
-        m_pendingSaveConflictPath = conflictPayload.path;
-        m_showSaveConflictWarning = true;
-    }
-
-    ProjectOpenFailedPayload openFailedPayload;
-    while ( getProjectOpenFailedQueue().try_dequeue(openFailedPayload) ) {
-        m_pendingProjectOpenFailedPath      = openFailedPayload.path;
-        m_pendingProjectOpenFailedMessage   = openFailedPayload.errorMessage;
-        m_pendingProjectOpenFailedIsPackage = openFailedPayload.isPackage;
-        m_showProjectOpenFailedPopup        = true;
     }
 
     if ( m_statusMessageTimer > 0.0f )
         m_statusMessageTimer -= ImGui::GetIO().DeltaTime;
 
-    // 启动时自动检查更新
-    if ( !m_hasCheckedOnStartup ) {
-        m_hasCheckedOnStartup = true;
-
-        // 先检查是否刚完成更新
-        if ( MMM::Network::UpdateChecker::checkStartupUpdateMarker() ) {
-            m_showUpdateSuccessPopup = true;
-        } else {
-            m_isSilentCheck = true;  // 静默检查
-            m_updateChecker->checkAsync();
-        }
-    }
-
-    // 如果是静默检查，监测状态
-    if ( m_isSilentCheck ) {
-        auto info = m_updateChecker->getInfo();
-        if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
-            m_showUpdatePopup = true;
-            m_isSilentCheck   = false;
-        } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
-            m_statusMessage      = TR("ui.help.up_to_date").data();
-            m_statusMessageTimer = 5.0f;
-            m_isSilentCheck      = false;
-        } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
-            m_isSilentCheck = false;
-        }
-    }
-
     renderSaveTooltip();
-}
-
-/// @brief 在菜单栏窗口外消费菜单点击产生的延迟动作。
-/// @param sourceManager 当前 UI 管理器。
-/// @warning UI 热路径：每帧检查布尔标志；除用户触发的低频向导或文件选择器外
-/// 禁止加入阻塞操作。
-void MainMenuView::processPendingMenuActions(UIManager* sourceManager)
-{
-    if ( m_pendingOpenNewProjectWizard ) {
-        if ( sourceManager ) {
-            auto* wizard =
-                sourceManager->getView<NewProjectWizard>("NewProjectWizard");
-            if ( wizard ) {
-                wizard->open();
-                m_pendingOpenNewProjectWizard = false;
-            }
-        }
-    }
-
-    if ( m_pendingSaveAsRequest ) {
-        m_pendingSaveAsRequest = false;
-        openExportFilePicker("");
-    }
-
-    if ( m_pendingPackRequest ) {
-        m_pendingPackRequest = false;
-        openPackFilePicker();
-    }
-}
-
-/// @brief 渲染保存目标被外部修改时的覆盖确认弹窗。
-/// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderSaveConflictWarningPopup(float dpiScale)
-{
-    constexpr const char* popupId =
-        "文件已被另外修改过###SaveConflictWarningModal";
-    if ( m_showSaveConflictWarning ) {
-        ImGui::OpenPopup(popupId);
-        m_showSaveConflictWarning = false;
-    }
-
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
-
-    {
-        Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        if ( popupStyle.begin(popupId,
-                              nullptr,
-                              ImGuiWindowFlags_None,
-                              ImVec2(540.0f * dpiScale, 0.0f)) ) {
-            ImGui::TextWrapped(
-                "文件已被另外修改过，强行覆盖可能会导致丢失数据，是否确认？");
-            if ( !m_pendingSaveConflictPath.empty() ) {
-                ImGui::Spacing();
-                ImGui::TextWrapped("目标文件：%s",
-                                   m_pendingSaveConflictPath.c_str());
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
-            if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
-                if ( m_currentSaveKeyConversionWarningConfirmed ) {
-                    dispatchSaveBeatmap(true);
-                    m_currentSaveKeyConversionWarningConfirmed = false;
-                } else {
-                    requestSaveBeatmap(true);
-                }
-                m_pendingSaveConflictPath.clear();
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
-                                           buttonSize) ) {
-                m_pendingSaveConflictPath.clear();
-                m_currentSaveKeyConversionWarningConfirmed = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
-    }
-}
-
-/// @brief 渲染项目或谱面包打开失败弹窗。
-/// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderProjectOpenFailedPopup(float dpiScale)
-{
-    constexpr const char* popupId = "打开失败###ProjectOpenFailedModal";
-    if ( m_showProjectOpenFailedPopup ) {
-        ImGui::OpenPopup(popupId);
-        m_showProjectOpenFailedPopup = false;
-    }
-
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
-
-    {
-        Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        if ( popupStyle.begin(popupId,
-                              nullptr,
-                              ImGuiWindowFlags_None,
-                              ImVec2(560.0f * dpiScale, 0.0f)) ) {
-            ImGui::TextWrapped("%s",
-                               m_pendingProjectOpenFailedIsPackage
-                                   ? "打开谱面包失败。"
-                                   : "打开项目失败。");
-            if ( !m_pendingProjectOpenFailedMessage.empty() ) {
-                ImGui::Spacing();
-                ImGui::TextWrapped("%s",
-                                   m_pendingProjectOpenFailedMessage.c_str());
-            }
-            if ( !m_pendingProjectOpenFailedPath.empty() ) {
-                ImGui::Spacing();
-                ImGui::TextWrapped("目标路径：%s",
-                                   m_pendingProjectOpenFailedPath.c_str());
-            }
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
-            if ( ::MMM::UI::FeedbackButton(TR("ui.common.confirm").data(),
-                                           buttonSize) ) {
-                m_pendingProjectOpenFailedPath.clear();
-                m_pendingProjectOpenFailedMessage.clear();
-                m_pendingProjectOpenFailedIsPackage = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
-    }
 }
 
 /// @brief 渲染首次启动 PGO 性能数据上传授权弹窗。
@@ -766,220 +288,15 @@ void MainMenuView::renderPgoUploadConsentWindow(float dpiScale)
 #endif
 }
 
-/// @brief 收集可用于替换当前焦点谱面的项目谱面候选。
-/// @return 数据来源候选列表。
-std::vector<MainMenuView::DataSourceReplaceCandidate>
-MainMenuView::collectDataSourceReplaceCandidates() const
-{
-    std::vector<DataSourceReplaceCandidate> candidates;
-
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
-    if ( !project || project->m_projectRoot.empty() ) return candidates;
-
-    std::string activePathKey;
-    {
-        std::lock_guard<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex());
-        auto session = engine.getActiveSession();
-        if ( session && session->getContext().currentBeatmap ) {
-            activePathKey = makeDataSourceBeatmapPathKey(
-                project->m_projectRoot,
-                session->getContext()
-                    .currentBeatmap->m_baseMapMetadata.map_path);
-        }
-    }
-
-    candidates.reserve(project->m_beatmaps.size());
-    for ( const auto& entry : project->m_beatmaps ) {
-        if ( entry.m_filePath.empty() ) continue;
-
-        auto relativePath =
-            Config::utf8ToPath(entry.m_filePath).lexically_normal();
-        auto candidatePathKey =
-            makeDataSourceBeatmapPathKey(project->m_projectRoot, relativePath);
-        if ( candidatePathKey.empty() || candidatePathKey == activePathKey ) {
-            continue;
-        }
-
-        std::error_code filesystemError;
-        const auto      fullPath =
-            (project->m_projectRoot / relativePath).lexically_normal();
-        if ( !std::filesystem::is_regular_file(fullPath, filesystemError) ||
-             filesystemError ) {
-            continue;
-        }
-
-        std::string displayName =
-            entry.m_name.empty() ? entry.m_filePath : entry.m_name;
-        candidates.push_back(DataSourceReplaceCandidate{
-            .relativePath = Config::pathToUtf8Generic(relativePath),
-            .displayName  = displayName,
-        });
-    }
-
-    std::sort(candidates.begin(),
-              candidates.end(),
-              [](const auto& lhs, const auto& rhs) {
-                  if ( lhs.displayName != rhs.displayName ) {
-                      return lhs.displayName < rhs.displayName;
-                  }
-                  return lhs.relativePath < rhs.relativePath;
-              });
-    return candidates;
-}
-
-/// @brief 提交数据来源替换请求。
-void MainMenuView::submitDataSourceReplaceRequest()
-{
-    auto& engine  = Logic::EditorEngine::instance();
-    auto* project = engine.getCurrentProject();
-    if ( !project || project->m_projectRoot.empty() ||
-         m_dataSourceReplacePath.empty() ) {
-        m_statusMessage      = "没有可用的数据来源谱面";
-        m_statusMessageTimer = 3.0f;
-        return;
-    }
-
-    if ( !m_replaceObjectsFromDataSource && !m_replaceTimelinesFromDataSource &&
-         !m_replaceMetadataFromDataSource ) {
-        m_statusMessage      = "至少选择一种要替换的数据";
-        m_statusMessageTimer = 3.0f;
-        return;
-    }
-
-    const auto sourcePath =
-        (project->m_projectRoot / Config::utf8ToPath(m_dataSourceReplacePath))
-            .lexically_normal();
-    auto sourceBeatmap =
-        std::make_shared<MMM::BeatMap>(MMM::BeatMap::loadFromFile(sourcePath));
-    if ( sourceBeatmap->m_baseMapMetadata.map_path.empty() ) {
-        m_statusMessage      = "读取数据来源谱面失败";
-        m_statusMessageTimer = 3.0f;
-        return;
-    }
-
-    dispatchCommand(Logic::CmdReplaceBeatmapData{
-        .sourceBeatmap    = sourceBeatmap,
-        .replaceObjects   = m_replaceObjectsFromDataSource,
-        .replaceTimelines = m_replaceTimelinesFromDataSource,
-        .replaceMetadata  = m_replaceMetadataFromDataSource,
-    });
-
-    m_statusMessage      = "已替换当前谱面数据";
-    m_statusMessageTimer = 3.0f;
-}
-
-/// @brief 渲染数据来源替换工具窗口。
-/// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderDataSourceReplaceWindow(float dpiScale)
-{
-    constexpr const char* popupId = "数据来源替换工具###DataSourceReplaceModal";
-    if ( m_showDataSourceReplaceWindow ) {
-        ImGui::OpenPopup(popupId);
-    }
-
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
-
-    bool closePopup = false;
-    {
-        Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        if ( popupStyle.begin(popupId,
-                              nullptr,
-                              ImGuiWindowFlags_NoCollapse,
-                              ImVec2(640.0f * dpiScale, 480.0f * dpiScale),
-                              false) ) {
-            auto candidates = collectDataSourceReplaceCandidates();
-            if ( m_dataSourceReplacePath.empty() && !candidates.empty() ) {
-                m_dataSourceReplacePath = candidates.front().relativePath;
-            }
-            if ( !m_dataSourceReplacePath.empty() &&
-                 std::none_of(candidates.begin(),
-                              candidates.end(),
-                              [&](const auto& candidate) {
-                                  return candidate.relativePath ==
-                                         m_dataSourceReplacePath;
-                              }) ) {
-                m_dataSourceReplacePath = candidates.empty()
-                                              ? std::string{}
-                                              : candidates.front().relativePath;
-            }
-
-            ImGui::TextUnformatted("数据来源谱面");
-            ImGui::Spacing();
-            const float listHeight =
-                std::max(120.0f * dpiScale,
-                         ImGui::GetContentRegionAvail().y - 126.0f * dpiScale);
-            if ( ImGui::BeginChild("DataSourceReplaceBeatmapList",
-                                   ImVec2(0.0f, listHeight),
-                                   true) ) {
-                if ( candidates.empty() ) {
-                    ImGui::TextDisabled("没有找到其他项目谱面。");
-                } else {
-                    for ( const auto& candidate : candidates ) {
-                        const bool selected =
-                            candidate.relativePath == m_dataSourceReplacePath;
-                        std::string label = candidate.displayName + " - " +
-                                            candidate.relativePath;
-                        if ( ::MMM::UI::FeedbackSelectable(label.c_str(),
-                                                           selected) ) {
-                            m_dataSourceReplacePath = candidate.relativePath;
-                        }
-                    }
-                }
-            }
-            ImGui::EndChild();
-
-            ImGui::Spacing();
-            ::MMM::UI::FeedbackCheckbox("物件数据源",
-                                        &m_replaceObjectsFromDataSource);
-            ImGui::SameLine();
-            ::MMM::UI::FeedbackCheckbox("时间线源",
-                                        &m_replaceTimelinesFromDataSource);
-            ImGui::SameLine();
-            ::MMM::UI::FeedbackCheckbox("元数据源",
-                                        &m_replaceMetadataFromDataSource);
-
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
-
-            const bool   canApply = !candidates.empty() &&
-                                    !m_dataSourceReplacePath.empty() &&
-                                    (m_replaceObjectsFromDataSource ||
-                                     m_replaceTimelinesFromDataSource ||
-                                     m_replaceMetadataFromDataSource);
-            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
-            if ( !canApply ) ImGui::BeginDisabled();
-            if ( ::MMM::UI::FeedbackButton("替换", buttonSize) ) {
-                submitDataSourceReplaceRequest();
-                closePopup = true;
-            }
-            if ( !canApply ) ImGui::EndDisabled();
-            ImGui::SameLine();
-            if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
-                                           buttonSize) ) {
-                closePopup = true;
-            }
-
-            if ( closePopup ) {
-                m_showDataSourceReplaceWindow = false;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::EndPopup();
-        }
-    }
-}
-
-/// @brief 渲染文件、编辑、工具和帮助主菜单。
-/// @param sourceManager 当前 UI 管理器，用于菜单项打开对应视图。
+/// @brief 遍历已注册的一级菜单接口。
+/// @param sourceManager 当前 UI 管理器，用于菜单项 action handler
+/// 打开对应视图。
 void MainMenuView::renderMenus(UIManager* sourceManager)
 {
     handleHotkeys(sourceManager);
 
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
-
-    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    float dpiScale = Config::AppConfig::instance().getWindowContentScale();
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
@@ -987,357 +304,34 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
         ImGuiStyleVar_FramePadding,
         ImVec2(6.0f * dpiScale, ImGui::GetStyle().FramePadding.y));
 
-    auto MenuItemWithFontIcon = [](const char* icon,
-                                   const char* label,
-                                   const char* shortcut = nullptr,
-                                   bool        enabled  = true) -> bool {
-        ImVec4 iconVec4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-        ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
-
-        float gap = ImGui::CalcTextSize(" ").x * 0.5f;
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(gap, 0));
-
-        const char* iconPtr = icon ? icon : "  ";
-
-        bool clicked = ::MMM::UI::FeedbackMenuItemEx(
-            label, iconPtr, shortcut, false, enabled);
-
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor();
-        return clicked;
+    MainMenuContext context{
+        .view          = *this,
+        .sourceManager = sourceManager,
+        .dpiScale      = dpiScale,
     };
 
     ImFont* menuFont = skinCfg.getFont("menu");
     if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
 
-    // ========== 文件菜单 ==========
-    if ( m_openFileMenuNextFrame ) {
-        ImGui::OpenPopup(TR("ui.file"));
-        m_openFileMenuNextFrame = false;
-    }
-    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.file")) ) {
-        if ( m_closeFileMenuNextFrame ) {
-            ImGui::CloseCurrentPopup();
-            m_closeFileMenuNextFrame = false;
+    for ( auto& menu : m_registeredMenus ) {
+        if ( !menu ) continue;
+
+        const MainMenuId menuId    = menu->id();
+        const char*      menuLabel = menu->label(context);
+        if ( consumeMenuOpenRequest(menuId) ) {
+            ImGui::OpenPopup(menuLabel);
         }
 
-        auto& engine     = Logic::EditorEngine::instance();
-        auto* project    = engine.getCurrentProject();
-        bool  hasProject = (project != nullptr);
-
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_BOOK, TR("ui.file.new_pro"), "Ctrl+Shift+N") ) {
-            m_pendingOpenNewProjectWizard = true;
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_FILE, TR("ui.file.new_map"), "Ctrl+N", hasProject) ) {
-            auto* wizard =
-                sourceManager->getView<NewBeatmapWizard>("NewBeatmapWizard");
-            if ( wizard ) wizard->open();
-        }
-        ImGui::Separator();
-
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_FOLDER_OPEN, TR("ui.file.open_pro"), "Ctrl+O") ) {
-            openFolderPicker();
-        }
-
-        if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
-                                  TR("ui.audio_manager.import_audio"),
-                                  "Ctrl+I",
-                                  hasProject) ) {
-            openAudioImportPicker();
-        }
-
-        if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.file.open_recent")) ) {
-            const auto& recent =
-                Config::AppConfig::instance().getEditorConfig().recentProjects;
-            if ( recent.empty() ) {
-                ::MMM::UI::FeedbackMenuItem(
-                    TR("ui.file.no_recent"), nullptr, false, false);
+        if ( ::MMM::UI::FeedbackBeginMenu(menuLabel) ) {
+            const bool shouldClose = consumeMenuCloseRequest(menuId);
+            if ( shouldClose ) {
+                ImGui::CloseCurrentPopup();
             } else {
-                for ( size_t i = 0; i < recent.size(); ++i ) {
-                    const auto&           path = recent[i];
-                    std::filesystem::path p    = Config::utf8ToPath(path);
-                    std::string       name = Config::pathToUtf8(p.filename());
-                    const std::string displayName = truncateUtf8TailToWidth(
-                        name, RECENT_PROJECT_NAME_MAX_WIDTH * dpiScale);
-                    const std::string displayPath = truncateUtf8MiddleToWidth(
-                        path, RECENT_PROJECT_PATH_MAX_WIDTH * dpiScale);
-                    ImGui::PushID(static_cast<int>(i));
-                    if ( ::MMM::UI::FeedbackMenuItem(displayName.c_str(),
-                                                     displayPath.c_str()) ) {
-                        Event::OpenProjectEvent ev;
-                        ev.m_projectPath = p;
-                        Event::EventBus::instance().publish(ev);
-                    }
-                    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) ) {
-                        ImGui::SetTooltip("%s\n%s", name.c_str(), path.c_str());
-                    }
-                    ImGui::PopID();
-                }
+                menu->render(context);
             }
             ::MMM::UI::FeedbackEndMenu();
         }
-
-        if ( MenuItemWithFontIcon(ICON_MMM_CLOSE,
-                                  TR("ui.file.close_pro"),
-                                  nullptr,
-                                  hasProject) ) {
-            if ( engine.isTemporaryProjectOpen() ) {
-                Event::EventBus::instance().publish(
-                    Event::TemporaryProjectClosePromptRequestedEvent{});
-            } else {
-                Event::EventBus::instance().publish(
-                    Event::ProjectCloseRequestedEvent{});
-            }
-        }
-        ImGui::Separator();
-
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_SAVE, TR("ui.file.save"), "Ctrl+S") ) {
-            requestSaveBeatmap();
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_SAVE, TR("ui.file.save_as"), "Ctrl+Shift+S") ) {
-            m_pendingSaveAsRequest = true;
-        }
-
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_PACK, TR("ui.file.pack"), nullptr, hasProject) ) {
-            m_pendingPackRequest = true;
-        }
-        ::MMM::UI::FeedbackEndMenu();
     }
-
-    // ========== 编辑菜单 ==========
-    if ( m_openEditMenuNextFrame ) {
-        ImGui::OpenPopup(TR("ui.edit"));
-        m_openEditMenuNextFrame = false;
-    }
-    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.edit")) ) {
-        if ( m_closeEditMenuNextFrame ) {
-            ImGui::CloseCurrentPopup();
-            m_closeEditMenuNextFrame = false;
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_UNDO, TR("ui.edit.undo"), "Ctrl+Z") ) {
-            dispatchCommand(Logic::CmdUndo{});
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_REDO, TR("ui.edit.redo"), "Ctrl+Y / Ctrl+Shift+Z") ) {
-            dispatchCommand(Logic::CmdRedo{});
-        }
-        ImGui::Separator();
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_SCISSORS, TR("ui.edit.cut"), "Ctrl+X") ) {
-            dispatchCommand(Logic::CmdCut{});
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_COPY, TR("ui.edit.copy"), "Ctrl+C") ) {
-            dispatchCommand(Logic::CmdCopy{});
-        }
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_PASTE, TR("ui.edit.paste"), "Ctrl+V") ) {
-            ClipboardBridge::importEditorClipboardFromSystem();
-            dispatchCommand(Logic::CmdPaste{ false,
-                                             Config::AppConfig::instance()
-                                                 .getEditorSettings()
-                                                 .selectPastedObjects });
-        }
-        const auto& shortcutConfig =
-            Config::AppConfig::instance().getEditorSettings().shortcutConfig;
-        std::string mirrorPasteShortcut =
-            ShortcutUtils::formatShortcut(shortcutConfig.mirrorPaste);
-        if ( MenuItemWithFontIcon(ICON_MMM_MIRROR,
-                                  TR("ui.edit.mirror_paste"),
-                                  mirrorPasteShortcut.empty()
-                                      ? nullptr
-                                      : mirrorPasteShortcut.c_str()) ) {
-            ClipboardBridge::importEditorClipboardFromSystem();
-            dispatchCommand(Logic::CmdPaste{ true,
-                                             Config::AppConfig::instance()
-                                                 .getEditorSettings()
-                                                 .selectPastedObjects });
-        }
-        std::string mirrorShortcut =
-            ShortcutUtils::formatShortcut(shortcutConfig.mirror);
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_MIRROR,
-                 TR("ui.edit.mirror"),
-                 mirrorShortcut.empty() ? nullptr : mirrorShortcut.c_str()) ) {
-            dispatchCommand(Logic::CmdMirrorSelected{});
-        }
-        ImGui::Separator();
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_SELECT_ALL, TR("ui.edit.select_all"), "Ctrl+A") ) {
-            dispatchCommand(Logic::CmdSelectAll{});
-        }
-        {
-            bool hasSelection = false;
-            auto engine       = &Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine->getSessionMutex());
-            auto session = engine->getActiveSession();
-            if ( session ) {
-                auto selView =
-                    session->getContext()
-                        .noteRegistry.view<const Logic::InteractionComponent>();
-                for ( auto e : selView ) {
-                    if ( selView.get<const Logic::InteractionComponent>(e)
-                             .isSelected ) {
-                        hasSelection = true;
-                        break;
-                    }
-                }
-            }
-            if ( MenuItemWithFontIcon(ICON_MMM_COG,
-                                      TR("ui.edit.note_metadata"),
-                                      nullptr,
-                                      hasSelection) ) {
-                m_showNoteMetadataEditorWindow = true;
-            }
-        }
-        ImGui::Separator();
-        bool playing      = Logic::EditorEngine::instance().isPlaybackPlaying();
-        const char* pIcon = playing ? ICON_MMM_PAUSE : ICON_MMM_PLAY;
-        if ( MenuItemWithFontIcon(pIcon, TR("ui.edit.play_pause"), "Space") ) {
-            dispatchCommand(Logic::CmdSetPlayState{ !playing });
-        }
-        ImGui::Separator();
-        if ( MenuItemWithFontIcon(ICON_MMM_FILE,
-                                  TR("ui.edit.beatmap_settings")) ) {
-            sourceManager->openSettingsWindow(Event::SettingsTab::Beatmap);
-        }
-        ::MMM::UI::FeedbackEndMenu();
-    }
-
-    // ========== 工具菜单 ==========
-    if ( m_openToolsMenuNextFrame ) {
-        ImGui::OpenPopup(TR("ui.tools"));
-        m_openToolsMenuNextFrame = false;
-    }
-    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.tools")) ) {
-        if ( m_closeToolsMenuNextFrame ) {
-            ImGui::CloseCurrentPopup();
-            m_closeToolsMenuNextFrame = false;
-        }
-
-        auto* project    = Logic::EditorEngine::instance().getCurrentProject();
-        bool  hasProject = (project != nullptr);
-
-        if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
-                                  TR("ui.tools.bpm_measure"),
-                                  nullptr,
-                                  hasProject) ) {
-            std::string viewName = "BpmMeasurementTool";
-            auto*       tool =
-                sourceManager->getView<BpmMeasurementToolView>(viewName);
-            if ( !tool ) {
-                auto toolView = std::make_unique<BpmMeasurementToolView>(
-                    TR("ui.tools.bpm_measure").data());
-                tool = toolView.get();
-                sourceManager->registerView(viewName, std::move(toolView));
-            }
-            if ( tool ) {
-                tool->openWithAudioTrack("");
-            }
-        }
-
-        if ( MenuItemWithFontIcon(ICON_MMM_SELECT_ALL,
-                                  TR("ui.tools.overlap_check")) ) {
-            m_showOverlapCheckWindow = !m_showOverlapCheckWindow;
-        }
-
-        if ( MenuItemWithFontIcon(ICON_MMM_COG, "谱面额外元数据编辑") ) {
-            m_showMetadataEditorWindow = !m_showMetadataEditorWindow;
-        }
-
-        {
-            bool  hasActiveBeatmap = false;
-            auto& engine           = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            auto session = engine.getActiveSession();
-            hasActiveBeatmap =
-                hasProject && session && session->getContext().currentBeatmap;
-            if ( MenuItemWithFontIcon(ICON_MMM_BARS,
-                                      "数据来源替换工具",
-                                      nullptr,
-                                      hasActiveBeatmap) ) {
-                m_showDataSourceReplaceWindow = true;
-            }
-        }
-
-        if ( MenuItemWithFontIcon(
-                 ICON_MMM_BARS, TR("ui.tools.format"), "Ctrl+F") ) {
-            dispatchCommand(Logic::CmdAlignSelectedToCommonBeats{});
-        }
-
-        {
-            bool  hasBeatmap = false;
-            auto& engine     = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            auto session = engine.getActiveSession();
-            hasBeatmap =
-                hasProject && session && session->getContext().currentBeatmap;
-            if ( MenuItemWithFontIcon(ICON_MMM_MUSIC,
-                                      "谱面倍速制作",
-                                      nullptr,
-                                      hasBeatmap && !m_speedExportRunning) ) {
-                openBeatmapSpeedExportPopup();
-            }
-        }
-
-        ::MMM::UI::FeedbackEndMenu();
-    }
-
-    // ========== 视图菜单 ==========
-    if ( m_openViewMenuNextFrame ) {
-        ImGui::OpenPopup(TR("ui.view"));
-        m_openViewMenuNextFrame = false;
-    }
-    if ( ::MMM::UI::FeedbackBeginMenu(TR("ui.view")) ) {
-        if ( m_closeViewMenuNextFrame ) {
-            ImGui::CloseCurrentPopup();
-            m_closeViewMenuNextFrame = false;
-        }
-
-        auto& appConfig      = Config::AppConfig::instance();
-        auto& editorSettings = appConfig.getEditorSettings();
-        bool  viewChanged    = false;
-
-        viewChanged |=
-            ::MMM::UI::FeedbackMenuItem(TR("ui.view.timeline").data(),
-                                        nullptr,
-                                        &editorSettings.showTimelineWindow);
-        viewChanged |=
-            ::MMM::UI::FeedbackMenuItem(TR("ui.view.preview").data(),
-                                        nullptr,
-                                        &editorSettings.showPreviewWindow);
-        ImGui::Separator();
-        viewChanged |=
-            ::MMM::UI::FeedbackMenuItem(TR("ui.view.show_tool_labels").data(),
-                                        nullptr,
-                                        &editorSettings.showToolLabels);
-        viewChanged |=
-            ::MMM::UI::FeedbackMenuItem(TR("ui.view.fixed_tool_window").data(),
-                                        nullptr,
-                                        &editorSettings.fixedToolWindow);
-        viewChanged |= ::MMM::UI::FeedbackMenuItem(
-            TR("ui.view.show_manager_labels").data(),
-            nullptr,
-            &editorSettings.showManagerLabels);
-
-        if ( viewChanged ) {
-            appConfig.save();
-        }
-        ::MMM::UI::FeedbackEndMenu();
-    }
-
-    // ========== 帮助菜单 ==========
-    renderHelpMenu(sourceManager);
 
     if ( menuFont ) ImGui::PopFont();
     ImGui::PopStyleVar(2);  // Pop WindowPadding and FramePadding
@@ -1351,29 +345,22 @@ void MainMenuView::renderMenus(UIManager* sourceManager)
 void MainMenuView::renderDeferredPopups(UIManager* sourceManager,
                                         float      dpiScale)
 {
-    processPendingMenuActions(sourceManager);
-
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     ImFont*              menuFont = skinCfg.getFont("menu");
     if ( menuFont ) ImGui::PushFont(menuFont, menuFont->LegacySize);
 
-    renderAboutPopup();
-    renderUpdateCheckingPopup();
-    renderUpdatePopup();
-    renderUpdateSuccessPopup();
-    renderOverlapCheckWindow();
-    renderMetadataEditorWindow();
-    renderNoteMetadataEditorWindow();
-    renderDataSourceReplaceWindow(dpiScale);
     renderPgoUploadConsentWindow(dpiScale);
-    renderSaveConflictWarningPopup(dpiScale);
-    renderProjectOpenFailedPopup(dpiScale);
-    renderExportFormatPickerPopup(dpiScale);
-    renderExportCompatibilityWarningPopup(dpiScale);
-    renderPackageFormatPickerPopup(dpiScale);
-    renderPackageFileSelectionWindow(dpiScale);
-    renderPackageBeatmapMetadataWindow(dpiScale);
-    renderBeatmapSpeedExportPopup(dpiScale);
+
+    MainMenuContext context{
+        .view          = *this,
+        .sourceManager = sourceManager,
+        .dpiScale      = dpiScale,
+    };
+    for ( auto& menu : m_registeredMenus ) {
+        if ( menu ) {
+            menu->renderDeferred(context);
+        }
+    }
 
     if ( menuFont ) ImGui::PopFont();
 }

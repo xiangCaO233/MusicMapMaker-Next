@@ -1,4 +1,4 @@
-#include "ui/imgui/menu/MainMenuView.h"
+#include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -8,6 +8,9 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
+#include "ui/imgui/menu/MainMenuView.h"
+#include "ui/imgui/menu/package/PackageDialogState.h"
+#include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -621,10 +624,156 @@ PackageBeatmapInfo collectPackageBeatmapInfo(
 }
 }  // namespace
 
+/// @brief 打开谱面打包流程动作，拥有打包候选、格式选择和元数据补充状态。
+class PackBeatmapAction final : public IMainMenuItemActionHandler
+{
+public:
+    /// @brief 仅在已有项目时允许打包。
+    bool isEnabled(const MainMenuContext& context) const override;
+
+    /// @brief 打开打包格式选择流程。
+    void execute(MainMenuContext&              context,
+                 const MainMenuItemActivation& activation) override;
+
+    /// @brief 渲染打包 action 拥有的延迟窗口和文件选择器。
+    /// @warning UI 热路径：每帧只检查弹窗状态；扫描文件仅由用户触发流程执行。
+    void renderDeferred(MainMenuContext& context) override;
+
+private:
+    /// @brief 在状态栏显示打包流程消息。
+    /// @param message 状态消息文本。
+    void showStatusMessage(std::string message);
+
+    /// @brief 按当前打包目标格式规范化输出包路径。
+    /// @param path 文件选择器返回的输出路径。
+    /// @return 补齐目标打包扩展名后的输出路径。
+    std::string applyPackSelectedFormatToPath(const std::string& path) const;
+
+    /// @brief 请求打包当前已选择的项目文件。
+    /// @param path 输出包路径。
+    void requestPackBeatmapTo(std::string path);
+
+    /// @brief 渲染打包目标格式选择弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageFormatPickerPopup(float dpiScale);
+
+    /// @brief 渲染打包文件复选列表窗口。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageFileSelectionWindow(float dpiScale);
+
+    /// @brief 为选中的谱面准备打包转换前的元数据补充项。
+    /// @param selectedRelativePaths 当前已选的项目相对路径列表。
+    /// @return 需要展示补充窗口时返回 true。
+    bool preparePackageBeatmapMetadataEdits(
+        const std::vector<std::string>& selectedRelativePaths);
+
+    /// @brief 从补充窗口缓存收集打包元数据覆盖项。
+    /// @return 元数据覆盖项列表。
+    std::vector<Logic::PackageBeatmapMetadataOverride>
+    collectPackageMetadataOverridesFromEdits();
+
+    /// @brief 渲染打包前补充目标谱面元数据的窗口。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageBeatmapMetadataWindow(float dpiScale);
+
+    /// @brief 按当前目标打包格式重建候选文件列表。
+    void rebuildPackageCandidateFiles();
+
+    /// @brief 设置候选文件选中状态，并同步谱面绑定资源。
+    /// @param index 候选文件索引。
+    /// @param selected 是否选中。
+    void setPackageCandidateSelected(std::size_t index, bool selected);
+
+    /// @brief 根据当前已选中谱面重新计算依赖资源锁定状态。
+    void syncPackageDependencySelection();
+
+    /// @brief 判断当前选中谱面是否存在未能绑定的依赖资源。
+    /// @return 存在缺失依赖时返回 true。
+    bool hasSelectedPackageMissingDependencies() const;
+
+    /// @brief 判断当前 MCZ 候选列表是否包含可写入上架 mode_ext 的谱面。
+    /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+    bool hasPackageStoreModeExtCandidates() const;
+
+    /// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
+    /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
+    bool hasSelectedPackageStoreModeExtCandidates() const;
+
+    /// @brief 收集当前已勾选的项目相对文件路径。
+    /// @return 已勾选的项目相对文件路径列表。
+    std::vector<std::string> collectSelectedPackageRelativePaths() const;
+
+    /// @brief 生成当前打包目标格式的默认输出文件名。
+    /// @return 默认输出文件名。
+    std::string makePackageDefaultFileName() const;
+
+    /// @brief 打开谱面打包流程。
+    void openPackFilePicker();
+
+    /// @brief 打开打包输出路径选择器。
+    /// @warning 用户触发的低频路径：原生选择器可能阻塞。
+    void openPackageOutputFilePicker();
+
+    /// @brief 渲染统一打包输出文件选择器。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径：仅在统一文件选择器打开时绘制。
+    void renderPackageOutputFileDialog(float dpiScale);
+
+    /// @brief 渲染打包输出覆盖确认弹窗。
+    /// @param dpiScale 当前窗口内容缩放。
+    void renderPackageOverwriteWarningPopup(float dpiScale);
+
+    /// @brief 当前帧菜单上下文，非拥有，仅在 renderDeferred 调用栈内有效。
+    MainMenuContext* m_context = nullptr;
+    /// @brief 打包流程的格式、候选文件和临时弹窗状态。
+    PackageDialogState m_package;
+    /// @brief 是否在下一帧打开打包输出覆盖确认弹窗。
+    bool m_showPackageOverwriteWarning = false;
+    /// @brief 待确认覆盖的打包输出路径。
+    std::string m_pendingPackageOverwritePath;
+};
+
+/// @brief 仅在已有项目时允许打包。
+bool PackBeatmapAction::isEnabled(const MainMenuContext& context) const
+{
+    (void)context;
+    return Logic::EditorEngine::instance().getCurrentProject() != nullptr;
+}
+
+/// @brief 打开打包格式选择流程。
+void PackBeatmapAction::execute(MainMenuContext&              context,
+                                const MainMenuItemActivation& activation)
+{
+    (void)context;
+    (void)activation;
+    openPackFilePicker();
+}
+
+/// @brief 渲染打包 action 拥有的延迟窗口和文件选择器。
+/// @warning UI 热路径：每帧只检查弹窗状态；扫描文件仅由用户触发流程执行。
+void PackBeatmapAction::renderDeferred(MainMenuContext& context)
+{
+    m_context = &context;
+    renderPackageFormatPickerPopup(context.dpiScale);
+    renderPackageFileSelectionWindow(context.dpiScale);
+    renderPackageBeatmapMetadataWindow(context.dpiScale);
+    renderPackageOutputFileDialog(context.dpiScale);
+    renderPackageOverwriteWarningPopup(context.dpiScale);
+    m_context = nullptr;
+}
+
+/// @brief 在状态栏显示打包流程消息。
+/// @param message 状态消息文本。
+void PackBeatmapAction::showStatusMessage(std::string message)
+{
+    if ( !m_context ) return;
+    m_context->view.showStatusMessage(std::move(message), 3.0f);
+}
+
 /// @brief 按当前打包目标格式规范化输出包路径。
 /// @param path 文件选择器返回的输出路径。
 /// @return 补齐目标打包扩展名后的输出路径。
-std::string MainMenuView::applyPackSelectedFormatToPath(
+std::string PackBeatmapAction::applyPackSelectedFormatToPath(
     const std::string& path) const
 {
     if ( path.empty() ) return path;
@@ -637,16 +786,15 @@ std::string MainMenuView::applyPackSelectedFormatToPath(
 
 /// @brief 请求打包当前已选择的项目文件。
 /// @param path 输出包路径。
-void MainMenuView::requestPackBeatmapTo(std::string path)
+void PackBeatmapAction::requestPackBeatmapTo(std::string path)
 {
     path = applyPackSelectedFormatToPath(path);
     if ( path.empty() || m_package.pendingRelativePaths.empty() ) {
-        m_statusMessage      = "没有可打包的已选文件";
-        m_statusMessageTimer = 3.0f;
+        showStatusMessage("没有可打包的已选文件");
         return;
     }
 
-    dispatchCommand(Logic::CmdPackBeatmap{
+    MenuUtil::dispatchCommand(Logic::CmdPackBeatmap{
         .exportPath                   = path,
         .selectedProjectRelativePaths = m_package.pendingRelativePaths,
         .saveConvertedBeatmapsToProject =
@@ -670,7 +818,7 @@ void MainMenuView::requestPackBeatmapTo(std::string path)
 
 /// @brief 渲染打包目标格式选择弹窗。
 /// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
+void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
 {
     constexpr const char* popupId = "选择打包格式###PackageFormatPickerWindow";
     if ( !m_package.showFormatPicker ) {
@@ -752,7 +900,7 @@ void MainMenuView::renderPackageFormatPickerPopup(float dpiScale)
 /// @param dpiScale 当前窗口内容缩放。
 /// @warning UI 热路径约束如下。
 /// 热路径：打包选择弹窗可见时每帧执行；只读取候选缓存，不访问文件系统。
-void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
+void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
 {
     constexpr const char* popupId = "选择打包文件###PackageFileSelectionModal";
     if ( m_package.showFileSelectionWindow ) {
@@ -1017,7 +1165,7 @@ void MainMenuView::renderPackageFileSelectionWindow(float dpiScale)
 /// @brief 为选中的谱面准备打包转换前的元数据补充项。
 /// @param selectedRelativePaths 当前已选的项目相对路径列表。
 /// @return 需要展示补充窗口时返回 true。
-bool MainMenuView::preparePackageBeatmapMetadataEdits(
+bool PackBeatmapAction::preparePackageBeatmapMetadataEdits(
     const std::vector<std::string>& selectedRelativePaths)
 {
     m_package.beatmapMetadataEdits.clear();
@@ -1093,7 +1241,7 @@ bool MainMenuView::preparePackageBeatmapMetadataEdits(
 /// @brief 从补充窗口缓存收集打包元数据覆盖项。
 /// @return 元数据覆盖项列表。
 std::vector<Logic::PackageBeatmapMetadataOverride>
-MainMenuView::collectPackageMetadataOverridesFromEdits()
+PackBeatmapAction::collectPackageMetadataOverridesFromEdits()
 {
     std::vector<Logic::PackageBeatmapMetadataOverride> overrides;
     overrides.reserve(m_package.beatmapMetadataEdits.size());
@@ -1117,7 +1265,7 @@ MainMenuView::collectPackageMetadataOverridesFromEdits()
 
 /// @brief 渲染打包前补充目标谱面元数据的窗口。
 /// @param dpiScale 当前窗口内容缩放。
-void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
+void PackBeatmapAction::renderPackageBeatmapMetadataWindow(float dpiScale)
 {
     constexpr const char* popupId =
         "补充谱面元数据###PackageBeatmapMetadataModal";
@@ -1244,7 +1392,7 @@ void MainMenuView::renderPackageBeatmapMetadataWindow(float dpiScale)
 /// @brief 按当前目标打包格式重建候选文件列表。
 /// @warning 低频 UI
 /// 路径：打开打包选择窗口或切换格式时执行；会扫描项目目录并读取谱面元数据。
-void MainMenuView::rebuildPackageCandidateFiles()
+void PackBeatmapAction::rebuildPackageCandidateFiles()
 {
     m_package.candidateFiles.clear();
 
@@ -1260,8 +1408,7 @@ void MainMenuView::rebuildPackageCandidateFiles()
          filesystemError ||
          !std::filesystem::is_directory(projectRoot, filesystemError) ||
          filesystemError ) {
-        m_statusMessage      = "扫描项目文件失败";
-        m_statusMessageTimer = 3.0f;
+        showStatusMessage("扫描项目文件失败");
         return;
     }
 
@@ -1271,8 +1418,7 @@ void MainMenuView::rebuildPackageCandidateFiles()
         projectRoot, directoryOptions, filesystemError);
     const std::filesystem::recursive_directory_iterator endIterator;
     if ( filesystemError ) {
-        m_statusMessage      = "扫描项目文件失败";
-        m_statusMessageTimer = 3.0f;
+        showStatusMessage("扫描项目文件失败");
         return;
     }
 
@@ -1303,8 +1449,7 @@ void MainMenuView::rebuildPackageCandidateFiles()
 
         iterator.increment(filesystemError);
         if ( filesystemError ) {
-            m_statusMessage      = "扫描项目文件失败";
-            m_statusMessageTimer = 3.0f;
+            showStatusMessage("扫描项目文件失败");
             break;
         }
     }
@@ -1359,7 +1504,8 @@ void MainMenuView::rebuildPackageCandidateFiles()
 /// @param index 候选文件索引。
 /// @param selected 是否选中。
 /// @warning UI 热路径：打包选择弹窗可见时由用户操作触发；只更新候选列表缓存。
-void MainMenuView::setPackageCandidateSelected(std::size_t index, bool selected)
+void PackBeatmapAction::setPackageCandidateSelected(std::size_t index,
+                                                    bool        selected)
 {
     if ( index >= m_package.candidateFiles.size() ) return;
 
@@ -1379,7 +1525,7 @@ void MainMenuView::setPackageCandidateSelected(std::size_t index, bool selected)
 
 /// @brief 根据当前已选中谱面重新计算依赖资源锁定状态。
 /// @warning UI 热路径：打包选择弹窗可见时由用户操作触发；按候选数量线性更新。
-void MainMenuView::syncPackageDependencySelection()
+void PackBeatmapAction::syncPackageDependencySelection()
 {
     std::vector<bool> wasLocked;
     wasLocked.reserve(m_package.candidateFiles.size());
@@ -1426,7 +1572,7 @@ void MainMenuView::syncPackageDependencySelection()
 /// @brief 判断当前选中谱面是否存在未能绑定的依赖资源。
 /// @return 存在缺失依赖时返回 true。
 /// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
-bool MainMenuView::hasSelectedPackageMissingDependencies() const
+bool PackBeatmapAction::hasSelectedPackageMissingDependencies() const
 {
     return std::any_of(m_package.candidateFiles.begin(),
                        m_package.candidateFiles.end(),
@@ -1441,7 +1587,7 @@ bool MainMenuView::hasSelectedPackageMissingDependencies() const
 /// @brief 判断当前 MCZ 候选列表是否存在可写入上架 mode_ext 的谱面。
 /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
 /// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
-bool MainMenuView::hasPackageStoreModeExtCandidates() const
+bool PackBeatmapAction::hasPackageStoreModeExtCandidates() const
 {
     if ( m_package.selectedFileType != PackageFileType::Mcz ) {
         return false;
@@ -1458,7 +1604,7 @@ bool MainMenuView::hasPackageStoreModeExtCandidates() const
 /// @brief 判断当前选中的 MCZ 谱面是否需要显示上架 mode_ext 选项。
 /// @return 存在 Flick/折线谱面且目标为 MCZ 时返回 true。
 /// @warning UI 热路径：打包选择弹窗可见时每帧查询；只遍历候选缓存。
-bool MainMenuView::hasSelectedPackageStoreModeExtCandidates() const
+bool PackBeatmapAction::hasSelectedPackageStoreModeExtCandidates() const
 {
     if ( m_package.selectedFileType != PackageFileType::Mcz ) {
         return false;
@@ -1477,7 +1623,7 @@ bool MainMenuView::hasSelectedPackageStoreModeExtCandidates() const
 /// @return 已勾选的项目相对文件路径列表。
 /// @warning UI 热路径低频分支：点击确认打包时执行；只遍历候选缓存。
 std::vector<std::string>
-MainMenuView::collectSelectedPackageRelativePaths() const
+PackBeatmapAction::collectSelectedPackageRelativePaths() const
 {
     std::vector<std::string> selectedPaths;
     selectedPaths.reserve(m_package.candidateFiles.size());
@@ -1491,7 +1637,7 @@ MainMenuView::collectSelectedPackageRelativePaths() const
 
 /// @brief 生成当前打包目标格式的默认输出文件名。
 /// @return 默认输出文件名。
-std::string MainMenuView::makePackageDefaultFileName() const
+std::string PackBeatmapAction::makePackageDefaultFileName() const
 {
     std::string baseName = "map";
     auto*       project  = Logic::EditorEngine::instance().getCurrentProject();
@@ -1504,7 +1650,7 @@ std::string MainMenuView::makePackageDefaultFileName() const
 }
 
 /// @brief 打开谱面打包流程。
-void MainMenuView::openPackFilePicker()
+void PackBeatmapAction::openPackFilePicker()
 {
     m_package.candidateFiles.clear();
     m_package.pendingRelativePaths.clear();
@@ -1519,7 +1665,7 @@ void MainMenuView::openPackFilePicker()
 }
 
 /// @brief 打开打包输出路径选择器。
-void MainMenuView::openPackageOutputFilePicker()
+void PackBeatmapAction::openPackageOutputFilePicker()
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
     const std::string defaultFileName = makePackageDefaultFileName();
@@ -1533,7 +1679,13 @@ void MainMenuView::openPackageOutputFilePicker()
             &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
 
         if ( result == NFD_OKAY ) {
-            requestPackBeatmapTo(outPath);
+            std::string filePath = applyPackSelectedFormatToPath(outPath);
+            if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
+                m_pendingPackageOverwritePath = std::move(filePath);
+                m_showPackageOverwriteWarning = true;
+            } else {
+                requestPackBeatmapTo(std::move(filePath));
+            }
             NFD_FreePath(outPath);
         }
     } else {
@@ -1548,6 +1700,94 @@ void MainMenuView::openPackageOutputFilePicker()
         ImGuiFileDialog::Instance()->OpenDialog(
             "PackFilePicker", TR("ui.file.pack"), packageFilter, fdConfig);
     }
+}
+
+/// @brief 渲染统一打包输出文件选择器。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 热路径：仅在统一文件选择器打开时绘制。
+void PackBeatmapAction::renderPackageOutputFileDialog(float dpiScale)
+{
+    Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
+    if ( ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
+        Utils::prepareCenteredModalWindow({ 600, 400 });
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             "PackFilePicker",
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
+             { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            std::string filePath =
+                ImGuiFileDialog::Instance()->GetFilePathName();
+            filePath = applyPackSelectedFormatToPath(filePath);
+
+            auto& engine = Logic::EditorEngine::instance();
+            auto  config = engine.getEditorConfig();
+            config.settings.lastFilePickerPath =
+                ImGuiFileDialog::Instance()->GetCurrentPath();
+            engine.setEditorConfig(config);
+
+            if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
+                m_pendingPackageOverwritePath = std::move(filePath);
+                m_showPackageOverwriteWarning = true;
+            } else {
+                requestPackBeatmapTo(std::move(filePath));
+            }
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
+/// @brief 渲染打包输出覆盖确认弹窗。
+/// @param dpiScale 当前窗口内容缩放。
+void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
+{
+    constexpr const char* popupId =
+        "确认覆盖打包文件###PackageOverwriteWarningModal";
+    if ( m_showPackageOverwriteWarning ) {
+        ImGui::OpenPopup(popupId);
+        m_showPackageOverwriteWarning = false;
+    }
+
+    if ( !ImGui::IsPopupOpen(popupId) ) return;
+
+    Utils::CenteredModalPopupScope popupStyle(dpiScale);
+    if ( popupStyle.begin(popupId,
+                          nullptr,
+                          ImGuiWindowFlags_None,
+                          ImVec2(540.0f * dpiScale, 0.0f)) ) {
+        ImGui::TextWrapped("目标打包文件已经存在，是否覆盖？");
+        if ( !m_pendingPackageOverwritePath.empty() ) {
+            ImGui::Spacing();
+            ImGui::TextWrapped("目标文件：%s",
+                               m_pendingPackageOverwritePath.c_str());
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+        if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
+            requestPackBeatmapTo(m_pendingPackageOverwritePath);
+            m_pendingPackageOverwritePath.clear();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackButton(TR("ui.common.cancel").data(),
+                                       buttonSize) ) {
+            m_pendingPackageOverwritePath.clear();
+            ImGui::CloseCurrentPopup();
+        }
+
+        ImGui::EndPopup();
+    }
+}
+
+/// @brief 创建打开谱面打包流程的菜单项业务处理器。
+std::unique_ptr<IMainMenuItemActionHandler> createPackBeatmapAction()
+{
+    return std::make_unique<PackBeatmapAction>();
 }
 
 }  // namespace MMM::UI
