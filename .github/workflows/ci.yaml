@@ -32,6 +32,25 @@ jobs:
       - name: ci->Sync Repository
         run: |
           set -euo pipefail
+
+          ci_git_sync_lock="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
+          exec 9>"${ci_git_sync_lock}"
+          flock 9
+
+          if [[ -e .git/index.lock ]]; then
+            active_git_processes="$(
+              ps -u "$(id -u)" -o pid=,comm=,args= \
+                | awk '$2 == "git" || $2 ~ /^git-/ { print }'
+            )"
+            if [[ -n "${active_git_processes}" ]]; then
+              printf "error: .git/index.lock exists and git is still running:\n%s\n" "${active_git_processes}" >&2
+              exit 1
+            fi
+
+            printf "warning: removing stale git index lock: .git/index.lock\n" >&2
+            rm -f .git/index.lock
+          fi
+
           git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
           git clean -fd -- scripts/ci .github/workflows
           git checkout --force -B ci origin/ci
@@ -113,6 +132,25 @@ jobs:
       - name: ci->Sync Repository
         run: |
           set -euo pipefail
+
+          ci_git_sync_lock="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
+          exec 9>"${ci_git_sync_lock}"
+          flock 9
+
+          if [[ -e .git/index.lock ]]; then
+            active_git_processes="$(
+              ps -u "$(id -u)" -o pid=,comm=,args= \
+                | awk '$2 == "git" || $2 ~ /^git-/ { print }'
+            )"
+            if [[ -n "${active_git_processes}" ]]; then
+              printf "error: .git/index.lock exists and git is still running:\n%s\n" "${active_git_processes}" >&2
+              exit 1
+            fi
+
+            printf "warning: removing stale git index lock: .git/index.lock\n" >&2
+            rm -f .git/index.lock
+          fi
+
           git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
           git clean -fd -- scripts/ci .github/workflows
           git checkout --force -B ci origin/ci
