@@ -15,11 +15,15 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <imgui_internal.h>
 #include <mutex>
+#include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace MMM::Canvas
@@ -28,6 +32,491 @@ namespace
 {
 /// @brief 新建 Timing 行的高亮持续时间（秒）
 constexpr double NEW_TIMING_HIGHLIGHT_DURATION = 3.0;
+
+/// @brief 表格分拍位拟合使用的最大分母。
+constexpr int TIMING_TABLE_MAX_BEAT_DENOMINATOR = 64;
+
+/// @brief 表格拍位换算使用的误差阈值。
+constexpr double TIMING_TABLE_BEAT_EPSILON = 1e-6;
+
+/// @brief 表格分拍位拟合误差提示阈值，单位毫秒。
+constexpr double TIMING_TABLE_FRACTION_WARNING_MS = 3.0;
+
+/// @brief 时间线表格列数量。
+constexpr int TIMING_TABLE_COLUMN_COUNT = 7;
+
+/// @brief 时间线表格各列最小宽度。
+constexpr std::array<float, TIMING_TABLE_COLUMN_COUNT>
+    TIMING_TABLE_COLUMN_MIN_WIDTHS{ 44.0f, 150.0f, 110.0f, 130.0f,
+                                    80.0f, 130.0f, 130.0f };
+
+/// @brief 时间线表格拍位换算使用的 BPM 锚点。
+struct TimingTableBeatPoint {
+    /// @brief BPM 时间点，单位秒。
+    double time{ 0.0 };
+    /// @brief 当前段 BPM。
+    double bpm{ 120.0 };
+    /// @brief 该时间点对应的连续拍位置。
+    double beat{ 0.0 };
+};
+
+/// @brief 时间线表格可双向换算的连续拍位时间线。
+using TimingTableBeatTimeline = std::vector<TimingTableBeatPoint>;
+
+/// @brief 时间线表格中展示的拍号与分拍位。
+struct TimingTableBeatPosition {
+    /// @brief 连续拍位置的整数拍号部分。
+    int beatIndex{ 0 };
+    /// @brief 连续拍位置的小数分拍部分，范围通常为 [0, 1)。
+    double fraction{ 0.0 };
+};
+
+/// @brief 表格分拍位拟合结果。
+struct TimingTableFractionFit {
+    /// @brief 拟合后的拍号。
+    int beatIndex{ 0 };
+    /// @brief 分拍分子。
+    int numerator{ 0 };
+    /// @brief 分拍分母。
+    int denominator{ 1 };
+    /// @brief 分拍小数值。
+    double fraction{ 0.0 };
+    /// @brief 拟合到该分数后的时间误差，单位毫秒。
+    double errorMs{ 0.0 };
+};
+
+/// @brief 分拍位文本输入缓存。
+using TimingTableFractionInputBuffer = std::array<char, 32>;
+
+/// @brief 规整表格拍位换算使用的 BPM。
+/// @param bpm 待规整 BPM。
+/// @param fallbackBpm BPM 无效时使用的回退值。
+/// @return 可用于除法换算的 BPM。
+double sanitizeTimingTableBpm(double bpm, double fallbackBpm)
+{
+    if ( std::isfinite(bpm) && bpm > 0.0 ) {
+        return std::min(bpm, 10000.0);
+    }
+    if ( std::isfinite(fallbackBpm) && fallbackBpm > 0.0 ) {
+        return std::min(fallbackBpm, 10000.0);
+    }
+    return 120.0;
+}
+
+/// @brief 取得表格拍位换算使用的快照回退 BPM。
+/// @param snapshot 当前渲染快照。
+/// @return 有效回退 BPM。
+double timingTableFallbackBpm(const Logic::RenderSnapshot& snapshot)
+{
+    return sanitizeTimingTableBpm(snapshot.fallbackBpm, 120.0);
+}
+
+/// @brief 从当前快照构建表格拍位换算时间线。
+/// @param snapshot 当前渲染快照。
+/// @return 按时间排序并合并同时间点后的 BPM 锚点。
+/// @warning UI 热路径：表格窗口打开时每帧调用，只遍历快照中的 Scroll
+/// 缓存，不访问文件系统。
+TimingTableBeatTimeline buildTimingTableBeatTimeline(
+    const Logic::RenderSnapshot& snapshot)
+{
+    struct BpmEvent {
+        /// @brief BPM 时间点，单位秒。
+        double time{ 0.0 };
+        /// @brief BPM 值。
+        double bpm{ 120.0 };
+    };
+
+    const double          fallbackBpm = timingTableFallbackBpm(snapshot);
+    std::vector<BpmEvent> bpmEvents;
+    bpmEvents.reserve(snapshot.scrollSegments.size());
+    for ( const auto& segment : snapshot.scrollSegments ) {
+        if ( (segment.effects & Logic::System::SCROLL_EFFECT_BPM) == 0 ||
+             !std::isfinite(segment.time) ) {
+            continue;
+        }
+
+        bpmEvents.push_back(
+            { segment.time,
+              sanitizeTimingTableBpm(segment.bpmValue, fallbackBpm) });
+    }
+
+    std::stable_sort(
+        bpmEvents.begin(),
+        bpmEvents.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.time < rhs.time; });
+
+    TimingTableBeatTimeline timeline;
+    timeline.reserve(bpmEvents.size());
+    for ( const auto& event : bpmEvents ) {
+        if ( !timeline.empty() && std::abs(timeline.back().time - event.time) <
+                                      TIMING_TABLE_BEAT_EPSILON ) {
+            timeline.back().bpm = event.bpm;
+            continue;
+        }
+
+        if ( timeline.empty() ) {
+            timeline.push_back({ event.time, event.bpm, 0.0 });
+            continue;
+        }
+
+        const auto&  previous = timeline.back();
+        const double beat =
+            previous.beat + (event.time - previous.time) * previous.bpm / 60.0;
+        timeline.push_back({ event.time, event.bpm, beat });
+    }
+    return timeline;
+}
+
+/// @brief 将秒时间转换为连续拍位置。
+/// @param timeline 表格拍位换算时间线。
+/// @param time 秒时间。
+/// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
+/// @return 连续拍位置。
+double timingTableTimeToBeat(const TimingTableBeatTimeline& timeline,
+                             double time, double fallbackBpm)
+{
+    if ( !std::isfinite(time) ) return 0.0;
+
+    const double bpm = sanitizeTimingTableBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return time * bpm / 60.0;
+    }
+
+    auto it =
+        std::upper_bound(timeline.begin(),
+                         timeline.end(),
+                         time,
+                         [](double value, const TimingTableBeatPoint& point) {
+                             return value < point.time;
+                         });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.beat + (time - point.time) * point.bpm / 60.0;
+}
+
+/// @brief 将连续拍位置转换为秒时间。
+/// @param timeline 表格拍位换算时间线。
+/// @param beat 连续拍位置。
+/// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
+/// @return 秒时间。
+double timingTableBeatToTime(const TimingTableBeatTimeline& timeline,
+                             double beat, double fallbackBpm)
+{
+    if ( !std::isfinite(beat) ) return 0.0;
+
+    const double bpm = sanitizeTimingTableBpm(fallbackBpm, 120.0);
+    if ( timeline.empty() ) {
+        return beat * 60.0 / bpm;
+    }
+
+    auto it =
+        std::upper_bound(timeline.begin(),
+                         timeline.end(),
+                         beat,
+                         [](double value, const TimingTableBeatPoint& point) {
+                             return value < point.beat;
+                         });
+    const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
+    return point.time + (beat - point.beat) * 60.0 / point.bpm;
+}
+
+/// @brief 将连续拍位置拆成表格展示的拍号和分拍位。
+/// @param beat 连续拍位置。
+/// @return 规整后的表格拍位。
+TimingTableBeatPosition splitTimingTableBeatPosition(double beat)
+{
+    if ( !std::isfinite(beat) ) {
+        return {};
+    }
+
+    int beatIndex =
+        static_cast<int>(std::floor(beat + TIMING_TABLE_BEAT_EPSILON));
+    double fraction = beat - static_cast<double>(beatIndex);
+    if ( fraction < TIMING_TABLE_BEAT_EPSILON ) {
+        fraction = 0.0;
+    }
+    if ( fraction > 1.0 - TIMING_TABLE_BEAT_EPSILON ) {
+        beatIndex++;
+        fraction = 0.0;
+    }
+    return { beatIndex, fraction };
+}
+
+/// @brief 将连续拍位置拟合到最大 1/64 精度。
+/// @param beat 连续拍位置。
+/// @return 拟合后的分数拍位置。
+TimingTableFractionFit fitTimingTableFraction(double beat)
+{
+    const auto position = splitTimingTableBeatPosition(beat);
+
+    int    bestNumerator   = 0;
+    int    bestDenominator = 1;
+    double bestError       = std::abs(position.fraction);
+    for ( int denominator = 1; denominator <= TIMING_TABLE_MAX_BEAT_DENOMINATOR;
+          ++denominator ) {
+        const int numerator = std::clamp(
+            static_cast<int>(std::round(position.fraction * denominator)),
+            0,
+            denominator);
+        const double fittedFraction =
+            static_cast<double>(numerator) / static_cast<double>(denominator);
+        const double error = std::abs(position.fraction - fittedFraction);
+        if ( error + TIMING_TABLE_BEAT_EPSILON < bestError ||
+             (std::abs(error - bestError) <= TIMING_TABLE_BEAT_EPSILON &&
+              denominator < bestDenominator) ) {
+            bestError       = error;
+            bestNumerator   = numerator;
+            bestDenominator = denominator;
+        }
+    }
+
+    int beatIndex = position.beatIndex;
+    if ( bestNumerator >= bestDenominator ) {
+        beatIndex += bestNumerator / bestDenominator;
+        bestNumerator %= bestDenominator;
+    }
+    if ( bestNumerator == 0 ) {
+        return { beatIndex, 0, 1, 0.0, 0.0 };
+    }
+
+    const int divisor = std::gcd(bestNumerator, bestDenominator);
+    bestNumerator /= divisor;
+    bestDenominator /= divisor;
+    return { beatIndex,
+             bestNumerator,
+             bestDenominator,
+             static_cast<double>(bestNumerator) /
+                 static_cast<double>(bestDenominator),
+             0.0 };
+}
+
+/// @brief 将连续拍位置拟合为分数并计算时间误差。
+/// @param beat 连续拍位置。
+/// @param time 原始秒时间。
+/// @param timeline 表格拍位换算时间线。
+/// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
+/// @return 带时间误差的分数拍位置。
+TimingTableFractionFit fitTimingTableFractionWithError(
+    double beat, double time, const TimingTableBeatTimeline& timeline,
+    double fallbackBpm)
+{
+    auto         fit        = fitTimingTableFraction(beat);
+    const double fittedBeat = static_cast<double>(fit.beatIndex) + fit.fraction;
+    const double fittedTime =
+        timingTableBeatToTime(timeline, fittedBeat, fallbackBpm);
+    fit.errorMs = std::abs(fittedTime - time) * 1000.0;
+    return fit;
+}
+
+/// @brief 将分数拍位格式化为表格文本。
+/// @param fit 分数拟合结果。
+/// @return 分拍位文本。
+std::string formatTimingTableFraction(const TimingTableFractionFit& fit)
+{
+    if ( fit.numerator == 0 ) {
+        return "0";
+    }
+    return fmt::format("{}/{}", fit.numerator, fit.denominator);
+}
+
+/// @brief 去除 ASCII 空白。
+/// @param text 原始文本。
+/// @return 去除首尾空白后的文本。
+std::string_view trimTimingTableAsciiWhitespace(std::string_view text)
+{
+    while ( !text.empty() && (text.front() == ' ' || text.front() == '\t' ||
+                              text.front() == '\n' || text.front() == '\r') ) {
+        text.remove_prefix(1);
+    }
+    while ( !text.empty() && (text.back() == ' ' || text.back() == '\t' ||
+                              text.back() == '\n' || text.back() == '\r') ) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+/// @brief 无异常解析整数文本。
+/// @param text 原始文本。
+/// @return 成功时返回整数，否则返回空。
+std::optional<int> parseTimingTableInteger(std::string_view text)
+{
+    text = trimTimingTableAsciiWhitespace(text);
+    if ( text.empty() ) {
+        return std::nullopt;
+    }
+
+    int  value = 0;
+    auto result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 无异常解析浮点文本。
+/// @param text 原始文本。
+/// @return 成功时返回双精度值，否则返回空。
+std::optional<double> parseTimingTableDouble(std::string_view text)
+{
+    text = trimTimingTableAsciiWhitespace(text);
+    if ( text.empty() ) {
+        return std::nullopt;
+    }
+
+    double value = 0.0;
+    auto   result =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if ( result.ec != std::errc{} || result.ptr != text.data() + text.size() ) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+/// @brief 解析分拍位输入文本。
+/// @param text 输入文本，可为小数或 numerator/denominator。
+/// @return 成功时返回分拍小数值，否则返回空。
+std::optional<double> parseTimingTableFractionText(std::string_view text)
+{
+    text = trimTimingTableAsciiWhitespace(text);
+    if ( text.empty() ) {
+        return std::nullopt;
+    }
+
+    const size_t slashPos = text.find('/');
+    if ( slashPos == std::string_view::npos ) {
+        return parseTimingTableDouble(text);
+    }
+
+    const auto numerator   = parseTimingTableInteger(text.substr(0, slashPos));
+    const auto denominator = parseTimingTableInteger(text.substr(slashPos + 1));
+    if ( !numerator || !denominator || *denominator <= 0 ) {
+        return std::nullopt;
+    }
+    return static_cast<double>(*numerator) / static_cast<double>(*denominator);
+}
+
+/// @brief 将文本复制到分拍位输入缓存。
+/// @param buffer 输入缓存。
+/// @param text 待写入文本。
+void copyTimingTableTextToBuffer(TimingTableFractionInputBuffer& buffer,
+                                 std::string_view                text)
+{
+    const size_t count = std::min(buffer.size() - 1U, text.size());
+    std::copy_n(text.data(), count, buffer.data());
+    buffer[count] = '\0';
+}
+
+/// @brief 绘制分拍位分数输入框。
+/// @param id ImGui 控件 ID。
+/// @param fit 当前拟合结果。
+/// @param fraction 输出的分拍小数值。
+/// @return 用户提交了合法输入时返回 true。
+/// @warning UI 热路径：仅维护短文本缓存与解析用户输入，不访问文件系统。
+bool drawTimingTableFractionInput(const char*                   id,
+                                  const TimingTableFractionFit& fit,
+                                  double&                       fraction)
+{
+    static std::unordered_map<ImGuiID, TimingTableFractionInputBuffer>
+        editBuffers;
+
+    const ImGuiID inputId = ImGui::GetID(id);
+    auto&         buffer  = editBuffers[inputId];
+    if ( ImGui::GetActiveID() != inputId ) {
+        copyTimingTableTextToBuffer(buffer, formatTimingTableFraction(fit));
+    }
+
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputText(
+        id, buffer.data(), buffer.size(), ImGuiInputTextFlags_CharsNoBlank);
+    if ( !ImGui::IsItemDeactivatedAfterEdit() ) {
+        return false;
+    }
+
+    const auto parsed = parseTimingTableFractionText(buffer.data());
+    if ( !parsed || !std::isfinite(*parsed) ) {
+        return false;
+    }
+
+    fraction = *parsed;
+    return true;
+}
+
+/// @brief 将连续拍位置格式化为 Malody timing metadata 的 beat 数组。
+/// @param beat 连续拍位置。
+/// @return JSON 数组文本。
+std::string makeMalodyBeatMetadataValue(double beat)
+{
+    const auto fit = fitTimingTableFraction(beat);
+    if ( fit.numerator == 0 ) {
+        return fmt::format("[{},0,1]", fit.beatIndex);
+    }
+
+    return fmt::format(
+        "[{},{},{}]", fit.beatIndex, fit.numerator, fit.denominator);
+}
+
+/// @brief 读取指定 Timing 实体当前持有的元数据。
+/// @param entity Timing 实体。
+/// @return 找不到实体时返回空元数据。
+::MMM::TimingMetadata readTimelineMetadataOrDefault(entt::entity entity)
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) {
+        return {};
+    }
+
+    auto& registry = session->getContext().timelineRegistry;
+    if ( const auto* timeline =
+             registry.try_get<const Logic::TimelineComponent>(entity) ) {
+        return timeline->m_metadata;
+    }
+    return {};
+}
+
+/// @brief 使用指定连续拍位置生成带 Malody beat 的 Timing 元数据。
+/// @param entity Timing 实体。
+/// @param beat 连续拍位置。
+/// @return 保留原有字段并更新 beat 后的元数据。
+::MMM::TimingMetadata makeTimelineMetadataWithMalodyBeat(entt::entity entity,
+                                                         double       beat)
+{
+    auto metadata = readTimelineMetadataOrDefault(entity);
+    metadata.timing_properties[::MMM::TimingMetadataType::MALODY]["beat"] =
+        makeMalodyBeatMetadataValue(beat);
+    return metadata;
+}
+
+/// @brief 发布按拍位更新 Timing 的命令。
+/// @param entity Timing 实体。
+/// @param beatIndex 拍号输入值。
+/// @param fraction 分拍位输入值。
+/// @param rawValue 当前 Timing 原始参数。
+/// @param timeline 表格拍位换算时间线。
+/// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
+void publishTimingBeatPositionUpdate(entt::entity entity, int beatIndex,
+                                     double fraction, double rawValue,
+                                     const TimingTableBeatTimeline& timeline,
+                                     double                         fallbackBpm)
+{
+    if ( entity == entt::null || !std::isfinite(fraction) ||
+         !std::isfinite(rawValue) ) {
+        return;
+    }
+
+    const double requestedBeat = static_cast<double>(beatIndex) + fraction;
+    const double newTime       = std::max(
+        0.0, timingTableBeatToTime(timeline, requestedBeat, fallbackBpm));
+    const double exportBeat =
+        timingTableTimeToBeat(timeline, newTime, fallbackBpm);
+    Event::EventBus::instance().publish(
+        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
+            entity,
+            newTime,
+            rawValue,
+            makeTimelineMetadataWithMalodyBeat(entity, exportBeat) }));
+}
 
 /// @brief 查询表格列当前是否有效显示。
 /// @param table ImGui 表格指针。
@@ -120,8 +609,8 @@ void renderTimingTableHeaderContextMenu()
 
     ImGui::Separator();
 
-    const std::array<const char*, 5> columnLabels{
-        "序号", "时间戳 (秒)", "类型", "数值", "操作"
+    const std::array<const char*, 7> columnLabels{
+        "序号", "时间戳 (秒)", "拍号", "分拍位", "类型", "数值", "操作"
     };
     int enabledColumnCount = 0;
     for ( int column = 0; column < table->ColumnsCount; ++column ) {
@@ -835,7 +1324,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, frameRound);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
-    ImGui::SetNextWindowSize(ImVec2(650, 450), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(820, 450), ImGuiCond_FirstUseEver);
 
     std::string windowTitle =
         std::string(TR("ui.timeline.timing_points_table.title").data()) +
@@ -845,7 +1334,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ::MMM::UI::FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin,
                                                 &m_isTableWindowOpen);
     if ( opened ) {
-        auto elements = collectTimelineElements();
+        auto       elements = collectTimelineElements();
+        const auto beatTimeline =
+            buildTimingTableBeatTimeline(*m_currentSnapshot);
+        const double tableFallbackBpm =
+            timingTableFallbackBpm(*m_currentSnapshot);
         refreshKeepSpeedBinding(elements);
         const double tableCurrentTime =
             getActiveSessionTimelineTime(m_currentSnapshot->currentTime);
@@ -985,22 +1478,31 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                      std::floor(14.0f * std::max(dpiScale, 1.0f)));
         ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, tableScrollbarSize);
         if ( ImGui::BeginTable(
-                 "TimingPointsTableMain",
-                 5,
+                 "TimingPointsTableMainV3",
+                 7,
                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
                      ImGuiTableFlags_Hideable | ImGuiTableFlags_RowBg |
                      ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
-                     ImGuiTableFlags_ScrollY,
+                     ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY,
                  ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing())) ) {
+            const ImGuiTableColumnFlags initialColumnFlags =
+                ImGuiTableColumnFlags_WidthFixed;
             ImGui::TableSetupColumn(
-                "序号", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                "序号", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[0]);
             ImGui::TableSetupColumn("时间戳 (秒)",
-                                    ImGuiTableColumnFlags_WidthStretch);
+                                    initialColumnFlags,
+                                    TIMING_TABLE_COLUMN_MIN_WIDTHS[1]);
             ImGui::TableSetupColumn(
-                "类型", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-            ImGui::TableSetupColumn("数值", ImGuiTableColumnFlags_WidthStretch);
+                "拍号", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[2]);
+            ImGui::TableSetupColumn("分拍位",
+                                    initialColumnFlags,
+                                    TIMING_TABLE_COLUMN_MIN_WIDTHS[3]);
             ImGui::TableSetupColumn(
-                "操作", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+                "类型", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[4]);
+            ImGui::TableSetupColumn(
+                "数值", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[5]);
+            ImGui::TableSetupColumn(
+                "操作", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[6]);
             if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
                 table->DisableDefaultContextMenu = true;
             }
@@ -1050,12 +1552,12 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                                IM_COL32(255, 245, 170, 95));
                     }
 
-                    // Column 0: 序号
+                    // 第 0 列：序号
                     ImGui::TableSetColumnIndex(0);
                     ImGui::AlignTextToFramePadding();
                     ImGui::Text("#%d", displayIdx);
 
-                    // Column 1: 时间戳 (秒)
+                    // 第 1 列：时间戳（秒）
                     ImGui::TableSetColumnIndex(1);
                     double tVal = el.time;
                     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1070,15 +1572,69 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                     ent, tVal, rawVal }));
                     }
 
-                    // Column 2: 类型
+                    const double continuousBeat = timingTableTimeToBeat(
+                        beatTimeline, el.time, tableFallbackBpm);
+                    const auto fractionFit =
+                        fitTimingTableFractionWithError(continuousBeat,
+                                                        el.time,
+                                                        beatTimeline,
+                                                        tableFallbackBpm);
+
+                    // 第 2 列：拍号
                     ImGui::TableSetColumnIndex(2);
+                    int beatIndexValue = fractionFit.beatIndex;
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    std::string beatId = fmt::format("##Beat_{}", displayIdx);
+                    ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
+                    if ( ImGui::IsItemDeactivatedAfterEdit() ) {
+                        publishTimingBeatPositionUpdate(ent,
+                                                        beatIndexValue,
+                                                        fractionFit.fraction,
+                                                        getElementRawValue(el),
+                                                        beatTimeline,
+                                                        tableFallbackBpm);
+                    }
+
+                    // 第 3 列：分拍位
+                    ImGui::TableSetColumnIndex(3);
+                    double      fractionValue = fractionFit.fraction;
+                    std::string fractionId =
+                        fmt::format("##BeatFrac_{}", displayIdx);
+                    const bool hasFractionWarning =
+                        fractionFit.errorMs >= TIMING_TABLE_FRACTION_WARNING_MS;
+                    if ( hasFractionWarning ) {
+                        ImGui::PushStyleColor(
+                            ImGuiCol_FrameBg,
+                            ImVec4(0.50f, 0.17f, 0.12f, 0.38f));
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                                              ImVec4(1.0f, 0.76f, 0.42f, 1.0f));
+                    }
+                    if ( drawTimingTableFractionInput(
+                             fractionId.c_str(), fractionFit, fractionValue) ) {
+                        publishTimingBeatPositionUpdate(ent,
+                                                        fractionFit.beatIndex,
+                                                        fractionValue,
+                                                        getElementRawValue(el),
+                                                        beatTimeline,
+                                                        tableFallbackBpm);
+                    }
+                    if ( hasFractionWarning ) {
+                        if ( ImGui::IsItemHovered() ) {
+                            ImGui::SetTooltip("分拍位拟合误差 %.3f ms",
+                                              fractionFit.errorMs);
+                        }
+                        ImGui::PopStyleColor(2);
+                    }
+
+                    // 第 4 列：类型
+                    ImGui::TableSetColumnIndex(4);
                     ImGui::PushStyleColor(ImGuiCol_Text,
                                           getEffectColor(effect));
                     ImGui::TextUnformatted(getEffectLabel(effect));
                     ImGui::PopStyleColor();
 
-                    // Column 3: 数值
-                    ImGui::TableSetColumnIndex(3);
+                    // 第 5 列：数值
+                    ImGui::TableSetColumnIndex(5);
                     double vVal =
                         getDisplayValue(effect, getElementRawValue(el), ent);
                     ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1134,8 +1690,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         finishKeepSpeedBinding();
                     }
 
-                    // Column 4: 操作
-                    ImGui::TableSetColumnIndex(4);
+                    // 第 6 列：操作
+                    ImGui::TableSetColumnIndex(6);
                     std::string seekId =
                         fmt::format("跳转##Seek_{}", displayIdx);
                     if ( ::MMM::UI::FeedbackButton(seekId.c_str()) ) {

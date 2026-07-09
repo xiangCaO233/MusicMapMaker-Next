@@ -400,9 +400,14 @@ struct CmdScroll {
  * @brief 更新时间线事件指令
  */
 struct CmdUpdateTimelineEvent {
+    /// @brief 待更新的 Timeline 实体。
     entt::entity entity;
-    double       newTime;
-    double       newValue;
+    /// @brief 新时间戳，单位秒。
+    double newTime;
+    /// @brief 新效果参数。
+    double newValue;
+    /// @brief 可选的新元数据；为空时由逻辑层保留或清理旧元数据。
+    std::optional<::MMM::TimingMetadata> metadataOverride;
 };
 
 /**

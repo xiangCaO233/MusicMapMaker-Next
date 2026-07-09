@@ -76,6 +76,22 @@ bool isPlaceableCreatedNote(const NoteComponent& note)
     return true;
 }
 
+/// @brief 移除 Malody timing 拍位缓存。
+/// @param metadata 待修改的 Timing 元数据。
+void clearMalodyTimingBeatMetadata(::MMM::TimingMetadata& metadata)
+{
+    auto sourceIt =
+        metadata.timing_properties.find(::MMM::TimingMetadataType::MALODY);
+    if ( sourceIt == metadata.timing_properties.end() ) {
+        return;
+    }
+
+    sourceIt->second.erase("beat");
+    if ( sourceIt->second.empty() ) {
+        metadata.timing_properties.erase(sourceIt);
+    }
+}
+
 /// @brief 复制粘贴分拍换算使用的 BPM 时间点。
 struct ClipboardBeatTimelinePoint {
     double timestamp{ 0.0 };  ///< BPM 时间点，单位秒
@@ -979,7 +995,7 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Delete Selected");
+                                                          "Delete Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);
     }
@@ -1032,7 +1048,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -1187,7 +1203,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -1320,7 +1336,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -1368,6 +1384,11 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         auto newTl = oldTl;
         newTl.m_timestamp = cmd.newTime;
         newTl.m_value     = cmd.newValue;
+        if ( cmd.metadataOverride ) {
+            newTl.m_metadata = *cmd.metadataOverride;
+        } else if ( std::abs(newTl.m_timestamp - oldTl.m_timestamp) > 1e-6 ) {
+            clearMalodyTimingBeatMetadata(newTl.m_metadata);
+        }
 
         auto action = std::make_unique<TimelineAction>(
             TimelineAction::Type::Update, cmd.entity, oldTl, newTl);
@@ -1790,7 +1811,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);
