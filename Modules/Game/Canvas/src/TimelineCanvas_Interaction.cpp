@@ -1278,17 +1278,34 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     case Logic::EditTool::Move:
         if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget ) {
-                if ( !additiveSelection &&
-                     m_selectedTimingEntities.find(hoveredTarget->entity) ==
-                         m_selectedTimingEntities.end() ) {
-                    m_selectedTimingEntities.clear();
-                }
-                if ( additiveSelection &&
-                     m_selectedTimingEntities.find(hoveredTarget->entity) !=
-                         m_selectedTimingEntities.end() ) {
-                    m_selectedTimingEntities.erase(hoveredTarget->entity);
+                const bool wasSelected =
+                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
+                    m_selectedTimingEntities.end();
+                bool shouldBeginTimingDrag = true;
+                if ( additiveSelection ) {
+                    if ( wasSelected ) {
+                        m_selectedTimingEntities.erase(hoveredTarget->entity);
+                        shouldBeginTimingDrag = false;
+                    } else {
+                        m_selectedTimingEntities.insert(hoveredTarget->entity);
+                    }
                 } else {
+                    if ( !wasSelected ) {
+                        m_selectedTimingEntities.clear();
+                    }
                     m_selectedTimingEntities.insert(hoveredTarget->entity);
+                }
+
+                if ( !shouldBeginTimingDrag ) {
+                    m_isTimingDragging       = false;
+                    m_timingDragPreviewDelta = 0.0;
+                    m_timingDragEntries.clear();
+                    break;
+                }
+
+                if ( m_selectedTimingEntities.empty() ) {
+                    m_selectedTimingEntities.clear();
+                    break;
                 }
 
                 m_isTimingDragging       = true;
@@ -1401,20 +1418,39 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         };
 
         if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
-            m_isTimingMarqueeSelecting = true;
-            m_timingMarqueeStartX      = localMouseX;
-            m_timingMarqueeEndX        = localMouseX;
-            m_timingMarqueeStartTime   = canvasTimeAtLocalY(size, localMouseY);
-            m_timingMarqueeEndTime     = m_timingMarqueeStartTime;
-            refreshMarqueeScreenY();
-            m_timingMarqueeBaseSelection.clear();
-            if ( additiveSelection ) {
-                m_timingMarqueeBaseSelection = m_selectedTimingEntities;
+            if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
+                const bool wasSelected =
+                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
+                    m_selectedTimingEntities.end();
+                if ( additiveSelection ) {
+                    if ( wasSelected ) {
+                        m_selectedTimingEntities.erase(hoveredTarget->entity);
+                    } else {
+                        m_selectedTimingEntities.insert(hoveredTarget->entity);
+                    }
+                } else {
+                    m_selectedTimingEntities.clear();
+                    m_selectedTimingEntities.insert(hoveredTarget->entity);
+                }
+                m_isTimingMarqueeSelecting = false;
+                m_timingMarqueeBaseSelection.clear();
+            } else {
+                m_isTimingMarqueeSelecting = true;
+                m_timingMarqueeStartX      = localMouseX;
+                m_timingMarqueeEndX        = localMouseX;
+                m_timingMarqueeStartTime =
+                    canvasTimeAtLocalY(size, localMouseY);
+                m_timingMarqueeEndTime = m_timingMarqueeStartTime;
+                refreshMarqueeScreenY();
+                m_timingMarqueeBaseSelection.clear();
+                if ( additiveSelection ) {
+                    m_timingMarqueeBaseSelection = m_selectedTimingEntities;
+                }
+                if ( !additiveSelection ) {
+                    m_selectedTimingEntities.clear();
+                }
+                refreshMarqueeTargets();
             }
-            if ( !additiveSelection ) {
-                m_selectedTimingEntities.clear();
-            }
-            refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&
              ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
