@@ -3,6 +3,7 @@
 #include "config/EditorConfig.h"
 #include "event/audio/AudioPlaybackEvent.h"
 #include "event/core/EventBus.h"
+#include "logic/PreviewDensity.h"
 #include "logic/SyncClock.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -151,9 +152,15 @@ struct SessionContext {
     std::vector<double>
         sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
     std::uint64_t noteVisibilityIndexRevision{ 0 };  ///< 音符可见性索引版本号
-    size_t        noteCount{ 0 };  ///< 当前谱面的可计数物件数量缓存
-    size_t        maxCombo{ 0 };   ///< 当前谱面的最大连击数缓存
-    double        lastSnapshotTime{ 0.0 };
+    /// @brief 密度缓存使用的可计数物件时间，按时间升序排列。
+    std::vector<double> previewDensityObjectTimes;
+    /// @brief 仅在物件或全谱时长变化时重建的预览密度缓存。
+    PreviewDensitySnapshot previewDensityCache;
+    /// @brief 预览密度缓存是否需要依据物件时间重建。
+    bool   isPreviewDensityDirty{ true };
+    size_t noteCount{ 0 };  ///< 当前谱面的可计数物件数量缓存
+    size_t maxCombo{ 0 };   ///< 当前谱面的最大连击数缓存
+    double lastSnapshotTime{ 0.0 };
 
     Event::ScopedSubscription<Event::AudioFinishedEvent>
         audioFinishedToken;  ///< 音频播放完成订阅令牌

@@ -118,6 +118,16 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 绘制预览窗口右侧独立的全谱物件密度栏。
+    /// @param canvasPos 预览画布内容左上角屏幕坐标。
+    /// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+    /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+    /// @param dpiScale 当前窗口 DPI 缩放。
+    /// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
+    /// 遍历、排序、文件访问或共享指针复制。
+    void drawDensityOverview(const ImVec2& canvasPos, const ImVec2& canvasSize,
+                             float reservedWidth, float dpiScale) const;
+
     /// @brief 上一次发送给逻辑线程的鼠标状态，用于过滤重复交互命令。
     struct LastMouseCommand {
         /// @brief 是否已经记录过一次鼠标命令。

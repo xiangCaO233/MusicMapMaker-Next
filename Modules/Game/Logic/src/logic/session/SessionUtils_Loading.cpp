@@ -34,10 +34,13 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.actionStack.clear();
     ctx.sortedNoteEntities.clear();
     ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.previewDensityObjectTimes.clear();
+    ctx.previewDensityCache.clear();
     ctx.lastCameraSnapshotTimes.clear();
-    ctx.isNoteOrderDirty = true;
-    ctx.isNotePruneDirty = false;
-    ctx.isNoteStatsDirty = true;
+    ctx.isNoteOrderDirty      = true;
+    ctx.isNotePruneDirty      = false;
+    ctx.isNoteStatsDirty      = true;
+    ctx.isPreviewDensityDirty = true;
     ctx.loadedMainAudioPath.clear();
     ctx.mainAudioTotalTime = 0.0;
     Audio::AudioManager::instance().stop();
