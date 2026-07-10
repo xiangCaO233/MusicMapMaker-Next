@@ -468,7 +468,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                 categorySize * 7.0f + categorySpacing * 6.0f;
+                                  categorySize * 7.0f + categorySpacing * 6.0f;
 
     cache.tabLabelWidth =
         measureSettingsTabLabelWidth(tab, snapshot) + std::floor(16.0f * scale);
@@ -554,7 +554,7 @@ void SettingsView::open(Event::SettingsTab tab)
 {
     m_currentTab                    = tab;
     m_isOpen                        = true;
-    m_focusNextFrame                = true;
+    m_focusRequestFramesRemaining   = FOCUS_REQUEST_FRAME_COUNT;
     m_dockToCenterNextFrame         = true;
     m_availableSkinDirectoriesDirty = true;
     if ( tab != Event::SettingsTab::Shortcut ) {
@@ -572,7 +572,7 @@ void SettingsView::requestDockToCenter()
 /// @brief 请求下一帧聚焦设置窗口。
 void SettingsView::requestFocus()
 {
-    m_focusNextFrame = true;
+    m_focusRequestFramesRemaining = FOCUS_REQUEST_FRAME_COUNT;
 }
 
 /// @brief 更新并渲染独立设置窗口。
@@ -588,9 +588,9 @@ void SettingsView::update(UIManager* sourceManager)
     if ( m_dockToCenterNextFrame ) {
         dockId = MainDockSpaceUI::getCenterDockId();
     }
-    if ( m_focusNextFrame ) {
+    if ( m_focusRequestFramesRemaining > 0 ) {
         ImGui::SetNextWindowFocus();
-        m_focusNextFrame = false;
+        --m_focusRequestFramesRemaining;
     }
     const float dpiScale =
         MMM::Config::AppConfig::instance().getWindowContentScale();
@@ -681,8 +681,8 @@ void SettingsView::drawContent()
             if ( iconFont ) ImGui::PushFont(iconFont, iconFont->LegacySize);
             ImFont* drawIconFont = iconFont ? iconFont : ImGui::GetFont();
             ImVec2  iconSize     = ImGui::CalcTextSize(iconStr);
-            ImVec2  iconPos      = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
-                                     rect.y + (rect.height - iconSize.y) * 0.5f };
+            ImVec2  iconPos = { rect.x + (iconAreaW - iconSize.x) * 0.5f,
+                                rect.y + (rect.height - iconSize.y) * 0.5f };
             ImGui::GetWindowDrawList()->AddText(
                 drawIconFont,
                 ImGui::GetFontSize(),
@@ -705,9 +705,9 @@ void SettingsView::drawContent()
                 ImGui::PushFont(menuFont, menuFont->LegacySize);
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = { sepX + textLeftPadding,
-                                           rect.y +
-                                               (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),
