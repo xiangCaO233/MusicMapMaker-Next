@@ -37,7 +37,8 @@ public:
     {
         (void)context;
         (void)activation;
-        m_showWindow = true;
+        m_showWindow          = true;
+        m_openWindowRequested = true;
     }
 
     /// @brief 渲染数据来源替换工具窗口。
@@ -168,17 +169,18 @@ private:
     {
         constexpr const char* popupId =
             "数据来源替换工具###DataSourceReplaceModal";
-        if ( m_showWindow ) {
+        if ( m_openWindowRequested ) {
             ImGui::OpenPopup(popupId);
+            m_openWindowRequested = false;
         }
 
-        if ( !ImGui::IsPopupOpen(popupId) ) return;
+        if ( !m_showWindow ) return;
 
         bool closePopup = false;
         {
             Utils::CenteredModalPopupScope popupStyle(context.dpiScale);
             if ( popupStyle.begin(popupId,
-                                  nullptr,
+                                  &m_showWindow,
                                   ImGuiWindowFlags_NoCollapse,
                                   ImVec2(640.0f * context.dpiScale,
                                          480.0f * context.dpiScale),
@@ -264,6 +266,9 @@ private:
 
     /// @brief 是否显示数据来源替换工具窗口。
     bool m_showWindow = false;
+
+    /// @brief 是否在下一帧打开数据来源替换工具弹窗。
+    bool m_openWindowRequested = false;
 
     /// @brief 当前选中的项目相对谱面路径。
     std::string m_dataSourcePath;

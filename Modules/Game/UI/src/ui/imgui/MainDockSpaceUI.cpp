@@ -730,7 +730,7 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
     IGFD::FileDialogConfig fdConfig;
     fdConfig.path              = editorSettings.lastFilePickerPath;
     fdConfig.countSelectionMax = 1;
-    fdConfig.flags             = ImGuiFileDialogFlags_Default;
+    fdConfig.flags             = ImGuiFileDialogFlags_Modal;
     ImGuiFileDialog::Instance()->OpenDialog(
         "TemporaryProjectSaveFolderPicker", "保存临时项目", nullptr, fdConfig);
 }

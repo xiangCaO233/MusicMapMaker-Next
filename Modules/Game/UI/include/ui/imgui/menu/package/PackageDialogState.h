@@ -70,8 +70,14 @@ struct PackageDialogState {
     /// @brief 是否在下一帧打开打包格式选择弹窗。
     bool showFormatPicker{ false };
 
+    /// @brief 打包格式选择弹窗当前是否保持打开。
+    bool formatPickerOpen{ false };
+
     /// @brief 是否显示打包文件复选列表窗口。
     bool showFileSelectionWindow{ false };
+
+    /// @brief 是否在下一帧打开打包文件复选列表弹窗。
+    bool openFileSelectionWindow{ false };
 
     /// @brief 是否显示打包前目标谱面元数据补充窗口。
     bool showBeatmapMetadataWindow{ false };

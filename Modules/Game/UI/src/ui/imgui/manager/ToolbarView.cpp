@@ -338,7 +338,10 @@ void ToolbarView::update(UIManager* sourceManager)
 
         if ( !ImGui::GetIO().WantTextInput &&
              !ShortcutUtils::isShortcutRecordingActive() &&
-             !ImGui::IsAnyItemActive() ) {
+             !ImGui::IsAnyItemActive() &&
+             !ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {
             bool handledShortcut   = false;
             auto tryToggleShortcut = [&](const Config::ShortcutBinding& binding,
                                          auto applyChange) {

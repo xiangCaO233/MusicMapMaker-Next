@@ -247,7 +247,7 @@ void FileManagerView::openFolderPicker()
         IGFD::FileDialogConfig fdConfig;
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
-        fdConfig.flags             = ImGuiFileDialogFlags_Default;
+        fdConfig.flags             = ImGuiFileDialogFlags_Modal;
         ImGuiFileDialog::Instance()->OpenDialog(
             "ProjectFolderPicker",
             TR("ui.file_manager.open_directory"),

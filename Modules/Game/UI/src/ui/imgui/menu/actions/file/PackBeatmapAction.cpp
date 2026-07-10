@@ -820,19 +820,21 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
 void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
 {
     constexpr const char* popupId = "选择打包格式###PackageFormatPickerWindow";
-    if ( !m_package.showFormatPicker ) {
-        return;
+    if ( m_package.showFormatPicker ) {
+        ImGui::OpenPopup(popupId);
+        m_package.showFormatPicker = false;
+        m_package.formatPickerOpen = true;
     }
+    if ( !m_package.formatPickerOpen ) return;
 
     bool            hasSelection = false;
     bool            closeWindow  = false;
     PackageFileType selectedType = m_package.selectedFileType;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
-        bool                           isOpen = true;
-        if ( popupStyle.beginWindow(
+        if ( popupStyle.begin(
                  popupId,
-                 &isOpen,
+                 &m_package.formatPickerOpen,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
                  ImVec2(380.0f * dpiScale, 0.0f)) ) {
             ImGui::TextUnformatted("选择目标打包格式：");
@@ -871,17 +873,15 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
             if ( hasSelection ) {
                 closeWindow = true;
             }
-        }
-        ImGui::End();
 
-        if ( !isOpen ) {
-            closeWindow = true;
+            if ( closeWindow ) {
+                m_package.formatPickerOpen = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
     }
 
-    if ( closeWindow ) {
-        m_package.showFormatPicker = false;
-    }
     if ( hasSelection ) {
         m_package.selectedFileType = selectedType;
         if ( !shouldShowConvertedBeatmapSaveOption(selectedType) ) {
@@ -892,6 +892,7 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
         }
         rebuildPackageCandidateFiles();
         m_package.showFileSelectionWindow = true;
+        m_package.openFileSelectionWindow = true;
     }
 }
 
@@ -902,18 +903,19 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
 void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
 {
     constexpr const char* popupId = "选择打包文件###PackageFileSelectionModal";
-    if ( m_package.showFileSelectionWindow ) {
+    if ( m_package.openFileSelectionWindow ) {
         ImGui::OpenPopup(popupId);
+        m_package.openFileSelectionWindow = false;
     }
 
-    if ( !ImGui::IsPopupOpen(popupId) ) return;
+    if ( !m_package.showFileSelectionWindow ) return;
 
     bool requestOutputPicker = false;
     bool closePopup          = false;
     {
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(popupId,
-                              nullptr,
+                              &m_package.showFileSelectionWindow,
                               ImGuiWindowFlags_NoCollapse,
                               ImVec2(760.0f * dpiScale, 540.0f * dpiScale),
                               false) ) {
@@ -1656,7 +1658,9 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.pendingMetadataOverrides.clear();
     m_package.beatmapMetadataEdits.clear();
     m_package.showFileSelectionWindow   = false;
+    m_package.openFileSelectionWindow   = false;
     m_package.showBeatmapMetadataWindow = false;
+    m_package.formatPickerOpen          = false;
     m_package.showFormatPicker          = true;
     if ( !shouldShowLegacyImdPackageOption(m_package.selectedFileType) ) {
         m_package.includeLegacyImdBeatmaps = false;

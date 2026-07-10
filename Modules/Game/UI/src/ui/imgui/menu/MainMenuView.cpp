@@ -28,6 +28,22 @@ void MainMenuView::handleHotkeys(MainMenuContext& context)
         return;
     }
 
+    const bool anyPopupOpen = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if ( anyPopupOpen ) {
+        bool mainMenuPopupOpen = false;
+        for ( const auto& menu : m_registeredMenus ) {
+            if ( menu && ImGui::IsPopupOpen(menu->label(context)) ) {
+                mainMenuPopupOpen = true;
+                break;
+            }
+        }
+        if ( mainMenuPopupOpen ) {
+            m_navigationController.handleShortcuts();
+        }
+        return;
+    }
+
     for ( auto& menu : m_registeredMenus ) {
         if ( menu && menu->handleShortcut(context) ) return;
     }

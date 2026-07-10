@@ -481,9 +481,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {
                 std::string label    = fmt::format("{} ({})##{}",
-                                                option.displayName,
-                                                option.internalName,
-                                                option.cameraId);
+                                                   option.displayName,
+                                                   option.internalName,
+                                                   option.cameraId);
                 bool        selected = option.cameraId == m_templateCameraId;
                 if ( ::MMM::UI::FeedbackSelectable(label.c_str(), selected) ) {
                     selectTemplate(option);
@@ -666,12 +666,6 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) return;
 
-    if ( m_shouldOpen ) {
-        m_shouldOpen = false;
-        ImGui::SetNextWindowFocus();
-        XINFO("NewBeatmapWizard: Opening wizard window...");
-    }
-
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     Utils::CenteredModalPopupScope windowScope(dpiScale);
     constexpr ImGuiWindowFlags     WINDOW_FLAGS =
@@ -679,14 +673,22 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     const std::string windowTitle =
         std::string(TR("ui.wizard.new_beatmap.title").data()) +
         "###NewBeatmapWizardWindow";
+    if ( m_shouldOpen ) {
+        ImGui::OpenPopup(windowTitle.c_str());
+        m_shouldOpen = false;
+        XINFO("NewBeatmapWizard: Opening wizard window...");
+    }
+
     const bool windowVisible =
-        windowScope.beginWindow(windowTitle.c_str(),
-                                &m_isOpen,
-                                WINDOW_FLAGS,
-                                ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
-                                false);
+        windowScope.begin(windowTitle.c_str(),
+                          &m_isOpen,
+                          WINDOW_FLAGS,
+                          ImVec2(600.0f * dpiScale, 700.0f * dpiScale),
+                          false);
     if ( !windowVisible ) {
-        ImGui::End();
+        if ( !m_isOpen ) {
+            unbindBpmMeasurementTool();
+        }
         return;
     }
 
@@ -750,7 +752,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::TextColored(Utils::UIThemeUtils::getDangerColor(),
                            "%s",
                            TR("ui.wizard.new_beatmap.no_project").data());
-        ImGui::End();
+        ImGui::EndPopup();
         return;
     }
 
@@ -771,8 +773,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         TR("ui.wizard.new_beatmap.measure_bpm_auto").data();
     const float measureBpmWidth = ImGui::CalcTextSize(measureBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float autoBpmWidth = ImGui::CalcTextSize(autoBpmLabel).x +
-                               ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
+                                  ImGui::GetStyle().FramePadding.x * 2.0f;
     const float comboWidth =
         std::max(120.0f,
                  ImGui::GetContentRegionAvail().x - measureBpmWidth -
@@ -937,7 +939,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     renderDuplicateNameWarningPopup();
 
-    ImGui::End();
+    if ( !m_isOpen ) {
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 void NewBeatmapWizard::open()
@@ -951,7 +956,6 @@ void NewBeatmapWizard::close()
 {
     unbindBpmMeasurementTool();
     m_isOpen = false;
-    ImGui::CloseCurrentPopup();
 }
 
 void NewBeatmapWizard::reset()

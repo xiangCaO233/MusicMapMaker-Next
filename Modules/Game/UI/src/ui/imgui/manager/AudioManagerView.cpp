@@ -1576,17 +1576,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
         if ( m_openManageModal ) {
+            ImGui::OpenPopup(windowTitle.c_str());
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
         const bool                     manageWindowOpened =
-            manageWindowScope.beginWindow(windowTitle.c_str(),
-                                          &showManageModal,
-                                          ImGuiWindowFlags_NoCollapse,
-                                          { 420 * dpiScale, 0.0f });
-        if ( !showManageModal ) {
-            m_manageTrackId = "";
-        }
+            manageWindowScope.begin(windowTitle.c_str(),
+                                    &showManageModal,
+                                    ImGuiWindowFlags_NoCollapse,
+                                    { 420 * dpiScale, 0.0f });
+        bool closeManageModal = !showManageModal;
         if ( manageWindowOpened ) {
             // --- 使用 Clay 重构对话框内容 ---
             CLayVBox    modalLayout;
@@ -1652,7 +1651,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 "TypeCombo",
                 Sizing::Grow(),
                 Sizing::Fixed(modalComboH),
-                [=, this, &engine](Clay_BoundingBox r, bool) {
+                [=, this, &engine, &closeManageModal](Clay_BoundingBox r,
+                                                      bool) {
                     ImGui::SetCursorScreenPos({ r.x, r.y });
                     int currentType =
                         (m_manageTrackType == AudioTrackType::Main ? 0 : 1);
@@ -1666,7 +1666,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(Logic::CmdUpdateAudioResource{
                             m_manageTrackId, m_manageTrackType });
-                        ImGui::CloseCurrentPopup();
+                        closeManageModal = true;
                     }
                 });
             modalLayout.addLayout("TypeRow",
@@ -1701,17 +1701,18 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         ImGui::OpenPopup("RemoveTrackConfirm");
                     }
                 });
-            btnRow.addElement("CancelBtn",
-                              Sizing::Fixed(cancelButtonW),
-                              Sizing::Fixed(modalButtonH),
-                              [=, this](Clay_BoundingBox r, bool) {
-                                  ImGui::SetCursorScreenPos({ r.x, r.y });
-                                  if ( ::MMM::UI::FeedbackButton(
-                                           TR("ui.common.cancel").data(),
-                                           { r.width, r.height }) ) {
-                                      m_manageTrackId = "";
-                                  }
-                              });
+            btnRow.addElement(
+                "CancelBtn",
+                Sizing::Fixed(cancelButtonW),
+                Sizing::Fixed(modalButtonH),
+                [=, this, &closeManageModal](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { r.width, r.height }) ) {
+                        closeManageModal = true;
+                    }
+                });
             modalLayout.addLayout(
                 "BtnRow", btnRow, Sizing::Grow(), Sizing::Fixed(modalButtonH));
 
@@ -1735,7 +1736,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         m_audioTableSortCacheDirty = true;
                         engine.pushCommand(
                             Logic::CmdRemoveAudioResource{ m_manageTrackId });
-                        m_manageTrackId = "";
+                        closeManageModal = true;
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::SameLine();
                     if ( ::MMM::UI::FeedbackButton(
@@ -1746,8 +1748,16 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::EndPopup();
                 }
             }
+
+            if ( closeManageModal ) {
+                showManageModal = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
-        ImGui::End();
+        if ( !showManageModal ) {
+            m_manageTrackId.clear();
+        }
     }
 
     if ( fileManagerFont ) ImGui::PopFont();

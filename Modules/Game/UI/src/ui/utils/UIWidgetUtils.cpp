@@ -589,9 +589,6 @@ constexpr ImGuiID MENU_POPUP_AMOUNT_KEY_SALT = 0x6D6D4D22u;
 /// @brief 菜单弹窗最后一次绘制帧存储键的盐值。
 constexpr ImGuiID MENU_POPUP_LAST_FRAME_KEY_SALT = 0x6D6D4D23u;
 
-/// @brief 菜单弹窗关闭动画状态存储键的盐值。
-constexpr ImGuiID MENU_POPUP_CLOSING_KEY_SALT = 0x6D6D4D24u;
-
 /// @brief 菜单弹窗滑入位移像素。
 constexpr float MENU_POPUP_SLIDE_Y = 8.0f;
 
@@ -1055,19 +1052,6 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
     storage->SetFloat(amountKey, amount);
     storage->SetInt(lastFrameKey, currentFrame);
     return amount;
-}
-
-/// @brief 读取菜单弹窗上一帧动画进度。
-/// @param id 菜单入口 ImGui ID。
-/// @param storage 菜单入口所属窗口的状态存储。
-/// @return 上一帧弹窗动画进度。
-/// @warning UI 热路径：只访问当前窗口 ImGuiStorage。
-float getStoredMenuPopupAmount(ImGuiID id, ImGuiStorage* storage)
-{
-    if ( !storage ) return 0.0f;
-
-    return storage->GetFloat(
-        makeButtonStorageKey(id, MENU_POPUP_AMOUNT_KEY_SALT), 0.0f);
 }
 
 /// @brief 对当前已打开菜单弹窗应用窗口级进入动画。
@@ -1751,26 +1735,6 @@ bool FeedbackBeginMenu(const char* label, bool enabled)
 {
     ImGuiStorage* storage = ImGui::GetStateStorage();
     const ImGuiID id      = ImGui::GetID(label);
-    const ImGuiID closingKey =
-        makeButtonStorageKey(id, MENU_POPUP_CLOSING_KEY_SALT);
-    const ImGuiID openKey    = makeButtonStorageKey(id, MENU_OPEN_KEY_SALT);
-    bool          closing    = storage && storage->GetInt(closingKey, 0) != 0;
-    const bool    wasOpen    = storage && storage->GetInt(openKey, 0) != 0;
-    const float   lastAmount = getStoredMenuPopupAmount(id, storage);
-    const bool    popupOpen  = ImGui::IsPopupOpen(label);
-    if ( enabled && wasOpen && !popupOpen && lastAmount > 0.01f ) {
-        closing = true;
-        storage->SetInt(closingKey, 1);
-    }
-    if ( closing && lastAmount <= 0.01f ) {
-        closing = false;
-        if ( storage ) {
-            storage->SetInt(closingKey, 0);
-        }
-    }
-    if ( closing && lastAmount > 0.01f ) {
-        ImGui::OpenPopup(label);
-    }
 
     const float           hoverAmount = updateButtonHoverAmount(id, storage);
     RoundedHighlightLayer highlightLayer;
@@ -1781,27 +1745,15 @@ bool FeedbackBeginMenu(const char* label, bool enabled)
     const bool   hovered          = ImGui::IsItemHovered();
     const bool   active           = ImGui::IsItemActive() || open;
     const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
-    if ( clicked ) {
-        closing = false;
-        if ( storage ) {
-            storage->SetInt(closingKey, 0);
-        }
-    }
     ImGui::PopStyleColor(pushedColorCount);
     endRoundedHighlightLayer(
         &highlightLayer,
         itemRect,
         calcRoundedHighlightColor(hoverAmount, false, hovered, active));
-    finishMenuFeedback(id, clicked, open && !closing, storage, hovered);
+    finishMenuFeedback(id, clicked, open, storage, hovered);
     if ( open ) {
-        const float amount = updateMenuPopupAmount(id, storage, !closing);
+        const float amount = updateMenuPopupAmount(id, storage, true);
         pushMenuPopupAnimation(amount);
-        if ( closing && amount <= 0.02f ) {
-            if ( storage ) {
-                storage->SetInt(closingKey, 0);
-            }
-            ImGui::CloseCurrentPopup();
-        }
     } else {
         updateMenuPopupAmount(id, storage, false);
     }

@@ -623,7 +623,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         std::string(TR("ui.wizard.new_project.title").data()) +
         "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
-        ImGui::SetNextWindowFocus();
+        ImGui::OpenPopup(windowTitle.c_str());
         m_shouldOpen = false;
     }
 
@@ -632,11 +632,11 @@ void NewProjectWizard::update(UIManager* sourceManager)
                                                   ImGuiWindowFlags_NoResize |
                                                   ImGuiWindowFlags_NoDocking;
     const bool                     windowVisible =
-        modalScope.beginWindow(windowTitle.c_str(),
-                               &m_isOpen,
-                               WINDOW_FLAGS,
-                               ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
-                               false);
+        modalScope.begin(windowTitle.c_str(),
+                         &m_isOpen,
+                         WINDOW_FLAGS,
+                         ImVec2(640.0f * dpiScale, 460.0f * dpiScale),
+                         false);
     if ( windowVisible ) {
         renderStepHeader();
 
@@ -657,11 +657,11 @@ void NewProjectWizard::update(UIManager* sourceManager)
         ImGui::EndChild();
 
         renderFooter();
-    }
-    ImGui::End();
 
-    processPendingParentFolderPicker();
-    renderParentFolderPicker(dpiScale);
+        processPendingParentFolderPicker();
+        renderParentFolderPicker(dpiScale);
+        ImGui::EndPopup();
+    }
 }
 
 void NewProjectWizard::open()

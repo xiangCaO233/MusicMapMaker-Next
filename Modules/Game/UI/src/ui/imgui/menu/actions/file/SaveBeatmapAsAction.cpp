@@ -239,18 +239,20 @@ private:
     {
         constexpr const char* popupId =
             "选择导出格式###ExportFormatPickerWindow";
-        if ( !m_showExportFormatPicker ) {
-            return;
+        if ( m_showExportFormatPicker ) {
+            ImGui::OpenPopup(popupId);
+            m_showExportFormatPicker = false;
+            m_exportFormatPickerOpen = true;
         }
+        if ( !m_exportFormatPickerOpen ) return;
 
         std::string selectedExtension;
         bool        closeWindow = false;
         {
             Utils::CenteredModalPopupScope popupStyle(dpiScale);
-            bool                           isOpen = true;
-            if ( popupStyle.beginWindow(
+            if ( popupStyle.begin(
                      popupId,
-                     &isOpen,
+                     &m_exportFormatPickerOpen,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
                      ImVec2(360.0f * dpiScale, 0.0f)) ) {
                 ImGui::TextUnformatted("选择另存为格式：");
@@ -288,17 +290,15 @@ private:
                 if ( !selectedExtension.empty() ) {
                     closeWindow = true;
                 }
-            }
-            ImGui::End();
 
-            if ( !isOpen ) {
-                closeWindow = true;
+                if ( closeWindow ) {
+                    m_exportFormatPickerOpen = false;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
             }
         }
 
-        if ( closeWindow ) {
-            m_showExportFormatPicker = false;
-        }
         if ( !selectedExtension.empty() ) {
             openExportFilePicker(selectedExtension);
         }
@@ -445,6 +445,8 @@ private:
 
     /// @brief 是否在下一帧打开原生另存为格式选择弹窗。
     bool m_showExportFormatPicker = false;
+    /// @brief 原生另存为格式选择弹窗当前是否保持打开。
+    bool m_exportFormatPickerOpen = false;
     /// @brief 是否在下一帧打开导出兼容性警告弹窗。
     bool m_showExportCompatibilityWarning = false;
     /// @brief 是否在下一帧打开覆盖确认弹窗。

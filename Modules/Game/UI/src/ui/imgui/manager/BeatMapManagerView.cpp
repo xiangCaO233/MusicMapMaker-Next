@@ -895,17 +895,16 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
         if ( m_openManageModal ) {
+            ImGui::OpenPopup(windowTitle.c_str());
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
         const bool                     manageWindowOpened =
-            manageWindowScope.beginWindow(windowTitle.c_str(),
-                                          &showBMModal,
-                                          ImGuiWindowFlags_NoCollapse,
-                                          { 420 * dpiScale, 0.0f });
-        if ( !showBMModal ) {
-            m_manageBeatmapPath = "";
-        }
+            manageWindowScope.begin(windowTitle.c_str(),
+                                    &showBMModal,
+                                    ImGuiWindowFlags_NoCollapse,
+                                    { 420 * dpiScale, 0.0f });
+        bool closeManageModal = !showBMModal;
         if ( manageWindowOpened ) {
             // --- 使用 Clay 重构对话框内容 ---
             CLayVBox    modalLayout;
@@ -966,17 +965,18 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 });
 
-            btnRow.addElement("CancelBtn",
-                              Sizing::Fixed(cancelButtonW),
-                              Sizing::Fixed(buttonH),
-                              [=, this](Clay_BoundingBox r, bool) {
-                                  ImGui::SetCursorScreenPos({ r.x, r.y });
-                                  if ( ::MMM::UI::FeedbackButton(
-                                           TR("ui.common.cancel").data(),
-                                           { r.width, r.height }) ) {
-                                      m_manageBeatmapPath = "";
-                                  }
-                              });
+            btnRow.addElement(
+                "CancelBtn",
+                Sizing::Fixed(cancelButtonW),
+                Sizing::Fixed(buttonH),
+                [=, this, &closeManageModal](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    if ( ::MMM::UI::FeedbackButton(
+                             TR("ui.common.cancel").data(),
+                             { r.width, r.height }) ) {
+                        closeManageModal = true;
+                    }
+                });
 
             modalLayout.addLayout(
                 "BtnRowLayout", btnRow, Sizing::Grow(), Sizing::Fixed(buttonH));
@@ -999,7 +999,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                              { 100 * dpiScale, 0 }) ) {
                         engine.pushCommand(
                             Logic::CmdRemoveBeatmap{ m_manageBeatmapPath });
-                        m_manageBeatmapPath = "";
+                        closeManageModal = true;
+                        ImGui::CloseCurrentPopup();
                     }
                     ImGui::SameLine();
                     if ( ::MMM::UI::FeedbackButton(
@@ -1010,8 +1011,16 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::EndPopup();
                 }
             }
+
+            if ( closeManageModal ) {
+                showBMModal = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
         }
-        ImGui::End();
+        if ( !showBMModal ) {
+            m_manageBeatmapPath.clear();
+        }
     }
 
     if ( fileManagerFont ) ImGui::PopFont();

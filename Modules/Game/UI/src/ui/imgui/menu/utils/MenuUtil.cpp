@@ -226,7 +226,7 @@ void MenuUtil::openProjectFolderPicker()
     IGFD::FileDialogConfig fdConfig;
     fdConfig.path              = config.lastFilePickerPath;
     fdConfig.countSelectionMax = 1;
-    fdConfig.flags             = ImGuiFileDialogFlags_Default;
+    fdConfig.flags             = ImGuiFileDialogFlags_Modal;
     ImGuiFileDialog::Instance()->OpenDialog(
         "ProjectFolderPicker",
         TR("ui.file_manager.open_directory"),
@@ -263,8 +263,8 @@ void MenuUtil::openAudioImportPicker()
     fdConfig.countSelectionMax = 1;
     fdConfig.fileName          = "";
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
-                     ImGuiFileDialogFlags_HideColumnType |
-                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                 ImGuiFileDialogFlags_HideColumnType |
+                                 ImGuiFileDialogFlags_ReadOnlyFileNameField;
     ImGuiFileDialog::Instance()->OpenDialog(
         "AudioImportPicker",
         TR("ui.audio_manager.import_audio").data(),
@@ -340,11 +340,11 @@ std::string MenuUtil::makeExportFileNameForExtension(
         std::string version  = "default";
         if ( beatMap ) {
             const auto& meta = beatMap->m_baseMapMetadata;
-            title            = !meta.title_unicode.empty()
-                                   ? meta.title_unicode
-                                   : (!meta.title.empty() ? meta.title : meta.name);
-            keyCount         = meta.track_count;
-            version          = meta.version.empty() ? "default" : meta.version;
+            title    = !meta.title_unicode.empty()
+                           ? meta.title_unicode
+                           : (!meta.title.empty() ? meta.title : meta.name);
+            keyCount = meta.track_count;
+            version  = meta.version.empty() ? "default" : meta.version;
         }
         return fmt::format("{}_{}k_{}.imd",
                            sanitizeExportFileNamePart(title),
