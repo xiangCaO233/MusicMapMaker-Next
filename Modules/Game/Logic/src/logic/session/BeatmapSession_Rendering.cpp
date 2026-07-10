@@ -183,7 +183,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio = config.visual.previewConfig.areaRatio;
+    float areaRatio    = config.visual.previewConfig.areaRatio;
 
     if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
          areaRatio <= 0.0001f ) {
@@ -250,9 +250,9 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
 
     float judgmentLineY =
         previewCamera.viewportHeight * config.visual.judgeline_pos;
-    double currentAbsY = cache->getAbsY(ctx.animateTime);
-    double deltaY      = (judgmentLineY - ctx.lastMousePos.y) /
-                    static_cast<double>(renderScaleY);
+    double currentAbsY   = cache->getAbsY(ctx.animateTime);
+    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
+                           static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -452,6 +452,19 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         }
     }
 
+    double snapshotCurrentBpm = snapshotFallbackBpm;
+    double snapshotCurrentSv  = 1.0;
+    if ( const auto* cache =
+             m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() ) {
+        const auto timingState = cache->getTimingStateAt(m_ctx->animateTime);
+        if ( std::isfinite(timingState.bpm) && timingState.bpm > 0.0 ) {
+            snapshotCurrentBpm = timingState.bpm;
+        }
+        if ( std::isfinite(timingState.sv) ) {
+            snapshotCurrentSv = timingState.sv;
+        }
+    }
+
     // 2. 遍历所有注册的视口 (Camera) 进行独立的视口剔除和坐标映射
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
         // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
@@ -508,6 +521,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->snapshotSysTime   = snapshotSysTime;
         snapshot->playbackSpeed     = snapshotPlaybackSpeed;
         snapshot->fallbackBpm       = snapshotFallbackBpm;
+        snapshot->currentBpm        = snapshotCurrentBpm;
+        snapshot->currentSv         = snapshotCurrentSv;
         snapshot->hasBeatmap        = hasBeatmap;
         snapshot->lastActionMessage = m_ctx->lastActionMessage;
 
@@ -547,8 +562,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         snapshot->noteCount          = m_ctx->noteCount;
         snapshot->maxCombo           = m_ctx->maxCombo;
         snapshot->isHoveringCanvas   = isActiveSession &&
-                                     m_ctx->isMouseInCanvas &&
-                                     (m_ctx->mouseCameraId == cameraId);
+                                       m_ctx->isMouseInCanvas &&
+                                       (m_ctx->mouseCameraId == cameraId);
 
         // 核心修复：预览区的拖拽状态广播
         // 如果预览区正在拖拽，所有视口的渲染快照都需要知道预览区当前的悬停时间点。
@@ -557,7 +572,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -758,11 +773,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     if ( isBeforeFirstBpm && bestNum == 1 && bestDen == 1 ) {
                         bestNum = 0;
                     }
-                    point.beatIndex   = isBeforeFirstBpm
-                                            ? static_cast<int>(beatsInActive)
-                                            : static_cast<int>(totalBeatsPrefix +
+                    point.beatIndex = isBeforeFirstBpm
+                                          ? static_cast<int>(beatsInActive)
+                                          : static_cast<int>(totalBeatsPrefix +
                                                              beatsInActive + 1);
-                    point.numerator   = bestNum;
+                    point.numerator = bestNum;
                     point.denominator = bestDen;
                     return point;
                 };
@@ -793,8 +808,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     const auto& note = *inspectNote;
                     const auto  hoveredPart =
                         useDragState
-                             ? m_ctx->draggedPart
-                             : static_cast<HoverPart>(inter->hoveredPart);
+                            ? m_ctx->draggedPart
+                            : static_cast<HoverPart>(inter->hoveredPart);
                     const int32_t hoveredSubIndex =
                         useDragState ? m_ctx->draggedSubIndex
                                      : inter->hoveredSubIndex;
@@ -888,10 +903,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.body = makeBeatPoint(note.m_timestamp,
                                                          note.m_trackIndex);
                         } else {
-                            inspect.kind      = HoverInspectKind::FlickHead;
-                            inspect.head      = makeBeatPoint(note.m_timestamp,
-                                                         note.m_trackIndex);
-                            inspect.track     = note.m_trackIndex;
+                            inspect.kind  = HoverInspectKind::FlickHead;
+                            inspect.head  = makeBeatPoint(note.m_timestamp,
+                                                          note.m_trackIndex);
+                            inspect.track = note.m_trackIndex;
                             inspect.showTrack = true;
                         }
                         inspect.showDtrack = true;

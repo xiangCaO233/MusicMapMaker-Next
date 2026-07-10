@@ -262,6 +262,12 @@ struct RenderSnapshot {
     /// @brief 无效 BPM 事件的会话级回退 BPM。
     double fallbackBpm{ 120.0 };
 
+    /// @brief 当前判定线所在时间段生效的 BPM。
+    double currentBpm{ 120.0 };
+
+    /// @brief 当前判定线所在时间段生效的 SV。
+    double currentSv{ 1.0 };
+
     // 框选盒子快照
     struct MarqueeBoxSnapshot {
         double      startTime{ 0.0 };
@@ -399,6 +405,8 @@ struct RenderSnapshot {
         uiInterpolationAbsYSpeed     = 0.0;
         uiInterpolationYOffsetScale  = 1.0;
         fallbackBpm                  = 120.0;
+        currentBpm                   = 120.0;
+        currentSv                    = 1.0;
         currentTool                  = EditTool::Move;
         acceptsInteraction           = false;
         isHoveringCanvas             = false;

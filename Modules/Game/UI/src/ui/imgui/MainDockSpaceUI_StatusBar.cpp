@@ -27,7 +27,7 @@ double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count();
-    const double dt = now - snapshot.snapshotSysTime;
+    const double dt  = now - snapshot.snapshotSysTime;
     if ( dt <= 0.0 || dt >= 0.1 ) {
         return animateTime;
     }
@@ -134,7 +134,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 const double visibleStart = std::min(snapshot->visibleTimeStart,
                                                      snapshot->visibleTimeEnd);
                 const double visibleEnd   = std::max(snapshot->visibleTimeStart,
-                                                   snapshot->visibleTimeEnd);
+                                                     snapshot->visibleTimeEnd);
                 const bool   hasValidHoveredTime =
                     std::isfinite(snapshot->hoveredTime) &&
                     (!std::isfinite(visibleStart) ||
@@ -157,6 +157,20 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 // 物件数量与最大连击数统计由逻辑线程写入快照，避免 UI 每帧访问
                 // Session 锁和 ECS。
                 if ( snapshot->hasBeatmap ) {
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text("BPM: %.3f", snapshot->currentBpm);
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(offsetY);
+                    ImGui::Text("SV: %.4f", snapshot->currentSv);
+
                     ImGui::SameLine();
                     ImGui::SetCursorPosY(offsetY);
                     ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);

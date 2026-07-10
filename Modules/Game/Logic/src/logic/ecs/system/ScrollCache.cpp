@@ -124,6 +124,10 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     double currentBPM = refBPM;
 
+    // 状态栏需要展示时间线语义上的当前 SV。该值独立于线性映射开关，
+    // 避免关闭滚动效果后丢失谱面实际段落信息。
+    double activeScrollValue = 1.0;
+
     // osu! MultiplierControlPoint 换算：
     //   倍率 = Velocity × ScrollSpeed × BaseBeatLength / BeatLength。
     //   推导 = 1.0 × scrollMult × (60000 / refBPM) / (60000 / bpm)。
@@ -153,8 +157,10 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     double currentSpeed = calcSpeed(currentBPM, currentScrollMult);
     newSegments.push_back({ lastTime, 0.0, currentSpeed, 0 });
-    newSegments.back().hs      = currentHs;
-    newSegments.back().hsValue = currentHs;
+    newSegments.back().hs                = currentHs;
+    newSegments.back().hsValue           = currentHs;
+    newSegments.back().activeBpmValue    = currentBPM;
+    newSegments.back().activeScrollValue = activeScrollValue;
 
     for ( const auto& entry : m_rebuildScratch ) {
         const auto* tl = entry.component;
@@ -170,18 +176,22 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             newSegments.back().bpmEntity = entry.entity;
             newSegments.back().bpmValue  = tl->m_value;
             currentBPM                   = tl->m_value;
-            if ( enableEffects && !hasMalodyMetadata(*tl) ) {
+            if ( !hasMalodyMetadata(*tl) ) {
                 // osu! 红线会重置 SV；Malody 的 BPM 不改变 effect 状态。
-                currentScrollMult = 1.0;
+                activeScrollValue = 1.0;
+                if ( enableEffects ) {
+                    currentScrollMult = 1.0;
+                }
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
             newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
             newSegments.back().scrollEntity = entry.entity;
             newSegments.back().scrollValue  = tl->m_value;
-            if ( enableEffects ) {
-                // mmm/Malody 内部均存储原始 SV 倍率；osu! 的负
-                // inherited beatLength 已在导入边界转换。
-                if ( std::isfinite(tl->m_value) ) {
+            // mmm/Malody 内部均存储原始 SV 倍率；osu! 的负 inherited
+            // beatLength 已在导入边界转换。
+            if ( std::isfinite(tl->m_value) ) {
+                activeScrollValue = tl->m_value;
+                if ( enableEffects ) {
                     currentScrollMult = tl->m_value;
                 }
             }
@@ -207,6 +217,8 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         currentSpeed             = calcSpeed(currentBPM, currentScrollMult);
         newSegments.back().speed = currentSpeed;
         newSegments.back().hs    = currentHs;
+        newSegments.back().activeBpmValue    = currentBPM;
+        newSegments.back().activeScrollValue = activeScrollValue;
     }
 
     m_segments = std::move(newSegments);
@@ -466,6 +478,31 @@ double ScrollCache::getHsAt(double t) const
     if ( it == m_segments.begin() ) return m_segments[0].hs;
     --it;
     return it->hs;
+}
+
+/// @brief 获取给定时间戳所在滚动段的 BPM 与 SV。
+/// @param t 查询时间，单位秒。
+/// @return 当前段落生效的 BPM 与 SV；缓存为空时返回保守默认值。
+/// @warning 逻辑热路径：每个 Session update 调用一次；只执行二分查找。
+ScrollTimingState ScrollCache::getTimingStateAt(double t) const
+{
+    if ( m_segments.empty() ) {
+        return {};
+    }
+
+    auto it = std::upper_bound(m_segments.begin(),
+                               m_segments.end(),
+                               t,
+                               [](double value, const ScrollSegment& segment) {
+                                   return value < segment.time;
+                               });
+
+    if ( it == m_segments.begin() ) {
+        return { it->activeBpmValue, it->activeScrollValue };
+    }
+
+    --it;
+    return { it->activeBpmValue, it->activeScrollValue };
 }
 
 double ScrollCache::getDisplayDelta(double t, double currentAbsY,
