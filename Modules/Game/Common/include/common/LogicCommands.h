@@ -387,13 +387,22 @@ struct CmdPackBeatmap {
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
 };
 
-/**
- * @brief 滚动指令 (鼠标滚轮)
- */
+/// @brief 滚轮指令的处理意图。
+enum class ScrollCommandIntent {
+    /// @brief 按滚轮增量移动画布时间。
+    MoveTimeline,
+
+    /// @brief 只应用“播放时滚动则停止播放”策略，不移动画布时间。
+    ModifierAdjustment,
+};
+
+/// @brief 滚动指令（鼠标滚轮）。
 struct CmdScroll {
-    std::string cameraId;
-    float       wheel;
-    bool        isShiftDown;
+    std::string cameraId;     ///< 接收滚轮的画布 ID。
+    float       wheel;        ///< 滚轮增量。
+    bool        isShiftDown;  ///< 是否按住 Shift 加速普通时间滚动。
+    /// @brief 本条滚轮指令需要执行的逻辑意图。
+    ScrollCommandIntent intent{ ScrollCommandIntent::MoveTimeline };
 };
 
 /**

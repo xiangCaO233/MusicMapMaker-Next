@@ -36,6 +36,15 @@ public:
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
 
+    /// @brief 处理当前鼠标所在主画布上的 Ctrl/Command/Alt 修饰键滚轮。
+    /// @param currentSnapshot 当前渲染快照。
+    /// @param allowSelectionScroll 是否允许 Ctrl 滚轮移动活动框选。
+    /// @return 本帧滚轮已被修饰键命令消费时返回 true。
+    /// @warning UI 输入路径：仅在滚轮事件发生时调用；可能发布逻辑命令或广播
+    /// 编辑器配置更新，禁止放入无条件每帧路径。
+    bool handleModifierWheel(const Logic::RenderSnapshot* currentSnapshot,
+                             bool allowSelectionScroll = true);
+
 private:
     struct PendingDrop {
         std::vector<std::string> paths;
@@ -89,12 +98,6 @@ private:
     void handleHotkeys(const Logic::RenderSnapshot* currentSnapshot);
     void handleInteractions(const Logic::RenderSnapshot* currentSnapshot,
                             float targetWidth, float targetHeight);
-    /// @brief 处理活动主画布窗口内容区上的 Ctrl/Alt 修饰键滚轮。
-    /// @param currentSnapshot 当前渲染快照。
-    /// @return 本帧滚轮已被修饰键命令消费时返回 true。
-    /// @warning UI 热路径：活动画布完整交互调用；只读取 ImGui
-    /// 输入状态并发送轻量命令。
-    bool handleModifierWheel(const Logic::RenderSnapshot* currentSnapshot);
     /// @brief 判断连续拖动编辑命令是否需要发送，并在需要时更新缓存。
     /// @param last 上一次发送的拖动编辑命令状态。
     /// @param pos 当前本地鼠标坐标。

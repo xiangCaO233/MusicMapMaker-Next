@@ -50,7 +50,7 @@ bool isModifierWheelOverCurrentWindowContent()
     const auto& io = ImGui::GetIO();
     return std::abs(io.MouseWheel) > 0.01f &&
            (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
-           isMouseHoveringCurrentWindowContent();
+           !ImGui::IsAnyMouseDown() && isMouseHoveringCurrentWindowContent();
 }
 
 /// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
@@ -93,8 +93,8 @@ Basic2DCanvas::~Basic2DCanvas() {}
 
 /// @brief 更新画布 ImGui 窗口和交互状态。
 /// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内，
-/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径；修饰键滚轮仅在
-/// 鼠标位于当前画布内容区时触发焦点切换。
+/// 后台画布 hover 滚轮只在滚轮输入发生时进入同主音轨判定路径；播放保持模式下的
+/// 修饰键滚轮只走窄交互入口，其余修饰键滚轮仅在鼠标位于内容区时切换焦点。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     auto& engine           = Logic::EditorEngine::instance();
@@ -192,7 +192,16 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 仅当当前画布是活动画布时才处理完整交互，防止后台画布发送干扰指令
         bool isActiveCanvas = engine.getActiveCameraId() == m_cameraId;
         if ( !isActiveCanvas && isModifierWheelOverCurrentWindowContent() ) {
-            if ( myIndex != -1 ) {
+            const bool keepCurrentPlayback =
+                !engine.getEditorConfig().settings.stopPlaybackOnScroll &&
+                engine.isPlaybackPlaying();
+            if ( keepCurrentPlayback ) {
+                if ( m_currentSnapshot ) {
+                    m_interaction->handleModifierWheel(m_currentSnapshot,
+                                                       false);
+                }
+            } else if ( myIndex != -1 ) {
+                ImGui::SetWindowFocus();
                 engine.setActiveSessionIndex(myIndex);
                 m_shouldFocusNextFrame = true;
                 isActiveCanvas = engine.getActiveCameraId() == m_cameraId;

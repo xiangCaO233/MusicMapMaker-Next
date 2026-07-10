@@ -292,7 +292,7 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
                                                 audio.getPlaybackSpeed());
 }
 
-/// @brief 处理滚轮滚动时间线命令。
+/// @brief 处理普通时间滚动或仅应用滚动暂停策略的滚轮命令。
 /// @param cmd 滚轮滚动指令。
 /// @warning
 /// 逻辑输入路径：用户滚轮触发时调用；同主音轨后台跟随画布在暂停开关开启时
@@ -316,6 +316,10 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
         m_ctx.currentTime = Audio::AudioManager::instance().getCurrentTime();
         // 如果停止了播放，需要同步一下渲染状态 (虽然 seek
         // 也会做，但这里明确一下更好)
+    }
+
+    if ( cmd.intent == ScrollCommandIntent::ModifierAdjustment ) {
+        return;
     }
 
     bool isShiftAccelerated = cmd.isShiftDown;

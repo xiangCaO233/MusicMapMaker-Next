@@ -102,15 +102,22 @@ void renderPlaybackSpeedTooltip(float speedValue)
 /// @param speedTooltipValue 输出速度提示窗口需要显示的速度倍率。
 /// @param speedTooltipTimer 输出速度提示窗口剩余显示时间。
 /// @return 已处理修饰滚轮时返回 true。
-/// @warning UI 热路径：Timeline 悬停滚轮时调用；只读取输入状态并发布轻量命令。
+/// @warning UI 热路径：Timeline 悬停滚轮时调用；会按播放配置短暂锁定
+/// SessionRegistry，并发布轻量命令。
 bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
                                  bool isCommandPressed, bool isAltPressed,
                                  bool isShiftPressed, float& speedTooltipValue,
                                  float& speedTooltipTimer)
 {
-    if ( !isCommandPressed && !isAltPressed ) {
+    if ( std::abs(wheel) <= 0.01f || (!isCommandPressed && !isAltPressed) ) {
         return false;
     }
+
+    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Logic::CmdScroll{ timelineId,
+                          0.0f,
+                          false,
+                          Logic::ScrollCommandIntent::ModifierAdjustment }));
 
     if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };

@@ -654,7 +654,7 @@ void Basic2DCanvasInteraction::update(
 
 /// @brief 处理活动主画布上的 Ctrl/Command/Alt 修饰键滚轮。
 bool Basic2DCanvasInteraction::handleModifierWheel(
-    const Logic::RenderSnapshot* currentSnapshot)
+    const Logic::RenderSnapshot* currentSnapshot, bool allowSelectionScroll)
 {
     if ( !currentSnapshot ) {
         return false;
@@ -669,6 +669,19 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
 
     const bool isAltPressed   = io.KeyAlt;
     const bool isShiftPressed = io.KeyShift;
+    auto&      engine         = Logic::EditorEngine::instance();
+    const bool scrollsActiveSelection =
+        allowSelectionScroll && isCommandPressed && !isAltPressed &&
+        currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+        currentSnapshot->isSelecting;
+    if ( !scrollsActiveSelection ) {
+        Event::EventBus::instance().publish(
+            Event::LogicCommandEvent(Logic::CmdScroll{
+                m_cameraId,
+                0.0f,
+                false,
+                Logic::ScrollCommandIntent::ModifierAdjustment }));
+    }
 
     if ( isCommandPressed && isAltPressed ) {
         constexpr std::array<double, 4> presets = { 0.25, 0.50, 0.75, 1.0 };
@@ -703,12 +716,11 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
     }
 
     if ( isCommandPressed ) {
-        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee &&
-             currentSnapshot->isSelecting ) {
+        if ( scrollsActiveSelection ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
         } else {
-            auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+            auto  editorCfg = engine.getEditorConfig();
             float step      = 0.1f;
             if ( isShiftPressed )
                 step *= editorCfg.settings.scrollSpeedMultiplier;
@@ -717,14 +729,14 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
                 std::clamp(currentZoom + wheel * step, 0.1f, 10.0f);
             if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
                 editorCfg.visual.timelineZoom = newZoom;
-                Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+                engine.setEditorConfig(editorCfg);
                 ::MMM::UI::PlayInteractionMouseUpFeedback();
             }
         }
         return true;
     }
 
-    auto      editorCfg = Logic::EditorEngine::instance().getEditorConfig();
+    auto      editorCfg       = engine.getEditorConfig();
     const int originalDivisor = editorCfg.settings.beatDivisor;
 
     static std::unordered_map<std::string, float> wheelAccumulator;
@@ -766,7 +778,7 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         editorCfg.settings.beatDivisor =
             std::clamp(editorCfg.settings.beatDivisor, 1, 64);
         if ( editorCfg.settings.beatDivisor != originalDivisor ) {
-            Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            engine.setEditorConfig(editorCfg);
             ::MMM::UI::PlayInteractionMouseUpFeedback();
         }
     }
@@ -1591,7 +1603,11 @@ void Basic2DCanvasInteraction::handleInteractions(
     // --- 交互：鼠标滚轮控制时间跳转与属性修改 ---
     const auto& io    = ImGui::GetIO();
     float       wheel = io.MouseWheel;
-    if ( isHovered && std::abs(wheel) > 0.01f ) {
+    const bool  isModifierWheelHovered =
+        isInsideCanvas && (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
+        !ImGui::IsAnyMouseDown() &&
+        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    if ( (isHovered || isModifierWheelHovered) && std::abs(wheel) > 0.01f ) {
         if ( !handleModifierWheel(currentSnapshot) ) {
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, io.KeyShift }));
