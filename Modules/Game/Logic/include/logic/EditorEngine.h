@@ -250,6 +250,14 @@ public:
         return m_sessionRegistry.activeCameraId();
     }
 
+    /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
+    /// @param beatmapPath 待规范化的谱面路径。
+    /// @return 规范化绝对路径键；空路径返回空字符串。
+    /// @warning
+    /// 低频路径：可能访问文件系统解析规范路径，只能在文件选择、打开或打包流程调用。
+    std::string makeBeatmapPathKeyForPath(
+        const std::filesystem::path& beatmapPath) const;
+
     /// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
     /// @param audioPath 待规范化的音频路径。
     /// @return 规范化绝对路径键；空路径返回空字符串。

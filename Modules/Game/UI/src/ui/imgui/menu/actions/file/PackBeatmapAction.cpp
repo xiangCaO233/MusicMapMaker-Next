@@ -8,6 +8,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
+#include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <imgui.h>
 #include <nfd.h>
@@ -1442,7 +1444,7 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
                     .relativePath = Config::pathToUtf8Generic(relativePath),
                     .typeLabel    = typeLabel,
                     .resourceType = *resourceType,
-                    .selected     = true,
+                    .selected     = false,
                 });
             }
         }
@@ -1492,6 +1494,34 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
                 file.missingDependencyRelativePaths.push_back(dependencyPath);
             }
         }
+    }
+
+    auto&         engine             = Logic::EditorEngine::instance();
+    auto          sessionEntries     = engine.getSessionEntries();
+    const int32_t activeSessionIndex = engine.getActiveSessionIndex();
+    std::vector<PackageOpenBeatmapState> openBeatmaps;
+    openBeatmaps.reserve(sessionEntries.size());
+    for ( std::size_t index = 0; index < sessionEntries.size(); ++index ) {
+        const auto& entry = sessionEntries[index];
+        openBeatmaps.push_back(PackageOpenBeatmapState{
+            .beatmapPathKey  = entry.beatmapPathKey,
+            .isCanvasVisible = entry.isCanvasVisible,
+            .isActive = static_cast<int32_t>(index) == activeSessionIndex,
+            .isLogoPlaceholder = entry.isLogoPlaceholder,
+        });
+    }
+
+    for ( auto& file : m_package.candidateFiles ) {
+        if ( file.resourceType != PackageResourceType::Beatmap ) {
+            file.selected = false;
+            continue;
+        }
+        const auto candidatePath =
+            projectRoot / Config::utf8ToPath(file.relativePath);
+        const std::string candidatePathKey =
+            engine.makeBeatmapPathKeyForPath(candidatePath);
+        file.selected =
+            shouldDefaultSelectPackageBeatmap(candidatePathKey, openBeatmaps);
     }
 
     syncPackageDependencySelection();

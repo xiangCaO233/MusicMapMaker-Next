@@ -127,3 +127,9 @@ mmm_add_test_executable(UI BpmPlaybackRoutingTest
 target_include_directories(BpmPlaybackRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
+
+mmm_add_test_executable(UI PackageDefaultSelectionTest
+                        tests/PackageDefaultSelectionTest.cpp)
+target_include_directories(PackageDefaultSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME PackageDefaultSelectionTest COMMAND PackageDefaultSelectionTest)
