@@ -1670,7 +1670,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                                        ImVec2(schemeButtonW, schemeButtonH)) ) {
             m_pendingDeletePaletteSchemeIndex =
                 static_cast<std::size_t>(m_activePaletteSchemeIndex);
-            ImGui::OpenPopup("DeleteNoteColorPaletteConfirm");
+            ::MMM::UI::OpenWarningPopup("DeleteNoteColorPaletteConfirm");
         }
         ImGui::EndDisabled();
 

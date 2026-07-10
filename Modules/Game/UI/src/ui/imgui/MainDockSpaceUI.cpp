@@ -518,7 +518,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 5.5 文件覆盖确认模态弹窗 ---
     if ( m_showOverwriteModal ) {
-        ImGui::OpenPopup("OverwriteConfirmModal");
+        ::MMM::UI::OpenWarningPopup("OverwriteConfirmModal");
         m_showOverwriteModal = false;
     }
 
@@ -581,7 +581,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
                 const std::string exitPopupName = fmt::format(
                     "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
-                ImGui::OpenPopup(exitPopupName.c_str());
+                ::MMM::UI::OpenWarningPopup(exitPopupName.c_str());
             }
         }
     }
@@ -740,7 +740,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                                                    ImGuiViewport* viewport)
 {
     if ( m_showTemporaryProjectReadOnlyModal ) {
-        ImGui::OpenPopup("临时项目只读###TemporaryProjectReadOnlyModal");
+        ::MMM::UI::OpenWarningPopup(
+            "临时项目只读###TemporaryProjectReadOnlyModal");
         m_showTemporaryProjectReadOnlyModal = false;
     }
 
@@ -786,7 +787,8 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
     }
 
     if ( m_showTemporaryProjectCloseModal ) {
-        ImGui::OpenPopup("保存临时项目###TemporaryProjectCloseModal");
+        ::MMM::UI::OpenWarningPopup(
+            "保存临时项目###TemporaryProjectCloseModal");
         m_showTemporaryProjectCloseModal = false;
     }
 

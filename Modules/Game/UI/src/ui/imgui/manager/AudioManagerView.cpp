@@ -1699,7 +1699,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     if ( ::MMM::UI::FeedbackButton(
                              TR("ui.audio_manager.remove_track").data(),
                              { r.width, r.height }) ) {
-                        ImGui::OpenPopup("RemoveTrackConfirm");
+                        ::MMM::UI::OpenWarningPopup("RemoveTrackConfirm");
                     }
                 });
             btnRow.addElement(

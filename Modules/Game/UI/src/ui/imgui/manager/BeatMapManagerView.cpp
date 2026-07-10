@@ -962,7 +962,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     if ( ::MMM::UI::FeedbackButton(
                              TR("ui.beatmap_manager.remove_beatmap").data(),
                              { r.width, r.height }) ) {
-                        ImGui::OpenPopup("RemoveBeatmapConfirm");
+                        ::MMM::UI::OpenWarningPopup("RemoveBeatmapConfirm");
                     }
                 });
 

@@ -311,7 +311,7 @@ private:
         constexpr const char* popupId =
             "确认覆盖导出文件###SaveAsOverwriteWarningModal";
         if ( m_showOverwriteWarning ) {
-            ImGui::OpenPopup(popupId);
+            ::MMM::UI::OpenWarningPopup(popupId);
             m_showOverwriteWarning = false;
         }
 
@@ -366,7 +366,11 @@ private:
     {
         constexpr const char* popupId = "谱面兼容性警告###ExportWarningModal";
         if ( m_showExportCompatibilityWarning ) {
-            ImGui::OpenPopup(popupId);
+            if ( m_pendingExportWarnings.empty() ) {
+                ImGui::OpenPopup(popupId);
+            } else {
+                ::MMM::UI::OpenWarningPopup(popupId);
+            }
             m_showExportCompatibilityWarning = false;
         }
 

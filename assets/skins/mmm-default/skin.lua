@@ -98,6 +98,7 @@ local Skin = {
 			click_down = { path = "audio/ui/click_down.wav", lead_in_ms = 0.0 },
 			click_up = { path = "audio/ui/click_up.wav", lead_in_ms = 0.0 },
 			slider = { path = "audio/ui/slider.wav", lead_in_ms = 0.0 },
+			notice = { path = "audio/ui/notice.wav", lead_in_ms = 0.0 },
 		},
 		metronome = {
 			beat_low = { path = "audio/metronome/beat_low.wav", lead_in_ms = 0.023 },

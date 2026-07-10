@@ -915,7 +915,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.create").data(),
                                    ImVec2(120, 0)) ) {
         if ( hasInternalNameConflict() ) {
-            ImGui::OpenPopup("NewBeatmapDuplicateNameWarning");
+            ::MMM::UI::OpenWarningPopup("NewBeatmapDuplicateNameWarning");
         } else {
             submitCreateRequest();
         }

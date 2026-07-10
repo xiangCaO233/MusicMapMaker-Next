@@ -1408,7 +1408,7 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
         fmt::format("{}###FileManagerDeletePopup",
                     TR("ui.file_manager.delete_title").data());
     if ( m_shouldOpenDeletePopup ) {
-        ImGui::OpenPopup(deleteTitle.c_str());
+        ::MMM::UI::OpenWarningPopup(deleteTitle.c_str());
         m_shouldOpenDeletePopup = false;
     }
     bool                           openDelete = true;

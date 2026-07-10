@@ -1784,7 +1784,7 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
     constexpr const char* popupId =
         "确认覆盖打包文件###PackageOverwriteWarningModal";
     if ( m_showPackageOverwriteWarning ) {
-        ImGui::OpenPopup(popupId);
+        ::MMM::UI::OpenWarningPopup(popupId);
         m_showPackageOverwriteWarning = false;
     }
 

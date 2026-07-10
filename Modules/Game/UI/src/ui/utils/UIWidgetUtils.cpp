@@ -566,6 +566,9 @@ constexpr const char* MOUSE_UP_SFX_KEY = "ui.click_up";
 /// @brief Slider 拖动变化时播放的皮肤音频 ID。
 constexpr const char* SLIDER_CHANGE_SFX_KEY = "ui.slider";
 
+/// @brief 警告弹窗打开时播放的皮肤音频 ID。
+constexpr const char* WARNING_NOTICE_SFX_KEY = "ui.notice";
+
 /// @brief 悬浮音效的单次触发音量倍率。
 constexpr float BUTTON_HOVER_SFX_VOLUME = 0.22f;
 
@@ -580,6 +583,9 @@ constexpr float MOUSE_UP_SFX_VOLUME = 0.34f;
 
 /// @brief Slider 变化音效的单次触发音量倍率。
 constexpr float SLIDER_CHANGE_SFX_VOLUME = 0.24f;
+
+/// @brief 警告弹窗提示音的单次触发音量倍率。
+constexpr float WARNING_NOTICE_SFX_VOLUME = 1.0f;
 
 /// @brief Slider 最低点对应的音高偏移，单位为半音。
 constexpr double SLIDER_MIN_PITCH_SEMITONES = -12.0;
@@ -1234,6 +1240,19 @@ void feedbackDockNodeControlsRecursive(ImGuiDockNode* node)
 void SetInteractionFeedbackEnabled(bool enabled)
 {
     interactionFeedbackEnabled = enabled;
+}
+
+/// @brief 打开警告弹窗，并在弹窗由关闭切换为打开时播放一次提示音。
+/// @param popupId 弹窗显示文本和 ImGui ID。
+/// @warning UI 低频路径：只查询 ImGui 弹窗状态并触发已预加载 SFX pool，
+/// 不执行资源加载。
+void OpenWarningPopup(const char* popupId)
+{
+    if ( !ImGui::IsPopupOpen(popupId) && isInteractionFeedbackEnabled() ) {
+        Audio::AudioManager::instance().playSoundEffect(
+            WARNING_NOTICE_SFX_KEY, WARNING_NOTICE_SFX_VOLUME);
+    }
+    ImGui::OpenPopup(popupId);
 }
 
 /// @brief 处理全局鼠标左右键按下与松开音效。

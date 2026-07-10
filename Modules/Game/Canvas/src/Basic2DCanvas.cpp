@@ -238,7 +238,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
     // --- 渲染保存确认弹窗 ---
     if ( m_showSaveConfirm ) {
-        ImGui::OpenPopup("Save Confirmation###SaveConfirmModal");
+        ::MMM::UI::OpenWarningPopup("Save Confirmation###SaveConfirmModal");
     }
 
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
