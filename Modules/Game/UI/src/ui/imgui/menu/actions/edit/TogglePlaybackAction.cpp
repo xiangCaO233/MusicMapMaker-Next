@@ -1,6 +1,9 @@
 #include "logic/EditorEngine.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <imgui.h>
 
@@ -40,8 +43,31 @@ public:
     bool handleShortcut(MainMenuContext& context) override
     {
         ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl || io.KeyAlt || io.KeySuper ) return false;
         if ( !ImGui::IsKeyPressed(ImGuiKey_Space, false) ) return false;
+
+        ImGuiContext* imguiContext = ImGui::GetCurrentContext();
+        const bool    bpmToolFocused =
+            imguiContext && imguiContext->NavWindow &&
+            imguiContext->NavWindow->Name &&
+            isBpmMeasurementToolStableWindowId(
+                ShortcutUtils::stableWindowId(imguiContext->NavWindow->Name));
+        if ( bpmToolFocused ) {
+            auto* bpmTool =
+                context.sourceManager
+                    ? context.sourceManager->getView<BpmMeasurementToolView>(
+                          "BpmMeasurementTool")
+                    : nullptr;
+            if ( !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
+                 !ImGui::IsAnyItemActive() && bpmTool ) {
+                // BPM 窗口级空格键优先于当前导航控件，避免同一按键在本帧
+                // 再次激活播放按钮或其它控件。
+                imguiContext->NavActivateId = 0;
+                bpmTool->togglePlaybackFromShortcut();
+            }
+            return true;
+        }
+
+        if ( io.KeyCtrl || io.KeyAlt || io.KeySuper ) return false;
 
         auto& engine = Logic::EditorEngine::instance();
         if ( ImGui::IsAnyItemActive() ) {

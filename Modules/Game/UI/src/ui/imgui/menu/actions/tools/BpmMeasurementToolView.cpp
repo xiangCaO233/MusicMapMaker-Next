@@ -292,24 +292,74 @@ BeatLineStyle getBeatLineStyle(int denominator)
                            skin.getValue("beat_lines_width.default", 2.0f)) };
 }
 
-/// @brief 按音频控制器的方式读取逻辑层同步后的播放时间。
+/// @brief 读取指定 BPM 播放路由的播放状态。
+/// @param route 当前 BPM 播放路由。
+/// @param audioManager 音频管理器。
+/// @return 对应编辑器主音轨或独立试听通道的播放状态。
+/// @warning UI 热路径：每帧读取固定数量的内存状态。
+Audio::PlaybackStatus getPlaybackStatus(BpmPlaybackRoute           route,
+                                        const Audio::AudioManager& audioManager)
+{
+    if ( route == BpmPlaybackRoute::Audition ) {
+        return audioManager.getAuditionStatus();
+    }
+    if ( route == BpmPlaybackRoute::SynchronizedWithEditor ) {
+        return audioManager.getStatus();
+    }
+    return Audio::PlaybackStatus::Stopped;
+}
+
+/// @brief 读取指定 BPM 播放路由的当前音频时间。
+/// @param route 当前 BPM 播放路由。
+/// @param audioManager 音频管理器。
+/// @return 当前音频时间，单位为秒。
+/// @warning UI 热路径：每帧读取一次 SourceNode 播放位置。
+double getPlaybackCurrentTime(BpmPlaybackRoute           route,
+                              const Audio::AudioManager& audioManager)
+{
+    return route == BpmPlaybackRoute::Audition
+               ? audioManager.getAuditionCurrentTime()
+               : audioManager.getCurrentTime();
+}
+
+/// @brief 读取指定 BPM 播放路由的音频总时长。
+/// @param route 当前 BPM 播放路由。
+/// @param audioManager 音频管理器。
+/// @return 音频总时长，单位为秒。
+/// @warning UI 热路径：每帧读取一次 SourceNode 时长。
+double getPlaybackTotalTime(BpmPlaybackRoute           route,
+                            const Audio::AudioManager& audioManager)
+{
+    return route == BpmPlaybackRoute::Audition
+               ? audioManager.getAuditionTotalTime()
+               : audioManager.getTotalTime();
+}
+
+/// @brief 按当前路由读取 BPM 工具播放时间。
+/// @param route 当前 BPM 播放路由。
 /// @return 已应用视觉偏移和亚帧补偿的播放时间。
 /// @warning UI 热路径约束如下。
-/// 热路径/共享指针：每帧读取同步缓冲区快照；getSyncBuffer 返回 shared_ptr
-/// 用于保证画布关闭时快照生命周期，与 AudioWaveformView/AudioSpectrumView
-/// 保持一致。
-PlaybackTimelineState readPlaybackTimelineState()
+/// 同轨时读取同步缓冲区快照；独立试听时只读取 audition SourceNode。
+PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
 {
     auto&                 audioManager = Audio::AudioManager::instance();
     PlaybackTimelineState state;
     state.visualOffset = Config::AppConfig::instance()
                              .getVisualConfig()
                              .getEffectiveVisualOffset();
-    state.audioTime  = audioManager.getCurrentTime();
+    if ( route == BpmPlaybackRoute::Unavailable ) {
+        return state;
+    }
+
+    state.audioTime  = getPlaybackCurrentTime(route, audioManager);
     state.visualTime = state.audioTime + state.visualOffset;
-    state.totalTime  = audioManager.getTotalTime();
-    state.isPlaying =
-        audioManager.getStatus() == Audio::PlaybackStatus::Playing;
+    state.totalTime  = getPlaybackTotalTime(route, audioManager);
+    state.isPlaying  = getPlaybackStatus(route, audioManager) ==
+                       Audio::PlaybackStatus::Playing;
+
+    if ( route != BpmPlaybackRoute::SynchronizedWithEditor ) {
+        return state;
+    }
 
     std::string activeCameraId =
         Logic::EditorEngine::instance().getActiveCameraId();
@@ -359,6 +409,7 @@ BpmMeasurementToolView::BpmMeasurementToolView(const std::string& name)
 BpmMeasurementToolView::~BpmMeasurementToolView()
 {
     stopAnalysisWorker();
+    Audio::AudioManager::instance().unloadAuditionTrack();
 
     auto context = Graphic::VKContext::get();
     if ( context ) {
@@ -373,6 +424,13 @@ void BpmMeasurementToolView::setMeasurementExportCallback(
     MeasurementExportCallback callback)
 {
     m_measurementExportCallback = std::move(callback);
+}
+
+/// @brief 由全局快捷键路由切换 BPM 工具当前音轨的播放状态。
+/// @warning UI 输入路径：只在 BPM 工具聚焦且按下无修饰空格时调用。
+void BpmMeasurementToolView::togglePlaybackFromShortcut()
+{
+    (void)togglePlayback();
 }
 
 /// @brief 打开窗口并选中指定项目音频轨道。
@@ -392,7 +450,7 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
         (m_waveTimes.empty() &&
          !m_analysisRunning.load(std::memory_order_relaxed));
     if ( selectionChanged ) {
-        m_selectedAudioTrackId = audioTrackId;
+        setSelectedAudioTrackId(audioTrackId);
         if ( auto resource = selectedAudioResource() ) {
             m_playbackSpeed =
                 std::clamp<double>(resource->m_config.playbackSpeed, 0.25, 2.0);
@@ -418,7 +476,7 @@ void BpmMeasurementToolView::openWithAutoMeasurement(
         return;
     }
 
-    m_selectedAudioTrackId = targetAudioTrackId;
+    setSelectedAudioTrackId(targetAudioTrackId);
     if ( auto resource = selectedAudioResource() ) {
         m_playbackSpeed =
             std::clamp<double>(resource->m_config.playbackSpeed, 0.25, 2.0);
@@ -428,11 +486,16 @@ void BpmMeasurementToolView::openWithAutoMeasurement(
 
 /// @brief 更新并绘制 BPM 测量工具 UI。
 /// @param sourceManager 当前 UI 管理器。
-/// @warning UI 热路径：每帧执行；不得在此处扫描文件系统、重新解码整段音频或创建
-/// FFT 计划。
+/// @warning UI
+/// 热路径：每帧执行；常规分支不得扫描文件系统、重新解码整段音频或创建 FFT
+/// 计划。只有音轨路径身份变化的低频脏分支可以启动后台分析。
 void BpmMeasurementToolView::update(UIManager* sourceManager)
 {
     (void)sourceManager;
+    refreshPlaybackRoute();
+    if ( m_selectedAudioIdentityNeedsAnalysis ) {
+        requestAnalyzeSelectedTrack();
+    }
     consumePendingAnalysis();
     updateMetronomePlayback();
 
@@ -499,6 +562,10 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
 
     renderAutoApplyOffsetPopup();
     renderApplyTimingPopup();
+
+    if ( !m_isOpen ) {
+        Audio::AudioManager::instance().unloadAuditionTrack();
+    }
 }
 
 /// @brief 判断频谱纹理是否需要上传。
@@ -865,7 +932,7 @@ void BpmMeasurementToolView::renderControlPanel()
             }
         }
         if ( !foundSelected ) {
-            m_selectedAudioTrackId.clear();
+            setSelectedAudioTrackId({});
             m_selectedAudioLabel =
                 TR("ui.tools.bpm_measure.select_track").data();
         }
@@ -878,9 +945,9 @@ void BpmMeasurementToolView::renderControlPanel()
             const bool  isSelected = resource.m_id == m_selectedAudioTrackId;
             std::string label      = makeAudioResourceLabel(resource);
             if ( ::MMM::UI::FeedbackSelectable(label.c_str(), isSelected) ) {
-                m_selectedAudioTrackId = resource.m_id;
-                m_selectedAudioLabel   = label;
-                m_playbackSpeed        = std::clamp<double>(
+                setSelectedAudioTrackId(resource.m_id);
+                m_selectedAudioLabel = label;
+                m_playbackSpeed      = std::clamp<double>(
                     resource.m_config.playbackSpeed, 0.25, 2.0);
                 requestAnalyzeSelectedTrack();
             }
@@ -1258,8 +1325,8 @@ void BpmMeasurementToolView::renderPlaybackControls()
     auto&      audio        = Audio::AudioManager::instance();
     bool       trackLoaded  = isSelectedTrackLoadedForPlayback();
     const bool hasSelection = !m_selectedAudioTrackId.empty();
-    const auto status =
-        trackLoaded ? audio.getStatus() : Audio::PlaybackStatus::Stopped;
+    const auto status = trackLoaded ? getPlaybackStatus(m_playbackRoute, audio)
+                                    : Audio::PlaybackStatus::Stopped;
     const bool isPlaying = status == Audio::PlaybackStatus::Playing;
 
     ImGui::Spacing();
@@ -1273,17 +1340,8 @@ void BpmMeasurementToolView::renderPlaybackControls()
     Utils::pushFixedButtonStyleVars();
     if ( ::MMM::UI::FeedbackButton(isPlaying ? ICON_MMM_PAUSE : ICON_MMM_PLAY,
                                    ImVec2(iconButtonSize, iconButtonSize)) ) {
-        if ( isPlaying ) {
-            setPlaybackState(false);
-        } else if ( loadSelectedTrackForPlayback() ) {
-            trackLoaded            = true;
-            const double totalTime = audio.getTotalTime();
-            if ( totalTime > 0.0 &&
-                 audio.getCurrentTime() >= totalTime - 0.001 ) {
-                seekPlaybackToCanvasTime(0.0);
-            }
-            setPlaybackState(true);
-        }
+        (void)togglePlayback();
+        trackLoaded = isSelectedTrackLoadedForPlayback();
     }
     Utils::popFixedButtonStyleVars();
     if ( ImGui::IsItemHovered() ) {
@@ -1301,7 +1359,11 @@ void BpmMeasurementToolView::renderPlaybackControls()
                                    ImVec2(iconButtonSize, iconButtonSize)) ) {
         setPlaybackState(false);
         seekPlaybackToCanvasTime(0.0);
-        audio.stop();
+        if ( isPlaybackSynchronizedWithEditor() ) {
+            audio.stop();
+        } else {
+            audio.stopAudition();
+        }
     }
     Utils::popFixedButtonStyleVars();
     if ( ImGui::IsItemHovered() ) {
@@ -1316,9 +1378,12 @@ void BpmMeasurementToolView::renderPlaybackControls()
     }
 
     const double totalTime =
-        trackLoaded ? std::max(audio.getTotalTime(), m_duration) : m_duration;
+        trackLoaded
+            ? std::max(getPlaybackTotalTime(m_playbackRoute, audio), m_duration)
+            : m_duration;
     const PlaybackTimelineState playbackState =
-        trackLoaded ? readPlaybackTimelineState() : PlaybackTimelineState{};
+        trackLoaded ? readPlaybackTimelineState(m_playbackRoute)
+                    : PlaybackTimelineState{};
     const double currentTime =
         trackLoaded ? playbackState.visualTime
                     : std::clamp(m_viewCenter, 0.0, std::max(0.0, totalTime));
@@ -1349,12 +1414,14 @@ void BpmMeasurementToolView::renderPlaybackControls()
     ImGui::TextDisabled("%s", positionText.c_str());
 
     char speedInfo[160] = { 0 };
-    std::snprintf(
-        speedInfo,
-        sizeof(speedInfo),
-        TR("ui.audio_manager.speed_info").data(),
-        m_playbackSpeed,
-        trackLoaded ? audio.getActualPlaybackSpeed() : m_playbackSpeed);
+    std::snprintf(speedInfo,
+                  sizeof(speedInfo),
+                  TR("ui.audio_manager.speed_info").data(),
+                  m_playbackSpeed,
+                  trackLoaded ? (isPlaybackSynchronizedWithEditor()
+                                     ? audio.getActualPlaybackSpeed()
+                                     : audio.getActualAuditionPlaybackSpeed())
+                              : m_playbackSpeed);
     ImGui::TextDisabled("%s", speedInfo);
 
     const char* presetLabels[] = {
@@ -1489,7 +1556,8 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
     }
 
     if ( isSelectedTrackLoadedForPlayback() ) {
-        const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+        const PlaybackTimelineState playbackState =
+            readPlaybackTimelineState(m_playbackRoute);
         if ( playbackState.visualTime >= 0.0 &&
              playbackState.visualTime <= canvasDuration ) {
             const float cursorX = timeToX(playbackState.visualTime);
@@ -1534,7 +1602,8 @@ void BpmMeasurementToolView::followPlaybackIfNeeded()
         return;
     }
 
-    const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+    const PlaybackTimelineState playbackState =
+        readPlaybackTimelineState(m_playbackRoute);
     if ( !playbackState.isPlaying ) {
         return;
     }
@@ -1569,20 +1638,23 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         }
     }
 
-    if ( audio.getStatus() != Audio::PlaybackStatus::Playing ) {
+    if ( getPlaybackStatus(m_playbackRoute, audio) !=
+         Audio::PlaybackStatus::Playing ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
 
     const double canvasDuration = playbackCanvasDuration();
-    const double totalTime =
-        std::max(canvasDuration, std::max(m_duration, audio.getTotalTime()));
+    const double totalTime      = std::max(
+        canvasDuration,
+        std::max(m_duration, getPlaybackTotalTime(m_playbackRoute, audio)));
     if ( canvasDuration <= 0.0 || totalTime <= 0.0 ) {
         m_metronomeScheduleInitialized = false;
         return;
     }
 
-    const double audioTime = std::clamp(audio.getCurrentTime(), 0.0, totalTime);
+    const double audioTime = std::clamp(
+        getPlaybackCurrentTime(m_playbackRoute, audio), 0.0, totalTime);
     const std::size_t activeSegmentIndex = findSegmentIndexForTime(audioTime);
     const double      activeFirstBeatTime =
         m_timingSegments[activeSegmentIndex].timestampSeconds;
@@ -1594,14 +1666,19 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         resetMetronomeScheduler(audioTime);
     }
 
-    const double scheduleEndAudioTime = std::min(
-        totalTime, audioTime + BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS);
+    const bool synchronizedPlayback = isPlaybackSynchronizedWithEditor();
+    // 独立试听不借用主 BGM 的计划时钟，按帧即时补响以避免编辑器
+    // seek/stop 清理全局预定音效时造成后续拍点漏触发。
+    const double scheduleLookahead =
+        synchronizedPlayback ? BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS : 1e-4;
+    const double scheduleEndAudioTime =
+        std::min(totalTime, audioTime + scheduleLookahead);
 
     int          scheduledCount{ 0 };
     const double pastTriggerWindow =
@@ -1616,7 +1693,13 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             m_metronomeScheduledFirstBeatTime +
             static_cast<double>(m_nextMetronomeBeatIndex) *
                 m_metronomeScheduledBeatLength;
-        if ( beatAudioTime < audioTime - pastTriggerWindow ) {
+        const bool latestBeatCrossedSinceLastUpdate =
+            !synchronizedPlayback &&
+            beatAudioTime > m_lastMetronomeAudioTime + 1e-4 &&
+            beatAudioTime <= audioTime + 1e-4 &&
+            beatAudioTime + m_metronomeScheduledBeatLength > audioTime + 1e-4;
+        if ( beatAudioTime < audioTime - pastTriggerWindow &&
+             !latestBeatCrossedSinceLastUpdate ) {
             ++m_nextMetronomeBeatIndex;
             continue;
         }
@@ -1638,7 +1721,7 @@ void BpmMeasurementToolView::updateMetronomePlayback()
                 beatMod == 0 ? BPM_METRONOME_HIGH_KEY : BPM_METRONOME_LOW_KEY;
             if ( beatAudioTime <= audioTime + 1e-4 ) {
                 audio.playSoundEffect(key, BPM_METRONOME_VOLUME_FACTOR);
-            } else {
+            } else if ( synchronizedPlayback ) {
                 audio.playSoundEffectScheduled(
                     key, beatAudioTime, BPM_METRONOME_VOLUME_FACTOR);
             }
@@ -1664,7 +1747,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
 
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                const std::filesystem::path& fallback) {
+                                       const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             return it->second;
@@ -1878,9 +1961,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -2201,7 +2284,8 @@ void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
         return;
     }
 
-    const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+    const PlaybackTimelineState playbackState =
+        readPlaybackTimelineState(m_playbackRoute);
     const double totalTime = std::max(m_duration, playbackState.totalTime);
     if ( totalTime <= 0.0 ) {
         return;
@@ -2565,7 +2649,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
         return;
     }
 
-    const PlaybackTimelineState playbackState = readPlaybackTimelineState();
+    const PlaybackTimelineState playbackState =
+        readPlaybackTimelineState(m_playbackRoute);
     const double totalTime = std::max(m_duration, playbackState.totalTime);
     if ( totalTime <= 0.0 ) {
         if ( m_playbackCursorDragOwner == ownerId ) {
@@ -2751,11 +2836,144 @@ BpmMeasurementToolView::selectedAudioResource() const
     return std::nullopt;
 }
 
+/// @brief 更新当前选择并刷新规范化音频同步键。
+/// @param audioTrackId 新的项目音频资源 ID。
+/// @warning 低频路径：选择变化时可能规范化一次文件系统路径。
+void BpmMeasurementToolView::setSelectedAudioTrackId(
+    const std::string& audioTrackId)
+{
+    if ( m_selectedAudioTrackId != audioTrackId ) {
+        Audio::AudioManager::instance().unloadAuditionTrack();
+    }
+
+    m_selectedAudioTrackId = audioTrackId;
+    m_selectedAudioProjectRoot.clear();
+    m_selectedAudioResourcePath.clear();
+    m_selectedAudioSyncKey.clear();
+    refreshSelectedAudioIdentity();
+    refreshPlaybackRoute();
+}
+
+/// @brief 在项目根目录或资源路径变化时刷新选中音轨身份缓存。
+/// @warning UI
+/// 热路径：每帧只比较当前项目音轨的路径字段；仅脏分支规范化文件路径。
+void BpmMeasurementToolView::refreshSelectedAudioIdentity()
+{
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( !project || m_selectedAudioTrackId.empty() ) {
+        if ( !m_selectedAudioSyncKey.empty() ) {
+            Audio::AudioManager::instance().unloadAuditionTrack();
+        }
+        m_selectedAudioProjectRoot.clear();
+        m_selectedAudioResourcePath.clear();
+        m_selectedAudioSyncKey.clear();
+        m_selectedAudioIdentityNeedsAnalysis = false;
+        return;
+    }
+
+    const AudioResource* selectedResource = nullptr;
+    for ( const auto& resource : project->m_audioResources ) {
+        if ( resource.m_id == m_selectedAudioTrackId ) {
+            selectedResource = &resource;
+            break;
+        }
+    }
+    if ( !selectedResource ) {
+        Audio::AudioManager::instance().unloadAuditionTrack();
+        m_selectedAudioProjectRoot.clear();
+        m_selectedAudioResourcePath.clear();
+        m_selectedAudioSyncKey.clear();
+        m_selectedAudioIdentityNeedsAnalysis = false;
+        return;
+    }
+
+    if ( m_selectedAudioProjectRoot == project->m_projectRoot &&
+         m_selectedAudioResourcePath == selectedResource->m_path &&
+         !m_selectedAudioSyncKey.empty() ) {
+        return;
+    }
+
+    Audio::AudioManager::instance().unloadAuditionTrack();
+    m_selectedAudioProjectRoot  = project->m_projectRoot;
+    m_selectedAudioResourcePath = selectedResource->m_path;
+    m_playbackSpeed =
+        std::clamp<double>(selectedResource->m_config.playbackSpeed, 0.25, 2.0);
+    const auto audioPath =
+        project->m_projectRoot / Config::utf8ToPath(selectedResource->m_path);
+    m_selectedAudioSyncKey =
+        Logic::EditorEngine::instance().makeMainAudioSyncKeyForPath(audioPath);
+    m_selectedAudioIdentityNeedsAnalysis = true;
+}
+
+/// @brief 根据活动谱面主音轨刷新 BPM 工具播放路由。
+/// @warning UI 热路径：每帧调用一次，只读取活动 Session 的缓存同步键。
+void BpmMeasurementToolView::refreshPlaybackRoute()
+{
+    refreshSelectedAudioIdentity();
+    auto&      engine = Logic::EditorEngine::instance();
+    const bool activeTrackMatches =
+        engine.activeMainAudioSyncKeyMatches(m_selectedAudioSyncKey);
+    const BpmPlaybackRoute nextRoute = resolveBpmPlaybackRoute(
+        m_selectedAudioSyncKey,
+        activeTrackMatches ? std::string_view(m_selectedAudioSyncKey)
+                           : std::string_view{});
+    if ( nextRoute != m_playbackRoute ) {
+        if ( nextRoute != BpmPlaybackRoute::Audition ) {
+            Audio::AudioManager::instance().unloadAuditionTrack();
+        }
+        m_playbackRoute                = nextRoute;
+        m_metronomeScheduleInitialized = false;
+    }
+
+    if ( m_playbackRoute == BpmPlaybackRoute::SynchronizedWithEditor ) {
+        m_playbackSpeed = std::clamp(
+            Audio::AudioManager::instance().getPlaybackSpeed(), 0.25, 2.0);
+    }
+}
+
+/// @brief 判断当前播放控制是否应与活动编辑器同步。
+/// @return 同轨同步路由返回 true。
+bool BpmMeasurementToolView::isPlaybackSynchronizedWithEditor() const
+{
+    return shouldDispatchBpmPlaybackToEditor(m_playbackRoute);
+}
+
+/// @brief 切换当前选中音轨的播放或暂停状态。
+/// @return 成功切换或暂停已有播放时返回 true。
+bool BpmMeasurementToolView::togglePlayback()
+{
+    refreshPlaybackRoute();
+    if ( m_playbackRoute == BpmPlaybackRoute::Unavailable ) {
+        return false;
+    }
+
+    auto& audio = Audio::AudioManager::instance();
+    if ( isSelectedTrackLoadedForPlayback() &&
+         getPlaybackStatus(m_playbackRoute, audio) ==
+             Audio::PlaybackStatus::Playing ) {
+        setPlaybackState(false);
+        return true;
+    }
+
+    if ( !loadSelectedTrackForPlayback() ) {
+        return false;
+    }
+
+    const double totalTime = getPlaybackTotalTime(m_playbackRoute, audio);
+    if ( totalTime > 0.0 &&
+         getPlaybackCurrentTime(m_playbackRoute, audio) >= totalTime - 0.001 ) {
+        seekPlaybackToCanvasTime(0.0);
+    }
+    setPlaybackState(true);
+    return true;
+}
+
 /// @brief 确保当前选中音轨已加载到播放图。
 /// @return 加载成功或已经加载时返回 true。
 bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
 {
     (void)ensureMetronomeSoundEffects();
+    refreshPlaybackRoute();
 
     auto resource = selectedAudioResource();
     auto path     = selectedAudioAbsolutePath();
@@ -2772,19 +2990,27 @@ bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
 
     const std::string pathString = Config::pathToUtf8(*path);
     auto&             audio      = Audio::AudioManager::instance();
-    if ( audio.getLoadedBGMPath() != pathString ) {
-        if ( !audio.loadBGM(pathString, resource->m_config) ) {
+    if ( isPlaybackSynchronizedWithEditor() ) {
+        if ( audio.getLoadedBGMSyncKey() != m_selectedAudioSyncKey &&
+             !audio.loadBGM(pathString, resource->m_config) ) {
             m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
             return false;
         }
+        return true;
     }
 
-    if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
-        Logic::EditorEngine::instance().pushCommand(
-            Logic::CmdSetPlaybackSpeed{ m_playbackSpeed });
-    } else {
-        audio.setPlaybackSpeed(m_playbackSpeed);
+    const bool needsAuditionLoad =
+        audio.getLoadedAuditionSyncKey() != m_selectedAudioSyncKey;
+    if ( needsAuditionLoad ) {
+        if ( !audio.loadAuditionTrack(pathString, resource->m_config) ) {
+            m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
+            return false;
+        }
+        const double startAudioTime =
+            std::max(0.0, m_viewCenter - playbackVisualOffset());
+        audio.seekAudition(startAudioTime);
     }
+    audio.setAuditionPlaybackSpeed(m_playbackSpeed);
     return true;
 }
 
@@ -2793,26 +3019,30 @@ bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
 /// @warning UI 热路径：每帧读取播放路径；不得在此加入文件存在性检查或音频加载。
 bool BpmMeasurementToolView::isSelectedTrackLoadedForPlayback() const
 {
-    auto path = selectedAudioAbsolutePath();
-    if ( !path ) {
+    if ( m_selectedAudioSyncKey.empty() ) {
         return false;
     }
 
-    return Audio::AudioManager::instance().getLoadedBGMPath() ==
-           Config::pathToUtf8(*path);
+    const auto& audio = Audio::AudioManager::instance();
+    if ( isPlaybackSynchronizedWithEditor() ) {
+        return audio.getLoadedBGMSyncKey() == m_selectedAudioSyncKey;
+    }
+    return m_playbackRoute == BpmPlaybackRoute::Audition &&
+           audio.getLoadedAuditionSyncKey() == m_selectedAudioSyncKey;
 }
 
-/// @brief 应用 BPM 工具的本地试听倍速。
+/// @brief 应用 BPM 工具倍速；同轨时同步编辑器，异轨时只修改独立试听。
 /// @param speed 目标倍速。
 void BpmMeasurementToolView::applyPlaybackSpeed(double speed)
 {
     m_playbackSpeed = std::clamp(speed, 0.25, 2.0);
     if ( isSelectedTrackLoadedForPlayback() ) {
-        if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
+        if ( isPlaybackSynchronizedWithEditor() ) {
             Logic::EditorEngine::instance().pushCommand(
                 Logic::CmdSetPlaybackSpeed{ m_playbackSpeed });
         } else {
-            Audio::AudioManager::instance().setPlaybackSpeed(m_playbackSpeed);
+            Audio::AudioManager::instance().setAuditionPlaybackSpeed(
+                m_playbackSpeed);
         }
     }
 }
@@ -2851,12 +3081,13 @@ double BpmMeasurementToolView::playbackCanvasDuration() const
     return std::max(0.0, m_duration);
 }
 
-/// @brief 跳转到指定音频时间并同步活动主画布。
+/// @brief 跳转到指定音频时间；仅同轨时同步活动主画布。
 /// @param audioTime 目标音频时间，单位为秒。
 void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
 {
-    auto&        audio        = Audio::AudioManager::instance();
-    const double totalTime    = std::max(m_duration, audio.getTotalTime());
+    auto&        audio = Audio::AudioManager::instance();
+    const double totalTime =
+        std::max(m_duration, getPlaybackTotalTime(m_playbackRoute, audio));
     const double visualOffset = playbackVisualOffset();
     double       minTime      = -visualOffset;
     if ( minTime > totalTime ) {
@@ -2867,27 +3098,31 @@ void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
         std::clamp(audioTime, minTime, std::max(minTime, totalTime));
     const double hardwareAudioTime =
         std::clamp(commandAudioTime, 0.0, std::max(0.0, totalTime));
-    audio.seek(hardwareAudioTime);
+    if ( isPlaybackSynchronizedWithEditor() ) {
+        audio.seek(hardwareAudioTime);
+    } else {
+        audio.seekAudition(hardwareAudioTime);
+    }
 
     const double canvasDuration = playbackCanvasDuration();
     m_viewCenter                = std::clamp<double>(
         commandAudioTime + visualOffset, 0.0, std::max(0.0, canvasDuration));
     resetMetronomeScheduler(commandAudioTime);
 
-    if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
+    if ( isPlaybackSynchronizedWithEditor() ) {
         Logic::EditorEngine::instance().pushCommand(
             Logic::CmdSeek{ commandAudioTime });
     }
 }
 
-/// @brief 跳转到指定 BPM 工具画布时间并同步活动主画布。
+/// @brief 跳转到指定 BPM 工具画布时间；仅同轨时同步活动主画布。
 /// @param canvasTime 目标画布时间，单位为秒。
 void BpmMeasurementToolView::seekPlaybackToCanvasTime(double canvasTime)
 {
     seekPlaybackToAudioTime(canvasTime - playbackVisualOffset());
 }
 
-/// @brief 切换试听和活动主画布的播放状态。
+/// @brief 切换播放状态；同轨时同步活动主画布，异轨时只控制独立试听。
 /// @param shouldPlay true 表示播放，false 表示暂停。
 void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
 {
@@ -2896,11 +3131,12 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
         m_metronomeScheduleInitialized = false;
     }
 
-    if ( Logic::EditorEngine::instance().getActiveSessionIndex() >= 0 ) {
+    if ( isPlaybackSynchronizedWithEditor() ) {
         if ( shouldPlay ) {
             (void)ensureMetronomeSoundEffects();
             const PlaybackTimelineState playbackState =
-                readPlaybackTimelineState();
+                readPlaybackTimelineState(
+                    BpmPlaybackRoute::SynchronizedWithEditor);
             const double canvasTime =
                 std::clamp<double>(playbackState.visualTime,
                                    0.0,
@@ -2915,15 +3151,16 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
 
     if ( shouldPlay ) {
         (void)ensureMetronomeSoundEffects();
-        const PlaybackTimelineState playbackState = readPlaybackTimelineState();
-        const double                canvasTime =
+        const PlaybackTimelineState playbackState =
+            readPlaybackTimelineState(BpmPlaybackRoute::Audition);
+        const double canvasTime =
             std::clamp<double>(playbackState.visualTime,
                                0.0,
                                std::max(0.0, playbackCanvasDuration()));
         seekPlaybackToCanvasTime(canvasTime);
-        audio.play();
+        audio.playAudition();
     } else {
-        audio.pause();
+        audio.pauseAudition();
     }
 }
 
@@ -2931,6 +3168,7 @@ void BpmMeasurementToolView::setPlaybackState(bool shouldPlay)
 /// @param autoMeasure 是否在分析完成后自动估算 BPM 和 offset。
 void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 {
+    m_selectedAudioIdentityNeedsAnalysis = false;
     stopAnalysisWorker();
     clearAnalysisData();
 
@@ -2956,9 +3194,9 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    m_duration      = sampleRate > 0.0
-                          ? static_cast<double>(track->num_frames()) / sampleRate
-                          : 0.0;
+    m_duration = sampleRate > 0.0
+                     ? static_cast<double>(track->num_frames()) / sampleRate
+                     : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
     m_viewCenter = std::clamp<double>(
@@ -2983,7 +3221,7 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
 
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
-    m_analysisFuture                = appThreadPool->enqueue([this,
+    m_analysisFuture = appThreadPool->enqueue([this,
                                                stopToken,
                                                track    = std::move(track),
                                                duration = m_duration,
@@ -3020,7 +3258,7 @@ void BpmMeasurementToolView::requestAutoMeasureSelectedTrack()
             m_statusText = TR("ui.tools.bpm_measure.no_audio").data();
             return;
         }
-        m_selectedAudioTrackId = targetAudioTrackId;
+        setSelectedAudioTrackId(targetAudioTrackId);
     }
 
     requestAnalyzeSelectedTrack(true);
@@ -3318,7 +3556,7 @@ void BpmMeasurementToolView::analyzeTrack(
             for ( int i = binStart; i <= binEnd; ++i ) {
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude = std::max(maxMagnitude, magSq);
+                maxMagnitude       = std::max(maxMagnitude, magSq);
             }
             const double db =
                 maxMagnitude > 1e-9

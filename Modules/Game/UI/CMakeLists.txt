@@ -121,3 +121,9 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
+
+mmm_add_test_executable(UI BpmPlaybackRoutingTest
+                        tests/BpmPlaybackRoutingTest.cpp)
+target_include_directories(BpmPlaybackRoutingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)

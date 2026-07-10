@@ -197,7 +197,7 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
-    auto   it  = std::upper_bound(ctx.bpmEvents.begin(),
+    auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
                                [](double time, const TimelineComponent* event) {
@@ -438,7 +438,9 @@ std::string getMainAudioSyncKey(const SessionContext& ctx,
     }
 
     const auto& meta = ctx.currentBeatmap->m_baseMapMetadata;
-    return makeMainAudioSyncKey(project, meta.map_path, meta.main_audio_path);
+    const auto  resolvedAudioPath =
+        SessionUtils::resolveMainAudioPath(ctx, project);
+    return makeMainAudioSyncKey(project, meta.map_path, resolvedAudioPath);
 }
 
 /// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
@@ -889,10 +891,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
         std::shared_ptr<BeatmapSession> restoredSession;
@@ -1468,6 +1470,43 @@ void EditorEngine::updateSnapshotAtlasUVMap(
         cameraId, target, targetRevision);
 }
 
+/// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
+/// @param audioPath 待规范化的音频路径。
+/// @return 规范化绝对路径键；空路径返回空字符串。
+/// @warning 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
+std::string EditorEngine::makeMainAudioSyncKeyForPath(
+    const std::filesystem::path& audioPath) const
+{
+    return makeMainAudioSyncKey(getCurrentProject(), {}, audioPath);
+}
+
+/// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
+/// @param audioSyncKey 待比较的规范化音频路径键。
+/// @return 存在有效活动谱面且主音轨键一致时返回 true。
+/// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
+/// SessionRegistry 锁，不复制 Session 或路径字符串。
+bool EditorEngine::activeMainAudioSyncKeyMatches(
+    std::string_view audioSyncKey) const
+{
+    if ( audioSyncKey.empty() ) {
+        return false;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
+    const auto  activeIndex = m_sessionRegistry.activeIndex();
+    if ( activeIndex < 0 ||
+         activeIndex >= static_cast<int32_t>(sessions.size()) ) {
+        return false;
+    }
+
+    const auto& entry = sessions[static_cast<size_t>(activeIndex)];
+    if ( entry.isLogoPlaceholder || !entry.session ) {
+        return false;
+    }
+    return entry.mainAudioSyncKey == audioSyncKey;
+}
+
 /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
 /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
 /// SessionRegistry 锁。
@@ -1843,10 +1882,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 复用此画布：加载谱面到它的 Session
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey   = requestedBeatmapKey;
                 sessions[i].mainAudioSyncKey = requestedMainAudioSyncKey;
                 if ( !preferredCameraId.empty() ) {
                     m_sessionRegistry.reserveCameraId(preferredCameraId);

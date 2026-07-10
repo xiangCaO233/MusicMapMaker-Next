@@ -6,6 +6,7 @@
 #include "mmm/timing/Timing.h"
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/menu/actions/tools/BpmAutoDetector.h"
+#include "ui/imgui/menu/actions/tools/BpmPlaybackRouting.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -61,6 +62,10 @@ public:
     {
         return m_selectedAudioTrackId;
     }
+
+    /// @brief 由全局快捷键路由切换 BPM 工具当前音轨的播放状态。
+    /// @warning UI 输入路径：只在 BPM 工具聚焦且按下无修饰空格时调用。
+    void togglePlaybackFromShortcut();
 
     /// @brief 更新并绘制 BPM 测量工具 UI。
     /// @param sourceManager 当前 UI 管理器。
@@ -355,6 +360,28 @@ private:
     /// @return 成功时返回音频资源副本，否则返回空。
     std::optional<AudioResource> selectedAudioResource() const;
 
+    /// @brief 更新当前选择并刷新规范化音频同步键。
+    /// @param audioTrackId 新的项目音频资源 ID。
+    /// @warning 低频路径：选择变化时可能规范化一次文件系统路径。
+    void setSelectedAudioTrackId(const std::string& audioTrackId);
+
+    /// @brief 在项目根目录或资源路径变化时刷新选中音轨身份缓存。
+    /// @warning UI
+    /// 热路径：每帧只比较当前项目音轨的路径字段；仅脏分支规范化文件路径。
+    void refreshSelectedAudioIdentity();
+
+    /// @brief 根据活动谱面主音轨刷新 BPM 工具播放路由。
+    /// @warning UI 热路径：每帧调用一次，只读取活动 Session 的缓存同步键。
+    void refreshPlaybackRoute();
+
+    /// @brief 判断当前播放控制是否应与活动编辑器同步。
+    /// @return 同轨同步路由返回 true。
+    bool isPlaybackSynchronizedWithEditor() const;
+
+    /// @brief 切换当前选中音轨的播放或暂停状态。
+    /// @return 成功切换或暂停已有播放时返回 true。
+    bool togglePlayback();
+
     /// @brief 确保当前选中音轨已加载到播放图。
     /// @return 加载成功或已经加载时返回 true。
     bool loadSelectedTrackForPlayback();
@@ -365,7 +392,7 @@ private:
     /// 热路径：每帧读取播放路径；不得在此加入文件存在性检查或音频加载。
     bool isSelectedTrackLoadedForPlayback() const;
 
-    /// @brief 应用 BPM 工具的本地试听倍速。
+    /// @brief 应用 BPM 工具倍速；同轨时同步编辑器，异轨时只修改独立试听。
     /// @param speed 目标倍速。
     void applyPlaybackSpeed(double speed);
 
@@ -385,15 +412,15 @@ private:
     /// @return 画布时间轴上可显示的最大时间。
     double playbackCanvasDuration() const;
 
-    /// @brief 跳转到指定音频时间并同步活动主画布。
+    /// @brief 跳转到指定音频时间；仅同轨时同步活动主画布。
     /// @param audioTime 目标音频时间，单位为秒。
     void seekPlaybackToAudioTime(double audioTime);
 
-    /// @brief 跳转到指定 BPM 工具画布时间并同步活动主画布。
+    /// @brief 跳转到指定 BPM 工具画布时间；仅同轨时同步活动主画布。
     /// @param canvasTime 目标画布时间，单位为秒。
     void seekPlaybackToCanvasTime(double canvasTime);
 
-    /// @brief 切换试听和活动主画布的播放状态。
+    /// @brief 切换播放状态；同轨时同步活动主画布，异轨时只控制独立试听。
     /// @param shouldPlay true 表示播放，false 表示暂停。
     void setPlaybackState(bool shouldPlay);
 
@@ -442,6 +469,21 @@ private:
 
     /// @brief 当前选中的项目音频资源 ID。
     std::string m_selectedAudioTrackId;
+
+    /// @brief 当前选中音轨的规范化绝对路径键。
+    std::string m_selectedAudioSyncKey;
+
+    /// @brief 生成当前选中音轨身份缓存时使用的项目根目录。
+    std::filesystem::path m_selectedAudioProjectRoot;
+
+    /// @brief 生成当前选中音轨身份缓存时使用的资源路径。
+    std::string m_selectedAudioResourcePath;
+
+    /// @brief 当前试听控制应使用编辑器同步还是独立试听通道。
+    BpmPlaybackRoute m_playbackRoute{ BpmPlaybackRoute::Unavailable };
+
+    /// @brief 音轨路径身份变化后是否需要重新生成波形和频谱分析缓存。
+    bool m_selectedAudioIdentityNeedsAnalysis{ false };
 
     /// @brief 当前选中音频轨道显示名。
     std::string m_selectedAudioLabel;
@@ -500,7 +542,8 @@ private:
     /// @brief 分拍线切分数量。
     int m_beatDivisor{ 4 };
 
-    /// @brief BPM 工具本地试听播放倍速，不写回项目音轨配置。
+    /// @brief BPM
+    /// 工具播放倍速；异轨试听不写回项目配置，同轨沿用编辑器同步语义。
     double m_playbackSpeed{ 1.0 };
 
     /// @brief 节拍器音效是否已准备好。

@@ -250,6 +250,21 @@ public:
         return m_sessionRegistry.activeCameraId();
     }
 
+    /// @brief 为外部音频路径生成与 Session 主音轨一致的同步键。
+    /// @param audioPath 待规范化的音频路径。
+    /// @return 规范化绝对路径键；空路径返回空字符串。
+    /// @warning
+    /// 低频路径：可能访问文件系统解析规范路径，只能在音轨选择变化时调用。
+    std::string makeMainAudioSyncKeyForPath(
+        const std::filesystem::path& audioPath) const;
+
+    /// @brief 判断当前活动 Session 是否使用指定主音轨同步键。
+    /// @param audioSyncKey 待比较的规范化音频路径键。
+    /// @return 存在有效活动谱面且主音轨键一致时返回 true。
+    /// @warning UI 热路径辅助：BPM 工具每帧读取一次；只短暂持有
+    /// SessionRegistry 锁，不复制 Session 或路径字符串。
+    bool activeMainAudioSyncKeyMatches(std::string_view audioSyncKey) const;
+
     /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
     /// @param cameraId 目标主画布 cameraId。
     /// @return 目标是当前活动画布，或与当前活动画布引用同一主音轨时返回 true。
