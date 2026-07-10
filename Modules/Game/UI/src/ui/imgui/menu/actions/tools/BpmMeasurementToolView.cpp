@@ -86,6 +86,9 @@ constexpr int BPM_METRONOME_MAX_TRIGGERED_PER_FRAME = 8;
 /// @brief BPM 工具全局时间滚动条最小高度，单位为像素。
 constexpr float BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT = 24.0f;
 
+/// @brief BPM 工具右侧控制面板滚动条最小宽度，单位为逻辑像素。
+constexpr float BPM_CONTROL_SCROLLBAR_MIN_WIDTH = 18.0f;
+
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
 {
@@ -549,6 +552,11 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         }
         ImGui::EndChild();
         ImGui::TableNextColumn();
+        const float controlScrollbarWidth =
+            std::max(ImGui::GetStyle().ScrollbarSize,
+                     std::floor(BPM_CONTROL_SCROLLBAR_MIN_WIDTH *
+                                std::max(dpiScale, 1.0f)));
+        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, controlScrollbarWidth);
         if ( ImGui::BeginChild("##BpmMeasureControlsChild",
                                ImVec2(0.0f, 0.0f),
                                ImGuiChildFlags_None,
@@ -556,6 +564,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
             renderControlPanel();
         }
         ImGui::EndChild();
+        ImGui::PopStyleVar();
 
         ImGui::EndTable();
     }
