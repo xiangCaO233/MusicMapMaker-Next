@@ -2,6 +2,7 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
@@ -16,6 +17,41 @@ using json = nlohmann::json;
 namespace MMM
 {
 
+/// @brief 无异常读取 Malody JSON 数值，兼容数字与数字字符串。
+/// @param value 待读取的 JSON 值。
+/// @param defaultValue 类型不兼容或解析失败时使用的默认值。
+/// @return 有限的解析结果，失败时返回默认值。
+inline double parseMalodyJsonDouble(const json& value, double defaultValue)
+{
+    if ( value.is_number() ) {
+        const double number = value.get<double>();
+        return std::isfinite(number) ? number : defaultValue;
+    }
+    if ( value.is_string() ) {
+        const double number = Internal::safeStod(
+            value.get_ref<const std::string&>(), defaultValue);
+        return std::isfinite(number) ? number : defaultValue;
+    }
+    return defaultValue;
+}
+
+/// @brief 无异常读取 Malody JSON 对象中的数值字段。
+/// @param object 待读取的 JSON 对象。
+/// @param key 字段名称。
+/// @param defaultValue 字段缺失或解析失败时使用的默认值。
+/// @return 有限的解析结果，失败时返回默认值。
+inline double readMalodyJsonDouble(const json& object, const char* key,
+                                   double defaultValue)
+{
+    if ( !object.is_object() ) return defaultValue;
+    const auto value = object.find(key);
+    if ( value == object.end() ) return defaultValue;
+    return parseMalodyJsonDouble(*value, defaultValue);
+}
+
+/// @brief 从 Malody `.mc` JSON 文件加载谱面。
+/// @param path 待加载的谱面路径。
+/// @return 加载后的谱面；文件或 JSON 无效时返回空谱面。
 inline BeatMap loadMalodyMap(std::filesystem::path path)
 {
     // 创建谱面
@@ -69,7 +105,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             basemeta.artist_unicode = song.value("artistorg", "");
             basemeta.main_audio_path =
                 Config::utf8ToPath(song.value("file", ""));
-            basemeta.preference_bpm = song.value("bpm", 0.0);
+            basemeta.preference_bpm = readMalodyJsonDouble(song, "bpm", 0.0);
         }
 
         if ( meta.contains("mode_ext") ) {
@@ -120,8 +156,10 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
         if ( !b.is_array() || b.size() < 3 ) return 0.0;
         // Malody 的 beat 数组约定：第一个元素即为当前拍数索引，后续为细分偏移
         // 绝对拍数 = beat_index + (numerator / denominator)
-        return static_cast<double>(b[0]) +
-               (static_cast<double>(b[1]) / static_cast<double>(b[2]));
+        const double denominator = parseMalodyJsonDouble(b[2], 1.0);
+        if ( std::abs(denominator) <= 1e-9 ) return 0.0;
+        return parseMalodyJsonDouble(b[0], 0.0) +
+               (parseMalodyJsonDouble(b[1], 0.0) / denominator);
     };
 
     // 2. 收集原始时间事件
@@ -152,13 +190,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
     if ( fileData.contains("time") && fileData["time"].is_array() &&
          !fileData["time"].empty() ) {
         const auto& firstTime = fileData["time"][0];
-        time0Delay            = firstTime.value("delay", 0.0);
+        time0Delay            = readMalodyJsonDouble(firstTime, "delay", 0.0);
     }
     if ( fileData.contains("time") ) {
         for ( const auto& t : fileData["time"] ) {
             RawEvent ev;
             ev.beat  = beatToDouble(t.value("beat", json::array()));
-            ev.bpm   = t.value("bpm", 120.0);
+            ev.bpm   = readMalodyJsonDouble(t, "bpm", 120.0);
             ev.isBpm = true;
             ev.raw   = t;
 
@@ -172,7 +210,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 if ( !e.contains(key) ) return;
                 RawEvent ev;
                 ev.beat   = beatToDouble(e.value("beat", json::array()));
-                ev.value  = e.value(key, 0.0);
+                ev.value  = readMalodyJsonDouble(e, key, 0.0);
                 ev.effect = effect;
                 ev.isBpm  = false;
                 ev.raw    = e;
@@ -376,7 +414,7 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                          basemeta.main_audio_path ||
                      soundFile.empty() ) {
                     if ( n.contains("offset") ) {
-                        audioOffset        = n.value("offset", 0.0);
+                        audioOffset = readMalodyJsonDouble(n, "offset", 0.0);
                         hasSoundNoteOffset = true;
                     }
                     break;
@@ -674,9 +712,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                basemeta.title,
-                                basemeta.track_count,
-                                basemeta.version);
+                                            basemeta.title,
+                                            basemeta.track_count,
+                                            basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用
