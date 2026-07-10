@@ -432,7 +432,7 @@ bool drawTimingTableFractionInput(const char*                   id,
     }
 
     ImGui::SetNextItemWidth(-FLT_MIN);
-    ::MMM::UI::AnimatedInputText(
+    ImGui::InputText(
         id, buffer.data(), buffer.size(), ImGuiInputTextFlags_CharsNoBlank);
     if ( !ImGui::IsItemDeactivatedAfterEdit() ) {
         return false;

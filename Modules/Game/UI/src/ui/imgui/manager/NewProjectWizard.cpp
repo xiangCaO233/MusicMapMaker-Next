@@ -430,7 +430,7 @@ bool NewProjectWizard::renderLabeledInputText(const char* label, const char* id,
 {
     ImGui::TextUnformatted(label);
     ImGui::SetNextItemWidth(-FLT_MIN);
-    return ::MMM::UI::AnimatedInputText(id, buffer, bufferSize);
+    return ImGui::InputText(id, buffer, bufferSize);
 }
 
 void NewProjectWizard::renderFooter()
