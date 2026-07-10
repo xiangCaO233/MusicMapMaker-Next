@@ -1429,7 +1429,8 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
         entries.push_back(
             { entt::null,
               std::nullopt,
-              TimelineComponent{ event.time, event.type, event.value } });
+              TimelineComponent{
+                  event.time, event.type, event.value, event.metadata } });
     }
 
     auto action =

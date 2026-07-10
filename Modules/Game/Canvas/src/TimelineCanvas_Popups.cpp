@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
+#include "ui/imgui/ClipboardBridge.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
@@ -24,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace MMM::Canvas
@@ -761,6 +763,60 @@ std::vector<Logic::TimelineInteractiveElement> collectTimelineElements()
     return elements;
 }
 
+/// @brief 将时间点表格当前选中行写入编辑器级 Timeline 剪贴板。
+/// @param elements 已按时间排序的完整 Timing 行。
+/// @param selectedEntities 当前选中的 Timing 实体集合。
+/// @param beatTimeline 当前谱面的连续拍位时间线。
+/// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
+/// @return 至少复制一行时返回 true。
+/// @warning UI 快捷键低频路径：仅在复制或剪切时短暂持有 Session 锁，
+/// 遍历完整表格行并复制选中 Timing 元数据。
+bool copyTimingTableSelectionToClipboard(
+    const std::vector<Logic::TimelineInteractiveElement>& elements,
+    const std::unordered_set<entt::entity>&               selectedEntities,
+    const TimingTableBeatTimeline& beatTimeline, double fallbackBpm)
+{
+    auto& engine = Logic::EditorEngine::instance();
+    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
+    auto                                  session = engine.getActiveSession();
+    if ( !session ) {
+        return false;
+    }
+
+    auto& registry = session->getContext().timelineRegistry;
+    std::vector<Logic::TimelineClipboardItem> clipboard;
+    clipboard.reserve(selectedEntities.size());
+    for ( const auto& element : elements ) {
+        const entt::entity entity = getElementEntity(element);
+        if ( !selectedEntities.contains(entity) || !registry.valid(entity) ||
+             !registry.all_of<Logic::TimelineComponent>(entity) ) {
+            continue;
+        }
+
+        Logic::TimelineClipboardItem entry;
+        entry.timeline = registry.get<const Logic::TimelineComponent>(entity);
+        clipboard.push_back(std::move(entry));
+    }
+    if ( clipboard.empty() ) {
+        return false;
+    }
+
+    const double anchorTime = clipboard.front().timeline.m_timestamp;
+    const double anchorBeat =
+        timingTableTimeToBeat(beatTimeline, anchorTime, fallbackBpm);
+    for ( auto& entry : clipboard ) {
+        entry.relativeTime = entry.timeline.m_timestamp - anchorTime;
+        entry.relativeBeat =
+            timingTableTimeToBeat(
+                beatTimeline, entry.timeline.m_timestamp, fallbackBpm) -
+            anchorBeat;
+        entry.hasBeatPosition = true;
+    }
+
+    engine.setTimelineClipboard(std::move(clipboard), nullptr, false);
+    return true;
+}
+
 /// @brief 读取当前活跃谱面的动画时间。
 /// @param fallbackTime 活跃会话不可用时使用的兜底时间。
 /// @return 当前活跃谱面的动画时间，单位秒。
@@ -1272,6 +1328,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 {
     if ( !m_isTableWindowOpen ) {
         m_tableBeatmapKey.clear();
+        m_tableSelectionAnchorEntity = entt::null;
         finishKeepSpeedBinding();
         return;
     }
@@ -1280,6 +1337,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_isTableWindowOpen = false;
         m_tableBeatmapKey.clear();
         m_tableScrollToCurrentTimePending = false;
+        m_tableSelectionAnchorEntity      = entt::null;
         finishKeepSpeedBinding();
     };
 
@@ -1345,9 +1403,51 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             buildTimingTableBeatTimeline(*m_currentSnapshot);
         const double tableFallbackBpm =
             timingTableFallbackBpm(*m_currentSnapshot);
+        if ( m_tableSelectionAnchorEntity != entt::null &&
+             !m_selectedTimingEntities.contains(
+                 m_tableSelectionAnchorEntity) ) {
+            m_tableSelectionAnchorEntity =
+                m_selectedTimingEntities.size() == 1
+                    ? *m_selectedTimingEntities.begin()
+                    : entt::null;
+        }
         refreshKeepSpeedBinding(elements);
         const double tableCurrentTime =
             getActiveSessionTimelineTime(m_currentSnapshot->currentTime);
+        const auto copyTableSelection = [&](bool cut) {
+            if ( !copyTimingTableSelectionToClipboard(elements,
+                                                      m_selectedTimingEntities,
+                                                      beatTimeline,
+                                                      tableFallbackBpm) ) {
+                return;
+            }
+            if ( cut ) {
+                deleteSelectedTimingEvents();
+                m_tableSelectionAnchorEntity = entt::null;
+            }
+        };
+        const auto resolveTablePasteAnchor = [&]() {
+            const auto anchor = std::find_if(
+                elements.begin(), elements.end(), [&](const auto& element) {
+                    return getElementEntity(element) ==
+                           m_tableSelectionAnchorEntity;
+                });
+            if ( anchor != elements.end() ) {
+                return anchor->time;
+            }
+            const auto selected = std::find_if(
+                elements.begin(), elements.end(), [&](const auto& element) {
+                    return m_selectedTimingEntities.contains(
+                        getElementEntity(element));
+                });
+            return selected != elements.end() ? selected->time
+                                              : tableCurrentTime;
+        };
+        const auto pasteTableSelection = [&]() {
+            ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
+            pasteTimingClipboard(std::max(0.0, resolveTablePasteAnchor()));
+            m_tableSelectionAnchorEntity = entt::null;
+        };
 
         // 顶层工具栏
         ImGui::AlignTextToFramePadding();
@@ -1414,6 +1514,44 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( elements.empty() ) {
             ImGui::EndDisabled();
         }
+
+        ImGui::Separator();
+
+        // 表格选择与基础 Excel 式剪贴板操作
+        const bool hasTableSelection = !m_selectedTimingEntities.empty();
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("已选择: %zu", m_selectedTimingEntities.size());
+        ImGui::SameLine();
+        if ( !hasTableSelection ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ::MMM::UI::FeedbackButton("复制##TimingTableCopy") ) {
+            copyTableSelection(false);
+        }
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackButton("剪切##TimingTableCut") ) {
+            copyTableSelection(true);
+        }
+        if ( !hasTableSelection ) {
+            ImGui::EndDisabled();
+        }
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackButton("粘贴##TimingTablePaste") ) {
+            pasteTableSelection();
+        }
+        ImGui::SameLine();
+        if ( !hasTableSelection ) {
+            ImGui::BeginDisabled();
+        }
+        if ( ::MMM::UI::FeedbackButton("删除##TimingTableDelete") ) {
+            deleteSelectedTimingEvents();
+            m_tableSelectionAnchorEntity = entt::null;
+        }
+        if ( !hasTableSelection ) {
+            ImGui::EndDisabled();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("Ctrl+A / C / X / V");
 
         ImGui::Separator();
 
@@ -1566,8 +1704,61 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
                     // 第 0 列：序号
                     ImGui::TableSetColumnIndex(0);
-                    ImGui::AlignTextToFramePadding();
-                    ImGui::Text("#%d", displayIdx);
+                    const bool rowSelected =
+                        m_selectedTimingEntities.contains(ent);
+                    const std::string rowLabel =
+                        fmt::format("#{}###TimingTableRow_{}",
+                                    displayIdx,
+                                    static_cast<std::uint32_t>(ent));
+                    if ( ::MMM::UI::FeedbackSelectable(
+                             rowLabel.c_str(),
+                             rowSelected,
+                             ImGuiSelectableFlags_SpanAllColumns |
+                                 ImGuiSelectableFlags_AllowOverlap,
+                             ImVec2(0.0f, ImGui::GetFrameHeight())) ) {
+                        const ImGuiIO& io     = ImGui::GetIO();
+                        const auto     anchor = std::find_if(
+                            elements.begin(),
+                            elements.end(),
+                            [&](const auto& element) {
+                                return getElementEntity(element) ==
+                                       m_tableSelectionAnchorEntity;
+                            });
+                        if ( io.KeyShift && anchor != elements.end() ) {
+                            if ( !io.KeyCtrl ) {
+                                m_selectedTimingEntities.clear();
+                            }
+                            const int anchorIndex = static_cast<int>(
+                                std::distance(elements.begin(), anchor));
+                            const int first = std::clamp(
+                                std::min(anchorIndex, idx),
+                                0,
+                                static_cast<int>(elements.size()) - 1);
+                            const int last = std::clamp(
+                                std::max(anchorIndex, idx),
+                                0,
+                                static_cast<int>(elements.size()) - 1);
+                            for ( int selectedIndex = first;
+                                  selectedIndex <= last;
+                                  ++selectedIndex ) {
+                                m_selectedTimingEntities.insert(
+                                    getElementEntity(
+                                        elements[static_cast<std::size_t>(
+                                            selectedIndex)]));
+                            }
+                        } else if ( io.KeyCtrl ) {
+                            if ( rowSelected ) {
+                                m_selectedTimingEntities.erase(ent);
+                            } else {
+                                m_selectedTimingEntities.insert(ent);
+                            }
+                            m_tableSelectionAnchorEntity = ent;
+                        } else {
+                            m_selectedTimingEntities.clear();
+                            m_selectedTimingEntities.insert(ent);
+                            m_tableSelectionAnchorEntity = ent;
+                        }
+                    }
 
                     // 第 1 列：时间戳（秒）
                     ImGui::TableSetColumnIndex(1);
@@ -1721,12 +1912,48 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdDeleteTimelineEvent{ ent }));
+                        m_selectedTimingEntities.erase(ent);
+                        m_tableSelectionAnchorEntity = entt::null;
                     }
                 }
             }
             ImGui::EndTable();
         }
         ImGui::PopStyleVar(2);
+
+        const bool tableShortcutFocused =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        const ImGuiIO& io = ImGui::GetIO();
+        if ( tableShortcutFocused && !ImGui::IsAnyItemActive() &&
+             !io.WantTextInput ) {
+            const bool ctrlOnly =
+                io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
+            const bool noModifier =
+                !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
+            if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
+                m_selectedTimingEntities.clear();
+                for ( const auto& element : elements ) {
+                    m_selectedTimingEntities.insert(getElementEntity(element));
+                }
+                m_tableSelectionAnchorEntity =
+                    elements.empty() ? entt::null
+                                     : getElementEntity(elements.front());
+            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
+                copyTableSelection(false);
+            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
+                copyTableSelection(true);
+            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+                pasteTableSelection();
+            } else if ( noModifier &&
+                        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
+                         ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) ) {
+                deleteSelectedTimingEvents();
+                m_tableSelectionAnchorEntity = entt::null;
+            } else if ( ImGui::IsKeyPressed(ImGuiKey_Escape, false) ) {
+                m_selectedTimingEntities.clear();
+                m_tableSelectionAnchorEntity = entt::null;
+            }
+        }
     }
     ImGui::End();
 

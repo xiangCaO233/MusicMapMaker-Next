@@ -56,3 +56,8 @@ mmm_add_test_executable(Logic EditorClipboardProtocolTest
                         tests/EditorClipboardProtocolTest.cpp)
 target_link_libraries(EditorClipboardProtocolTest PRIVATE Logic Log)
 add_test(NAME EditorClipboardProtocolTest COMMAND EditorClipboardProtocolTest)
+
+mmm_add_test_executable(Logic TimelineBatchMetadataTest
+                        tests/TimelineBatchMetadataTest.cpp)
+target_link_libraries(TimelineBatchMetadataTest PRIVATE Logic Log)
+add_test(NAME TimelineBatchMetadataTest COMMAND TimelineBatchMetadataTest)

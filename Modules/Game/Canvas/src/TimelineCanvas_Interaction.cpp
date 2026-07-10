@@ -1045,10 +1045,16 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
     m_selectedTimingEntities.clear();
     Logic::CmdCreateTimelineEvents batch;
     batch.events.reserve(timingClipboard.size());
+    const bool containsPastedBpm = std::any_of(
+        timingClipboard.begin(), timingClipboard.end(), [](const auto& entry) {
+            return entry.timeline.m_effect == ::MMM::TimingEffect::BPM;
+        });
+    // 新 BPM 会改变其后事件的拍位时间映射。批量命令尚未应用时无法用目标
+    // 谱面的旧 BPM 时间线可靠换算，因此保留来源相对时间，避免静默贴错拍位。
     const bool pasteByBeat =
         Config::AppConfig::instance().getEditorSettings().copyPasteTimeBasis ==
             Config::CopyPasteTimeBasis::Beat &&
-        m_currentSnapshot &&
+        m_currentSnapshot && !containsPastedBpm &&
         std::all_of(timingClipboard.begin(),
                     timingClipboard.end(),
                     [](const auto& entry) { return entry.hasBeatPosition; });
@@ -1070,7 +1076,8 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
         }
         batch.events.push_back({ std::max(0.0, targetTime),
                                  entry.timeline.m_effect,
-                                 entry.timeline.m_value });
+                                 entry.timeline.m_value,
+                                 entry.timeline.m_metadata });
     }
     if ( !batch.events.empty() ) {
         Event::EventBus::instance().publish(

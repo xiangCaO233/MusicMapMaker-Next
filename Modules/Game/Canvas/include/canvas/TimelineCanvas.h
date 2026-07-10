@@ -407,7 +407,9 @@ private:
     /// @brief 下一帧表格是否需要滚动到当前判定线时间附近。
     bool m_tableScrollToCurrentTimePending{ false };
     /// @brief 表格待滚动定位的目标时间，单位秒。
-    double       m_tableScrollTargetTime{ 0.0 };
+    double m_tableScrollTargetTime{ 0.0 };
+    /// @brief 时间点表格 Shift 连续选择使用的锚点实体。
+    entt::entity m_tableSelectionAnchorEntity{ entt::null };
     entt::entity m_editingEntity{ entt::null };
     double       m_editTime{ 0.0 };
     double       m_editValue{ 1.0 };

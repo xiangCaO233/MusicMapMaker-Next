@@ -449,6 +449,9 @@ struct CmdCreateTimelineEvents {
 
         /// @brief Timeline 参数值。
         double value{ 0.0 };
+
+        /// @brief 创建后写入 Timeline 组件的原始元数据。
+        ::MMM::TimingMetadata metadata;
     };
 
     /// @brief 待创建 Timeline 事件列表。
