@@ -1011,7 +1011,7 @@ void TimelineCanvas::finishKeepSpeedBinding()
 void TimelineCanvas::renderEventEditorPopup()
 {
     if ( m_isPopupOpen ) {
-        ImGui::OpenPopup("TimelineEventEditor");
+        ::MMM::UI::FeedbackOpenPopup("TimelineEventEditor");
     }
 
     float dpiScale   = Config::AppConfig::instance().getWindowContentScale();
@@ -1102,7 +1102,7 @@ void TimelineCanvas::renderEventEditorPopup()
 void TimelineCanvas::renderEventCreationPopup()
 {
     if ( m_isCreatePopupOpen ) {
-        ImGui::OpenPopup("TimelineCreateEvent");
+        ::MMM::UI::FeedbackOpenPopup("TimelineCreateEvent");
     }
 
     float dpiScale   = Config::AppConfig::instance().getWindowContentScale();

@@ -481,7 +481,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 5. 音频导入类型选择模态弹窗 ---
     if ( m_showImportTypeModal ) {
-        ImGui::OpenPopup("AudioImportTypeModal");
+        ::MMM::UI::FeedbackOpenPopup("AudioImportTypeModal");
         m_showImportTypeModal = false;
     }
 
@@ -518,7 +518,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     // --- 5.5 文件覆盖确认模态弹窗 ---
     if ( m_showOverwriteModal ) {
-        ::MMM::UI::OpenWarningPopup("OverwriteConfirmModal");
+        ::MMM::UI::FeedbackOpenPopup("OverwriteConfirmModal");
         m_showOverwriteModal = false;
     }
 
@@ -581,7 +581,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
                 const std::string exitPopupName = fmt::format(
                     "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
-                ::MMM::UI::OpenWarningPopup(exitPopupName.c_str());
+                ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
             }
         }
     }
@@ -716,6 +716,7 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
 
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
         nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
@@ -731,8 +732,14 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
     fdConfig.path              = editorSettings.lastFilePickerPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal;
+    const bool wasOpen         = ImGuiFileDialog::Instance()->IsOpened(
+        "TemporaryProjectSaveFolderPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "TemporaryProjectSaveFolderPicker", "保存临时项目", nullptr, fdConfig);
+    if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                         "TemporaryProjectSaveFolderPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 /// @brief 渲染临时项目只读和关闭确认弹窗。
@@ -740,7 +747,7 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                                                    ImGuiViewport* viewport)
 {
     if ( m_showTemporaryProjectReadOnlyModal ) {
-        ::MMM::UI::OpenWarningPopup(
+        ::MMM::UI::FeedbackOpenPopup(
             "临时项目只读###TemporaryProjectReadOnlyModal");
         m_showTemporaryProjectReadOnlyModal = false;
     }
@@ -787,7 +794,7 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
     }
 
     if ( m_showTemporaryProjectCloseModal ) {
-        ::MMM::UI::OpenWarningPopup(
+        ::MMM::UI::FeedbackOpenPopup(
             "保存临时项目###TemporaryProjectCloseModal");
         m_showTemporaryProjectCloseModal = false;
     }

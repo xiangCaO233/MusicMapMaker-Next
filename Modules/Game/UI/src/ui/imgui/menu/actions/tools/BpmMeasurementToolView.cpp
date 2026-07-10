@@ -1220,7 +1220,7 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
 {
     const char* popupTitle = TR("ui.tools.bpm_measure.auto_apply_title").data();
     if ( m_shouldOpenAutoApplyPopup ) {
-        ImGui::OpenPopup(popupTitle);
+        ::MMM::UI::FeedbackOpenPopup(popupTitle);
         m_shouldOpenAutoApplyPopup = false;
     }
 
@@ -1250,7 +1250,7 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
     const char* popupTitle =
         TR("ui.tools.bpm_measure.apply_popup_title").data();
     if ( m_shouldOpenApplyTimingPopup ) {
-        ImGui::OpenPopup(popupTitle);
+        ::MMM::UI::FeedbackOpenPopup(popupTitle);
         m_shouldOpenApplyTimingPopup = false;
     }
 

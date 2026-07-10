@@ -192,7 +192,7 @@ private:
     {
         constexpr const char* popupId = "谱面兼容性警告###ExportWarningModal";
         if ( m_showExportCompatibilityWarning ) {
-            ::MMM::UI::OpenWarningPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showExportCompatibilityWarning = false;
         }
 
@@ -249,7 +249,7 @@ private:
         constexpr const char* popupId =
             "文件已被另外修改过###SaveConflictWarningModal";
         if ( m_showSaveConflictWarning ) {
-            ::MMM::UI::OpenWarningPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showSaveConflictWarning = false;
         }
 

@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <memory>
 #include <string>
 
@@ -31,6 +32,7 @@ public:
         std::string viewName = "BpmMeasurementTool";
         auto*       tool =
             context.sourceManager->getView<BpmMeasurementToolView>(viewName);
+        const bool wasOpen = tool && tool->isOpen();
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
@@ -39,6 +41,9 @@ public:
         }
         if ( tool ) {
             tool->openWithAudioTrack("");
+            if ( !wasOpen ) {
+                ::MMM::UI::PlayPopupOpenFeedback();
+            }
         }
     }
 };

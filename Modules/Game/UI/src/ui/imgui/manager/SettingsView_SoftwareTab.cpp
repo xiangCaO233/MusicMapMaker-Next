@@ -199,7 +199,7 @@ void SettingsView::drawSoftwareSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -340,10 +340,10 @@ void SettingsView::drawSoftwareSettings()
             TR_CACHE("ui.settings.software.audio_backend").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -628,6 +628,7 @@ void SettingsView::drawSoftwareSettings()
                 if ( browseAsciiClicked ) {
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
@@ -651,11 +652,18 @@ void SettingsView::drawSoftwareSettings()
                             ImGuiFileDialogFlags_Modal |
                             ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        const bool wasOpen =
+                            ImGuiFileDialog::Instance()->IsOpened(
+                                "AsciiFontPicker");
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AsciiFontPicker",
                             TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
+                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                                             "AsciiFontPicker") ) {
+                            ::MMM::UI::PlayPopupOpenFeedback();
+                        }
                     }
                 }
             });
@@ -725,6 +733,7 @@ void SettingsView::drawSoftwareSettings()
                 if ( browseCjkClicked ) {
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = { { "Font Files",
                                                            "ttf,otf" } };
@@ -748,11 +757,18 @@ void SettingsView::drawSoftwareSettings()
                             ImGuiFileDialogFlags_Modal |
                             ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        const bool wasOpen =
+                            ImGuiFileDialog::Instance()->IsOpened(
+                                "CjkFontPicker");
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "CjkFontPicker",
                             TR_CACHE("ui.settings.software.font.browse").data(),
                             ".ttf,.otf",
                             config);
+                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                                             "CjkFontPicker") ) {
+                            ::MMM::UI::PlayPopupOpenFeedback();
+                        }
                     }
                 }
             });

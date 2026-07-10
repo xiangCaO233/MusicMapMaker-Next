@@ -823,7 +823,7 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
 {
     constexpr const char* popupId = "选择打包格式###PackageFormatPickerWindow";
     if ( m_package.showFormatPicker ) {
-        ImGui::OpenPopup(popupId);
+        ::MMM::UI::FeedbackOpenPopup(popupId);
         m_package.showFormatPicker = false;
         m_package.formatPickerOpen = true;
     }
@@ -906,7 +906,7 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
 {
     constexpr const char* popupId = "选择打包文件###PackageFileSelectionModal";
     if ( m_package.openFileSelectionWindow ) {
-        ImGui::OpenPopup(popupId);
+        ::MMM::UI::FeedbackOpenPopup(popupId);
         m_package.openFileSelectionWindow = false;
     }
 
@@ -1275,7 +1275,7 @@ void PackBeatmapAction::renderPackageBeatmapMetadataWindow(float dpiScale)
     constexpr const char* popupId =
         "补充谱面元数据###PackageBeatmapMetadataModal";
     if ( m_package.showBeatmapMetadataWindow ) {
-        ImGui::OpenPopup(popupId);
+        ::MMM::UI::FeedbackOpenPopup(popupId);
         m_package.showBeatmapMetadataWindow = false;
     }
 
@@ -1710,6 +1710,7 @@ void PackBeatmapAction::openPackageOutputFilePicker()
     const std::string defaultFileName = makePackageDefaultFileName();
     const std::string defaultPath     = getPackagePickerDefaultPath(config);
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
         const char*  packageFilter =
             getNativePackageOutputFilterText(m_package.selectedFileType);
@@ -1736,8 +1737,14 @@ void PackBeatmapAction::openPackageOutputFilePicker()
             ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
         const char* packageFilter =
             getUnifiedPackageOutputFilterText(m_package.selectedFileType);
+        const bool wasOpen =
+            ImGuiFileDialog::Instance()->IsOpened("PackFilePicker");
         ImGuiFileDialog::Instance()->OpenDialog(
             "PackFilePicker", TR("ui.file.pack"), packageFilter, fdConfig);
+        if ( !wasOpen &&
+             ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
     }
 }
 
@@ -1784,7 +1791,7 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
     constexpr const char* popupId =
         "确认覆盖打包文件###PackageOverwriteWarningModal";
     if ( m_showPackageOverwriteWarning ) {
-        ::MMM::UI::OpenWarningPopup(popupId);
+        ::MMM::UI::FeedbackOpenPopup(popupId);
         m_showPackageOverwriteWarning = false;
     }
 

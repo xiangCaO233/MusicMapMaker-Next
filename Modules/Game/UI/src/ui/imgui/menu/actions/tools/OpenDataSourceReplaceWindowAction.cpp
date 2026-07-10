@@ -170,7 +170,7 @@ private:
         constexpr const char* popupId =
             "数据来源替换工具###DataSourceReplaceModal";
         if ( m_openWindowRequested ) {
-            ImGui::OpenPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_openWindowRequested = false;
         }
 

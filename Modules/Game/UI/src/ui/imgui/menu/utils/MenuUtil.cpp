@@ -211,6 +211,7 @@ void MenuUtil::openProjectFolderPicker()
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
         nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
 
@@ -227,11 +228,17 @@ void MenuUtil::openProjectFolderPicker()
     fdConfig.path              = config.lastFilePickerPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "ProjectFolderPicker",
         TR("ui.file_manager.open_directory"),
         nullptr,
         fdConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 /// @brief 打开音频导入选择器并发布导入事件。
@@ -243,6 +250,7 @@ void MenuUtil::openAudioImportPicker()
 
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath    = nullptr;
         nfdu8filteritem_t filters[1] = { { "Audio Files",
                                            "mp3,ogg,wav,flac,opus,aac,m4a" } };
@@ -265,11 +273,17 @@ void MenuUtil::openAudioImportPicker()
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
                                  ImGuiFileDialogFlags_HideColumnType |
                                  ImGuiFileDialogFlags_ReadOnlyFileNameField;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker");
     ImGuiFileDialog::Instance()->OpenDialog(
         "AudioImportPicker",
         TR("ui.audio_manager.import_audio").data(),
         ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a",
         fdConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 /// @brief 当前是否存在活跃谱面。

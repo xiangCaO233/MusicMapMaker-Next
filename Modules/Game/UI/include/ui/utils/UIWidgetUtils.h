@@ -217,11 +217,16 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
 /// @warning UI 热路径：每帧写入一次，只更新内存标志，不执行资源操作。
 void SetInteractionFeedbackEnabled(bool enabled);
 
-/// @brief 打开警告弹窗，并在弹窗由关闭切换为打开时播放一次提示音。
+/// @brief 打开 ImGui 弹窗，并在弹窗由关闭切换为打开时播放一次提示音。
 /// @param popupId 弹窗显示文本和 ImGui ID。
-/// @warning UI 低频路径：只查询 ImGui 弹窗状态并触发已预加载 SFX pool，
-/// 不执行资源加载。
-void OpenWarningPopup(const char* popupId);
+/// @warning UI 热路径：部分弹窗会每帧调用；只查询/请求 ImGui 弹窗状态，
+/// 并仅在打开边沿触发已预加载 SFX pool，不执行资源加载。
+void FeedbackOpenPopup(const char* popupId);
+
+/// @brief 播放一次独立弹窗打开提示音。
+/// @warning UI 低频路径：调用方必须只在普通窗口或文件选择器的打开边沿调用；
+/// 只触发已预加载 SFX pool，不执行资源加载。
+void PlayPopupOpenFeedback();
 
 /// @brief 处理全局鼠标左右键按下与松开音效。
 /// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载

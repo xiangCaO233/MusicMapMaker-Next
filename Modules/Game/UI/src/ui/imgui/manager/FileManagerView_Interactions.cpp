@@ -235,6 +235,7 @@ void FileManagerView::openFolderPicker()
 {
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t* outPath = nullptr;
         nfdresult_t  result  = NFD_PickFolder(&outPath, nullptr);
         if ( result == NFD_OKAY ) {
@@ -248,11 +249,17 @@ void FileManagerView::openFolderPicker()
         fdConfig.path              = config.lastFilePickerPath;
         fdConfig.countSelectionMax = 1;
         fdConfig.flags             = ImGuiFileDialogFlags_Modal;
+        const bool wasOpen =
+            ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker");
         ImGuiFileDialog::Instance()->OpenDialog(
             "ProjectFolderPicker",
             TR("ui.file_manager.open_directory"),
             nullptr,
             fdConfig);
+        if ( !wasOpen &&
+             ImGuiFileDialog::Instance()->IsOpened("ProjectFolderPicker") ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
     }
 }
 

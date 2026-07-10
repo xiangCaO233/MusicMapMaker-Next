@@ -154,6 +154,7 @@ private:
         }
 
         if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
             nfdu8char_t*      outPath = nullptr;
             nfdu8filteritem_t filters[4];
             int               filterCount = 0;
@@ -203,10 +204,16 @@ private:
         else
             filterStr = ".mmm,.osu,.imd,.mc";
 
+        const bool wasOpen =
+            ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker");
         ImGuiFileDialog::Instance()->OpenDialog("SaveAsFilePicker",
                                                 TR("ui.file.save_as"),
                                                 filterStr.c_str(),
                                                 fdConfig);
+        if ( !wasOpen &&
+             ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker") ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
     }
 
     /// @brief 渲染统一文件选择器并消费另存为路径。
@@ -240,7 +247,7 @@ private:
         constexpr const char* popupId =
             "选择导出格式###ExportFormatPickerWindow";
         if ( m_showExportFormatPicker ) {
-            ImGui::OpenPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showExportFormatPicker = false;
             m_exportFormatPickerOpen = true;
         }
@@ -311,7 +318,7 @@ private:
         constexpr const char* popupId =
             "确认覆盖导出文件###SaveAsOverwriteWarningModal";
         if ( m_showOverwriteWarning ) {
-            ::MMM::UI::OpenWarningPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showOverwriteWarning = false;
         }
 
@@ -366,11 +373,7 @@ private:
     {
         constexpr const char* popupId = "谱面兼容性警告###ExportWarningModal";
         if ( m_showExportCompatibilityWarning ) {
-            if ( m_pendingExportWarnings.empty() ) {
-                ImGui::OpenPopup(popupId);
-            } else {
-                ::MMM::UI::OpenWarningPopup(popupId);
-            }
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showExportCompatibilityWarning = false;
         }
 

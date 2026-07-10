@@ -78,7 +78,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
     }
 
     if ( m_isCalculating ) {
-        ImGui::OpenPopup("ProcessingWaveform");
+        ::MMM::UI::FeedbackOpenPopup("ProcessingWaveform");
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
         Utils::CenteredModalPopupScope modalScope(dpiScale);
         if ( modalScope.begin("ProcessingWaveform") ) {

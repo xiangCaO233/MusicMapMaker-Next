@@ -1384,7 +1384,7 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
         fmt::format("{}###FileManagerRenamePopup",
                     TR("ui.file_manager.rename_title").data());
     if ( m_shouldOpenRenamePopup ) {
-        ImGui::OpenPopup(renameTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(renameTitle.c_str());
         m_shouldOpenRenamePopup = false;
     }
     renderNamePopup(renameTitle.c_str(),
@@ -1396,7 +1396,7 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
         fmt::format("{}###FileManagerNewFolderPopup",
                     TR("ui.file_manager.new_folder_title").data());
     if ( m_shouldOpenNewFolderPopup ) {
-        ImGui::OpenPopup(newFolderTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(newFolderTitle.c_str());
         m_shouldOpenNewFolderPopup = false;
     }
     renderNamePopup(newFolderTitle.c_str(),
@@ -1408,7 +1408,7 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
         fmt::format("{}###FileManagerDeletePopup",
                     TR("ui.file_manager.delete_title").data());
     if ( m_shouldOpenDeletePopup ) {
-        ::MMM::UI::OpenWarningPopup(deleteTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(deleteTitle.c_str());
         m_shouldOpenDeletePopup = false;
     }
     bool                           openDelete = true;

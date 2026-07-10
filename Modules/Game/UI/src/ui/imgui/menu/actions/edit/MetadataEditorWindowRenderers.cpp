@@ -628,7 +628,8 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
 {
     auto& state = osuMetadataTextEditorState();
     if ( state.requestOpen ) {
-        ImGui::OpenPopup("OSU 元数据文本编辑###OsuMetadataTextEditorPopup");
+        ::MMM::UI::FeedbackOpenPopup(
+            "OSU 元数据文本编辑###OsuMetadataTextEditorPopup");
         state.requestOpen = false;
     }
 
@@ -817,7 +818,8 @@ void renderMetadataJsonEditorPopup(float dpiScale)
 {
     auto& state = metadataJsonEditorState();
     if ( state.requestOpen ) {
-        ImGui::OpenPopup("字段 JSON 编辑###MetadataJsonEditorPopup");
+        ::MMM::UI::FeedbackOpenPopup(
+            "字段 JSON 编辑###MetadataJsonEditorPopup");
         state.requestOpen = false;
     }
 

@@ -508,6 +508,7 @@ void NewProjectWizard::processPendingParentFolderPicker()
     }
 
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath = nullptr;
         const nfdresult_t result =
             pickNativeParentFolder(&outPath, defaultPath);
@@ -547,11 +548,17 @@ void NewProjectWizard::openUnifiedParentFolderPicker(
     fdConfig.flags             = ImGuiFileDialogFlags_Modal |
                                  ImGuiFileDialogFlags_HideColumnType |
                                  ImGuiFileDialogFlags_ReadOnlyFileNameField;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened(PARENT_FOLDER_PICKER_ID);
     ImGuiFileDialog::Instance()->OpenDialog(
         PARENT_FOLDER_PICKER_ID,
         TR("ui.wizard.new_project.select_parent").data(),
         nullptr,
         fdConfig);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened(PARENT_FOLDER_PICKER_ID) ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
 }
 
 void NewProjectWizard::renderParentFolderPicker(float dpiScale)
@@ -623,7 +630,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         std::string(TR("ui.wizard.new_project.title").data()) +
         "###NewProjectWizardWindow";
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(windowTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
         m_shouldOpen = false;
     }
 

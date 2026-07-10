@@ -9,6 +9,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -658,7 +659,7 @@ void TimelineCanvas::openTimingCreatePopupAtY(const ImVec2& size,
     m_createValue =
         defaultTimingCreateValue(timingEffectFromCreateType(m_createType));
     m_isCreatePopupOpen = true;
-    ImGui::OpenPopup("TimelineCreateEvent");
+    ::MMM::UI::FeedbackOpenPopup("TimelineCreateEvent");
 }
 
 /// @brief 收集当前快照中可交互的 Timing 目标。

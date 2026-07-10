@@ -3,6 +3,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <mutex>
 
 namespace MMM::UI
@@ -43,6 +44,9 @@ public:
     {
         (void)context;
         (void)activation;
+        if ( !m_showWindow ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
         m_showWindow = true;
     }
 

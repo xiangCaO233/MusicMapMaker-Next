@@ -114,7 +114,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     }
 
     if ( m_isCalculating.load() ) {
-        ImGui::OpenPopup("###SpectrumCalcModal");
+        ::MMM::UI::FeedbackOpenPopup("###SpectrumCalcModal");
     }
 
     {
@@ -462,9 +462,9 @@ void AudioSpectrumView::buildChannelGeometry(
         const float uv1X = static_cast<float>((intersectEnd - texGlobalStart) /
                                               texture->width());
         const float x    = static_cast<float>((intersectStart - pixelStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         const float w    = static_cast<float>((intersectEnd - intersectStart) /
-                                           pixelWidth * plotW);
+                                              pixelWidth * plotW);
         addSpectrumQuad(x, plotY, w, plotH, uv0X, uv1X, texture);
     }
 }
@@ -742,7 +742,7 @@ void AudioSpectrumView::startAsyncRecalculate()
 
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
+    m_calcFuture = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,
@@ -1028,9 +1028,9 @@ void AudioSpectrumView::prepareFullGlobalTextures()
     m_pendingChunksR.reserve(static_cast<size_t>(numChunks));
 
     constexpr size_t rgbaBytesPerPixel = 4U;
-    auto             writeHotPixel     = [](std::vector<unsigned char>& pixels,
-                            size_t                      offset,
-                            std::uint8_t                intensity) {
+    auto             writeHotPixel = [](std::vector<unsigned char>& pixels,
+                                        size_t                      offset,
+                                        std::uint8_t                intensity) {
         const float t      = static_cast<float>(intensity) / 255.0f;
         auto        toByte = [](float value) {
             const float clamped = std::clamp(value, 0.0f, 1.0f);

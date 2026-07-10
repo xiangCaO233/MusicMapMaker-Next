@@ -637,7 +637,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 m_isTimingErasing        = false;
                 m_shouldFocusNextFrame   = false;
                 m_timingEraseTargetEntities.clear();
-                ImGui::OpenPopup("TimelineEventEditor");
+                ::MMM::UI::FeedbackOpenPopup("TimelineEventEditor");
             };
 
             const bool inlineGearCanOpenEditor =
@@ -819,6 +819,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                          TR("ui.timeline.menu.open_timing_table").data(),
                          nullptr,
                          m_isTableWindowOpen) ) {
+                    if ( !m_isTableWindowOpen ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
+                    }
                     m_isTableWindowOpen = true;
                 }
                 ImGui::EndPopup();

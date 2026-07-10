@@ -87,7 +87,7 @@ private:
     void renderUpdateCheckingPopup()
     {
         if ( m_showCheckingPopup ) {
-            ImGui::OpenPopup(TR("ui.help.check_update"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.check_update"));
             m_showCheckingPopup = false;
         }
 
@@ -147,12 +147,12 @@ private:
         auto info = m_updateChecker->getInfo();
 
         if ( m_showUpdatePopup ) {
-            ImGui::OpenPopup(TR("ui.help.update_found"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found"));
             m_showUpdatePopup = false;
         } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound &&
                     !m_updatePopupCanceled ) {
             if ( !ImGui::IsPopupOpen(TR("ui.help.update_found")) )
-                ImGui::OpenPopup(TR("ui.help.update_found"));
+                ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found"));
         }
 
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -181,7 +181,7 @@ private:
     void renderUpdateSuccessPopup()
     {
         if ( m_showUpdateSuccessPopup ) {
-            ImGui::OpenPopup(TR("ui.help.update_success"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_success"));
             m_showUpdateSuccessPopup = false;
         }
 

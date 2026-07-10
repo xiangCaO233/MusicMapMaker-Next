@@ -896,7 +896,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         TR("ui.beatmap_manager.manage_title").data(),
                         m_manageBeatmapPath);
         if ( m_openManageModal ) {
-            ImGui::OpenPopup(windowTitle.c_str());
+            ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
@@ -962,7 +962,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     if ( ::MMM::UI::FeedbackButton(
                              TR("ui.beatmap_manager.remove_beatmap").data(),
                              { r.width, r.height }) ) {
-                        ::MMM::UI::OpenWarningPopup("RemoveBeatmapConfirm");
+                        ::MMM::UI::FeedbackOpenPopup("RemoveBeatmapConfirm");
                     }
                 });
 

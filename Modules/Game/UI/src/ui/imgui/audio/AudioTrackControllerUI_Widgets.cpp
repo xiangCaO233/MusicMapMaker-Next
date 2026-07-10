@@ -984,6 +984,7 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                      ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioWaveform";
                 if ( !sourceManager->getView<AudioWaveformView>(viewName) ) {
+                    ::MMM::UI::PlayPopupOpenFeedback();
                     sourceManager->registerView(
                         viewName,
                         std::make_unique<AudioWaveformView>(
@@ -996,6 +997,7 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                      ImVec2(btnW, buttonHeight)) ) {
                 std::string viewName = "AudioSpectrum";
                 if ( !sourceManager->getView<AudioSpectrumView>(viewName) ) {
+                    ::MMM::UI::PlayPopupOpenFeedback();
                     sourceManager->registerView(
                         viewName,
                         std::make_unique<AudioSpectrumView>(

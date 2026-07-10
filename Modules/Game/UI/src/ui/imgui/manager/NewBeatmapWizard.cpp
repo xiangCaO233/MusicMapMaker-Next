@@ -651,13 +651,13 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     }
 
     if ( m_shouldOpenTemplatePicker ) {
-        ImGui::OpenPopup("NewBeatmapTemplatePicker");
+        ::MMM::UI::FeedbackOpenPopup("NewBeatmapTemplatePicker");
         m_shouldOpenTemplatePicker = false;
     }
     renderTemplatePickerPopup(templateOptions);
 
     if ( m_shouldOpenTemplateOptions ) {
-        ImGui::OpenPopup("NewBeatmapTemplateOptions");
+        ::MMM::UI::FeedbackOpenPopup("NewBeatmapTemplateOptions");
         m_shouldOpenTemplateOptions = false;
     }
     renderTemplateOptionsPopup();
@@ -675,7 +675,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         std::string(TR("ui.wizard.new_beatmap.title").data()) +
         "###NewBeatmapWizardWindow";
     if ( m_shouldOpen ) {
-        ImGui::OpenPopup(windowTitle.c_str());
+        ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
         m_shouldOpen = false;
         XINFO("NewBeatmapWizard: Opening wizard window...");
     }
@@ -806,6 +806,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     auto openBpmTool = [&](bool autoMeasure) {
         auto* tool = sourceManager->getView<BpmMeasurementToolView>(
             BPM_MEASUREMENT_TOOL_VIEW_NAME);
+        const bool wasOpen = tool && tool->isOpen();
         if ( !tool ) {
             auto toolView = std::make_unique<BpmMeasurementToolView>(
                 TR("ui.tools.bpm_measure").data());
@@ -826,6 +827,9 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                 tool->openWithAutoMeasurement(m_selectedAudioTrackId);
             } else {
                 tool->openWithAudioTrack(m_selectedAudioTrackId);
+            }
+            if ( !wasOpen ) {
+                ::MMM::UI::PlayPopupOpenFeedback();
             }
         }
     };
@@ -915,7 +919,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.create").data(),
                                    ImVec2(120, 0)) ) {
         if ( hasInternalNameConflict() ) {
-            ::MMM::UI::OpenWarningPopup("NewBeatmapDuplicateNameWarning");
+            ::MMM::UI::FeedbackOpenPopup("NewBeatmapDuplicateNameWarning");
         } else {
             submitCreateRequest();
         }

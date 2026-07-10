@@ -600,7 +600,7 @@ private:
         constexpr const char* popupId =
             "谱面倍速制作###BeatmapSpeedExportModal";
         if ( m_showPopup ) {
-            ImGui::OpenPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showPopup = false;
         }
 

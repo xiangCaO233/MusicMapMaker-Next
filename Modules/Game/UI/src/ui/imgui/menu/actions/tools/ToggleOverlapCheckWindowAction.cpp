@@ -31,6 +31,9 @@ public:
     {
         (void)context;
         (void)activation;
+        if ( !m_showWindow ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
         m_showWindow = !m_showWindow;
     }
 

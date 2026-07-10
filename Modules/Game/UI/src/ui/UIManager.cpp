@@ -344,7 +344,8 @@ void UIManager::captureProjectWorkspaceState()
 /// @param tab 需要激活的设置标签页。
 void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
 {
-    auto* settingsView = getView<SettingsView>(SETTINGS_VIEW_NAME);
+    auto*      settingsView = getView<SettingsView>(SETTINGS_VIEW_NAME);
+    const bool wasOpen      = settingsView && settingsView->isOpen();
     if ( !settingsView ) {
         auto view =
             std::make_unique<SettingsView>(TR("title.settings_manager").data());
@@ -356,6 +357,9 @@ void UIManager::openSettingsWindow(MMM::Event::SettingsTab tab)
         settingsView->open(tab);
         settingsView->requestDockToCenter();
         settingsView->requestFocus();
+        if ( !wasOpen ) {
+            ::MMM::UI::PlayPopupOpenFeedback();
+        }
     }
 }
 

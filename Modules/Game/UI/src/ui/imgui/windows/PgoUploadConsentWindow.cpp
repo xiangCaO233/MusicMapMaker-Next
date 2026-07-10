@@ -24,7 +24,7 @@ void PgoUploadConsentWindow::render(float dpiScale) const
 
     const std::string popupId = std::string(TR("ui.pgo.consent.title").data()) +
                                 "###PgoUploadConsentModal";
-    ImGui::OpenPopup(popupId.c_str());
+    ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
     Utils::CenteredModalPopupScope popupStyle(dpiScale);
     if ( !popupStyle.begin(popupId.c_str(),

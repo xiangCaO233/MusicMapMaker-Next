@@ -110,7 +110,7 @@ private:
     {
         constexpr const char* popupId = "打开失败###ProjectOpenFailedModal";
         if ( m_showOpenFailedPopup ) {
-            ::MMM::UI::OpenWarningPopup(popupId);
+            ::MMM::UI::FeedbackOpenPopup(popupId);
             m_showOpenFailedPopup = false;
         }
 

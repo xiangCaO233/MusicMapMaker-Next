@@ -1526,6 +1526,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     auto& settings = engine.getEditorConfig().settings;
                     if ( settings.filePickerStyle ==
                          Config::FilePickerStyle::Native ) {
+                        ::MMM::UI::PlayPopupOpenFeedback();
                         nfdu8char_t*      outPath    = nullptr;
                         nfdu8filteritem_t filters[1] = {
                             { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
@@ -1548,11 +1549,18 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                             ImGuiFileDialogFlags_Modal |
                             ImGuiFileDialogFlags_HideColumnType |
                             ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                        const bool wasOpen =
+                            ImGuiFileDialog::Instance()->IsOpened(
+                                "AudioImportPicker");
                         ImGuiFileDialog::Instance()->OpenDialog(
                             "AudioImportPicker",
                             TR("ui.audio_manager.import_audio").data(),
                             ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a",
                             fdConfig);
+                        if ( !wasOpen && ImGuiFileDialog::Instance()->IsOpened(
+                                             "AudioImportPicker") ) {
+                            ::MMM::UI::PlayPopupOpenFeedback();
+                        }
                     }
                 }
 
@@ -1577,7 +1585,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         TR("ui.audio_manager.manage_title").data(),
                         m_manageTrackId);
         if ( m_openManageModal ) {
-            ImGui::OpenPopup(windowTitle.c_str());
+            ::MMM::UI::FeedbackOpenPopup(windowTitle.c_str());
             m_openManageModal = false;
         }
         Utils::CenteredModalPopupScope manageWindowScope(dpiScale);
@@ -1699,7 +1707,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     if ( ::MMM::UI::FeedbackButton(
                              TR("ui.audio_manager.remove_track").data(),
                              { r.width, r.height }) ) {
-                        ::MMM::UI::OpenWarningPopup("RemoveTrackConfirm");
+                        ::MMM::UI::FeedbackOpenPopup("RemoveTrackConfirm");
                     }
                 });
             btnRow.addElement(

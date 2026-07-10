@@ -99,7 +99,7 @@ public:
         const std::string popupId =
             std::string(TR("ui.pgo.upload.title").data()) +
             "###PgoShutdownUploadProgressModal";
-        ImGui::OpenPopup(popupId.c_str());
+        ::MMM::UI::FeedbackOpenPopup(popupId.c_str());
 
         const float dpiScale =
             Config::AppConfig::instance().getWindowContentScale();

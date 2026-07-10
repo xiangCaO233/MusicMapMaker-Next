@@ -63,7 +63,7 @@ private:
     void renderAboutPopup()
     {
         if ( m_showPopup ) {
-            ImGui::OpenPopup(TR("ui.help.about_title"));
+            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.about_title"));
             m_showPopup = false;
         }
 
