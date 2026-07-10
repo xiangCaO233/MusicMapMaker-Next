@@ -200,7 +200,7 @@ private:
     /// @brief 绘制波形和频谱之间的全局时间滚动条。
     /// @param size 绘制区域尺寸。
     /// @warning UI 热路径约束如下。
-    /// 热路径：每帧执行；只处理当前视野范围和鼠标拖动，不访问文件系统。
+    /// 热路径：每帧执行；拖动时同步更新视野和当前播放跳转，不访问文件系统。
     void renderOverviewTimelineScrollbar(const ImVec2& size);
 
     /// @brief 播放时让分析视图自动跟随播放指针。
@@ -280,14 +280,15 @@ private:
     void handleBeatMarkerDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                               double viewStart, double viewEnd, int ownerId);
 
-    /// @brief 处理播放指针顶部三角手柄的拖拽跳转。
+    /// @brief 处理播放指针顶部三角手柄的拖拽预览和松手跳转。
     /// @param rectMin 交互区域左上角。
     /// @param rectMax 交互区域右下角。
     /// @param viewStart 当前视图起始时间，单位为秒。
     /// @param viewEnd 当前视图结束时间，单位为秒。
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
-    /// 热路径：波形图和频谱图每帧执行；只处理鼠标状态和少量浮点计算，不访问文件系统。
+    /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
+    /// 松手后才执行实际播放跳转，不访问文件系统。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
                                   int ownerId);

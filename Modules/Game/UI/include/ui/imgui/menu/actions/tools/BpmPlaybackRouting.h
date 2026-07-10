@@ -42,6 +42,16 @@ constexpr bool shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute route)
     return route == BpmPlaybackRoute::SynchronizedWithEditor;
 }
 
+/// @brief 判断 BPM 工具聚焦时的空格键是否应切换工具音轨播放状态。
+/// @param hasModifier 当前是否按下任意修饰键。
+/// @param wantsTextInput 当前焦点控件是否正在接收文字输入。
+/// @return 无修饰键且未输入文字时返回 true。
+constexpr bool shouldToggleBpmPlaybackFromSpace(bool hasModifier,
+                                                bool wantsTextInput)
+{
+    return !hasModifier && !wantsTextInput;
+}
+
 /// @brief 判断稳定 ImGui 窗口 ID 是否属于 BPM 测量工具或其子窗口。
 /// @param stableWindowId 已移除可见标题前缀的稳定窗口 ID。
 /// @return BPM 工具根窗口或子窗口返回 true。

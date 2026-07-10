@@ -57,8 +57,11 @@ public:
                     ? context.sourceManager->getView<BpmMeasurementToolView>(
                           "BpmMeasurementTool")
                     : nullptr;
-            if ( !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && !io.KeyShift &&
-                 !ImGui::IsAnyItemActive() && bpmTool ) {
+            const bool hasModifier =
+                io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
+            if ( shouldToggleBpmPlaybackFromSpace(hasModifier,
+                                                  io.WantTextInput) &&
+                 bpmTool ) {
                 // BPM 窗口级空格键优先于当前导航控件，避免同一按键在本帧
                 // 再次激活播放按钮或其它控件。
                 imguiContext->NavActivateId = 0;

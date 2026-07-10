@@ -8,6 +8,7 @@ using MMM::UI::BpmPlaybackRoute;
 using MMM::UI::isBpmMeasurementToolStableWindowId;
 using MMM::UI::resolveBpmPlaybackRoute;
 using MMM::UI::shouldDispatchBpmPlaybackToEditor;
+using MMM::UI::shouldToggleBpmPlaybackFromSpace;
 
 /// @brief 检查播放路由是否符合预期。
 /// @param selectedKey BPM 工具选中音轨键。
@@ -21,7 +22,7 @@ bool checkRoute(std::string_view selectedKey, std::string_view activeKey,
 }
 }  // namespace
 
-/// @brief 覆盖同轨同步、异轨隔离、无活动谱面和无选择场景。
+/// @brief 覆盖同轨同步、异轨隔离、聚焦空格、无活动谱面和无选择场景。
 /// @return 所有断言通过时返回 0。
 int main()
 {
@@ -41,6 +42,9 @@ int main()
         BpmPlaybackRoute::SynchronizedWithEditor);
     ok &= !shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute::Audition);
     ok &= !shouldDispatchBpmPlaybackToEditor(BpmPlaybackRoute::Unavailable);
+    ok &= shouldToggleBpmPlaybackFromSpace(false, false);
+    ok &= !shouldToggleBpmPlaybackFromSpace(true, false);
+    ok &= !shouldToggleBpmPlaybackFromSpace(false, true);
     ok &= isBpmMeasurementToolStableWindowId("BpmMeasurementTool");
     ok &= isBpmMeasurementToolStableWindowId(
         "BpmMeasurementTool/##BpmMeasureControlsChild_A1B2C3D4");
