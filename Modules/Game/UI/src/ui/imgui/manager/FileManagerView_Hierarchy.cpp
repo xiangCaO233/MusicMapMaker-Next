@@ -516,13 +516,13 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
     auto        toLayoutPixels = [](float value) {
         return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
     };
-    const uint16_t compactGap =
-        toLayoutPixels(std::max(2.0f * dpiScale, style.ItemSpacing.y * 0.25f));
+    // 与谱面管理器的原生相邻项布局保持一致，避免 Header 和表格过近。
+    const uint16_t itemSpacing = toLayoutPixels(style.ItemSpacing.y);
     const uint16_t rootPadding = toLayoutPixels(std::min(
         4.0f * dpiScale, std::max(0.0f, layoutContext.m_avail.x) * 0.02f));
 
     CLayVBox treeVBox;
-    treeVBox.setSpacing(compactGap);
+    treeVBox.setSpacing(itemSpacing);
 
     // 1. Root 节点作为 CollapsingHeader
     treeVBox.addElement("ProjectRootHeader",
@@ -635,7 +635,7 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
 
     CLayVBox rootVBox;
     rootVBox.setPadding(rootPadding, rootPadding, rootPadding, rootPadding)
-        .setSpacing(compactGap)
+        .setSpacing(itemSpacing)
         .addLayout("treeVBox", treeVBox, Sizing::Grow(), Sizing::Grow());
 
     rootVBox.render(layoutContext);
@@ -653,18 +653,6 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         ImGui::TableNextRow(ImGuiTableRowFlags_None, itemH);
 
         ImGui::TableNextColumn();
-        const ImGuiStyle& style       = ImGui::GetStyle();
-        const ImVec2      nameCellPos = ImGui::GetCursorScreenPos();
-        const float       rowMinY     = nameCellPos.y - style.CellPadding.y;
-        const float       rowMaxY     = rowMinY + itemH;
-        const float       mouseY      = ImGui::GetMousePos().y;
-        const bool        rowHovered  = ImGui::TableGetHoveredColumn() >= 0 &&
-                                        mouseY >= rowMinY && mouseY < rowMaxY;
-        if ( rowHovered ) {
-            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
-                                   ImGui::GetColorU32(ImGuiCol_HeaderHovered));
-        }
-
         const std::string displayName =
             fmt::format("{}  {}", fileEntryIcon(entry), entry.filename);
         const float  nameColumnWidth = ImGui::GetContentRegionAvail().x;
@@ -683,6 +671,20 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
             },
             "");
         ImGui::PopStyleColor(3);
+
+        // 以 ImGui 表格行边界和首列结算高度判定 Hover，避免手算行高偏差。
+        const ImGuiTable* table  = ImGui::GetCurrentTable();
+        const float       mouseY = ImGui::GetMousePos().y;
+        const float       rowMaxY =
+            table ? std::max(table->RowPosY2,
+                             ImGui::GetItemRectMax().y + table->RowCellPaddingY)
+                  : 0.0f;
+        const bool rowHovered = table && ImGui::TableGetHoveredColumn() >= 0 &&
+                                mouseY >= table->RowPosY1 && mouseY < rowMaxY;
+        if ( rowHovered ) {
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg1,
+                                   ImGui::GetColorU32(ImGuiCol_HeaderHovered));
+        }
         renderFileEntryContextMenu(entry, sourceManager);
         if ( rowHovered ) {
             Utils::renderTooltip(entry.fullPath.c_str());

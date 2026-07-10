@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <fmt/format.h>
 #include <imgui_internal.h>
 #include <numeric>
 #include <system_error>
@@ -793,10 +794,12 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                         m_openManageModal   = true;
                     }
                     if ( hovered ) {
-                        ImGui::SetTooltip("File: %s\nType: %s\nTrack: %s",
-                                          beatmap.m_filePath.c_str(),
-                                          typeText.c_str(),
-                                          beatmap.m_audioTrackId.c_str());
+                        const std::string tooltipText =
+                            fmt::format("File: {}\nType: {}\nTrack: {}",
+                                        beatmap.m_filePath,
+                                        typeText,
+                                        beatmap.m_audioTrackId);
+                        Utils::renderTooltip(tooltipText.c_str());
                     }
 
                     const std::string nameText =
