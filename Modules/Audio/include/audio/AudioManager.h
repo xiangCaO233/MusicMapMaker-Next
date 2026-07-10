@@ -153,6 +153,59 @@ public:
     /// @brief 获取总时长 (秒)
     double getTotalTime() const;
 
+    /// @brief 将音轨加载到独立试听通道，不替换当前 BGM。
+    /// @param filePath 音频文件绝对路径。
+    /// @param config 试听音轨的音量、静音和初始倍速配置。
+    /// @return 加载并接入主混音器成功时返回 true。
+    /// @warning
+    /// 低频资源路径：可能触发音频解码缓存加载，禁止在每帧热路径中调用。
+    bool loadAuditionTrack(const std::string&      filePath,
+                           const AudioTrackConfig& config);
+
+    /// @brief 卸载独立试听音轨并断开其混音节点。
+    void unloadAuditionTrack();
+
+    /// @brief 开始或恢复独立试听音轨播放。
+    void playAudition();
+
+    /// @brief 暂停独立试听音轨播放。
+    void pauseAudition();
+
+    /// @brief 停止独立试听音轨并回到起始位置。
+    void stopAudition();
+
+    /// @brief 跳转独立试听音轨播放位置。
+    /// @param seconds 目标时间，单位为秒。
+    void seekAudition(double seconds);
+
+    /// @brief 获取独立试听音轨的当前播放状态。
+    /// @return 当前试听播放状态。
+    PlaybackStatus getAuditionStatus() const;
+
+    /// @brief 获取独立试听音轨当前播放时间。
+    /// @return 当前播放时间，单位为秒。
+    double getAuditionCurrentTime() const;
+
+    /// @brief 获取独立试听音轨总时长。
+    /// @return 总时长，单位为秒。
+    double getAuditionTotalTime() const;
+
+    /// @brief 设置独立试听音轨播放倍率。
+    /// @param speed 目标播放倍率。
+    void setAuditionPlaybackSpeed(double speed);
+
+    /// @brief 获取独立试听音轨请求的播放倍率。
+    /// @return 当前请求的播放倍率。
+    double getAuditionPlaybackSpeed() const;
+
+    /// @brief 获取独立试听拉伸器实际生效的播放倍率。
+    /// @return 当前实际播放倍率。
+    double getActualAuditionPlaybackSpeed() const;
+
+    /// @brief 获取独立试听通道当前加载的音频路径。
+    /// @return 音频文件路径；未加载时返回空字符串。
+    const std::string& getLoadedAuditionPath() const;
+
     /// @brief 设置主音轨音量 (0.0 ~ 1.0)
     void setMainTrackVolume(float volume);
 
@@ -406,6 +459,14 @@ public:
     /// @return 当前 BGM 文件路径；未加载时返回空字符串。
     const std::string& getLoadedBGMPath() const;
 
+    /// @brief 获取当前 BGM 文件的规范化绝对路径键。
+    /// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+    const std::string& getLoadedBGMSyncKey() const;
+
+    /// @brief 获取独立试听文件的规范化绝对路径键。
+    /// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+    const std::string& getLoadedAuditionSyncKey() const;
+
     /// @brief 使指定音频文件的解码缓存失效。
     /// @param filePath UTF-8 音频文件绝对路径。
     void invalidateTrackCache(const std::string& filePath);
@@ -432,6 +493,9 @@ private:
 
     /// @brief 刷新所有音效池当前播放节点的有效音量。
     void refreshSFXEffectiveVolumes();
+
+    /// @brief 刷新独立试听源的有效音量。
+    void refreshAuditionTrackVolume();
 
     /// @brief 创建并启动指定播放后端。
     /// @param backend 目标播放后端。
@@ -493,6 +557,9 @@ private:
     /// @brief 当前加载的主音轨文件路径。
     std::string m_bgmPath;
 
+    /// @brief 当前主音轨文件的规范化绝对路径键。
+    std::string m_bgmSyncKey;
+
     /// @brief 当前主音轨播放源节点。
     std::shared_ptr<ice::SourceNode> m_bgmSource;
 
@@ -504,6 +571,21 @@ private:
 
     /// @brief 当前主音轨时间拉伸节点。
     std::shared_ptr<ice::TimeStretcher> m_stretcher;
+
+    /// @brief 当前独立试听音轨数据。
+    std::shared_ptr<ice::AudioTrack> m_auditionTrack;
+
+    /// @brief 当前独立试听音轨文件路径。
+    std::string m_auditionPath;
+
+    /// @brief 当前独立试听音轨文件的规范化绝对路径键。
+    std::string m_auditionSyncKey;
+
+    /// @brief 当前独立试听播放源节点。
+    std::shared_ptr<ice::SourceNode> m_auditionSource;
+
+    /// @brief 当前独立试听时间拉伸节点。
+    std::shared_ptr<ice::TimeStretcher> m_auditionStretcher;
 
     /// @brief 主输出混音器。
     std::shared_ptr<ice::MixBus> m_mainMixer;
@@ -526,6 +608,15 @@ private:
 
     /// @brief 当前主音轨是否静音。
     bool m_mainTrackMuted{ false };
+
+    /// @brief 当前独立试听音轨音量。
+    float m_auditionTrackVolume{ 1.0f };
+
+    /// @brief 当前独立试听音轨是否静音。
+    bool m_auditionTrackMuted{ false };
+
+    /// @brief 当前独立试听通道播放状态。
+    PlaybackStatus m_auditionStatus{ PlaybackStatus::Stopped };
 
     /// @brief 当前全局音量。
     float m_globalVolume{ 1.0f };
@@ -553,6 +644,9 @@ private:
 
     /// @brief 当前请求的播放倍率。
     double m_speed{ 1.0 };
+
+    /// @brief 当前独立试听通道请求的播放倍率。
+    double m_auditionSpeed{ 1.0 };
 
     /// @brief 音效池静音状态表。
     std::unordered_map<std::string, bool> m_sfxMutes;

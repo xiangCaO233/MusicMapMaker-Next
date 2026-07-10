@@ -1,11 +1,14 @@
 #include "audio/AudioManager.h"
 #include "audio/SoundEffectPool.h"
+#include "config/Utf8Path.h"
 #include "event/audio/AudioPlaybackEvent.h"
 #include "event/core/EventBus.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
 
+#include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -18,6 +21,29 @@
 
 namespace MMM::Audio
 {
+namespace
+{
+/// @brief 将音频文件路径转换为稳定的规范化绝对路径键。
+/// @param filePath UTF-8 音频文件路径。
+/// @return 规范化路径键；路径解析失败时返回词法规范化结果。
+/// @warning 低频加载路径：会访问文件系统，只能在加载音轨时调用。
+std::string makeAudioPathSyncKey(const std::string& filePath)
+{
+    if ( filePath.empty() ) {
+        return {};
+    }
+
+    std::filesystem::path path = Config::utf8ToPath(filePath);
+    std::error_code       filesystemError;
+    auto                  canonicalPath =
+        std::filesystem::weakly_canonical(path, filesystemError);
+    if ( !filesystemError ) {
+        path = std::move(canonicalPath);
+    }
+    return Config::pathToUtf8(path.lexically_normal());
+}
+}  // namespace
+
 /// @brief IonCachyEngine 播放回调适配器，将音频播放进度转发到事件系统。
 class AudioPlayCallBack : public ice::PlayCallBack
 {
@@ -92,6 +118,7 @@ bool AudioManager::loadBGM(const std::string&      filePath,
 
     m_bgmTrack     = track;
     m_bgmPath      = filePath;
+    m_bgmSyncKey   = makeAudioPathSyncKey(filePath);
     m_bgmSource    = std::make_shared<ice::SourceNode>(track);
     float finalVol = (m_globalMuted || m_bgmGainMuted)
                          ? 0.0f
@@ -167,6 +194,7 @@ void AudioManager::unloadBGM()
     m_bgmSource.reset();
     m_bgmTrack.reset();
     m_bgmPath.clear();
+    m_bgmSyncKey.clear();
     m_status = PlaybackStatus::Stopped;
     XINFO("BGM unloaded.");
 }
@@ -183,6 +211,93 @@ std::shared_ptr<ice::AudioTrack> AudioManager::getBGMTrack() const
 const std::string& AudioManager::getLoadedBGMPath() const
 {
     return m_bgmPath;
+}
+
+/// @brief 将音轨加载到独立试听通道并接入主混音器。
+/// @param filePath 音频文件绝对路径。
+/// @param config 试听音轨配置。
+/// @return 加载并接入混音图成功时返回 true。
+/// @warning 低频资源路径：可能触发音频解码缓存加载，禁止在每帧热路径中调用。
+bool AudioManager::loadAuditionTrack(const std::string&      filePath,
+                                     const AudioTrackConfig& config)
+{
+    if ( !m_audioPool || !m_threadPool || !m_mainMixer || filePath.empty() ) {
+        return false;
+    }
+
+    XINFO("Loading audition track: {}", filePath);
+    auto trackWeak = m_audioPool->get_or_load(*m_threadPool, filePath);
+    auto track     = trackWeak.lock();
+    if ( !track ) {
+        XERROR("Failed to load audition track: {}", filePath);
+        return false;
+    }
+
+    unloadAuditionTrack();
+
+    m_auditionTrack       = std::move(track);
+    m_auditionPath        = filePath;
+    m_auditionSyncKey     = makeAudioPathSyncKey(filePath);
+    m_auditionTrackVolume = std::clamp(config.volume, 0.0f, 1.0f);
+    m_auditionTrackMuted  = config.muted;
+    m_auditionSource      = std::make_shared<ice::SourceNode>(m_auditionTrack);
+    m_auditionStretcher   = std::make_shared<ice::TimeStretcher>();
+    m_auditionStretcher->set_inputnode(m_auditionSource);
+    m_mainMixer->add_source(m_auditionStretcher);
+    m_auditionStatus = PlaybackStatus::Stopped;
+
+    refreshAuditionTrackVolume();
+    setAuditionPlaybackSpeed(config.playbackSpeed);
+    XINFO("Audition track loaded successfully.");
+    return true;
+}
+
+/// @brief 卸载独立试听音轨并断开其混音节点。
+void AudioManager::unloadAuditionTrack()
+{
+    stopAudition();
+
+    if ( m_mainMixer && m_auditionStretcher ) {
+        m_mainMixer->remove_source(m_auditionStretcher);
+    }
+
+    const bool hadAuditionTrack = m_auditionTrack || m_auditionSource ||
+                                  m_auditionStretcher ||
+                                  !m_auditionPath.empty();
+    m_auditionStretcher.reset();
+    m_auditionSource.reset();
+    m_auditionTrack.reset();
+    m_auditionPath.clear();
+    m_auditionSyncKey.clear();
+    m_auditionStatus      = PlaybackStatus::Stopped;
+    m_auditionTrackVolume = 1.0f;
+    m_auditionTrackMuted  = false;
+    m_auditionSpeed       = 1.0;
+
+    if ( hadAuditionTrack ) {
+        XINFO("Audition track unloaded.");
+    }
+}
+
+/// @brief 获取独立试听通道当前加载的音频路径。
+/// @return 音频文件路径；未加载时返回空字符串。
+const std::string& AudioManager::getLoadedAuditionPath() const
+{
+    return m_auditionPath;
+}
+
+/// @brief 获取当前 BGM 文件的规范化绝对路径键。
+/// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+const std::string& AudioManager::getLoadedBGMSyncKey() const
+{
+    return m_bgmSyncKey;
+}
+
+/// @brief 获取独立试听文件的规范化绝对路径键。
+/// @return 与 Session 主音轨同步键格式一致的路径键；未加载时为空。
+const std::string& AudioManager::getLoadedAuditionSyncKey() const
+{
+    return m_auditionSyncKey;
 }
 
 /// @brief 使指定音频文件的解码缓存失效。

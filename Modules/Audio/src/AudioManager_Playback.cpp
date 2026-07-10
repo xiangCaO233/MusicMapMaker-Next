@@ -166,4 +166,128 @@ AudioManager::StretchQuality AudioManager::getPlaybackQuality() const
     return StretchQuality::Finer;
 }
 
+/// @brief 开始或恢复独立试听音轨播放。
+void AudioManager::playAudition()
+{
+    if ( !m_auditionSource ) {
+        return;
+    }
+
+    const double totalTime = getAuditionTotalTime();
+    if ( totalTime > 0.0 && getAuditionCurrentTime() >= totalTime - 0.001 ) {
+        seekAudition(0.0);
+    }
+    m_auditionSource->play();
+    m_auditionStatus = PlaybackStatus::Playing;
+}
+
+/// @brief 暂停独立试听音轨播放。
+void AudioManager::pauseAudition()
+{
+    if ( !m_auditionSource ) {
+        return;
+    }
+
+    m_auditionSource->pause();
+    if ( m_auditionStatus != PlaybackStatus::Stopped ) {
+        m_auditionStatus = PlaybackStatus::Paused;
+    }
+}
+
+/// @brief 停止独立试听音轨并回到起始位置。
+void AudioManager::stopAudition()
+{
+    if ( m_auditionSource ) {
+        m_auditionSource->pause();
+        m_auditionSource->set_playpos(static_cast<size_t>(0));
+    }
+    m_auditionStatus = PlaybackStatus::Stopped;
+}
+
+/// @brief 跳转独立试听音轨播放位置。
+/// @param seconds 目标时间，单位为秒。
+void AudioManager::seekAudition(double seconds)
+{
+    if ( !m_auditionSource ) {
+        return;
+    }
+
+    const PlaybackStatus statusBeforeSeek = getAuditionStatus();
+    const double         clampedTime =
+        std::clamp(seconds, 0.0, std::max(0.0, getAuditionTotalTime()));
+    m_auditionSource->set_playpos(std::chrono::duration<double>(clampedTime));
+    if ( statusBeforeSeek == PlaybackStatus::Stopped ) {
+        m_auditionStatus = PlaybackStatus::Stopped;
+    }
+}
+
+/// @brief 获取独立试听音轨的当前播放状态。
+/// @return 当前试听播放状态。
+PlaybackStatus AudioManager::getAuditionStatus() const
+{
+    if ( !m_auditionSource ) {
+        return PlaybackStatus::Stopped;
+    }
+    if ( m_auditionSource->isplaying() ) {
+        return PlaybackStatus::Playing;
+    }
+    return m_auditionStatus == PlaybackStatus::Paused ? PlaybackStatus::Paused
+                                                      : PlaybackStatus::Stopped;
+}
+
+/// @brief 获取独立试听音轨当前播放时间。
+/// @return 当前播放时间，单位为秒。
+double AudioManager::getAuditionCurrentTime() const
+{
+    if ( !m_auditionSource ) {
+        return 0.0;
+    }
+
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    if ( sampleRate <= 0.0 ) {
+        return 0.0;
+    }
+    return static_cast<double>(m_auditionSource->get_playpos()) / sampleRate;
+}
+
+/// @brief 获取独立试听音轨总时长。
+/// @return 总时长，单位为秒。
+double AudioManager::getAuditionTotalTime() const
+{
+    if ( !m_auditionSource ) {
+        return 0.0;
+    }
+    return std::chrono::duration_cast<std::chrono::duration<double>>(
+               m_auditionSource->total_time())
+        .count();
+}
+
+/// @brief 设置独立试听音轨播放倍率。
+/// @param speed 目标播放倍率。
+void AudioManager::setAuditionPlaybackSpeed(double speed)
+{
+    m_auditionSpeed = std::clamp(speed, 0.1, 4.0);
+    if ( m_auditionStretcher ) {
+        m_auditionStretcher->set_playback_ratio(m_auditionSpeed);
+    }
+}
+
+/// @brief 获取独立试听音轨请求的播放倍率。
+/// @return 当前请求的播放倍率。
+double AudioManager::getAuditionPlaybackSpeed() const
+{
+    return m_auditionSpeed;
+}
+
+/// @brief 获取独立试听拉伸器实际生效的播放倍率。
+/// @return 当前实际播放倍率。
+double AudioManager::getActualAuditionPlaybackSpeed() const
+{
+    if ( m_auditionStretcher ) {
+        return m_auditionStretcher->get_actual_playback_ratio();
+    }
+    return m_auditionSpeed;
+}
+
 }  // namespace MMM::Audio

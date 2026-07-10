@@ -176,9 +176,11 @@ void AudioManager::shutdown()
 {
     XINFO("Shutting down AudioManager...");
     destroyPlaybackBackend();
+    unloadAuditionTrack();
 
     m_bgmTrack.reset();
     m_bgmPath.clear();
+    m_bgmSyncKey.clear();
     m_bgmSource.reset();
     m_stretcher.reset();
     m_mainMixer.reset();

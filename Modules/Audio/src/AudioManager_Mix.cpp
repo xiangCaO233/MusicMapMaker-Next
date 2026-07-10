@@ -83,6 +83,20 @@ bool AudioManager::isMainTrackMuted() const
     return m_mainTrackMuted;
 }
 
+/// @brief 按试听轨道配置、全局音量和 BGM 总线增益刷新独立试听源音量。
+void AudioManager::refreshAuditionTrackVolume()
+{
+    if ( !m_auditionSource ) {
+        return;
+    }
+
+    float effectiveVolume = m_auditionTrackVolume * m_globalVolume * m_bgmGain;
+    if ( m_auditionTrackMuted || m_globalMuted || m_bgmGainMuted ) {
+        effectiveVolume = 0.0f;
+    }
+    m_auditionSource->setvolume(effectiveVolume);
+}
+
 /// @brief 设置全局音量、保存配置并刷新所有轨道有效音量。
 /// @param volume 目标全局音量。
 void AudioManager::setGlobalVolume(float volume)
@@ -103,6 +117,7 @@ void AudioManager::setGlobalVolume(float volume)
         m_bgmSource->setvolume(finalVol);
     }
 
+    refreshAuditionTrackVolume();
     refreshSFXEffectiveVolumes();
 }
 
@@ -269,6 +284,7 @@ void AudioManager::setBGMGain(float gain)
     Config::AppConfig::instance().save();
 
     setMainTrackVolume(m_mainTrackVolume);  // 重新应用
+    refreshAuditionTrackVolume();
 }
 
 /// @brief 获取 BGM 全局增益。
@@ -289,6 +305,7 @@ void AudioManager::setBGMGainMute(bool muted)
     Config::AppConfig::instance().save();
 
     setMainTrackVolume(m_mainTrackVolume);
+    refreshAuditionTrackVolume();
 }
 
 /// @brief 获取 BGM 增益是否静音。
