@@ -26,7 +26,7 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "ui/imgui/manager/SettingsView.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>

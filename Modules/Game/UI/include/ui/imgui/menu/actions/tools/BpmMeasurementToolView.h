@@ -5,7 +5,7 @@
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include "ui/ITextureLoader.h"
-#include "ui/imgui/tools/BpmAutoDetector.h"
+#include "ui/imgui/menu/actions/tools/BpmAutoDetector.h"
 #include <array>
 #include <atomic>
 #include <cstdint>

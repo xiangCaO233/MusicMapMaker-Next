@@ -7,7 +7,6 @@
 #include "logic/session/SessionUtils.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "runtime/AppThreadPool.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -580,14 +579,15 @@ private:
                 engine.syncProjectWithFile(result.mapPath);
                 engine.createSession(result.beatmap, result.displayName);
 
-                context.view.showStatusMessage(result.message, 3.0f);
+                context.statusMessageSink.showStatusMessage(result.message,
+                                                            3.0f);
                 m_showPopup = false;
             } else {
                 XERROR("Beatmap speed export failed: {}", result.message);
-                context.view.showStatusMessage(result.message.empty()
-                                                   ? "谱面倍速制作失败"
-                                                   : result.message,
-                                               4.0f);
+                context.statusMessageSink.showStatusMessage(
+                    result.message.empty() ? "谱面倍速制作失败"
+                                           : result.message,
+                    4.0f);
             }
         }
     }

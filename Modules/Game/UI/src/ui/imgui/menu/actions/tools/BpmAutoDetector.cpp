@@ -1,4 +1,4 @@
-#include "ui/imgui/tools/BpmAutoDetector.h"
+#include "ui/imgui/menu/actions/tools/BpmAutoDetector.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -765,10 +765,10 @@ std::optional<double> calcOffset(const std::vector<float>& feature, double bpm)
     const auto   maxIt = std::max_element(folded.begin() + 5, folded.end() - 5);
     const size_t maxPeak = static_cast<size_t>(maxIt - folded.begin());
     double       offset  = peak(maxPeak,
-                                1.0,
-                                folded[maxPeak - 1],
-                                folded[maxPeak],
-                                folded[maxPeak + 1]);
+                         1.0,
+                         folded[maxPeak - 1],
+                         folded[maxPeak],
+                         folded[maxPeak + 1]);
     offset -= FILTER_DELAY_MS;
     return offset;
 }
@@ -894,9 +894,9 @@ std::optional<BpmAutoTimingResult> BpmAutoDetector::detect(
     result.rawBpmUncertainty = bpmEstimate->first.uncertainty;
     result.signature         = bpmEstimate->first.signature;
     result.division          = bpmEstimate->first.division;
-    result.bpm = bpmEstimate->second < 16
-                     ? snapBpm(result.rawBpm, result.rawBpmUncertainty)
-                     : result.rawBpm;
+    result.bpm               = bpmEstimate->second < 16
+                                   ? snapBpm(result.rawBpm, result.rawBpmUncertainty)
+                                   : result.rawBpm;
 
     auto rawPhase = calcOffset(feature, result.bpm);
     if ( !rawPhase ) {

@@ -1,16 +1,18 @@
 #pragma once
 
 #include "ui/imgui/menu/MainMenuInterfaces.h"
-#include <array>
+#include "ui/imgui/menu/MainMenuNavigationController.h"
+
 #include <memory>
-#include <string>
 #include <vector>
 
 namespace MMM::UI
 {
 class UIManager;
 
-/// @brief ImGui 顶部主菜单视图，负责注册菜单遍历、快捷键分发和公共反馈。
+class IStatusMessageSink;
+
+/// @brief ImGui 顶部主菜单视图，负责遍历注册菜单并转发 UI 生命周期。
 class MainMenuView
 {
 public:
@@ -20,94 +22,50 @@ public:
     /// @brief 默认移动构造主菜单视图。
     MainMenuView(MainMenuView&&) = default;
 
-    /// @brief 禁止拷贝构造，避免复制更新检查器和窗口状态。
+    /// @brief 禁止拷贝构造，避免复制菜单注册所有权。
     MainMenuView(const MainMenuView&) = delete;
 
     /// @brief 默认移动赋值主菜单视图。
     MainMenuView& operator=(MainMenuView&&) = default;
 
-    /// @brief 禁止拷贝赋值，避免复制更新检查器和窗口状态。
+    /// @brief 禁止拷贝赋值，避免复制菜单注册所有权。
     MainMenuView& operator=(const MainMenuView&) = delete;
 
     /// @brief 销毁主菜单视图。
     ~MainMenuView();
 
-    /// @brief 更新主菜单计时器和弹窗状态。
+    /// @brief 遍历更新已注册菜单持有的 action 状态。
     /// @param sourceManager 当前 UI 管理器。
-    void update(UIManager* sourceManager);
+    /// @param statusMessageSink 状态消息接收接口。
+    void update(UIManager*          sourceManager,
+                IStatusMessageSink& statusMessageSink);
 
     /// @brief 渲染顶部主菜单。
     /// @param sourceManager 当前 UI 管理器。
-    void renderMenus(UIManager* sourceManager);
+    /// @param statusMessageSink 状态消息接收接口。
+    void renderMenus(UIManager*          sourceManager,
+                     IStatusMessageSink& statusMessageSink);
 
     /// @brief 渲染由主菜单触发但必须位于菜单栏窗口外的弹窗和辅助窗口。
     /// @param sourceManager 当前 UI 管理器，用于消费菜单延迟动作。
     /// @param dpiScale 当前窗口内容缩放。
+    /// @param statusMessageSink 状态消息接收接口。
     /// @warning UI 热路径：每帧执行；只允许消费已置位菜单动作并渲染可见弹窗，
     /// 文件选择器等阻塞操作只能来自用户明确点击。
-    void renderDeferredPopups(UIManager* sourceManager, float dpiScale);
-
-    /// @brief 渲染底部提示文本占位区域。
-    void renderInfoText();
-
-    /// @brief 处理主菜单相关的全局快捷键。
-    /// @param sourceManager 当前 UI 管理器。
-    void handleHotkeys(UIManager* sourceManager);
-
-    /// @brief 获取状态信息 (用于状态栏显示)
-    /// @return 状态消息仍在显示时返回消息文本，否则返回空字符串。
-    std::string getStatusMessage() const
-    {
-        return m_statusMessageTimer > 0.0f ? m_statusMessage : "";
-    }
-
-    /// @brief 显示状态栏临时消息。
-    /// @param message 状态消息文本。
-    /// @param durationSeconds 显示时长，单位秒。
-    void showStatusMessage(std::string message, float durationSeconds);
+    void renderDeferredPopups(UIManager* sourceManager, float dpiScale,
+                              IStatusMessageSink& statusMessageSink);
 
 private:
-    /// @brief 请求下一帧打开指定一级菜单。
-    /// @param id 一级菜单标识。
-    void requestMenuOpen(MainMenuId id);
-
-    /// @brief 请求下一帧关闭指定一级菜单。
-    /// @param id 一级菜单标识。
-    void requestMenuClose(MainMenuId id);
-
-    /// @brief 消费指定一级菜单的打开请求。
-    /// @param id 一级菜单标识。
-    /// @return 本帧存在打开请求时返回 true。
-    bool consumeMenuOpenRequest(MainMenuId id);
-
-    /// @brief 消费指定一级菜单的关闭请求。
-    /// @param id 一级菜单标识。
-    /// @return 本帧存在关闭请求时返回 true。
-    bool consumeMenuCloseRequest(MainMenuId id);
-
-    /// @brief 渲染首次启动 PGO 性能数据上传授权弹窗。
-    /// @param dpiScale 当前窗口内容缩放。
-    void renderPgoUploadConsentWindow(float dpiScale);
-
-    /// @brief 渲染保存提示气泡。
-    void renderSaveTooltip();
+    /// @brief 让已注册菜单项和一级菜单导航尝试消费当前快捷键。
+    /// @param context 单帧主菜单上下文。
+    /// @warning UI 热路径：每帧执行；仅遍历注册菜单并读取固定数量导航键。
+    void handleHotkeys(MainMenuContext& context);
 
     /// @brief 已注册的一级主菜单绘制接口。
     std::vector<std::unique_ptr<IMainMenu>> m_registeredMenus;
-    /// @brief 下一帧需要打开的一级菜单标志。
-    std::array<bool, MAIN_MENU_ID_COUNT> m_openMenuNextFrame{};
-    /// @brief 下一帧需要关闭的一级菜单标志。
-    std::array<bool, MAIN_MENU_ID_COUNT> m_closeMenuNextFrame{};
-    /// @brief 保存提示气泡剩余显示时间。
-    float m_saveTooltipTimer = 0.0f;
-    /// @brief 保存提示气泡是否为成功状态。
-    bool m_saveTooltipSuccess = true;
-    /// @brief 保存提示气泡显示文本。
-    std::string m_saveTooltipMessage;
-    /// @brief 状态消息剩余显示时间。
-    float m_statusMessageTimer = 0.0f;
-    /// @brief 状态栏显示的临时消息。
-    std::string m_statusMessage;
+
+    /// @brief 一级菜单 Alt 导航和跨帧开关请求控制器。
+    MainMenuNavigationController m_navigationController;
 };
 
 }  // namespace MMM::UI

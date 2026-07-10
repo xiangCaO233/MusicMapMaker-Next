@@ -8,7 +8,6 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -723,8 +722,8 @@ private:
     /// @param dpiScale 当前窗口内容缩放。
     void renderPackageOverwriteWarningPopup(float dpiScale);
 
-    /// @brief 当前帧菜单上下文，非拥有，仅在 renderDeferred 调用栈内有效。
-    MainMenuContext* m_context = nullptr;
+    /// @brief 当前帧状态消息接收接口，非拥有且仅在延迟渲染调用栈内有效。
+    IStatusMessageSink* m_statusMessageSink = nullptr;
     /// @brief 打包流程的格式、候选文件和临时弹窗状态。
     PackageDialogState m_package;
     /// @brief 是否在下一帧打开打包输出覆盖确认弹窗。
@@ -753,21 +752,21 @@ void PackBeatmapAction::execute(MainMenuContext&              context,
 /// @warning UI 热路径：每帧只检查弹窗状态；扫描文件仅由用户触发流程执行。
 void PackBeatmapAction::renderDeferred(MainMenuContext& context)
 {
-    m_context = &context;
+    m_statusMessageSink = &context.statusMessageSink;
     renderPackageFormatPickerPopup(context.dpiScale);
     renderPackageFileSelectionWindow(context.dpiScale);
     renderPackageBeatmapMetadataWindow(context.dpiScale);
     renderPackageOutputFileDialog(context.dpiScale);
     renderPackageOverwriteWarningPopup(context.dpiScale);
-    m_context = nullptr;
+    m_statusMessageSink = nullptr;
 }
 
 /// @brief 在状态栏显示打包流程消息。
 /// @param message 状态消息文本。
 void PackBeatmapAction::showStatusMessage(std::string message)
 {
-    if ( !m_context ) return;
-    m_context->view.showStatusMessage(std::move(message), 3.0f);
+    if ( !m_statusMessageSink ) return;
+    m_statusMessageSink->showStatusMessage(std::move(message), 3.0f);
 }
 
 /// @brief 按当前打包目标格式规范化输出包路径。

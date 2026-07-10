@@ -3,7 +3,6 @@
 #include "config/skin/SkinConfig.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -50,8 +49,8 @@ public:
             m_showUpdatePopup = true;
             m_isSilentCheck   = false;
         } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
-            context.view.showStatusMessage(TR("ui.help.up_to_date").data(),
-                                           5.0f);
+            context.statusMessageSink.showStatusMessage(
+                TR("ui.help.up_to_date").data(), 5.0f);
             m_isSilentCheck = false;
         } else if ( info.status == MMM::Network::UpdateStatus::kError ) {
             m_isSilentCheck = false;

@@ -4,7 +4,6 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
-#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -130,12 +129,14 @@ private:
         auto* project = engine.getCurrentProject();
         if ( !project || project->m_projectRoot.empty() ||
              m_dataSourcePath.empty() ) {
-            context.view.showStatusMessage("没有可用的数据来源谱面", 3.0f);
+            context.statusMessageSink.showStatusMessage(
+                "没有可用的数据来源谱面", 3.0f);
             return;
         }
 
         if ( !m_replaceObjects && !m_replaceTimelines && !m_replaceMetadata ) {
-            context.view.showStatusMessage("至少选择一种要替换的数据", 3.0f);
+            context.statusMessageSink.showStatusMessage(
+                "至少选择一种要替换的数据", 3.0f);
             return;
         }
 
@@ -145,7 +146,8 @@ private:
         auto sourceBeatmap = std::make_shared<MMM::BeatMap>(
             MMM::BeatMap::loadFromFile(sourcePath));
         if ( sourceBeatmap->m_baseMapMetadata.map_path.empty() ) {
-            context.view.showStatusMessage("读取数据来源谱面失败", 3.0f);
+            context.statusMessageSink.showStatusMessage("读取数据来源谱面失败",
+                                                        3.0f);
             return;
         }
 
@@ -156,7 +158,7 @@ private:
             .replaceMetadata  = m_replaceMetadata,
         });
 
-        context.view.showStatusMessage("已替换当前谱面数据", 3.0f);
+        context.statusMessageSink.showStatusMessage("已替换当前谱面数据", 3.0f);
     }
 
     /// @brief 渲染数据来源替换工具窗口。

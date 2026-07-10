@@ -2,7 +2,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include <memory>
 #include <string>
 

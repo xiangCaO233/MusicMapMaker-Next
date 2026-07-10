@@ -7,7 +7,7 @@
 namespace MMM::UI
 {
 
-/// @brief BPM 自动测量结果。
+/// @brief BPM 测量工具使用的自动测量结果。
 struct BpmAutoTimingResult {
     /// @brief 经过常见 BPM 栅格吸附后的 BPM。
     double bpm{ 0.0 };

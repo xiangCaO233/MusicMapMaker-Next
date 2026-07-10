@@ -1,12 +1,13 @@
 #pragma once
 
+#include "ui/imgui/status/IStatusMessageSink.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace MMM::UI
 {
-class MainMenuView;
 class UIManager;
 
 /// @brief 顶部主菜单的一级菜单标识。
@@ -39,8 +40,8 @@ constexpr std::size_t mainMenuIdIndex(MainMenuId id)
 
 /// @brief 单帧主菜单上下文。
 struct MainMenuContext {
-    /// @brief 当前主菜单视图，提供菜单打开请求和公共状态反馈。
-    MainMenuView& view;
+    /// @brief 状态消息接收接口，由菜单 action 发布临时反馈。
+    IStatusMessageSink& statusMessageSink;
 
     /// @brief 当前 UI 管理器，可为空。
     UIManager* sourceManager = nullptr;

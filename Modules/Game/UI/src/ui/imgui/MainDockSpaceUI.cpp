@@ -244,12 +244,17 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 {
     ensureTemporaryProjectSubscriptions();
     consumeTemporaryProjectQueues();
-    m_mainMenuview.update(sourceManager);
+
+    const float deltaSeconds = ImGui::GetIO().DeltaTime;
+    m_statusMessageService.update(deltaSeconds);
+    m_saveResultFeedback.update(deltaSeconds);
+    m_mainMenuview.update(sourceManager, m_statusMessageService);
 
     auto&                engine   = Logic::EditorEngine::instance();
     Config::SkinManager& skinCfg  = Config::SkinManager::instance();
     ImGuiViewport*       viewport = ImGui::GetMainViewport();
     float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
+    m_saveResultFeedback.render(dpiScale);
 
     // --- 0. IGFD 翻译，当前因库封装暂跳过 ---
 
@@ -642,7 +647,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(1.0f, 1.0f), ImGuiCond_Always);
         if ( ImGui::Begin("MainMenuPopupHost", nullptr, popupHostFlags) ) {
-            m_mainMenuview.renderDeferredPopups(sourceManager, dpiScale);
+            m_pgoUploadConsentWindow.render(dpiScale);
+            m_mainMenuview.renderDeferredPopups(
+                sourceManager, dpiScale, m_statusMessageService);
         }
         ImGui::End();
     }

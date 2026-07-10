@@ -123,7 +123,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::SetCursorPosX(buttonSize + 4.0f * dpiScale);
 
         ImFont* menuFont = skinCfg.getFont("menu");
-        m_mainMenuview.renderMenus(sourceManager);
+        m_mainMenuview.renderMenus(sourceManager, m_statusMessageService);
         ImGui::PopStyleVar(1);
 
         float barWidth  = ImGui::GetWindowWidth();

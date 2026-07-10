@@ -27,7 +27,7 @@ double resolveStatusBarAnimateTime(const Logic::RenderSnapshot& snapshot)
     const double now = std::chrono::duration<double>(
                            std::chrono::steady_clock::now().time_since_epoch())
                            .count();
-    const double dt  = now - snapshot.snapshotSysTime;
+    const double dt = now - snapshot.snapshotSysTime;
     if ( dt <= 0.0 || dt >= 0.1 ) {
         return animateTime;
     }
@@ -99,9 +99,11 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
         ImGui::SetCursorPosY(offsetY);
 
         // 渲染状态栏内容
-        std::string menuStatus = m_mainMenuview.getStatusMessage();
-        if ( !menuStatus.empty() ) {
-            ImGui::Text("%s", menuStatus.c_str());
+        const std::string_view statusMessage =
+            m_statusMessageService.getStatusMessage();
+        if ( !statusMessage.empty() ) {
+            ImGui::TextUnformatted(statusMessage.data(),
+                                   statusMessage.data() + statusMessage.size());
         } else {
             ImGui::Text("%s", TR("ui.status.ready").data());
         }
@@ -132,7 +134,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 const double visibleStart = std::min(snapshot->visibleTimeStart,
                                                      snapshot->visibleTimeEnd);
                 const double visibleEnd   = std::max(snapshot->visibleTimeStart,
-                                                     snapshot->visibleTimeEnd);
+                                                   snapshot->visibleTimeEnd);
                 const bool   hasValidHoveredTime =
                     std::isfinite(snapshot->hoveredTime) &&
                     (!std::isfinite(visibleStart) ||

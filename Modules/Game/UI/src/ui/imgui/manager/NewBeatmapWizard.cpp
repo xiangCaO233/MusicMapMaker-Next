@@ -9,7 +9,7 @@
 #include "logic/session/SessionUtils.h"
 #include "mmm/project/Project.h"
 #include "ui/UIManager.h"
-#include "ui/imgui/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
