@@ -387,7 +387,8 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                                   headerBox);
 
     if ( m_showBeatmapList ) {
-        const ImGuiTableFlags tableFlags =
+        Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
+        const ImGuiTableFlags              tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |

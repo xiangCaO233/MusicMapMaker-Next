@@ -485,6 +485,7 @@ private:
         ImGuiTableFlags tableFlags =
             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
             ImGuiTableFlags_BordersOuter | ImGuiTableFlags_Resizable;
+        Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
         if ( !ImGui::BeginTable(
                  "OverlapResultsTable", 5, tableFlags, ImVec2(0.0f, -1.0f)) )
             return;

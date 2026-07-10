@@ -364,6 +364,36 @@ enum class TooltipDir { Left, Right };
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
 void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f));
 
+/// @brief 在局部作用域内为纵向滚动容器推入 DPI 感知的最小滚动条宽度。
+/// @warning UI 热路径：构造与析构只读取当前 DPI/主题并执行一次 ImGui
+/// 样式栈操作。
+/// @warning ImGuiStyleVar_ScrollbarSize
+/// 同时控制横向滚动条高度，本作用域只能包裹 不生成横向滚动条的容器。
+class VerticalScrollbarStyleScope
+{
+public:
+    /// @brief 使用当前窗口 DPI 缩放推入纵向滚动条宽度样式。
+    VerticalScrollbarStyleScope();
+
+    /// @brief 使用指定 DPI 缩放推入纵向滚动条宽度样式。
+    /// @param dpiScale 当前窗口内容缩放。
+    explicit VerticalScrollbarStyleScope(float dpiScale);
+
+    /// @brief 恢复进入作用域前的滚动条宽度样式。
+    ~VerticalScrollbarStyleScope();
+
+    /// @brief 禁止拷贝，避免重复弹出样式栈。
+    VerticalScrollbarStyleScope(const VerticalScrollbarStyleScope&) = delete;
+    /// @brief 禁止拷贝赋值，避免重复管理样式栈。
+    VerticalScrollbarStyleScope& operator=(const VerticalScrollbarStyleScope&) =
+        delete;
+    /// @brief 禁止移动，确保样式栈生命周期与局部作用域一致。
+    VerticalScrollbarStyleScope(VerticalScrollbarStyleScope&&) = delete;
+    /// @brief 禁止移动赋值，确保样式栈生命周期与局部作用域一致。
+    VerticalScrollbarStyleScope& operator=(VerticalScrollbarStyleScope&&) =
+        delete;
+};
+
 /// @brief 全局审美配置驱动的居中模态弹窗作用域。
 /// @warning UI 热路径：仅在模态弹窗绘制帧中使用，只做 ImGui next-window
 /// 状态、字体栈和样式栈操作。

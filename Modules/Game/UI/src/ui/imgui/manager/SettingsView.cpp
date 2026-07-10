@@ -627,6 +627,7 @@ void SettingsView::drawContent()
     float btnSize = std::floor(sidebarBaseW * dpiScale);
 
     float sidebarWidth = getCategorySidebarWidth(dpiScale);
+    Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
 
     // 1. 左侧图标侧边栏 (Clay 布局)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));

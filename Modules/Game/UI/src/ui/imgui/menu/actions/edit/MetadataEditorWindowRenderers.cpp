@@ -439,7 +439,7 @@ std::string buildOsuMetadataText(const MetadataPropertyMap& props,
 
             std::string_view localKey(fullKey.data() + prefix.size(),
                                       fullKey.size() - prefix.size());
-            const bool       known = std::find_if(knownKeys.begin(),
+            const bool known = std::find_if(knownKeys.begin(),
                                             knownKeys.end(),
                                             [localKey](const char* knownKey) {
                                                 return localKey == knownKey;
@@ -1140,7 +1140,7 @@ void renderMetadataEditorWindow(bool& showWindow)
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::OSU];
-                        bool osuPropsChanged = false;
+                        bool  osuPropsChanged = false;
                         if ( auto result = takeOsuMetadataTextResult() ) {
                             props = std::move(*result);
                             ensureCompleteOsuMetadata(
@@ -1181,7 +1181,9 @@ void renderMetadataEditorWindow(bool& showWindow)
                             ImGuiTableFlags_Resizable;
 
                         float footerHeight = 45.0f * dpiScale;
-                        if ( ImGui::BeginTable("OSUMetadataTable",
+                        if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                                 dpiScale);
+                             ImGui::BeginTable("OSUMetadataTable",
                                                4,
                                                tableFlags,
                                                ImVec2(0.0f, -footerHeight)) ) {
@@ -1435,7 +1437,9 @@ void renderMetadataEditorWindow(bool& showWindow)
                             ImGuiTableFlags_Resizable;
 
                         float footerHeight = 45.0f * dpiScale;
-                        if ( ImGui::BeginTable("MalodyMetadataTable",
+                        if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                                 dpiScale);
+                             ImGui::BeginTable("MalodyMetadataTable",
                                                4,
                                                tableFlags,
                                                ImVec2(0.0f, -footerHeight)) ) {
@@ -1671,14 +1675,16 @@ void renderMetadataEditorWindow(bool& showWindow)
 
                         auto& props = beatmap->m_metadata
                                           .map_properties[MapMetadataType::RM];
-                        bool rmPropsChanged = false;
+                        bool  rmPropsChanged = false;
 
                         ImGuiTableFlags tableFlags =
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg |
                             ImGuiTableFlags_BordersOuter |
                             ImGuiTableFlags_Resizable;
 
-                        if ( ImGui::BeginTable("RMMetadataTable",
+                        if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                                 dpiScale);
+                             ImGui::BeginTable("RMMetadataTable",
                                                3,
                                                tableFlags,
                                                ImVec2(0.0f, 0.0f)) ) {
@@ -1931,6 +1937,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 ImGui::Spacing();
 
                 // --- 各组的编辑区域 ---
+                Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
                 ImGui::BeginChild("NoteMetaGroups",
                                   ImVec2(0, 0),
                                   ImGuiChildFlags_None,
@@ -1994,8 +2001,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2169,8 +2176,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |
@@ -2351,8 +2358,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                 const auto&     refProps =
                                     (it !=
                                      firstNc.m_metadata.note_properties.end())
-                                            ? it->second
-                                            : emptyMap;
+                                        ? it->second
+                                        : emptyMap;
 
                                 ImGuiTableFlags tableFlags =
                                     ImGuiTableFlags_RowBg |

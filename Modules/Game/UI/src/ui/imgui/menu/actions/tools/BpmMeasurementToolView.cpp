@@ -86,9 +86,6 @@ constexpr int BPM_METRONOME_MAX_TRIGGERED_PER_FRAME = 8;
 /// @brief BPM 工具全局时间滚动条最小高度，单位为像素。
 constexpr float BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT = 24.0f;
 
-/// @brief BPM 工具右侧控制面板滚动条最小宽度，单位为逻辑像素。
-constexpr float BPM_CONTROL_SCROLLBAR_MIN_WIDTH = 18.0f;
-
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
 {
@@ -552,19 +549,16 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         }
         ImGui::EndChild();
         ImGui::TableNextColumn();
-        const float controlScrollbarWidth =
-            std::max(ImGui::GetStyle().ScrollbarSize,
-                     std::floor(BPM_CONTROL_SCROLLBAR_MIN_WIDTH *
-                                std::max(dpiScale, 1.0f)));
-        ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, controlScrollbarWidth);
-        if ( ImGui::BeginChild("##BpmMeasureControlsChild",
-                               ImVec2(0.0f, 0.0f),
-                               ImGuiChildFlags_None,
-                               ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
-            renderControlPanel();
+        {
+            Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
+            if ( ImGui::BeginChild("##BpmMeasureControlsChild",
+                                   ImVec2(0.0f, 0.0f),
+                                   ImGuiChildFlags_None,
+                                   ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
+                renderControlPanel();
+            }
+            ImGui::EndChild();
         }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
 
         ImGui::EndTable();
     }
@@ -1121,66 +1115,69 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
     const float childHeight =
         std::min(170.0f, std::max(rowHeight * 3.0f, rowHeight * 4.5f));
     bool changed = false;
-    if ( ImGui::BeginChild("##BpmMeasureSegments",
-                           ImVec2(0.0f, childHeight),
-                           ImGuiChildFlags_Borders) ) {
-        for ( std::size_t i = 0; i < m_timingSegments.size(); ++i ) {
-            auto& segment = m_timingSegments[i];
-            ImGui::PushID(static_cast<int>(i));
-            ImGui::Text("#%zu", i + 1);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(78.0f);
-            float time = static_cast<float>(segment.timestampSeconds);
-            if ( ::MMM::UI::FeedbackDragFloat(
-                     "##SegmentTime",
-                     &time,
-                     0.001f,
-                     static_cast<float>(firstBeatMinSeconds(
-                         60.0 / std::max(1.0, segment.bpm))),
-                     static_cast<float>(
-                         std::max(0.001, playbackCanvasDuration())),
-                     "%.3fs") ) {
-                segment.timestampSeconds = time;
-                changed                  = true;
-            }
-            if ( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip(
-                    "%s", TR("ui.tools.bpm_measure.segment_time").data());
-            }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(76.0f);
-            float bpm = static_cast<float>(segment.bpm);
-            if ( ::MMM::UI::FeedbackDragFloat(
-                     "##SegmentBpm", &bpm, 0.01f, 1.0f, 999.0f, "%.3f") ) {
-                segment.bpm = bpm;
-                changed     = true;
-            }
-            if ( ImGui::IsItemHovered() ) {
-                ImGui::SetTooltip(
-                    "%s", TR("ui.tools.bpm_measure.segment_bpm").data());
-            }
-            ImGui::SameLine();
-            if ( i == 0 ) {
-                ImGui::BeginDisabled();
-            }
-            if ( ::MMM::UI::FeedbackSmallButton(
-                     TR("ui.common.delete").data()) ) {
-                m_timingSegments.erase(m_timingSegments.begin() +
-                                       static_cast<std::ptrdiff_t>(i));
-                changed = true;
+    {
+        Utils::VerticalScrollbarStyleScope scrollbarStyle;
+        if ( ImGui::BeginChild("##BpmMeasureSegments",
+                               ImVec2(0.0f, childHeight),
+                               ImGuiChildFlags_Borders) ) {
+            for ( std::size_t i = 0; i < m_timingSegments.size(); ++i ) {
+                auto& segment = m_timingSegments[i];
+                ImGui::PushID(static_cast<int>(i));
+                ImGui::Text("#%zu", i + 1);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(78.0f);
+                float time = static_cast<float>(segment.timestampSeconds);
+                if ( ::MMM::UI::FeedbackDragFloat(
+                         "##SegmentTime",
+                         &time,
+                         0.001f,
+                         static_cast<float>(firstBeatMinSeconds(
+                             60.0 / std::max(1.0, segment.bpm))),
+                         static_cast<float>(
+                             std::max(0.001, playbackCanvasDuration())),
+                         "%.3fs") ) {
+                    segment.timestampSeconds = time;
+                    changed                  = true;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.tools.bpm_measure.segment_time").data());
+                }
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(76.0f);
+                float bpm = static_cast<float>(segment.bpm);
+                if ( ::MMM::UI::FeedbackDragFloat(
+                         "##SegmentBpm", &bpm, 0.01f, 1.0f, 999.0f, "%.3f") ) {
+                    segment.bpm = bpm;
+                    changed     = true;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.tools.bpm_measure.segment_bpm").data());
+                }
+                ImGui::SameLine();
+                if ( i == 0 ) {
+                    ImGui::BeginDisabled();
+                }
+                if ( ::MMM::UI::FeedbackSmallButton(
+                         TR("ui.common.delete").data()) ) {
+                    m_timingSegments.erase(m_timingSegments.begin() +
+                                           static_cast<std::ptrdiff_t>(i));
+                    changed = true;
+                    if ( i == 0 ) {
+                        ImGui::EndDisabled();
+                    }
+                    ImGui::PopID();
+                    break;
+                }
                 if ( i == 0 ) {
                     ImGui::EndDisabled();
                 }
                 ImGui::PopID();
-                break;
             }
-            if ( i == 0 ) {
-                ImGui::EndDisabled();
-            }
-            ImGui::PopID();
         }
+        ImGui::EndChild();
     }
-    ImGui::EndChild();
 
     if ( changed ) {
         normalizeTimingSegments();

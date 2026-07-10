@@ -477,6 +477,7 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
             ImGui::TextDisabled(
                 "%s", TR("ui.wizard.new_beatmap.template.none_open").data());
         } else {
+            Utils::VerticalScrollbarStyleScope verticalScrollbarStyle;
             ImGui::BeginChild(
                 "TemplateBeatmapList", ImVec2(460.0f, 220.0f), true);
             for ( const auto& option : templateOptions ) {

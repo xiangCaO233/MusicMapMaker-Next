@@ -645,16 +645,19 @@ void NewProjectWizard::update(UIManager* sourceManager)
         const float contentHeight =
             std::max(120.0f * dpiScale,
                      ImGui::GetContentRegionAvail().y - footerReserve);
-        ImGui::BeginChild("##NewProjectWizardContent",
-                          ImVec2(0.0f, contentHeight),
-                          false,
-                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
-        switch ( m_currentStep ) {
-        case Step::ProjectInfo: renderProjectInfoStep(); break;
-        case Step::Preferences: renderPreferencesStep(); break;
-        case Step::Location: renderLocationStep(); break;
+        {
+            Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
+            ImGui::BeginChild("##NewProjectWizardContent",
+                              ImVec2(0.0f, contentHeight),
+                              false,
+                              ImGuiWindowFlags_AlwaysVerticalScrollbar);
+            switch ( m_currentStep ) {
+            case Step::ProjectInfo: renderProjectInfoStep(); break;
+            case Step::Preferences: renderPreferencesStep(); break;
+            case Step::Location: renderLocationStep(); break;
+            }
+            ImGui::EndChild();
         }
-        ImGui::EndChild();
 
         renderFooter();
 

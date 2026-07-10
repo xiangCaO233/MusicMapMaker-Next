@@ -296,14 +296,17 @@ private:
             ImGui::Spacing();
             ImGui::TextUnformatted(TR("ui.help.changelog").data());
 
-            ImGui::BeginChild("ChangelogScroll",
-                              ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
-                              ImGuiChildFlags_Borders);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
-            ImGui::TextWrapped("%s", info.changelog.c_str());
-            ImGui::PopStyleVar();
-            ImGui::EndChild();
+            {
+                Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
+                ImGui::BeginChild("ChangelogScroll",
+                                  ImVec2(400.0f * dpiScale, 150.0f * dpiScale),
+                                  ImGuiChildFlags_Borders);
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
+                ImGui::TextWrapped("%s", info.changelog.c_str());
+                ImGui::PopStyleVar();
+                ImGui::EndChild();
+            }
         }
 
         ImGui::Spacing();

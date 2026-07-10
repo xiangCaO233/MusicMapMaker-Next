@@ -1188,7 +1188,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     auto renderAudioResourcesTable = [&](Clay_BoundingBox r, bool) {
         ImGui::SetCursorScreenPos({ r.x, r.y });
-        const ImGuiTableFlags tableFlags =
+        Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
+        const ImGuiTableFlags              tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |

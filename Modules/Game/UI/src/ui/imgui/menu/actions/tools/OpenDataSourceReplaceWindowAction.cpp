@@ -207,25 +207,30 @@ private:
                     std::max(120.0f * context.dpiScale,
                              ImGui::GetContentRegionAvail().y -
                                  126.0f * context.dpiScale);
-                if ( ImGui::BeginChild("DataSourceReplaceBeatmapList",
-                                       ImVec2(0.0f, listHeight),
-                                       true) ) {
-                    if ( candidates.empty() ) {
-                        ImGui::TextDisabled("没有找到其他项目谱面。");
-                    } else {
-                        for ( const auto& candidate : candidates ) {
-                            const bool selected =
-                                candidate.relativePath == m_dataSourcePath;
-                            std::string label = candidate.displayName + " - " +
-                                                candidate.relativePath;
-                            if ( ::MMM::UI::FeedbackSelectable(label.c_str(),
-                                                               selected) ) {
-                                m_dataSourcePath = candidate.relativePath;
+                {
+                    Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                        context.dpiScale);
+                    if ( ImGui::BeginChild("DataSourceReplaceBeatmapList",
+                                           ImVec2(0.0f, listHeight),
+                                           true) ) {
+                        if ( candidates.empty() ) {
+                            ImGui::TextDisabled("没有找到其他项目谱面。");
+                        } else {
+                            for ( const auto& candidate : candidates ) {
+                                const bool selected =
+                                    candidate.relativePath == m_dataSourcePath;
+                                std::string label = candidate.displayName +
+                                                    " - " +
+                                                    candidate.relativePath;
+                                if ( ::MMM::UI::FeedbackSelectable(
+                                         label.c_str(), selected) ) {
+                                    m_dataSourcePath = candidate.relativePath;
+                                }
                             }
                         }
                     }
+                    ImGui::EndChild();
                 }
-                ImGui::EndChild();
 
                 ImGui::Spacing();
                 ::MMM::UI::FeedbackCheckbox("物件数据源", &m_replaceObjects);

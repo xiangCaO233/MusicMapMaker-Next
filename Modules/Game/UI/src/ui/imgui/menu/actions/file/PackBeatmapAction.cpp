@@ -1049,7 +1049,9 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     constexpr ImGuiTableFlags tableFlags =
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
                         ImGuiTableFlags_ScrollY;
-                    if ( ImGui::BeginTable("PackageCandidateFilesTable",
+                    if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                             dpiScale);
+                         ImGui::BeginTable("PackageCandidateFilesTable",
                                            3,
                                            tableFlags,
                                            ImVec2(0.0f, 0.0f)) ) {
@@ -1302,62 +1304,66 @@ void PackBeatmapAction::renderPackageBeatmapMetadataWindow(float dpiScale)
                 120.0f * dpiScale,
                 ImGui::GetContentRegionAvail().y - footerReserveHeight);
 
-            if ( ImGui::BeginChild("PackageBeatmapMetadataEditChild",
-                                   ImVec2(0.0f, editHeight),
-                                   true) ) {
-                for ( std::size_t index = 0;
-                      index < m_package.beatmapMetadataEdits.size();
-                      ++index ) {
-                    auto& edit = m_package.beatmapMetadataEdits[index];
-                    ImGui::PushID(static_cast<int>(index));
-                    if ( ::MMM::UI::FeedbackCollapsingHeader(
-                             edit.relativePath.c_str(),
-                             ImGuiTreeNodeFlags_DefaultOpen) ) {
-                        if ( ImGui::BeginTable(
-                                 "PackageBeatmapMetadataFields",
-                                 2,
-                                 ImGuiTableFlags_SizingStretchProp |
-                                     ImGuiTableFlags_NoSavedSettings) ) {
-                            ImGui::TableSetupColumn(
-                                "字段",
-                                ImGuiTableColumnFlags_WidthFixed,
-                                112.0f * dpiScale);
-                            ImGui::TableSetupColumn(
-                                "值", ImGuiTableColumnFlags_WidthStretch);
+            {
+                Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
+                if ( ImGui::BeginChild("PackageBeatmapMetadataEditChild",
+                                       ImVec2(0.0f, editHeight),
+                                       true) ) {
+                    for ( std::size_t index = 0;
+                          index < m_package.beatmapMetadataEdits.size();
+                          ++index ) {
+                        auto& edit = m_package.beatmapMetadataEdits[index];
+                        ImGui::PushID(static_cast<int>(index));
+                        if ( ::MMM::UI::FeedbackCollapsingHeader(
+                                 edit.relativePath.c_str(),
+                                 ImGuiTreeNodeFlags_DefaultOpen) ) {
+                            if ( ImGui::BeginTable(
+                                     "PackageBeatmapMetadataFields",
+                                     2,
+                                     ImGuiTableFlags_SizingStretchProp |
+                                         ImGuiTableFlags_NoSavedSettings) ) {
+                                ImGui::TableSetupColumn(
+                                    "字段",
+                                    ImGuiTableColumnFlags_WidthFixed,
+                                    112.0f * dpiScale);
+                                ImGui::TableSetupColumn(
+                                    "值", ImGuiTableColumnFlags_WidthStretch);
 
-                            auto inputRow = [](const char* label,
-                                               const char* id,
-                                               auto&       buffer) {
-                                ImGui::TableNextRow();
-                                ImGui::TableSetColumnIndex(0);
-                                ImGui::AlignTextToFramePadding();
-                                ImGui::TextUnformatted(label);
-                                ImGui::TableSetColumnIndex(1);
-                                ImGui::SetNextItemWidth(-1.0f);
-                                ImGui::InputText(
-                                    id, buffer.data(), buffer.size());
-                            };
+                                auto inputRow = [](const char* label,
+                                                   const char* id,
+                                                   auto&       buffer) {
+                                    ImGui::TableNextRow();
+                                    ImGui::TableSetColumnIndex(0);
+                                    ImGui::AlignTextToFramePadding();
+                                    ImGui::TextUnformatted(label);
+                                    ImGui::TableSetColumnIndex(1);
+                                    ImGui::SetNextItemWidth(-1.0f);
+                                    ImGui::InputText(
+                                        id, buffer.data(), buffer.size());
+                                };
 
-                            inputRow("Title", "##Title", edit.titleBuffer);
-                            inputRow("TitleOrg",
-                                     "##TitleUnicode",
-                                     edit.titleUnicodeBuffer);
-                            inputRow("Artist", "##Artist", edit.artistBuffer);
-                            inputRow("ArtistOrg",
-                                     "##ArtistUnicode",
-                                     edit.artistUnicodeBuffer);
-                            inputRow(
-                                "Creator", "##Creator", edit.creatorBuffer);
-                            inputRow(
-                                "Version", "##Version", edit.versionBuffer);
+                                inputRow("Title", "##Title", edit.titleBuffer);
+                                inputRow("TitleOrg",
+                                         "##TitleUnicode",
+                                         edit.titleUnicodeBuffer);
+                                inputRow(
+                                    "Artist", "##Artist", edit.artistBuffer);
+                                inputRow("ArtistOrg",
+                                         "##ArtistUnicode",
+                                         edit.artistUnicodeBuffer);
+                                inputRow(
+                                    "Creator", "##Creator", edit.creatorBuffer);
+                                inputRow(
+                                    "Version", "##Version", edit.versionBuffer);
 
-                            ImGui::EndTable();
+                                ImGui::EndTable();
+                            }
                         }
+                        ImGui::PopID();
                     }
-                    ImGui::PopID();
                 }
+                ImGui::EndChild();
             }
-            ImGui::EndChild();
 
             ImGui::Spacing();
             ImGui::Separator();

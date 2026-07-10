@@ -25,6 +25,9 @@ constexpr float TOOLTIP_SLIDE_X = 6.0f;
 /// @brief Tooltip 弹出动画的纵向位移像素。
 constexpr float TOOLTIP_SLIDE_Y = 4.0f;
 
+/// @brief 项目纵向滚动区域统一使用的最小滚动条宽度，单位为逻辑像素。
+constexpr float VERTICAL_SCROLLBAR_MIN_WIDTH = 18.0f;
+
 /// @brief 计算带盐的 Tooltip 状态键。
 /// @param id 控件 ID。
 /// @param salt 用途盐值。
@@ -316,6 +319,31 @@ void prepareCenteredModalWindow(ImVec2 desiredSize)
         }
         ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
     }
+}
+
+/// @brief 使用当前窗口 DPI 缩放推入纵向滚动条宽度样式。
+VerticalScrollbarStyleScope::VerticalScrollbarStyleScope()
+    : VerticalScrollbarStyleScope(
+          Config::AppConfig::instance().getWindowContentScale())
+{
+}
+
+/// @brief 使用指定 DPI 缩放推入纵向滚动条宽度样式。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 热路径：只读取当前主题并压入一个 ImGui 样式变量。
+VerticalScrollbarStyleScope::VerticalScrollbarStyleScope(float dpiScale)
+{
+    const float scrollbarSize = std::max(
+        ImGui::GetStyle().ScrollbarSize,
+        std::floor(VERTICAL_SCROLLBAR_MIN_WIDTH * std::max(dpiScale, 1.0f)));
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, scrollbarSize);
+}
+
+/// @brief 恢复进入作用域前的滚动条宽度样式。
+/// @warning UI 热路径：只弹出一个 ImGui 样式变量。
+VerticalScrollbarStyleScope::~VerticalScrollbarStyleScope()
+{
+    ImGui::PopStyleVar();
 }
 
 /// @brief 使用当前窗口 DPI 缩放推入全局窗口样式。
