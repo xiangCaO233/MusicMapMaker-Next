@@ -310,6 +310,8 @@ void ToolbarView::update(UIManager* sourceManager)
         auto&       engine      = Logic::EditorEngine::instance();
         const auto& editorCfg   = engine.getEditorConfig();
         const auto& shortcutConfig = editorCfg.settings.shortcutConfig;
+        const bool  shouldPlayAdjustmentFeedback =
+            editorCfg.settings.stopPlaybackOnScroll;
 
         auto tooltipWithShortcut =
             [](const char*                    tooltip,
@@ -751,7 +753,9 @@ void ToolbarView::update(UIManager* sourceManager)
                         double newSpeed = presets[bestIdx];
                         if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
                             applyPlaybackSpeed(newSpeed);
-                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            if ( shouldPlayAdjustmentFeedback ) {
+                                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                            }
                         }
                     }
                     drawTooltip(TR("ui.toolbar.playback_speed").data());
@@ -798,7 +802,9 @@ void ToolbarView::update(UIManager* sourceManager)
                         meta.track_count = newTracks;
                         engine.pushCommand(
                             Logic::CmdUpdateBeatmapMetadata{ meta });
-                        ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        if ( shouldPlayAdjustmentFeedback ) {
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        }
                     }
                 }
                 drawTooltip(TR("ui.settings.beatmap.tracks").data());
@@ -846,7 +852,9 @@ void ToolbarView::update(UIManager* sourceManager)
                         auto newConfig                 = editorCfg;
                         newConfig.settings.beatDivisor = newDivisor;
                         engine.setEditorConfig(newConfig);
-                        ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        if ( shouldPlayAdjustmentFeedback ) {
+                            ::MMM::UI::PlayInteractionMouseUpFeedback();
+                        }
                     }
                 }
 

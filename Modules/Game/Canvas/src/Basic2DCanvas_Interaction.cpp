@@ -670,6 +670,8 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
     const bool isAltPressed   = io.KeyAlt;
     const bool isShiftPressed = io.KeyShift;
     auto&      engine         = Logic::EditorEngine::instance();
+    const bool shouldPlayAdjustmentFeedback =
+        engine.getEditorConfig().settings.stopPlaybackOnScroll;
     const bool scrollsActiveSelection =
         allowSelectionScroll && isCommandPressed && !isAltPressed &&
         currentSnapshot->currentTool == Logic::EditTool::Marquee &&
@@ -710,7 +712,9 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             m_speedTooltipValue = static_cast<float>(newSpeed);
             m_speedTooltipTimer = 2.0f;
-            ::MMM::UI::PlayInteractionMouseUpFeedback();
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
@@ -730,7 +734,9 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
             if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
                 editorCfg.visual.timelineZoom = newZoom;
                 engine.setEditorConfig(editorCfg);
-                ::MMM::UI::PlayInteractionMouseUpFeedback();
+                if ( shouldPlayAdjustmentFeedback ) {
+                    ::MMM::UI::PlayInteractionMouseUpFeedback();
+                }
             }
         }
         return true;
@@ -779,7 +785,9 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
             std::clamp(editorCfg.settings.beatDivisor, 1, 64);
         if ( editorCfg.settings.beatDivisor != originalDivisor ) {
             engine.setEditorConfig(editorCfg);
-            ::MMM::UI::PlayInteractionMouseUpFeedback();
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
     }
 

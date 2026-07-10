@@ -113,6 +113,10 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
         return false;
     }
 
+    const bool shouldPlayAdjustmentFeedback =
+        Logic::EditorEngine::instance()
+            .getEditorConfig()
+            .settings.stopPlaybackOnScroll;
     Event::EventBus::instance().publish(Event::LogicCommandEvent(
         Logic::CmdScroll{ timelineId,
                           0.0f,
@@ -146,7 +150,9 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             speedTooltipValue = static_cast<float>(newSpeed);
             speedTooltipTimer = 2.0f;
-            ::MMM::UI::PlayInteractionMouseUpFeedback();
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
@@ -163,7 +169,9 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
         if ( std::abs(newZoom - currentZoom) > 0.0001f ) {
             editorCfg.visual.timelineZoom = newZoom;
             Logic::EditorEngine::instance().setEditorConfig(editorCfg);
-            ::MMM::UI::PlayInteractionMouseUpFeedback();
+            if ( shouldPlayAdjustmentFeedback ) {
+                ::MMM::UI::PlayInteractionMouseUpFeedback();
+            }
         }
         return true;
     }
@@ -212,7 +220,9 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
         std::clamp(editorCfg.settings.beatDivisor, 1, 64);
     if ( editorCfg.settings.beatDivisor != originalDivisor ) {
         Logic::EditorEngine::instance().setEditorConfig(editorCfg);
-        ::MMM::UI::PlayInteractionMouseUpFeedback();
+        if ( shouldPlayAdjustmentFeedback ) {
+            ::MMM::UI::PlayInteractionMouseUpFeedback();
+        }
     }
     return true;
 }
