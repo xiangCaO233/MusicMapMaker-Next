@@ -711,11 +711,12 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( hasBeatmap ) {
                     snprintf(speedBuf,
                              sizeof(speedBuf),
-                             "%.2g##ToolbarPlaybackSpeed",
+                             "%.2g###ToolbarPlaybackSpeed",
                              currentSpeed);
                 } else {
-                    snprintf(
-                        speedBuf, sizeof(speedBuf), "--##ToolbarPlaybackSpeed");
+                    snprintf(speedBuf,
+                             sizeof(speedBuf),
+                             "--###ToolbarPlaybackSpeed");
                 }
 
                 if ( ::MMM::UI::FeedbackButton(speedBuf,
@@ -776,10 +777,10 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( hasBeatmap ) {
                 snprintf(keyBuf,
                          sizeof(keyBuf),
-                         "%dK##ToolbarKeyCount",
+                         "%dK###ToolbarKeyCount",
                          currentTracks);
             } else {
-                snprintf(keyBuf, sizeof(keyBuf), "--##ToolbarKeyCount");
+                snprintf(keyBuf, sizeof(keyBuf), "--###ToolbarKeyCount");
             }
 
             if ( ::MMM::UI::FeedbackButton(keyBuf, ImVec2(btnSize, btnSize)) ) {
@@ -829,7 +830,7 @@ void ToolbarView::update(UIManager* sourceManager)
             char divisorBuf[64];
             snprintf(divisorBuf,
                      sizeof(divisorBuf),
-                     "%d##ToolbarBeatDivisor",
+                     "%d###ToolbarBeatDivisor",
                      currentDivisor);
             if ( ::MMM::UI::FeedbackButton(divisorBuf,
                                            ImVec2(btnSize, btnSize)) ) {
