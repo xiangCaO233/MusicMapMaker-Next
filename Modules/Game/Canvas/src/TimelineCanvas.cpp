@@ -294,6 +294,10 @@ TimelineCanvas::TimelineCanvas(
     m_targetHeight = h;
 }
 
+/// @brief 更新 Timeline 窗口、画布交互与叠加控件。
+/// @param sourceManager UI 管理器。
+/// @warning UI 热路径：窗口可见时每帧调用，只做绘制和输入处理。
+/// 禁止引入文件系统访问、阻塞操作或全量排序。
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
     auto& appConfig      = Config::AppConfig::instance();
@@ -398,8 +402,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             ImVec2 mousePos  = ImGui::GetMousePos();
             bool   isHovered =
                 ImGui::IsItemHovered(
-                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                    ImGuiHoveredFlags_AllowWhenOverlapped) ||
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
                 (ImGui::IsWindowHovered(
                      ImGuiHoveredFlags_RootAndChildWindows |
                      ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&

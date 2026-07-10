@@ -1124,8 +1124,11 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         return;
     }
-    if ( m_isPopupOpen || m_isCreatePopupOpen || overMenuButton ||
-         io.WantTextInput || UI::ShortcutUtils::isShortcutRecordingActive() ) {
+    const bool anyPopupOpen = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if ( anyPopupOpen || m_isPopupOpen || m_isCreatePopupOpen ||
+         overMenuButton || io.WantTextInput ||
+         UI::ShortcutUtils::isShortcutRecordingActive() ) {
         if ( m_isTimingErasing &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
