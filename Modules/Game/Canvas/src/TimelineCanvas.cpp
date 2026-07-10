@@ -210,6 +210,23 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
     return true;
 }
 
+/// @brief 根据齿轮颜色选择具有稳定对比度的中性底板颜色。
+/// @param gearColor 齿轮文字颜色。
+/// @param hovered 齿轮当前是否悬浮。
+/// @return 对比色底板的 ImGui 打包颜色。
+/// @warning UI 热路径：每个可见齿轮每帧调用，只执行常量算术。
+ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
+{
+    const float luminance = 0.2126f * gearColor.x * gearColor.x +
+                            0.7152f * gearColor.y * gearColor.y +
+                            0.0722f * gearColor.z * gearColor.z;
+    const int   alpha     = hovered ? 242 : 218;
+    if ( luminance < 0.18f ) {
+        return IM_COL32(248, 250, 255, alpha);
+    }
+    return IM_COL32(8, 11, 18, alpha);
+}
+
 /// @brief Timeline 画布齿轮按钮的类型信息
 struct TimelineGearInfo {
     /// @brief 对应 TimelineInteractiveElement 的效果掩码。
@@ -716,8 +733,28 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             inlineGearEditorOpened = true;
                         }
 
-                        const ImVec2 buttonMin = ImGui::GetItemRectMin();
-                        ImGui::GetWindowDrawList()->AddText(
+                        const bool   gearHovered  = ImGui::IsItemHovered();
+                        const ImVec2 buttonMin    = ImGui::GetItemRectMin();
+                        const ImVec2 buttonMax    = ImGui::GetItemRectMax();
+                        ImDrawList*  drawList     = ImGui::GetWindowDrawList();
+                        const float  gearRounding = iconSize * 0.25f;
+                        const ImU32  gearBackground =
+                            timelineGearBackgroundColor(gear.color,
+                                                        gearHovered);
+                        ImVec4 gearBorderColor = gear.color;
+                        gearBorderColor.w      = gearHovered ? 1.0f : 0.82f;
+
+                        // 对比色底板隔离底层同色 glow，确保齿轮轮廓始终清晰。
+                        drawList->AddRectFilled(
+                            buttonMin, buttonMax, gearBackground, gearRounding);
+                        drawList->AddRect(
+                            buttonMin,
+                            buttonMax,
+                            ImGui::ColorConvertFloat4ToU32(gearBorderColor),
+                            gearRounding,
+                            0,
+                            gearHovered ? 2.0f : 1.0f);
+                        drawList->AddText(
                             ImVec2(buttonMin.x +
                                        (iconSize - gearGlyphSize.x) * 0.5f,
                                    buttonMin.y +
@@ -725,7 +762,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                             ImGui::ColorConvertFloat4ToU32(gear.color),
                             UI::ICON_MMM_COG);
 
-                        if ( ImGui::IsItemHovered() ) {
+                        if ( gearHovered ) {
                             const auto timeText =
                                 formatCanvasTime(el.time, m_currentSnapshot);
                             ImGui::SetTooltip(
