@@ -1208,7 +1208,7 @@ void SetInteractionFeedbackEnabled(bool enabled)
     interactionFeedbackEnabled = enabled;
 }
 
-/// @brief 处理全局鼠标按下与松开音效。
+/// @brief 处理全局鼠标左右键按下与松开音效。
 /// @warning UI 热路径：每帧调用一次，只读取 ImGui 鼠标边沿状态并触发已预加载
 /// SFX pool，禁止执行资源加载。
 void ProcessGlobalMouseFeedback()
@@ -1217,12 +1217,14 @@ void ProcessGlobalMouseFeedback()
         return;
     }
 
-    if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+    if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
         Audio::AudioManager::instance().playSoundEffect(MOUSE_DOWN_SFX_KEY,
                                                         MOUSE_DOWN_SFX_VOLUME);
     }
 
-    if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+    if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+         ImGui::IsMouseReleased(ImGuiMouseButton_Right) ) {
         PlayInteractionMouseUpFeedback();
     }
 }
