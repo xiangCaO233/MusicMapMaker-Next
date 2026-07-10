@@ -1357,11 +1357,11 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
                 ImGui::SetKeyboardFocusHere();
                 m_shouldFocusFileOperationInput = false;
             }
-            const bool enterPressed =
-                ImGui::InputText("##FileManagerOperationName",
-                                 m_fileOperationInput.data(),
-                                 m_fileOperationInput.size(),
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
+            const bool enterPressed = ::MMM::UI::AnimatedInputText(
+                "##FileManagerOperationName",
+                m_fileOperationInput.data(),
+                m_fileOperationInput.size(),
+                ImGuiInputTextFlags_EnterReturnsTrue);
             if ( !m_fileOperationError.empty() ) {
                 ImGui::TextDisabled("%s", m_fileOperationError.c_str());
             }

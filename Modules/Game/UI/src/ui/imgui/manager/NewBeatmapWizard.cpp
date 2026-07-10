@@ -694,7 +694,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
 
     auto DrawInput = [&](const char* label, char* buf, size_t bufSize) {
-        ImGui::InputText(label, buf, bufSize);
+        ::MMM::UI::AnimatedInputText(label, buf, bufSize);
     };
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());

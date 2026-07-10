@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 
+#include <cstddef>
 #include <string>
 
 struct Clay_BoundingBox;
@@ -166,6 +167,58 @@ void FeedbackEndCombo();
 bool FeedbackCombo(const char* label, int* currentItem,
                    const char* const items[], int itemsCount,
                    int popupMaxHeightInItems = -1);
+
+/// @brief 绘制带文字增删过渡的 ImGui 单行文本输入框。
+/// @param label 输入框显示文本和 ImGui ID。
+/// @param buffer UTF-8 文本缓冲区。
+/// @param bufferSize 文本缓冲区容量。
+/// @param flags 文本输入标志。
+/// @param callback 可选原生输入回调。
+/// @param userData 传给原生输入回调的用户数据。
+/// @return 文本值或提交状态变化时返回 true，语义与 ImGui::InputText 一致。
+/// @warning UI 热路径：静止时只比较当前活动输入框的文本快照；仅在编辑边沿
+/// 计算 UTF-8 变化片段并提交少量文字绘制命令，不修改原生编辑状态。
+bool AnimatedInputText(const char* label, char* buffer, std::size_t bufferSize,
+                       ImGuiInputTextFlags    flags    = 0,
+                       ImGuiInputTextCallback callback = nullptr,
+                       void*                  userData = nullptr);
+
+/// @brief 绘制带提示文本和文字增删过渡的 ImGui 单行文本输入框。
+/// @param label 输入框显示文本和 ImGui ID。
+/// @param hint 缓冲区为空时显示的提示文本。
+/// @param buffer UTF-8 文本缓冲区。
+/// @param bufferSize 文本缓冲区容量。
+/// @param flags 文本输入标志。
+/// @param callback 可选原生输入回调。
+/// @param userData 传给原生输入回调的用户数据。
+/// @return 文本值或提交状态变化时返回 true，语义与
+/// ImGui::InputTextWithHint 一致。
+/// @warning UI 热路径：静止时只比较当前活动输入框的文本快照；仅在编辑边沿
+/// 计算 UTF-8 变化片段并提交少量文字绘制命令，不修改原生编辑状态。
+bool AnimatedInputTextWithHint(const char* label, const char* hint,
+                               char* buffer, std::size_t bufferSize,
+                               ImGuiInputTextFlags    flags    = 0,
+                               ImGuiInputTextCallback callback = nullptr,
+                               void*                  userData = nullptr);
+
+/// @brief 绘制带整体文字淡入过渡的 ImGui 多行文本输入框。
+/// @param label 输入框显示文本和 ImGui ID。
+/// @param buffer UTF-8 文本缓冲区。
+/// @param bufferSize 文本缓冲区容量。
+/// @param size 输入框尺寸，语义与 ImGui::InputTextMultiline 一致。
+/// @param flags 文本输入标志。
+/// @param callback 可选原生输入回调。
+/// @param userData 传给原生输入回调的用户数据。
+/// @return 文本值或提交状态变化时返回 true，语义与
+/// ImGui::InputTextMultiline 一致。
+/// @warning UI 热路径：每帧只访问当前窗口 ImGuiStorage；不复制大型多行
+/// 缓冲区，也不修改原生光标、选区、滚动或 IME 状态。
+bool AnimatedInputTextMultiline(const char* label, char* buffer,
+                                std::size_t            bufferSize,
+                                const ImVec2&          size     = ImVec2(0, 0),
+                                ImGuiInputTextFlags    flags    = 0,
+                                ImGuiInputTextCallback callback = nullptr,
+                                void*                  userData = nullptr);
 
 /// @brief 绘制带统一反馈的 ImGui Float 滑块。
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、

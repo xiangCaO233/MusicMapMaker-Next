@@ -652,11 +652,12 @@ void renderOsuMetadataTextEditorPopup(float dpiScale)
         }
 
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextMultiline("##OsuMetadataTextBuffer",
-                                  state.textBuffer.data(),
-                                  state.textBuffer.size(),
-                                  ImVec2(0.0f, 430.0f * dpiScale),
-                                  ImGuiInputTextFlags_AllowTabInput);
+        ::MMM::UI::AnimatedInputTextMultiline(
+            "##OsuMetadataTextBuffer",
+            state.textBuffer.data(),
+            state.textBuffer.size(),
+            ImVec2(0.0f, 430.0f * dpiScale),
+            ImGuiInputTextFlags_AllowTabInput);
 
         if ( ::MMM::UI::FeedbackButton("完成##ApplyOsuMetadataText") ) {
             MetadataPropertyMap parsedProps;
@@ -861,11 +862,12 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         }
 
         ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputTextMultiline("##MetadataJsonRawEditor",
-                                  state.jsonBuffer.data(),
-                                  state.jsonBuffer.size(),
-                                  ImVec2(0.0f, 220.0f * dpiScale),
-                                  ImGuiInputTextFlags_AllowTabInput);
+        ::MMM::UI::AnimatedInputTextMultiline(
+            "##MetadataJsonRawEditor",
+            state.jsonBuffer.data(),
+            state.jsonBuffer.size(),
+            ImVec2(0.0f, 220.0f * dpiScale),
+            ImGuiInputTextFlags_AllowTabInput);
 
         if ( ::MMM::UI::FeedbackButton("格式化##FormatMetadataJson") ) {
             parsed = parseJsonNoThrow(state.jsonBuffer.data());
@@ -934,16 +936,16 @@ void renderMetadataJsonEditorPopup(float dpiScale)
         ImGui::TextUnformatted("键:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(130.0f * dpiScale);
-        ImGui::InputText("##MetadataJsonChildKey",
-                         state.childKeyBuffer.data(),
-                         state.childKeyBuffer.size());
+        ::MMM::UI::AnimatedInputText("##MetadataJsonChildKey",
+                                     state.childKeyBuffer.data(),
+                                     state.childKeyBuffer.size());
         ImGui::SameLine();
         ImGui::TextUnformatted("值:");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(210.0f * dpiScale);
-        ImGui::InputText("##MetadataJsonChildValue",
-                         state.childValueBuffer.data(),
-                         state.childValueBuffer.size());
+        ::MMM::UI::AnimatedInputText("##MetadataJsonChildValue",
+                                     state.childValueBuffer.data(),
+                                     state.childValueBuffer.size());
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加/覆盖##MetadataJsonChildAdd") ) {
             std::string childKey = state.childKeyBuffer.data();
@@ -1250,7 +1252,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                 }
 
                                 ImGui::SetNextItemWidth(-1.0f);
-                                if ( ImGui::InputText(
+                                if ( ::MMM::UI::AnimatedInputText(
                                          (std::string("##val_osu_") + key)
                                              .c_str(),
                                          valBuf,
@@ -1333,7 +1335,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                           valBuf);
 
                                 ImGui::SetNextItemWidth(-1.0f);
-                                if ( ImGui::InputText(
+                                if ( ::MMM::UI::AnimatedInputText(
                                          (std::string("##val_osu_custom_") +
                                           key)
                                              .c_str(),
@@ -1362,7 +1364,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                         ImGui::SameLine();
                         static char newOsuKey[128] = "";
                         ImGui::SetNextItemWidth(200.0f * dpiScale);
-                        ImGui::InputText(
+                        ::MMM::UI::AnimatedInputText(
                             "##new_osu_key", newOsuKey, sizeof(newOsuKey));
 
                         ImGui::SameLine();
@@ -1370,7 +1372,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                         ImGui::SameLine();
                         static char newOsuVal[256] = "";
                         ImGui::SetNextItemWidth(250.0f * dpiScale);
-                        ImGui::InputText(
+                        ::MMM::UI::AnimatedInputText(
                             "##new_osu_val", newOsuVal, sizeof(newOsuVal));
 
                         ImGui::SameLine();
@@ -1506,7 +1508,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                 }
 
                                 ImGui::SetNextItemWidth(-1.0f);
-                                if ( ImGui::InputText(
+                                if ( ::MMM::UI::AnimatedInputText(
                                          (std::string("##val_mld_") + key)
                                              .c_str(),
                                          valBuf,
@@ -1593,7 +1595,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                           valBuf);
 
                                 ImGui::SetNextItemWidth(-1.0f);
-                                if ( ImGui::InputText(
+                                if ( ::MMM::UI::AnimatedInputText(
                                          (std::string("##val_mld_custom_") +
                                           key)
                                              .c_str(),
@@ -1633,7 +1635,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                         ImGui::SameLine();
                         static char newMldKey[128] = "";
                         ImGui::SetNextItemWidth(200.0f * dpiScale);
-                        ImGui::InputText(
+                        ::MMM::UI::AnimatedInputText(
                             "##new_mld_key", newMldKey, sizeof(newMldKey));
 
                         ImGui::SameLine();
@@ -1641,7 +1643,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                         ImGui::SameLine();
                         static char newMldVal[256] = "";
                         ImGui::SetNextItemWidth(250.0f * dpiScale);
-                        ImGui::InputText(
+                        ::MMM::UI::AnimatedInputText(
                             "##new_mld_val", newMldVal, sizeof(newMldVal));
 
                         ImGui::SameLine();
@@ -2058,7 +2060,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                                   valBuf);
 
                                         ImGui::SetNextItemWidth(-1.0f);
-                                        if ( ImGui::InputText(
+                                        if ( ::MMM::UI::AnimatedInputText(
                                                  fmt::format("##nm_osu_{}_{}",
                                                              groupIdx,
                                                              key)
@@ -2117,7 +2119,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                                 static_cast<int>(metaType));
                                 auto& buf = inputBuffers[bufKey];
                                 ImGui::SetNextItemWidth(150.0f * dpiScale);
-                                ImGui::InputText(
+                                ::MMM::UI::AnimatedInputText(
                                     fmt::format("##nmk_osu_{}", groupIdx)
                                         .c_str(),
                                     buf.key,
@@ -2128,7 +2130,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                         .data());
                                 ImGui::SameLine();
                                 ImGui::SetNextItemWidth(200.0f * dpiScale);
-                                ImGui::InputText(
+                                ::MMM::UI::AnimatedInputText(
                                     fmt::format("##nmv_osu_{}", groupIdx)
                                         .c_str(),
                                     buf.val,
@@ -2233,7 +2235,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                                   valBuf);
 
                                         ImGui::SetNextItemWidth(-1.0f);
-                                        if ( ImGui::InputText(
+                                        if ( ::MMM::UI::AnimatedInputText(
                                                  fmt::format("##nm_mld_{}_{}",
                                                              groupIdx,
                                                              key)
@@ -2298,7 +2300,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                                 static_cast<int>(metaType));
                                 auto& buf = inputBuffers[bufKey];
                                 ImGui::SetNextItemWidth(150.0f * dpiScale);
-                                ImGui::InputText(
+                                ::MMM::UI::AnimatedInputText(
                                     fmt::format("##nmk_mld_{}", groupIdx)
                                         .c_str(),
                                     buf.key,
@@ -2309,7 +2311,7 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                                         .data());
                                 ImGui::SameLine();
                                 ImGui::SetNextItemWidth(200.0f * dpiScale);
-                                ImGui::InputText(
+                                ::MMM::UI::AnimatedInputText(
                                     fmt::format("##nmv_mld_{}", groupIdx)
                                         .c_str(),
                                     buf.val,

@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/SearchView.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <imgui.h>
@@ -31,10 +32,10 @@ void SearchView::onUpdate(LayoutContext& layoutContext,
 {
     // 搜索栏
     ImGui::SetNextItemWidth(-1);
-    if ( ImGui::InputTextWithHint("##GlobalSearch",
-                                  TR("title.search_manager"),
-                                  m_searchBuffer,
-                                  sizeof(m_searchBuffer)) ) {
+    if ( ::MMM::UI::AnimatedInputTextWithHint("##GlobalSearch",
+                                              TR("title.search_manager"),
+                                              m_searchBuffer,
+                                              sizeof(m_searchBuffer)) ) {
         // TODO: 实现搜索逻辑
     }
 

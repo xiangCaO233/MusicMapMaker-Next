@@ -198,7 +198,7 @@ void SettingsView::drawBeatmapSettings()
     auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
 
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
@@ -270,30 +270,30 @@ void SettingsView::drawBeatmapSettings()
         auto DrawInput = [&](const char*  labelPtr,
                              std::string& valRef,
                              bool         enabled = true) {
-            addSettingItem(
-                *sec,
-                rowIndex,
-                labelPtr,
-                maxLabelW,
-                [labelPtr, &valRef = valRef, &changed, enabled](
-                    Clay_BoundingBox r, bool) {
-                    ImGui::PushID(labelPtr);
-                    if ( !enabled ) {
-                        ImGui::BeginDisabled();
-                    }
-                    char buf[256];
-                    strncpy(buf, valRef.c_str(), sizeof(buf));
-                    buf[sizeof(buf) - 1] = '\0';
-                    ImGui::SetNextItemWidth(r.width);
-                    if ( ImGui::InputText("##Input", buf, sizeof(buf)) ) {
-                        valRef  = buf;
-                        changed = true;
-                    }
-                    if ( !enabled ) {
-                        ImGui::EndDisabled();
-                    }
-                    ImGui::PopID();
-                });
+            addSettingItem(*sec,
+                           rowIndex,
+                           labelPtr,
+                           maxLabelW,
+                           [labelPtr, &valRef = valRef, &changed, enabled](
+                               Clay_BoundingBox r, bool) {
+                               ImGui::PushID(labelPtr);
+                               if ( !enabled ) {
+                                   ImGui::BeginDisabled();
+                               }
+                               char buf[256];
+                               strncpy(buf, valRef.c_str(), sizeof(buf));
+                               buf[sizeof(buf) - 1] = '\0';
+                               ImGui::SetNextItemWidth(r.width);
+                               if ( ::MMM::UI::AnimatedInputText(
+                                        "##Input", buf, sizeof(buf)) ) {
+                                   valRef  = buf;
+                                   changed = true;
+                               }
+                               if ( !enabled ) {
+                                   ImGui::EndDisabled();
+                               }
+                               ImGui::PopID();
+                           });
         };
 
         DrawInput(
@@ -600,11 +600,11 @@ void SettingsView::drawBeatmapSettings()
 
                 std::error_code bgExistsError;
                 bool            bgExists = project &&
-                                std::filesystem::exists(
-                                    resolveProjectPath(meta.main_cover_path),
-                                    bgExistsError) &&
-                                !bgExistsError;
-                bool bgPushed = false;
+                                           std::filesystem::exists(
+                                               resolveProjectPath(meta.main_cover_path),
+                                               bgExistsError) &&
+                                           !bgExistsError;
+                bool            bgPushed = false;
                 if ( !bgExists && !currentBgPath.empty() ) {
                     ImGui::PushStyleColor(
                         ImGuiCol_Text, Utils::UIThemeUtils::getWarningColor());

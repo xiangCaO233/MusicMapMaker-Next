@@ -1642,9 +1642,9 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             TR("ui.toolbar.note_palette.scheme_name").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(210.0f * dpiScale));
-        if ( ImGui::InputText("##NoteColorPaletteSchemeName",
-                              m_paletteSchemeNameBuffer.data(),
-                              m_paletteSchemeNameBuffer.size()) ) {
+        if ( ::MMM::UI::AnimatedInputText("##NoteColorPaletteSchemeName",
+                                          m_paletteSchemeNameBuffer.data(),
+                                          m_paletteSchemeNameBuffer.size()) ) {
             m_paletteSchemeErrorKey.clear();
         }
 
@@ -1764,10 +1764,11 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.hex").data());
         ImGui::SameLine();
         ImGui::SetNextItemWidth(std::floor(148.0f * dpiScale));
-        bool hexChanged = ImGui::InputText("##NoteColorHex",
-                                           m_colorHexBuffer.data(),
-                                           m_colorHexBuffer.size(),
-                                           ImGuiInputTextFlags_CharsNoBlank);
+        bool hexChanged =
+            ::MMM::UI::AnimatedInputText("##NoteColorHex",
+                                         m_colorHexBuffer.data(),
+                                         m_colorHexBuffer.size(),
+                                         ImGuiInputTextFlags_CharsNoBlank);
         m_colorHexInputActive = ImGui::IsItemActive();
         if ( hexChanged ) {
             glm::vec4 parsedColor;

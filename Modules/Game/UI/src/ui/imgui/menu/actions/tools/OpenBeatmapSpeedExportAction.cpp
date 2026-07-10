@@ -625,9 +625,9 @@ private:
 
         ImGui::TextUnformatted("输出名称");
         ImGui::SetNextItemWidth(-1.0f);
-        if ( ImGui::InputText("##SpeedExportName",
-                              m_nameBuffer.data(),
-                              m_nameBuffer.size()) ) {
+        if ( ::MMM::UI::AnimatedInputText("##SpeedExportName",
+                                          m_nameBuffer.data(),
+                                          m_nameBuffer.size()) ) {
             m_nameEdited = trimSpaces(m_nameBuffer.data()) != m_autoName;
         }
 

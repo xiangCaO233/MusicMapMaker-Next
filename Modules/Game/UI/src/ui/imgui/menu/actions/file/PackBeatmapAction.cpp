@@ -1338,7 +1338,7 @@ void PackBeatmapAction::renderPackageBeatmapMetadataWindow(float dpiScale)
                                     ImGui::TextUnformatted(label);
                                     ImGui::TableSetColumnIndex(1);
                                     ImGui::SetNextItemWidth(-1.0f);
-                                    ImGui::InputText(
+                                    ::MMM::UI::AnimatedInputText(
                                         id, buffer.data(), buffer.size());
                                 };
 
