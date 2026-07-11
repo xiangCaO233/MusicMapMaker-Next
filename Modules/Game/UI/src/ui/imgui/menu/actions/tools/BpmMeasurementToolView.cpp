@@ -86,6 +86,9 @@ constexpr int BPM_METRONOME_MAX_TRIGGERED_PER_FRAME = 8;
 /// @brief BPM 工具全局时间滚动条最小高度，单位为像素。
 constexpr float BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT = 24.0f;
 
+/// @brief BPM 工具紧凑文字按钮的最大横向内边距，单位为逻辑像素。
+constexpr float BPM_COMPACT_BUTTON_PADDING_X = 4.0f;
+
 /// @brief 播放指针拖到分析视图边缘时触发自动滚动的范围，单位为像素。
 constexpr float PLAYBACK_CURSOR_EDGE_SCROLL_MARGIN = 20.0f;
 
@@ -94,6 +97,28 @@ constexpr double BPM_USER_PREFERENCE_SAVE_DELAY_SECONDS = 0.35;
 
 /// @brief BPM 工具偏好保存失败后的重试等待时间，单位为秒。
 constexpr double BPM_USER_PREFERENCE_SAVE_RETRY_DELAY_SECONDS = 1.0;
+
+/// @brief 压入 BPM 工具窄文字按钮的紧凑内边距和居中样式。
+/// @warning UI 热路径：每帧只读取当前样式和 DPI 并压入两个样式变量。
+void pushBpmCompactTextButtonStyleVars()
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float       dpiScale =
+        std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
+    const float paddingX =
+        std::min(style.FramePadding.x,
+                 std::floor(BPM_COMPACT_BUTTON_PADDING_X * dpiScale));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(paddingX, style.FramePadding.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5f, 0.5f));
+}
+
+/// @brief 恢复 BPM 工具窄文字按钮的局部样式。
+/// @warning UI 热路径：与 pushBpmCompactTextButtonStyleVars 成对调用。
+void popBpmCompactTextButtonStyleVars()
+{
+    ImGui::PopStyleVar(2);
+}
 
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
@@ -1182,8 +1207,11 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                 if ( i == 0 ) {
                     ImGui::BeginDisabled();
                 }
-                if ( ::MMM::UI::FeedbackSmallButton(
-                         TR("ui.common.delete").data()) ) {
+                pushBpmCompactTextButtonStyleVars();
+                const bool deleteClicked = ::MMM::UI::FeedbackSmallButton(
+                    TR("ui.common.delete").data());
+                popBpmCompactTextButtonStyleVars();
+                if ( deleteClicked ) {
                     m_timingSegments.erase(m_timingSegments.begin() +
                                            static_cast<std::ptrdiff_t>(i));
                     changed = true;
@@ -1466,6 +1494,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
         0.0f, (ImGui::GetContentRegionAvail().x - spacing * 3.0f) / 4.0f);
     constexpr size_t presetCount =
         sizeof(presetSpeeds) / sizeof(presetSpeeds[0]);
+    pushBpmCompactTextButtonStyleVars();
     for ( size_t i = 0; i < presetCount; ++i ) {
         if ( i > 0 ) {
             ImGui::SameLine();
@@ -1475,6 +1504,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
             applyPlaybackSpeed(presetSpeeds[i]);
         }
     }
+    popBpmCompactTextButtonStyleVars();
 
     float speed = static_cast<float>(m_playbackSpeed);
     ImGui::Text("%s", TR("ui.audio_manager.speed_value").data());
