@@ -1,4 +1,5 @@
 #include "canvas/PreviewCanvas.h"
+#include "canvas/PreviewDensityInteraction.h"
 #include "canvas/TimeFormatUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -33,6 +34,62 @@ constexpr float PREVIEW_DENSITY_GAP = 4.0f;
 
 /// @brief 窄窗口中仍需保留的最小预览画布宽度。
 constexpr float PREVIEW_MIN_CANVAS_WIDTH = 48.0f;
+
+/// @brief 密度栏外框与内部时间轴的屏幕布局。
+struct PreviewDensityRailLayout {
+    /// @brief 密度栏外框左上角。
+    ImVec2 railMin{ 0.0f, 0.0f };
+
+    /// @brief 密度栏外框右下角。
+    ImVec2 railMax{ 0.0f, 0.0f };
+
+    /// @brief 密度时间轴绘制区域左上角。
+    ImVec2 innerMin{ 0.0f, 0.0f };
+
+    /// @brief 密度时间轴绘制区域右下角。
+    ImVec2 innerMax{ 0.0f, 0.0f };
+
+    /// @brief 当前布局是否足够容纳绘制和交互。
+    bool valid{ false };
+};
+
+/// @brief 计算预览画布右侧密度栏布局。
+/// @param canvasPos 预览画布左上角屏幕坐标。
+/// @param canvasSize 预览画布尺寸。
+/// @param reservedWidth 为密度栏预留的总宽度。
+/// @param dpiScale 当前窗口 DPI 缩放。
+/// @return 可供绘制和命中测试共用的密度栏布局。
+/// @warning UI 热路径纯计算：每帧调用，不得引入分配或阻塞操作。
+PreviewDensityRailLayout calculatePreviewDensityRailLayout(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale)
+{
+    PreviewDensityRailLayout layout;
+    if ( reservedWidth <= 1.0f || canvasSize.y <= 1.0f ) {
+        return layout;
+    }
+
+    const float gap =
+        std::min(reservedWidth * 0.25f,
+                 std::max(1.0f, std::floor(PREVIEW_DENSITY_GAP * dpiScale)));
+    layout.railMin = { canvasPos.x + canvasSize.x + gap, canvasPos.y };
+    layout.railMax = { canvasPos.x + canvasSize.x + reservedWidth,
+                       canvasPos.y + canvasSize.y };
+    if ( layout.railMax.x - layout.railMin.x <= 1.0f ) {
+        return layout;
+    }
+
+    const float innerPadding =
+        std::min(std::floor(2.0f * dpiScale),
+                 std::max(0.0f, (layout.railMax.x - layout.railMin.x) * 0.2f));
+    layout.innerMin = { layout.railMin.x + innerPadding,
+                        layout.railMin.y + innerPadding };
+    layout.innerMax = { layout.railMax.x - innerPadding,
+                        layout.railMax.y - innerPadding };
+    layout.valid    = layout.innerMax.x - layout.innerMin.x > 0.0f &&
+                      layout.innerMax.y - layout.innerMin.y > 0.0f;
+    return layout;
+}
 }  // namespace
 
 PreviewCanvas::PreviewCanvas(
@@ -52,36 +109,34 @@ PreviewCanvas::PreviewCanvas(
 /// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
 /// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
 /// @param dpiScale 当前窗口 DPI 缩放。
+/// @param seekPreviewTime 当前拖动预览时间；无交互时使用快照播放时间。
 /// @warning UI 热路径：每帧最多聚合并绘制 512 个缓存样本；禁止 ECS
 /// 遍历、排序、文件访问或共享指针复制。
-void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
-                                        const ImVec2& canvasSize,
-                                        float         reservedWidth,
-                                        float         dpiScale) const
+void PreviewCanvas::drawDensityOverview(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale, std::optional<double> seekPreviewTime) const
 {
-    if ( reservedWidth <= 1.0f || canvasSize.y <= 1.0f ) {
-        return;
-    }
-
-    const float gap =
-        std::min(reservedWidth * 0.25f,
-                 std::max(1.0f, std::floor(PREVIEW_DENSITY_GAP * dpiScale)));
-    const ImVec2 railMin{ canvasPos.x + canvasSize.x + gap, canvasPos.y };
-    const ImVec2 railMax{ canvasPos.x + canvasSize.x + reservedWidth,
-                          canvasPos.y + canvasSize.y };
-    if ( railMax.x - railMin.x <= 1.0f ) {
+    const auto layout = calculatePreviewDensityRailLayout(
+        canvasPos, canvasSize, reservedWidth, dpiScale);
+    if ( !layout.valid ) {
         return;
     }
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
-    const float rounding = std::clamp(
-        ImGui::GetStyle().FrameRounding,
-        0.0f,
-        std::min(railMax.x - railMin.x, railMax.y - railMin.y) * 0.5f);
-    drawList->AddRectFilled(
-        railMin, railMax, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
-    drawList->AddRect(
-        railMin, railMax, ImGui::GetColorU32(ImGuiCol_Border), rounding);
+    const float rounding =
+        std::clamp(ImGui::GetStyle().FrameRounding,
+                   0.0f,
+                   std::min(layout.railMax.x - layout.railMin.x,
+                            layout.railMax.y - layout.railMin.y) *
+                       0.5f);
+    drawList->AddRectFilled(layout.railMin,
+                            layout.railMax,
+                            ImGui::GetColorU32(ImGuiCol_FrameBg),
+                            rounding);
+    drawList->AddRect(layout.railMin,
+                      layout.railMax,
+                      ImGui::GetColorU32(ImGuiCol_Border),
+                      rounding);
 
     if ( !m_currentSnapshot ) {
         return;
@@ -92,23 +147,18 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
         return;
     }
 
-    const float innerPadding =
-        std::min(std::floor(2.0f * dpiScale),
-                 std::max(0.0f, (railMax.x - railMin.x) * 0.2f));
-    const ImVec2 innerMin{ railMin.x + innerPadding, railMin.y + innerPadding };
-    const ImVec2 innerMax{ railMax.x - innerPadding, railMax.y - innerPadding };
-    const float  innerWidth  = innerMax.x - innerMin.x;
-    const float  innerHeight = innerMax.y - innerMin.y;
-    if ( innerWidth <= 0.0f || innerHeight <= 0.0f ) {
-        return;
-    }
+    const float innerWidth  = layout.innerMax.x - layout.innerMin.x;
+    const float innerHeight = layout.innerMax.y - layout.innerMin.y;
 
     const std::size_t displayRowCount = std::min<std::size_t>(
         density.counts.size(),
         static_cast<std::size_t>(std::max(1.0f, std::floor(innerHeight))));
-    const double currentTime = std::isfinite(m_currentSnapshot->currentTime)
-                                   ? m_currentSnapshot->currentTime
-                                   : 0.0;
+    const double currentTime =
+        seekPreviewTime && std::isfinite(*seekPreviewTime)
+            ? *seekPreviewTime
+            : (std::isfinite(m_currentSnapshot->currentTime)
+                   ? m_currentSnapshot->currentTime
+                   : 0.0);
     const double progress =
         std::clamp(currentTime / density.duration, 0.0, 1.0);
     const std::size_t currentBin =
@@ -135,15 +185,15 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
         // 预览画布的未来时间向上，因此时间升序样本需自底向上排列。
         const std::size_t visualRow = displayRowCount - 1 - row;
         const float       rowY0 =
-            innerMin.y + innerHeight * static_cast<float>(visualRow) /
-                             static_cast<float>(displayRowCount);
-        const float rowY1 =
-            innerMin.y + innerHeight * static_cast<float>(visualRow + 1) /
-                             static_cast<float>(displayRowCount);
-        const bool isCurrent = currentBin >= binBegin && currentBin < binEnd;
+            layout.innerMin.y + innerHeight * static_cast<float>(visualRow) /
+                                    static_cast<float>(displayRowCount);
+        const float rowY1 = layout.innerMin.y +
+                            innerHeight * static_cast<float>(visualRow + 1) /
+                                static_cast<float>(displayRowCount);
+        const bool  isCurrent = currentBin >= binBegin && currentBin < binEnd;
         if ( isCurrent ) {
-            drawList->AddRectFilled(ImVec2(innerMin.x, rowY0),
-                                    ImVec2(innerMax.x, rowY1),
+            drawList->AddRectFilled(ImVec2(layout.innerMin.x, rowY0),
+                                    ImVec2(layout.innerMax.x, rowY1),
                                     activeBackgroundColor);
         }
         if ( rowCount == 0 ) {
@@ -157,17 +207,92 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
                                         ? std::min(0.5f, (rowY1 - rowY0) * 0.2f)
                                         : 0.0f;
         drawList->AddRectFilled(
-            ImVec2(innerMin.x, rowY0 + verticalInset),
-            ImVec2(innerMin.x + barWidth, rowY1 - verticalInset),
+            ImVec2(layout.innerMin.x, rowY0 + verticalInset),
+            ImVec2(layout.innerMin.x + barWidth, rowY1 - verticalInset),
             isCurrent ? activeColor : normalColor);
     }
 
     const float currentY =
-        innerMax.y - static_cast<float>(progress) * innerHeight;
-    drawList->AddLine(ImVec2(innerMin.x, currentY),
-                      ImVec2(innerMax.x, currentY),
+        layout.innerMax.y - static_cast<float>(progress) * innerHeight;
+    drawList->AddLine(ImVec2(layout.innerMin.x, currentY),
+                      ImVec2(layout.innerMax.x, currentY),
                       activeColor,
                       std::max(1.0f, std::floor(dpiScale)));
+}
+
+/// @brief 处理密度栏按下、拖动和松开时的连续时间跳转。
+/// @param canvasPos 预览画布内容左上角屏幕坐标。
+/// @param canvasSize 扣除密度栏后的预览画布逻辑尺寸。
+/// @param reservedWidth 右侧为密度栏实际预留的逻辑宽度。
+/// @param dpiScale 当前窗口 DPI 缩放。
+/// @return 当前交互帧需要即时绘制的目标时间；未拖动时返回空。
+/// @warning UI 热路径：每帧仅处理常量级命中测试与坐标换算；
+/// 仅在目标时间变化时发布 Seek。
+std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
+    const ImVec2& canvasPos, const ImVec2& canvasSize, float reservedWidth,
+    float dpiScale)
+{
+    const auto layout = calculatePreviewDensityRailLayout(
+        canvasPos, canvasSize, reservedWidth, dpiScale);
+    if ( !layout.valid ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const ImVec2 previousCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(layout.railMin);
+    ImGui::InvisibleButton("##PreviewDensitySeek",
+                           ImVec2(layout.railMax.x - layout.railMin.x,
+                                  layout.railMax.y - layout.railMin.y),
+                           ImGuiButtonFlags_MouseButtonLeft);
+    const bool isHovered   = ImGui::IsItemHovered();
+    const bool isActive    = ImGui::IsItemActive();
+    const bool deactivated = ImGui::IsItemDeactivated();
+    ImGui::SetCursorScreenPos(previousCursor);
+
+    if ( !m_currentSnapshot ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+    const double duration = m_currentSnapshot->previewDensity.duration;
+    const ImVec2 mousePos = ImGui::GetMousePos();
+    if ( !std::isfinite(duration) || duration <= 0.0 ||
+         !ImGui::IsMousePosValid(&mousePos) || !std::isfinite(mousePos.y) ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const auto targetTime = previewDensityTimeAtY(
+        mousePos.y, layout.innerMin.y, layout.innerMax.y, duration);
+    if ( !targetTime ) {
+        m_wasDensitySeekActive = false;
+        return std::nullopt;
+    }
+
+    const bool interactionEnded = deactivated && m_wasDensitySeekActive;
+    const bool interactionFrame = isActive || interactionEnded;
+    if ( interactionFrame &&
+         (!m_wasDensitySeekActive ||
+          std::abs(*targetTime - m_lastDensitySeekTime) > 1e-6) ) {
+        const double visualOffset = Config::AppConfig::instance()
+                                        .getVisualConfig()
+                                        .getEffectiveVisualOffset();
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSeek{ *targetTime - visualOffset }));
+        m_lastDensitySeekTime = *targetTime;
+    }
+    m_wasDensitySeekActive = isActive;
+
+    if ( isHovered || interactionFrame ) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+        const auto timeText =
+            formatCanvasTimePair(*targetTime, duration, m_currentSnapshot);
+        ImGui::SetTooltip("%s", timeText.c_str());
+    }
+    if ( interactionFrame ) {
+        return targetTime;
+    }
+    return std::nullopt;
 }
 
 /// @brief 更新预览画布 ImGui 窗口和鼠标交互。
@@ -178,6 +303,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showPreviewWindow ) {
+        m_wasDensitySeekActive = false;
         return;
     }
 
@@ -188,6 +314,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
+        m_wasDensitySeekActive           = false;
         editorSettings.showPreviewWindow = false;
         appConfig.save();
         return;
@@ -234,8 +361,13 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0) &&
                       clickStartedInContent && ImGui::IsWindowFocused();
 
-    drawDensityOverview(
+    const auto densitySeekPreview = handleDensitySeekInteraction(
         windowPos, contentSize, rctx.getReservedRightWidth(), dpiScale);
+    drawDensityOverview(windowPos,
+                        contentSize,
+                        rctx.getReservedRightWidth(),
+                        dpiScale,
+                        densitySeekPreview);
 
     float viewportWidth  = contentSize.x;
     float viewportHeight = contentSize.y;
