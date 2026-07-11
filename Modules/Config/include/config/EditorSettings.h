@@ -631,6 +631,43 @@ NLOHMANN_JSON_SERIALIZE_ENUM(CopyPasteTimeBasis,
                                  { CopyPasteTimeBasis::Beat, "Beat" },
                              })
 
+/// @brief BPM 测量工具中不依赖具体项目或音轨的用户偏好。
+struct BpmMeasurementToolPreferences {
+    /// @brief 黄色拍框宽度，单位为毫秒。
+    double markerWidthMs{ 80.0 };
+
+    /// @brief 分拍线切分数量。
+    int beatDivisor{ 4 };
+
+    /// @brief 最近一次由用户调整的视图中心，单位为秒。
+    double viewCenterSeconds{ 0.0 };
+
+    /// @brief 分析视图在中心点单侧显示的时间跨度，单位为秒。
+    double viewHalfWidthSeconds{ 8.0 };
+};
+
+/// @brief 将 BPM 测量工具用户偏好序列化为 JSON。
+/// @param j 输出 JSON 对象。
+/// @param c 待序列化的 BPM 测量工具偏好。
+inline void to_json(nlohmann::json& j, const BpmMeasurementToolPreferences& c)
+{
+    j = nlohmann::json{ { "markerWidthMs", c.markerWidthMs },
+                        { "beatDivisor", c.beatDivisor },
+                        { "viewCenterSeconds", c.viewCenterSeconds },
+                        { "viewHalfWidthSeconds", c.viewHalfWidthSeconds } };
+}
+
+/// @brief 从 JSON 恢复 BPM 测量工具用户偏好。
+/// @param j 输入 JSON 对象。
+/// @param c 接收结果的 BPM 测量工具偏好。
+inline void from_json(const nlohmann::json& j, BpmMeasurementToolPreferences& c)
+{
+    c.markerWidthMs        = j.value("markerWidthMs", 80.0);
+    c.beatDivisor          = j.value("beatDivisor", 4);
+    c.viewCenterSeconds    = j.value("viewCenterSeconds", 0.0);
+    c.viewHalfWidthSeconds = j.value("viewHalfWidthSeconds", 8.0);
+}
+
 /// @brief 编辑器行为与功能相关的配置
 struct EditorSettings {
     /// @brief 渲染同步配置
@@ -765,6 +802,9 @@ struct EditorSettings {
     /// @brief 时间线窗口多选是否允许选中 BPM 红线
     bool timelineSelectionIncludesBpm{ false };
 
+    /// @brief BPM 测量工具的全局用户偏好。
+    BpmMeasurementToolPreferences bpmMeasurementToolPreferences;
+
     /// @brief 偏好的 ASCII 字体名称
     std::string preferredAsciiFont{ "Default" };
 
@@ -858,6 +898,7 @@ inline void to_json(nlohmann::json& j, const EditorSettings& c)
         { "selectPastedObjects", c.selectPastedObjects },
         { "copyPasteTimeBasis", c.copyPasteTimeBasis },
         { "timelineSelectionIncludesBpm", c.timelineSelectionIncludesBpm },
+        { "bpmMeasurementToolPreferences", c.bpmMeasurementToolPreferences },
         { "softwareCursorConfig", c.softwareCursorConfig },
         { "preferredAsciiFont", c.preferredAsciiFont },
         { "preferredCjkFont", c.preferredCjkFont },
@@ -940,6 +981,10 @@ inline void from_json(const nlohmann::json& j, EditorSettings& c)
         j.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
     c.timelineSelectionIncludesBpm =
         j.value("timelineSelectionIncludesBpm", false);
+    BpmMeasurementToolPreferences bpmMeasurementToolPreferencesFallback;
+    bpmMeasurementToolPreferencesFallback.beatDivisor = c.beatDivisor;
+    c.bpmMeasurementToolPreferences                   = j.value(
+        "bpmMeasurementToolPreferences", bpmMeasurementToolPreferencesFallback);
     c.softwareCursorConfig =
         j.value("softwareCursorConfig", SoftwareCursorConfig());
     c.preferredAsciiFont =

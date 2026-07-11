@@ -89,6 +89,12 @@ constexpr float BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT = 24.0f;
 /// @brief 播放指针拖到分析视图边缘时触发自动滚动的范围，单位为像素。
 constexpr float PLAYBACK_CURSOR_EDGE_SCROLL_MARGIN = 20.0f;
 
+/// @brief 连续调整 BPM 工具偏好停止后等待落盘的时间，单位为秒。
+constexpr double BPM_USER_PREFERENCE_SAVE_DELAY_SECONDS = 0.35;
+
+/// @brief BPM 工具偏好保存失败后的重试等待时间，单位为秒。
+constexpr double BPM_USER_PREFERENCE_SAVE_RETRY_DELAY_SECONDS = 1.0;
+
 /// @brief 获取 FFTW 计划互斥锁，保护全局 planner 状态。
 std::mutex& fftwPlanMutex()
 {
@@ -403,14 +409,14 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
 BpmMeasurementToolView::BpmMeasurementToolView(const std::string& name)
     : IUIView(name), ITextureLoader(name)
 {
-    m_beatDivisor = std::clamp(
-        Config::AppConfig::instance().getEditorSettings().beatDivisor, 1, 64);
+    restoreUserPreferences();
     m_statusText = TR("ui.tools.bpm_measure.select_track").data();
 }
 
 /// @brief 销毁窗口并等待后台分析任务和 GPU 资源释放。
 BpmMeasurementToolView::~BpmMeasurementToolView()
 {
+    flushUserPreferences(true);
     stopAnalysisWorker();
     Audio::AudioManager::instance().unloadAuditionTrack();
 
@@ -440,6 +446,9 @@ void BpmMeasurementToolView::togglePlaybackFromShortcut()
 /// @param audioTrackId 项目内音频资源 ID；为空时仅打开窗口。
 void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
 {
+    if ( !m_isOpen ) {
+        restoreUserPreferences();
+    }
     m_isOpen = true;
     (void)ensureMetronomeSoundEffects();
 
@@ -469,6 +478,9 @@ void BpmMeasurementToolView::openWithAudioTrack(const std::string& audioTrackId)
 void BpmMeasurementToolView::openWithAutoMeasurement(
     const std::string& audioTrackId)
 {
+    if ( !m_isOpen ) {
+        restoreUserPreferences();
+    }
     m_isOpen = true;
     (void)ensureMetronomeSoundEffects();
 
@@ -570,7 +582,10 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     renderApplyTimingPopup();
 
     if ( !m_isOpen ) {
+        flushUserPreferences(true);
         Audio::AudioManager::instance().unloadAuditionTrack();
+    } else {
+        flushUserPreferences(false);
     }
 }
 
@@ -1044,6 +1059,7 @@ void BpmMeasurementToolView::renderControlPanel()
              1000.0f,
              "%.1f") ) {
         m_markerWidthMs = std::clamp<double>(markerWidth, 4.0, 1000.0);
+        markUserPreferencesChanged(true, false);
     }
 
     int beatDivisor = m_beatDivisor;
@@ -1053,6 +1069,7 @@ void BpmMeasurementToolView::renderControlPanel()
              1,
              64) ) {
         m_beatDivisor = std::clamp(beatDivisor, 1, 64);
+        markUserPreferencesChanged(true, false);
     }
 
     ImGui::Spacing();
@@ -1068,6 +1085,7 @@ void BpmMeasurementToolView::renderControlPanel()
              "%.3f") ) {
         m_viewCenter = std::clamp<double>(
             center, 0.0, std::max(0.0, playbackCanvasDuration()));
+        markUserPreferencesChanged(false, true);
     }
 
     float zoom = static_cast<float>(m_zoomSeconds);
@@ -1078,6 +1096,7 @@ void BpmMeasurementToolView::renderControlPanel()
                                       120.0f,
                                       "%.2f") ) {
         m_zoomSeconds = std::clamp<double>(zoom, 0.1, 120.0);
+        markUserPreferencesChanged(false, true);
     }
 
     if ( ::MMM::UI::FeedbackButton(
@@ -1085,6 +1104,7 @@ void BpmMeasurementToolView::renderControlPanel()
              ImVec2(-1.0f, 0.0f)) ) {
         m_viewCenter = std::clamp<double>(
             m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
+        markUserPreferencesChanged(false, true);
     }
 
     renderTimingSegmentsPanel();
@@ -1367,6 +1387,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
                                    ImVec2(iconButtonSize, iconButtonSize)) ) {
         setPlaybackState(false);
         seekPlaybackToCanvasTime(0.0);
+        markUserPreferencesChanged(false, true);
         if ( isPlaybackSynchronizedWithEditor() ) {
             audio.stop();
         } else {
@@ -1411,6 +1432,7 @@ void BpmMeasurementToolView::renderPlaybackControls()
         const double seekTime =
             std::clamp<double>(position, 0.0, std::max(0.0, totalTime));
         seekPlaybackToCanvasTime(seekTime);
+        markUserPreferencesChanged(false, true);
     }
     if ( !trackLoaded || totalTime <= 0.0 ) {
         ImGui::EndDisabled();
@@ -1587,6 +1609,9 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
         const bool targetChanged =
             std::abs(targetCanvasTime - m_viewCenter) > 1e-6;
         m_viewCenter = targetCanvasTime;
+        if ( dragStarted || targetChanged ) {
+            markUserPreferencesChanged(false, true);
+        }
         if ( isSelectedTrackLoadedForPlayback() &&
              (dragStarted || targetChanged) ) {
             seekPlaybackToCanvasTime(targetCanvasTime);
@@ -2755,6 +2780,7 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
                                     edgeScrollSensitivity * frameSeconds;
         m_viewCenter              = std::clamp<double>(
             m_viewCenter + scrollDelta, 0.0, playbackCanvasDuration());
+        markUserPreferencesChanged(false, true);
         const double clampedCenter =
             std::clamp<double>(m_viewCenter, 0.0, playbackCanvasDuration());
         previewViewStart = std::max(0.0, clampedCenter - m_zoomSeconds);
@@ -2776,6 +2802,7 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(const ImVec2& rectMin,
 
     if ( !mouseDown ) {
         seekPlaybackToCanvasTime(m_pendingPlaybackSeekCanvasTime);
+        markUserPreferencesChanged(false, true);
         m_isPlaybackCursorDragging = false;
         m_playbackCursorDragOwner  = 0;
         m_hasPendingPlaybackSeek   = false;
@@ -2852,6 +2879,7 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         const double nextViewStart = anchorTime - mouseRatio * nextZoom * 2.0;
         m_zoomSeconds              = nextZoom;
         m_viewCenter               = clampCenter(nextViewStart + nextZoom);
+        markUserPreferencesChanged(false, true);
     }
 
     if ( hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
@@ -2868,6 +2896,7 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         const double timeDelta =
             -static_cast<double>(io.MouseDelta.x) / rectWidth * viewRange;
         m_viewCenter = clampCenter(m_viewCenter + timeDelta);
+        markUserPreferencesChanged(false, true);
     }
 }
 
@@ -3100,6 +3129,85 @@ void BpmMeasurementToolView::applyPlaybackSpeed(double speed)
     }
 }
 
+/// @brief 从全局配置恢复不依赖具体音轨的 BPM 工具偏好。
+void BpmMeasurementToolView::restoreUserPreferences()
+{
+    const auto& preferences = Config::AppConfig::instance()
+                                  .getEditorSettings()
+                                  .bpmMeasurementToolPreferences;
+    m_markerWidthMs = std::clamp(std::isfinite(preferences.markerWidthMs)
+                                     ? preferences.markerWidthMs
+                                     : 80.0,
+                                 4.0,
+                                 1000.0);
+    m_beatDivisor   = std::clamp(preferences.beatDivisor, 1, 64);
+    m_viewCenter    = std::max(0.0,
+                               std::isfinite(preferences.viewCenterSeconds)
+                                   ? preferences.viewCenterSeconds
+                                   : 0.0);
+    m_zoomSeconds   = std::clamp(std::isfinite(preferences.viewHalfWidthSeconds)
+                                     ? preferences.viewHalfWidthSeconds
+                                     : 8.0,
+                                 0.01,
+                                 120.0);
+}
+
+/// @brief 将指定类别的 BPM 工具偏好同步到内存配置并启动延迟落盘。
+/// @param measurementDisplayChanged 是否同步拍框宽度与分拍数。
+/// @param viewChanged 是否同步视图中心与半宽。
+/// @warning UI 热路径低频分支：只写入少量标量，禁止在此执行文件访问。
+void BpmMeasurementToolView::markUserPreferencesChanged(
+    bool measurementDisplayChanged, bool viewChanged)
+{
+    auto& preferences = Config::AppConfig::instance()
+                            .getEditorSettings()
+                            .bpmMeasurementToolPreferences;
+    if ( measurementDisplayChanged ) {
+        preferences.markerWidthMs = std::clamp(m_markerWidthMs, 4.0, 1000.0);
+        preferences.beatDivisor   = std::clamp(m_beatDivisor, 1, 64);
+    }
+    if ( viewChanged ) {
+        preferences.viewCenterSeconds = std::max(0.0, m_viewCenter);
+        preferences.viewHalfWidthSeconds =
+            std::clamp(m_zoomSeconds, 0.01, 120.0);
+    }
+    if ( measurementDisplayChanged || viewChanged ) {
+        m_userPreferencesDirty = true;
+        m_userPreferencesSaveDelaySeconds =
+            BPM_USER_PREFERENCE_SAVE_DELAY_SECONDS;
+    }
+}
+
+/// @brief 在用户停止连续操作后将 BPM 工具偏好写入配置文件。
+/// @param force 是否忽略延迟并立即保存，供窗口关闭和析构流程使用。
+/// @warning 低频配置路径：可能访问文件系统，不得在未修改偏好时调用。
+void BpmMeasurementToolView::flushUserPreferences(bool force)
+{
+    if ( !m_userPreferencesDirty ) {
+        return;
+    }
+
+    if ( !force ) {
+        m_userPreferencesSaveDelaySeconds =
+            std::max(0.0,
+                     m_userPreferencesSaveDelaySeconds -
+                         static_cast<double>(ImGui::GetIO().DeltaTime));
+        if ( m_userPreferencesSaveDelaySeconds > 0.0 ||
+             ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+             ImGui::IsAnyItemActive() ) {
+            return;
+        }
+    }
+
+    if ( Config::AppConfig::instance().save() ) {
+        m_userPreferencesDirty            = false;
+        m_userPreferencesSaveDelaySeconds = 0.0;
+    } else {
+        m_userPreferencesSaveDelaySeconds =
+            BPM_USER_PREFERENCE_SAVE_RETRY_DELAY_SECONDS;
+    }
+}
+
 /// @brief 获取当前配置下的视觉偏移，单位为秒。
 /// @return 音频时间转换为视觉时间时需要叠加的偏移。
 double BpmMeasurementToolView::playbackVisualOffset() const
@@ -3252,8 +3360,10 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
                      : 0.0;
     m_firstBeatTime = clampFirstBeatTime(
         m_firstBeatTime, m_beatLengthSeconds, playbackCanvasDuration());
-    m_viewCenter = std::clamp<double>(
-        m_firstBeatTime, 0.0, std::max(0.0, playbackCanvasDuration()));
+    m_viewCenter =
+        std::clamp<double>(autoMeasure ? m_firstBeatTime : m_viewCenter,
+                           0.0,
+                           std::max(0.0, playbackCanvasDuration()));
     m_statusText = autoMeasure
                        ? TR("ui.tools.bpm_measure.auto_analyzing").data()
                        : TR("ui.tools.bpm_measure.analyzing").data();

@@ -397,6 +397,21 @@ private:
     /// @param speed 目标倍速。
     void applyPlaybackSpeed(double speed);
 
+    /// @brief 从全局配置恢复不依赖具体音轨的 BPM 工具偏好。
+    void restoreUserPreferences();
+
+    /// @brief 将指定类别的 BPM 工具偏好同步到内存配置并启动延迟落盘。
+    /// @param measurementDisplayChanged 是否同步拍框宽度与分拍数。
+    /// @param viewChanged 是否同步视图中心与半宽。
+    /// @warning UI 热路径低频分支：只写入少量标量，禁止在此执行文件访问。
+    void markUserPreferencesChanged(bool measurementDisplayChanged,
+                                    bool viewChanged);
+
+    /// @brief 在用户停止连续操作后将 BPM 工具偏好写入配置文件。
+    /// @param force 是否忽略延迟并立即保存，供窗口关闭和析构流程使用。
+    /// @warning 低频配置路径：可能访问文件系统，不得在未修改偏好时调用。
+    void flushUserPreferences(bool force);
+
     /// @brief 获取当前配置下的视觉偏移，单位为秒。
     /// @return 音频时间转换为视觉时间时需要叠加的偏移。
     double playbackVisualOffset() const;
@@ -546,6 +561,12 @@ private:
     /// @brief BPM
     /// 工具播放倍速；异轨试听不写回项目配置，同轨沿用编辑器同步语义。
     double m_playbackSpeed{ 1.0 };
+
+    /// @brief BPM 工具偏好是否已经修改且尚未写入配置文件。
+    bool m_userPreferencesDirty{ false };
+
+    /// @brief 连续调整结束后的配置保存延迟，单位为秒。
+    double m_userPreferencesSaveDelaySeconds{ 0.0 };
 
     /// @brief 节拍器音效是否已准备好。
     bool m_metronomeSfxReady{ false };
