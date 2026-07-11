@@ -106,8 +106,8 @@ local Skin = {
 			notice = { path = "audio/ui/notice.wav", lead_in_ms = 0.0 },
 		},
 		metronome = {
-			beat_low = { path = "audio/metronome/beat_low.wav", lead_in_ms = 0.023 },
-			downbeat_high = { path = "audio/metronome/downbeat_high.wav", lead_in_ms = 0.023 },
+			beat_low = { path = "audio/metronome/metronome_light.wav", lead_in_ms = 0.023 },
+			downbeat_high = { path = "audio/metronome/metronome_accent.wav", lead_in_ms = 0.023 },
 		},
 	},
 
