@@ -626,6 +626,27 @@ constexpr ImGuiID MENU_POPUP_LAST_FRAME_KEY_SALT = 0x6D6D4D23u;
 /// @brief 菜单弹窗滑入位移像素。
 constexpr float MENU_POPUP_SLIDE_Y = 8.0f;
 
+/// @brief Combo 弹层使用的全局审美间距快照。
+struct ComboPopupStyleVars {
+    ImVec2 windowPadding;
+    ImVec2 itemSpacing;
+};
+
+/// @brief 读取不受宿主窗口局部布局影响的 Combo 弹层间距。
+/// @return 按当前 DPI 缩放后的全局审美间距。
+/// @warning UI 热路径：只读取内存配置并执行常量次数值计算。
+ComboPopupStyleVars makeComboPopupStyleVars()
+{
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    const float windowPadding = std::floor(aesthetics.windowPadding * dpiScale);
+    const float itemSpacing   = std::floor(aesthetics.itemSpacing * dpiScale);
+    return { ImVec2(windowPadding, windowPadding),
+             ImVec2(itemSpacing, itemSpacing) };
+}
+
 /// @brief 计算带盐的 ImGuiStorage 键，避免与控件自身 ID 冲突。
 /// @param id 控件 ID。
 /// @param salt 用途盐值。
@@ -1467,23 +1488,33 @@ bool FeedbackSelectable(const char* label, bool* pSelected,
 bool FeedbackBeginCombo(const char* label, const char* previewValue,
                         ImGuiComboFlags flags)
 {
-    ImGuiStorage* storage          = ImGui::GetStateStorage();
-    const ImGuiID id               = ImGui::GetID(label);
-    const float   hoverAmount      = updateButtonHoverAmount(id, storage);
-    const int     pushedColorCount = pushAnimatedComboColors(hoverAmount);
-    const bool    open    = ImGui::BeginCombo(label, previewValue, flags);
-    const bool    clicked = isLastItemFeedbackActivated();
-    const bool    hovered = ImGui::IsItemHovered() || open;
+    ImGuiStorage* storage                = ImGui::GetStateStorage();
+    const ImGuiID id                     = ImGui::GetID(label);
+    const float   hoverAmount            = updateButtonHoverAmount(id, storage);
+    const int     pushedColorCount       = pushAnimatedComboColors(hoverAmount);
+    const ComboPopupStyleVars popupStyle = makeComboPopupStyleVars();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, popupStyle.windowPadding);
+    const bool open    = ImGui::BeginCombo(label, previewValue, flags);
+    const bool clicked = isLastItemFeedbackActivated();
+    const bool hovered = ImGui::IsItemHovered() || open;
     ImGui::PopStyleColor(pushedColorCount);
+    if ( open ) {
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, popupStyle.itemSpacing);
+    } else {
+        ImGui::PopStyleVar();
+    }
     finishButtonFeedback(id, clicked, storage, hovered);
     return open;
 }
 
-/// @brief 结束由 FeedbackBeginCombo 打开的 Combo。
-/// @warning UI 热路径：弹出列表绘制结束时调用 ImGui::EndCombo。
+/// @brief 结束由 FeedbackBeginCombo 打开的 Combo 并恢复宿主间距样式。
+/// @warning UI 热路径：先恢复弹层内 ItemSpacing，再调用 ImGui::EndCombo，
+/// 最后恢复在弹层 Begin 前压入的 WindowPadding。
 void FeedbackEndCombo()
 {
+    ImGui::PopStyleVar();
     ImGui::EndCombo();
+    ImGui::PopStyleVar();
 }
 
 /// @brief 绘制带统一反馈的 ImGui Combo 数组辅助控件。
@@ -1508,9 +1539,13 @@ bool FeedbackCombo(const char* label, int* currentItem,
     bool        changed      = false;
 
     if ( popupMaxHeightInItems > 0 ) {
-        const float maxHeight = ImGui::GetTextLineHeightWithSpacing() *
-                                    static_cast<float>(popupMaxHeightInItems) +
-                                ImGui::GetStyle().WindowPadding.y * 2.0f;
+        const ComboPopupStyleVars popupStyle       = makeComboPopupStyleVars();
+        const float               popupPadding     = popupStyle.windowPadding.y;
+        const float               popupItemSpacing = popupStyle.itemSpacing.y;
+        const float               maxHeight =
+            (ImGui::GetTextLineHeight() + popupItemSpacing) *
+                static_cast<float>(popupMaxHeightInItems) -
+            popupItemSpacing + popupPadding * 2.0f;
         ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f),
                                             ImVec2(FLT_MAX, maxHeight));
     }

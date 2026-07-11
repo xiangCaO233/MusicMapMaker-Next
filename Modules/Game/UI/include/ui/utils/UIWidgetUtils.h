@@ -150,8 +150,9 @@ bool FeedbackSelectable(const char* label, bool* pSelected,
 bool FeedbackBeginCombo(const char* label, const char* previewValue,
                         ImGuiComboFlags flags = 0);
 
-/// @brief 结束由 FeedbackBeginCombo 打开的 Combo。
-/// @warning UI 热路径：弹出列表绘制结束时调用 ImGui::EndCombo。
+/// @brief 结束由 FeedbackBeginCombo 打开的 Combo 并恢复宿主间距样式。
+/// @warning UI 热路径：先恢复弹层内 ItemSpacing，再调用 ImGui::EndCombo，
+/// 最后恢复在弹层 Begin 前压入的 WindowPadding。
 void FeedbackEndCombo();
 
 /// @brief 绘制带统一反馈的 ImGui Combo 数组辅助控件。
