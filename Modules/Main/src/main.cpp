@@ -1,6 +1,7 @@
 #include "common/MessageBox.h"
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -252,12 +253,21 @@ int main(int argc, char* argv[])
 
     // 载入皮肤配置
     const auto startupSkinPath = Main::resolveStartupSkinPath(defaultSkinPath);
-    if ( !SkinManager::instance().loadSkin(
-             Config::pathToUtf8(startupSkinPath)) &&
-         startupSkinPath != defaultSkinPath ) {
+    bool       skinLoaded =
+        SkinManager::instance().loadSkin(Config::pathToUtf8(startupSkinPath));
+    if ( !skinLoaded && startupSkinPath != defaultSkinPath ) {
         XWARN("Fallback to default skin: {}",
               Config::pathToUtf8(defaultSkinPath));
-        SkinManager::instance().loadSkin(Config::pathToUtf8(defaultSkinPath));
+        skinLoaded = SkinManager::instance().loadSkin(
+            Config::pathToUtf8(defaultSkinPath));
+    }
+    if ( skinLoaded && resetUnavailableFontPreferences(
+                           AppConfig::instance().getEditorSettings(),
+                           SkinManager::instance()) ) {
+        XWARN("Unavailable font preference reset to skin default");
+        if ( !AppConfig::instance().save() ) {
+            XERROR("Failed to save reset font preference");
+        }
     }
     auto [r, g, b, a] = SkinManager::instance().getColor("background");
 

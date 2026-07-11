@@ -1,6 +1,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/FontPreferenceValidator.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -160,6 +161,10 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     }
 
     auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( Config::resetUnavailableFontPreferences(
+             settings, Config::SkinManager::instance()) ) {
+        XWARN("Unavailable font preference reset after skin switch");
+    }
     settings.selectedSkinDirectory = skinDirectoryName;
     m_layoutMetricsCache.valid     = false;
     m_hasPreparedLayoutMetrics     = false;
